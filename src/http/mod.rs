@@ -87,8 +87,9 @@ impl AppError {
     /// # Returns
     /// 404 for a path, catalog or changeset that is not there (or not reachable), 401
     /// for a request that proves no identity, 403 for an access level that is
-    /// not enough or a suspended team's catalog, 409 for a refused request or a
-    /// publish conflict, 410 for a used or expired link, 422 for a publish
+    /// not enough, a suspended team's catalog, a catalog that needs an unlock
+    /// or the maintenance runner on a catalog with maintenance off, 409 for a
+    /// refused request or a publish conflict, 410 for a used or expired link, 422 for a publish
     /// whose result fails lint or a self-service request past a limit, 400 for
     /// a bad input, 500 for the server's own failures, 503 for a request the
     /// database aborted (retry it).
@@ -99,7 +100,10 @@ impl AppError {
             | OkfError::CatalogNotSelected { .. }
             | OkfError::UnknownChangeset { .. }
             | OkfError::UnknownName { .. } => StatusCode::NOT_FOUND,
-            OkfError::Forbidden { .. } | OkfError::Suspended { .. } => StatusCode::FORBIDDEN,
+            OkfError::Forbidden { .. }
+            | OkfError::Suspended { .. }
+            | OkfError::UnlockRequired { .. }
+            | OkfError::MaintenanceOff { .. } => StatusCode::FORBIDDEN,
             OkfError::Unauthenticated { .. } => StatusCode::UNAUTHORIZED,
             OkfError::Gone { .. } => StatusCode::GONE,
             OkfError::Refused { .. } | OkfError::Conflict { .. } | OkfError::StillLinked { .. } => {
@@ -557,6 +561,19 @@ mod tests {
             notice: None,
         });
         assert_eq!(suspended.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn unlock_required_and_maintenance_off_are_403() {
+        let locked = AppError(OkfError::UnlockRequired {
+            catalog: "main".to_string(),
+            has_user: true,
+        });
+        let maintenance_off = AppError(OkfError::MaintenanceOff {
+            catalog: "main".to_string(),
+        });
+        assert_eq!(locked.status(), StatusCode::FORBIDDEN);
+        assert_eq!(maintenance_off.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
