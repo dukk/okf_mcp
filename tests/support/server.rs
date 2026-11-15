@@ -343,6 +343,34 @@ impl TestServer {
         user.id
     }
 
+    /// Gives the fixture user [`OWNER`], whose personal team owns the
+    /// catalogs, the email `tester@example.com` and `password`, and polls.
+    ///
+    /// # Arguments
+    /// * `password` - the password (within the policy).
+    ///
+    /// # Returns
+    /// The email, which signs them in.
+    ///
+    /// # Panics
+    /// If the store refuses the email or the password.
+    pub async fn owner_with_password(&self, password: &str) -> String {
+        let pool = &self.db.pool;
+        let email = format!("{OWNER}@example.com");
+        users::set_email(pool, OWNER, Some(&email), &AuditActor::cli(), Utc::now())
+            .await
+            .expect("set the owner's email");
+        let owner = users::find_by_email(pool, &email)
+            .await
+            .expect("find the owner")
+            .expect("the owner exists");
+        okf_mcp::store::passwords::set(pool, &owner.id, password, Utc::now())
+            .await
+            .expect("set the owner's password");
+        self.app.poll().await.expect("poll the owner in");
+        email
+    }
+
     /// Creates a read-only maintenance reporter and refreshes the key cache.
     pub async fn reporter_key(&self, name: &str, catalogs: &[&str]) -> String {
         let key = self.key(name, Access::Read, catalogs, None).await;

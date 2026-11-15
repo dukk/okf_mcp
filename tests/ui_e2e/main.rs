@@ -30,4 +30,5 @@ mod settings;
 mod signin;
 mod smoke;
 mod teams;
+mod unlocks;
 mod users;
