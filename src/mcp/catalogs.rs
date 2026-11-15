@@ -95,7 +95,7 @@ pub(crate) fn list(ctx: &ToolContext) -> CatalogList {
         })
         .collect();
     // The selection's names only, not its contents: nothing is admitted.
-    let (selection, write_target, selection_error) = match ctx.resolve_call(None) {
+    let (selection, write_target, selection_error) = match ctx.select(None) {
         Ok(selection) => {
             let write_target = Some(selection.write_target().to_string());
             (selection.catalogs().to_vec(), write_target, None)

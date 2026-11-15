@@ -12,7 +12,11 @@ use crate::error::OkfError;
 
 /// Loads the gates. Creates the audit rows the maps need first
 /// (`ensure_audit_rows`), so every live credential, user and owner team
-/// has an audit id to record an access with.
+/// has an audit id to record an access with; then reads every map in one
+/// read-only `REPEATABLE READ` transaction, so memberships, admins and
+/// catalog scopes describe one moment: never a catalog's replacement (or
+/// new owner) beside its old members, which would admit an admin read as
+/// a customer's.
 ///
 /// # Arguments
 /// * `pool` - the database.
@@ -23,30 +27,55 @@ use crate::error::OkfError;
 /// # Errors
 /// [`OkfError::Database`].
 pub async fn load(pool: &PgPool) -> Result<AccessGates, OkfError> {
+    load_with(pool, || async {}).await
+}
+
+/// [`load`], running `between` after the first read of the snapshot and
+/// before the others: the seam a test uses to change the data mid-load.
+///
+/// # Errors
+/// [`OkfError::Database`].
+// `F: FnOnce() -> Fut` with `Fut: Future`: a closure returning a future,
+// the Rust spelling of "an async callback".
+async fn load_with<F, Fut>(pool: &PgPool, between: F) -> Result<AccessGates, OkfError>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     ensure_audit_rows(pool).await?;
-    // Five reads at once on pooled connections (`try_join!` is
-    // `asyncio.gather` that stops at the first error).
-    let (members, admins, people, credentials, catalogs) = tokio::try_join!(
-        sqlx::query_as::<_, (String, String)>(
-            "SELECT m.user_id, c.name FROM team_members m \
-             JOIN catalogs c ON c.owner_team_id = m.team_id",
-        )
-        .fetch_all(pool),
-        sqlx::query_scalar::<_, String>("SELECT id FROM users WHERE is_admin").fetch_all(pool),
-        sqlx::query_as::<_, (String, i64)>(
-            "SELECT user_id, id FROM audit_people WHERE user_id IS NOT NULL",
-        )
-        .fetch_all(pool),
-        sqlx::query_as::<_, (String, i64)>(
-            "SELECT credential_id, id FROM audit_credentials WHERE credential_id IS NOT NULL",
-        )
-        .fetch_all(pool),
-        sqlx::query_as::<_, (String, i64, Option<i64>)>(
-            "SELECT c.name, c.id, a.id FROM catalogs c \
-             LEFT JOIN audit_teams a ON a.team_id = c.owner_team_id",
-        )
-        .fetch_all(pool),
-    )?;
+    let mut tx = pool.begin().await?;
+    // Must be the transaction's first statement; the snapshot is taken by
+    // the first query after it, and every later one reads the same.
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    let members: Vec<(String, String)> = sqlx::query_as(
+        "SELECT m.user_id, c.name FROM team_members m \
+         JOIN catalogs c ON c.owner_team_id = m.team_id",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    between().await;
+    let admins: Vec<String> = sqlx::query_scalar("SELECT id FROM users WHERE is_admin")
+        .fetch_all(&mut *tx)
+        .await?;
+    let people: Vec<(String, i64)> =
+        sqlx::query_as("SELECT user_id, id FROM audit_people WHERE user_id IS NOT NULL")
+            .fetch_all(&mut *tx)
+            .await?;
+    let credentials: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT credential_id, id FROM audit_credentials WHERE credential_id IS NOT NULL",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    let catalogs: Vec<(String, i64, Option<i64>)> = sqlx::query_as(
+        "SELECT c.name, c.id, a.id FROM catalogs c \
+         LEFT JOIN audit_teams a ON a.team_id = c.owner_team_id",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    // Nothing was written; ending the transaction frees its connection.
+    tx.commit().await?;
     let mut gates = AccessGates {
         admins: admins.into_iter().collect(),
         people: people.into_iter().collect(),
@@ -160,5 +189,56 @@ mod tests {
             .unwrap();
         assert!(gates.people.contains_key(&me));
         assert!(!gates.members.contains_key(&me), "no catalog yet");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_gates_are_one_snapshot_across_a_catalog_replaced_mid_load() {
+        use crate::store::audit::AuditActor;
+        use crate::store::catalogs::{self, NewCatalog};
+        let db = test_db().await;
+        let cli = AuditActor::cli();
+        let main = |owner_team| NewCatalog {
+            name: "main",
+            description: "",
+            owner_team,
+        };
+        catalogs::create(&db.pool, &main(TEST_USER), &cli, chrono::Utc::now())
+            .await
+            .unwrap();
+        let bob = crate::store::users::NewUser {
+            name: "bob",
+            display_name: "",
+        };
+        crate::store::users::create(&db.pool, &bob, &cli, chrono::Utc::now())
+            .await
+            .unwrap();
+        let original = catalogs::find(&db.pool, "main").await.unwrap().id;
+        let me: String = sqlx::query_scalar("SELECT id FROM users WHERE name = $1")
+            .bind(TEST_USER)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+
+        // `main` is deleted and created again for bob's personal team after
+        // the memberships are read and before the catalogs are.
+        let gates = load_with(&db.pool, || async {
+            catalogs::delete(&db.pool, "main", true, &cli, chrono::Utc::now())
+                .await
+                .unwrap();
+            catalogs::create(&db.pool, &main("bob"), &cli, chrono::Utc::now())
+                .await
+                .unwrap();
+        })
+        .await
+        .unwrap();
+
+        // One moment: the old `main` and the test user's membership of it,
+        // never the replacement beside that membership.
+        let member = gates
+            .members
+            .get(&me)
+            .is_some_and(|names| names.contains("main"));
+        assert!(member);
+        assert_eq!(gates.catalogs["main"].id, original, "{gates:?}");
     }
 }

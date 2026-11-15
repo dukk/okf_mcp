@@ -14,6 +14,7 @@ use crate::error::OkfError;
 use crate::mcp::context::ToolContext;
 use crate::mcp::{reply, OkfServer};
 use crate::okf::paths::{escapes_root, normpath};
+use crate::store::audit::AccessKind;
 use crate::store::history::revisions;
 
 /// The design's default `limit`.
@@ -114,6 +115,10 @@ pub(crate) async fn history(ctx: &ToolContext, params: HistoryParams) -> Result<
     let limit = revision_limit(params.limit);
     let paths = candidates(&params.path);
     for state in ctx.read_set(params.catalog.as_deref())? {
+        // Admitted right before its revisions are read, so a catalog after
+        // the one that answers is never recorded (plan Decision 23). A
+        // `Busy` here leaves the catalogs already read recorded: they were.
+        ctx.admit(&state, AccessKind::Read)?;
         for path in &paths {
             // `.await` suspends this call until Postgres answers, freeing the
             // thread for other requests meanwhile.

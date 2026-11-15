@@ -9,13 +9,13 @@ use std::sync::{Arc, Mutex};
 use axum::http::request::Parts;
 
 use crate::app::{App, Catalogs};
-use crate::auth::Principal;
+use crate::auth::{Admission, Principal};
 use crate::catalog::CatalogState;
 use crate::error::OkfError;
 use crate::http::requester::Requester;
 use crate::overlay::View;
 use crate::selection::{connection_catalogs, in_scope, resolve, Selection, Sources};
-use crate::store::audit::{AccessKind, AuditActor, Source};
+use crate::store::audit::{AccessKind, AccessRecord, AuditActor, Source};
 use crate::store::changesets::{self, ChangesetRow, ChangesetState};
 use crate::store::keys::Access;
 
@@ -197,35 +197,15 @@ impl ToolContext {
         match self.connection.as_deref() {
             // With a list, `select(None)` resolves to exactly that list.
             // `map(drop)` discards the selection, keeping only `Ok(())`.
-            Some(list) if !list.is_empty() => self.resolve_call(None).map(drop),
+            Some(list) if !list.is_empty() => self.select(None).map(drop),
             _ => Ok(()),
         }
     }
 
-    /// Resolves the call's catalogs (design "Catalog selection") for a tool
-    /// that reads their contents, and notes each selected catalog's read for
-    /// the audit log (`ToolContext::admit`).
-    ///
-    /// # Arguments
-    /// * `argument` - the call's `catalogs` (or `catalog` as one name).
-    ///
-    /// # Returns
-    /// The selection, every name in this call's catalog map.
-    ///
-    /// # Errors
-    /// As [`resolve`]; [`OkfError::Busy`] as `ToolContext::admit`.
-    pub fn select(&self, argument: Option<&[String]>) -> Result<Selection, OkfError> {
-        let selection = self.resolve_call(argument)?;
-        for name in selection.catalogs() {
-            self.admit(&self.state(name), AccessKind::Read)?;
-        }
-        Ok(selection)
-    }
-
-    /// Resolves the call's catalogs as [`ToolContext::select`] does, but
-    /// admits nothing: for a path that reads no catalog's contents (the
-    /// connection check, the catalog list, opening or listing changesets),
-    /// so only the catalog actually read is recorded (plan Decision 23).
+    /// Resolves the call's catalogs (design "Catalog selection"). Admits
+    /// nothing: a tool admits each catalog right before it reads its
+    /// contents (`ToolContext::view`, `ToolContext::admit`), so only the
+    /// catalogs actually read are recorded (plan Decision 23).
     ///
     /// # Arguments
     /// * `argument` - the call's `catalogs` (or `catalog` as one name).
@@ -235,7 +215,7 @@ impl ToolContext {
     ///
     /// # Errors
     /// As [`resolve`].
-    pub fn resolve_call(&self, argument: Option<&[String]>) -> Result<Selection, OkfError> {
+    pub fn select(&self, argument: Option<&[String]>) -> Result<Selection, OkfError> {
         let sources = Sources {
             argument,
             connection: self.connection.as_deref(),
@@ -317,7 +297,7 @@ impl ToolContext {
     /// As [`ToolContext::select`].
     pub fn target(&self, catalog: Option<&str>) -> Result<Arc<CatalogState>, OkfError> {
         let argument = catalog.map(str::to_string);
-        let selection = self.resolve_call(argument.as_ref().map(std::slice::from_ref))?;
+        let selection = self.select(argument.as_ref().map(std::slice::from_ref))?;
         // `write_target` is the first selected catalog.
         Ok(self.state(selection.write_target()))
     }
@@ -344,6 +324,52 @@ impl ToolContext {
     /// may be an admin read, and is neither recorded under the wrong
     /// catalog or team nor left out. A retry sees a settled cache.
     pub(crate) fn admit(&self, state: &CatalogState, kind: AccessKind) -> Result<(), OkfError> {
+        if let Some(admitted) = self.admission_of(state, kind)? {
+            self.note(admitted, kind);
+        }
+        Ok(())
+    }
+
+    /// Admits every state of a read that reads them all before answering
+    /// (a search), all or nothing: each is checked first, and nothing is
+    /// noted unless every one passes, so a call refused with
+    /// [`OkfError::Busy`] queues no read.
+    ///
+    /// # Arguments
+    /// * `states` - the catalogs the call reads.
+    /// * `kind` - what the call does with their contents.
+    ///
+    /// # Errors
+    /// [`OkfError::Busy`] as `ToolContext::admit`, for any of them.
+    pub(crate) fn admit_all(
+        &self,
+        states: &[Arc<CatalogState>],
+        kind: AccessKind,
+    ) -> Result<(), OkfError> {
+        // `collect` into a `Result` stops at the first error, like a loop
+        // that returns early.
+        let admitted = states
+            .iter()
+            .map(|state| self.admission_of(state, kind))
+            .collect::<Result<Vec<_>, _>>()?;
+        // `flatten` skips the `None`s (reads that record nothing).
+        for admitted in admitted.into_iter().flatten() {
+            self.note(admitted, kind);
+        }
+        Ok(())
+    }
+
+    /// What `ToolContext::admit` would note for `state`, with no side
+    /// effect: the record and its admission, or `None` for a read that
+    /// records nothing.
+    ///
+    /// # Errors
+    /// [`OkfError::Busy`] as `ToolContext::admit`.
+    fn admission_of(
+        &self,
+        state: &CatalogState,
+        kind: AccessKind,
+    ) -> Result<Option<(AccessRecord, Admission)>, OkfError> {
         let access = match kind {
             AccessKind::Write => Access::Write,
             AccessKind::Read | AccessKind::Export => Access::Read,
@@ -366,27 +392,29 @@ impl ToolContext {
                     reason: format!("catalog {catalog:?} is being reloaded"),
                 });
             }
-            return Ok(());
+            return Ok(None);
         };
         let now = self.app.clock().now();
-        // `let ... else`: leave early for a refusal (Task 9b checks those
-        // before this runs) or an admission that records nothing.
-        let Ok(admission) = principal.admission(catalog, access, now) else {
-            return Ok(());
+        // A refusal (Task 9b checks those before this runs) or an admission
+        // that records nothing notes nothing.
+        let admission = match principal.admission(catalog, access, now) {
+            Ok(admission) if admission.is_recorded() => admission,
+            Ok(_) | Err(_) => return Ok(None),
         };
-        if !admission.is_recorded() {
-            return Ok(());
-        }
+        let record = principal.access_record(&self.requester, catalog, scope, now);
+        Ok(Some((record, admission)))
+    }
+
+    /// Notes an admitted access, once per call, catalog and kind.
+    fn note(&self, (record, admission): (AccessRecord, Admission), kind: AccessKind) {
         let fresh = self
             .noted
             .lock()
             .expect("noted lock poisoned")
-            .insert((catalog.to_string(), kind));
+            .insert((record.catalog.clone(), kind));
         if fresh {
-            let record = principal.access_record(&self.requester, catalog, scope, now);
             self.app.note_access(record, kind, admission);
         }
-        Ok(())
     }
 
     /// The call's changeset, if it named one: what a read tool passes to
@@ -405,7 +433,9 @@ impl ToolContext {
         match handle {
             None => Ok(None),
             // `.map(Some)` wraps the `Ok` value: `Ok(pinned)` becomes `Ok(Some(pinned))`.
-            Some(handle) => self.changeset(handle, Access::Read).await.map(Some),
+            // Resolved without admitting: the read tool's `view` admits the
+            // pinned catalog when, and only if, it reads it.
+            Some(handle) => self.resolve_changeset(handle, Access::Read).await.map(Some),
         }
     }
 
@@ -426,14 +456,18 @@ impl ToolContext {
     /// # Returns
     /// The view.
     ///
+    /// Admits the read first (`ToolContext::admit`): a view is taken only
+    /// to read it.
+    ///
     /// # Errors
-    /// An overlay build error ([`crate::overlay::build_overlay`]);
-    /// [`OkfError::Database`].
+    /// [`OkfError::Busy`] as `ToolContext::admit`; an overlay build error
+    /// ([`crate::overlay::build_overlay`]); [`OkfError::Database`].
     pub async fn view(
         &self,
         state: &CatalogState,
         pinned: Option<&Pinned>,
     ) -> Result<View, OkfError> {
+        self.admit(state, AccessKind::Read)?;
         // `filter` keeps the pinned changeset only if it is in this catalog.
         match pinned.filter(|pinned| pinned.state.id() == state.id()) {
             None => Ok(View::Published(state.current())),
@@ -505,6 +539,26 @@ impl ToolContext {
     /// - [`OkfError::Busy`] as `ToolContext::admit`;
     /// - [`OkfError::Database`].
     pub async fn changeset(&self, handle: &str, access: Access) -> Result<Pinned, OkfError> {
+        let pinned = self.resolve_changeset(handle, access).await?;
+        // The changeset's own catalog only, never the connection's others
+        // (plan Decision 23). `if` is an expression, like Python's
+        // conditional expression.
+        let kind = if access == Access::Write {
+            AccessKind::Write
+        } else {
+            AccessKind::Read
+        };
+        self.admit(&pinned.state, kind)?;
+        Ok(pinned)
+    }
+
+    /// [`ToolContext::changeset`] without the admission: for a handle a read
+    /// tool pins, whose catalog it admits only if it reads it.
+    ///
+    /// # Errors
+    /// As [`ToolContext::changeset`], but never [`OkfError::Busy`] from the
+    /// admission.
+    async fn resolve_changeset(&self, handle: &str, access: Access) -> Result<Pinned, OkfError> {
         self.check_connection()?;
         // A closure, so each refusal below builds its own error value.
         let unknown = || OkfError::UnknownChangeset {
@@ -535,18 +589,7 @@ impl ToolContext {
         // Only a discarded changeset gets the 24-hour hint: the prune is one
         // way to be discarded, and a published one was never pruned.
         let hint = match row.state {
-            ChangesetState::Open => {
-                // The changeset's own catalog only, never the connection's
-                // others (plan Decision 23). `if` is an expression, like
-                // Python's conditional expression.
-                let kind = if access == Access::Write {
-                    AccessKind::Write
-                } else {
-                    AccessKind::Read
-                };
-                self.admit(&state, kind)?;
-                return Ok(Pinned { state, row });
-            }
+            ChangesetState::Open => return Ok(Pinned { state, row }),
             ChangesetState::Published => "",
             ChangesetState::Discarded => " (a changeset with no edits is discarded after 24 hours)",
         };

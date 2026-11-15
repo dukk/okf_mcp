@@ -389,3 +389,108 @@ async fn an_export_whose_entry_cannot_be_written_answers_500_without_an_archive(
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(body["error"], "Database", "an error body, not an archive");
 }
+
+/// A tool context for `secret` on a connection of `main` then `other`.
+fn on_main_and_other(test: &TestApp, secret: &str) -> crate::mcp::context::ToolContext {
+    crate::mcp::testing::context(
+        test,
+        crate::mcp::testing::cached_principal(test, secret),
+        Some(&["main", "other"]),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_that_answers_from_the_first_catalog_records_only_that_one() {
+    use crate::mcp::documents::{get_concept, GetConceptParams};
+    use crate::mcp::history::{history, HistoryParams};
+    let test = app().await;
+    let staff = staff_root(&test).await;
+    // `main`, listed first, answers each: both catalogs have `index.md`'s
+    // history, and only `main` has the concept.
+    let history_ctx = on_main_and_other(&test, &staff);
+    let concept_ctx = on_main_and_other(&test, &staff);
+
+    let found = history(
+        &history_ctx,
+        HistoryParams {
+            path: "index.md".to_string(),
+            catalog: None,
+            limit: None,
+        },
+    )
+    .await
+    .unwrap();
+    let concept = get_concept(
+        &concept_ctx,
+        GetConceptParams {
+            path: "systems/alpha.md".to_string(),
+            catalog: None,
+            links: false,
+            raw: false,
+            section: None,
+            full: false,
+            changeset: None,
+        },
+    )
+    .await;
+    settle_access(&test).await;
+
+    assert_eq!(found.catalog, "main");
+    assert!(concept.is_ok(), "{concept:?}");
+    let entries = audit::testing::entries(test.app.pool(), "catalog.admin_read").await;
+    assert_eq!(
+        entries.len(),
+        1,
+        "never `other`, which was not read: {entries:?}"
+    );
+    assert_eq!(entries[0].target.as_deref(), Some("main"));
+    assert_eq!(entries[0].requests, Some(2), "one per call");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_search_refused_after_one_catalog_passes_queues_no_read() {
+    use crate::mcp::search::{run, SearchParams};
+    let test = app().await;
+    let staff = staff_root(&test).await;
+    // `other` is replaced and only the key cache reloaded: `main` passes
+    // its check, `other` (still the old map's) cannot.
+    let cli = AuditActor::cli();
+    catalogs::delete(test.app.pool(), "other", true, &cli, Utc::now())
+        .await
+        .unwrap();
+    let other = NewCatalog {
+        name: "other",
+        description: "",
+        owner_team: TEST_TEAM,
+    };
+    catalogs::create(test.app.pool(), &other, &cli, Utc::now())
+        .await
+        .unwrap();
+    test.app.keys().reload(test.app.pool()).await.unwrap();
+    let ctx = on_main_and_other(&test, &staff);
+
+    let refused = run(
+        &ctx,
+        SearchParams {
+            query: "Main".to_string(),
+            catalogs: None,
+            concept_type: None,
+            tags: Vec::new(),
+            status: None,
+            limit: None,
+            changeset: None,
+        },
+    )
+    .await
+    .map(drop);
+    settle_access(&test).await;
+
+    assert!(
+        matches!(refused, Err(crate::error::OkfError::Busy { .. })),
+        "{refused:?}"
+    );
+    assert!(
+        admin_reads(&test).await.is_empty(),
+        "nothing queued for `main`"
+    );
+}
