@@ -11,7 +11,9 @@
 //! foreign key holds it `FOR KEY SHARE`) or the unlock row, then the
 //! `server_state` generation row. Holding the unlocked admin `FOR KEY SHARE`
 //! keeps `users::set_admin` (which locks every admin `FOR UPDATE`) from
-//! clearing the flag before the unlock commits. The owner email is queued in
+//! clearing the flag before the unlock commits; the actor's row, held the
+//! same way, does the same for the creator's own admin flag, which
+//! [`create`] checks under that lock (issue #447). The owner email is queued in
 //! the same transaction, so an unlock that rolls back mails nobody, and
 //! nothing is awaited after the commit.
 //!
@@ -362,6 +364,8 @@ fn check_reason(reason: &str) -> Result<&str, OkfError> {
 /// reason; [`OkfError::UnknownName`] for an unknown (or malformed) user;
 /// [`OkfError::CatalogNotSelected`] for an unknown (or malformed) catalog;
 /// [`OkfError::Refused`] for a user who is not an admin;
+/// [`OkfError::Forbidden`] for an actor whose own user is not an admin user
+/// (the command line has none and passes);
 /// [`OkfError::Database`], a failed audit write or mail insert included.
 pub async fn create(
     pool: &PgPool,
@@ -390,6 +394,7 @@ pub async fn create(
     let (user_id, is_admin) = audit::lock_people(&mut tx, actor, &people)
         .await?
         .ok_or_else(|| crate::store::users::unknown(new.user))?;
+    require_staff(&mut tx, actor).await?;
     if !is_admin {
         return Err(OkfError::Refused {
             reason: format!(
@@ -447,6 +452,38 @@ pub async fn create(
     let record = find_in(&mut tx, id).await?;
     tx.commit().await?;
     Ok(record)
+}
+
+/// Refuses an actor whose user is not an admin user (spec Part 6: an unlock
+/// is made by an admin user; issue #447). The command line acts with no
+/// user, as the operator, and passes. Call it after
+/// [`audit::lock_people`], which holds the actor's row `FOR KEY SHARE`:
+/// `users::set_admin` takes it `FOR UPDATE`, so the flag read here cannot
+/// change before the commit, and a demotion committed while this waited is
+/// seen.
+///
+/// # Arguments
+/// * `conn` - the unlock's transaction.
+/// * `actor` - who makes the unlock.
+///
+/// # Errors
+/// [`OkfError::Forbidden`] for a user who is not (or no longer) an admin,
+/// or is gone; [`OkfError::Database`].
+async fn require_staff(conn: &mut PgConnection, actor: &AuditActor) -> Result<(), OkfError> {
+    let Some(user_id) = actor.user_id.as_deref() else {
+        return Ok(());
+    };
+    let staff: Option<bool> = sqlx::query_scalar("SELECT is_admin FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(&mut *conn)
+        .await?;
+    if staff == Some(true) {
+        return Ok(());
+    }
+    Err(OkfError::Forbidden {
+        reason: "this credential's user is not an admin user; only operator staff make unlocks"
+            .to_string(),
+    })
 }
 
 /// Queues the unlocked email to every owner of the catalog's owner team
@@ -1138,6 +1175,117 @@ mod tests {
         }
     }
 
+    /// A console-session actor for the user called `name`.
+    async fn session_actor(pool: &PgPool, name: &str) -> AuditActor {
+        let user_id: String = sqlx::query_scalar("SELECT id FROM users WHERE name = $1")
+            .bind(name)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        AuditActor {
+            source: Source::Console,
+            credential: None,
+            user_id: Some(user_id),
+            label: "console session".to_string(),
+            via: Via::Session,
+            operator: true,
+            provisioner: false,
+            ip: None,
+        }
+    }
+
+    /// How many unlocks exist, and how many `catalog.unlocked` entries.
+    async fn unlocks_and_entries(pool: &PgPool) -> (i64, i64) {
+        let unlocks: i64 = sqlx::query_scalar("SELECT count(*) FROM unlocks")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        let entries = testing::entries(pool, "catalog.unlocked").await.len();
+        (unlocks, i64::try_from(entries).unwrap())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn only_an_admin_user_or_the_command_line_creates_an_unlock() {
+        // Issue #447: TEST_USER is not an admin user, so it may not unlock
+        // `main` for admin `staff`; nothing is written.
+        let db = test_db().await;
+        staff_and_main(&db.pool).await;
+        let customer = session_actor(&db.pool, TEST_USER).await;
+        let staff = session_actor(&db.pool, "staff").await;
+
+        let refused = create(&db.pool, &new(1), &policy(), &customer, now()).await;
+        let written = unlocks_and_entries(&db.pool).await;
+        let by_staff = create(&db.pool, &new(1), &policy(), &staff, now()).await;
+        let by_cli = create(&db.pool, &new(1), &policy(), &AuditActor::cli(), now()).await;
+
+        assert!(
+            matches!(refused, Err(OkfError::Forbidden { .. })),
+            "{refused:?}"
+        );
+        assert_eq!(written, (0, 0));
+        assert!(by_staff.is_ok(), "{by_staff:?}");
+        assert!(by_cli.is_ok(), "{by_cli:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unlock_waiting_on_its_creators_demotion_is_refused() {
+        // Admin `staff` unlocks `main` for admin `boss` while `staff` is
+        // being demoted. The demotion holds every admin row `FOR UPDATE`
+        // and is paused at its generation bump (the `server_state` row,
+        // held here); the unlock queues on the users' rows. Once the
+        // demotion commits, the unlock must see that its creator is no
+        // longer staff: a check made before the lock would let it through.
+        let db = test_db().await;
+        staff_and_main(&db.pool).await;
+        admin(&db.pool, "boss").await;
+        let actor = session_actor(&db.pool, "staff").await;
+        let mut holder = db.pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM server_state FOR UPDATE")
+            .execute(&mut *holder)
+            .await
+            .unwrap();
+        let demotion = tokio::spawn({
+            let pool = db.pool.clone();
+            async move {
+                let off = AdminChange {
+                    on: false,
+                    allow_last: false,
+                };
+                users::set_admin(&pool, "staff", off, &AuditActor::cli(), now()).await
+            }
+        });
+        wait_for_lock_waiters(&db.pool, 1).await;
+        let unlock = tokio::spawn({
+            let pool = db.pool.clone();
+            async move {
+                let new = NewUnlock {
+                    user: "boss",
+                    ..new(1)
+                };
+                create(&pool, &new, &policy(), &actor, now()).await
+            }
+        });
+        wait_for_lock_waiters(&db.pool, 2).await;
+        // Dropping the holder rolls it back and releases the row.
+        drop(holder);
+        let wait = Duration::from_secs(30);
+        let demoted = tokio::time::timeout(wait, demotion)
+            .await
+            .expect("the demotion finished within 30 s")
+            .expect("the demotion task did not panic");
+        let unlocked = tokio::time::timeout(wait, unlock)
+            .await
+            .expect("the unlock finished within 30 s")
+            .expect("the unlock task did not panic");
+
+        assert!(demoted.unwrap(), "staff was an admin before the demotion");
+        assert!(
+            matches!(unlocked, Err(OkfError::Forbidden { .. })),
+            "{unlocked:?}"
+        );
+        assert_eq!(unlocks_and_entries(&db.pool).await, (0, 0));
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn an_unlock_by_an_admin_and_a_concurrent_demotion_of_its_staff_both_finish() {
         // Two admins: the lower id acts (a console session), the higher is
@@ -1153,18 +1301,9 @@ mod tests {
         .fetch_all(&db.pool)
         .await
         .unwrap();
-        let (actor_id, _) = &ids[0];
+        let (_, actor_name) = &ids[0];
         let (_, target) = ids[1].clone();
-        let actor = AuditActor {
-            source: Source::Console,
-            credential: None,
-            user_id: Some(actor_id.clone()),
-            label: "console session".to_string(),
-            via: Via::Session,
-            operator: true,
-            provisioner: false,
-            ip: None,
-        };
+        let actor = session_actor(&db.pool, actor_name).await;
         // The catalog row, which the unlock's foreign key needs after it
         // has locked its users.
         let mut holder = db.pool.begin().await.unwrap();
