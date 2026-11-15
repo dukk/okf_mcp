@@ -468,6 +468,29 @@ exit 0'
     flock -n "$repo/.git/agentic/gates.lock" true || die "the daemon still holds gates.lock"
 }
 
+# The lock outlives the gate's own command: while gate.sh is still stopping a
+# TERM-ignoring leftover, no other gate may take it.
+test_gate_holds_the_lock_until_its_cleanup_ends() {
+    new_fixtures; leaky_gate 'exit 0'
+    (cd "$repo" && PATH="$fx/bin:$PATH" AGENTIC_GATE_KILL_AFTER=3 \
+        "$tools/gate.sh" lint) >"$fx/out" 2>&1 &
+    gate_pid=$!
+    for ((tick = 0; tick < 50; tick++)); do
+        [ -s "$fx/child.pid" ] && break
+        sleep 0.1
+    done
+    [ -s "$fx/child.pid" ] || die "the fake gate didn't start its child"
+    sleep 1 # the leader has exited; cleanup is waiting out its 3 s grace
+    kill -0 "$(cat "$fx/child.pid")" 2>/dev/null || die "the leftover is already gone"
+    ! flock -n "$repo/.git/agentic/gates.lock" true || die "the lock is free during cleanup"
+    wait "$gate_pid"
+    rc=$?
+    out=$(cat "$fx/out")
+    want_rc 0; want_out "leaving 1 process(es) behind"
+    ! kill -0 "$(cat "$fx/child.pid")" 2>/dev/null || die "the leftover outlived the gate"
+    flock -n "$repo/.git/agentic/gates.lock" true || die "gates.lock is still held"
+}
+
 test_gate_lock_wait_is_bounded() {
     new_fixtures; fake_just 'exit 0'
     mkdir -p "$repo/.git/agentic"

@@ -11,12 +11,23 @@
   machine then waited until its lock-wait limit ran out (observed on
   2026-11-15: a lint and a test gate each queued about 25 minutes behind an
   idle sccache server).
-- The gate now runs `flock -o`: flock holds the lock itself and closes the
-  descriptor before running the command, so no child inherits it.
+- `gate.sh` now takes the lock itself on fd 9 (`flock -w`), before the
+  gate starts, and holds it until `agentic_run_bounded` returns, so through
+  the process-group cleanup too. It runs the gate with `9>&-`, so no child
+  inherits the lock. Time spent waiting for the lock still counts against
+  the gate's limit. A lock wait that runs out reports "waited its <limit>
+  limit for the gate lock" instead of "was killed or timed out".
+- A first version of this fix used `flock -o`. Review found that it freed
+  the lock as soon as the gate's main command exited, while cleanup was
+  still stopping TERM-ignoring leftovers (up to the 60 s grace period),
+  so a second gate could run beside them.
 
 ## Tests
 
 - `test_gate_daemon_that_escapes_the_group_does_not_keep_the_lock` in
   `tools/agentic/tests/run.sh`: a fake gate starts a `setsid` daemon and
-  exits; the lock must be free while the daemon still runs. It fails
-  without `-o`.
+  exits; the lock must be free while the daemon still runs. It fails on
+  `main`.
+- `test_gate_holds_the_lock_until_its_cleanup_ends`: while gate.sh is
+  still stopping a TERM-ignoring leftover, `flock -n` on the lock must
+  fail. It fails with `flock -o`.
