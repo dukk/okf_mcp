@@ -17,6 +17,7 @@ use crate::mcp::{blocking, reply, OkfServer};
 use crate::okf::search::{search_catalogs, CatalogHit, SearchQuery};
 use crate::okf::snapshot::Snapshot;
 use crate::overlay::View;
+use crate::store::audit::AccessKind;
 
 /// The design's default `limit`.
 const DEFAULT_LIMIT: usize = 20;
@@ -101,6 +102,9 @@ pub(crate) async fn run(ctx: &ToolContext, params: SearchParams) -> Result<Searc
     let states = ctx.states(params.catalogs.as_deref())?;
     let pinned = ctx.pin(params.changeset.as_deref()).await?;
     require_selected(pinned.as_ref(), &states)?;
+    // A search reads every catalog before it answers: all are admitted at
+    // once, or none (a refused call queues no read).
+    ctx.admit_all(&states, AccessKind::Read)?;
     let query = SearchQuery {
         text: params.query,
         concept_type: params.concept_type,

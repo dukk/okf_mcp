@@ -32,6 +32,7 @@ use crate::okf::outline::Outline;
 use crate::okf::pystr::universal_newlines;
 use crate::okf::snapshot::DocKind;
 use crate::render::{to_html, Page};
+use crate::store::audit::AccessKind;
 use crate::store::history::content_at;
 use crate::store::keys::Access;
 
@@ -170,6 +171,8 @@ async fn tree(
 ) -> Result<Json<Tree>, AppError> {
     let ctx = context(&app, principal, requester);
     let state = ctx.one(Some(&catalog))?;
+    // The tree lists the catalog's documents: a read of its contents.
+    ctx.admit(&state, AccessKind::Read)?;
     let loaded = state.current();
     let documents = loaded
         .snapshot()

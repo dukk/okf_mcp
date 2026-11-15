@@ -317,6 +317,7 @@ mod tests {
             kind: CredentialKind::ApiKey,
             user: None,
             user_id: None,
+            gates: Default::default(),
             suspended: std::sync::Arc::new(
                 suspended
                     .iter()

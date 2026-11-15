@@ -2,18 +2,20 @@
 //! catalogs, one view of the catalog map, and the changeset a handle names
 //! ([`Pinned`]).
 
-use std::sync::Arc;
+use std::borrow::Cow;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 
 use axum::http::request::Parts;
 
 use crate::app::{App, Catalogs};
-use crate::auth::Principal;
+use crate::auth::{Admission, Principal};
 use crate::catalog::CatalogState;
 use crate::error::OkfError;
 use crate::http::requester::Requester;
 use crate::overlay::View;
 use crate::selection::{connection_catalogs, in_scope, resolve, Selection, Sources};
-use crate::store::audit::{AuditActor, Source};
+use crate::store::audit::{AccessKind, AccessRecord, AuditActor, Source};
 use crate::store::changesets::{self, ChangesetRow, ChangesetState};
 use crate::store::keys::Access;
 
@@ -59,6 +61,10 @@ pub struct ToolContext {
     catalogs: Arc<Catalogs>,
     // The request's address and source, for the audit log.
     requester: Requester,
+    // The accesses this call has noted for the audit log, so each catalog
+    // and kind counts once per call (plan Decision 5). A `std` mutex: held
+    // only to insert, never across an `.await`.
+    noted: Mutex<HashSet<(String, AccessKind)>>,
 }
 
 impl ToolContext {
@@ -85,6 +91,7 @@ impl ToolContext {
                 ip: None,
                 source: Source::Api,
             },
+            noted: Mutex::default(),
         }
     }
 
@@ -195,7 +202,10 @@ impl ToolContext {
         }
     }
 
-    /// Resolves the call's catalogs (design "Catalog selection").
+    /// Resolves the call's catalogs (design "Catalog selection"). Admits
+    /// nothing: a tool admits each catalog right before it reads its
+    /// contents (`ToolContext::view`, `ToolContext::admit`), so only the
+    /// catalogs actually read are recorded (plan Decision 23).
     ///
     /// # Arguments
     /// * `argument` - the call's `catalogs` (or `catalog` as one name).
@@ -256,7 +266,12 @@ impl ToolContext {
         self.states(argument.as_ref().map(std::slice::from_ref))
     }
 
-    /// The one catalog a report runs on: `catalog`, else the first selected.
+    /// The one catalog a call acts on: `catalog`, else the first selected.
+    /// Admits nothing, like [`ToolContext::select`]: a tool that reads the
+    /// catalog's contents calls `ToolContext::admit` after its own access
+    /// checks, right before the read, and one that only mutates or
+    /// authorizes against it (a maintenance claim, opening a changeset)
+    /// records nothing (plan Decision 23).
     ///
     /// # Arguments
     /// * `catalog` - the call's `catalog` argument.
@@ -271,6 +286,121 @@ impl ToolContext {
         let selection = self.select(argument.as_ref().map(std::slice::from_ref))?;
         // `write_target` is the first selected catalog.
         Ok(self.state(selection.write_target()))
+    }
+
+    /// Notes one access to `state`'s contents for the audit log: at most
+    /// once per call, catalog and kind (one request, one count), and only
+    /// for an admission that is recorded. The admission and the scope come
+    /// from gates that describe the incarnation this call reads (the
+    /// state's `catalogs.id`): the principal's own, else the key cache's
+    /// current ones, which `App::poll` publishes before the catalog map
+    /// that goes with them. The identities and scope are fixed now
+    /// ([`Principal::access_record`]); the write runs in the background
+    /// ([`App::note_access`]), off the request path.
+    ///
+    /// # Arguments
+    /// * `state` - a catalog this call reaches at the level `kind` needs,
+    ///   from this call's catalog map.
+    /// * `kind` - what the call does with its contents.
+    ///
+    /// # Errors
+    /// [`OkfError::Busy`] for an admin credential when no gates know the
+    /// incarnation read (the catalog was deleted and created again, or
+    /// created, while the cache and the map were being reloaded): its read
+    /// may be an admin read, and is neither recorded under the wrong
+    /// catalog or team nor left out. A retry sees a settled cache.
+    pub(crate) fn admit(&self, state: &CatalogState, kind: AccessKind) -> Result<(), OkfError> {
+        if let Some(admitted) = self.admission_of(state, kind)? {
+            self.note(admitted, kind);
+        }
+        Ok(())
+    }
+
+    /// Admits every state of a read that reads them all before answering
+    /// (a search), all or nothing: each is checked first, and nothing is
+    /// noted unless every one passes, so a call refused with
+    /// [`OkfError::Busy`] queues no read.
+    ///
+    /// # Arguments
+    /// * `states` - the catalogs the call reads.
+    /// * `kind` - what the call does with their contents.
+    ///
+    /// # Errors
+    /// [`OkfError::Busy`] as `ToolContext::admit`, for any of them.
+    pub(crate) fn admit_all(
+        &self,
+        states: &[Arc<CatalogState>],
+        kind: AccessKind,
+    ) -> Result<(), OkfError> {
+        // `collect` into a `Result` stops at the first error, like a loop
+        // that returns early.
+        let admitted = states
+            .iter()
+            .map(|state| self.admission_of(state, kind))
+            .collect::<Result<Vec<_>, _>>()?;
+        // `flatten` skips the `None`s (reads that record nothing).
+        for admitted in admitted.into_iter().flatten() {
+            self.note(admitted, kind);
+        }
+        Ok(())
+    }
+
+    /// What `ToolContext::admit` would note for `state`, with no side
+    /// effect: the record and its admission, or `None` for a read that
+    /// records nothing.
+    ///
+    /// # Errors
+    /// [`OkfError::Busy`] as `ToolContext::admit`.
+    fn admission_of(
+        &self,
+        state: &CatalogState,
+        kind: AccessKind,
+    ) -> Result<Option<(AccessRecord, Admission)>, OkfError> {
+        let access = match kind {
+            AccessKind::Write => Access::Write,
+            AccessKind::Read | AccessKind::Export => Access::Read,
+        };
+        let (catalog, catalog_id) = (state.name(), state.id());
+        // A principal whose gates describe this incarnation, borrowed as it
+        // is, or a copy carrying the cache's current gates (`Cow` holds
+        // either, like a value that is "maybe a reference").
+        let principal = match self.principal.scope_of(catalog, catalog_id) {
+            Some(_) => Cow::Borrowed(&*self.principal),
+            None => Cow::Owned(Principal {
+                gates: self.app.keys().gates(),
+                ..(*self.principal).clone()
+            }),
+        };
+        let Some(scope) = principal.scope_of(catalog, catalog_id) else {
+            // Only an admin credential's read can be an admin read.
+            if self.principal.access == Access::Admin {
+                return Err(OkfError::Busy {
+                    reason: format!("catalog {catalog:?} is being reloaded"),
+                });
+            }
+            return Ok(None);
+        };
+        let now = self.app.clock().now();
+        // A refusal (Task 9b checks those before this runs) or an admission
+        // that records nothing notes nothing.
+        let admission = match principal.admission(catalog, access, now) {
+            Ok(admission) if admission.is_recorded() => admission,
+            Ok(_) | Err(_) => return Ok(None),
+        };
+        let record = principal.access_record(&self.requester, catalog, scope, now);
+        Ok(Some((record, admission)))
+    }
+
+    /// Notes an admitted access, once per call, catalog and kind.
+    fn note(&self, (record, admission): (AccessRecord, Admission), kind: AccessKind) {
+        let fresh = self
+            .noted
+            .lock()
+            .expect("noted lock poisoned")
+            .insert((record.catalog.clone(), kind));
+        if fresh {
+            self.app.note_access(record, kind, admission);
+        }
     }
 
     /// The call's changeset, if it named one: what a read tool passes to
@@ -289,7 +419,9 @@ impl ToolContext {
         match handle {
             None => Ok(None),
             // `.map(Some)` wraps the `Ok` value: `Ok(pinned)` becomes `Ok(Some(pinned))`.
-            Some(handle) => self.changeset(handle, Access::Read).await.map(Some),
+            // Resolved without admitting: the read tool's `view` admits the
+            // pinned catalog when, and only if, it reads it.
+            Some(handle) => self.resolve_changeset(handle, Access::Read).await.map(Some),
         }
     }
 
@@ -310,14 +442,18 @@ impl ToolContext {
     /// # Returns
     /// The view.
     ///
+    /// Admits the read first (`ToolContext::admit`): a view is taken only
+    /// to read it.
+    ///
     /// # Errors
-    /// An overlay build error ([`crate::overlay::build_overlay`]);
-    /// [`OkfError::Database`].
+    /// [`OkfError::Busy`] as `ToolContext::admit`; an overlay build error
+    /// ([`crate::overlay::build_overlay`]); [`OkfError::Database`].
     pub async fn view(
         &self,
         state: &CatalogState,
         pinned: Option<&Pinned>,
     ) -> Result<View, OkfError> {
+        self.admit(state, AccessKind::Read)?;
         // `filter` keeps the pinned changeset only if it is in this catalog.
         match pinned.filter(|pinned| pinned.state.id() == state.id()) {
             None => Ok(View::Published(state.current())),
@@ -386,8 +522,29 @@ impl ToolContext {
     /// - [`OkfError::Refused`] for a changeset that was published or
     ///   discarded (a discarded one with a hint that an empty changeset is
     ///   discarded after 24 hours);
+    /// - [`OkfError::Busy`] as `ToolContext::admit`;
     /// - [`OkfError::Database`].
     pub async fn changeset(&self, handle: &str, access: Access) -> Result<Pinned, OkfError> {
+        let pinned = self.resolve_changeset(handle, access).await?;
+        // The changeset's own catalog only, never the connection's others
+        // (plan Decision 23). `if` is an expression, like Python's
+        // conditional expression.
+        let kind = if access == Access::Write {
+            AccessKind::Write
+        } else {
+            AccessKind::Read
+        };
+        self.admit(&pinned.state, kind)?;
+        Ok(pinned)
+    }
+
+    /// [`ToolContext::changeset`] without the admission: for a handle a read
+    /// tool pins, whose catalog it admits only if it reads it.
+    ///
+    /// # Errors
+    /// As [`ToolContext::changeset`], but never [`OkfError::Busy`] from the
+    /// admission.
+    async fn resolve_changeset(&self, handle: &str, access: Access) -> Result<Pinned, OkfError> {
         self.check_connection()?;
         // A closure, so each refusal below builds its own error value.
         let unknown = || OkfError::UnknownChangeset {

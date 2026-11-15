@@ -15,6 +15,7 @@ use crate::app::App;
 use crate::archive::read_tarball;
 use crate::auth::Principal;
 use crate::error::OkfError;
+use crate::http::requester::Requester;
 use crate::http::{timeout_layer, AppError, REQUEST_TIMEOUT};
 use crate::mcp::blocking;
 use crate::store::audit::AuditActor;
@@ -91,6 +92,7 @@ fn body_limit(max_import_bytes: u64) -> usize {
 /// # Arguments
 /// * `app` - the shared state.
 /// * `principal` - the caller, from the auth layer.
+/// * `requester` - its address and source, for the `catalog.exported` entry.
 /// * `name` - the catalog, from the path.
 ///
 /// # Returns
@@ -105,6 +107,7 @@ fn body_limit(max_import_bytes: u64) -> usize {
 async fn export_catalog(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
+    requester: Requester,
     Path(name): Path<String>,
 ) -> Result<Response, AppError> {
     // `?` returns early with the error, converted to `AppError` by `From`.
@@ -113,7 +116,9 @@ async fn export_catalog(
     principal.require_export(&name)?;
     // M3's export builds the whole tarball in memory (a `Vec<u8>`).
     // The generation is for the command line's `import --expect-generation`.
-    let (bytes, _generation) = export(app.pool(), &name, Vec::new()).await?;
+    let actor = AuditActor::of(&principal, &requester);
+    let (bytes, _generation) =
+        export(app.pool(), &name, Vec::new(), &actor, app.clock().now()).await?;
     // `name` is a catalog that exists, so it is `[a-z0-9-]+` and safe in a header.
     let disposition = format!("attachment; filename=\"{name}.tar.gz\"");
     let headers = [

@@ -2372,6 +2372,7 @@ mod tests {
             records,
             std::collections::HashMap::new(),
             Default::default(),
+            Default::default(),
             now(),
         );
         assert!(

@@ -309,6 +309,7 @@ async fn session_principal(app: &App, user_id: &str) -> Result<Option<Principal>
             &user,
             app.keys().ceiling_of(user_id),
             app.keys().suspensions(),
+            app.keys().gates(),
         )));
     }
     // Not in the cache yet: two queries, until the next reload.
@@ -322,6 +323,7 @@ async fn session_principal(app: &App, user_id: &str) -> Result<Option<Principal>
             &user,
             ceiling,
             app.keys().suspensions(),
+            app.keys().gates(),
         ))),
         // Deleted between the two reads.
         Err(OkfError::UnknownName { .. }) => Ok(None),

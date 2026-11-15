@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::OkfError;
 use crate::maintenance::types::{ClaimResult, Lease, Receipt, RevisionPin, RunState, Submission};
 use crate::mcp::context::ToolContext;
+use crate::store::audit::AccessKind;
 use crate::store::keys::Access;
 use crate::store::maintenance::{evidence, reports, runs};
 
@@ -138,6 +139,10 @@ pub(crate) async fn maintenance_read_revision(
     };
     // Normalize once at the boundary; the store's exact-byte reader takes a stored path.
     let pin = crate::maintenance::validate::pin(&pin)?;
+    // It answers a document's text at a revision: a read of the contents,
+    // admitted once the request is valid. The other tools here claim,
+    // renew, submit or close work and read none, so they admit nothing.
+    ctx.admit(&state, AccessKind::Read)?;
     let mut result = evidence::read(ctx.app().pool(), state.id(), &pin).await?;
     super::pin_path(&mut result.pin);
     Ok(MaintenanceResult::new(state.name(), result))
