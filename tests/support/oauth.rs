@@ -322,9 +322,9 @@ impl OAuthClient {
                 ("action", "approve"),
             ])
             .await;
-        assert_eq!(approved.status(), 303);
-        let location = url::Url::parse(approved.headers()["location"].to_str().expect("location"))
-            .expect("URL");
+        assert_eq!(approved.status(), 200);
+        let page = approved.text().await.expect("forwarding page");
+        let location = forwarded(&page);
         assert!(location.as_str().starts_with(&self.redirect_uri));
         let param = |name: &str| {
             location
@@ -391,6 +391,15 @@ impl OAuthClient {
         ])
         .await
     }
+}
+
+/// Where a consent POST's forwarding page sends the browser: its Continue
+/// link's target, with the `&amp;` between query pairs undone.
+fn forwarded(page: &str) -> url::Url {
+    let marker = "id=\"consent-forward\" href=\"";
+    let start = page.find(marker).expect("the Continue link") + marker.len();
+    let end = start + page[start..].find('"').expect("closing quote");
+    url::Url::parse(&page[start..end].replace("&amp;", "&")).expect("an absolute URL")
 }
 
 /// The `value` of the hidden input `name` in a consent page.

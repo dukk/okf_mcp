@@ -247,6 +247,32 @@ pub(crate) async fn send_as(
     )
 }
 
+/// Where a consent POST's answer forwards the browser
+/// ([`crate::oauth::consent::forward_page`]): the Continue link's target,
+/// unescaped.
+///
+/// # Arguments
+/// * `status` - the answer's status.
+/// * `headers` - its headers.
+/// * `page` - its HTML.
+///
+/// # Returns
+/// The client URL, answer included.
+///
+/// # Panics
+/// If the answer is not a 200 forwarding page.
+pub(crate) fn forwarded(status: StatusCode, headers: &HeaderMap, page: &str) -> url::Url {
+    assert_eq!(status, StatusCode::OK, "a forwarding page: {page}");
+    assert!(headers.get(header::LOCATION).is_none(), "not a redirect");
+    let marker = "id=\"consent-forward\" href=\"";
+    let start = page.find(marker).expect("the Continue link") + marker.len();
+    let end = start + page[start..].find('"').expect("closing quote");
+    // `escape` wrote `&amp;` between the query's pairs. The test redirect
+    // URIs hold no `"`, `'`, `<` or `>`, and the query is percent-encoded,
+    // so `&amp;` is the only entity to undo.
+    url::Url::parse(&page[start..end].replace("&amp;", "&")).expect("an absolute URL")
+}
+
 /// The `value` of the hidden input `name` in a consent page.
 ///
 /// # Arguments
