@@ -343,6 +343,9 @@ fn request_span<B>(request: &axum::http::Request<B>) -> tracing::Span {
     )
 }
 
+/// How long a stopping server waits for its background access writes.
+const ACCESS_SETTLE_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Serves until `shutdown` is cancelled, running the poll loop, the clock
 /// check and (unless `[mail] worker = false`) the mail worker beside it.
 ///
@@ -351,7 +354,8 @@ fn request_span<B>(request: &axum::http::Request<B>) -> tracing::Span {
 /// * `listener` - a bound socket.
 /// * `shutdown` - cancelled to stop: it ends the MCP sessions, the poll loop,
 ///   the clock check, the mail worker and the listener, and `serve` returns
-///   once open connections close and the mail worker has stopped.
+///   once open connections close, the mail worker has stopped and the
+///   access counts in flight are written.
 ///
 /// # Errors
 /// The listener's I/O error, after the loops and the sessions are
@@ -397,6 +401,14 @@ pub async fn serve(
         if let Err(error) = mail_worker.await {
             tracing::error!(%error, "the mail worker panicked");
         }
+    }
+    // The access counts still being written (plan Decision 5), bounded so a
+    // database that stopped answering cannot hold the shutdown forever.
+    if tokio::time::timeout(ACCESS_SETTLE_LIMIT, app.settle_access())
+        .await
+        .is_err()
+    {
+        tracing::error!("gave up waiting for the access counts being written");
     }
     served
 }

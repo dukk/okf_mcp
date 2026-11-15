@@ -815,7 +815,9 @@ pub async fn run(cli: Cli, clock: Arc<dyn Clock>) -> anyhow::Result<()> {
             // Build the archive in memory first: no `StdoutLock` is held across
             // `.await` (which would make this future impossible to
             // `tokio::spawn`), and an unknown catalog leaves no file behind.
-            let (tarball, generation) = export::export(&pool, &catalog, Vec::new()).await?;
+            let (tarball, generation) =
+                export::export(&pool, &catalog, Vec::new(), &AuditActor::cli(), clock.now())
+                    .await?;
             // Writing is blocking I/O: run it on a blocking thread.
             tokio::task::spawn_blocking(move || write_output(&output, &tarball))
                 .await

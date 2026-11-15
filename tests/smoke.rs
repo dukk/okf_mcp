@@ -208,7 +208,15 @@ async fn storage_round_trip_on_a_real_catalog() {
     });
 
     let started = Instant::now();
-    let (tarball, _generation) = export::export(&db.pool, "pg", Vec::new()).await.unwrap();
+    let (tarball, _generation) = export::export(
+        &db.pool,
+        "pg",
+        Vec::new(),
+        &okf_mcp::store::audit::AuditActor::cli(),
+        chrono::Utc::now(),
+    )
+    .await
+    .unwrap();
     eprintln!("export: {} bytes in {:?}", tarball.len(), started.elapsed());
 }
 

@@ -270,7 +270,7 @@ Why each edge, and the shared files to merge with care:
 | `migrations/0015_provisioner.sql` | Create | 5 |
 | `migrations/0016_unlocks.sql` | Create | 9a |
 | `migrations/0017_maintenance_audit.sql` | Create | 9c |
-| `src/store/audit.rs` | Create (write helper); `prune` (6d); `record_admin_read`, `record_export` (7b); `list`, `Viewer`, `AuditQuery`, `AuditRecord` (8a) | 1, 6d, 7b, 8a |
+| `src/store/audit.rs` | Create (write helper); `prune` (6d); `AccessKind`, `AccessRecord`, `record_admin_read` (7b; *corrected, issue #401: the export's entry is written by `store::export` itself*); `list`, `Viewer`, `AuditQuery`, `AuditRecord` (8a) | 1, 6d, 7b, 8a |
 | `src/store/unlocks.rs` | Create | 9a, 9b |
 | `src/store/gates.rs` | Create (memberships, admins); entitlements, unlocks, maintenance flags, `require_unlock` (9b) | 7b, 9b |
 | `src/store/maintenance/tests.rs` | The `maintenance_run` entry test | 9c |
@@ -4048,6 +4048,8 @@ git commit -m "feat(audit): record publishes, reverts and admins' discards (M14 
 
 (Use the browse routes `browse::routes()` defines; the document route's path may differ.) And in `src/store/export.rs`:
 
+> **Corrected (issue #401, 2026-11-15).** The REST tests above live in their own module, `src/http/api/access_tests.rs` (as `provisioner_tests.rs` does), not in `browse.rs`. `staff_root` (user `staff`, *not* an admin user, display name "Staff Member", and an every-catalog admin key `staff-root`) and `settle_access(test)` (`App::settle_access` under a 30-second `tokio::time::timeout`, so no test waits unbounded) are in `mcp::testing`; every test that waits on the background writes calls that `settle_access`, never `test.app.settle_access()` bare. `every_export_is_recorded_whoever_asks` also exports as `staff` (both are recorded, neither is an admin read), and `an_operator_read_is_bucketed_and_a_members_read_is_not` also reads with the member's admin key. `gates::tests::a_key_from_before_the_audit_log_gets_its_credential_id_at_load` covers `ensure_audit_rows`.
+
 ```rust
     #[tokio::test(flavor = "multi_thread")]
     async fn the_cli_export_is_recorded_as_the_cli() {
@@ -4254,6 +4256,8 @@ async fn ensure_audit_rows(pool: &PgPool) -> Result<(), OkfError> {
 ```
 
 (A credential's label in `audit_credentials` is its `actor`, which a key keeps for life; the change paths of Tasks 6a to 6c keep refreshing people and labels as before.)
+
+> **Corrected (issue #401, 2026-11-15).** `gates::load` runs `ensure_audit_rows` first, then its five reads in one `try_join!`; and `KeyCache::read` calls it *after* its `try_join!` of keys, ceilings, users and suspensions, not as a fifth member: run beside the key list, a key listed after `ensure_audit_rows` looked would have no credential id, and its admin reads would fall back to the label bucket, which every API key shares (`api key`). `ensure_audit_rows` makes credential rows first; since migration `0014_audit_row_locks.sql` every user and team has its row from creation, so the user and team passes find nothing after the first load but stay as a guard. `from_records(records, ceilings, suspended, gates, now)` as planned; its test callers pass `Arc::default()`.
 
 > **Corrected (PR #375 review, 2026-11-13).** An hourly `catalog.admin_read` bucket is keyed by (credential or person audit id, `catalogs.id`, owner `audit_teams` id, hour), not by catalog name: reads before and after a transfer to another team, or of a catalog deleted and created again under the same name, go to separate entries, each scoped to the team that owned the catalog (Decision 20). The catalog and its owner are captured at admission (below), never looked up by name when the write runs.
 
@@ -4505,6 +4509,30 @@ Test, in `src/mcp/changesets.rs`' tests (move Step 1's `staff_root` helper, in `
 
 Run it with `tools/agentic/gate.sh narrow --lib mcp::changesets` in Step 6.
 
+> **Corrected (issue #401, 2026-11-15).** What shipped for Decision 23 (`src/mcp/context.rs`):
+> - *(Superseded by the round 2 note below: `select` admits nothing and there is no `resolve_call`.)* `resolve_call(argument)` was `select`'s old body and admitted nothing; `select` was `resolve_call` plus `admit(name, Read)` for each selected catalog. `check_connection` used `resolve_call`.
+> - *(Superseded by the round 3 note below: `one` admits nothing and there is no `target`.)* `target(catalog)` was `one`'s old body (now on `select`), admitting nothing; `one` is `target` plus `admit`. The paths that read no catalog's contents use the non-admitting forms: `check_connection`, `list_catalogs`' selection (`select(None)`), `open_changeset` (`target`; its writes are recorded as publishes) and `list_changesets` with *or* without `catalog` (`target` for a named one: a changeset list is not content).
+> - `changeset` admits only an open changeset, after `require` (a published or discarded handle is refused, not read).
+> - The revision route (`browse.rs`) needs no `ctx.admit` of its own: it reads through `history`, whose `read_set` admits, and `ctx.one`; the per-call `noted` set counts the request once.
+> - The test opens its changeset with `open_changeset` (so opening is shown to record nothing) and also lists with `catalog: Some("other")`.
+
+> **Corrected (issue #401, PR #433 review, 2026-11-15).** The gates and the catalog map a call reads are published separately (`App::poll` swaps the key cache before the catalog map), so a call could read one incarnation of `main` (deleted and created again) while the principal's gates described another, and record the read under the wrong catalog or team, or take an admin read for a member's. `ToolContext::admit(state: &CatalogState, kind) -> Result<(), OkfError>` now takes the state the call reads and admits only through gates that know *that* incarnation: `Principal::scope_of(name, state.id())` (the gates' `CatalogScope` for the name, only if its `id` matches); failing that, a copy of the principal with the cache's current gates (`app.keys().gates()`); failing both, an admin credential is refused with `OkfError::Busy` (retryable) and a non-admin passes unrecorded. Admission and the scope then come from the same gates. `Principal::access_record(requester, catalog, scope, now) -> AccessRecord` takes that scope. `select`, `one` and `changeset` propagate the error. Tests: `access_tests::a_read_of_an_old_catalog_map_under_newer_gates_is_refused_not_misrecorded` and `an_old_principal_reading_a_new_catalog_map_is_admitted_as_the_new_catalog`.
+
+> **Corrected (issue #401, PR #433 review round 2, 2026-11-15).** Admission moved from the selection to the point of reading, so a catalog a call never reads is never recorded (a `history` or `get_concept` that answers from the first catalog of `[main, other]` used to record `other` too).
+> - `select`, `states` and `read_set` admit nothing, and `resolve_call` is gone again: `select` is the one resolution.
+> - Admissions happen at the reads: `ToolContext::view(state, pinned)` admits `state` first (every document tool and the reports read through it), the `history` loop admits each state before reading its revisions, and `one` and `changeset` admit what they return (the REST browse routes, the maintenance and report tools, `pending_changes`). `pin` resolves its handle without admitting (a private `resolve_changeset`), since the read tool's `view` admits the pinned catalog only if it reads it.
+> - A search reads every catalog before it answers, so it calls `ToolContext::admit_all(&states, kind)`: each state's admission is checked (`admission_of`, no side effect) and nothing is noted unless all pass, so a search refused with `Busy` queues no read. In a loop that reads catalog by catalog (`history`, `get_concept`), a `Busy` on a later catalog leaves the earlier ones recorded, because they were read.
+> - Tests: `access_tests::a_read_that_answers_from_the_first_catalog_records_only_that_one` and `a_search_refused_after_one_catalog_passes_queues_no_read`.
+>
+> **Corrected (issue #401, PR #433 review round 2, 2026-11-15).** `gates::load` reads its five maps in one read-only `REPEATABLE READ` transaction, after `ensure_audit_rows`, rather than in a `try_join!` over separate pooled connections, which could straddle a catalog's replacement or transfer and pair the replacement with its old members (admitting an admin read as a customer's). A private `load_with(pool, between)` runs a test's callback after the first read. Test: `store::gates::tests::the_gates_are_one_snapshot_across_a_catalog_replaced_mid_load`.
+>
+> **Corrected (issue #401, PR #433 review round 3, 2026-11-15).** `one` admits nothing either (and `target`, which it had become, is folded back into it): the maintenance tools resolve their catalog with `one` before checking `require_maintenance_report`, so an admitting `one` queued a `catalog.admin_read` for a refused `maintenance_claim` and for every claim, renew, submit and close. Each tool that reads contents admits explicitly with `ctx.admit(&state, AccessKind::Read)?` after its own access checks, right before the read:
+> - the REST `tree` route;
+> - `maintenance_read_revision`, after the pin is validated;
+> - `maintenance_get_run`, `maintenance_list_findings(_by)` and `maintenance_get_finding` (their work, findings and evidence describe the documents).
+>
+> These read through a function that admits already: the REST concept, document and revision routes (through `get_concept`, `read_document` and `history`), and the report tool (through `view`). `maintenance_claim`, `maintenance_renew`, `maintenance_submit`, `maintenance_close`, `maintenance_dispose`, `maintenance_list_runs` and `maintenance_finding_counts` read no contents and admit nothing. Test: `access_tests::a_maintenance_mutation_records_no_read_and_a_revision_read_records_one`.
+
 `select` calls `self.admit(name, AccessKind::Read)` for each catalog of a successful selection; `changeset` calls `self.admit(state.name(), if access == Access::Write { AccessKind::Write } else { AccessKind::Read })` after its `require`. The REST revision route (`browse.rs:328`) calls `ctx.admit(&catalog, AccessKind::Read)` after building its context.
 
 `src/app.rs`:
@@ -4558,11 +4586,15 @@ Run it with `tools/agentic/gate.sh narrow --lib mcp::changesets` in Step 6.
     }
 ```
 
-`http::serve` awaits `app.settle_access()` after the server stops.
+`http::serve` awaits `app.settle_access()` after the server stops. *(Corrected, issue #401, 2026-11-15: bounded by `ACCESS_SETTLE_LIMIT`, 30 seconds, and logged at `error` when it gives up, so a database that stopped answering cannot hold a shutdown forever.)*
 
 - [ ] **Step 5: Exports**
 
-`store::export::export(pool, catalog, out, audit: &AuditActor, now)`: after the read transaction commits and before compressing, record `catalog.exported` in a short transaction of its own, `{"generation", "files": rows.len()}`, teams `catalog_teams`. A failed record fails the export (no archive without its entry). The REST handler takes a `requester: Requester` argument and passes `&AuditActor::of(&principal, &requester)`; `Command::Export` passes `&AuditActor::cli()`.
+`store::export::export(pool, catalog, out, audit: &AuditActor, now)`: after the read transaction commits and before compressing, record `catalog.exported` in a short transaction of its own, `{"generation", "files": rows.len()}`, teams `catalog_teams`. A failed record fails the export (no archive without its entry).
+
+> **Corrected (issue #401, PR #433 review, 2026-11-15).** The scope is captured in the export's read snapshot: the read-only transaction also reads the owner team's `audit_teams` id (a plain `SELECT`; every team has its row from creation, and a read-only transaction cannot run `audit_team_ref`), and `record_export` gets that fixed scope with the catalog's id (`Exported { catalog, scope, generation, files }`), so an export of a catalog that moves or is deleted before its entry is written stays in the scope it was read in. Its transaction takes `lock_people(&mut tx, audit, &People::default())` (only the actor is resolved now). `details` gains `catalog_id`. Tests: `store::export::tests::an_export_belongs_to_the_owner_it_read_even_if_the_catalog_moves_or_goes` (the entry's first lock held between the read and the record), `an_export_whose_entry_fails_fails_and_records_nothing` and `access_tests::an_export_whose_entry_cannot_be_written_answers_500_without_an_archive`. The note below is superseded where it says `People { catalogs: .. }`.
+
+> **Corrected (issue #401, 2026-11-15).** The entry is written by a private `record_export` in `src/store/export.rs` (there is no `audit::record_export`); its transaction takes `audit::lock_people(&mut tx, audit, &People { catalogs: &[catalog], .. })` before `catalog_teams` and `record`, the lock order every recorder takes. `tests/roundtrip.rs` and `tests/smoke.rs` pass `AuditActor::cli()` and `Utc::now()`. The REST handler takes a `requester: Requester` argument and passes `&AuditActor::of(&principal, &requester)`; `Command::Export` passes `&AuditActor::cli()`.
 
 - [ ] **Step 6: Run, gate, commit**
 
@@ -6171,7 +6203,7 @@ git commit -m "feat(unlocks): unlock records, settings, error kinds and the owne
     }
 ```
 
-with a `staff_root` helper (create admin user `staff`, an every-catalog admin key for it, poll). And an MCP-side case in `src/selection.rs`: a connection list of `["main", "other"]` where only `other` is unlocked selects `["other"]`, and naming `main` is `UnlockRequired` (build the principal from M13's `principal_with(reach, default, suspended)`, `src/selection.rs:299`, with `user_id` and `gates` set).
+with a `staff_root` helper (create admin user `staff`, an every-catalog admin key for it, poll). *(Corrected, issue #401, 2026-11-15: Task 7b put `staff_root` in `mcp::testing`, and its `staff` is not an admin user; make it one with `users::set_admin` and poll, or give the helper a flag. Wait for background writes with `mcp::testing::settle_access(&test)`, which has a timeout.)* And an MCP-side case in `src/selection.rs`: a connection list of `["main", "other"]` where only `other` is unlocked selects `["other"]`, and naming `main` is `UnlockRequired` (build the principal from M13's `principal_with(reach, default, suspended)`, `src/selection.rs:299`, with `user_id` and `gates` set).
 
 - [ ] **Step 2: Run them and see them fail**
 
@@ -6264,8 +6296,8 @@ Expected: compile errors (`entitled`, `require_unlock`, `Admission::Unlocked`), 
 
 - `selection.rs`: `Sources` gains `now: DateTime<Utc>` (`ToolContext::select` passes `self.app.clock().now()`; tests pass `Utc::now()`). M13's `refuse_suspended` and `without_suspended` become `refuse_closed` and `without_closed`, calling `principal.check_open(name, Access::Read, sources.now)`: a named catalog that is locked is refused with `UnlockRequired`; a connection list drops it, and is refused with the first refusal only when nothing is left. Update `resolve`'s `# Errors` and the module doc.
 - `http/api/search.rs` and `mcp/changesets.rs` (`list_changesets`): M13's `check_not_suspended(name).is_ok()` filter becomes `check_open(name, Access::Read, now).is_ok()`.
-- `ToolContext::changeset`: `self.principal.require_contents(access, state.name(), self.app.clock().now())?` replaces `require`; `open_changeset` (`mcp/changesets.rs:243`) likewise; the revision route (`browse.rs:328`); `maintenance_close`'s operator override (`work.rs:172`) uses `require_contents(Access::Write, ..).is_ok()`.
-- `http/archives.rs`: export keeps M13's `require_export` (reach and read level, suspension ignored), then `principal.admission(&name, Access::Read, now)?`; with `Admission::Unlocked`, `app.note_access(.., AccessKind::Export, ..)`. Import: `require(Access::Admin, ..)` then `admission(&name, Access::Write, now)?`, noted as a write.
+- `ToolContext::changeset`: `self.principal.require_contents(access, state.name(), self.app.clock().now())?` replaces `require` (*note, issue #401: `ToolContext::admit(&state, kind)` calls `admission` itself and ignores a refusal, so the refusal must come from `require_contents` before it; since the PR #433 review it admits only through gates that know the state's incarnation and returns `Busy` for an admin credential when none do. An unlocked non-admin key must not pass unrecorded there: extend that refusal to every admission `is_recorded` would record*); `open_changeset` (`mcp/changesets.rs:243`, which since issue #401 resolves its catalog with `ctx.one`, which admits nothing) likewise; the revision route (`browse.rs:328`); `maintenance_close`'s operator override (`work.rs:172`) uses `require_contents(Access::Write, ..).is_ok()`. *(Note, issue #401 round 3, 2026-11-15: the maintenance tools resolve with the non-admitting `ctx.one` and admit explicitly only where they read contents (`maintenance_read_revision`, `maintenance_get_run`, `maintenance_list_findings_by`, `maintenance_get_finding`), after their own checks. Where `require_contents` replaces those checks, keep each `ctx.admit` after it, and admit nothing in the mutation tools.)*
+- `http/archives.rs`: export keeps M13's `require_export` (reach and read level, suspension ignored), then `principal.admission(&name, Access::Read, now)?`; with `Admission::Unlocked`, `app.note_access(.., AccessKind::Export, ..)` (*corrected, issue #401: the record comes from `principal.access_record(&requester, &name, now)`; the handler already takes `requester: Requester` for the `catalog.exported` entry*). Import: `require(Access::Admin, ..)` then `admission(&name, Access::Write, now)?`, noted as a write.
 - `App::note_access`: `Admission::Unlocked { unlock_id } => unlocks::tally(&pool, unlock_id, kind).await` (the `record` is not needed for a tally). Tallies are keyed by the unlock's id, and an unlock belongs to one `catalogs.id` (`ON DELETE CASCADE`), so a catalog deleted and created again under the same name never inherits an unlock or its counts; deleting a catalog bumps `admin_generation`, so the cache drops the unlock at once. *(Corrected, PR #375 review, 2026-11-13: checked for the same name-keying defect; none. The unlock id is part of the admission, so it is fixed when the request is admitted; a tally that runs after its catalog (and with it the unlock) was deleted updates nothing, and the unlock's `catalog.unlocked` and `catalog.unlock_ended` entries keep the record.)* In `src/store/unlocks.rs`:
 
 ```rust
@@ -6289,7 +6321,7 @@ pub async fn tally(pool: &PgPool, id: i64, kind: AccessKind) -> Result<(), OkfEr
 
 > **Corrected (M13 merged, 2026-11-14).** What the M13 selection rules shipped as, and what they mean once `refuse_closed` / `without_closed` call `check_open`:
 > - **Order.** `require_contents` keeps the spec's order (reach, level, suspension, then the unlock). At the selection there is no level check: `open_changeset`, `maintenance_dispose` and the maintenance work tools select first and check their own level after, which M13 qualified for `Suspended` (#366). So for those tools a locked catalog answers 403 `UnlockRequired` to a credential below the tool's level, where `Forbidden` would come first through `require_contents`. Reach is still first everywhere, so a credential that does not reach a catalog never learns it is locked. The founder confirmed this order (Decision 24, 2026-11-14); the spec's "The refusal" carries the same qualification.
-> - **Connections.** `check_connection` goes through `select(None)` (`src/mcp/context.rs:158-165`), so a connection whose every listed catalog is closed (suspended or locked) is refused with the first refusal by `list_changesets` without `catalog` and by every changeset handle on it; a mixed list passes, as M13 shipped for suspension.
+> - **Connections.** `check_connection` goes through `select(None)` (`src/mcp/context.rs:158-165`; *since issue #401 `select` admits nothing: admissions are at the reads, `view`, `one`, `changeset`, the `history` loop and search's `admit_all`*), so a connection whose every listed catalog is closed (suspended or locked) is refused with the first refusal by `list_changesets` without `catalog` and by every changeset handle on it; a mixed list passes, as M13 shipped for suspension.
 > - **Search.** When every reached catalog is filtered out, the REST search falls back to the key's default (M13), which is then refused as named, with `UnlockRequired` for a locked one.
 > - **Tests.** Extend M13's whole-class tests rather than writing new matrices: `mcp::context::tests::every_selection_path_refuses_or_drops_a_suspended_catalog` and `http::api::browse::tests::every_selection_backed_read_route_refuses_a_suspended_catalog_to_members` have the shape a "locked" twin needs (with `require_unlock` on and an admin key outside its teams), and `http::api::testing::{Expect, assert_answers}` gives a status and error kind per request.
 

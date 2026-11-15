@@ -12,7 +12,7 @@
 //! compares with stored hashes, which does not help find a key, so there is
 //! no constant-time scan (the design's deviation, recorded in the M4 plan).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 // `Future` is not in the 2021 prelude; the trait below names it.
 use std::future::Future;
@@ -28,10 +28,13 @@ use sqlx::PgPool;
 use crate::app::App;
 use crate::clock::Clock;
 use crate::error::OkfError;
+use crate::http::requester::Requester;
 use crate::http::AppError;
 use crate::keys;
 use crate::oauth::access::OAuthVerifier;
+use crate::store::audit::{AccessRecord, AuditActor};
 use crate::store::ceiling::{self, cap, Ceiling};
+use crate::store::gates;
 use crate::store::keys::{self as key_rows, Access, KeyKind, KeyRecord};
 use crate::store::teams::{self, SuspendedCatalog};
 use crate::store::users::{self, UserAuth};
@@ -75,6 +78,58 @@ pub enum CredentialKind {
 /// key-cache load, shared (through an `Arc`) by every principal built from it.
 pub type Suspensions = HashMap<String, SuspendedCatalog>;
 
+/// Who reaches which catalog as a customer, and the audit ids an operator's
+/// access is recorded with: loaded with the key cache and shared by every
+/// principal of that load (as the suspension map is). Task 9b of M14 adds
+/// the unlock and maintenance fields.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AccessGates {
+    /// By `users.id`: the catalogs owned by the user's teams.
+    pub members: HashMap<String, HashSet<String>>,
+    /// The `users.id` of every admin user.
+    pub admins: HashSet<String>,
+    /// By `users.id`: the user's `audit_people` id. Resolved here, at load,
+    /// so an access is recorded with ids fixed at admission (M14 Decision 21).
+    pub people: HashMap<String, i64>,
+    /// By key or grant id: its `audit_credentials` id.
+    pub credentials: HashMap<String, i64>,
+    /// By catalog name: its immutable id and its owner team's `audit_teams`
+    /// id (M14 Decision 22).
+    pub catalogs: HashMap<String, CatalogScope>,
+}
+
+/// A catalog as an access record names it, fixed at admission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CatalogScope {
+    /// `catalogs.id`, never reused.
+    pub id: i64,
+    /// The owner team's `audit_teams` id; `None` for an unowned catalog.
+    pub team: Option<i64>,
+}
+
+/// How a content read or write is let in (spec Parts 5 and 6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Admission {
+    /// A member of the owner team: nothing is recorded.
+    Customer,
+    /// Neither a customer nor an admin read: nothing is recorded (writes
+    /// are recorded as publishes).
+    Untracked,
+    /// An admin credential reading a catalog outside its user's teams: an
+    /// hourly `catalog.admin_read` bucket.
+    AdminRead,
+}
+
+impl Admission {
+    /// Whether this admission writes an audit row.
+    ///
+    /// # Returns
+    /// `true` for [`Admission::AdminRead`].
+    pub fn is_recorded(self) -> bool {
+        matches!(self, Admission::AdminRead)
+    }
+}
+
 /// Who a request acts as: one live API key, OAuth grant or console session
 /// (never the secret itself).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +167,9 @@ pub struct Principal {
     /// Task 4 of M13, selection); an admin credential ignores it. Empty for a
     /// principal built outside the cache (`From<KeyRecord>`, tests).
     pub suspended: Arc<Suspensions>,
+    /// The access gates of the cache it came from (shared). Empty for a
+    /// principal built outside the cache, which then records no access.
+    pub gates: Arc<AccessGates>,
 }
 
 impl Principal {
@@ -257,11 +315,17 @@ impl Principal {
     /// * `ceiling` - the user's ceiling (unused for an admin).
     /// * `suspended` - the suspended catalogs, from the key cache
     ///   ([`Keys::suspensions`]); an admin ignores them.
+    /// * `gates` - the access gates, from the key cache ([`Keys::gates`]).
     ///
     /// # Returns
     /// The principal; its `access` is the highest level it holds, for
     /// display and the admin checks (which a non-admin never passes).
-    pub fn for_session(user: &UserAuth, ceiling: Ceiling, suspended: Arc<Suspensions>) -> Self {
+    pub fn for_session(
+        user: &UserAuth,
+        ceiling: Ceiling,
+        suspended: Arc<Suspensions>,
+        gates: Arc<AccessGates>,
+    ) -> Self {
         let (access, reach) = if user.is_admin {
             (Access::Admin, Reach::All)
         } else {
@@ -284,6 +348,119 @@ impl Principal {
             user: Some(user.name.clone()),
             user_id: Some(user.id.clone()),
             suspended,
+            gates,
+        }
+    }
+
+    /// How this principal is let into `catalog`'s contents for `access`.
+    /// Call it only on a catalog the principal reaches at that level.
+    ///
+    /// # Arguments
+    /// * `catalog` - the catalog.
+    /// * `access` - what the operation needs.
+    /// * `now` - the server clock (unlock expiry, M14 Task 9b).
+    ///
+    /// # Returns
+    /// The admission: a customer in the owner team, an admin read by an
+    /// admin credential from outside it (a credential with no user always
+    /// counts), or untracked.
+    ///
+    /// # Errors
+    /// None yet; M14 Task 9b adds `UnlockRequired` and `MaintenanceOff`.
+    pub fn admission(
+        &self,
+        catalog: &str,
+        access: Access,
+        now: DateTime<Utc>,
+    ) -> Result<Admission, OkfError> {
+        // Task 9b reads it; `let _` marks it used until then.
+        let _ = now;
+        if self.is_member_of_owner(catalog) {
+            return Ok(Admission::Customer);
+        }
+        Ok(if self.access == Access::Admin && access == Access::Read {
+            Admission::AdminRead
+        } else {
+            Admission::Untracked
+        })
+    }
+
+    /// Whether the credential's user is in the catalog's owner team.
+    fn is_member_of_owner(&self, catalog: &str) -> bool {
+        self.user_id
+            .as_deref()
+            .and_then(|user_id| self.gates.members.get(user_id))
+            .is_some_and(|catalogs| catalogs.contains(catalog))
+    }
+
+    /// The scope of the catalog incarnation `catalog_id`, if this
+    /// principal's gates were loaded with that incarnation under `catalog`.
+    /// The gates and the catalog map a call reads are published separately
+    /// (`App::poll` swaps the key cache first), so a call can read one
+    /// incarnation of a name (deleted and created again) while the gates
+    /// describe another; only a matching id makes the gates' membership and
+    /// owner team true of what is read.
+    ///
+    /// # Arguments
+    /// * `catalog` - the catalog's name.
+    /// * `catalog_id` - the `catalogs.id` of the state the call reads.
+    ///
+    /// # Returns
+    /// Its id and owner team, or `None` when the gates do not know that
+    /// incarnation.
+    pub fn scope_of(&self, catalog: &str, catalog_id: i64) -> Option<CatalogScope> {
+        self.gates
+            .catalogs
+            .get(catalog)
+            .copied()
+            .filter(|scope| scope.id == catalog_id)
+    }
+
+    /// This principal's access to `catalog` as the audit log will record
+    /// it, with every identity and scope fixed now from the key cache, so
+    /// a write that runs later neither looks anything up by name nor
+    /// creates a person or credential row (M14 Decisions 21 and 22).
+    ///
+    /// # Arguments
+    /// * `requester` - the request's address and source.
+    /// * `catalog` - the catalog's name.
+    /// * `scope` - the incarnation read, from [`Self::scope_of`].
+    /// * `now` - when it was admitted (server clock).
+    ///
+    /// # Returns
+    /// The record.
+    pub fn access_record(
+        &self,
+        requester: &Requester,
+        catalog: &str,
+        scope: CatalogScope,
+        now: DateTime<Utc>,
+    ) -> AccessRecord {
+        let actor = AuditActor::of(self, requester);
+        AccessRecord {
+            source: requester.source,
+            actor_credential: actor
+                .credential
+                .as_deref()
+                .and_then(|id| self.gates.credentials.get(id))
+                .copied(),
+            actor_person: self
+                .user_id
+                .as_deref()
+                .and_then(|id| self.gates.people.get(id))
+                .copied(),
+            actor_label: actor.stored_label(),
+            // As `audit::record` marks it: an operator credential, or a
+            // credential of an admin user.
+            operator: actor.operator
+                || self
+                    .user_id
+                    .as_deref()
+                    .is_some_and(|id| self.gates.admins.contains(id)),
+            ip: requester.ip,
+            catalog: catalog.to_string(),
+            scope,
+            at: now,
         }
     }
 
@@ -332,8 +509,9 @@ impl From<KeyRecord> for Principal {
             user: record.user,
             user_id: record.user_id,
             // Filled in by the key cache (`principal_of`); a principal
-            // built outside it sees nothing suspended.
+            // built outside it sees nothing suspended and records nothing.
             suspended: Arc::default(),
+            gates: Arc::default(),
         }
     }
 }
@@ -382,6 +560,8 @@ pub struct KeyCache {
     users: HashMap<String, UserAuth>,
     // The suspended catalogs this cache's principals share.
     suspended: Arc<Suspensions>,
+    // The access gates this cache's principals share.
+    gates: Arc<AccessGates>,
 }
 
 /// The ceiling of a self-issued credential whose user has none.
@@ -395,6 +575,7 @@ static NO_CEILING: Ceiling = BTreeMap::new();
 /// * `record` - the row.
 /// * `ceilings` - every user's ceiling, by user id.
 /// * `suspended` - the cache's suspended catalogs, shared with the principal.
+/// * `gates` - the cache's access gates, shared with the principal.
 ///
 /// # Returns
 /// The principal.
@@ -402,6 +583,7 @@ fn principal_of(
     record: KeyRecord,
     ceilings: &HashMap<String, Ceiling>,
     suspended: &Arc<Suspensions>,
+    gates: &Arc<AccessGates>,
 ) -> Principal {
     // Looked up before `record` moves into the principal. `get` borrows
     // only `ceilings`, so the reference outlives the borrow of `record`.
@@ -415,6 +597,7 @@ fn principal_of(
     let mut principal = Principal::from(record);
     // `Arc::clone` copies the pointer, not the map: one map per load.
     principal.suspended = Arc::clone(suspended);
+    principal.gates = Arc::clone(gates);
     if let Some(ceiling) = ceiling {
         let levels = match &principal.reach {
             Reach::Catalogs(levels) => cap(levels, ceiling),
@@ -441,6 +624,8 @@ impl KeyCache {
     /// * `suspended` - the suspended catalogs, as
     ///   [`teams::suspended_catalogs`] returns them (kept in the cache and
     ///   shared by every principal it builds).
+    /// * `gates` - the access gates, as [`gates::load`] returns them (kept
+    ///   in the cache and shared by every principal it builds).
     /// * `now` - the server clock.
     ///
     /// # Returns
@@ -449,11 +634,13 @@ impl KeyCache {
         records: Vec<KeyRecord>,
         ceilings: HashMap<String, Ceiling>,
         suspended: Arc<Suspensions>,
+        gates: Arc<AccessGates>,
         now: DateTime<Utc>,
     ) -> Self {
         let mut cache = Self {
             by_user: ceilings,
             suspended,
+            gates,
             ..Self::default()
         };
         for record in records
@@ -473,8 +660,12 @@ impl KeyCache {
                     else {
                         continue;
                     };
-                    let principal =
-                        Arc::new(principal_of(record, &cache.by_user, &cache.suspended));
+                    let principal = Arc::new(principal_of(
+                        record,
+                        &cache.by_user,
+                        &cache.suspended,
+                        &cache.gates,
+                    ));
                     cache.by_hash.insert(
                         hash,
                         Cached {
@@ -485,8 +676,12 @@ impl KeyCache {
                 }
                 KeyKind::OAuth => {
                     let id = record.id.clone();
-                    let principal =
-                        Arc::new(principal_of(record, &cache.by_user, &cache.suspended));
+                    let principal = Arc::new(principal_of(
+                        record,
+                        &cache.by_user,
+                        &cache.suspended,
+                        &cache.gates,
+                    ));
                     cache.by_id.insert(
                         id,
                         Cached {
@@ -523,8 +718,8 @@ impl KeyCache {
         self.users.get(user_id)
     }
 
-    /// Reads every key, every ceiling, every user and every suspended
-    /// catalog, and builds the cache.
+    /// Reads every key, every ceiling, every user, every suspended catalog
+    /// and the access gates, and builds the cache.
     ///
     /// # Errors
     /// [`OkfError::Database`].
@@ -539,7 +734,15 @@ impl KeyCache {
             users::auth_by_id(pool),
             teams::suspended_catalogs(pool)
         )?;
-        Ok(Self::from_records(records, ceilings, Arc::new(suspended), now).with_users(users))
+        // After the keys and users, not beside them: `gates::load` creates
+        // the audit rows of every credential and user read above, so each
+        // principal of this load finds its audit ids (a key created since
+        // also moved `admin_generation`, so the next poll reloads).
+        let gates = Arc::new(gates::load(pool).await?);
+        Ok(
+            Self::from_records(records, ceilings, Arc::new(suspended), gates, now)
+                .with_users(users),
+        )
     }
 
     /// The principal of a presented key.
@@ -682,6 +885,15 @@ impl Keys {
                 .expect("key cache lock poisoned")
                 .suspended,
         )
+    }
+
+    /// The access gates, from the current cache: what a console session
+    /// principal is built with.
+    ///
+    /// # Returns
+    /// The shared gates (a pointer copy).
+    pub fn gates(&self) -> Arc<AccessGates> {
+        Arc::clone(&self.cache.read().expect("key cache lock poisoned").gates)
     }
 
     /// The principal of a presented key, from the current cache.
@@ -942,6 +1154,7 @@ mod tests {
             ],
             HashMap::new(),
             Arc::default(),
+            Arc::default(),
             now,
         );
 
@@ -1081,6 +1294,7 @@ mod tests {
             ],
             HashMap::new(),
             Arc::default(),
+            Arc::default(),
             now,
         );
 
@@ -1105,11 +1319,23 @@ mod tests {
             ..record("soon", "soon-key", false)
         };
         let fresh = Keys::new(
-            KeyCache::from_records(vec![soon.clone()], HashMap::new(), Arc::default(), now),
+            KeyCache::from_records(
+                vec![soon.clone()],
+                HashMap::new(),
+                Arc::default(),
+                Arc::default(),
+                now,
+            ),
             Arc::new(FixedClock(now)),
         );
         let stale = Keys::new(
-            KeyCache::from_records(vec![soon], HashMap::new(), Arc::default(), now),
+            KeyCache::from_records(
+                vec![soon],
+                HashMap::new(),
+                Arc::default(),
+                Arc::default(),
+                now,
+            ),
             Arc::new(FixedClock(now + hour * 2)),
         );
 
@@ -1266,6 +1492,7 @@ mod tests {
                 grant_record("grant-old", true),
             ],
             HashMap::new(),
+            Arc::default(),
             Arc::default(),
             now,
         );
@@ -1486,6 +1713,7 @@ mod tests {
                 stranger,
             ],
             HashMap::from([("alice-id".to_string(), alice.clone())]),
+            Arc::default(),
             Arc::default(),
             now,
         );
@@ -1739,7 +1967,8 @@ mod tests {
             ("other".to_string(), Access::Read),
         ]);
 
-        let principal = Principal::for_session(&user(false), ceiling, Arc::default());
+        let principal =
+            Principal::for_session(&user(false), ceiling, Arc::default(), Arc::default());
 
         assert_eq!(principal.key_id, "session:alice");
         assert_eq!(principal.actor, "alice");
@@ -1771,7 +2000,8 @@ mod tests {
 
     #[test]
     fn an_admin_users_session_is_an_admin_on_every_catalog() {
-        let principal = Principal::for_session(&user(true), Ceiling::new(), Arc::default());
+        let principal =
+            Principal::for_session(&user(true), Ceiling::new(), Arc::default(), Arc::default());
 
         assert_eq!(principal.access, Access::Admin);
         assert_eq!(principal.reach, Reach::All);
@@ -1780,7 +2010,8 @@ mod tests {
 
     #[test]
     fn a_session_with_an_empty_ceiling_reaches_nothing() {
-        let principal = Principal::for_session(&user(false), Ceiling::new(), Arc::default());
+        let principal =
+            Principal::for_session(&user(false), Ceiling::new(), Arc::default(), Arc::default());
 
         assert_eq!(principal.access, Access::Read);
         assert!(!principal.reaches("main"));
@@ -1817,8 +2048,114 @@ mod tests {
             kind: CredentialKind::ApiKey,
             user: None,
             user_id: None,
+            gates: Default::default(),
             suspended,
         }
+    }
+
+    fn gates_with_member(user_id: &str, catalog: &str) -> Arc<AccessGates> {
+        Arc::new(AccessGates {
+            members: HashMap::from([(user_id.to_string(), HashSet::from([catalog.to_string()]))]),
+            ..AccessGates::default()
+        })
+    }
+
+    #[test]
+    fn an_admin_reading_outside_its_teams_is_an_admin_read_and_a_member_is_a_customer() {
+        let gates = gates_with_member("u-member", "main");
+        let principal = |user: Option<&str>, access| Principal {
+            user_id: user.map(str::to_string),
+            gates: Arc::clone(&gates),
+            // `key_on` opts into reporting; Task 9b exempts reporting keys.
+            maintenance_report: false,
+            ..key_on(&["main"], access, Arc::default())
+        };
+        let now = Utc::now();
+        let admitted = |user, access, needs| principal(user, access).admission("main", needs, now);
+
+        let member_admin = admitted(Some("u-member"), Access::Admin, Access::Read);
+        let staff = admitted(Some("u-staff"), Access::Admin, Access::Read);
+        let legacy = admitted(None, Access::Admin, Access::Read);
+        let staff_write = admitted(Some("u-staff"), Access::Admin, Access::Write);
+        let reader = admitted(Some("u-staff"), Access::Read, Access::Read);
+
+        assert_eq!(member_admin.unwrap(), Admission::Customer);
+        assert_eq!(staff.unwrap(), Admission::AdminRead);
+        assert_eq!(
+            legacy.unwrap(),
+            Admission::AdminRead,
+            "a key with no user always counts"
+        );
+        assert_eq!(
+            staff_write.unwrap(),
+            Admission::Untracked,
+            "writes are recorded as publishes"
+        );
+        assert_eq!(reader.unwrap(), Admission::Untracked);
+        assert!(Admission::AdminRead.is_recorded());
+        assert!(!Admission::Customer.is_recorded() && !Admission::Untracked.is_recorded());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_cache_loads_memberships_and_admins_for_every_principal() {
+        let db = crate::db::test_db().await;
+        crate::store::catalogs::create(
+            &db.pool,
+            &crate::store::catalogs::NewCatalog {
+                name: "main",
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        let new = key_rows::NewKey {
+            name: "member",
+            access: Access::Read,
+            maintenance_report: false,
+            grants: key_rows::Grants::All,
+            default_catalog: None,
+            actor: "member",
+            user: crate::db::TEST_USER,
+            self_issued: false,
+            expires_at: None,
+            levels: &[],
+        };
+        let secret = key_rows::create(&db.pool, &new, &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap();
+        crate::store::users::set_admin(
+            &db.pool,
+            crate::db::TEST_USER,
+            crate::store::users::AdminChange {
+                on: true,
+                allow_last: false,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+
+        let keys = Keys::load(&db.pool, Arc::new(crate::clock::SystemClock))
+            .await
+            .unwrap();
+
+        let me: String = sqlx::query_scalar("SELECT id FROM users WHERE name = $1")
+            .bind(crate::db::TEST_USER)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        let gates = keys.gates();
+        assert!(gates.members[&me].contains("main"));
+        assert!(gates.admins.contains(&me));
+        assert!(gates.people.contains_key(&me));
+        assert!(gates.catalogs.contains_key("main"));
+        let principal = keys.find(&secret).expect("the key is cached");
+        assert!(Arc::ptr_eq(&principal.gates, &gates), "one map, shared");
+        assert!(gates.credentials.contains_key(&principal.key_id));
     }
 
     #[test]
@@ -1881,8 +2218,18 @@ mod tests {
     fn a_member_session_is_suspended_and_an_admin_session_is_not() {
         let ceiling = Ceiling::from([("shared".to_string(), Access::Write)]);
 
-        let member = Principal::for_session(&user(false), ceiling, suspended_on(&["shared"]));
-        let admin = Principal::for_session(&user(true), Ceiling::new(), suspended_on(&["shared"]));
+        let member = Principal::for_session(
+            &user(false),
+            ceiling,
+            suspended_on(&["shared"]),
+            Arc::default(),
+        );
+        let admin = Principal::for_session(
+            &user(true),
+            Ceiling::new(),
+            suspended_on(&["shared"]),
+            Arc::default(),
+        );
 
         assert!(matches!(
             member.require(Access::Read, "shared"),

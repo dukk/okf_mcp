@@ -9,6 +9,7 @@ pub mod changesets;
 pub mod documents;
 pub mod email_tokens;
 pub mod export;
+pub mod gates;
 pub mod history;
 pub mod identities;
 pub mod import;
