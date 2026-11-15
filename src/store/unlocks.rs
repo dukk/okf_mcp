@@ -178,6 +178,62 @@ pub struct UnlockRecord {
     pub exports: i64,
 }
 
+/// Where an unlock stands at a moment. serde spells each as `as_str` does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnlockState {
+    /// Neither ended nor expired: its admin's credentials may open the
+    /// catalog.
+    Live,
+    /// Past its expiry without being ended.
+    Expired,
+    /// Ended early by an admin.
+    Ended,
+}
+
+impl UnlockState {
+    /// The state's name.
+    ///
+    /// # Returns
+    /// `"live"`, `"expired"` or `"ended"`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            UnlockState::Live => "live",
+            UnlockState::Expired => "expired",
+            UnlockState::Ended => "ended",
+        }
+    }
+}
+
+impl UnlockRecord {
+    /// Where the unlock stands at `now`. An unlock ended early reads
+    /// `ended` even after its expiry has passed too.
+    ///
+    /// # Arguments
+    /// * `now` - the server clock.
+    ///
+    /// # Returns
+    /// Its state.
+    pub fn state(&self, now: DateTime<Utc>) -> UnlockState {
+        if self.ended_at.is_some() {
+            UnlockState::Ended
+        } else if self.expires_at <= now {
+            UnlockState::Expired
+        } else {
+            UnlockState::Live
+        }
+    }
+
+    /// When the unlock stops (or stopped) applying: its early end, else
+    /// its expiry.
+    ///
+    /// # Returns
+    /// The time.
+    pub fn ends(&self) -> DateTime<Utc> {
+        self.ended_at.unwrap_or(self.expires_at)
+    }
+}
+
 /// One `unlocks` row as [`find_in`] and [`list`] read it; the category
 /// is text until [`UnlockRow::into_record`] parses it.
 #[derive(sqlx::FromRow)]
@@ -680,6 +736,43 @@ mod tests {
             reason: "ticket 12",
             hours,
         }
+    }
+
+    #[test]
+    fn an_unlock_is_live_until_it_expires_or_ends_and_ends_at_the_earlier() {
+        let record = |ended_at: Option<DateTime<Utc>>| UnlockRecord {
+            id: 1,
+            catalog: "main".to_string(),
+            owner_team: None,
+            user: Some("staff".to_string()),
+            person: "staff".to_string(),
+            category: Category::Support,
+            reason: "ticket 12".to_string(),
+            created_at: now(),
+            expires_at: now() + TimeDelta::hours(2),
+            ended_at,
+            reads: 0,
+            writes: 0,
+            exports: 0,
+        };
+        let open = record(None);
+        let ended = record(Some(now() + TimeDelta::minutes(5)));
+        let expiry = now() + TimeDelta::hours(2);
+
+        assert_eq!(open.state(now()), UnlockState::Live);
+        assert_eq!(open.state(expiry), UnlockState::Expired);
+        assert_eq!(
+            ended.state(now() + TimeDelta::minutes(10)),
+            UnlockState::Ended
+        );
+        assert_eq!(ended.state(expiry), UnlockState::Ended);
+        assert_eq!(open.ends(), expiry);
+        assert_eq!(ended.ends(), now() + TimeDelta::minutes(5));
+        assert_eq!(
+            serde_json::to_value(UnlockState::Expired).unwrap(),
+            "expired"
+        );
+        assert_eq!(UnlockState::Ended.as_str(), "ended");
     }
 
     #[test]
