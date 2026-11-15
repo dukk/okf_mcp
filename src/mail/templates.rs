@@ -38,6 +38,16 @@ pub enum Template {
     },
     /// The Settings page's test email.
     Test,
+    /// An operator unlocked a catalog of the recipient's team (spec Part 6).
+    /// No staff name and no reason: owners see only the category.
+    Unlocked {
+        /// The catalog's name.
+        catalog: String,
+        /// Why, as `unlocks::Category::label` words ("a deletion request").
+        category: String,
+        /// When it expires (`clock::format_timestamp`, UTC).
+        until: String,
+    },
 }
 
 // A hand-written `Debug` (Python's `__repr__`) instead of `#[derive(Debug)]`,
@@ -59,6 +69,16 @@ impl std::fmt::Debug for Template {
                 .field("method", method)
                 .finish(),
             Template::Test => formatter.write_str("Test"),
+            Template::Unlocked {
+                catalog,
+                category,
+                until,
+            } => formatter
+                .debug_struct("Unlocked")
+                .field("catalog", catalog)
+                .field("category", category)
+                .field("until", until)
+                .finish(),
         }
     }
 }
@@ -67,13 +87,14 @@ impl Template {
     /// The template's name, as the mail queue lists it.
     ///
     /// # Returns
-    /// `"setup"`, `"reset"`, `"method_added"` or `"test"`.
+    /// `"setup"`, `"reset"`, `"method_added"`, `"test"` or `"unlocked"`.
     pub fn name(&self) -> &'static str {
         match self {
             Template::Setup { .. } => "setup",
             Template::Reset { .. } => "reset",
             Template::MethodAdded { .. } => "method_added",
             Template::Test => "test",
+            Template::Unlocked { .. } => "unlocked",
         }
     }
 }
@@ -219,6 +240,36 @@ pub fn render(template: &Template, brand: &Brand) -> (String, String, String) {
             let html = html_document(&subject, &[escape(&line)], brand);
             (subject, format!("{line}\n"), html)
         }
+        Template::Unlocked {
+            catalog,
+            category,
+            until,
+        } => {
+            // The subject names the product, as every other one does, so an
+            // inbox tells the products apart.
+            let subject = format!("An operator opened {catalog} in {name}");
+            let opened = format!(
+                "An operator of {name} opened your team's catalog {catalog} for {category} \
+                 until {until} (UTC)."
+            );
+            let counted = "The operator's reads and writes are counted and shown in the audit \
+                           log of your team.";
+            // With a support contact, `render`'s closing "Questions? Contact
+            // ..." line says whom to ask, so the template does not repeat it.
+            let unexpected = brand
+                .support_contact
+                .is_none()
+                .then_some("If you did not expect this, contact the operator.");
+            // `chain` adds the optional sentence (zero or one items).
+            let lines: Vec<&str> = [opened.as_str(), counted]
+                .into_iter()
+                .chain(unexpected)
+                .collect();
+            let text = format!("{}\n", lines.join("\n\n"));
+            let paragraphs: Vec<String> = lines.iter().map(|line| escape(line)).collect();
+            let html = html_document(&subject, &paragraphs, brand);
+            (subject, text, html)
+        }
     };
     (subject, with_contact(text, brand), html)
 }
@@ -323,12 +374,14 @@ mod tests {
                 method: "a passkey".into(),
             },
             Template::Test,
+            unlocked(),
         ];
         let subjects = [
             "Set up your Acme <Notes> account",
             "Reset your Acme <Notes> password",
             "A sign-in method was added to your Acme <Notes> account",
             "Acme <Notes> test email",
+            "An operator opened main in Acme <Notes>",
         ];
         for (template, want) in templates.iter().zip(subjects) {
             let (subject, text, html) = render(template, &acme());
@@ -370,6 +423,37 @@ mod tests {
         assert!(!html.contains("Questions?"), "{html}");
     }
 
+    fn unlocked() -> Template {
+        Template::Unlocked {
+            catalog: "main".to_string(),
+            category: "a deletion request".to_string(),
+            until: "2026-11-13T14:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn the_unlocked_mail_names_the_catalog_category_and_end_and_no_staff() {
+        let (subject, text, html) = render(&unlocked(), &Brand::default());
+        let (_, branded, branded_html) = render(&unlocked(), &acme());
+
+        assert_eq!(subject, "An operator opened main in okf");
+        assert_eq!(
+            text,
+            "An operator of okf opened your team's catalog main for a deletion request until \
+             2026-11-13T14:00:00Z (UTC).\n\nThe operator's reads and writes are counted and \
+             shown in the audit log of your team.\n\nIf you did not expect this, contact the \
+             operator.\n"
+        );
+        assert!(html.contains("<p>If you did not expect this, contact the operator.</p>"));
+        // With a contact, the closing line names it once, and the template's
+        // own "contact the operator" sentence is left out.
+        assert!(!branded.contains("contact the operator"), "{branded}");
+        assert_eq!(branded.matches("Contact help@example.com").count(), 1);
+        assert!(branded.contains("An operator of Acme <Notes> opened"));
+        assert!(branded_html.contains("An operator of Acme &lt;Notes&gt; opened"));
+        assert!(!branded_html.contains("<Notes>"), "{branded_html}");
+    }
+
     #[test]
     fn names_are_stable_and_debug_hides_links() {
         let setup = Template::Setup {
@@ -388,9 +472,10 @@ mod tests {
                     method: String::new()
                 }
                 .name(),
-                Template::Test.name()
+                Template::Test.name(),
+                unlocked().name()
             ],
-            ["setup", "reset", "method_added", "test"]
+            ["setup", "reset", "method_added", "test", "unlocked"]
         );
         let shown = format!("{setup:?} {reset:?}");
         assert!(

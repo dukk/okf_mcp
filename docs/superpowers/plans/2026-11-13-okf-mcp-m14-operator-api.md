@@ -112,6 +112,13 @@ pub struct Entry<'a> { pub action: Action, pub target: Target<'a>, pub person: O
                        pub teams: &'a [i64] /* audit_teams ids */, pub details: serde_json::Value }
 pub async fn record(conn: &mut PgConnection, actor: &AuditActor, entry: &Entry<'_>,
                     now: DateTime<Utc>) -> Result<i64, OkfError>;
+pub struct FixedPerson { pub person_id: i64 /* audit_people id */, pub operator: bool }
+pub async fn record_for_person(conn: &mut PgConnection, actor: &AuditActor, entry: &Entry<'_>,
+                               person: FixedPerson, now: DateTime<Utc>) -> Result<i64, OkfError>;
+// Corrected (issue #405, PR #428 review, 2026-11-15): `record` resolves the entry's person
+// and `target_operator` from the user as it is now; `record_for_person` takes an audit person
+// fixed earlier and its marking (ignores `entry.person`). Both unlock entries use it, so an
+// unlock ended after its admin was demoted or deleted names the same person, still hidden.
 pub async fn team_ref(conn: &mut PgConnection, team: &str) -> Result<i64, OkfError>;
 pub async fn catalog_teams(conn: &mut PgConnection, catalog_id: i64) -> Result<Vec<i64>, OkfError>;
 pub async fn key_teams(conn: &mut PgConnection, key_id: &str) -> Result<Vec<i64>, OkfError>;
@@ -180,6 +187,9 @@ pub async fn end(pool: &PgPool, id: i64, actor: &AuditActor, now: DateTime<Utc>)
                  -> Result<UnlockRecord, OkfError>;
 pub async fn list(pool: &PgPool, filter: &UnlockFilter<'_>) -> Result<Vec<UnlockRecord>, OkfError>;
 pub async fn live(pool: &PgPool, now: DateTime<Utc>) -> Result<Vec<LiveUnlock>, OkfError>;
+pub async fn find(pool: &PgPool, id: i64) -> Result<UnlockRecord, OkfError>;
+pub async fn find_in(conn: &mut PgConnection, id: i64) -> Result<UnlockRecord, OkfError>;
+pub const DEFAULT_MAX_HOURS: u32 = 4; pub const MAX_HOURS_LIMIT: u32 = 72;   // Corrected (issue #405)
 pub async fn tally(pool: &PgPool, id: i64, kind: AccessKind) -> Result<(), OkfError>;   // Task 9b
 ```
 
@@ -5959,6 +5969,16 @@ pub async fn create(
 }
 ```
 
+> **Corrected (issue #405, 2026-11-15).** What shipped differs from the code above in these ways (read `src/store/unlocks.rs`):
+> - **Lock order.** `create` does not lock the user with its own `SELECT ... FOR SHARE`: it calls `audit::lock_people(&mut tx, actor, &People { target: Some((new.user, RowLock::KeyShare)), catalogs: &[new.catalog], .. })` first, which locks the actor, the unlocked admin and a personal owner team's person, admins first by id, and answers the admin flag under the lock (`FOR KEY SHARE` is enough: `users::set_admin` locks every admin `FOR UPDATE`, which waits on it). The draft locked the target first and the actor later inside `record`, which deadlocks against `set_admin` when the actor's id sorts lower; the race test `an_unlock_by_an_admin_and_a_concurrent_demotion_of_its_staff_both_finish` fails with `Busy` on the draft. `end` reads the unlock's catalog name without a lock, calls `lock_people` with it (the actor and a personal owner team's person; the unlocked user is not locked, see the next note), then runs the `UPDATE`.
+> - **Nothing after the commit.** Both functions read their answer with `find_in(&mut tx, id)` before `tx.commit()`, not `find(pool, id)` after it (`tools/agentic/lessons.md`). `find(pool, id)` and `find_in(conn, id)` are both public; an unknown id is `NotFound { path: "unlocks/<id>" }`.
+> - **Inputs.** A reason with a control character (a NUL would be a 500) is refused like a blank one (`LimitExceeded { limit: "reason" }`); the expiry uses `checked_add_signed`. A malformed catalog or team name in `UnlockFilter` matches nothing. `end` writes `ended_at = GREATEST(now, created_at)`, so a clock behind the start cannot fail the schema's check.
+> - **Constants.** `unlocks::DEFAULT_MAX_HOURS` (4) and `unlocks::MAX_HOURS_LIMIT` (72), which `settings.rs` uses; `Category::ALL` lists the six categories (`parse` uses it).
+> - **The email.** The subject names the product, as every other template's does: `An operator opened {catalog} in {product}`. The "If you did not expect this, contact the operator." sentence is there only without a `support_contact`; with one, `render`'s closing "Questions? Contact ..." line says whom to ask.
+> - **Settings.** `SettingKey::ALL` has 13 keys (`require_unlock`, `unlock_max_hours`, `unlock_notify_owners` last); `Settings` gains `require_unlock: bool`, `unlock_max_hours: u32`, `unlock_notify_owners: bool`. The three take `audited_value`'s `Some(value)` arm. The console's Settings page shows them as text rows until Task 9e's `BOOLEAN_SETTINGS`.
+
+> **Corrected (issue #405, PR #428 review, 2026-11-15).** Neither entry passes the user's id to `record`: both call `audit::record_for_person(.., FixedPerson { person_id: unlocks.person_id, operator: true }, now)` (`unlocks::staff_person`). `record` marks `target_operator` from the user's admin flag *now*, so an unlock ended after its admin was demoted recorded `false`, and one ended after the user's deletion had no person. Every unlock's person was an admin when it began (`create` refuses anyone else under the user's lock), so `operator: true` is fixed with it. `end` therefore locks only the actor and a personal owner team's person, not the unlocked user. Tests: `an_unlock_ended_after_its_staff_is_demoted_still_hides_who_it_was`, `an_unlock_ended_after_its_staff_is_deleted_keeps_the_person_and_marking`.
+
 > **Corrected (PR #375 review, 2026-11-13).** `catalog.unlocked` and `catalog.unlock_ended` name the unlocked admin as the entry's person. Because that person is an admin user, `record` sets `target_operator`, and Task 8a's owner view hides the person (and the target filter cannot match it), as it hides the actor and the `reason`. Owners see only "an operator opened <catalog>: <category>, <start> to <end>".
 
 `end(pool, id, actor, now)`: `UPDATE unlocks SET ended_at = $2 WHERE id = $1 AND ended_at IS NULL AND expires_at > $2 RETURNING catalog_id`; none is `Refused` ("unlock N has already ended or expired") or `NotFound` for an unknown id; records `catalog.unlock_ended` (`{"unlock": id}`), bumps the generation. `find(pool, id)`, `list(pool, filter)` (newest first; the `team` filter matches the catalog's current owner team), `live(pool, now) -> Vec<LiveUnlock>` (`ended_at IS NULL AND expires_at > now AND user_id IS NOT NULL`). (`tally` comes in Task 9b, with `AccessKind` from Task 7b.)
@@ -6849,7 +6869,7 @@ function showLocked(view, catalog, body) {
 
 > **Corrected (M13 merged, 2026-11-14).** Every write this task adds follows `tools/agentic/lessons.md`' console rules, which M13 applied to the team drawer and the key drawers (`pages/teams.js`' suspension section, `pages/keys.js`' `nextDraw`); `pages/catalogs.js`' `memberAccess` is the closest model for a drawer section with one guarded write:
 > - **Pending-write keys.** The Unlock form's submit is `guard`ed by `unlock:<catalog>:create` and posts under `once`; each End button by `unlock:<id>:end`; the maintenance switch by `catalog:<name>:maintenance`. A control drawn again while its write runs (a reopened drawer, a refreshed Unlocks table) is drawn disabled.
-> - **Refusals stay.** A refused unlock (409 over `unlock_max_hours`, 403 for a non-admin) keeps its reason in `#unlock-form-error` until the next submit; a refused End keeps its reason beside the row; a refused maintenance write keeps its reason in `#catalog-maintenance-error`. Each is drawn from the last answer even when the read after it fails, marked "may be out of date", with the controls usable.
+> - **Refusals stay.** A refused unlock (422 over `unlock_max_hours`, `LimitExceeded`; *corrected, issue #405, 2026-11-15: first written as 409*; 403 for a non-admin) keeps its reason in `#unlock-form-error` until the next submit; a refused End keeps its reason beside the row; a refused maintenance write keeps its reason in `#catalog-maintenance-error`. Each is drawn from the last answer even when the read after it fails, marked "may be out of date", with the controls usable.
 > - **Numbered reads.** The Unlocks table's loads and the maintenance section's reads are numbered; only the newest draws. A settled maintenance write redraws the section the catalog drawer shows *now* if it is that catalog's (a registry like `shownMemberAccess`), taking its draw number as the write settles and only while that drawer shows that catalog, so it never cancels another catalog's drawer while it loads.
 > - **Side reads.** The Unlock form's `GET /settings` (for `max`) and the Unlocks page's catalog picker are side reads: when one fails, fall back (4 hours; a free-text catalog) and never lose a write's answer.
 > - **Journeys** (add to `tests/ui_e2e/unlocks.rs`): `ui.hold_next("PUT", "/api/v1/catalogs/main/maintenance")`, `ui.click_twice("#catalog-maintenance")`, close and reopen the drawer, `assert_eq!(ui.held_matches(), 1)`; `ui.hold_next("POST", "/api/v1/unlocks")` with `click_twice` on the form's submit; `ui.fail_next("PUT", "/api/v1/catalogs/main/maintenance", 403, ..)` then `ui.fail_next` on the follow-up GET, checking `#catalog-maintenance-error` is visible (`ui.wait_visible`, not only `wait_text`) and the switch is enabled; and `ui.hold_answer` on a first Unlocks load that settles after a second.
