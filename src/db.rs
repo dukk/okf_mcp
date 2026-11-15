@@ -189,6 +189,7 @@ mod tests {
                 "sign_in_events",
                 "team_members",
                 "teams",
+                "unlocks",
                 "user_catalogs",
                 "user_identities",
                 "user_passkeys",

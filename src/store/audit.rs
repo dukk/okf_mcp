@@ -375,10 +375,77 @@ pub async fn record(
     entry: &Entry<'_>,
     now: DateTime<Utc>,
 ) -> Result<i64, OkfError> {
+    insert(conn, actor, entry, None, now).await
+}
+
+/// An entry's person given as the audit person fixed when something began
+/// (an unlock's `person_id`), with the operator marking it had then, so a
+/// later entry about the same thing names the same person and hides it
+/// from owners the same way, whatever the user's admin flag is now and even
+/// once the user is deleted ([`record_for_person`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FixedPerson {
+    /// The `audit_people` id.
+    pub person_id: i64,
+    /// Whether the person was operator staff (an admin user) then.
+    pub operator: bool,
+}
+
+/// [`record`], with the entry's person given as a [`FixedPerson`] instead of
+/// a `users.id` resolved now (`entry.person` is ignored). The person's
+/// `audit_people` row is read as it is and never refreshed or locked.
+///
+/// # Arguments
+/// * `conn` - the change's transaction (`&mut tx`).
+/// * `actor` - who.
+/// * `entry` - what; its target must not be a user, a key, a grant or a
+///   code (whose person and marking come from the user or owner now).
+/// * `person` - the person and its operator marking.
+/// * `now` - when (server clock).
+///
+/// # Returns
+/// The entry's id.
+///
+/// # Errors
+/// [`OkfError::Refused`] for a user, key, grant or code target, before any
+/// SQL; otherwise as [`record`].
+pub async fn record_for_person(
+    conn: &mut PgConnection,
+    actor: &AuditActor,
+    entry: &Entry<'_>,
+    person: FixedPerson,
+    now: DateTime<Utc>,
+) -> Result<i64, OkfError> {
+    // Such a target names its own person; a fixed one would contradict it.
+    if matches!(
+        entry.target,
+        Target::User(_) | Target::Key(_) | Target::Grant(_) | Target::Code(_)
+    ) {
+        return Err(OkfError::Refused {
+            reason: format!(
+                "an entry about {:?} names its own person, not a fixed one",
+                entry.target
+            ),
+        });
+    }
+    insert(conn, actor, entry, Some(person), now).await
+}
+
+/// The one `INSERT` behind [`record`] and [`record_for_person`].
+async fn insert(
+    conn: &mut PgConnection,
+    actor: &AuditActor,
+    entry: &Entry<'_>,
+    fixed: Option<FixedPerson>,
+    now: DateTime<Utc>,
+) -> Result<i64, OkfError> {
     let target = entry.target.parts();
-    let person = match entry.target {
-        Target::User(user_id) => Some(user_id),
-        _ => entry.person,
+    let person = match (entry.target, fixed) {
+        // A fixed person is never resolved from a user now (and
+        // `record_for_person` refuses a user target).
+        (_, Some(_)) => None,
+        (Target::User(user_id), None) => Some(user_id),
+        (_, None) => entry.person,
     };
     // The subquery resolves both people once (`audit_person` creates or
     // refreshes a row; NULL in, NULL out); the credentials and the target
@@ -386,15 +453,17 @@ pub async fn record(
     // label goes to `audit_credentials` (mutable), the entry gets only
     // `stored_label`. `target_operator`: the target person, or the owner of
     // a target key, grant or code (which `audit_credential` resolves the
-    // same way), is an admin user now, so owners never see who it is.
+    // same way), is an admin user now, so owners never see who it is. A
+    // fixed person ($17, $18) replaces both the resolved target person and
+    // that marking.
     Ok(sqlx::query_scalar(
         "INSERT INTO audit_entries (at, action, source, actor_credential_ref, actor_person_id, \
              actor_label, actor_operator, client_ip, target_kind, target_name, target_team_ref, \
              target_credential_ref, target_person_id, target_operator, teams, details) \
          SELECT $1, $2, $3, audit_credential($4, p.actor, $5), p.actor, $6, $7, $8::inet, $9, \
                 $10, audit_team_ref((SELECT id FROM teams WHERE name = $11)), \
-                audit_credential($12, p.target, NULL), p.target, \
-                COALESCE((SELECT bool_or(is_admin) FROM users WHERE id IN ($13, \
+                audit_credential($12, p.target, NULL), COALESCE($17::bigint, p.target), \
+                COALESCE($18::boolean, (SELECT bool_or(is_admin) FROM users WHERE id IN ($13, \
                     (SELECT user_id FROM api_keys WHERE id = $12), \
                     (SELECT user_id FROM sign_in_codes WHERE id = $12))), false), $14, $15 \
          FROM (SELECT audit_person($16) AS actor, audit_person($13) AS target) p \
@@ -416,6 +485,8 @@ pub async fn record(
     .bind(entry.teams)
     .bind(&entry.details)
     .bind(&actor.user_id)
+    .bind(fixed.map(|fixed| fixed.person_id))
+    .bind(fixed.map(|fixed| fixed.operator))
     // `&mut *conn` reborrows the connection, so `conn` stays usable after.
     .fetch_one(&mut *conn)
     .await?)
@@ -961,6 +1032,42 @@ mod tests {
             .fetch_all(conn)
             .await
             .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_fixed_person_is_refused_for_a_target_that_names_its_own() {
+        let db = test_db().await;
+        let user = user_id(&db.pool, TEST_USER).await;
+        let fixed = FixedPerson {
+            person_id: 1,
+            operator: true,
+        };
+        let mut conn = db.pool.acquire().await.unwrap();
+
+        let mut refusals = Vec::new();
+        for target in [
+            Target::User(&user),
+            Target::Key("k1"),
+            Target::Grant("g1"),
+            Target::Code("c1"),
+        ] {
+            let about = entry(Action::UserCreated, target);
+            refusals
+                .push(record_for_person(&mut conn, &AuditActor::cli(), &about, fixed, now()).await);
+        }
+
+        for refused in refusals {
+            assert!(
+                matches!(refused, Err(OkfError::Refused { .. })),
+                "{refused:?}"
+            );
+        }
+        let written: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_entries WHERE at = $1")
+            .bind(now())
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(written, 0);
     }
 
     #[tokio::test(flavor = "multi_thread")]

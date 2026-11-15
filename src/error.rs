@@ -163,6 +163,28 @@ pub enum OkfError {
         notice: Option<String>,
     },
 
+    /// Operator access to a catalog's contents without an active unlock, on
+    /// a server with `require_unlock` on (spec Part 6).
+    // `*.has_user` copies the `bool` out of the borrowed field.
+    #[error("{}", unlock_message(.catalog, *.has_user))]
+    UnlockRequired {
+        /// The catalog asked for.
+        catalog: String,
+        /// Whether the credential has a user (one without cannot be unlocked).
+        has_user: bool,
+    },
+
+    /// The maintenance runner on a catalog whose owners turned maintenance
+    /// off. Its kind is `Forbidden` (spec Part 6); the body's
+    /// `"maintenance": "off"` lets the runner skip the catalog.
+    #[error(
+        "forbidden: maintenance is off for catalog {catalog:?}; an owner of its team can turn it on"
+    )]
+    MaintenanceOff {
+        /// The catalog.
+        catalog: String,
+    },
+
     /// An administrative request was refused; the reason says why and what to do.
     #[error("{reason}")]
     Refused {
@@ -313,6 +335,11 @@ impl OkfError {
             OkfError::UnknownName { .. } => "UnknownName",
             OkfError::Forbidden { .. } => "Forbidden",
             OkfError::Suspended { .. } => "Suspended",
+            OkfError::UnlockRequired { .. } => "UnlockRequired",
+            // The one variant whose kind is not its name, on purpose: the
+            // spec refuses the runner with `Forbidden`, and the body's
+            // `"maintenance": "off"` tells it apart (plan Decision 7).
+            OkfError::MaintenanceOff { .. } => "Forbidden",
             OkfError::Refused { .. } => "Refused",
             OkfError::Unauthenticated { .. } => "Unauthenticated",
             OkfError::Gone { .. } => "Gone",
@@ -343,7 +370,8 @@ impl OkfError {
     /// The error as clients see it: `{"error": kind, "message": text}`, plus
     /// the `path`, `catalog`, `noun` and `name`, or `problems` it concerns
     /// (a `Suspended` error adds `catalog`, `team` and `notice`, `null` when
-    /// the operator left none).
+    /// the operator left none; a `MaintenanceOff` error, whose kind is
+    /// `Forbidden`, adds `catalog` and `"maintenance": "off"`).
     ///
     /// Every catalog path in the body is `/`-prefixed (`path`, `files[].path`,
     /// `links[].source`, `errors[].file`, `warnings[].file`). An
@@ -420,6 +448,11 @@ impl OkfError {
                 // `Option<&str>` into JSON: a string, or `null` for `None`.
                 body["notice"] = notice.as_deref().into();
             }
+            OkfError::UnlockRequired { catalog, .. } => body["catalog"] = catalog.as_str().into(),
+            OkfError::MaintenanceOff { catalog } => {
+                body["catalog"] = catalog.as_str().into();
+                body["maintenance"] = "off".into();
+            }
             OkfError::Database { .. }
             | OkfError::Migrate { .. }
             | OkfError::Config { .. }
@@ -452,6 +485,29 @@ fn suspended_message(catalog: &str, team: &str, notice: Option<&str>) -> String 
         message.push_str(notice);
     }
     message
+}
+
+/// The text of [`OkfError::UnlockRequired`]: how to unlock, or, for a
+/// credential with no user, why it cannot be.
+///
+/// # Arguments
+/// * `catalog` - the catalog asked for.
+/// * `has_user` - whether the credential has a user.
+///
+/// # Returns
+/// The message.
+fn unlock_message(catalog: &str, has_user: bool) -> String {
+    if has_user {
+        format!(
+            "catalog {catalog:?} needs an unlock for operator access: okf-mcp unlock create, \
+             POST /api/v1/unlocks, or Unlock in the console"
+        )
+    } else {
+        format!(
+            "catalog {catalog:?} needs an unlock for operator access, and this key has no user, so \
+             it cannot be unlocked: give it a user (okf-mcp key assign)"
+        )
+    }
 }
 
 /// A catalog path as clients see it: catalog-relative with a leading `/`
@@ -574,6 +630,53 @@ mod tests {
             body["message"],
             "catalog \"shared\" is unavailable: its team \"family\" is suspended"
         );
+    }
+
+    #[test]
+    fn unlock_required_names_the_catalog_and_says_how() {
+        let error = OkfError::UnlockRequired {
+            catalog: "main".to_string(),
+            has_user: true,
+        };
+        let user_less = OkfError::UnlockRequired {
+            catalog: "main".to_string(),
+            has_user: false,
+        };
+
+        let body = error.to_json();
+
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "error": "UnlockRequired",
+                "message": "catalog \"main\" needs an unlock for operator access: okf-mcp \
+                            unlock create, POST /api/v1/unlocks, or Unlock in the console",
+                "catalog": "main",
+            })
+        );
+        assert!(!error.is_internal());
+        assert!(user_less.to_string().contains("has no user"));
+        assert_eq!(user_less.to_json()["catalog"], "main");
+    }
+
+    #[test]
+    fn maintenance_off_is_a_forbidden_the_runner_can_tell_apart() {
+        let error = OkfError::MaintenanceOff {
+            catalog: "main".to_string(),
+        };
+
+        let body = error.to_json();
+
+        assert_eq!(error.kind(), "Forbidden");
+        assert_eq!(body["error"], "Forbidden");
+        assert_eq!(body["maintenance"], "off");
+        assert_eq!(body["catalog"], "main");
+        // A plain `Forbidden` has no marker, so the runner can tell them apart.
+        let plain = OkfError::Forbidden {
+            reason: "x".to_string(),
+        }
+        .to_json();
+        assert_eq!(plain.get("maintenance"), None);
     }
 
     #[test]
