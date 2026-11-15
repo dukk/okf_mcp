@@ -1768,27 +1768,26 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_set_queued_behind_a_removal_records_the_value_it_found_after_waiting() {
+    async fn a_set_queued_behind_a_new_override_records_it_as_from() {
         use crate::http::api::testing::wait_for_lock_waiters;
         let db = test_db().await;
-        set(
-            &db.pool,
-            SettingKey::MaxKeysPerUser,
-            "3",
-            &by("alice"),
-            now(),
-        )
-        .await
-        .unwrap();
-        // A held generation row whose transaction also removes the
-        // override, as a `reset` that won the race would.
+        // A held generation row whose transaction also inserts an override
+        // of 3, as a `set` that won the race would. Only a read taken after
+        // the generation lock sees it: a read before it, even `FOR UPDATE`,
+        // can neither see nor wait on a row inserted by an uncommitted
+        // transaction, and would record `from: null`.
         let mut holder = db.pool.begin().await.unwrap();
         bump_admin_generation(&mut holder).await.unwrap();
-        sqlx::query("DELETE FROM server_settings WHERE key = $1")
-            .bind(SettingKey::MaxKeysPerUser.as_str())
-            .execute(&mut *holder)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO server_settings (key, value, updated_at, updated_by) \
+             VALUES ($1, $2, $3, 'carol')",
+        )
+        .bind(SettingKey::MaxKeysPerUser.as_str())
+        .bind(serde_json::json!(3))
+        .bind(now())
+        .execute(&mut *holder)
+        .await
+        .unwrap();
         let setter = tokio::spawn({
             let pool = db.pool.clone();
             async move { set(&pool, SettingKey::MaxKeysPerUser, "4", &by("alice"), now()).await }
@@ -1804,9 +1803,12 @@ mod tests {
         assert!(set_result.is_ok(), "{set_result:?}");
         let changed = audit::testing::entries(&db.pool, "setting.changed").await;
         assert_eq!(
-            changed.last().map(|e| e.details.clone()),
-            Some(serde_json::json!({"from": null, "to": 4})),
-            "set read the override after it waited, not the 3 removed meanwhile"
+            changed
+                .iter()
+                .map(|e| e.details.clone())
+                .collect::<Vec<_>>(),
+            [serde_json::json!({"from": 3, "to": 4})],
+            "set read the override after it waited, and found the 3 stored meanwhile"
         );
     }
 

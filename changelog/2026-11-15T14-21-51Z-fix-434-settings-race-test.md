@@ -3,12 +3,19 @@
 Issue #434 (duplicates #441 and #443).
 
 ## Added
-- `store::settings::tests::a_set_queued_behind_a_removal_records_the_value_it_found_after_waiting`:
-  a held `server_state` row whose transaction also deletes the override
-  queues a `set`; once released, `set`'s entry must say `from: null`. It
-  pins that `set` reads the previous value after the generation lock.
-  Moving the read before `bump_admin_generation` makes it fail with
-  `from: 3`.
+- `store::settings::tests::a_set_queued_behind_a_new_override_records_it_as_from`:
+  with no override stored, a held `server_state` row whose transaction
+  also inserts an override of 3 queues a `set` of 4. Once released,
+  `set`'s entry must say `from: 3`. It pins that `set` reads the previous
+  value after the generation lock. A read taken before it, even
+  `FOR UPDATE`, can neither see nor wait on a row an uncommitted
+  transaction inserted, so it records `from: null`. Both mutants were
+  checked: the existing `SELECT ... FOR UPDATE` moved before
+  `bump_admin_generation`, and a plain `SELECT` moved there. Each fails
+  the test with `{from: null, to: 4}`. The PR's first version used a held
+  removal instead (review of PR #450). A locking read moved before the
+  lock waits on the uncommitted delete and still records `from: null`, so
+  that version could not tell the two orders apart.
 - `tools/agentic/lessons.md`: Postgres does not wake row-lock waiters in
   the order they queued; assert a valid serial history instead.
 
