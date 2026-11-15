@@ -1,5 +1,5 @@
 //! Outgoing mail (spec "Mail", Decisions 10 and 11). A [`Mailer`] sends one
-//! [`Mail`]; the provider (SMTP, Postmark or the log) is chosen at run time
+//! [`Mail`]; the provider (SMTP, Postmark, SES or the log) is chosen at run time
 //! from `[mail]`, so it is a trait object, `Arc<dyn Mailer>`. Requests never
 //! send directly: they enqueue a `SendMail` job ([`queue::enqueue`]), and a
 //! worker sends it with retries ([`queue::spawn_worker`]).
@@ -17,6 +17,7 @@ pub mod invite;
 mod log;
 mod postmark;
 pub mod queue;
+mod ses;
 mod smtp;
 pub mod templates;
 
@@ -78,7 +79,9 @@ pub trait Mailer: Send + Sync {
 
 /// Builds the configured mailer, reading its secrets from the environment.
 /// `App::load` calls it, so `serve` stops at start-up when a secret is
-/// missing; commands that only enqueue never call it.
+/// missing; commands that only enqueue never call it. It is `async` only
+/// for SES, whose SDK resolves its region and configuration chains
+/// asynchronously; no other provider awaits anything.
 ///
 /// # Arguments
 /// * `config` - `[mail]` (already validated).
@@ -89,16 +92,16 @@ pub trait Mailer: Send + Sync {
 /// # Errors
 /// [`OkfError::Config`] when a named environment variable is unset or
 /// empty, the From address does not parse, or the provider cannot be built
-/// (an SMTP host lettre refuses).
-pub fn from_config(config: &MailConfig) -> Result<Arc<dyn Mailer>, OkfError> {
-    from_config_with(config, &|name| std::env::var(name).ok())
+/// (an SMTP host lettre refuses), or SES finds no AWS region.
+pub async fn from_config(config: &MailConfig) -> Result<Arc<dyn Mailer>, OkfError> {
+    from_config_with(config, &|name| std::env::var(name).ok()).await
 }
 
 /// [`from_config`] with the environment as a function, so tests need not
 /// set process-wide variables.
 // `&dyn Fn(&str) -> Option<String>`: any callable taking a name, like a
 // Python `Callable[[str], Optional[str]]`.
-pub(crate) fn from_config_with(
+pub(crate) async fn from_config_with(
     config: &MailConfig,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Arc<dyn Mailer>, OkfError> {
@@ -137,6 +140,10 @@ pub(crate) fn from_config_with(
                 &postmark.message_stream,
             )?))
         }
+        // No secret to read: the AWS SDK's own chain finds the credentials.
+        MailProvider::Ses => Ok(Arc::new(
+            ses::from_config(&config.from, config.ses.as_ref()).await?,
+        )),
     }
 }
 
@@ -162,7 +169,7 @@ pub(crate) fn config_error(message: String) -> OkfError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{PostmarkConfig, SmtpConfig};
+    use crate::config::{PostmarkConfig, SesConfig, SmtpConfig};
 
     fn smtp_config() -> MailConfig {
         MailConfig {
@@ -190,17 +197,30 @@ mod tests {
         }
     }
 
-    #[test]
-    fn each_provider_builds_when_its_secret_is_set() {
-        let env = |name: &str| name.starts_with("OKF_TEST_").then(|| "s3cr3t".to_string());
-
-        assert!(from_config_with(&MailConfig::default(), &env).is_ok());
-        assert!(from_config_with(&smtp_config(), &env).is_ok());
-        assert!(from_config_with(&postmark_config(), &env).is_ok());
+    fn ses_config() -> MailConfig {
+        MailConfig {
+            provider: MailProvider::Ses,
+            ses: Some(SesConfig {
+                region: Some("us-east-1".to_string()),
+            }),
+            ..MailConfig::default()
+        }
     }
 
-    #[test]
-    fn a_missing_or_empty_secret_stops_start_up_and_names_the_variable() {
+    #[tokio::test]
+    async fn each_provider_builds_when_its_secret_is_set() {
+        let env = |name: &str| name.starts_with("OKF_TEST_").then(|| "s3cr3t".to_string());
+
+        assert!(from_config_with(&MailConfig::default(), &env).await.is_ok());
+        assert!(from_config_with(&smtp_config(), &env).await.is_ok());
+        assert!(from_config_with(&postmark_config(), &env).await.is_ok());
+        // A configured region: no region lookup, and no credential lookup
+        // before the first send.
+        assert!(from_config_with(&ses_config(), &env).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_missing_or_empty_secret_stops_start_up_and_names_the_variable() {
         let unset = |_: &str| None;
         let empty = |_: &str| Some("  ".to_string());
 
@@ -211,7 +231,7 @@ mod tests {
             for env in [&unset as &dyn Fn(&str) -> Option<String>, &empty] {
                 // `.err()` keeps the error and drops the `Ok` type (a
                 // trait object, which has no `Debug`).
-                let error = from_config_with(&config, env).err();
+                let error = from_config_with(&config, env).await.err();
                 assert!(
                     matches!(&error, Some(OkfError::Config { message, .. }) if message.contains(variable)),
                     "{error:?}"
@@ -220,11 +240,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_secret_never_reaches_the_error() {
+    #[tokio::test]
+    async fn a_secret_never_reaches_the_error() {
         let env = |_: &str| Some("bad\ntoken-s3cr3t".to_string());
 
-        let error = from_config_with(&postmark_config(), &env).err();
+        let error = from_config_with(&postmark_config(), &env).await.err();
 
         let shown = format!("{error:?}");
         assert!(

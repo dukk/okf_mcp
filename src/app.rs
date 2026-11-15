@@ -153,8 +153,8 @@ impl App {
     /// the list;
     /// [`OkfError::Config`] from [`OAuth::new`] or [`Passkeys::new`], or from
     /// [`crate::mail::from_config`] (a mail secret missing from the
-    /// environment) or [`OidcProviders::new`] (an OIDC client secret missing
-    /// from the environment).
+    /// environment, or no AWS region for SES) or [`OidcProviders::new`] (an
+    /// OIDC client secret missing from the environment).
     pub async fn load(
         pool: PgPool,
         config: Config,
@@ -187,7 +187,7 @@ impl App {
         let oauth = OAuth::new(&config)?;
         let sessions = SessionKeys::new(config.session_idle_timeout);
         let overlays = Overlays::new(config.session_idle_timeout, config.overlay_cache_size);
-        let mailer = crate::mail::from_config(&config.mail)?;
+        let mailer = crate::mail::from_config(&config.mail).await?;
         let passkeys = Passkeys::new(&config)?;
         // A provider whose secret variable is unset fails start-up here.
         let oidc = OidcProviders::new(&config, |name| std::env::var(name).ok())?;
