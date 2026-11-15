@@ -2992,9 +2992,10 @@ console" ([OAuth sign-in codes](#oauth-sign-in-codes)).
     link-local and unique-local addresses are refused, unless
     `cimd_allow_private`). The connection goes only to the addresses checked,
     so DNS rebinding cannot swap them. The document must be a JSON object
-    whose `client_id` equals its URL. It is cached for its `Cache-Control`
-    max-age, clamped between 5 minutes and 24 hours; if a refetch fails, the
-    cached copy is used for up to a day after it was fetched.
+    whose `client_id` equals its URL, listing 1 to 32 redirect URIs. It is
+    cached for its `Cache-Control` max-age, clamped between 5 minutes and 24
+    hours; if a refetch fails, the cached copy is used for up to a day after
+    it was fetched.
   - Any other `client_id` must have been registered at `/oauth/register`:
     public clients only, 1 to 10 redirect URIs, each `https` or `http` on a
     loopback host.

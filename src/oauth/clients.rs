@@ -47,8 +47,14 @@ pub const CACHE_FLOOR: Duration = Duration::from_secs(5 * 60);
 pub const CACHE_CEILING: Duration = Duration::from_secs(24 * 60 * 60);
 /// Registration is refused while this many DCR clients have no grant.
 pub const MAX_UNBOUND_DCR: i64 = 500;
-/// The most redirect URIs one client may register.
+/// The most redirect URIs a client may register at `/oauth/register`. Kept
+/// tight: anyone may register, and every registration is stored.
 pub const MAX_REDIRECT_URIS: usize = 10;
+/// The most redirect URIs a Client ID Metadata Document may list. Looser
+/// than [`MAX_REDIRECT_URIS`]: the document comes from the client's own
+/// URL, is already bounded by [`CIMD_MAX_BYTES`], and real clients publish
+/// one document for all their environments (MCPJam's lists 18, issue #448).
+pub const MAX_CIMD_REDIRECT_URIS: usize = 32;
 /// The longest redirect URI accepted, in characters.
 pub const MAX_URI_CHARS: usize = 2000;
 /// The longest `client_name` accepted, in characters.
@@ -285,6 +291,9 @@ const SUPPORTED_GRANT_TYPES: [&str; 2] = ["authorization_code", "refresh_token"]
 ///
 /// # Arguments
 /// * `document` - the JSON as received.
+/// * `max_redirect_uris` - the most `redirect_uris` accepted:
+///   [`MAX_REDIRECT_URIS`] for a registration, [`MAX_CIMD_REDIRECT_URIS`]
+///   for a CIMD document.
 ///
 /// # Returns
 /// The fields the server keeps, with RFC 7591's defaults filled in
@@ -294,7 +303,10 @@ const SUPPORTED_GRANT_TYPES: [&str; 2] = ["authorization_code", "refresh_token"]
 /// [`OAuthError::InvalidClientMetadata`] for anything but a JSON object, or a
 /// shape, auth method, grant or response type this server does not support;
 /// [`OAuthError::InvalidRedirectUri`] for a bad redirect URI.
-pub fn validate_metadata(document: &Value) -> Result<ValidatedMetadata, OAuthError> {
+pub fn validate_metadata(
+    document: &Value,
+    max_redirect_uris: usize,
+) -> Result<ValidatedMetadata, OAuthError> {
     let invalid = |why: String| OAuthError::InvalidClientMetadata(why);
     // RFC 7591 metadata is a JSON object. Checked first because serde's
     // derived struct deserializer would also accept an array holding the
@@ -306,9 +318,9 @@ pub fn validate_metadata(document: &Value) -> Result<ValidatedMetadata, OAuthErr
     // re-serializing it (serde_json implements `Deserializer` for `&Value`).
     let metadata = ClientMetadata::deserialize(document)
         .map_err(|error| invalid(format!("client metadata: {error}")))?;
-    if metadata.redirect_uris.is_empty() || metadata.redirect_uris.len() > MAX_REDIRECT_URIS {
+    if metadata.redirect_uris.is_empty() || metadata.redirect_uris.len() > max_redirect_uris {
         return Err(invalid(format!(
-            "redirect_uris must list 1 to {MAX_REDIRECT_URIS} URIs"
+            "redirect_uris must list 1 to {max_redirect_uris} URIs"
         )));
     }
     metadata
@@ -437,7 +449,7 @@ pub fn validate_cimd_document(
             "the metadata document at {url:?} does not name itself as its client_id"
         )));
     }
-    validate_metadata(document).map_err(|error| {
+    validate_metadata(document, MAX_CIMD_REDIRECT_URIS).map_err(|error| {
         OAuthError::InvalidClient(format!("the metadata document at {url:?}: {error}"))
     })
 }
@@ -871,7 +883,7 @@ async fn register(State(app): State<Arc<App>>, body: Bytes) -> Result<Response, 
     let document: Value = serde_json::from_slice(&body).map_err(|_| {
         OAuthError::InvalidClientMetadata("the body must be a JSON object".to_string())
     })?;
-    let metadata = validate_metadata(&document)?;
+    let metadata = validate_metadata(&document, MAX_REDIRECT_URIS)?;
     let now = app.clock().now();
     // The metadata as registered, which the response echoes; `client_name`
     // only when the client sent one.
@@ -1170,6 +1182,76 @@ mod tests {
     }
 
     #[test]
+    fn a_cimd_document_may_list_more_redirect_uris_than_a_registration() {
+        // MCPJam's own document
+        // (https://www.mcpjam.com/.well-known/oauth/client-metadata.json,
+        // 2026-11-15), verbatim: 18 redirect URIs, over the registration cap
+        // of 10 (issue #448).
+        let url = "https://www.mcpjam.com/.well-known/oauth/client-metadata.json";
+        let mcpjam = json!({
+            "client_id": url,
+            "client_name": "MCPJam",
+            "client_uri": "https://www.mcpjam.com",
+            "logo_uri": "https://www.mcpjam.com/mcp_jam_2row.png",
+            "redirect_uris": [
+                "http://127.0.0.1:6274/oauth/callback",
+                "http://127.0.0.1:6274/callback",
+                "http://127.0.0.1:6274/oauth/callback/debug",
+                "http://localhost:6274/oauth/callback",
+                "http://localhost:6274/callback",
+                "http://localhost:6274/oauth/callback/debug",
+                "http://127.0.0.1:5173/oauth/callback",
+                "http://127.0.0.1:5173/oauth/callback/debug",
+                "http://localhost:5173/oauth/callback",
+                "http://localhost:5173/oauth/callback/debug",
+                "https://app.mcpjam.com/oauth/callback",
+                "https://app.mcpjam.com/oauth/callback/debug",
+                "https://staging.mcpjam.com/oauth/callback",
+                "https://staging.mcpjam.com/oauth/callback/debug",
+                "https://score.mcpjam.com/oauth/callback",
+                "https://score.mcpjam.com/oauth/callback/debug",
+                "https://www.score.mcpjam.com/oauth/callback",
+                "https://www.score.mcpjam.com/oauth/callback/debug"
+            ],
+            "grant_types": [
+                "authorization_code",
+                "refresh_token",
+                "urn:ietf:params:oauth:grant-type:device_code"
+            ],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "none",
+            "application_type": "native"
+        });
+
+        let accepted =
+            validate_cimd_document(url, &mcpjam).expect("MCPJam's document is a public client");
+
+        assert_eq!(accepted.redirect_uris.len(), 18);
+        assert!(accepted
+            .redirect_uris
+            .iter()
+            .any(|known| redirect_uri_matches(known, "http://127.0.0.1:6274/oauth/callback")));
+        assert_eq!(
+            accepted.grant_types,
+            ["authorization_code", "refresh_token"]
+        );
+        // The same list is still too long for a registration.
+        assert!(matches!(
+            validate_metadata(&mcpjam, MAX_REDIRECT_URIS),
+            Err(OAuthError::InvalidClientMetadata(_))
+        ));
+        // And a document has a cap of its own.
+        let too_many: Vec<String> = (0..=MAX_CIMD_REDIRECT_URIS)
+            .map(|n| format!("https://client.example.com/cb{n}"))
+            .collect();
+        let over_cap = json!({ "client_id": url, "redirect_uris": too_many });
+        assert!(matches!(
+            validate_cimd_document(url, &over_cap),
+            Err(OAuthError::InvalidClient(_))
+        ));
+    }
+
+    #[test]
     fn a_client_that_also_offers_none_is_accepted_as_public() {
         // ChatGPT's own document (https://chatgpt.com/oauth/client.json,
         // 2026-11-11), verbatim: it declares private_key_jwt but lists `none`
@@ -1231,7 +1313,7 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    validate_metadata(&bad),
+                    validate_metadata(&bad, MAX_REDIRECT_URIS),
                     Err(OAuthError::InvalidClientMetadata(_))
                 ),
                 "{why}: {bad}"
@@ -1241,21 +1323,25 @@ mod tests {
 
     #[test]
     fn metadata_validation_accepts_public_clients_only() {
-        let valid = validate_metadata(&json!({
+        let valid = validate_metadata(
+            &json!({
             "client_name": "Example",
             "redirect_uris": ["https://client.example.com/callback"],
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
             "token_endpoint_auth_method": "none",
             "logo_uri": "https://client.example.com/logo.png"
-        }))
+            }),
+            MAX_REDIRECT_URIS,
+        )
         .expect("valid");
         assert_eq!(valid.client_name.as_deref(), Some("Example"));
         assert_eq!(valid.grant_types, ["authorization_code", "refresh_token"]);
 
-        let defaults = validate_metadata(&json!({
-            "redirect_uris": ["https://client.example.com/callback"]
-        }))
+        let defaults = validate_metadata(
+            &json!({ "redirect_uris": ["https://client.example.com/callback"] }),
+            MAX_REDIRECT_URIS,
+        )
         .expect("defaults");
         assert_eq!(defaults.grant_types, ["authorization_code"]);
         assert_eq!(defaults.response_types, ["code"]);
@@ -1301,14 +1387,16 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    validate_metadata(&bad),
+                    validate_metadata(&bad, MAX_REDIRECT_URIS),
                     Err(OAuthError::InvalidClientMetadata(_))
                 ),
                 "{why}"
             );
         }
-        let bad_uri =
-            validate_metadata(&json!({ "redirect_uris": ["http://client.example.com/cb"] }));
+        let bad_uri = validate_metadata(
+            &json!({ "redirect_uris": ["http://client.example.com/cb"] }),
+            MAX_REDIRECT_URIS,
+        );
         assert!(matches!(bad_uri, Err(OAuthError::InvalidRedirectUri(_))));
     }
 
@@ -1330,7 +1418,7 @@ mod tests {
 
         assert!(
             matches!(
-                validate_metadata(&positional),
+                validate_metadata(&positional, MAX_REDIRECT_URIS),
                 Err(OAuthError::InvalidClientMetadata(_))
             ),
             "registration metadata"
