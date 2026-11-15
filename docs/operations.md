@@ -2227,7 +2227,8 @@ signed in with an account who is not an admin: its Catalogs link lists the
 catalogs the user reaches, and a catalog's drawer holds only the
 Maintenance switch, enabled for an owner of the catalog's owner team. Where a
 locked catalog is refused (`UnlockRequired`), the console offers Unlock,
-to an admin credential with a user, with a short form for the category,
+to an admin credential whose user is an admin user (`whoami`'s
+`user_admin`), with a short form for the category,
 reason and hours.
 
 ### API reference
