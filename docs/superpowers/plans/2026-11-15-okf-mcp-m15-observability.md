@@ -287,6 +287,7 @@ The plan PR applied these to the spec, each marked `(Corrected, M15 plan, 2026-1
 | Task | Delivers |
 |---|---|
 | 1 | `[telemetry]` config and validation; `telemetry::subscriber` (layers, caps, JSON with trace ids); OTLP traces and logs; the Sentry DSN target; counting exporters; `Telemetry::start`/`shutdown`; `serve` wiring; stderr-only subscriber for the other subcommands; the spec deviations |
+| 1b | The privacy audit of every existing `tracing` event: caller-supplied text, full error text and the `log` mail provider move to `LOCAL_ONLY` (stderr only) or are replaced by closed values |
 | 2 | `telemetry::metrics::Metrics` (instruments, label enums, buckets); the Prometheus reader; `[telemetry.prometheus] listen`; the `/metrics` listener; `okf.build.info`; export-failure counters on `/metrics`; `App::load_with_metrics` |
 | 3 | The HTTP server span (semconv fields, i64 status, error on 5xx, `traceparent` link, `enduser.id`/`okf.key.id`); `http.server.*` metrics; `OkfServer::call_tool` span and `okf.mcp.tool.duration`; `okf.mcp.sessions.active` |
 | 4 | Publish, changeset, poll loop and cache spans and metrics |
@@ -349,18 +350,18 @@ Each line is `task (the tasks it needs)`; a task starts when every task in its p
 
 ```
 wave 1:  1 ()                8 ()
-wave 2:  2 (1)               9b (8)      9e (8)
+wave 2:  2 (1)   1b (1)       9b (8)      9e (8)
 wave 3:  3 (2)  4 (2)  5 (2)  6 (2)
-wave 4:  7 (3, 4, 5, 6)         9a (8, 4, 6)   9c (8, 3, 5, 6)   9d (8, 3, 4, 5)
+wave 4:  7 (1b, 3, 4, 5, 6)         9a (8, 4, 6)   9c (8, 3, 5, 6)   9d (8, 3, 4, 5)
 wave 5:  10 (9a, 9b, 9c, 9d, 9e)
 wave 6:  11 (all)
 ```
 
 Why each edge, and the shared files to merge with care:
 - **1 and 8 start together.** 1 owns `src/telemetry/`, `src/main.rs`, `src/cli.rs` and `src/config.rs`; 8 owns the justfile, `gate.sh` and the docs. Both touch `Cargo.toml` (8 adds `[package.metadata.dylint]` and `[lints.rust]`, 1 adds dependencies): keep both.
-- **2 needs 1** (`Telemetry`, `TelemetryConfig`, the resource).
+- **2 needs 1** (`Telemetry`, `TelemetryConfig`, the resource). **1b needs 1** (`LOCAL_ONLY` and the cap). It touches event lines in files that 3-6 also edit, so merge `main` and keep both sides; it runs beside 2.
 - **3, 4, 5 and 6 need 2** (the `Metrics` handle; 3 and 6 also share `telemetry/propagation.rs`, which 3 creates with `link_from` and 6 extends with `inject`). They each add methods to `src/telemetry/metrics.rs` in separate `impl` blocks and add instruments to the `Instruments` struct: keep both sides. Task 6 creates `propagation.rs` itself if it merges before Task 3 (*whoever is second keeps both functions*).
-- **7 needs 3, 4, 5 and 6.** Its sentinel test goes through the request span (3), publish (4), sign-in (5) and the archive routes (6).
+- **7 needs 1b, 3, 4, 5 and 6.** Its sentinel test goes through the existing events (1b), the request span (3), publish (4), sign-in (5) and the archive routes (6).
 - **9b and 9e need only 8.** Their modules are untouched by 3-6.
 - **9a needs 4 and 6** (`store/publish.rs`, and the pool spans in `store/` from 6). **9c needs 3, 5 and 6** (`http/`, `oauth/`, `oidc.rs`). **9d needs 3, 4 and 5** (`mcp/`, `auth.rs`, `app.rs`, `mail/`). This keeps the sweep from conflicting with the hand-written instrumentation.
 - **10 needs every sweep task.** **11 is last.**
@@ -625,6 +626,12 @@ const EXPORT_STACK: [&str; 10] = [
     "hyper", "hyper_util", "reqwest", "h2",
 ];
 
+/// The target of events that may carry text the privacy rules keep out of
+/// OTLP: a caller-supplied value, an internal error's full text, the `log`
+/// mail provider's message. Such events reach stderr only. `pub` so every
+/// module writes `tracing::warn!(target: LOCAL_ONLY, ...)` (Task 1b).
+pub const LOCAL_ONLY: &str = "okf_mcp::local_only";
+
 /// The highest level any layer takes from `rmcp`: at `debug` it logs whole
 /// JSON-RPC messages, credentials among them.
 const RMCP_CAP: Level = Level::INFO;
@@ -633,8 +640,8 @@ const RMCP_CAP: Level = Level::INFO;
 fn cap(otlp: bool) -> Targets {
     let mut targets = Targets::new().with_default(LevelFilter::TRACE).with_target("rmcp", RMCP_CAP);
     if otlp {
-        for target in EXPORT_STACK {
-            targets = targets.with_target(target, LevelFilter::OFF);
+        for target in EXPORT_STACK.iter().chain(std::iter::once(&LOCAL_ONLY)) {
+            targets = targets.with_target(*target, LevelFilter::OFF);
         }
     }
     targets
@@ -691,6 +698,7 @@ Tests check the filters through `Filter::callsite_enabled`/`would_enable`, not `
 - `stderr_at_warn_still_exports_debug_spans`: stderr `warn` and traces `debug`. A `debug` span reaches the in-memory span exporter, and nothing reaches the captured stderr writer.
 - `rmcp_debug_never_reaches_any_layer`: every filter at `trace`. An `rmcp`-target `debug` event reaches neither the log exporter nor stderr.
 - `export_stack_events_reach_stderr_only`: an event with target `opentelemetry-otlp` at `error` reaches stderr and not the log exporter.
+- `local_only_events_reach_stderr_only`: the same for target `LOCAL_ONLY`, at every level, on both OTLP layers (a `LOCAL_ONLY` event inside a span also adds no span event).
 - `error_event_marks_span_error`: an `error!` inside a span exports the span with `Status::Error`.
 
 Each test builds the subscriber with in-memory exporters and `with_simple_exporter`, and runs under `tracing::subscriber::with_default`. Keep each provider alive until the end of its test, then `shutdown()`. Dropping a provider inside the dispatcher's lock has deadlocked other projects' tests.
@@ -765,6 +773,50 @@ If `set_global_default` fails (already set), return `OkfError::Config` ("a traci
 - [ ] **Step 10: Gates and commit**
 
 `tools/agentic/gate.sh fmt`, `lint`, `test`. Then commit `feat(telemetry): config, subscriber, OTLP traces and logs (M15 Task 1)`.
+
+---
+
+### Task 1b: The privacy audit of existing events
+
+The log bridge exports every `tracing` event that passes its filter. `skip_all` protects only the arguments of functions instrumented from now on; it does nothing for the events the crate already emits, and some of those carry exactly what the spec's "never recorded anywhere" list forbids. Found in review of the plan PR (#459):
+- `src/mail/log.rs:15-19` logs the recipient and the whole message, setup and reset links included (that is the `log` provider's purpose);
+- `src/oauth/authorize.rs:526` logs a caller-supplied `client_id` and the refusal's text;
+- `src/http/mod.rs:136` and `src/mcp/mod.rs:137` (`tool_error`) log an internal error's full `Display`.
+
+**No release may ship Task 1 without this task.** OTLP is off unless configured, so `main` is safe between them, but the release that turns OTLP on must contain both.
+
+**Files:** every file with a `tracing` event that this audit changes (expect `src/mail/log.rs`, `src/oauth/*.rs`, `src/http/mod.rs`, `src/mcp/mod.rs`, `src/app.rs`, `src/http/signin.rs`, `src/oidc.rs`, `src/mail/queue.rs`); `docs/contributing/policy-lints.md` if Task 8 has merged (the event rules), otherwise the spec's "Privacy"; `tests/telemetry_privacy.rs` if Task 7 has merged (otherwise Task 7 adds the cases below).
+
+- [ ] **Step 1: List every event.** `grep -rn "tracing::\(trace\|debug\|info\|warn\|error\)!\|\b\(trace\|debug\|info\|warn\|error\)!(" src --include=*.rs`, excluding `#[cfg(test)]` code (about 110 sites on `bc32c72`). Put the table in the PR description: site, level, each field, and its class.
+
+- [ ] **Step 2: Classify each field** as one of:
+  - **closed**: an enum's `as_str`, a `kind()`, a count, a duration, a generation, a status code, a route template, a catalog name that exists. These stay.
+  - **id**: a user id, key id, session-binding id prefix, job id. These stay (the same rule as span attributes).
+  - **caller text**: anything a request supplied (a client id, a redirect URI, an email, a name, a path, a query value, a header). It moves to a `LOCAL_ONLY` event or is dropped.
+  - **error text**: `%error` of an `OkfError`, `sqlx::Error`, `reqwest::Error` or a provider error. Its message can name a path or echo input. The exported event keeps `kind`, a closed value; the full text moves to a `LOCAL_ONLY` event beside it. On stderr that is two lines, one per sink, and the detail line says what the generic one does.
+  - **content**: a document, a mail body, a link. These are `LOCAL_ONLY` only.
+
+- [ ] **Step 3: Apply.** For example:
+
+```rust
+// Before: tracing::error!(error = %self.0, "request failed");
+// After: the exported event says what failed by kind; the detail, which can
+// name a path or echo a value, stays on stderr (`LOCAL_ONLY` is turned off
+// on both OTLP layers).
+tracing::error!(kind = self.0.kind(), "request failed");
+tracing::error!(target: LOCAL_ONLY, error = %self.0, "request failed (detail)");
+```
+
+`LogMailer::send` logs with `target: LOCAL_ONLY` alone. `authorize.rs:526` becomes `warn!(reason = error.kind(), "refused an OAuth client")` plus a `LOCAL_ONLY` line with the `client_id` and the text. If the error type has no `kind`, give it one (a closed `&'static str`).
+
+- [ ] **Step 4: Test.**
+  - Unit tests per changed site, using the in-memory log exporter: a refused OAuth client whose id contains a sentinel exports no record containing it; the `log` mailer's send exports nothing; an internal error exports `kind` and not its text.
+  - The sentinel test (Task 7) gains these cases: the `log` mail provider with a sign-up invitation, a refused OAuth client id, and an internal error whose text holds the sentinel. Add them here if Task 7 has merged, or note them on Task 7's issue.
+  - **Revert check:** put one site back and see its test fail.
+
+- [ ] **Step 5: The rule for new code.** The policy doc gains "Events": the same classes; caller text, error text and content go to `LOCAL_ONLY`. Review checks every new event against it.
+
+- [ ] **Step 6: Gates and commit** `fix(telemetry): keep caller text, error text and mail content out of OTLP (M15 Task 1b)`
 
 ---
 
@@ -1190,7 +1242,8 @@ Exercise:
 - MCP: `search` for the sentinel, `create_concept`, `publish`;
 - the REST API;
 - the sign-in form;
-- import and export.
+- import and export;
+- Task 1b's sites: a sign-up invitation through the `log` mail provider, a refused OAuth client whose id holds the sentinel, and an internal error whose text holds it (a test hook in `tests/support`, or a store failure the test can force).
 
 Then `wait_for` the collector to stop receiving (two quiet intervals). Assert that no decoded span name, attribute value, event, log body or log attribute, and no metric attribute, contains `zq-sentinel-7f3a`. Also scrape `/metrics` and assert the same.
 
