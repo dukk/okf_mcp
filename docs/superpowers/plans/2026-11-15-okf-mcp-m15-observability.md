@@ -1045,17 +1045,36 @@ Notes:
 
 - [ ] **Step 3: Principal ids**
 
-At `auth.rs:1192` and both inserts in `console_session.rs`:
+Root-span fields are recorded **on a handle to the root span, never on `Span::current()`**. Once the sweep (Task 9) instruments the auth middleware and its helpers, and an operator raises `traces_filter`, `Span::current()` is a child span that does not declare `enduser.id`, and `record` silently does nothing (review of PR #459).
+
+A one-line middleware, layered directly inside `TraceLayer` (in axum the last `.layer(..)` is the outermost, so it goes just before the `TraceLayer` call), stores the request span in the request's extensions:
 
 ```rust
-let span = tracing::Span::current();
-span.record("okf.key.id", principal.key_id.as_str());
-if let Some(user_id) = principal.user_id.as_deref() {
-    span.record("enduser.id", user_id);
+/// The request span `TraceLayer` opened, for code deeper in the stack that
+/// records the request's root fields (the principal's ids).
+#[derive(Debug, Clone)]
+pub struct RequestSpan(pub tracing::Span);
+
+// Exempt from `uninstrumented_fn`: its own span would become `Span::current()`
+// and it would capture that instead of the request span.
+async fn capture_request_span(mut request: Request, next: Next) -> Response {
+    request.extensions_mut().insert(RequestSpan(tracing::Span::current()));
+    next.run(request).await
 }
 ```
 
-`Span::current()` there is the request span (the middleware runs inside `TraceLayer`). A test asserts it.
+At `auth.rs:1192` and both inserts in `console_session.rs`:
+
+```rust
+if let Some(RequestSpan(span)) = request.extensions().get::<RequestSpan>() {
+    span.record("okf.key.id", principal.key_id.as_str());
+    if let Some(user_id) = principal.user_id.as_deref() {
+        span.record("enduser.id", user_id);
+    }
+}
+```
+
+Test `principal_ids_land_on_the_request_span_under_helper_spans`: with the span filter at `trace`, and the middleware wrapped in an extra `trace_span!` in the test (standing in for the sweep's `#[instrument]`), the exported request span still carries `enduser.id` and `okf.key.id`.
 
 - [ ] **Step 4: `OkfServer::call_tool`**
 
@@ -1096,7 +1115,20 @@ async fn call_tool(
 }
 ```
 
-- **The error kind:** `tool_error` (`src/mcp/mod.rs:137`) records `tracing::Span::current().record("okf.error.kind", error.kind())`. It runs inside the span, so the field lands there.
+- **The error kind** is recorded on the tool span through a task-local handle, not `Span::current()`. Under a raised filter, `Span::current()` in `tool_error` is the tool method's own `debug` span or a helper's (review of PR #459).
+
+  ```rust
+  // `task_local!` is a value scoped to one async task, like a
+  // `contextvars.ContextVar` in Python.
+  tokio::task_local! {
+      /// The span of the tool call in progress (set by `call_tool`).
+      pub(crate) static TOOL_SPAN: tracing::Span;
+  }
+  ```
+
+  `call_tool` runs `TOOL_SPAN.scope(span.clone(), self.tool_router.call(tcc).instrument(span.clone())).await`. `tool_error` does `let _ = TOOL_SPAN.try_with(|span| span.record("okf.error.kind", error.kind()));`, which is a no-op outside a tool call. If the router turns out to run the tool on another task (the scope would then be lost), record the kind in `call_tool` instead, from `structured_content["error"]` matched against `OkfError::kind()`'s strings, and say so in this plan.
+  - Test `error_kind_lands_on_the_tool_span_under_helper_spans`: with the span filter at `trace` and the tool method wrapped in a `debug` span (as the sweep will), a failing tool's exported `mcp <tool>` span carries `okf.error.kind`.
+  - `record_principal(&span, &context)` writes to the `span` handle `call_tool` holds, for the same reason.
 - **`catalog_label`** reads `arguments["catalog"]` as a string and returns it only if `self.app.catalog(name)` is loaded, otherwise `"none"`. An unloaded name never becomes a label.
 - **`okf.mcp.tool.duration`** is an `f64_histogram`, `SECONDS_BUCKETS`, attributes `tool`, `catalog`, `outcome`.
 - **`okf.mcp.sessions.active`** is an `i64_up_down_counter`, incremented in the `mcp_service` factory (`src/http/mod.rs:227`) and decremented when the `OkfServer` is dropped (`impl Drop for OkfServer`). Test: open and close a session, and the gauge returns to 0.
