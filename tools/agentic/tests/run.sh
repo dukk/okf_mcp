@@ -405,7 +405,7 @@ test_gate_returns_the_gate_exit_status() {
 }
 
 # leaky_gate <then>: a fake gate that starts a child which ignores TERM and
-# inherits the lock's fd, then runs <then> (wait, exit 0, kill itself...).
+# runs in the gate's process group, then runs <then> (wait, exit 0, kill itself...).
 # The child's output goes to /dev/null so it can't hold the test's pipe open.
 leaky_gate() {
     fake_just "bash -c 'trap \"\" TERM; exec sleep 30' >/dev/null 2>&1 &
@@ -448,6 +448,24 @@ test_gate_passing_leader_stops_leftover_child_and_frees_lock() {
     new_fixtures; leaky_gate 'exit 0'
     run_leaky_gate
     want_rc 0; want_out "leaving 1 process(es) behind"; want_no_out "HANG"; want_nothing_left
+}
+
+# A daemon the gate starts (sccache's server, say) leaves the gate's process
+# group with setsid, so the group cleanup never stops it. It must not take the
+# lock with it: flock -o keeps the lock's fd out of the gate's children.
+test_gate_daemon_that_escapes_the_group_does_not_keep_the_lock() {
+    new_fixtures
+    # shellcheck disable=SC2016 # $! and $GH_FIXTURES are expanded by the fake just
+    fake_just 'setsid bash -c "exec sleep 30" </dev/null >/dev/null 2>&1 &
+echo $! >"$GH_FIXTURES/daemon.pid"
+exit 0'
+    trap '[ -s "$fx/daemon.pid" ] && kill -KILL "$(cat "$fx/daemon.pid")" 2>/dev/null' EXIT
+    out=$(cd "$repo" && PATH="$fx/bin:$PATH" "$tools/gate.sh" lint 2>&1)
+    rc=$?
+    want_rc 0
+    [ -s "$fx/daemon.pid" ] || die "the fake gate didn't start its daemon"
+    kill -0 "$(cat "$fx/daemon.pid")" 2>/dev/null || die "the daemon didn't outlive the gate"
+    flock -n "$repo/.git/agentic/gates.lock" true || die "the daemon still holds gates.lock"
 }
 
 test_gate_lock_wait_is_bounded() {

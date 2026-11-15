@@ -23,7 +23,8 @@
 # every other exit too (pass, failure, a killed gate, or INT/TERM to gate.sh),
 # whatever is left of the group is stopped the same way. gate.sh returns only once the group is empty,
 # so nothing it started (a test that ignores TERM, a stray background job)
-# outlives it or keeps holding the lock it inherited.
+# outlives it. The gate's children never inherit the lock's fd (flock -o), so
+# a daemon that leaves the group (setsid) cannot keep the lock either.
 #
 # Exit codes:
 #   the gate's own, when it exits by itself; if it left processes behind they
@@ -70,7 +71,11 @@ limit_s=$((number * unit))
 
 if [ "$locked" = 1 ]; then
     # A lock wait that runs out exits 124 too: it is stuck behind a hang.
-    cmd=(flock -E 124 -w "$limit_s" "$lock" "${cmd[@]}")
+    # -o: flock holds the lock itself and closes its fd before running the
+    # gate, so no child inherits it. A daemon the gate starts (sccache's
+    # server) leaves the process group with setsid, escapes the cleanup
+    # below, and would otherwise hold the lock until it exits.
+    cmd=(flock -o -E 124 -w "$limit_s" "$lock" "${cmd[@]}")
 fi
 
 # lib.sh's agentic_run_bounded runs the gate in its own process group and
