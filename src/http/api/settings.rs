@@ -69,7 +69,7 @@ pub(crate) struct OidcProviderView {
 /// The mail provider, without any secret.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct MailView {
-    /// `smtp`, `postmark` or `log`.
+    /// `smtp`, `postmark`, `ses` or `log`.
     pub provider: &'static str,
     /// The From address.
     pub from: String,

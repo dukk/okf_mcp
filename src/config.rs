@@ -294,6 +294,9 @@ pub enum MailProvider {
     Smtp,
     /// Postmark's HTTP API (`[mail.postmark]`).
     Postmark,
+    /// Amazon SES through the AWS SDK (`[mail.ses]`, optional), with the
+    /// standard AWS credential chain (EKS Pod Identity among it).
+    Ses,
     /// Writes each message, links included, to the log at `info`. For
     /// development and tests only.
     #[default]
@@ -304,11 +307,13 @@ impl MailProvider {
     /// The config spelling.
     ///
     /// # Returns
-    /// `"smtp"`, `"postmark"` or `"log"`, as `[mail] provider` takes it.
+    /// `"smtp"`, `"postmark"`, `"ses"` or `"log"`, as `[mail] provider`
+    /// takes it.
     pub fn as_str(self) -> &'static str {
         match self {
             MailProvider::Smtp => "smtp",
             MailProvider::Postmark => "postmark",
+            MailProvider::Ses => "ses",
             MailProvider::Log => "log",
         }
     }
@@ -345,6 +350,17 @@ pub struct PostmarkConfig {
     pub message_stream: String,
 }
 
+/// `[mail.ses]`. Credentials are never here: the AWS SDK's standard chain
+/// finds them (environment, profile, web identity, or the container
+/// provider that EKS Pod Identity configures).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct SesConfig {
+    /// The AWS region to send in (`"us-east-1"`). Unset: the SDK's own
+    /// resolution (`AWS_REGION`, then the profile, then instance metadata).
+    pub region: Option<String>,
+}
+
 // `serde(default = "...")` takes a function's name, not a value.
 fn default_smtp_port() -> u16 {
     DEFAULT_SMTP_PORT
@@ -376,6 +392,8 @@ pub struct MailConfig {
     pub smtp: Option<SmtpConfig>,
     /// Postmark, for `provider = "postmark"`.
     pub postmark: Option<PostmarkConfig>,
+    /// SES, for `provider = "ses"` (optional: every key has a default).
+    pub ses: Option<SesConfig>,
 }
 
 impl Default for MailConfig {
@@ -386,6 +404,7 @@ impl Default for MailConfig {
             worker: true,
             smtp: None,
             postmark: None,
+            ses: None,
         }
     }
 }
@@ -402,7 +421,7 @@ impl MailConfig {
     /// `[mail.smtp]` table, with a blank host, port 0, or a `username`
     /// without `password_env` (or the reverse); `provider = "postmark"`
     /// without a `[mail.postmark]` table, or with a blank `token_env` or
-    /// `message_stream`.
+    /// `message_stream`; `provider = "ses"` with a blank `region`.
     fn validate(&self) -> Result<(), String> {
         self.from
             .parse::<Mailbox>()
@@ -445,6 +464,20 @@ impl MailConfig {
                 }
                 if postmark.message_stream.trim().is_empty() {
                     return Err("mail.postmark.message_stream is blank".to_string());
+                }
+                Ok(())
+            }
+            MailProvider::Ses => {
+                // `and_then` reaches through both `Option`s: the table, then
+                // its key. A missing region is fine (the SDK resolves one at
+                // start-up); a blank one is a mistake.
+                if self
+                    .ses
+                    .as_ref()
+                    .and_then(|ses| ses.region.as_deref())
+                    .is_some_and(|region| region.trim().is_empty())
+                {
+                    return Err("mail.ses.region is blank".to_string());
                 }
                 Ok(())
             }
@@ -851,6 +884,7 @@ mod tests {
         for provider in [
             MailProvider::Smtp,
             MailProvider::Postmark,
+            MailProvider::Ses,
             MailProvider::Log,
         ] {
             // serde reads a bare enum variant from a JSON string.
@@ -1260,7 +1294,9 @@ mod tests {
                     username = \"okf\"\n\
                     password_env = \"OKF_SMTP_PASSWORD\"\n\
                     [mail.postmark]\n\
-                    token_env = \"OKF_POSTMARK_TOKEN\"\n";
+                    token_env = \"OKF_POSTMARK_TOKEN\"\n\
+                    [mail.ses]\n\
+                    region = \"us-east-1\"\n";
 
         let config = Config::from_toml(text).unwrap();
 
@@ -1284,7 +1320,27 @@ mod tests {
                 message_stream: "outbound".to_string(),
             })
         );
+        assert_eq!(
+            config.mail.ses,
+            Some(SesConfig {
+                region: Some("us-east-1".to_string()),
+            })
+        );
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn ses_needs_no_table_and_takes_an_optional_region() {
+        for text in [
+            "[mail]\nprovider = \"ses\"\n",
+            "[mail]\nprovider = \"ses\"\n[mail.ses]\n",
+            "[mail]\nprovider = \"ses\"\n[mail.ses]\nregion = \"eu-west-1\"\n",
+        ] {
+            let config = Config::from_toml(text).unwrap();
+
+            assert_eq!(config.mail.provider, MailProvider::Ses, "{text}");
+            assert!(config.validate().is_ok(), "{text}");
+        }
     }
 
     #[test]
@@ -1312,6 +1368,7 @@ mod tests {
             "[mail]\nprovider = \"postmark\"\n[mail.postmark]\ntoken_env = \"T\"\n\
              message_stream = \" \"\n"
                 .to_string(),
+            "[mail]\nprovider = \"ses\"\n[mail.ses]\nregion = \" \"\n".to_string(),
         ];
 
         for text in &refused {

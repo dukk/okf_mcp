@@ -97,11 +97,12 @@ unknown keys are ignored, so one file serves every version.
 | `auth.reset_link_ttl` | `"1h"` | How long a password reset link works (`reset_link_ttl` setting) |
 | `auth.trusted_proxy_header` | none | The header whose last address is the client's, such as `"x-forwarded-for"`, behind an ingress that appends it. Unset: the TCP peer's address, and no header is read. The sign-in limits and the sign-in history use it. Config only, not a setting |
 | `[[auth.oidc]]` | none | One table per OIDC provider: `id` (1 to 32 of `a-z`, `0-9` and `-`; stable, since each linked identity stores it), `label` (the button text), `issuer`, `client_id`, `client_secret_env` (the environment variable holding the secret) and `scopes` (default `["openid", "email", "profile"]`). Needs `public_url` |
-| `mail.provider` | `"log"` | `"smtp"`, `"postmark"` or `"log"`. **`log` is for development only:** it writes each whole message, setup and reset links included, to the log at `info`, and delivers nothing |
-| `mail.from` | `"okf <okf@localhost>"` | The From address, such as `"okf <okf@example.com>"`; it must parse as one mailbox. Set it for `smtp` and `postmark` |
+| `mail.provider` | `"log"` | `"smtp"`, `"postmark"`, `"ses"` or `"log"`. **`log` is for development only:** it writes each whole message, setup and reset links included, to the log at `info`, and delivers nothing |
+| `mail.from` | `"okf <okf@localhost>"` | The From address, such as `"okf <okf@example.com>"`; it must parse as one mailbox. Set it for `smtp`, `postmark` and `ses` (for `ses`, an identity verified in SES) |
 | `mail.worker` | `true` | Run the mail worker in `serve`. Its own pool opens up to 4 connections, on top of `database_max_connections` |
 | `mail.smtp.host`, `mail.smtp.port`, `mail.smtp.starttls`, `mail.smtp.username`, `mail.smtp.password_env` | none, `587`, `true`, none, none | The SMTP relay. `starttls = true` requires STARTTLS; `false` is TLS from the first byte (port 465); there is no plain-text mode. `username` and `password_env` (the environment variable holding the password) go together |
 | `mail.postmark.token_env`, `mail.postmark.message_stream` | none, `"outbound"` | Postmark's server token (by environment variable) and message stream |
+| `mail.ses.region` | none | The AWS region SES sends in. Unset, the AWS SDK's own resolution decides (`AWS_REGION`, then the profile, then instance metadata). The `[mail.ses]` table is optional; there is no credential key ([Mail](#mail)) |
 
 The server refuses to start (and every subcommand refuses to run) with a zero
 `poll_interval`, `session_idle_timeout`, `database_max_connections` or
@@ -126,11 +127,13 @@ also refuses an `id` that is malformed or listed twice, an empty `label`,
 it refuses a `from` that is not one address, an `smtp` provider without a
 `[mail.smtp]` table, with a blank host, port 0, or `username` without
 `password_env` (or the reverse), and a `postmark` provider without a
-`[mail.postmark]` table or with a blank `token_env` or `message_stream`.
+`[mail.postmark]` table or with a blank `token_env` or `message_stream`,
+and an `ses` provider with a blank `region`.
 `serve` also refuses to start when a variable named by `client_secret_env`,
 `password_env` or `token_env` is unset or empty, naming the variable (never
-a value). The other subcommands never read those variables: `user invite`
-and `mail test` only queue mail, which a running server sends.
+a value), and when the `ses` provider finds no AWS region. The other
+subcommands never read those variables nor look for AWS credentials:
+`user invite` and `mail test` only queue mail, which a running server sends.
 
 ```toml
 listen = "[::]:8080"
@@ -203,6 +206,7 @@ top-level key: a top-level key written below one would land inside it.
 | `OKF_OIDC_EXAMPLE_SECRET` (any name) | An OIDC client secret, named by its provider's `client_secret_env` |
 | `OKF_SMTP_PASSWORD` (any name) | The SMTP password, named by `mail.smtp.password_env` |
 | `OKF_POSTMARK_TOKEN` (any name) | The Postmark server token, named by `mail.postmark.token_env` |
+| `AWS_REGION`, `AWS_CONTAINER_CREDENTIALS_FULL_URI`, ... | Read by the AWS SDK for the `ses` provider only: the region when `mail.ses.region` is unset, and credentials through the SDK's standard chain. EKS Pod Identity sets the credential variables itself; never set static keys for okf ([Mail](#mail)) |
 
 Logs go to stderr. They never carry the database URL, an API key or a
 document's text, nor a password, session id, CSRF token, setup or reset
@@ -1502,6 +1506,8 @@ Mail goes through `[mail]`'s provider:
 
 - `smtp`: any relay, over STARTTLS or TLS from the first byte;
 - `postmark`: Postmark's HTTP API;
+- `ses`: Amazon SES, through the AWS SDK's SES v2 `SendEmail` (not SES
+  SMTP), with the SDK's standard credentials (below);
 - `log`: **for development only.** It logs each whole message at `info`,
   recipient, subject and body, setup and reset links included, and
   delivers nothing. Anyone who can read the log can use those links. Never
@@ -1520,10 +1526,15 @@ sends it, on a pool of its own (`mail.worker`); `user invite` and `mail test`
 on the command line only queue. Two workers never send the same mail.
 
 - A provider error that may pass is retried: a network error, Postmark 401,
-  429 or 5xx, an SMTP 4xx. The first retry is 30 seconds later, doubling up
-  to an hour, for 24 hours from when the mail was queued.
-- A refusal fails the mail at once: an SMTP 5xx, or any other Postmark
-  error (422 among them).
+  429 or 5xx, an SMTP 4xx, and for SES a timeout, throttling or a sending
+  quota, any 408, 429 or 5xx, a paused or suspended account, and any
+  credential or authorization failure (no credentials found, any 401 or
+  403, an expired token, `AccessDenied`). The first retry is 30 seconds later, doubling up to an
+  hour, for 24 hours from when the mail was queued.
+- A refusal fails the mail at once: an SMTP 5xx, any other Postmark error
+  (422 among them), and for SES `MessageRejected`, an unverified MAIL FROM
+  domain, a bad request (an invalid address among them) or any other 4xx.
+  An SES error is sorted by its error type, then by its HTTP status.
 - Failed mail keeps its last error. Sent mail is deleted after 7 days and
   failed mail after 30, by the server's hourly prune.
 - A job holds the rendered message, link included, until it is pruned: the
@@ -1542,6 +1553,58 @@ left) or `failed` (refused, or out of time). Retry takes `retrying` and
 `failed` mail; Delete takes anything but `sending`. The Settings page shows
 the same queue with Retry and Delete. A setup or reset link in a deleted
 mail stays valid until it expires; send a new one to replace it.
+
+#### Amazon SES
+
+```toml
+[mail]
+provider = "ses"
+from = "okf <okf@example.com>"
+
+[mail.ses]
+region = "us-east-1"   # optional; otherwise AWS_REGION and the SDK's chain
+```
+
+- **Credentials** come only from the AWS SDK's standard chain:
+  environment, profile, web identity (IRSA), then the container provider,
+  which is what **EKS Pod Identity** uses. okf has no access-key setting:
+  give the pod an identity instead. Credentials are fetched on the first
+  send and refreshed by the SDK, not at start-up, so a missing or refused
+  identity shows up as a retrying mail rather than a failed start.
+- **Region:** `mail.ses.region` wins; otherwise `AWS_REGION`, the
+  profile, then instance metadata. With none, `serve` stops at start-up
+  with "found no AWS region". Pod Identity does not set a region, so set
+  `mail.ses.region` (or `AWS_REGION`) on EKS.
+- **Permission:** the role needs `ses:SendEmail` on the From identity
+  (and on the configuration set, if the identity has a default one), for
+  example `arn:aws:ses:us-east-1:111122223333:identity/example.com`.
+- **Identity:** `mail.from`'s address or its domain must be a verified
+  SES identity in that region.
+- **Sandbox:** an account in the SES sandbox sends only to verified
+  recipients, and SES answers `MessageRejected` for any other, which
+  fails the mail at once. Request production access before inviting
+  users.
+- **EKS Pod Identity prerequisites:** the `eks-pod-identity-agent` add-on
+  runs on the cluster, and a Pod Identity association maps the server's
+  namespace and service account to an IAM role with the permission above.
+  The pod must run under that service account; associations apply to pods
+  started after they exist, so restart the server after creating one.
+- **Each send is one SES request,** bounded at 30 seconds (10 to connect),
+  with no SDK retries: the queue's own backoff retries it.
+
+Smoke test after deploying (needs a recipient SES will deliver to, which
+in the sandbox means a verified one):
+
+```sh
+okf-mcp mail test alice@example.com    # queue it; the running server sends it
+okf-mcp mail queue                     # empty once sent; else its status and last error
+```
+
+A sent test mail leaves the queue and the server logs `mail sent`; it
+arrives from `mail.from`. A `retrying` entry whose error names
+`AccessDenied` or a credential failure points at the Pod Identity
+association or the role's policy; `MessageRejected` (failed at once)
+usually means an unverified identity or a sandbox recipient.
 
 ### Settings
 
