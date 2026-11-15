@@ -397,7 +397,8 @@ pub struct FixedPerson {
 /// # Arguments
 /// * `conn` - the change's transaction (`&mut tx`).
 /// * `actor` - who.
-/// * `entry` - what; its target must not be a user.
+/// * `entry` - what; its target must not be a user, a key, a grant or a
+///   code (whose person and marking come from the user or owner now).
 /// * `person` - the person and its operator marking.
 /// * `now` - when (server clock).
 ///
@@ -405,7 +406,8 @@ pub struct FixedPerson {
 /// The entry's id.
 ///
 /// # Errors
-/// As [`record`].
+/// [`OkfError::Refused`] for a user, key, grant or code target, before any
+/// SQL; otherwise as [`record`].
 pub async fn record_for_person(
     conn: &mut PgConnection,
     actor: &AuditActor,
@@ -413,6 +415,18 @@ pub async fn record_for_person(
     person: FixedPerson,
     now: DateTime<Utc>,
 ) -> Result<i64, OkfError> {
+    // Such a target names its own person; a fixed one would contradict it.
+    if matches!(
+        entry.target,
+        Target::User(_) | Target::Key(_) | Target::Grant(_) | Target::Code(_)
+    ) {
+        return Err(OkfError::Refused {
+            reason: format!(
+                "an entry about {:?} names its own person, not a fixed one",
+                entry.target
+            ),
+        });
+    }
     insert(conn, actor, entry, Some(person), now).await
 }
 
@@ -426,9 +440,10 @@ async fn insert(
 ) -> Result<i64, OkfError> {
     let target = entry.target.parts();
     let person = match (entry.target, fixed) {
-        (Target::User(user_id), _) => Some(user_id),
-        // A fixed person is never resolved from a user now.
+        // A fixed person is never resolved from a user now (and
+        // `record_for_person` refuses a user target).
         (_, Some(_)) => None,
+        (Target::User(user_id), None) => Some(user_id),
         (_, None) => entry.person,
     };
     // The subquery resolves both people once (`audit_person` creates or
@@ -1016,6 +1031,42 @@ mod tests {
             .fetch_all(conn)
             .await
             .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_fixed_person_is_refused_for_a_target_that_names_its_own() {
+        let db = test_db().await;
+        let user = user_id(&db.pool, TEST_USER).await;
+        let fixed = FixedPerson {
+            person_id: 1,
+            operator: true,
+        };
+        let mut conn = db.pool.acquire().await.unwrap();
+
+        let mut refusals = Vec::new();
+        for target in [
+            Target::User(&user),
+            Target::Key("k1"),
+            Target::Grant("g1"),
+            Target::Code("c1"),
+        ] {
+            let about = entry(Action::UserCreated, target);
+            refusals
+                .push(record_for_person(&mut conn, &AuditActor::cli(), &about, fixed, now()).await);
+        }
+
+        for refused in refusals {
+            assert!(
+                matches!(refused, Err(OkfError::Refused { .. })),
+                "{refused:?}"
+            );
+        }
+        let written: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_entries WHERE at = $1")
+            .bind(now())
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(written, 0);
     }
 
     #[tokio::test(flavor = "multi_thread")]
