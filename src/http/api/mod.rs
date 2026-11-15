@@ -24,6 +24,7 @@ use crate::store::keys::Access;
 
 #[cfg(test)]
 mod access_tests;
+mod audit;
 mod browse;
 mod catalogs;
 mod changesets;
@@ -67,6 +68,7 @@ pub(crate) fn routes(app: &Arc<App>) -> Router<Arc<App>> {
         .merge(settings::routes())
         .merge(mail::routes())
         .merge(me::routes())
+        .merge(audit::routes())
         .merge(crate::http::passkeys::api_routes())
         // `POST /me/identities/{provider}/link` (Task 9); it answers 404
         // itself without providers.

@@ -41,7 +41,7 @@ use crate::store::keys::{
     self as key_rows, Access, CatalogGrant, Grants, KeyKind, KeyRecord, NewKey,
 };
 use crate::store::passwords::{self, NewPassword, SessionChange, SignInOutcome};
-use crate::store::{identities, passkeys, sign_in_events, user_sessions, users};
+use crate::store::{identities, passkeys, sign_in_events, teams, user_sessions, users};
 
 /// How many recent sign-ins `GET /me/sign-ins` and the admin's
 /// `GET /users/{name}/sign-ins` show.
@@ -154,6 +154,9 @@ pub(crate) struct AccountView {
     pub has_password: bool,
     /// The user's teams, sorted, its personal team included.
     pub teams: Vec<String>,
+    /// The teams the user owns, sorted, its personal team included: whose
+    /// audit log its console session can read (`GET /audit?team=`).
+    pub owned_teams: Vec<String>,
     /// What its self-issued credentials may reach.
     pub ceiling: Vec<CeilingEntry>,
     /// Whether the caller is a console session (`false` for a key).
@@ -642,8 +645,19 @@ async fn account(
         }
         .into());
     };
-    let record = users::find(app.pool(), name).await?;
-    let ceiling = ceiling::ceiling_of(app.pool(), name).await?;
+    let owned_teams = async {
+        match principal.user_id.as_deref() {
+            Some(user_id) => teams::owned_names(app.pool(), user_id).await,
+            None => Ok(Vec::new()),
+        }
+    };
+    // `try_join!` runs the three reads at once (as `asyncio.gather` would)
+    // and returns the first error, if any.
+    let (record, ceiling, owned_teams) = tokio::try_join!(
+        users::find(app.pool(), name),
+        ceiling::ceiling_of(app.pool(), name),
+        owned_teams,
+    )?;
     let policy = app.settings();
     Ok(Json(AccountView {
         user: record.name,
@@ -652,6 +666,7 @@ async fn account(
         admin: record.is_admin,
         has_password: record.has_password,
         teams: record.teams,
+        owned_teams,
         ceiling: ceiling_view(ceiling),
         session: matches!(principal.kind, CredentialKind::Session { .. }),
         password_sign_in: policy.password_sign_in,

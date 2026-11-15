@@ -339,6 +339,66 @@ pub async fn find(pool: &PgPool, name: &str) -> Result<TeamRecord, OkfError> {
         .expect("one team row gives one record"))
 }
 
+/// The team called `team`, if `user_id` is one of its owners: the scope of
+/// that owner's audit view.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `user_id` - the owner's `users.id`.
+/// * `team` - the team's name.
+///
+/// # Returns
+/// Its `teams.id` and its `audit_teams` id, or `None` when the user owns no
+/// team by that name (a malformed name included).
+///
+/// # Errors
+/// [`OkfError::Database`].
+pub async fn owned_by(
+    pool: &PgPool,
+    user_id: &str,
+    team: &str,
+) -> Result<Option<(String, i64)>, OkfError> {
+    // A malformed name (a NUL from `?team=`) owns nothing, never a database
+    // error, as for every team lookup (#339).
+    if !is_valid_name(team) {
+        return Ok(None);
+    }
+    // A plain read of the `audit_teams` row, which every team gets in the
+    // transaction that creates it (migration 0014), so a read never writes.
+    Ok(sqlx::query_as(
+        "SELECT t.id, a.id FROM teams t \
+         JOIN team_members m ON m.team_id = t.id \
+         JOIN audit_teams a ON a.team_id = t.id \
+         WHERE t.name = $1 AND m.user_id = $2 AND m.role = 'owner'",
+    )
+    .bind(team)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// The names of the teams `user_id` owns, its personal team included: the
+/// teams whose audit log its console session can read.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `user_id` - the user's `users.id`.
+///
+/// # Returns
+/// The names, sorted.
+///
+/// # Errors
+/// [`OkfError::Database`].
+pub async fn owned_names(pool: &PgPool, user_id: &str) -> Result<Vec<String>, OkfError> {
+    Ok(sqlx::query_scalar(
+        "SELECT t.name FROM teams t JOIN team_members m ON m.team_id = t.id \
+         WHERE m.user_id = $1 AND m.role = 'owner' ORDER BY t.name",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?)
+}
+
 /// Adds a user to a team with a role, or changes its role, records
 /// `team.member_added` or `team.role_changed`, and bumps the administrative
 /// generation, when anything changed.

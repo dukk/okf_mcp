@@ -2024,13 +2024,14 @@ admin routes (403).
 
 ### API reference
 
-The API has 88 endpoints (a method and path each). The identity endpoints
+The API has 90 endpoints (a method and path each). The identity endpoints
 are below (3), and each area's endpoints are in its own subsection:
 [API keys](#api-keys) (7),
 [OAuth sign-in codes](#oauth-sign-in-codes) (4),
 [Users and teams](#users-and-teams-api) (21),
 [Your account](#your-account-api) (19),
 [Settings and mail](#settings-and-mail-api) (7),
+[Audit](#audit-api) (2),
 [Health](#health) (2), [Browse and search](#browse-and-search) (7),
 [Catalogs and import/export](#catalogs-and-importexport) (9),
 [Findings and runs](#findings-and-runs) (6) and [Changesets](#changesets) (3).
@@ -2177,7 +2178,7 @@ does. Limits are in [Signing in and self-service](#signing-in-and-self-service).
 
 | Method and path | Key | Does |
 |---|---|---|
-| `GET /api/v1/me` | console session, or a key that belongs to a user | `{user, display_name, email, admin, has_password, teams, ceiling, session, password_sign_in, limits}`: `ceiling` is `[{catalog, access}]`, `session` says whether a console session asked, and `limits` is `{max_keys_per_user, max_key_lifetime_secs}` (`null` for no lifetime limit). 404 for a key without a user |
+| `GET /api/v1/me` | console session, or a key that belongs to a user | `{user, display_name, email, admin, has_password, teams, owned_teams, ceiling, session, password_sign_in, limits}`: `owned_teams` are the teams the user owns, sorted, its personal team included (whose audit log its console session can read); `ceiling` is `[{catalog, access}]`, `session` says whether a console session asked, and `limits` is `{max_keys_per_user, max_key_lifetime_secs}` (`null` for no lifetime limit). 404 for a key without a user |
 | `GET /api/v1/me/keys` | console session | `{keys}`: the user's keys, revoked and expired ones included, as `GET /api/v1/keys` shows them (with `catalog_access`, `expires_at`, `self_issued`) |
 | `POST /api/v1/me/keys` | console session | Body `{name, catalogs: [{catalog, access}], default_catalog, actor, expires_at}` (`actor` defaults to `name`; `expires_at` RFC 3339, and absent means the lifetime limit, or none). Answers `{key, secret}`, the secret once. 400 for no catalogs, a repeated catalog, an unknown level, or a malformed or past expiry; 409 for a bad or taken name or a default that is not one of `catalogs`; 422 above the ceiling (`admin` included), past the key limit or the lifetime limit (`limit` is `ceiling`, `max_keys_per_user` or `max_key_lifetime`), or for an unknown field such as `all`, `user` or `maintenance_report` |
 | `PATCH /api/v1/me/keys/{id}` | console session | Body `{name}`. Renames a live key; answers its view. 409 for a bad or taken name or a revoked key |
@@ -2213,6 +2214,62 @@ reaches every catalog.
 | `GET /api/v1/mail/queue` | admin | `{mail}`: every mail not yet sent, oldest due first: `id`, `to`, `template`, `status` (`pending`, `sending`, `retrying` or `failed`), `attempts`, `last_error`, `run_at`. Never a body |
 | `POST /api/v1/mail/queue/{id}/retry` | admin, every catalog | Sends failed mail again now, with a new 24-hour retry window; 204. 404 for an unknown id, 409 for mail that has not failed |
 | `DELETE /api/v1/mail/queue/{id}` | admin, every catalog | Deletes mail that is not being sent right now; 204. 404 for an unknown id, 409 while a worker is sending it |
+
+### Audit API
+
+The routes behind reading the [audit log](#audit-log). Who reads what:
+
+- **An admin key that reaches every catalog** (or an admin user's console
+  session) reads every entry, unredacted.
+- **A team's owner**, through a signed-in console session only and naming
+  the team (`?team=NAME`), reads the entries that belong to that team. The
+  scope is the team's immutable identity, never its name: a team created
+  again under an old name sees none of the old team's entries. An owner's
+  keys, a plain member, a team the user does not own, a missing `team` and
+  a malformed name get 403. `GET /api/v1/me`'s `owned_teams` lists the
+  teams a user may name.
+- **A provisioner key** reads only the entries it wrote (`GET /api/v1/audit`
+  only; the export is 403 for it).
+- Anyone else gets 403.
+
+What an owner sees is redacted when it is read (the stored entry never
+changes): an entry whose actor is an admin credential, a provisioner, or
+any credential of an admin user (a self-issued key, a grant) shows the
+actor as `{"kind": "operator"}`, with no person, credential, label or IP;
+client IPs show only for the team's own members; a target person who
+was an admin user when the entry was written (such as the admin an unlock
+is for) is hidden, and so is a key, grant or code of theirs; an unlock's
+free-text `reason` leaves `details`; and `teams` lists only the owner's own
+team. For an owner the `actor` filter never matches an operator's entry and
+the `target` filter never matches a hidden person or credential, so neither
+reveals who operator staff are. A deleted user reads as `deleted user #N`
+and their credentials as `credential #N` in every view.
+
+Filters (all optional; an empty value is no filter; an unknown one is 400):
+`team` (an admin's by name, spanning every team that had it, a personal
+team by its user's name), `action` (one action name; 400 for an unknown
+one), `actor` (a person, credential id or actor label), `target` (a target
+name, a target person, or a credential id), `since` and `until` (RFC 3339;
+`since` inclusive, `until` exclusive; 400 otherwise), `after` (the cursor:
+entries older than this id) and `limit` (1 to 500, default 100). A filter
+that can name nothing (a malformed team, a NUL) matches no entry.
+
+An entry is `{id, at, action, source, actor, ip, target, teams, details,
+requests}`: `actor` is `{"kind": "operator"}` or `{"kind": "known", person,
+credential, label, operator}`; `ip` is `null` when not shown; `target` is
+`{kind, name, person}` (`name` is `null` for a user); `teams` are names,
+a personal team shown as its user; `requests` is a `catalog.admin_read`
+entry's request count, else `null`.
+
+| Method and path | Key | Does |
+|---|---|---|
+| `GET /api/v1/audit` | admin, every catalog; a team owner's console session with `?team=`; a provisioner | `{entries, next_after, actions}`: entries newest first, at most `limit`; `next_after` is the last entry's id when the page is full (pass it as `?after=`; a full last page is followed by an empty one), else `null`; `actions` lists every action name |
+| `GET /api/v1/audit/export` | as `GET /api/v1/audit`, not a provisioner | Every entry the filters select (`after` starts it; `limit` is ignored), newest first, as JSON Lines (`application/x-ndjson`, one entry per line, downloaded as `audit.jsonl`) |
+
+```sh
+curl -s -H "Authorization: Bearer $OKF_MCP_KEY" \
+    "https://okf-mcp.example.com/api/v1/audit?action=user.created&limit=20"
+```
 
 ### Health
 

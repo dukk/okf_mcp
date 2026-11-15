@@ -454,12 +454,15 @@ async fn insert(
     // a target key, grant or code (which `audit_credential` resolves the
     // same way), is an admin user now, so owners never see who it is. A
     // fixed person ($17, $18) replaces both the resolved target person and
-    // that marking.
+    // that marking. `actor_operator` likewise: an operator credential, or
+    // any credential of an admin user (a self-issued key, a grant), which
+    // is still operator staff acting (issue #402).
     Ok(sqlx::query_scalar(
         "INSERT INTO audit_entries (at, action, source, actor_credential_ref, actor_person_id, \
              actor_label, actor_operator, client_ip, target_kind, target_name, target_team_ref, \
              target_credential_ref, target_person_id, target_operator, teams, details) \
-         SELECT $1, $2, $3, audit_credential($4, p.actor, $5), p.actor, $6, $7, $8::inet, $9, \
+         SELECT $1, $2, $3, audit_credential($4, p.actor, $5), p.actor, $6, \
+                $7 OR COALESCE((SELECT is_admin FROM users WHERE id = $16), false), $8::inet, $9, \
                 $10, audit_team_ref((SELECT id FROM teams WHERE name = $11)), \
                 audit_credential($12, p.target, NULL), COALESCE($17::bigint, p.target), \
                 COALESCE($18::boolean, (SELECT bool_or(is_admin) FROM users WHERE id IN ($13, \
@@ -1013,6 +1016,404 @@ pub fn refuse_admin_target(actor: &AuditActor, is_admin: bool, user: &str) -> Re
         });
     }
     Ok(())
+}
+
+/// Who is reading the log, which decides what they see (spec "Who reads
+/// it, and how").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Viewer {
+    /// An every-catalog admin or the CLI: everything, unredacted.
+    Admin,
+    /// An owner of one team, through a console session: that team's
+    /// entries, operator staff redacted.
+    Owner {
+        /// The team's `teams.id` (for the member-IP rule).
+        team_id: String,
+        /// Its `audit_teams` id: the scope. It follows the immutable
+        /// `teams.id`, so a later team with the same name has another and
+        /// sees none of this one's entries.
+        audit_team: i64,
+    },
+    /// A provisioner, by key id: only the entries it wrote.
+    Credential(String),
+}
+
+/// The most entries one page holds.
+pub const MAX_PAGE: i64 = 500;
+
+/// A page's size when the query asks for none.
+pub const DEFAULT_PAGE: i64 = 100;
+
+/// The filters of `GET /audit` and `audit list` (all optional).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AuditQuery<'a> {
+    /// An admin's or provisioner's team filter, by name: every team that
+    /// had it (a personal team by its user's name). An owner's view is
+    /// scoped by [`Viewer::Owner`] instead.
+    pub team: Option<&'a str>,
+    /// One action.
+    pub action: Option<Action>,
+    /// A person's name, a credential id or an actor label.
+    pub actor: Option<&'a str>,
+    /// A target name, a target team's or person's name, or a credential id.
+    pub target: Option<&'a str>,
+    /// From this time on.
+    pub since: Option<DateTime<Utc>>,
+    /// Before this time.
+    pub until: Option<DateTime<Utc>>,
+    /// Older than this entry id (the cursor).
+    pub after: Option<i64>,
+    /// At most this many ([`AuditQuery::page_size`]).
+    pub limit: i64,
+}
+
+impl AuditQuery<'_> {
+    /// How many entries a page of this query holds: `limit`, at most
+    /// [`MAX_PAGE`], and [`DEFAULT_PAGE`] when it is 0 or less.
+    ///
+    /// # Returns
+    /// A size from 1 to [`MAX_PAGE`].
+    pub fn page_size(&self) -> i64 {
+        if self.limit <= 0 {
+            DEFAULT_PAGE
+        } else {
+            self.limit.min(MAX_PAGE)
+        }
+    }
+}
+
+/// The filters as text (a query string, command-line flags), before
+/// [`parse_filters`] checks them. An empty value is no filter.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FilterText<'a> {
+    /// [`AuditQuery::team`].
+    pub team: Option<&'a str>,
+    /// An action name such as `user.created`.
+    pub action: Option<&'a str>,
+    /// [`AuditQuery::actor`].
+    pub actor: Option<&'a str>,
+    /// [`AuditQuery::target`].
+    pub target: Option<&'a str>,
+    /// An RFC 3339 time.
+    pub since: Option<&'a str>,
+    /// An RFC 3339 time.
+    pub until: Option<&'a str>,
+    /// [`AuditQuery::after`].
+    pub after: Option<i64>,
+    /// [`AuditQuery::limit`]; [`DEFAULT_PAGE`] when absent.
+    pub limit: Option<i64>,
+}
+
+/// Checks text filters and turns them into a query: shared by the REST
+/// routes and the CLI, so both refuse the same input the same way.
+///
+/// # Arguments
+/// * `text` - the filters as given.
+///
+/// # Returns
+/// The query; empty values are dropped.
+///
+/// # Errors
+/// [`OkfError::InvalidPath`] (400) for an unknown action, or a time that is
+/// not RFC 3339, naming the filter.
+pub fn parse_filters<'a>(text: &FilterText<'a>) -> Result<AuditQuery<'a>, OkfError> {
+    // `filter` turns `Some("")` into `None`: an empty form field filters nothing.
+    let given = |value: Option<&'a str>| value.filter(|value| !value.is_empty());
+    let invalid = |filter: &str, reason: String| OkfError::InvalidPath {
+        path: filter.to_string(),
+        reason,
+    };
+    let time = |filter: &str, value: Option<&'a str>| {
+        given(value)
+            .map(|value| {
+                DateTime::parse_from_rfc3339(value)
+                    .map(|time| time.with_timezone(&Utc))
+                    .map_err(|_| invalid(filter, format!("{value:?} is not an RFC 3339 time")))
+            })
+            // `transpose` turns `Option<Result<T, E>>` into `Result<Option<T>, E>`,
+            // so `?` can return the error.
+            .transpose()
+    };
+    let action = given(text.action)
+        .map(|name| {
+            Action::parse(name)
+                .ok_or_else(|| invalid("action", format!("{name:?} is not an audit action")))
+        })
+        .transpose()?;
+    Ok(AuditQuery {
+        team: given(text.team),
+        action,
+        actor: given(text.actor),
+        target: given(text.target),
+        since: time("since", text.since)?,
+        until: time("until", text.until)?,
+        after: text.after,
+        limit: text.limit.unwrap_or(DEFAULT_PAGE),
+    })
+}
+
+/// Who an entry shows as acting.
+// `tag = "kind"` puts the variant's name in a `kind` field next to its own
+// fields: `{"kind": "operator"}` or `{"kind": "known", "person": ...}`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ActorView {
+    /// An admin credential or a provisioner, as a team owner sees it: no
+    /// person, credential, label or IP.
+    Operator,
+    /// Anyone else, or an operator as an admin sees it.
+    Known {
+        /// The person, if the actor was one (`deleted user #N` once deleted).
+        person: Option<String>,
+        /// The key or grant id (`credential #N` once its user is deleted).
+        credential: Option<String>,
+        /// The credential's label, or the entry's actor label.
+        label: String,
+        /// Whether it was an operator credential.
+        operator: bool,
+    },
+}
+
+/// An entry's target as a reader sees it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct TargetView {
+    /// `user`, `team`, `catalog`, `key`, `grant`, `code`, `setting` or `unlock`.
+    pub kind: String,
+    /// Its name (`None` for a user, and for a hidden credential).
+    pub name: Option<String>,
+    /// The person it is about, if any, and if the reader may see them.
+    pub person: Option<String>,
+}
+
+/// One entry as a reader sees it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct AuditRecord {
+    /// Its id (the cursor).
+    pub id: i64,
+    /// When (`2026-11-13T12:00:00Z`).
+    pub at: String,
+    /// The action.
+    pub action: String,
+    /// `cli`, `api`, `console` or `system`.
+    pub source: String,
+    /// Who.
+    pub actor: ActorView,
+    /// The client address, when the reader may see it (`null` otherwise).
+    pub ip: Option<String>,
+    /// What.
+    pub target: TargetView,
+    /// The teams it belongs to, personal teams shown as their user; for an
+    /// owner, only the owner's own team.
+    pub teams: Vec<String>,
+    /// Its details, redacted for owners.
+    pub details: serde_json::Value,
+    /// For `catalog.admin_read`: the request count.
+    pub requests: Option<i64>,
+}
+
+/// The `details` keys a team owner never sees, per action: an unlock's
+/// free-text reason (spec Part 6). Add any free-text detail a new action
+/// records here.
+pub const OWNER_REDACTED: &[(&str, &[&str])] = &[("catalog.unlocked", &["reason"])];
+
+/// The entries a viewer may read, newest first.
+///
+/// For an owner, the actor filter never matches an operator's entry and the
+/// target filter never matches a hidden (operator) person or credential, so
+/// neither can reveal who operator staff are.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `viewer` - who reads.
+/// * `query` - the filters.
+///
+/// # Returns
+/// At most [`AuditQuery::page_size`] records. A filter that cannot name
+/// anything (a malformed team name, a NUL) matches nothing, without SQL.
+///
+/// # Errors
+/// [`OkfError::Database`].
+pub async fn list(
+    pool: &PgPool,
+    viewer: &Viewer,
+    query: &AuditQuery<'_>,
+) -> Result<Vec<AuditRecord>, OkfError> {
+    // Postgres refuses a NUL in text, and no stored name holds one (team
+    // names are `[a-z0-9-]+`): such a filter is "nothing", never a 500.
+    let unmatchable = query
+        .team
+        .is_some_and(|team| !crate::store::catalogs::is_valid_name(team))
+        || [query.actor, query.target]
+            .into_iter()
+            .flatten()
+            .any(|text| text.contains('\0'));
+    if unmatchable {
+        return Ok(Vec::new());
+    }
+    // `scope`: the one audit team an owner's entries must belong to.
+    let (scope, team_name, team_id, credential) = match viewer {
+        Viewer::Admin => (None, query.team, None, None),
+        Viewer::Owner {
+            team_id,
+            audit_team,
+        } => (Some(*audit_team), None, Some(team_id.as_str()), None),
+        Viewer::Credential(id) => (None, query.team, None, Some(id.as_str())),
+    };
+    let owner = matches!(viewer, Viewer::Owner { .. });
+    let rows = sqlx::query_as::<_, ListedRow>(LIST_SQL)
+        .bind(scope)
+        .bind(query.action.map(Action::as_str))
+        .bind(query.actor)
+        .bind(query.target)
+        .bind(query.since)
+        .bind(query.until)
+        .bind(query.after)
+        .bind(credential)
+        .bind(team_id)
+        .bind(owner)
+        .bind(query.page_size())
+        .bind(team_name)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|row| row.into_record(owner)).collect())
+}
+
+/// The listing. `$1` an owner's audit team id, `$2` action, `$3` actor,
+/// `$4` target, `$5` since, `$6` until, `$7` cursor, `$8` credential, `$9`
+/// the owner's `teams.id`, `$10` owner view, `$11` limit, `$12` a team
+/// name (every audit team that had it, a personal team by its person).
+/// Newest first is `ORDER BY id DESC`, the primary key. The target filter's
+/// `target_name` and `tt.name` branches need no operator guard: they hold
+/// only catalog, setting and unlock names and shared teams' names (a
+/// personal team's `name` is NULL), never a person's.
+const LIST_SQL: &str = "\
+    SELECT e.id, e.at, e.action, e.source, e.actor_operator, \
+           COALESCE(ac.credential_id, 'credential #' || ac.id) AS actor_credential, \
+           COALESCE(ac.label, e.actor_label) AS actor_label, \
+           ap.name AS actor_person, host(e.client_ip) AS ip, e.target_kind, \
+           COALESCE(e.target_name, tt.name, ttp.name, tc.credential_id, 'credential #' || tc.id) \
+               AS target_name, \
+           tp.name AS target_person, e.target_operator, \
+           ARRAY(SELECT COALESCE(t.name, p.name) \
+                 FROM unnest(e.teams) WITH ORDINALITY AS r (id, n) \
+                 JOIN audit_teams t ON t.id = r.id \
+                 LEFT JOIN audit_people p ON p.id = t.person_id \
+                 WHERE $1::bigint IS NULL OR r.id = $1 ORDER BY r.n) AS teams, \
+           e.details, c.requests, \
+           ($9::text IS NOT NULL AND EXISTS ( \
+               SELECT 1 FROM audit_people p JOIN team_members m ON m.user_id = p.user_id \
+               WHERE p.id = e.actor_person_id AND m.team_id = $9)) AS actor_in_team \
+    FROM audit_entries e \
+    LEFT JOIN audit_credentials ac ON ac.id = e.actor_credential_ref \
+    LEFT JOIN audit_people ap ON ap.id = e.actor_person_id \
+    LEFT JOIN audit_people tp ON tp.id = e.target_person_id \
+    LEFT JOIN audit_teams tt ON tt.id = e.target_team_ref \
+    LEFT JOIN audit_people ttp ON ttp.id = tt.person_id \
+    LEFT JOIN audit_credentials tc ON tc.id = e.target_credential_ref \
+    LEFT JOIN audit_access_counts c ON c.entry_id = e.id \
+    WHERE ($1::bigint IS NULL OR e.teams @> ARRAY[$1]) \
+      AND ($12::text IS NULL OR e.teams && ARRAY( \
+           SELECT t.id FROM audit_teams t LEFT JOIN audit_people p ON p.id = t.person_id \
+           WHERE t.name = $12 OR p.name = $12)) \
+      AND ($2::text IS NULL OR e.action = $2) \
+      AND ($3::text IS NULL OR ((NOT $10 OR NOT e.actor_operator) \
+           AND (ap.name = $3 OR ac.credential_id = $3 OR ac.label = $3 OR e.actor_label = $3))) \
+      AND ($4::text IS NULL OR e.target_name = $4 OR tt.name = $4 \
+           OR ((NOT $10 OR NOT e.target_operator) \
+               AND (tp.name = $4 OR ttp.name = $4 OR tc.credential_id = $4))) \
+      AND ($5::timestamptz IS NULL OR e.at >= $5) \
+      AND ($6::timestamptz IS NULL OR e.at < $6) \
+      AND ($7::bigint IS NULL OR e.id < $7) \
+      AND ($8::text IS NULL OR ac.credential_id = $8) \
+    ORDER BY e.id DESC LIMIT $11";
+
+/// One row of [`LIST_SQL`], before redaction.
+// `FromRow` maps each selected column to the field of the same name.
+#[derive(Debug, sqlx::FromRow)]
+struct ListedRow {
+    id: i64,
+    at: DateTime<Utc>,
+    action: String,
+    source: String,
+    actor_operator: bool,
+    actor_credential: Option<String>,
+    actor_label: String,
+    actor_person: Option<String>,
+    ip: Option<String>,
+    target_kind: String,
+    target_name: Option<String>,
+    target_person: Option<String>,
+    target_operator: bool,
+    teams: Vec<String>,
+    details: serde_json::Value,
+    requests: Option<i64>,
+    actor_in_team: bool,
+}
+
+impl ListedRow {
+    /// The record a reader sees. For an owner: an operator actor becomes
+    /// [`ActorView::Operator`] with no IP; other IPs show only for the
+    /// team's own members; [`OWNER_REDACTED`] keys leave `details`; a target
+    /// person who is operator staff (`target_operator`, such as the admin an
+    /// unlock is for) is hidden, with a credential naming them; and `teams`
+    /// holds only the owner's team (the SQL drops the others, which may be
+    /// another customer's or a staff member's personal team). The stored
+    /// entry is never changed.
+    fn into_record(self, owner: bool) -> AuditRecord {
+        let actor = if owner && self.actor_operator {
+            ActorView::Operator
+        } else {
+            ActorView::Known {
+                person: self.actor_person,
+                credential: self.actor_credential,
+                label: self.actor_label,
+                operator: self.actor_operator,
+            }
+        };
+        let ip = if owner && (self.actor_operator || !self.actor_in_team) {
+            None
+        } else {
+            self.ip
+        };
+        let mut details = self.details;
+        if owner {
+            let redacted = OWNER_REDACTED
+                .iter()
+                .find(|(action, _)| *action == self.action);
+            // `if let (Some(..), Some(..))` runs only when both are present.
+            if let (Some((_, keys)), Some(object)) = (redacted, details.as_object_mut()) {
+                for key in *keys {
+                    object.remove(*key);
+                }
+            }
+        }
+        let target = if owner && self.target_operator {
+            let credential = matches!(self.target_kind.as_str(), "key" | "grant" | "code");
+            TargetView {
+                name: if credential { None } else { self.target_name },
+                kind: self.target_kind,
+                person: None,
+            }
+        } else {
+            TargetView {
+                kind: self.target_kind,
+                name: self.target_name,
+                person: self.target_person,
+            }
+        };
+        AuditRecord {
+            id: self.id,
+            at: crate::clock::format_timestamp(self.at),
+            action: self.action,
+            source: self.source,
+            actor,
+            ip,
+            target,
+            teams: self.teams,
+            details,
+            requests: self.requests,
+        }
+    }
 }
 
 /// Test helpers shared by every module that records entries.
@@ -2160,6 +2561,615 @@ mod tests {
         assert_eq!(
             reads,
             [(vec![personal], 1), (vec![family], 2), (vec![personal], 1)]
+        );
+    }
+
+    /// An owner of `team` (an existing team owned by someone), as
+    /// [`list`] takes it.
+    async fn owner_of(pool: &PgPool, team: &str) -> Viewer {
+        let mut conn = pool.acquire().await.unwrap();
+        let audit_team = team_ref(&mut conn, team).await.unwrap();
+        let team_id: String = sqlx::query_scalar("SELECT id FROM teams WHERE name = $1")
+            .bind(team)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        Viewer::Owner {
+            team_id,
+            audit_team,
+        }
+    }
+
+    /// Records one entry in its own transaction.
+    async fn record_one(pool: &PgPool, actor: &AuditActor, entry: &Entry<'_>) {
+        let mut tx = pool.begin().await.unwrap();
+        record(&mut tx, actor, entry, now()).await.unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    /// A query with only an actor or a target filter.
+    fn by(actor: Option<&'static str>, target: Option<&'static str>) -> AuditQuery<'static> {
+        AuditQuery {
+            actor,
+            target,
+            ..AuditQuery::default()
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn owners_never_see_an_operators_identity_ip_unlock_reason_or_unlocked_staff() {
+        let db = test_db().await;
+        let me = user_id(&db.pool, TEST_USER).await;
+        users::create(
+            &db.pool,
+            &NewUser {
+                name: "staff",
+                display_name: "Staff Member",
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        let promote = users::AdminChange {
+            on: true,
+            allow_last: true,
+        };
+        users::set_admin(&db.pool, "staff", promote, &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        let staff = user_id(&db.pool, "staff").await;
+        store_key(&db.pool, "staff-key", Some(&staff)).await;
+        store_code(&db.pool, "staff-code", &staff).await;
+        let mut conn = db.pool.acquire().await.unwrap();
+        let team = team_ref(&mut conn, TEST_TEAM).await.unwrap();
+        drop(conn);
+        let actor = AuditActor {
+            credential: Some("staff-key".to_string()),
+            user_id: Some(staff.clone()),
+            ..admin_actor(&me)
+        };
+        let unlocked = Entry {
+            action: Action::CatalogUnlocked,
+            target: Target::Catalog("main"),
+            // The unlocked admin: operator staff.
+            person: Some(&staff),
+            teams: std::slice::from_ref(&team),
+            details: serde_json::json!({"category": "support", "reason": "ticket 12", "unlock": 1}),
+        };
+        // The staff member's credentials as targets (a key, a grant, as
+        // `keys::key_target` names an OAuth grant, and a code): each is
+        // hidden with its id.
+        let targets = [
+            Target::Key("staff-key"),
+            Target::Grant("staff-key"),
+            Target::Code("staff-code"),
+        ];
+        for target in targets {
+            let granted = Entry {
+                teams: std::slice::from_ref(&team),
+                ..entry(Action::KeyCatalogGranted, target)
+            };
+            record_one(&db.pool, &actor, &granted).await;
+        }
+        record_one(&db.pool, &actor, &unlocked).await;
+        let owner_view = owner_of(&db.pool, TEST_TEAM).await;
+
+        let owner = list(&db.pool, &owner_view, &AuditQuery::default())
+            .await
+            .unwrap();
+        // Owners cannot use the filters as an identity oracle.
+        let probes = [
+            by(None, Some("staff")),
+            by(None, Some("staff-key")),
+            by(Some("staff-key"), None),
+            by(Some("staff"), None),
+            by(Some("root"), None),
+            by(Some("api key"), None),
+        ];
+        let mut owner_hits = Vec::new();
+        let mut admin_hits = Vec::new();
+        for probe in &probes {
+            owner_hits.push(list(&db.pool, &owner_view, probe).await.unwrap().len());
+            admin_hits.push(list(&db.pool, &Viewer::Admin, probe).await.unwrap().len());
+        }
+        let admin = list(&db.pool, &Viewer::Admin, &AuditQuery::default())
+            .await
+            .unwrap();
+
+        assert_eq!(owner.len(), 4, "every entry is the team's");
+        assert_eq!(owner[0].actor, ActorView::Operator);
+        assert_eq!(owner[0].ip, None);
+        assert_eq!(
+            owner[0].target.person, None,
+            "the unlocked staff member is hidden"
+        );
+        assert_eq!(
+            owner[0].details,
+            serde_json::json!({"category": "support", "unlock": 1})
+        );
+        let hidden: Vec<TargetView> = owner[1..]
+            .iter()
+            .map(|record| record.target.clone())
+            .collect();
+        let hide = |kind: &str| TargetView {
+            kind: kind.to_string(),
+            name: None,
+            person: None,
+        };
+        assert_eq!(
+            hidden,
+            [hide("code"), hide("grant"), hide("key")],
+            "staff credentials"
+        );
+        // The whole record, as the API would send it.
+        let whole = serde_json::to_string(&owner).unwrap();
+        assert!(
+            !whole.contains("staff")
+                && !whole.contains("Staff")
+                && !whole.contains("ticket")
+                && !whole.contains("192.0.2"),
+            "{whole}"
+        );
+        assert_eq!(
+            owner_hits, [0; 6],
+            "no filter matches an operator for an owner"
+        );
+        // The same filters do match for an admin: the target person matches
+        // the unlock and staff's own `user.created` and `user.admin_changed`;
+        // the credential id the key and the grant; each actor filter all
+        // four of staff's entries.
+        assert_eq!(admin_hits, [3, 2, 4, 4, 4, 4]);
+        assert_eq!(admin[0].details["reason"], "ticket 12");
+        assert_eq!(admin[0].target.person.as_deref(), Some("staff"));
+        assert_eq!(admin[0].ip.as_deref(), Some("192.0.2.7"));
+        assert_eq!(
+            admin[0].teams,
+            [TEST_USER],
+            "a personal team reads as its user"
+        );
+        assert_eq!(admin[1].target.name.as_deref(), Some("staff-code"));
+        assert_eq!(admin[3].target.name.as_deref(), Some("staff-key"));
+        let ActorView::Known {
+            person, credential, ..
+        } = &admin[0].actor
+        else {
+            panic!("an admin sees the operator: {:?}", admin[0].actor);
+        };
+        assert_eq!(
+            (person.as_deref(), credential.as_deref()),
+            (Some("staff"), Some("staff-key"))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_admin_user_acting_through_a_non_admin_credential_is_an_operator_to_owners() {
+        let db = test_db().await;
+        users::create(
+            &db.pool,
+            &NewUser {
+                name: "staff",
+                display_name: "",
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        let promote = users::AdminChange {
+            on: true,
+            allow_last: true,
+        };
+        users::set_admin(&db.pool, "staff", promote, &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        let staff = user_id(&db.pool, "staff").await;
+        store_key(&db.pool, "staff-own", Some(&staff)).await;
+        let mut conn = db.pool.acquire().await.unwrap();
+        let team = team_ref(&mut conn, TEST_TEAM).await.unwrap();
+        drop(conn);
+        // A self-issued write key of the admin user: not an operator
+        // credential by its access.
+        let actor = AuditActor {
+            credential: Some("staff-own".to_string()),
+            user_id: Some(staff.clone()),
+            label: "laptop".to_string(),
+            operator: false,
+            ..admin_actor(&staff)
+        };
+        let published = Entry {
+            teams: std::slice::from_ref(&team),
+            ..entry(Action::CatalogPublished, Target::Catalog("main"))
+        };
+        record_one(&db.pool, &actor, &published).await;
+        let owner_view = owner_of(&db.pool, TEST_TEAM).await;
+
+        let owner = list(&db.pool, &owner_view, &AuditQuery::default())
+            .await
+            .unwrap();
+        let probe = list(&db.pool, &owner_view, &by(Some("staff"), None))
+            .await
+            .unwrap();
+
+        assert_eq!(owner[0].actor, ActorView::Operator);
+        assert!(probe.is_empty(), "the actor filter is no staff oracle");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn owners_see_only_their_members_ips_and_only_their_own_team() {
+        let db = test_db().await;
+        users::create(
+            &db.pool,
+            &NewUser {
+                name: "bob",
+                display_name: "",
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        let me = user_id(&db.pool, TEST_USER).await;
+        let bob = user_id(&db.pool, "bob").await;
+        let mut conn = db.pool.acquire().await.unwrap();
+        let mine = team_ref(&mut conn, TEST_TEAM).await.unwrap();
+        let bobs = team_ref(&mut conn, "bob").await.unwrap();
+        drop(conn);
+        let session = |user_id: &str, ip: &str| AuditActor {
+            source: Source::Console,
+            credential: None,
+            user_id: Some(user_id.to_string()),
+            label: "someone".to_string(),
+            via: Via::Session,
+            operator: false,
+            provisioner: false,
+            ip: Some(ip.parse().unwrap()),
+        };
+        // A catalog moved from bob's personal team to TEST_USER's.
+        let both = [bobs, mine];
+        let moved = Entry {
+            teams: &both,
+            ..entry(Action::CatalogOwnerChanged, Target::Catalog("main"))
+        };
+        record_one(&db.pool, &session(&bob, "192.0.2.21"), &moved).await;
+        record_one(&db.pool, &session(&me, "192.0.2.22"), &moved).await;
+        // An operator who is also the team's member: still no IP.
+        let mut operator = session(&me, "192.0.2.23");
+        operator.operator = true;
+        record_one(&db.pool, &operator, &moved).await;
+
+        let owner = list(
+            &db.pool,
+            &owner_of(&db.pool, TEST_TEAM).await,
+            &AuditQuery::default(),
+        )
+        .await
+        .unwrap();
+        let admin = list(&db.pool, &Viewer::Admin, &AuditQuery::default())
+            .await
+            .unwrap();
+
+        assert_eq!(owner.len(), 3);
+        assert_eq!(owner[0].ip, None, "an operator, though a member");
+        assert_eq!(
+            owner[1].ip.as_deref(),
+            Some("192.0.2.22"),
+            "the team's own member"
+        );
+        assert_eq!(owner[2].ip, None, "not a member of the team");
+        assert!(
+            owner.iter().all(|record| record.teams == [TEST_USER]),
+            "only the owner's own team"
+        );
+        assert_eq!(admin[0].teams, ["bob", TEST_USER]);
+        assert_eq!(admin[0].ip.as_deref(), Some("192.0.2.23"));
+        assert_eq!(admin[2].ip.as_deref(), Some("192.0.2.21"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_deleted_session_user_is_named_nowhere_in_the_admin_or_owner_view() {
+        let db = test_db().await;
+        let family = NewTeam {
+            name: "family",
+            display_name: "",
+            owner: TEST_USER,
+        };
+        teams::create(&db.pool, &family, &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        users::create(
+            &db.pool,
+            &NewUser {
+                name: "alice",
+                display_name: "Alice Example",
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        let alice = user_id(&db.pool, "alice").await;
+        // A legacy-style key whose id carries her name.
+        store_key(&db.pool, "alice-laptop", Some(&alice)).await;
+        let mut conn = db.pool.acquire().await.unwrap();
+        let family_ref = team_ref(&mut conn, "family").await.unwrap();
+        drop(conn);
+        // The actor `AuditActor::of` builds for alice's console session: its
+        // label is her name. It acts on a credential whose id carries the
+        // name too.
+        let actor = AuditActor {
+            source: Source::Console,
+            credential: Some("alice-laptop".to_string()),
+            user_id: Some(alice.clone()),
+            label: "alice".to_string(),
+            via: Via::Session,
+            operator: false,
+            provisioner: false,
+            ip: Some("192.0.2.8".parse().unwrap()),
+        };
+        let created = Entry {
+            person: Some(&alice),
+            teams: std::slice::from_ref(&family_ref),
+            details: serde_json::json!({"self_issued": true}),
+            ..entry(Action::KeyCreated, Target::Key("alice-laptop"))
+        };
+        record_one(&db.pool, &actor, &created).await;
+        let before = list(&db.pool, &Viewer::Admin, &AuditQuery::default())
+            .await
+            .unwrap();
+
+        users::delete(&db.pool, "alice", false, &AuditActor::cli(), now())
+            .await
+            .unwrap();
+
+        let admin = list(&db.pool, &Viewer::Admin, &AuditQuery::default())
+            .await
+            .unwrap();
+        let owner = list(
+            &db.pool,
+            &owner_of(&db.pool, "family").await,
+            &AuditQuery::default(),
+        )
+        .await
+        .unwrap();
+        // Before the deletion she is named (so the check below is not vacuous).
+        assert!(serde_json::to_string(&before).unwrap().contains("alice"));
+        for (view, records) in [("admin", &admin), ("owner", &owner)] {
+            let whole = serde_json::to_string(records).unwrap();
+            assert!(
+                !whole.contains("alice") && !whole.contains("Alice"),
+                "{view}: {whole}"
+            );
+        }
+        assert!(owner.iter().any(|record| record.action == "key.created"));
+        let admin_text = serde_json::to_string(&admin).unwrap();
+        assert!(admin_text.contains("deleted user #"), "{admin_text}");
+        assert!(admin_text.contains("credential #"), "{admin_text}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_new_team_under_an_old_name_cannot_read_the_old_teams_entries() {
+        let db = test_db().await;
+        users::create(
+            &db.pool,
+            &NewUser {
+                name: "bob",
+                display_name: "",
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        let new_team = |owner: &'static str| NewTeam {
+            name: "family",
+            display_name: "",
+            owner,
+        };
+        teams::create(&db.pool, &new_team(TEST_USER), &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        teams::delete(&db.pool, "family", &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        // Another customer's team, same name.
+        teams::create(&db.pool, &new_team("bob"), &AuditActor::cli(), now())
+            .await
+            .unwrap();
+
+        let seen = list(
+            &db.pool,
+            &owner_of(&db.pool, "family").await,
+            &AuditQuery::default(),
+        )
+        .await
+        .unwrap();
+        let by_name = list(
+            &db.pool,
+            &Viewer::Admin,
+            &AuditQuery {
+                team: Some("family"),
+                ..AuditQuery::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let actions: Vec<&str> = seen.iter().map(|record| record.action.as_str()).collect();
+        assert_eq!(
+            actions,
+            ["team.created"],
+            "only the new team's own creation, never the old team's entries"
+        );
+        // An admin's filter by name spans every team that had it.
+        let actions: Vec<&str> = by_name
+            .iter()
+            .map(|record| record.action.as_str())
+            .collect();
+        assert_eq!(actions, ["team.created", "team.deleted", "team.created"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_credential_viewer_sees_only_its_own_entries() {
+        let db = test_db().await;
+        let me = user_id(&db.pool, TEST_USER).await;
+        store_key(&db.pool, "k1", Some(&me)).await;
+        store_key(&db.pool, "k2", Some(&me)).await;
+        let other = AuditActor {
+            credential: Some("k2".to_string()),
+            ..admin_actor(&me)
+        };
+        record_one(
+            &db.pool,
+            &admin_actor(&me),
+            &entry(Action::SettingChanged, Target::Setting("a")),
+        )
+        .await;
+        record_one(
+            &db.pool,
+            &other,
+            &entry(Action::SettingChanged, Target::Setting("b")),
+        )
+        .await;
+
+        let seen = list(
+            &db.pool,
+            &Viewer::Credential("k1".to_string()),
+            &AuditQuery::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].target.name.as_deref(), Some("a"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_filters_window_and_page_newest_first() {
+        let db = test_db().await;
+        let me = user_id(&db.pool, TEST_USER).await;
+        let mut tx = db.pool.begin().await.unwrap();
+        for (minutes, key) in [(0, "a"), (10, "b"), (20, "c")] {
+            let at = now() + TimeDelta::minutes(minutes);
+            record(
+                &mut tx,
+                &admin_actor(&me),
+                &entry(Action::SettingChanged, Target::Setting(key)),
+                at,
+            )
+            .await
+            .unwrap();
+        }
+        tx.commit().await.unwrap();
+        let names = |records: Vec<AuditRecord>| -> Vec<String> {
+            records
+                .into_iter()
+                .filter_map(|record| record.target.name)
+                .collect()
+        };
+        let query = |since, until, after, limit| AuditQuery {
+            action: Some(Action::SettingChanged),
+            since,
+            until,
+            after,
+            limit,
+            ..AuditQuery::default()
+        };
+
+        let first = list(&db.pool, &Viewer::Admin, &query(None, None, None, 2))
+            .await
+            .unwrap();
+        let rest = list(
+            &db.pool,
+            &Viewer::Admin,
+            &query(None, None, Some(first[1].id), 2),
+        )
+        .await
+        .unwrap();
+        let window = query(
+            Some(now() + TimeDelta::minutes(5)),
+            Some(now() + TimeDelta::minutes(20)),
+            None,
+            0,
+        );
+        let windowed = list(&db.pool, &Viewer::Admin, &window).await.unwrap();
+
+        assert_eq!(names(first), ["c", "b"]);
+        assert_eq!(names(rest), ["a"]);
+        assert_eq!(
+            names(windowed),
+            ["b"],
+            "since is inclusive, until exclusive"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_filter_that_names_nothing_matches_nothing_without_sql() {
+        let db = test_db().await;
+        let queries = [
+            AuditQuery {
+                team: Some("a\0b"),
+                ..AuditQuery::default()
+            },
+            AuditQuery {
+                team: Some("Not A Name"),
+                ..AuditQuery::default()
+            },
+            AuditQuery {
+                actor: Some("a\0b"),
+                ..AuditQuery::default()
+            },
+            AuditQuery {
+                target: Some("a\0b"),
+                ..AuditQuery::default()
+            },
+        ];
+
+        for query in &queries {
+            let seen = list(&db.pool, &Viewer::Admin, query).await;
+            assert_eq!(seen.map(|records| records.len()).ok(), Some(0), "{query:?}");
+        }
+    }
+
+    #[test]
+    fn parse_filters_checks_actions_and_times_and_drops_empty_values() {
+        let good = FilterText {
+            team: Some(""),
+            action: Some("user.created"),
+            actor: Some(""),
+            since: Some("2026-11-13T12:00:00+01:00"),
+            ..FilterText::default()
+        };
+
+        let query = parse_filters(&good).unwrap();
+        let bad_action = parse_filters(&FilterText {
+            action: Some("no.such"),
+            ..good
+        });
+        let bad_time = parse_filters(&FilterText {
+            until: Some("yesterday"),
+            ..good
+        });
+
+        assert_eq!(query.team, None);
+        assert_eq!(query.actor, None);
+        assert_eq!(query.action, Some(Action::UserCreated));
+        assert_eq!(query.since, Some("2026-11-13T11:00:00Z".parse().unwrap()));
+        assert_eq!(query.page_size(), DEFAULT_PAGE);
+        assert!(
+            matches!(bad_action, Err(OkfError::InvalidPath { ref path, .. }) if path == "action")
+        );
+        assert!(matches!(bad_time, Err(OkfError::InvalidPath { ref path, .. }) if path == "until"));
+        let size = |limit| {
+            AuditQuery {
+                limit,
+                ..AuditQuery::default()
+            }
+            .page_size()
+        };
+        assert_eq!(
+            [size(-1), size(0), size(7), size(10_000)],
+            [DEFAULT_PAGE, DEFAULT_PAGE, 7, MAX_PAGE]
         );
     }
 }
