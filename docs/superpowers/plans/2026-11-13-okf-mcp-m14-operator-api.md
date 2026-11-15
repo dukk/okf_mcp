@@ -112,6 +112,13 @@ pub struct Entry<'a> { pub action: Action, pub target: Target<'a>, pub person: O
                        pub teams: &'a [i64] /* audit_teams ids */, pub details: serde_json::Value }
 pub async fn record(conn: &mut PgConnection, actor: &AuditActor, entry: &Entry<'_>,
                     now: DateTime<Utc>) -> Result<i64, OkfError>;
+pub struct FixedPerson { pub person_id: i64 /* audit_people id */, pub operator: bool }
+pub async fn record_for_person(conn: &mut PgConnection, actor: &AuditActor, entry: &Entry<'_>,
+                               person: FixedPerson, now: DateTime<Utc>) -> Result<i64, OkfError>;
+// Corrected (issue #405, PR #428 review, 2026-11-15): `record` resolves the entry's person
+// and `target_operator` from the user as it is now; `record_for_person` takes an audit person
+// fixed earlier and its marking (ignores `entry.person`). Both unlock entries use it, so an
+// unlock ended after its admin was demoted or deleted names the same person, still hidden.
 pub async fn team_ref(conn: &mut PgConnection, team: &str) -> Result<i64, OkfError>;
 pub async fn catalog_teams(conn: &mut PgConnection, catalog_id: i64) -> Result<Vec<i64>, OkfError>;
 pub async fn key_teams(conn: &mut PgConnection, key_id: &str) -> Result<Vec<i64>, OkfError>;
@@ -5942,6 +5949,8 @@ pub async fn create(
 > - **Constants.** `unlocks::DEFAULT_MAX_HOURS` (4) and `unlocks::MAX_HOURS_LIMIT` (72), which `settings.rs` uses; `Category::ALL` lists the six categories (`parse` uses it).
 > - **The email.** The subject names the product, as every other template's does: `An operator opened {catalog} in {product}`. The "If you did not expect this, contact the operator." sentence is there only without a `support_contact`; with one, `render`'s closing "Questions? Contact ..." line says whom to ask.
 > - **Settings.** `SettingKey::ALL` has 13 keys (`require_unlock`, `unlock_max_hours`, `unlock_notify_owners` last); `Settings` gains `require_unlock: bool`, `unlock_max_hours: u32`, `unlock_notify_owners: bool`. The three take `audited_value`'s `Some(value)` arm. The console's Settings page shows them as text rows until Task 9e's `BOOLEAN_SETTINGS`.
+
+> **Corrected (issue #405, PR #428 review, 2026-11-15).** Neither entry passes the user's id to `record`: both call `audit::record_for_person(.., FixedPerson { person_id: unlocks.person_id, operator: true }, now)` (`unlocks::staff_person`). `record` marks `target_operator` from the user's admin flag *now*, so an unlock ended after its admin was demoted recorded `false`, and one ended after the user's deletion had no person. Every unlock's person was an admin when it began (`create` refuses anyone else under the user's lock), so `operator: true` is fixed with it. `end` therefore locks only the actor and a personal owner team's person, not the unlocked user. Tests: `an_unlock_ended_after_its_staff_is_demoted_still_hides_who_it_was`, `an_unlock_ended_after_its_staff_is_deleted_keeps_the_person_and_marking`.
 
 > **Corrected (PR #375 review, 2026-11-13).** `catalog.unlocked` and `catalog.unlock_ended` name the unlocked admin as the entry's person. Because that person is an admin user, `record` sets `target_operator`, and Task 8a's owner view hides the person (and the target filter cannot match it), as it hides the actor and the `reason`. Owners see only "an operator opened <catalog>: <category>, <start> to <end>".
 

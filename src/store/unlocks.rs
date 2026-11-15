@@ -5,15 +5,20 @@
 //!
 //! Lock order, the same in [`create`] and [`end`] (`tools/agentic/lessons.md`):
 //! first every user row the change and its audit entry lock, through
-//! [`audit::lock_people`] (the actor, the unlocked admin and the person of a
-//! personal owner team, admins first by id, as `users::set_admin` takes
-//! them), then the catalog row (the `unlocks` foreign key holds it
-//! `FOR KEY SHARE`) or the unlock row, then the `server_state` generation
-//! row. Holding the unlocked admin `FOR KEY SHARE` keeps `users::set_admin`
-//! (which locks every admin `FOR UPDATE`) from clearing the flag before the
-//! unlock commits. The owner email is queued in the same transaction, so an
-//! unlock that rolls back mails nobody, and nothing is awaited after the
-//! commit.
+//! [`audit::lock_people`] (the actor, the person of a personal owner team,
+//! and in [`create`] the unlocked admin; admins first by id, as
+//! `users::set_admin` takes them), then the catalog row (the `unlocks`
+//! foreign key holds it `FOR KEY SHARE`) or the unlock row, then the
+//! `server_state` generation row. Holding the unlocked admin `FOR KEY SHARE`
+//! keeps `users::set_admin` (which locks every admin `FOR UPDATE`) from
+//! clearing the flag before the unlock commits. The owner email is queued in
+//! the same transaction, so an unlock that rolls back mails nobody, and
+//! nothing is awaited after the commit.
+//!
+//! Both entries name the admin as the audit person the unlock fixed at
+//! creation (`unlocks.person_id`), marked operator
+//! ([`audit::record_for_person`]), so a later demotion or deletion of the
+//! user never shows owners who it was.
 
 use chrono::{DateTime, TimeDelta, Utc};
 use sqlx::{PgConnection, PgPool};
@@ -22,7 +27,7 @@ use crate::clock::format_timestamp;
 use crate::error::OkfError;
 use crate::mail::queue;
 use crate::mail::templates::Template;
-use crate::store::audit::{self, Action, AuditActor, Entry, People, RowLock, Target};
+use crate::store::audit::{self, Action, AuditActor, Entry, FixedPerson, People, RowLock, Target};
 use crate::store::catalogs::{self, bump_admin_generation, is_valid_name};
 
 /// `unlock_max_hours` with no override.
@@ -339,10 +344,10 @@ pub async fn create(
     // The foreign key takes the catalog row `FOR KEY SHARE`, so a
     // concurrent `catalogs::delete` either commits first (this insert then
     // fails its check) or waits for this one.
-    let id: i64 = sqlx::query_scalar(
+    let (id, person_id): (i64, i64) = sqlx::query_as(
         "INSERT INTO unlocks (catalog_id, user_id, person_id, category, reason, created_at, \
                               expires_at) \
-         VALUES ($1, $2, audit_person($2), $3, $4, $5, $6) RETURNING id",
+         VALUES ($1, $2, audit_person($2), $3, $4, $5, $6) RETURNING id, person_id",
     )
     .bind(catalog.id)
     .bind(&user_id)
@@ -353,15 +358,16 @@ pub async fn create(
     .fetch_one(&mut *tx)
     .await?;
     let teams = audit::catalog_teams(&mut tx, catalog.id).await?;
-    // The admin is the entry's person; `record` marks it `target_operator`,
-    // so owners see neither who it was nor (Task 8a) the reason.
-    audit::record(
+    // The admin is the entry's person, marked operator, so owners see
+    // neither who it was nor (Task 8a) the reason. `end` names the same
+    // person the same way (`staff_person`).
+    audit::record_for_person(
         &mut tx,
         actor,
         &Entry {
             action: Action::CatalogUnlocked,
             target: Target::Catalog(new.catalog),
-            person: Some(&user_id),
+            person: None,
             teams: &teams,
             details: serde_json::json!({
                 "unlock": id,
@@ -371,6 +377,7 @@ pub async fn create(
                 "expires": format_timestamp(expires_at),
             }),
         },
+        staff_person(person_id),
         now,
     )
     .await?;
@@ -439,36 +446,35 @@ pub async fn end(
     let not_found = || OkfError::NotFound {
         path: format!("unlocks/{id}"),
     };
-    // Read without a lock, to name the users to lock first; the `UPDATE`
-    // below decides under the row's lock.
-    let named: Option<(String, Option<String>)> = sqlx::query_as(
-        "SELECT c.name, us.name FROM unlocks u JOIN catalogs c ON c.id = u.catalog_id \
-         LEFT JOIN users us ON us.id = u.user_id WHERE u.id = $1",
+    // Read without a lock, to name the catalog (whose personal owner
+    // team's person the entry locks) first; the `UPDATE` below decides
+    // under the row's lock.
+    let catalog: Option<String> = sqlx::query_scalar(
+        "SELECT c.name FROM unlocks u JOIN catalogs c ON c.id = u.catalog_id WHERE u.id = $1",
     )
     .bind(id)
     .fetch_optional(pool)
     .await?;
-    let (catalog, user) = named.ok_or_else(not_found)?;
+    let catalog = catalog.ok_or_else(not_found)?;
     let mut tx = pool.begin().await?;
-    // The user's name as a zero- or one-item list (`None` once deleted).
-    let users: Vec<&str> = user.as_deref().into_iter().collect();
+    // The unlocked admin is not locked: the entry names the audit person the
+    // unlock fixed (`staff_person`), not the user as it is now.
     let people = People {
-        users: &users,
         catalogs: &[catalog.as_str()],
         ..People::default()
     };
     audit::lock_people(&mut tx, actor, &people).await?;
     // `GREATEST`: a clock behind `created_at` still ends it, at its start.
-    let ended: Option<(i64, Option<String>)> = sqlx::query_as(
+    let ended: Option<(i64, i64)> = sqlx::query_as(
         "UPDATE unlocks SET ended_at = GREATEST($2, created_at) \
          WHERE id = $1 AND ended_at IS NULL AND expires_at > $2 \
-         RETURNING catalog_id, user_id",
+         RETURNING catalog_id, person_id",
     )
     .bind(id)
     .bind(now)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((catalog_id, user_id)) = ended else {
+    let Some((catalog_id, person_id)) = ended else {
         let exists: bool =
             sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM unlocks WHERE id = $1)")
                 .bind(id)
@@ -483,16 +489,17 @@ pub async fn end(
         });
     };
     let teams = audit::catalog_teams(&mut tx, catalog_id).await?;
-    audit::record(
+    audit::record_for_person(
         &mut tx,
         actor,
         &Entry {
             action: Action::CatalogUnlockEnded,
             target: Target::Catalog(&catalog),
-            person: user_id.as_deref(),
+            person: None,
             teams: &teams,
             details: serde_json::json!({ "unlock": id }),
         },
+        staff_person(person_id),
         now,
     )
     .await?;
@@ -500,6 +507,18 @@ pub async fn end(
     let record = find_in(&mut tx, id).await?;
     tx.commit().await?;
     Ok(record)
+}
+
+/// How both of an unlock's entries name its admin: the audit person the
+/// unlock fixed at creation, marked operator. `create` refuses a user who is
+/// not an admin under the user's lock, so every unlock's person was operator
+/// staff when it began; a later demotion or deletion of the user changes
+/// neither the person nor the marking (plan Decision 18).
+fn staff_person(person_id: i64) -> FixedPerson {
+    FixedPerson {
+        person_id,
+        operator: true,
+    }
 }
 
 /// One unlock, inside the caller's connection or transaction.
@@ -745,6 +764,110 @@ mod tests {
         assert_eq!(mail.len(), 1);
         assert_eq!(mail[0].to, "owner@example.com");
         assert_eq!(mail[0].template, "unlocked");
+    }
+
+    /// The person and operator marking of the one entry with `action`.
+    async fn entry_person(pool: &PgPool, action: &str) -> (Option<i64>, bool) {
+        sqlx::query_as(
+            "SELECT target_person_id, target_operator FROM audit_entries WHERE action = $1",
+        )
+        .bind(action)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// What happens to the unlocked admin between the unlock and its end.
+    #[derive(Debug, Clone, Copy)]
+    enum Meanwhile {
+        Demoted,
+        Deleted,
+    }
+
+    /// Unlocks `main` for staff, demotes or deletes staff, ends the unlock,
+    /// and answers both entries' person and operator marking plus the
+    /// ended record's person.
+    async fn ended_after(pool: &PgPool, meanwhile: Meanwhile) -> [(Option<i64>, bool); 2] {
+        let made = create(pool, &new(2), &policy(), &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        match meanwhile {
+            Meanwhile::Demoted => {
+                let off = AdminChange {
+                    on: false,
+                    allow_last: true,
+                };
+                users::set_admin(pool, "staff", off, &AuditActor::cli(), now())
+                    .await
+                    .unwrap();
+            }
+            Meanwhile::Deleted => {
+                users::delete(pool, "staff", true, &AuditActor::cli(), now())
+                    .await
+                    .unwrap();
+            }
+        }
+        let ended = end(
+            pool,
+            made.id,
+            &AuditActor::cli(),
+            now() + TimeDelta::minutes(5),
+        )
+        .await
+        .unwrap();
+        let expected_person = match meanwhile {
+            Meanwhile::Demoted => "staff".to_string(),
+            Meanwhile::Deleted => {
+                let person: i64 = sqlx::query_scalar("SELECT person_id FROM unlocks WHERE id = $1")
+                    .bind(made.id)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap();
+                format!("deleted user #{person}")
+            }
+        };
+        assert_eq!(ended.person, expected_person, "{meanwhile:?}");
+        [
+            entry_person(pool, "catalog.unlocked").await,
+            entry_person(pool, "catalog.unlock_ended").await,
+        ]
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unlock_ended_after_its_staff_is_demoted_still_hides_who_it_was() {
+        let db = test_db().await;
+        staff_and_main(&db.pool).await;
+
+        let [unlocked, ended] = ended_after(&db.pool, Meanwhile::Demoted).await;
+
+        assert!(unlocked.0.is_some() && unlocked.1, "{unlocked:?}");
+        assert_eq!(
+            ended, unlocked,
+            "the end names the same person, as operator"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unlock_ended_after_its_staff_is_deleted_keeps_the_person_and_marking() {
+        let db = test_db().await;
+        staff_and_main(&db.pool).await;
+
+        let [unlocked, ended] = ended_after(&db.pool, Meanwhile::Deleted).await;
+
+        assert!(unlocked.0.is_some() && unlocked.1, "{unlocked:?}");
+        assert_eq!(
+            ended, unlocked,
+            "the end names the same person, as operator"
+        );
+        let shown = testing::entries(&db.pool, "catalog.unlock_ended").await;
+        assert_eq!(
+            shown[0]
+                .person
+                .as_deref()
+                .map(|name| name.starts_with("deleted user #")),
+            Some(true),
+            "{shown:?}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
