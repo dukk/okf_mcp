@@ -33,10 +33,15 @@ export async function refreshIdentity() {
 }
 
 // Whether an element marked data-need="<need>" shows: "session" for the
-// account pages (signed in with an account, not a key), else an access
-// level.
+// account pages (signed in with an account, not a key), "audit" (below),
+// else an access level.
+// "audit" for the Audit page: an admin that reaches every catalog, or anyone
+// signed in with an account (every user owns at least its personal team, and
+// the page lists the teams it owns).
 function shows(need) {
-    return need === 'session' ? !!store.session : store.can(need);
+    if (need === 'session') return !!store.session;
+    if (need === 'audit') return canAdministerPeople() || !!store.session;
+    return store.can(need);
 }
 
 // The account pages (My keys, My grants, Account) are for a person signed
