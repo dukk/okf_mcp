@@ -346,13 +346,7 @@ pub fn search_catalogs(catalogs: &[(&str, &Snapshot)], query: &SearchQuery) -> V
 }
 
 /// The tier, or `None` when some term occurs in no field.
-#[cfg_attr(
-    dylint_lib = "hyp_tracing",
-    allow(
-        uninstrumented_fn,
-        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
-    )
-)]
+#[tracing::instrument(level = "trace", skip_all)]
 fn tier(fields: &SearchFields, query: &Prepared) -> Option<u8> {
     if query.terms.is_empty() {
         return Some(0);

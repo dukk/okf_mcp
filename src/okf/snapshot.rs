@@ -294,13 +294,7 @@ impl SnapshotDoc {
     /// `true` for everything except the root `AGENTS.md`, `CLAUDE.md` and
     /// `README.md` (`build_docs` skips them): the negation of
     /// [`outside_link_graph`], so the snapshot and `rewrite_links` share one rule.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "one-line delegation to an instrumented function"
-        )
-    )]
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn in_link_graph(&self) -> bool {
         !outside_link_graph(&self.path)
     }

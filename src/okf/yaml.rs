@@ -164,13 +164,7 @@ impl<'a> Inline<'a> {
         }
     }
 
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial constructor: builds a value from its arguments"
-        )
-    )]
+    #[tracing::instrument(level = "trace", skip_all)]
     fn err(&self, message: &str) -> YamlError {
         YamlError::new(
             format!("{message} in {}", py_repr_str(self.source)),

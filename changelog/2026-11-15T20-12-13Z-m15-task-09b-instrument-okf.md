@@ -4,11 +4,11 @@
 - `#[tracing::instrument(level = "trace", skip_all)]` on private helpers and
   `level = "debug"` on public entry points (and `Workspace` trait impls) in
   `src/okf/**`, `src/overlay.rs`, `src/render.rs` and `src/selection.rs`.
-  317 functions are instrumented (150 debug, 167 trace). No span records a
+  320 functions are instrumented (151 debug, 169 trace). No span records a
   field, so nothing from a path, document text or error can reach a span.
-- 88 `uninstrumented_fn` exemptions, each with an accepted reason:
-  33 per-element predicates or scanners in the parser and analysis hot loops,
-  28 trivial accessors, 21 one-line delegations, 6 trivial constructors.
+- 85 `uninstrumented_fn` exemptions, each with an accepted reason:
+  32 per-element predicates or scanners in the parser and analysis hot loops,
+  28 trivial accessors, 20 one-line delegations, 5 trivial constructors.
 
 ## Changed
 - The dylint warning count in these paths goes from 405 to 0. Other paths keep
