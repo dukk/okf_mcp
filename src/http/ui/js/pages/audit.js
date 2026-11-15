@@ -142,11 +142,19 @@ export async function render(main) {
         return params.toString();
     }
 
+    // What is drawn: the rows, the filters they answer and the cursor that
+    // continues them. Only a first page that draws replaces the three, and
+    // only a continuation that appends advances the cursor; a failed or
+    // overtaken read leaves them as they are, so the rows on screen keep
+    // their Load more (a pending read only hides the button).
     let rows = [];
-    let shownQuery = null;   // the filters the drawn rows answer
-    let next = null;         // the cursor continuing them, if more may follow
+    let shownQuery = null;
+    let cursor = null;
     let loads = 0;           // the number of the newest table load
-    let stale = false;       // whether the newest load failed over drawn rows
+    let settled = 0;         // the number of the newest load that answered
+    let continuing = null;   // the load whose rows a continuation is pending for
+    let loadFailed = false;  // the newest load failed over the rows drawn
+    let moreFailed = false;  // the last continuation of the rows drawn failed
     let actionsShown = false;
 
     const table = listTable(columns(admin), rows, { empty: 'No entries match.' });
@@ -154,13 +162,20 @@ export async function render(main) {
     const more = h('button', { type: 'button', id: 'audit-more', class: 'secondary', hidden: true, onclick: () => loadMore() }, 'Load more');
     const status = h('div', { id: 'audit-status' });
 
+    // Load more shows while the rows drawn have a cursor and nothing is
+    // pending: no newer load (whose rows would replace them) and no
+    // continuation of these rows (a second click would append it twice).
+    function showMore() {
+        more.hidden = cursor === null || settled !== loads || continuing === loads;
+    }
+
     // The reason the last read or export failed (or nothing), and the stale
-    // mark while the newest load failed over rows still drawn. fill() drops
-    // the null children (issue #302).
+    // mark while a read of the rows drawn failed. fill() drops the null
+    // children (issue #302).
     function showStatus(error) {
         fill(status,
             error ? h('p', { class: 'error small', id: 'audit-error', role: 'alert' }, error.message || 'The audit log could not be read.') : null,
-            stale && rows.length ? h('p', { class: 'error small', id: 'audit-stale', role: 'status' }, 'The entries below may be out of date.') : null);
+            (loadFailed || moreFailed) && rows.length ? h('p', { class: 'error small', id: 'audit-stale', role: 'status' }, 'The entries below may be out of date.') : null);
     }
 
     // The action filter's options, once, from the first answer's list.
@@ -173,68 +188,67 @@ export async function render(main) {
         inputs.action.value = chosen;
     }
 
-    // A new first page for the filters as they are now. Dropping the old
-    // cursor at once means "Load more" cannot continue the previous filters
-    // while this load is pending.
+    // A new first page for the filters as they are now. While it is pending,
+    // Load more is hidden; if it fails, the rows drawn keep their cursor.
     async function load() {
         const mine = ++loads;
         const filters = query();
-        const previous = next;
-        next = null;
-        more.hidden = true;
+        showMore();
         let page;
         try {
             page = await api.get(`/audit?${filters}`, { quiet: true });
         } catch (error) {
-            if (mine !== loads || !main.isConnected) return;
-            stale = true;
-            // A failed Refresh of the filters drawn keeps their cursor.
-            if (filters === shownQuery) next = previous;
-            more.hidden = next === null;
+            if (mine !== loads || !main.isConnected) return;   // overtaken
+            settled = mine;
+            loadFailed = true;
+            showMore();
             showStatus(error);
             return;
         }
         if (mine !== loads || !main.isConnected) return;   // a newer load overtook this one
+        settled = mine;
         rows = page.entries;
         shownQuery = filters;
-        stale = false;
+        // A full last page is followed by an empty one, so an empty answer
+        // ends the list whatever its cursor.
+        cursor = page.entries.length ? page.next_after : null;
+        loadFailed = false;
+        moreFailed = false;
         showActions(page.actions);
         table.redraw(rows);
         showStatus(null);
-        // A full last page is followed by an empty one, so an empty answer
-        // ends the list whatever its cursor.
-        next = page.entries.length ? page.next_after : null;
-        more.hidden = next === null;
+        showMore();
     }
 
     // The next page of the rows drawn, for their filters (not the fields as
     // they may have been edited since). `after` goes first, so every query
-    // for the same filters ends the same way. Its cursor is taken (and the
-    // button hidden) at once, so a second click cannot append the same page
-    // twice; the answer appends only while that load is still the newest.
+    // for the same filters ends the same way. The answer appends only while
+    // no newer load has started; a failure keeps the cursor for a retry.
     async function loadMore() {
-        if (next === null) return;
+        if (cursor === null || settled !== loads || continuing === loads) return;
         const mine = loads;
-        const after = next;
-        next = null;
-        more.hidden = true;
+        const after = new URLSearchParams({ after: String(cursor) });
+        continuing = mine;
+        showMore();
         let page;
         try {
-            const cursor = new URLSearchParams({ after: String(after) });
-            page = await api.get(`/audit?${cursor}${shownQuery ? `&${shownQuery}` : ''}`, { quiet: true });
+            page = await api.get(`/audit?${after}${shownQuery ? `&${shownQuery}` : ''}`, { quiet: true });
         } catch (error) {
             if (mine !== loads || !main.isConnected) return;
-            next = after;   // the same page can be asked for again
-            more.hidden = false;
+            continuing = null;
+            moreFailed = true;
+            showMore();
             showStatus(error);
             return;
         }
         if (mine !== loads || !main.isConnected) return;
+        continuing = null;
         rows = rows.concat(page.entries);
+        cursor = page.entries.length ? page.next_after : null;
+        moreFailed = false;
         table.redraw(rows);
         showStatus(null);
-        next = page.entries.length ? page.next_after : null;
-        more.hidden = next === null;
+        showMore();
     }
 
     // The export downloads every entry the filters select, with the

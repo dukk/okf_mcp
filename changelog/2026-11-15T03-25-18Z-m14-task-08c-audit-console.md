@@ -24,7 +24,10 @@ Issue #404, part of epic #390. Plan:
 - `tests/ui_e2e/audit.rs`: `an_admin_filters_the_log_by_action_and_exports_it`,
   `an_owner_reads_its_team_and_sees_an_operator`,
   `a_late_table_load_never_draws_over_a_newer_filter` and
-  `load_more_appends_only_to_the_newest_table_load`.
+  `load_more_appends_only_to_the_newest_table_load` and
+  `the_rows_drawn_keep_their_load_more_through_failed_and_overtaken_reads`.
+- `tools/agentic/lessons.md`: a paged list's committed cursor survives a
+  failed or overtaken read.
 
 ## Changed
 
@@ -37,9 +40,12 @@ Issue #404, part of epic #390. Plan:
   numbered and only the newest draws; "Load more" takes its cursor at once
   and appends only while its load is still the newest; a failed load or a
   refused export keeps the rows drawn, marked "may be out of date", with the
-  server's reason on screen and every control usable. A failed Refresh of
-  the filters drawn keeps their Load more, which always continues the
-  filters of the rows drawn; a refused export shows its reason without the
+  server's reason on screen and every control usable. The rows drawn, their
+  filters and their cursor are one committed state, replaced only when a
+  first page draws, so a failed or overtaken read (overlapping Refreshes, a
+  Refresh over a pending Load more) never loses their Load more; a failed
+  Load more keeps its cursor for a retry and marks the rows like any failed
+  read (PR #438 review). A refused export shows its reason without the
   stale mark.
 - An empty page ends the list whatever its `next_after` (a full last page
   is followed by an empty one).

@@ -8,7 +8,7 @@ use okf_mcp::config::Config;
 use okf_mcp::store::keys::Access;
 use serde_json::{json, Value};
 
-use crate::harness::drive;
+use crate::harness::{drive, Ui};
 use crate::self_service::{console_base, login_server, member, EMAIL, PASSWORD};
 use crate::support::server::{files, TestServer, OWNER};
 
@@ -189,11 +189,15 @@ async fn a_late_table_load_never_draws_over_a_newer_filter() {
     .await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn load_more_appends_only_to_the_newest_table_load() {
+/// A server whose log holds 102 `user.created` entries, more than one page
+/// (100): the fixture user (by the CLI, the oldest) and `user-0` to
+/// `user-100` (by the admin key), plus a team `family`.
+///
+/// # Returns
+/// The server and the admin key.
+async fn two_pages() -> (TestServer, String) {
     let server = server().await;
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
-    // More user.created entries than one page (100) holds.
     for index in 0..101 {
         call(
             &server,
@@ -212,6 +216,83 @@ async fn load_more_appends_only_to_the_newest_table_load() {
         json!({"name": "family", "owner": "user-0"}),
     )
     .await;
+    (server, admin)
+}
+
+/// The number of rows `#audit-table` draws.
+fn rows(ui: &Ui) -> u64 {
+    ui.eval(
+        "() => document.querySelectorAll('#audit-table tbody tr').length",
+        Value::Null,
+    )
+    .as_u64()
+    .unwrap_or(0)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_rows_drawn_keep_their_load_more_through_failed_and_overtaken_reads() {
+    let (server, admin) = two_pages().await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/audit");
+        ui.select("#audit-action", "user.created");
+        ui.wait_visible("#audit-more");
+        assert_eq!(rows(ui), 100);
+        // A failed Load more keeps the rows, its reason, the stale mark and
+        // the button; the retry appends the page once and clears both.
+        ui.fail_next("GET", "&action=user.created", 503, "page two is away");
+        ui.click("#audit-more");
+        ui.wait_text("#audit-error", "page two is away");
+        ui.wait_visible("#audit-error");
+        ui.wait_visible("#audit-stale");
+        ui.wait_visible("#audit-more");
+        assert_eq!(rows(ui), 100);
+        ui.click("#audit-more");
+        // The oldest entry, the fixture user's (by the CLI), is on page two.
+        ui.wait_text("#audit-table", "cli:");
+        ui.wait_hidden("#audit-error");
+        ui.wait_hidden("#audit-stale");
+        ui.wait_hidden("#audit-more");
+        assert_eq!(rows(ui), 102);
+        ui.click("#audit-refresh");
+        ui.wait_text_gone("#audit-table", "cli:");
+        ui.wait_visible("#audit-more");
+        // Two Refreshes overlap: the newer fails, the older answers late
+        // (and is dropped). The rows drawn keep their cursor.
+        ui.hold_answer("GET", "/api/v1/audit?action=user.created", || {
+            ui.click("#audit-refresh")
+        });
+        ui.fail_next("GET", "/api/v1/audit?action=user.created", 503, "away");
+        ui.click("#audit-refresh");
+        ui.wait_text("#audit-error", "away");
+        ui.release_held();
+        ui.wait_visible("#audit-more");
+        // A Refresh overtakes a pending Load more and fails: the late page
+        // is dropped, and Load more is still there.
+        ui.hold_answer("GET", "&action=user.created", || ui.click("#audit-more"));
+        ui.fail_next(
+            "GET",
+            "/api/v1/audit?action=user.created",
+            503,
+            "away again",
+        );
+        ui.click("#audit-refresh");
+        ui.wait_text("#audit-error", "away again");
+        ui.release_held();
+        assert_eq!(rows(ui), 100, "an overtaken page was appended");
+        ui.wait_visible("#audit-more");
+        // And it still works: the next page, once.
+        ui.click("#audit-more");
+        ui.wait_text("#audit-table", "cli:");
+        assert_eq!(rows(ui), 102);
+        ui.wait_hidden("#audit-more");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn load_more_appends_only_to_the_newest_table_load() {
+    let (server, admin) = two_pages().await;
     drive(server.base.clone(), move |ui| {
         ui.login(&admin);
         ui.open("/audit");
