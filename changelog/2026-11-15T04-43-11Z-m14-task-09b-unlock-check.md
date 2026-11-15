@@ -23,14 +23,6 @@ runner reads without one unless the catalog's owners turned maintenance off.
   refusal, and the runner's exemption, under "Unlock before access".
 
 ## Changed
-- Review round 1: rayon workers do not inherit tracing's thread-local span or
-  scoped subscriber, so spans opened in the parallel passes became roots. New
-  `src/okf/caller.rs` (`Caller::capture` before the parallel iterator,
-  `map_init(|| caller.enter(), ...)` inside it) re-enters the caller's span and
-  dispatcher once per rayon work split. Applied to `Snapshot::build`, the secret
-  scan, lint, oldest, sprawl, search and unlinked mentions. Tests in
-  `okf::caller` use a 4-thread pool and a recording layer, and fail with the
-  `map_init` removed.
 
 - `Principal::admission` refuses `MaintenanceOff` to the runner on an
   opted-out catalog and, with `require_unlock` on, `UnlockRequired` to
