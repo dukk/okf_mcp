@@ -284,6 +284,61 @@ async fn a_provisioner_reads_only_its_own_entries() {
     );
 }
 
+/// Exports as `key` and answers the parsed lines' ids, waiting at most
+/// 20 s (an export whose cursor never advances would loop forever).
+async fn export_ids(test: &TestApp, key: &str, query: &str) -> Vec<i64> {
+    let mut browser = Browser::default();
+    browser.bearer = Some(key.to_string());
+    let uri = format!("/api/v1/audit/export?{query}");
+    let reply = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        browser.send(test, "GET", &uri, Payload::Empty),
+    )
+    .await
+    .expect("the export finished within 20 s");
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    lines(&reply.text())
+        .iter()
+        .map(|record| record["id"].as_i64().expect("an entry id"))
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_export_pages_through_every_entry_once_newest_first_from_any_cursor() {
+    let test = app().await;
+    let root = every_catalog_admin(&test).await;
+    // 1203 matching entries in one statement: two full pages and a partial
+    // one, so the export must advance its cursor twice.
+    let mut expected: Vec<i64> = sqlx::query_scalar(
+        "INSERT INTO audit_entries (at, action, source, actor_label, actor_operator, \
+             target_kind, target_name) \
+         SELECT now(), 'setting.changed', 'cli', 'cli:test', true, 'setting', 's' || n \
+         FROM generate_series(1, 1203) AS n RETURNING id",
+    )
+    .fetch_all(test.app.pool())
+    .await
+    .unwrap();
+    expected.sort_unstable_by(|a, b| b.cmp(a));
+    let cursor = expected[600];
+
+    // `limit` is ignored by the export: it pages to the end.
+    let all = export_ids(&test, &root, "action=setting.changed&limit=3").await;
+    let from_cursor = export_ids(
+        &test,
+        &root,
+        &format!("action=setting.changed&limit=3&after={cursor}"),
+    )
+    .await;
+
+    assert_eq!(all.len(), 1203);
+    assert_eq!(all, expected, "every entry once, newest first");
+    assert_eq!(
+        from_cursor,
+        expected[601..],
+        "only the entries older than the cursor"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn the_export_is_json_lines_with_the_same_filters() {
     let test = app().await;
