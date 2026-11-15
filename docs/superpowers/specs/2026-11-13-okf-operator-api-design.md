@@ -335,6 +335,13 @@ audit tables), so deleting one never changes or removes its entries.
   (such as the admin an unlock is for) shows owners no person and no
   credential naming them, and owners' actor and target filters never match
   an operator, so they cannot be used to find out who staff are.
+- *(Corrected, issue #402, 2026-11-15.)* An admin user acting through any
+  credential (a self-issued key, a grant) counts as an operator too.
+- *(Corrected, issue #402, 2026-11-15.)* An owner sees only its own team
+  in an entry's `teams`: an entry can also belong to another team (a
+  catalog's old owner, another catalog a key is granted), which may be
+  another customer's team or a staff member's personal team, shown as that
+  person's name.
 - `GET /api/v1/audit?team=&action=&actor=&target=&since=&until=&after=&limit=`,
   newest first, cursor-paged (`after`).
 - `GET /api/v1/audit/export?...` with the same filters: JSON Lines, for a

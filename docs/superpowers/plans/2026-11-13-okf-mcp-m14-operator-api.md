@@ -141,6 +141,8 @@ pub async fn lock_people(conn: &mut PgConnection, actor: &AuditActor, people: &P
 pub enum AccessKind { Read, Write, Export }                                          // Task 7b
 pub async fn list(pool: &PgPool, viewer: &Viewer, query: &AuditQuery<'_>)
                   -> Result<Vec<AuditRecord>, OkfError>;                              // Task 8a
+pub fn parse_filters<'a>(text: &FilterText<'a>) -> Result<AuditQuery<'a>, OkfError>; // Task 8a
+pub const OWNER_REDACTED: &[(&str, &[&str])]; // details keys owners never see  // Task 8a
 
 // ---- src/http/requester.rs (Task 1) ----
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4578,7 +4580,20 @@ git commit -m "feat(audit): access gates; record every export and operators' rea
 
 **Files:**
 - Create: `src/http/api/audit.rs`
-- Modify: `src/store/audit.rs` (`Viewer`, `AuditQuery`, `AuditRecord`, `ActorView`, `list`, `audit_teams_named`), `src/store/teams.rs` (`owned_by`, `owned_names`), `src/http/api/mod.rs` (`mod audit`, merge its routes), `src/http/api/me.rs` (`AccountView.owned_teams`), `docs/operations.md` (API reference rows)
+- Modify: `src/store/audit.rs` (`Viewer`, `AuditQuery`, `FilterText`, `parse_filters`, `AuditRecord`, `ActorView`, `TargetView`, `OWNER_REDACTED`, `list`), `src/store/teams.rs` (`owned_by`, `owned_names`), `src/http/api/mod.rs` (`mod audit`, merge its routes), `src/http/api/me.rs` (`AccountView.owned_teams`), `docs/operations.md` (API reference rows)
+- Create: `src/http/api/audit/tests.rs` (the route tests)
+
+> **Corrected (issue #402, 2026-11-15).** What shipped differs from the code below in these ways; read `src/store/audit.rs` (the reader) and `src/http/api/audit.rs`:
+> - **Shared filter parsing.** `query_of` moved into the store as `audit::parse_filters(&FilterText { team, action, actor, target, since, until, after, limit }) -> Result<AuditQuery, OkfError>` (400 `InvalidPath` naming the filter), so Task 8b's CLI parses exactly as the routes do. An empty value is no filter (an empty form field). `AuditQuery::page_size()` (1 to `MAX_PAGE` = 500, `DEFAULT_PAGE` = 100 for 0 or less) is the one clamp; `next_after` uses it.
+> - **No `audit_teams_named`.** The team-name filter is a subquery in `LIST_SQL` (`$12`), one round trip; it applies to an admin and to a provisioner. The owner scope is `$1`, the one `audit_teams` id (`e.teams @> ARRAY[$1]`, the GIN index).
+> - **One more owner redaction: `teams` lists only the owner's own team.** An entry can belong to several teams (`catalog.owner_changed` belongs to the old and the new owner, a key event to its catalogs' owners), and another team may be another customer's or a staff member's personal team, which reads as that person's name. The other ids still stay in `details` as audit ids, never names. Test `owners_see_only_their_members_ips_and_only_their_own_team`.
+> - **An admin user acting is an operator whatever its credential.** `record` stores `actor_operator` as `actor.operator OR` the acting user's `is_admin`, as `target_operator` already used the target's flag: an admin user's self-issued key or grant (not an admin credential) was shown to owners by name, and the owner's actor filter matched it. Test `an_admin_user_acting_through_a_non_admin_credential_is_an_operator_to_owners`. Found by this PR's claims audit.
+> - **`OWNER_REDACTED`** is `pub` (`[("catalog.unlocked", ["reason"])]`). Task 9a's `catalog.unlock_ended` records only `{"unlock": id}`; any free-text detail a later task records must be added to it.
+> - **A filter that can name nothing matches nothing without SQL:** a team name that fails `is_valid_name`, or an actor or target holding a NUL (Postgres refuses NUL; never a 500).
+> - **`teams::owned_by`** reads the `audit_teams` row (`JOIN audit_teams a ON a.team_id = t.id`) instead of calling `audit_team_ref`, so a read never writes: every team has its row from the transaction that creates it (migration 0014).
+> - **The tests.** `a_deleted_session_user_is_named_nowhere_in_the_admin_or_owner_view` stores the `alice-laptop` key first: a `key` target with no credential row breaks `audit_entries_target_shape`. The owner test of the redaction rules also records a staff member's key as a target, and checks each filter against an admin as a positive control (the person filter `staff` matches three entries for an admin: the unlock, staff's `user.created` and `user.admin_changed`). The provisioner's export is 403: `PROVISIONER_ROUTES` allows `GET /api/v1/audit` only (spec Part 4).
+> - **The export** is built in memory, page by page, as below: streaming it would need a new dependency (`futures`), and retention bounds it.
+
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5409,7 +5424,7 @@ pub struct AuditArgs {
 }
 ```
 
-`src/cli/audit.rs`: `pub async fn audit(pool: &PgPool, command: AuditCommand) -> anyhow::Result<String>` builds an `AuditQuery` (parsing as `query_of` does; share the parse by moving `query_of`'s action and time parsing into `store::audit::parse_filters`) and calls `audit::list(pool, &Viewer::Admin, ..)` (the CLI has operator access). `List` prints `{id}\t{at}\t{action}\t{actor}\t{target}\t{teams}\t{details}` where `actor` is `person NAME`, else `key ID`, else the label, and `target` is `user NAME` or `KIND NAME`; `Export` pages through like `export_audit` and prints JSON Lines.
+`src/cli/audit.rs`: `pub async fn audit(pool: &PgPool, command: AuditCommand) -> anyhow::Result<String>` builds an `AuditQuery` with `store::audit::parse_filters(&FilterText { .. })`, which Task 8a added and the routes use (*corrected, issue #402, 2026-11-15*) and calls `audit::list(pool, &Viewer::Admin, ..)` (the CLI has operator access). `List` prints `{id}\t{at}\t{action}\t{actor}\t{target}\t{teams}\t{details}` where `actor` is `person NAME`, else `key ID`, else the label, and `target` is `user NAME` or `KIND NAME`; `Export` pages through like `export_audit` and prints JSON Lines.
 
 `docs/operations.md`: the commands in the audit section, and parity rows
 
