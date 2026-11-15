@@ -5,6 +5,8 @@
 //! redirect (no open redirect). After that, failures go back to the client
 //! as `error=...`. A valid request becomes a pending authorization in
 //! memory, and the POSTs walk it through the sign-in code and consent.
+//! Approve and Deny answer with a page that forwards the browser to the
+//! client rather than a 303 (issue #435).
 //!
 //! Who approves (spec "OAuth consent as the user"): with `signin=code`, the
 //! sign-in code path (step 1 and 2), whose grants stay admin-issued. Else a
@@ -192,27 +194,40 @@ fn claim_consent(consent: Option<&mut UserConsent>, posted: Option<&str>, fresh:
     current
 }
 
-/// A 303 to the client's redirect URI with `pairs`, `state` and `iss` added.
+/// How an answer travels back to the client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Hop {
+    /// A 303, for an answer to a GET: no form is involved.
+    Redirect,
+    /// [`consent::forward_page`], for an answer to the consent form's POST:
+    /// a 303 there would put the client's own redirects under the page's
+    /// `form-action` (issue #435).
+    Forward,
+}
+
+/// Sends the browser to the client's redirect URI with `pairs`, `state`
+/// and `iss` added, by `hop`.
 ///
-/// 303, not 307: a 307 would make the browser re-POST the consent form,
-/// sign-in code included, to the client.
+/// A 303, never a 307: a 307 would make the browser re-POST the consent
+/// form, sign-in code included, to the client.
 ///
 /// # Arguments
-/// * `brand` - the product name and support contact, for the error page.
+/// * `brand` - the product name and support contact, for the pages.
 /// * `redirect_uri` - the request's URI, matched against the client's
 ///   (see [`clients::redirect_uri_matches`]).
 /// * `pairs` - `code`, or `error` and `error_description`.
-/// * `state` - the client's `state`, echoed if it sent one.
-/// * `issuer` - this server's issuer (RFC 9207).
+/// * `(state, issuer)` - the client's `state`, echoed if it sent one, and
+///   this server's issuer (RFC 9207).
+/// * `hop` - a 303 or the forwarding page.
 ///
 /// # Returns
-/// The redirect.
+/// The redirect or the forwarding page.
 fn back_to_client(
     brand: &Brand,
     redirect_uri: &str,
     pairs: &[(&str, &str)],
-    state: Option<&str>,
-    issuer: &str,
+    (state, issuer): (Option<&str>, &str),
+    hop: Hop,
 ) -> Response {
     // `redirect_uri_matches` parsed the URI before trusting it, so this
     // cannot fail; a failure is answered as an error page rather than a panic.
@@ -233,7 +248,10 @@ fn back_to_client(
         }
         query.append_pair("iss", issuer);
     }
-    Redirect::to(target.as_str()).into_response()
+    match hop {
+        Hop::Redirect => Redirect::to(target.as_str()).into_response(),
+        Hop::Forward => consent::forward_page(target.as_str(), brand),
+    }
 }
 
 /// An OAuth error sent back to the client.
@@ -243,41 +261,36 @@ fn back_to_client(
 ///   [`back_to_client`]).
 /// * `redirect_uri` - the request's URI, matched against the client's
 ///   (see [`clients::redirect_uri_matches`]).
-/// * `state` - the client's `state`, echoed if it sent one.
-/// * `issuer` - this server's issuer.
+/// * `(state, issuer)` - the client's `state`, echoed if it sent one, and
+///   this server's issuer.
 /// * `(code, description)` - the OAuth error code and its
 ///   `error_description`.
+/// * `hop` - a 303 or the forwarding page (see [`Hop`]).
 ///
 /// # Returns
-/// The redirect.
+/// The redirect or the forwarding page.
 fn error_to_client(
     brand: &Brand,
     redirect_uri: &str,
-    state: Option<&str>,
-    issuer: &str,
+    state_and_issuer: (Option<&str>, &str),
     (code, description): (&str, &str),
+    hop: Hop,
 ) -> Response {
     back_to_client(
         brand,
         redirect_uri,
         &[("error", code), ("error_description", description)],
-        state,
-        issuer,
+        state_and_issuer,
+        hop,
     )
 }
 
 /// The page view of a pending authorization.
 fn view(pending_id: &str, pending: &PendingAuthorization) -> PageView {
     // `redirect_uri_matches` parsed the URI before trusting it, so the
-    // fallbacks never show. The origin is the request's, port included, so
-    // `form-action` allows the redirect to a loopback client's live port.
-    let parsed = url::Url::parse(&pending.redirect_uri).ok();
-    let redirect_origin = parsed
-        .as_ref()
-        .map(|url| url.origin().ascii_serialization())
-        .unwrap_or_default();
-    let client_host = parsed
-        .as_ref()
+    // fallback never shows.
+    let client_host = url::Url::parse(&pending.redirect_uri)
+        .ok()
         .and_then(|url| url.host_str().map(str::to_string))
         .unwrap_or_default();
     PageView {
@@ -290,7 +303,6 @@ fn view(pending_id: &str, pending: &PendingAuthorization) -> PageView {
             .unwrap_or_else(|| pending.client.client_id.clone()),
         client_host,
         verified: pending.client.kind == ClientKind::Cimd,
-        redirect_origin,
     }
 }
 
@@ -561,7 +573,13 @@ async fn authorize(
     let issuer = oauth.settings.issuer.as_str();
     let state = query.state.as_deref();
     let back = |code: &str, description: &str| {
-        error_to_client(&brand, redirect_uri, state, issuer, (code, description))
+        error_to_client(
+            &brand,
+            redirect_uri,
+            (state, issuer),
+            (code, description),
+            Hop::Redirect,
+        )
     };
     // 3. The rest, in the spec's order.
     if query.response_type.as_deref() != Some("code") {
@@ -709,9 +727,9 @@ async fn consent_post(
             error_to_client(
                 &brand,
                 &pending.redirect_uri,
-                pending.state.as_deref(),
-                &oauth.settings.issuer,
+                (pending.state.as_deref(), &oauth.settings.issuer),
                 ("access_denied", "the person signing in denied access"),
+                Hop::Forward,
             )
         }
         "code" if code_path => {
@@ -831,7 +849,7 @@ async fn approve(
 /// * `grant_id` - the grant the approval created.
 ///
 /// # Returns
-/// A 303 to the client with `code`, or an error page.
+/// The forwarding page to the client with `code`, or an error page.
 async fn finish(
     app: &App,
     oauth: &OAuth,
@@ -881,8 +899,8 @@ async fn finish(
         &brand,
         &pending.redirect_uri,
         &[("code", &code)],
-        pending.state.as_deref(),
-        &oauth.settings.issuer,
+        (pending.state.as_deref(), &oauth.settings.issuer),
+        Hop::Forward,
     )
 }
 
@@ -899,8 +917,8 @@ async fn finish(
 /// * `headers` - the request's headers (the session cookie).
 ///
 /// # Returns
-/// A 303 to the client, the page again (nothing or a bad default chosen),
-/// or an error page.
+/// The forwarding page to the client, the page again (nothing or a bad
+/// default chosen), or an error page.
 async fn consent_as_user(
     app: &App,
     oauth: &OAuth,
@@ -1025,9 +1043,9 @@ mod tests {
     use crate::oauth::pkce;
     use crate::oauth::state::code_key;
     use crate::oauth::testing::{
-        authorize_query, authorize_query_for, form, hidden, hidden_inputs, insert_loopback_client,
-        oauth_app, send, send_as, sign_in_code, user_authorize_query, CLIENT_ID,
-        LOOPBACK_CLIENT_ID, LOOPBACK_ON_PORT, PUBLIC_URL, REDIRECT_URI, VERIFIER,
+        authorize_query, authorize_query_for, form, forwarded, hidden, hidden_inputs,
+        insert_loopback_client, oauth_app, send, send_as, sign_in_code, user_authorize_query,
+        CLIENT_ID, LOOPBACK_CLIENT_ID, LOOPBACK_ON_PORT, PUBLIC_URL, REDIRECT_URI, VERIFIER,
     };
     use crate::store::audit::AuditActor;
     use crate::store::ceiling::NewEntitlement;
@@ -1111,7 +1129,7 @@ mod tests {
         assert!(headers["content-security-policy"]
             .to_str()
             .unwrap()
-            .contains("form-action 'self' https://client.example.com;"));
+            .ends_with("form-action 'self';"));
         assert_eq!(headers["cache-control"], "no-store");
         assert_eq!(headers["referrer-policy"], "no-referrer");
         assert_eq!(headers["x-content-type-options"], "nosniff");
@@ -1153,7 +1171,7 @@ mod tests {
         insert_loopback_client(&test).await;
         let code = sign_in_code(&test, Access::Read).await;
 
-        let (status, headers, page) = send(
+        let (status, _, page) = send(
             &test,
             "GET",
             &format!(
@@ -1165,17 +1183,8 @@ mod tests {
         .await;
 
         assert_eq!(status, StatusCode::OK, "{page}");
-        // `form-action` names the request's origin, port included, or the
-        // browser would block the redirect after Approve.
-        let csp = |headers: &HeaderMap| {
-            headers["content-security-policy"]
-                .to_str()
-                .unwrap()
-                .to_string()
-        };
-        assert!(csp(&headers).contains("form-action 'self' http://localhost:54123;"));
         let (pending, csrf) = (hidden(&page, "pending"), hidden(&page, "csrf"));
-        let (status, headers, summary) = post(
+        let (status, _, summary) = post(
             &test,
             &[
                 ("pending", &pending),
@@ -1186,10 +1195,8 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert!(csp(&headers).contains("form-action 'self' http://localhost:54123;"));
-        let (status, headers, _) = approve_from(&test, &summary).await;
-        assert_eq!(status, StatusCode::SEE_OTHER);
-        let target = location(&headers);
+        let (status, headers, body) = approve_from(&test, &summary).await;
+        let target = forwarded(status, &headers, &body);
         assert_eq!(target.port(), Some(54123));
         assert!(target.as_str().starts_with(LOOPBACK_ON_PORT));
         let issued = param(&target, "code").expect("a code");
@@ -1268,7 +1275,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_code_then_approve_creates_a_grant_and_redirects_with_a_code() {
+    async fn a_code_then_approve_creates_a_grant_and_forwards_with_a_code() {
         let test = oauth_app().await;
         let code = sign_in_code(&test, Access::Write).await;
         let (pending, csrf) = start(&test).await;
@@ -1292,11 +1299,10 @@ mod tests {
         assert!(headers["content-security-policy"]
             .to_str()
             .unwrap()
-            .contains("form-action 'self' https://client.example.com;"));
+            .ends_with("form-action 'self';"));
 
-        let (status, headers, _) = approve_from(&test, &summary).await;
-        assert_eq!(status, StatusCode::SEE_OTHER);
-        let target = location(&headers);
+        let (status, headers, body) = approve_from(&test, &summary).await;
+        let target = forwarded(status, &headers, &body);
         let issued = param(&target, "code").expect("a code");
         assert!(issued.starts_with("okfac_"));
         assert_eq!(param(&target, "state").as_deref(), Some("xyz"));
@@ -1350,14 +1356,13 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        let (status, headers, _) = post(
+        let (status, headers, body) = post(
             &test,
             &[("pending", &pending), ("csrf", &csrf), ("action", "deny")],
         )
         .await;
-        assert_eq!(status, StatusCode::SEE_OTHER);
         assert_eq!(
-            param(&location(&headers), "error").as_deref(),
+            param(&forwarded(status, &headers, &body), "error").as_deref(),
             Some("access_denied")
         );
 
@@ -1370,16 +1375,15 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn deny_redirects_with_access_denied() {
+    async fn deny_forwards_with_access_denied() {
         let test = oauth_app().await;
         let (pending, csrf) = start(&test).await;
-        let (status, headers, _) = post(
+        let (status, headers, body) = post(
             &test,
             &[("pending", &pending), ("csrf", &csrf), ("action", "deny")],
         )
         .await;
-        assert_eq!(status, StatusCode::SEE_OTHER);
-        let target = location(&headers);
+        let target = forwarded(status, &headers, &body);
         assert!(target.as_str().starts_with(REDIRECT_URI));
         assert_eq!(param(&target, "error").as_deref(), Some("access_denied"));
         assert_eq!(param(&target, "state").as_deref(), Some("xyz"));
@@ -1409,12 +1413,12 @@ mod tests {
             }
         }
         // The real form still works: a forger cannot cancel someone's request.
-        let (status, _, _) = post(
+        let (status, headers, body) = post(
             &test,
             &[("pending", &pending), ("csrf", &csrf), ("action", "deny")],
         )
         .await;
-        assert_eq!(status, StatusCode::SEE_OTHER);
+        forwarded(status, &headers, &body);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1526,8 +1530,8 @@ mod tests {
             assert_eq!(status, StatusCode::OK);
             summaries.push(summary);
         }
-        let (status, _, _) = approve_from(&test, &summaries[0]).await;
-        assert_eq!(status, StatusCode::SEE_OTHER);
+        let (status, headers, body) = approve_from(&test, &summaries[0]).await;
+        forwarded(status, &headers, &body);
         let (status, _, page) = approve_from(&test, &summaries[1]).await;
         assert_eq!(status, StatusCode::OK);
         assert!(page.contains("That sign-in code is not valid"));
@@ -1600,9 +1604,8 @@ mod tests {
         assert_eq!(oauth_grants(&test).await, 0);
 
         // B's own, current summary still approves, and grants write.
-        let (status, headers, _) = approve_from(&test, &summaries[1]).await;
-        assert_eq!(status, StatusCode::SEE_OTHER);
-        let issued = param(&location(&headers), "code").expect("a code");
+        let (status, headers, body) = approve_from(&test, &summaries[1]).await;
+        let issued = param(&forwarded(status, &headers, &body), "code").expect("a code");
         let oauth = test.app.oauth().expect("oauth on");
         let waiting = oauth
             .codes
@@ -1748,9 +1751,10 @@ mod tests {
         .await
     }
 
-    /// The grant behind the authorization code in a 303 to the client.
-    fn grant_of(test: &TestApp, headers: &HeaderMap) -> String {
-        let issued = param(&location(headers), "code").expect("a code");
+    /// The grant behind the authorization code `target` carries to the
+    /// client.
+    fn grant_of(test: &TestApp, target: &url::Url) -> String {
+        let issued = param(target, "code").expect("a code");
         test.app
             .oauth()
             .expect("oauth on")
@@ -1892,11 +1896,10 @@ mod tests {
         )
         .await;
 
-        assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
-        let target = location(&headers);
+        let target = forwarded(status, &headers, &body);
         assert!(target.as_str().starts_with(REDIRECT_URI));
         assert_eq!(param(&target, "state").as_deref(), Some("xyz"));
-        let grant = grant_of(&test, &headers);
+        let grant = grant_of(&test, &target);
         let principal = test.app.keys().find_grant(&grant).expect("cached grant");
         assert_eq!(principal.user.as_deref(), Some("alice"));
         assert_eq!(principal.actor, "Example Client");
@@ -1919,7 +1922,7 @@ mod tests {
         let test = oauth_app().await;
         let alice = signed_in(&test, "alice", &[("main", Access::Write)]).await;
         let page = user_page(&test, &alice).await;
-        let (_, headers, _) = consent_as(
+        let (status, headers, body) = consent_as(
             &test,
             Some(&alice),
             &page,
@@ -1930,7 +1933,7 @@ mod tests {
             ],
         )
         .await;
-        let grant = grant_of(&test, &headers);
+        let grant = grant_of(&test, &forwarded(status, &headers, &body));
         let granted = test
             .app
             .keys()
@@ -2198,7 +2201,7 @@ mod tests {
         assert_eq!(stale, StatusCode::BAD_REQUEST);
         let mut statuses = [one.0, two.0];
         statuses.sort();
-        assert_eq!(statuses, [StatusCode::SEE_OTHER, StatusCode::BAD_REQUEST]);
+        assert_eq!(statuses, [StatusCode::OK, StatusCode::BAD_REQUEST]);
         assert_eq!(oauth_grants(&test).await, 1);
     }
 
@@ -2229,7 +2232,7 @@ mod tests {
         assert_eq!(cross, StatusCode::FORBIDDEN);
         assert_eq!(same_site, StatusCode::FORBIDDEN);
         // Refused before the nonce was looked at: the page still approves.
-        assert_eq!(same_origin, StatusCode::SEE_OTHER);
+        assert_eq!(same_origin, StatusCode::OK);
         assert_eq!(oauth_grants(&test).await, 1);
     }
 
