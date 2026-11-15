@@ -172,6 +172,19 @@ async fn a_late_table_load_never_draws_over_a_newer_filter() {
         ui.click("#audit-refresh");
         ui.wait_hidden("#audit-error");
         ui.wait_hidden("#audit-stale");
+        // A refused export shows its reason and keeps the rows, which are
+        // not out of date.
+        ui.fail_next(
+            "GET",
+            "/api/v1/audit/export?action=team.created",
+            403,
+            "no export for you",
+        );
+        ui.click("#audit-export");
+        ui.wait_visible("#audit-error");
+        ui.wait_text("#audit-error", "no export for you");
+        assert!(ui.text("#audit-table").contains("family"));
+        assert_eq!(ui.text("#audit-stale"), "");
     })
     .await;
 }
@@ -203,6 +216,12 @@ async fn load_more_appends_only_to_the_newest_table_load() {
         ui.login(&admin);
         ui.open("/audit");
         ui.select("#audit-action", "user.created");
+        ui.wait_visible("#audit-more");
+        // A failed Refresh of the same filters keeps their Load more.
+        ui.fail_next("GET", "/api/v1/audit?action=user.created", 503, "away");
+        ui.click("#audit-refresh");
+        ui.wait_visible("#audit-error");
+        ui.wait_visible("#audit-stale");
         ui.wait_visible("#audit-more");
         // The second page's answer is held while the filter changes.
         ui.hold_answer("GET", "&action=user.created", || ui.click("#audit-more"));

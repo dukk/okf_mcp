@@ -37,7 +37,10 @@ Issue #404, part of epic #390. Plan:
   numbered and only the newest draws; "Load more" takes its cursor at once
   and appends only while its load is still the newest; a failed load or a
   refused export keeps the rows drawn, marked "may be out of date", with the
-  server's reason on screen and every control usable.
+  server's reason on screen and every control usable. A failed Refresh of
+  the filters drawn keeps their Load more, which always continues the
+  filters of the rows drawn; a refused export shows its reason without the
+  stale mark.
 - An empty page ends the list whatever its `next_after` (a full last page
   is followed by an empty one).
 - The manifest needs no change: `ui.rs` lists every embedded page.

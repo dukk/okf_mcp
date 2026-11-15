@@ -131,22 +131,22 @@ export async function render(main) {
     form.addEventListener('submit', event => event.preventDefault());
     for (const input of Object.values(inputs)) input.addEventListener('change', () => load());
 
-    // The query the filters spell now. `after` continues a load; it goes
-    // first, so every query for the same filters ends the same way.
-    function query(after = null) {
+    // The query the filters spell now, as text.
+    function query() {
         const params = new URLSearchParams();
-        if (after !== null) params.set('after', String(after));
         for (const name of FILTERS) {
             const raw = inputs[name].value.trim();
             const value = name === 'since' || name === 'until' ? utc(raw) : raw;
             if (value) params.set(name, value);
         }
-        return params;
+        return params.toString();
     }
 
     let rows = [];
-    let next = null;     // the cursor of the newest completed load, if more may follow
-    let loads = 0;       // the number of the newest table load
+    let shownQuery = null;   // the filters the drawn rows answer
+    let next = null;         // the cursor continuing them, if more may follow
+    let loads = 0;           // the number of the newest table load
+    let stale = false;       // whether the newest load failed over drawn rows
     let actionsShown = false;
 
     const table = listTable(columns(admin), rows, { empty: 'No entries match.' });
@@ -154,12 +154,13 @@ export async function render(main) {
     const more = h('button', { type: 'button', id: 'audit-more', class: 'secondary', hidden: true, onclick: () => loadMore() }, 'Load more');
     const status = h('div', { id: 'audit-status' });
 
-    // The reason a read failed and the stale mark, or nothing. fill() drops
+    // The reason the last read or export failed (or nothing), and the stale
+    // mark while the newest load failed over rows still drawn. fill() drops
     // the null children (issue #302).
     function showStatus(error) {
         fill(status,
             error ? h('p', { class: 'error small', id: 'audit-error', role: 'alert' }, error.message || 'The audit log could not be read.') : null,
-            error && rows.length ? h('p', { class: 'error small', id: 'audit-stale', role: 'status' }, 'The entries below may be out of date.') : null);
+            stale && rows.length ? h('p', { class: 'error small', id: 'audit-stale', role: 'status' }, 'The entries below may be out of date.') : null);
     }
 
     // The action filter's options, once, from the first answer's list.
@@ -177,17 +178,26 @@ export async function render(main) {
     // while this load is pending.
     async function load() {
         const mine = ++loads;
+        const filters = query();
+        const previous = next;
         next = null;
         more.hidden = true;
         let page;
         try {
-            page = await api.get(`/audit?${query()}`, { quiet: true });
+            page = await api.get(`/audit?${filters}`, { quiet: true });
         } catch (error) {
-            if (mine === loads && main.isConnected) showStatus(error);
+            if (mine !== loads || !main.isConnected) return;
+            stale = true;
+            // A failed Refresh of the filters drawn keeps their cursor.
+            if (filters === shownQuery) next = previous;
+            more.hidden = next === null;
+            showStatus(error);
             return;
         }
         if (mine !== loads || !main.isConnected) return;   // a newer load overtook this one
         rows = page.entries;
+        shownQuery = filters;
+        stale = false;
         showActions(page.actions);
         table.redraw(rows);
         showStatus(null);
@@ -197,9 +207,11 @@ export async function render(main) {
         more.hidden = next === null;
     }
 
-    // The next page of the newest load. Its cursor is taken (and the button
-    // hidden) at once, so a second click cannot append the same page twice;
-    // the answer appends only while that load is still the newest.
+    // The next page of the rows drawn, for their filters (not the fields as
+    // they may have been edited since). `after` goes first, so every query
+    // for the same filters ends the same way. Its cursor is taken (and the
+    // button hidden) at once, so a second click cannot append the same page
+    // twice; the answer appends only while that load is still the newest.
     async function loadMore() {
         if (next === null) return;
         const mine = loads;
@@ -208,7 +220,8 @@ export async function render(main) {
         more.hidden = true;
         let page;
         try {
-            page = await api.get(`/audit?${query(after)}`, { quiet: true });
+            const cursor = new URLSearchParams({ after: String(after) });
+            page = await api.get(`/audit?${cursor}${shownQuery ? `&${shownQuery}` : ''}`, { quiet: true });
         } catch (error) {
             if (mine !== loads || !main.isConnected) return;
             next = after;   // the same page can be asked for again
@@ -225,7 +238,8 @@ export async function render(main) {
     }
 
     // The export downloads every entry the filters select, with the
-    // console's own credential. Its refusal stays on screen like a load's.
+    // console's own credential. Its refusal stays on screen like a load's,
+    // without marking the rows out of date.
     async function exportLog() {
         try {
             await api.download(`/audit/export?${query()}`, 'audit.jsonl', { quiet: true });
