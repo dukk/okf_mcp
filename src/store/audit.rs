@@ -562,8 +562,9 @@ pub async fn lock_people(
 /// * `people` - additional users and catalogs (including an assignment's new owner).
 ///
 /// # Returns
-/// Nothing; the locks last until the transaction ends. An absent credential
-/// is left for the caller's existing unknown-target handling.
+/// Nothing; the locks last until the transaction ends. An absent credential,
+/// including one deleted with its owner while this waited, is left for the
+/// caller's existing unknown-target handling.
 ///
 /// # Errors
 /// [`OkfError::Refused`] if ownership or grants changed while locking;
@@ -622,7 +623,13 @@ pub async fn lock_credential_people(
         .bind(id)
         .fetch_all(&mut *conn)
         .await?;
-    if before.map(|(owner, _)| owner) != after || catalogs != current_catalogs {
+    // Gone under the lock (its owner was deleted meanwhile, which cascades):
+    // not a change to retry, so the caller's own lookup answers "unknown".
+    // `let ... else`: bind the row when there is one, else return early.
+    let Some(after) = after else {
+        return Ok(());
+    };
+    if before.map(|(owner, _)| owner) != Some(after) || catalogs != current_catalogs {
         return Err(OkfError::Refused {
             reason: "credential changed while locking; retry the request".to_string(),
         });

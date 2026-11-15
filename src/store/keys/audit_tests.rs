@@ -285,6 +285,28 @@ enum SnapshotChange {
     Grants,
 }
 
+/// Returns once a backend waits in `lock_people` on `holder_pid`'s lock.
+/// Seeing it blocked there proves the credential snapshot has been read; no
+/// scheduling sleep decides when a competing change may run. Callers bound
+/// this with `tokio::time::timeout`.
+async fn blocked_in_lock_people(pool: &PgPool, holder_pid: i32) -> Result<(), OkfError> {
+    loop {
+        let waiting: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity \
+             WHERE datname = current_database() AND wait_event_type = 'Lock' \
+               AND $1 = ANY(pg_blocking_pids(pid)) \
+               AND query = 'SELECT is_admin FROM users WHERE id = $1 FOR KEY SHARE')",
+        )
+        .bind(holder_pid)
+        .fetch_one(pool)
+        .await?;
+        if waiting {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 /// Pauses a revoke after its snapshot, commits a competing change using an
 /// unrelated actor, then checks that only the competing change survives.
 async fn assert_snapshot_mismatch_refuses_revoke(change: SnapshotChange) {
@@ -337,24 +359,7 @@ async fn assert_snapshot_mismatch_refuses_revoke(change: SnapshotChange) {
     let mut changing =
         tokio::spawn(async move { revoke_by_id(&pool, &id, &actor, Utc::now()).await });
     let competing = tokio::time::timeout(Duration::from_secs(10), async {
-        // Seeing this specific backend blocked by our holder in lock_people
-        // proves both snapshots have been read; no scheduling sleeps decide
-        // when the competing change may run.
-        loop {
-            let waiting: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM pg_stat_activity \
-                 WHERE datname = current_database() AND wait_event_type = 'Lock' \
-                   AND $1 = ANY(pg_blocking_pids(pid)) \
-                   AND query = 'SELECT is_admin FROM users WHERE id = $1 FOR KEY SHARE')",
-            )
-            .bind(holder_pid)
-            .fetch_one(&db.pool)
-            .await?;
-            if waiting {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        blocked_in_lock_people(&db.pool, holder_pid).await?;
         match change {
             SnapshotChange::Owner => {
                 assign_user_by_id(&db.pool, &created.id, "bob", &competing_actor, Utc::now()).await
@@ -422,6 +427,118 @@ async fn owner_snapshot_mismatch_refuses_revoke_without_mutation_audit_or_genera
 #[tokio::test(flavor = "multi_thread")]
 async fn grant_snapshot_mismatch_refuses_revoke_without_mutation_audit_or_generation_bump() {
     assert_snapshot_mismatch_refuses_revoke(SnapshotChange::Grants).await;
+}
+
+/// A change the owner-deletion test makes while its owner is deleted.
+#[derive(Clone, Copy, Debug)]
+enum WaitingChange {
+    Revoke,
+    Assign,
+}
+
+/// Pauses `change` on a key after its snapshot, deletes the key's owner
+/// (which deletes the key), then checks the change answers as for any
+/// unknown key, not with the snapshot-mismatch retry.
+async fn assert_owner_deleted_while_locking_is_unknown(change: WaitingChange) {
+    let db = test_db().await;
+    let alice = seed_user(&db.pool, "alice", None).await;
+    let bob = seed_user(&db.pool, "bob", None).await;
+    seed_user(&db.pool, "carol", None).await;
+    // An admin actor is locked before every other user (`lock_people`'s
+    // admin-first order), so the change waits on it holding no other row.
+    sqlx::query("UPDATE users SET is_admin = true WHERE id = $1")
+        .bind(&alice.id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let created = create_with_id(
+        &db.pool,
+        &NewKey {
+            user: "bob",
+            ..key("owner-deleted", Grants::All)
+        },
+        &AuditActor::system("owner-deleted-setup"),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    let mut actor = AuditActor::system("waiting-credential-change");
+    actor.user_id = Some(alice.id.clone());
+    let mut holder = db.pool.begin().await.unwrap();
+    let holder_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+        .bind(&alice.id)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let pool = db.pool.clone();
+    let id = created.id.clone();
+    let mut changing = tokio::spawn(async move {
+        match change {
+            WaitingChange::Revoke => revoke_by_id(&pool, &id, &actor, Utc::now()).await,
+            WaitingChange::Assign => {
+                assign_user_by_id(&pool, &id, "carol", &actor, Utc::now()).await
+            }
+        }
+    });
+    let deleted = tokio::time::timeout(Duration::from_secs(10), async {
+        blocked_in_lock_people(&db.pool, holder_pid).await?;
+        // The row deletes `users::delete` ends in (personal team, then
+        // user); it would also lock every admin, the held actor included, so
+        // it cannot run while the holder waits. `ON DELETE CASCADE` takes
+        // the key with its owner.
+        let mut deleting = db.pool.begin().await?;
+        for sql in [
+            "DELETE FROM teams WHERE personal_of = $1",
+            "DELETE FROM users WHERE id = $1",
+        ] {
+            sqlx::query(sql).bind(&bob.id).execute(&mut *deleting).await?;
+        }
+        deleting.commit().await?;
+        Ok::<_, OkfError>(())
+    })
+    .await;
+    // Release the holder and drain the task before asserting, on every path.
+    holder.rollback().await.unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(10), &mut changing).await;
+    if result.is_err() {
+        changing.abort();
+        tokio::time::timeout(Duration::from_secs(10), changing)
+            .await
+            .expect("aborted change task must finish")
+            .expect_err("change task must have been cancelled");
+    }
+    deleted
+        .expect("the change must block on its actor while the owner is deleted")
+        .expect("deleting the owner must succeed");
+    let outcome = result
+        .expect("the change must finish after releasing its actor")
+        .expect("change task must not panic");
+    match change {
+        WaitingChange::Revoke => assert!(
+            matches!(&outcome, Err(OkfError::Refused { reason })
+                if *reason == format!("no active key {:?}", created.id)),
+            "a revoke of a deleted key answers as unknown, got {outcome:?}"
+        ),
+        WaitingChange::Assign => assert!(
+            matches!(&outcome, Err(OkfError::NotFound { path })
+                if *path == format!("keys/{}", created.id)),
+            "an assignment of a deleted key answers not found, got {outcome:?}"
+        ),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn owner_deleted_while_revoke_locks_answers_unknown_key() {
+    assert_owner_deleted_while_locking_is_unknown(WaitingChange::Revoke).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn owner_deleted_while_assign_locks_answers_not_found() {
+    assert_owner_deleted_while_locking_is_unknown(WaitingChange::Assign).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
