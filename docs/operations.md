@@ -517,6 +517,16 @@ kubectl -n okf-mcp exec deploy/okf-mcp -- \
     okf-mcp catalog create notes --description "Team notes" --owner alice
 ```
 
+A new catalog is not empty: it starts with a root `index.md` (headed with
+its name, its description as the first paragraph) and a `log.md` with one
+`Creation` entry, so agents can list concepts and log changes at once.
+Importing into it before anything is published replaces them without
+`--replace`. A catalog created before starter files existed (or one
+imported without indexes) is repaired through any agent with write access:
+open a changeset, call `repair_indexes`, review `pending_changes`, fill in
+the `TODO` placeholders it names, and publish. The maintenance runner does
+not do this for you; it only reports.
+
 **Change a catalog's description** (what `list_catalogs` tells agents, for
 example when a catalog becomes the source of truth). It prints the old and
 new text; an unknown catalog is refused, and an empty description is allowed:
@@ -600,7 +610,7 @@ git -C ~/notes archive --format=tar.gz HEAD |
 ```
 
 or post it to the HTTP route with an `admin` key (`?replace=true` to replace
-a non-empty catalog, `?only_machinery=true` for `--only-machinery` and
+a non-empty catalog, which a new catalog's starter files do not make it, `?only_machinery=true` for `--only-machinery` and
 `?expect_generation=N` for `--expect-generation N`, both described below):
 
 ```sh

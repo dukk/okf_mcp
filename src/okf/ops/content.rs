@@ -217,15 +217,20 @@ pub fn create_concept(
     Ok(outcome)
 }
 
+/// The refusal of a listing in a catalog without a root `index.md`.
+const ROOT_MISSING: &str =
+    "no index.md in /; create it first (repair_indexes creates it in a changeset)";
+
 /// Checks, before anything is written, that `list_concept` will find the
 /// folder's `index.md` and its `section`: the existing index, or the text
 /// `ensure_index` will write for a new folder.
 ///
 /// # Errors
-/// [`OkfError::Refused`] with `list_concept`'s wording: no root `index.md`
-/// when the folder's index is missing (`ensure_index` creates every other
-/// folder index, but needs the root's to list them in), or a `section`
-/// that is not a heading of the index.
+/// [`OkfError::Refused`] with `list_concept`'s wording, plus a pointer to
+/// `repair_indexes`, when there is no root `index.md` and the folder's
+/// index is missing (`ensure_index` creates every other folder index, but
+/// needs the root's to list them in), or a `section` that is not a heading
+/// of the index.
 fn check_listing(
     workspace: &dyn Workspace,
     concept: &str,
@@ -239,7 +244,7 @@ fn check_listing(
         // `ensure_index` creates every missing folder index below the root,
         // then lists the topmost new folder in the root's: so the root
         // `index.md` (this one, for a root concept) must already exist.
-        return Err(refused("no index.md in /; create it first".to_string()));
+        return Err(refused(ROOT_MISSING.to_string()));
     } else {
         new_index_text(folder)
     };
@@ -765,11 +770,11 @@ mod tests {
         // Each listing refusal comes before anything is written.
         assert_eq!(refusal(missing), "no heading 'Nope' in infra/index.md");
         assert_eq!(refusal(new_folder), "no heading 'Hosts' in ops/index.md");
-        assert_eq!(refusal(no_root), "no index.md in /; create it first");
+        assert_eq!(refusal(no_root), ROOT_MISSING);
         assert!(!ws.exists("infra/c.md"));
         assert!(!ws.exists("ops/c.md") && !ws.exists("ops/index.md"));
         assert_eq!(read(&ws, "index.md"), ROOT_INDEX);
-        assert_eq!(refusal(nested_no_root), "no index.md in /; create it first");
+        assert_eq!(refusal(nested_no_root), ROOT_MISSING);
         assert!(!rootless.exists("c.md"));
         assert!(!rootless.exists("ops/new/c.md") && !rootless.exists("ops/new/index.md"));
     }

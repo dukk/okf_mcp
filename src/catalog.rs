@@ -480,6 +480,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn load_records_the_description_file_count_and_last_change() {
         let db = test_db().await;
+        let created = Utc.with_ymd_and_hms(2026, 11, 1, 12, 0, 0).unwrap();
         catalogs::create(
             &db.pool,
             &crate::store::catalogs::NewCatalog {
@@ -488,15 +489,16 @@ mod tests {
                 owner_team: crate::db::TEST_TEAM,
             },
             &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
+            created,
         )
         .await
         .unwrap();
         let empty = CatalogState::load(&db.pool, "pg").await.unwrap();
         assert_eq!(&*empty.description(), "pgrace's world");
         assert_eq!(empty.owner_team().as_deref(), Some(crate::db::TEST_TEAM));
-        assert_eq!(empty.current().files(), 0);
-        assert_eq!(empty.current().last_change(), None);
+        // A new catalog holds its starter files (index.md and log.md).
+        assert_eq!(empty.current().files(), crate::okf::ops::STARTER_FILE_COUNT);
+        assert_eq!(empty.current().last_change(), Some(created));
         let imported = Utc.with_ymd_and_hms(2026, 11, 2, 12, 0, 0).unwrap();
         let options = ImportOptions {
             replace: false,

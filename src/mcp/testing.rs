@@ -75,18 +75,7 @@ pub(crate) async fn app_at(
 ) -> TestApp {
     let db = crate::db::test_db().await;
     for (name, entries) in catalogs_and_files {
-        catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name,
-                description: "",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &AuditActor::cli(),
-            imported,
-        )
-        .await
-        .expect("create the test catalog");
+        create_catalog(&db, name, imported).await;
         let options = ImportOptions {
             replace: false,
             scope: ImportScope::Everything,
@@ -99,6 +88,44 @@ pub(crate) async fn app_at(
             .await
             .expect("import the test files");
     }
+    load(db, config, clock).await
+}
+
+/// Creates each catalog without importing anything, so each holds only its
+/// starter files (`index.md` and `log.md`), as a catalog created through
+/// `POST /catalogs` does; loads the app with the system clock.
+///
+/// # Arguments
+/// * `names` - the catalogs, in creation order.
+/// * `config` - the server's settings.
+///
+/// # Returns
+/// The loaded app and its database.
+///
+/// # Panics
+/// If the database, a create or the load fails: a broken test setup.
+pub(crate) async fn app_with_new(names: &[&str], config: Config) -> TestApp {
+    let db = crate::db::test_db().await;
+    for name in names {
+        create_catalog(&db, name, Utc::now()).await;
+    }
+    load(db, config, Arc::new(SystemClock)).await
+}
+
+/// Creates catalog `name`, owned by the fixture team, at `at`.
+async fn create_catalog(db: &TestDb, name: &str, at: DateTime<Utc>) {
+    let new = catalogs::NewCatalog {
+        name,
+        description: "",
+        owner_team: crate::db::TEST_TEAM,
+    };
+    catalogs::create(&db.pool, &new, &AuditActor::cli(), at)
+        .await
+        .expect("create the test catalog");
+}
+
+/// Loads the app over `db` with `clock`.
+async fn load(db: TestDb, config: Config, clock: Arc<dyn Clock>) -> TestApp {
     // Test apps only enqueue (Decision 19); the investigator test serves one.
     let mut config = config;
     config.mail.worker = false;

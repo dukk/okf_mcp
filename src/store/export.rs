@@ -164,7 +164,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn an_empty_catalog_exports_an_empty_archive_and_unknown_ones_fail() {
+    async fn a_new_catalog_exports_its_starter_files_and_unknown_ones_fail() {
         let db = test_db().await;
         catalogs::create(
             &db.pool,
@@ -182,9 +182,10 @@ mod tests {
         let (tarball, generation) = export(&db.pool, "pg", Vec::new()).await.unwrap();
         let unknown = export(&db.pool, "nope", Vec::new()).await;
 
-        assert!(archive::read_tarball(tarball.as_slice(), u64::MAX)
-            .unwrap()
-            .is_empty());
+        // A new catalog holds only its starter files.
+        let exported = archive::read_tarball(tarball.as_slice(), u64::MAX).unwrap();
+        let paths: Vec<&str> = exported.keys().map(String::as_str).collect();
+        assert_eq!(paths, ["index.md", "log.md"]);
         assert_eq!(generation, 0);
         assert!(matches!(unknown, Err(OkfError::CatalogNotSelected { .. })));
     }

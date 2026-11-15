@@ -407,6 +407,8 @@ mod tests {
     #[tokio::test]
     async fn a_slow_upload_is_503_and_imports_nothing() {
         let test = app_with(&[("pg", &[])], Config::default()).await;
+        let before = stored(&test).await;
+        let files_before = test.app.catalog("pg").unwrap().current().files();
         let archive = tarball();
         let (head, tail) = archive.split_at(archive.len() / 2);
         // An in-memory pipe: the request body reads `reader` as `writer`
@@ -436,8 +438,11 @@ mod tests {
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(json["error"], "Timeout");
         assert!(late.is_err(), "the late bytes were read: {late:?}");
-        assert_eq!(stored(&test).await, (0, 0));
-        assert_eq!(test.app.catalog("pg").unwrap().current().files(), 0);
+        assert_eq!(stored(&test).await, before);
+        assert_eq!(
+            test.app.catalog("pg").unwrap().current().files(),
+            files_before
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

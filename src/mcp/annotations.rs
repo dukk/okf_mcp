@@ -46,6 +46,7 @@ const STAGED: &[&str] = &[
     "open_changeset",
     "question",
     "remove_source",
+    "repair_indexes",
     "replace_body",
     "review",
     "revert",
@@ -123,7 +124,7 @@ fn every_tool_is_classified_exactly_once() {
         registered, classified,
         "the registered tools and the classified tools differ"
     );
-    assert_eq!(registered.len(), 41);
+    assert_eq!(registered.len(), 42);
 }
 
 #[test]

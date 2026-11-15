@@ -138,7 +138,7 @@ pub struct ServeArgs {
 /// `okf-mcp catalog ...`.
 #[derive(Debug, Subcommand)]
 pub enum CatalogCommand {
-    /// Create an empty catalog.
+    /// Create a catalog holding only a root index.md and a log.md.
     Create {
         /// Its name (`[a-z0-9-]+`).
         name: String,
@@ -2079,10 +2079,12 @@ mod tests {
             .await
             .unwrap();
 
-        let rows: Vec<(String, String)> = sqlx::query_as("SELECT path, updated_by FROM documents")
-            .fetch_all(&db.pool)
-            .await
-            .unwrap();
+        // Live documents: the starter log.md the import dropped is a tombstone.
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT path, updated_by FROM documents WHERE deleted_at IS NULL")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
         assert_eq!(rows, [("index.md".to_string(), "test".to_string())]);
     }
 
@@ -2133,10 +2135,12 @@ mod tests {
         .await
         .unwrap_err();
 
-        let rows: Vec<(String, bool)> = sqlx::query_as("SELECT path, executable FROM documents")
-            .fetch_all(&db.pool)
-            .await
-            .unwrap();
+        // Live documents: the starter files the import dropped are tombstones.
+        let rows: Vec<(String, bool)> =
+            sqlx::query_as("SELECT path, executable FROM documents WHERE deleted_at IS NULL")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
         assert_eq!(rows, [("tools/run.sh".to_string(), true)]);
         assert!(error
             .to_string()

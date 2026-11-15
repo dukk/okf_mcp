@@ -2,6 +2,12 @@
 //! `ensure_index` (`:1471`). Each writes through the workspace and records
 //! the [`ReplayOp`]s that redo its edit at publish (see [`mod@super::replay`]).
 //!
+//! Also two server-only pieces `okf.py` has no command for (issue #426): the
+//! [`starter_files`] a new catalog is created with, and [`repair_indexes`],
+//! which creates the root `index.md` and `log.md`, folder indexes and listings
+//! a catalog is missing, so a catalog created empty can be repaired through a
+//! changeset.
+//!
 //! Divergences from `okf.py`:
 //! - a missing `log.md` is [`OkfError::NotFound`] (okf.py: `no log.md at <root>`);
 //! - `ensure_index` upper-cases a folder name's first character where
@@ -13,19 +19,33 @@
 //!   `okf.py` crashes (`AttributeError` on `.replace`). Scalar titles such as
 //!   `2026` or `true` are strings in both parsers, so they list alike.
 
+use std::collections::BTreeSet;
+
+use chrono::{DateTime, Utc};
+
 use crate::error::OkfError;
+use crate::okf::doc::Doc;
 use crate::okf::ops::replay::{
     folder_heading, insert_index_bullet_text, lists_target, log_text, missing_heading,
-    new_index_text, ReplayOp,
+    new_index_text, root_index_text, ReplayOp, LOG_TEMPLATE,
 };
 use crate::okf::ops::{load_concept, refused, LogKind, OpContext, OpOutcome};
-use crate::okf::paths::{basename, dirname, join};
+use crate::okf::paths::{basename, dirname, is_concept, join};
 use crate::okf::pystr::is_py_space;
+use crate::okf::rules::is_machinery;
 use crate::okf::workspace::Workspace;
 use crate::okf::yaml::Value;
 
 /// The catalog's log, at the root.
 const LOG: &str = "log.md";
+/// The root index.
+const ROOT_INDEX: &str = "index.md";
+/// A folder's index file name.
+const INDEX: &str = "index.md";
+/// The summary of a folder listing nobody has described yet.
+const FOLDER_TODO: &str = "TODO: describe this folder";
+/// The summary of a concept listing whose concept has no `description`.
+const CONCEPT_TODO: &str = "TODO: describe this concept";
 /// The heading folder listings go under.
 const SECTIONS: &str = "Sections";
 
@@ -229,8 +249,36 @@ pub fn ensure_index(
     );
     let parent = dirname(folder);
     ensure_index(workspace, parent, outcome)?;
-    let parent_index = join(parent, "index.md");
+    let parent_index = join(parent, INDEX);
     let parent_text = workspace.read_text(&parent_index)?;
+    insert_folder_listing(workspace, folder, &parent_text, outcome)?;
+    outcome.notes.push(format!(
+        "created /{folder}/index.md; replace its TODO lines (and the parent's listing)"
+    ));
+    Ok(())
+}
+
+/// `ensure_index`'s listing of `folder` in its parent's index:
+/// `* [<Folder name>](<name>/) - TODO: describe this folder` under
+/// `# Sections` (created when missing), with an absolute `/<folder>/` href
+/// when the parent's bullets are absolute. It does not check whether the
+/// parent lists the folder already ([`repair_indexes`] does, first).
+///
+/// # Arguments
+/// * `workspace` - the catalog.
+/// * `folder` - catalog-relative folder, not the root.
+/// * `parent_text` - the parent's `index.md`, as read.
+/// * `outcome` - gains the parent's `ListBullet` replay op.
+///
+/// # Errors
+/// The workspace's write error.
+fn insert_folder_listing(
+    workspace: &dyn Workspace,
+    folder: &str,
+    parent_text: &str,
+    outcome: &mut OpOutcome,
+) -> Result<(), OkfError> {
+    let parent_index = join(dirname(folder), INDEX);
     let absolute = parent_text
         .split('\n')
         .any(|line| line.starts_with("* [") && line.contains("](/"));
@@ -239,26 +287,230 @@ pub fn ensure_index(
     } else {
         format!("{}/", basename(folder))
     };
-    let bullet = format!(
-        "* [{}]({href}) - TODO: describe this folder",
-        folder_heading(folder)
-    );
-    let updated = insert_index_bullet_text(&parent_text, &bullet, Some(SECTIONS), true)
+    let bullet = format!("* [{}]({href}) - {FOLDER_TODO}", folder_heading(folder));
+    let updated = insert_index_bullet_text(parent_text, &bullet, Some(SECTIONS), true)
         .expect("create_section always finds a place for the bullet");
     workspace.write_atomic(&parent_index, &updated)?;
     outcome.record(
         &parent_index,
         ReplayOp::ListBullet {
-            target: index_path,
+            target: join(folder, INDEX),
             bullet,
             section: Some(SECTIONS.to_string()),
             create_section: true,
         },
     );
-    outcome.notes.push(format!(
-        "created /{folder}/index.md; replace its TODO lines (and the parent's listing)"
-    ));
     Ok(())
+}
+
+/// How many [`starter_files`] a new catalog holds.
+pub const STARTER_FILE_COUNT: usize = 2;
+
+/// The files a new catalog starts with: a root `index.md` and a `log.md`
+/// with one `Creation` entry, so the bookkeeping tools (`log`, `index`,
+/// `create_concept` with `index_summary`) work in it at once. They follow
+/// `okf-catalog-template`'s skeleton, without its people and projects.
+///
+/// # Arguments
+/// * `name` - the catalog's name, the index's heading.
+/// * `description` - the catalog's description, the index's paragraph (a
+///   TODO line when blank).
+/// * `now` - the creation time; its UTC date heads the log entry.
+///
+/// # Returns
+/// `(path, text)` pairs, sorted by path.
+///
+/// # Examples
+/// ```
+/// use chrono::{TimeZone, Utc};
+/// use okf_mcp::okf::ops::starter_files;
+/// let now = Utc.with_ymd_and_hms(2026, 11, 14, 12, 0, 0).unwrap();
+/// let files = starter_files("pg", "Systems.", now);
+/// assert_eq!(files[0].0, "index.md");
+/// assert!(files[0].1.contains("okf_version") && files[0].1.contains("# pg\n\nSystems.\n"));
+/// assert!(files[1].1.ends_with("## 2026-11-14\n\n* **Creation:** Created the catalog.\n"));
+/// ```
+pub fn starter_files(
+    name: &str,
+    description: &str,
+    now: DateTime<Utc>,
+) -> [(&'static str, String); STARTER_FILE_COUNT] {
+    let date = now.format("%Y-%m-%d").to_string();
+    let bullet = format!("* **{}:** Created the catalog.", LogKind::Creation.as_str());
+    let log = log_text(LOG_TEMPLATE, &date, &bullet)
+        .expect("an empty log has no entry under any date yet");
+    [(ROOT_INDEX, root_index_text(name, description)), (LOG, log)]
+}
+
+/// Creates whatever bookkeeping a catalog is missing, never changing what
+/// it has: the root `index.md` and `log.md`, an `index.md` for every folder
+/// holding a concept or an index (and their ancestors), a listing of every
+/// folder index in its parent's `# Sections`, and a listing of every concept
+/// in its folder's index (where `index` puts it). Machinery is skipped,
+/// since no write tool may change it.
+///
+/// Existing text is only ever added to: headings, prose, bullets and
+/// summaries stay as they are, nothing is removed, and a target an index
+/// already links (however it is worded) is not listed again. So running it
+/// twice changes nothing the second time. Every edit is a replay op
+/// ([`ReplayOp::CreateIndex`], [`ReplayOp::CreateLog`],
+/// [`ReplayOp::ListBullet`]), so publish redoes it onto indexes that changed
+/// meanwhile instead of overwriting them.
+///
+/// A listing takes the concept's frontmatter `title` (else its first `# `
+/// heading, else its file name) and `description`; what is missing becomes
+/// a TODO placeholder, and each one gets a note.
+///
+/// # Arguments
+/// * `workspace` - the catalog.
+///
+/// # Returns
+/// The outcome: every file written, its replay ops, a summary message, and
+/// one note per created file and per placeholder.
+///
+/// # Errors
+/// The workspace's listing, read or write error. Files written before the
+/// error stay written, so run it on a scratch copy (as the write path does).
+pub fn repair_indexes(workspace: &dyn Workspace) -> Result<OpOutcome, OkfError> {
+    let markdown = workspace.list_markdown()?;
+    let mut outcome = OpOutcome::default();
+    let mut placeholders = 0_usize;
+    if !workspace.exists(ROOT_INDEX) {
+        workspace.write_atomic(ROOT_INDEX, &new_index_text(""))?;
+        outcome.record(
+            ROOT_INDEX,
+            ReplayOp::CreateIndex {
+                folder: String::new(),
+            },
+        );
+        outcome
+            .notes
+            .push("created /index.md; replace its heading and TODO line".to_string());
+        placeholders += 1;
+    }
+    if !workspace.exists(LOG) {
+        workspace.write_atomic(LOG, LOG_TEMPLATE)?;
+        outcome.record(LOG, ReplayOp::CreateLog);
+        outcome.notes.push("created /log.md".to_string());
+    }
+    // Every folder below the root that holds a concept or an index, sorted
+    // (a `BTreeSet` is a sorted set), so a parent comes before its children.
+    let concepts: Vec<&str> = markdown
+        .iter()
+        .map(String::as_str)
+        .filter(|path| is_concept(path) && !is_machinery(path))
+        .collect();
+    let folders: BTreeSet<&str> = markdown
+        .iter()
+        .map(String::as_str)
+        .filter(|path| !is_machinery(path) && (basename(path) == INDEX || is_concept(path)))
+        .map(dirname)
+        .filter(|folder| !folder.is_empty())
+        .collect();
+    for folder in folders {
+        let created = outcome.notes.len();
+        ensure_index(workspace, folder, &mut outcome)?;
+        // Each created index holds a TODO line, and so does its listing.
+        placeholders += 2 * (outcome.notes.len() - created);
+        let parent_index = join(dirname(folder), INDEX);
+        let parent_text = workspace.read_text(&parent_index)?;
+        if !lists_target(workspace, &parent_text, &parent_index, &join(folder, INDEX)) {
+            insert_folder_listing(workspace, folder, &parent_text, &mut outcome)?;
+            outcome.notes.push(format!(
+                "listed /{folder}/ in /{parent_index} with a TODO summary"
+            ));
+            placeholders += 1;
+        }
+    }
+    for concept in concepts {
+        let index_path = join(dirname(concept), INDEX);
+        let text = workspace.read_text(&index_path)?;
+        if lists_target(workspace, &text, &index_path, concept) {
+            continue;
+        }
+        let about = ConceptAbout::read(workspace, concept)?;
+        if about.title.is_none() {
+            outcome.notes.push(format!(
+                "listed /{concept} under its file name: it has no title"
+            ));
+            placeholders += 1;
+        }
+        if about.description.is_none() {
+            outcome.notes.push(format!(
+                "listed /{concept} with a TODO summary: it has no description"
+            ));
+            placeholders += 1;
+        }
+        let title = about
+            .title
+            .unwrap_or_else(|| folder_heading(concept.strip_suffix(".md").unwrap_or(concept)));
+        let listing = Listing {
+            concept,
+            title: &title,
+            summary: about.description.as_deref().unwrap_or(CONCEPT_TODO),
+            section: None,
+        };
+        list_concept(workspace, &listing, &mut outcome)?;
+    }
+    outcome.message = if outcome.touched.is_empty() {
+        "indexes complete: nothing to repair".to_string()
+    } else {
+        format!(
+            "repaired {} file(s); {placeholders} TODO placeholder(s) to fill in (see notes)",
+            outcome.touched.len()
+        )
+    };
+    Ok(outcome)
+}
+
+/// What a listing says about a concept, from its text.
+struct ConceptAbout {
+    /// Frontmatter `title`, else the first `# ` heading; whitespace collapsed.
+    title: Option<String>,
+    /// Frontmatter `description`; whitespace collapsed.
+    description: Option<String>,
+}
+
+impl ConceptAbout {
+    /// Reads a concept's title and description. Frontmatter that does not
+    /// parse counts as none: the listing gets placeholders instead of
+    /// failing the whole repair.
+    ///
+    /// # Arguments
+    /// * `workspace` - the catalog.
+    /// * `concept` - its catalog-relative path.
+    ///
+    /// # Errors
+    /// The workspace's read error.
+    fn read(workspace: &dyn Workspace, concept: &str) -> Result<Self, OkfError> {
+        let text = workspace.read_text(concept)?;
+        let doc = Doc::from_text(concept, &text);
+        // `.ok()` turns a parse error into `None`, like `except: data = None`.
+        let data = if doc.has_frontmatter() {
+            doc.parse().ok()
+        } else {
+            None
+        };
+        // Blank values count as missing, as `index`'s `title or ...` does.
+        let field = |key: &str| {
+            data.as_ref()
+                .and_then(|data| data.get(key))
+                .and_then(Value::as_str)
+                .map(collapse_whitespace)
+                .filter(|value| !value.is_empty())
+        };
+        let heading = || {
+            doc.body()
+                .split('\n')
+                .find_map(|line| line.strip_prefix("# "))
+                .map(collapse_whitespace)
+                .filter(|heading| !heading.is_empty())
+        };
+        Ok(Self {
+            title: field("title").or_else(heading),
+            description: field("description"),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -483,5 +735,264 @@ mod tests {
         ensure_index(&ws, "", &mut outcome).unwrap();
 
         assert_eq!(outcome, OpOutcome::default());
+    }
+
+    /// A catalog from before starter files: no root index or log, a curated
+    /// folder index that misses a concept and a subfolder, and machinery.
+    fn legacy() -> MemWorkspace {
+        MemWorkspace::from_files([
+            ("infra/index.md", LEGACY_INFRA),
+            (
+                "infra/time-server.md",
+                "---\ntype: System\ntitle: Time server\ndescription: GPS clock.\n---\n",
+            ),
+            (
+                "infra/ntp.md",
+                "---\ntype: Service\ntitle: NTP\ndescription: \"Keeps\\n   time.\"\n---\n",
+            ),
+            ("infra/hosts/web.md", "---\ntype: Host\n---\n# Web   host\n"),
+            ("a-note.md", "No frontmatter at all.\n"),
+            ("tools/helper.md", "# Tooling\n"),
+        ])
+    }
+
+    const LEGACY_INFRA: &str = concat!(
+        "# Infra\n\nOur systems, by hand.\n\n# Concepts\n\n",
+        "* [Time server](time-server.md) - curated words\n",
+    );
+
+    fn sorted(mut notes: Vec<String>) -> Vec<String> {
+        notes.sort();
+        notes
+    }
+
+    #[test]
+    fn repair_indexes_creates_what_an_empty_catalog_lacks() {
+        let ws = MemWorkspace::default();
+
+        let outcome = repair_indexes(&ws).unwrap();
+
+        assert_eq!(outcome.touched, ["index.md", "log.md"]);
+        assert_eq!(
+            ws.read_to_string("index.md").unwrap(),
+            "---\nokf_version: \"0.2\"\n---\n\n# Catalog\n\nTODO: say what this catalog holds.\n"
+        );
+        assert_eq!(
+            ws.read_to_string("log.md").unwrap(),
+            "# Knowledge Catalog Update Log\n"
+        );
+        assert_eq!(
+            outcome.replay["index.md"],
+            [ReplayOp::CreateIndex {
+                folder: String::new()
+            }]
+        );
+        assert_eq!(outcome.replay["log.md"], [ReplayOp::CreateLog]);
+        assert_eq!(
+            outcome.message,
+            "repaired 2 file(s); 1 TODO placeholder(s) to fill in (see notes)"
+        );
+        assert_eq!(
+            outcome.notes,
+            [
+                "created /index.md; replace its heading and TODO line",
+                "created /log.md"
+            ]
+        );
+    }
+
+    #[test]
+    fn repair_indexes_fills_a_legacy_catalog_and_keeps_its_curated_text() {
+        let ws = legacy();
+
+        let outcome = repair_indexes(&ws).unwrap();
+
+        assert_eq!(
+            outcome.touched,
+            [
+                "index.md",
+                "log.md",
+                "infra/hosts/index.md",
+                "infra/index.md"
+            ]
+        );
+        assert_eq!(
+            ws.read_to_string("index.md").unwrap(),
+            concat!(
+                "---\nokf_version: \"0.2\"\n---\n\n# Catalog\n\n",
+                "TODO: say what this catalog holds.\n\n# Concepts\n\n",
+                "* [A note](a-note.md) - TODO: describe this concept\n\n# Sections\n\n",
+                "* [Infra](infra/) - TODO: describe this folder\n",
+            )
+        );
+        // The curated prose and listing stay; the missing ones are added.
+        assert_eq!(
+            ws.read_to_string("infra/index.md").unwrap(),
+            concat!(
+                "# Infra\n\nOur systems, by hand.\n\n# Concepts\n\n",
+                "* [Time server](time-server.md) - curated words\n",
+                "* [NTP](ntp.md) - Keeps time.\n\n# Sections\n\n",
+                "* [Hosts](hosts/) - TODO: describe this folder\n",
+            )
+        );
+        assert_eq!(
+            ws.read_to_string("infra/hosts/index.md").unwrap(),
+            concat!(
+                "# Hosts\n\nTODO: say what this folder holds.\n\n# Concepts\n\n",
+                "* [Web host](web.md) - TODO: describe this concept\n",
+            )
+        );
+        // Machinery is never written: no write tool may change it.
+        assert!(!ws.exists("tools/index.md"));
+        assert_eq!(
+            outcome.message,
+            "repaired 4 file(s); 7 TODO placeholder(s) to fill in (see notes)"
+        );
+        assert_eq!(
+            sorted(outcome.notes),
+            [
+                "created /index.md; replace its heading and TODO line",
+                "created /infra/hosts/index.md; replace its TODO lines (and the parent's listing)",
+                "created /log.md",
+                "listed /a-note.md under its file name: it has no title",
+                "listed /a-note.md with a TODO summary: it has no description",
+                "listed /infra/ in /index.md with a TODO summary",
+                "listed /infra/hosts/web.md with a TODO summary: it has no description",
+            ]
+        );
+        // Every edit of an index is a replay op, so publish never overwrites
+        // an index that changed meanwhile.
+        assert_eq!(
+            outcome.replay["infra/index.md"],
+            [
+                ReplayOp::ListBullet {
+                    target: "infra/hosts/index.md".to_string(),
+                    bullet: "* [Hosts](hosts/) - TODO: describe this folder".to_string(),
+                    section: Some("Sections".to_string()),
+                    create_section: true,
+                },
+                ReplayOp::ListBullet {
+                    target: "infra/ntp.md".to_string(),
+                    bullet: "* [NTP](ntp.md) - Keeps time.".to_string(),
+                    section: None,
+                    create_section: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn repair_indexes_twice_changes_nothing_the_second_time() {
+        let ws = legacy();
+        repair_indexes(&ws).unwrap();
+        let before = ws.read_to_string("infra/index.md").unwrap();
+
+        let again = repair_indexes(&ws).unwrap();
+
+        assert_eq!(again.touched, Vec::<String>::new());
+        assert!(again.replay.is_empty() && again.notes.is_empty());
+        assert_eq!(again.message, "indexes complete: nothing to repair");
+        assert_eq!(ws.read_to_string("infra/index.md").unwrap(), before);
+    }
+
+    #[test]
+    fn repair_indexes_accepts_any_wording_of_an_existing_listing() {
+        // Absolute links, a folder linked by its index file, and a concept
+        // listed under # Sections all count as listed: nothing is duplicated.
+        let root = concat!(
+            "---\nokf_version: \"0.2\"\n---\n# Root\n\n# Sections\n\n",
+            "* [Ops, by hand](/ops/index.md) - curated\n* [Top](/top.md) - misfiled\n",
+        );
+        let ws = MemWorkspace::from_files([
+            ("index.md", root),
+            ("log.md", "# Log\n"),
+            ("top.md", "---\ntype: Note\ntitle: Top\n---\n"),
+            ("ops/index.md", "# Ops\n\n* [Run](/ops/run.md) - curated\n"),
+            ("ops/run.md", "---\ntype: Note\ntitle: Run\n---\n"),
+            ("ops/deep/index.md", "# Deep\n"),
+        ]);
+
+        let outcome = repair_indexes(&ws).unwrap();
+
+        // Only the unlisted folder index is listed, in its parent's style.
+        assert_eq!(outcome.touched, ["ops/index.md"]);
+        assert_eq!(ws.read_to_string("index.md").unwrap(), root);
+        assert_eq!(
+            ws.read_to_string("ops/index.md").unwrap(),
+            concat!(
+                "# Ops\n\n* [Run](/ops/run.md) - curated\n\n# Sections\n\n",
+                "* [Deep](/ops/deep/) - TODO: describe this folder\n",
+            )
+        );
+        assert_eq!(
+            outcome.notes,
+            ["listed /ops/deep/ in /ops/index.md with a TODO summary"]
+        );
+    }
+
+    #[test]
+    fn repair_indexes_lists_a_concept_whose_frontmatter_does_not_parse() {
+        let ws = MemWorkspace::from_files([
+            ("index.md", "---\nokf_version: \"0.2\"\n---\n# Root\n"),
+            ("log.md", "# Log\n"),
+            (
+                "broken.md",
+                "---\ntitle: [unclosed\n---\n# Broken heading\n",
+            ),
+        ]);
+
+        let outcome = repair_indexes(&ws).unwrap();
+
+        assert_eq!(
+            ws.read_to_string("index.md").unwrap(),
+            concat!(
+                "---\nokf_version: \"0.2\"\n---\n# Root\n\n# Concepts\n\n",
+                "* [Broken heading](broken.md) - TODO: describe this concept\n",
+            )
+        );
+        assert_eq!(
+            outcome.notes,
+            ["listed /broken.md with a TODO summary: it has no description"]
+        );
+    }
+
+    #[test]
+    fn starter_files_are_a_titled_root_index_and_a_dated_log() {
+        let [(index_path, index_text), (log_path, log_text)] =
+            starter_files("pg", "  Systems\n and   people. ", ctx().now);
+        let [(_, untitled), _] = starter_files("bare", " ", ctx().now);
+
+        assert_eq!((index_path, log_path), ("index.md", "log.md"));
+        assert_eq!(
+            index_text,
+            "---\nokf_version: \"0.2\"\n---\n\n# pg\n\nSystems and people.\n"
+        );
+        assert_eq!(
+            untitled,
+            "---\nokf_version: \"0.2\"\n---\n\n# bare\n\nTODO: say what this catalog holds.\n"
+        );
+        assert_eq!(
+            log_text,
+            concat!(
+                "# Knowledge Catalog Update Log\n\n## 2026-10-27\n\n",
+                "* **Creation:** Created the catalog.\n",
+            )
+        );
+        // The bookkeeping tools work on them at once.
+        let ws = MemWorkspace::from_files([
+            (index_path, index_text.as_str()),
+            (log_path, log_text.as_str()),
+            ("a.md", "---\ntype: Note\ntitle: A\n---\n"),
+        ]);
+        assert_eq!(
+            index(&ws, &ctx(), "a", "first", None, None)
+                .unwrap()
+                .message,
+            "index.md: * [A](a.md) - first"
+        );
+        assert_eq!(
+            log(&ws, &ctx(), LogKind::Update, "x").unwrap().touched,
+            ["log.md"]
+        );
     }
 }

@@ -77,7 +77,7 @@ export async function render(main) {
             toast(`Created catalog ${name}.`, 'ok');
             await settled(ticket);
         });
-        ticket.open('New catalog', 'An empty catalog; import a .tar.gz into it next.', form);
+        ticket.open('New catalog', 'Starts with an index.md and a log.md; agents can add to it at once, or import a .tar.gz into it next.', form);
     }
 
     async function openEdit(row) {

@@ -57,11 +57,16 @@ pub enum ReplayOp {
         /// Create the heading when it is missing (folder listings under `# Sections`).
         create_section: bool,
     },
-    /// `ensure_index`: create a folder's `index.md` unless it exists.
+    /// `ensure_index` and `repair_indexes`: create a folder's `index.md`
+    /// unless it exists.
     CreateIndex {
-        /// Catalog-relative folder, `infra/hosts`.
+        /// Catalog-relative folder, `infra/hosts`; `""` is the root, whose
+        /// index is `new_index_text`'s root template (an `okf_version`
+        /// frontmatter, a heading and a TODO line).
         folder: String,
     },
+    /// `repair_indexes`: create the root `log.md` unless it exists.
+    CreateLog,
     /// `move_concept` and `delete_concept`: remove the first bullet of an
     /// `index.md` that links `target`.
     Unlist {
@@ -84,8 +89,8 @@ pub enum ReplayOp {
 /// Redoes `ops` on a file's current text (design "Publish", step 3).
 ///
 /// Idempotent where publish needs it: a log bullet already under its date,
-/// a listing whose `target` the index already links, a `CreateIndex` of a
-/// file that exists, an `Unlist` whose listing is gone, and a `Relink` with
+/// a listing whose `target` the index already links, a `CreateIndex` or
+/// `CreateLog` of a file that exists (someone else's text wins), an `Unlist` whose listing is gone, and a `Relink` with
 /// no link left into its source all leave the text alone. Text that no operation
 /// changes is returned byte for byte; text a bookkeeping edit changed has
 /// `\n` endings, as `okf.py` writes it, while a `Relink` keeps the file's
@@ -128,6 +133,7 @@ pub fn replay(path: &str, current: Option<&str>, ops: &[ReplayOp]) -> Result<Str
     for op in ops {
         let updated = match op {
             ReplayOp::CreateIndex { folder } => text.is_none().then(|| new_index_text(folder)),
+            ReplayOp::CreateLog => text.is_none().then(|| LOG_TEMPLATE.to_string()),
             ReplayOp::Log { date, bullet } => {
                 log_text(&universal_newlines(present(path, &text)?), date, bullet)
             }
@@ -308,8 +314,40 @@ pub(crate) fn folder_heading(folder: &str) -> String {
     capitalize(&basename(folder).replace('-', " "))
 }
 
-/// The `index.md` `ensure_index` writes for a new folder.
+/// The first lines of a new `log.md`: its heading, which `log` adds dated
+/// entries under (`okf-catalog-template`'s `install/skeleton/log.md`).
+pub(crate) const LOG_TEMPLATE: &str = "# Knowledge Catalog Update Log\n";
+
+/// The heading of a root `index.md` that `repair_indexes` (or its replay)
+/// creates, which knows no catalog name.
+const ROOT_HEADING: &str = "Catalog";
+
+/// The placeholder line of a root `index.md` with nothing to say yet.
+pub(crate) const ROOT_TODO: &str = "TODO: say what this catalog holds.";
+
+/// A root `index.md`: the `okf_version` lint requires there, a heading and
+/// one paragraph (`okf-catalog-template`'s `install/skeleton/index.md`,
+/// without its sections, which a catalog grows as it gains folders).
+///
+/// # Arguments
+/// * `heading` - the `# ` heading, the catalog's name when it is known.
+/// * `about` - the paragraph under it; its whitespace collapses to single
+///   spaces, and a blank one becomes [`ROOT_TODO`].
+///
+/// # Returns
+/// The file's text, ending in a newline.
+pub(crate) fn root_index_text(heading: &str, about: &str) -> String {
+    let about = crate::okf::ops::log_index::collapse_whitespace(about);
+    let about = if about.is_empty() { ROOT_TODO } else { &about };
+    format!("---\nokf_version: \"0.2\"\n---\n\n# {heading}\n\n{about}\n")
+}
+
+/// The `index.md` `ensure_index` writes for a new folder; for the root
+/// (`""`), the [`root_index_text`] `repair_indexes` writes.
 pub(crate) fn new_index_text(folder: &str) -> String {
+    if folder.is_empty() {
+        return root_index_text(ROOT_HEADING, "");
+    }
     format!(
         "# {}\n\nTODO: say what this folder holds.\n",
         folder_heading(folder)
@@ -737,6 +775,55 @@ mod tests {
             no_heading,
             OkfError::Refused { ref reason } if reason == "no heading 'Nowhere' in people/index.md"
         ));
+    }
+
+    #[test]
+    fn create_index_of_the_root_and_create_log_keep_text_that_exists() {
+        let root = [ReplayOp::CreateIndex {
+            folder: String::new(),
+        }];
+        let log = [ReplayOp::CreateLog];
+
+        let new_root = replay("index.md", None, &root).unwrap();
+        let kept_root = replay("index.md", Some("# Mine\n"), &root).unwrap();
+        let new_log = replay("log.md", None, &log).unwrap();
+        let kept_log = replay("log.md", Some("# Log\n\n## x\n"), &log).unwrap();
+
+        assert_eq!(new_root, new_index_text(""));
+        assert!(new_root.starts_with("---\nokf_version: \"0.2\"\n---\n"));
+        assert_eq!(kept_root, "# Mine\n");
+        assert_eq!(new_log, LOG_TEMPLATE);
+        assert_eq!(kept_log, "# Log\n\n## x\n");
+        assert_eq!(
+            serde_json::to_value(&log[0]).unwrap(),
+            json!({"op": "create_log"})
+        );
+    }
+
+    #[test]
+    fn repair_ops_replay_onto_a_root_index_created_meanwhile() {
+        // A repair in one changeset creates the root and lists a concept and
+        // a folder; meanwhile someone else published a curated root.
+        let workspace = MemWorkspace::from_files([
+            (
+                "a.md",
+                "---\ntype: Note\ntitle: A\ndescription: First.\n---\n",
+            ),
+            ("ops/index.md", "# Ops\n"),
+        ]);
+        let outcome = crate::okf::ops::repair_indexes(&workspace).unwrap();
+        let curated = "---\nokf_version: \"0.2\"\n---\n# Ours\n\nCurated words.\n";
+
+        let replayed = replay("index.md", Some(curated), &outcome.replay["index.md"]).unwrap();
+
+        assert_eq!(
+            replayed,
+            concat!(
+                "---\nokf_version: \"0.2\"\n---\n# Ours\n\nCurated words.\n\n",
+                "# Concepts\n\n* [A](a.md) - First.\n\n",
+                "# Sections\n\n* [Ops](ops/) - TODO: describe this folder\n",
+            )
+        );
     }
 
     #[test]
