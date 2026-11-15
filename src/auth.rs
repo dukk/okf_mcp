@@ -450,7 +450,13 @@ impl Principal {
                 .and_then(|id| self.gates.people.get(id))
                 .copied(),
             actor_label: actor.stored_label(),
-            operator: actor.operator,
+            // As `audit::record` marks it: an operator credential, or a
+            // credential of an admin user.
+            operator: actor.operator
+                || self
+                    .user_id
+                    .as_deref()
+                    .is_some_and(|id| self.gates.admins.contains(id)),
             ip: requester.ip,
             catalog: catalog.to_string(),
             scope,
