@@ -1527,13 +1527,14 @@ on the command line only queue. Two workers never send the same mail.
 
 - A provider error that may pass is retried: a network error, Postmark 401,
   429 or 5xx, an SMTP 4xx, and for SES a timeout, throttling or a sending
-  quota, a 5xx, a paused or suspended account, and any credential or
-  authorization failure (no credentials found, an expired token,
-  `AccessDenied`). The first retry is 30 seconds later, doubling up to an
+  quota, any 408, 429 or 5xx, a paused or suspended account, and any
+  credential or authorization failure (no credentials found, any 401 or
+  403, an expired token, `AccessDenied`). The first retry is 30 seconds later, doubling up to an
   hour, for 24 hours from when the mail was queued.
 - A refusal fails the mail at once: an SMTP 5xx, any other Postmark error
   (422 among them), and for SES `MessageRejected`, an unverified MAIL FROM
   domain, a bad request (an invalid address among them) or any other 4xx.
+  An SES error is sorted by its error type, then by its HTTP status.
 - Failed mail keeps its last error. Sent mail is deleted after 7 days and
   failed mail after 30, by the server's hourly prune.
 - A job holds the rendered message, link included, until it is pruned: the

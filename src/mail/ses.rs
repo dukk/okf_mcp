@@ -7,16 +7,17 @@
 //! so each [`Mailer::send`] is one request, bounded by [`SES_TIMEOUT`].
 //!
 //! Classification:
-//! - retryable: throttling and sending quotas, SES 5xx, timeouts, network
-//!   errors, and every credential or authorization failure (no credentials
-//!   found, an expired or invalid token, `AccessDenied`): like Postmark's
+//! - retryable: throttling and sending quotas, any 5xx, 408 or 429,
+//!   timeouts, network errors, and every credential or authorization
+//!   failure (no credentials found, any 401 or 403, an expired or invalid
+//!   token, `AccessDenied`): like Postmark's
 //!   401, an operator can fix them within the queue's retry window, and a
 //!   Pod Identity agent that is briefly unreachable fixes itself;
 //! - also retryable: account-level holds (`SendingPaused`,
 //!   `AccountSuspended`), which say nothing about this message;
 //! - permanent: `MessageRejected`, an unverified MAIL FROM domain, a bad
 //!   request (an invalid address among them), a missing identity or
-//!   configuration set, and any other 4xx.
+//!   configuration set, and any other 4xx with no retryable code.
 //!
 //! Error text names SES's error code and message, never a credential or a
 //! message body.
@@ -27,6 +28,7 @@ use aws_config::meta::region::{ProvideRegion, RegionProviderChain};
 use aws_config::retry::RetryConfig;
 use aws_config::timeout::TimeoutConfig;
 use aws_config::{BehaviorVersion, Region};
+use aws_sdk_sesv2::config::http::HttpResponse;
 use aws_sdk_sesv2::error::{DisplayErrorContext, ProvideErrorMetadata, SdkError};
 use aws_sdk_sesv2::operation::send_email::SendEmailError;
 use aws_sdk_sesv2::types::{Body, Content, Destination, EmailContent, Message};
@@ -161,11 +163,8 @@ fn utf8(data: &str) -> Result<Content, MailError> {
 
 /// Sorts a failed `SendEmail` (see the module docs for the policy).
 // `SdkError<E, R>`: the SDK's error, generic over the operation's modeled
-// error `E` and the raw response type `R`.
-fn classify<R>(error: &SdkError<SendEmailError, R>) -> MailError
-where
-    R: std::fmt::Debug,
-{
+// error `E` and the raw response type `R` (here the SDK's HTTP response).
+fn classify(error: &SdkError<SendEmailError, HttpResponse>) -> MailError {
     let SdkError::ServiceError(service) = error else {
         // `DisplayErrorContext` prints the whole source chain (the
         // connector's or credential provider's reason), which has neither
@@ -194,11 +193,21 @@ where
         | SendEmailError::LimitExceededException(_)
         | SendEmailError::SendingPausedException(_)
         | SendEmailError::AccountSuspendedException(_) => MailError::Retryable(detail),
-        // Errors SES does not model for `SendEmail`: throttling, auth and
-        // server errors by code, everything else is a refusal.
-        _ if retryable_code(code) => MailError::Retryable(detail),
+        // Errors SES does not model for `SendEmail` (or an answer with no
+        // error type at all, such as a gateway's 502): throttling, auth and
+        // server errors by code or by status, everything else is a refusal.
+        _ if retryable_code(code) || retryable_status(service.raw().status().as_u16()) => {
+            MailError::Retryable(detail)
+        }
         _ => MailError::Permanent(detail),
     }
+}
+
+/// Whether an HTTP status may pass whatever its error code: a request
+/// timeout, throttling, a credential or authorization refusal (401, 403),
+/// or any server error.
+fn retryable_status(status: u16) -> bool {
+    matches!(status, 401 | 403 | 408 | 429 | 500..=599)
 }
 
 /// Whether an unmodeled SES error code may pass: throttling, a credential
@@ -441,6 +450,10 @@ mod tests {
             (400, "ThrottlingException"),
             (500, "InternalFailure"),
             (503, "ServiceUnavailable"),
+            // Unlisted codes on a retryable status.
+            (502, "SomeGatewayException"),
+            (504, "SomeFutureServerException"),
+            (408, "SomeTimeoutException"),
         ] {
             let (endpoint, mock) = mock_ses(status, Some(kind)).await;
 
@@ -457,12 +470,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_server_error_without_an_error_type_is_retryable() {
+        for status in [500, 502, 503] {
+            let (endpoint, _mock) = mock_ses(status, None).await;
+
+            let refused = mailer(&endpoint).send(&mail()).await.unwrap_err();
+
+            assert!(
+                matches!(refused, MailError::Retryable(_)),
+                "{status}: {refused:?}"
+            );
+            assert_clean(&refused);
+        }
+    }
+
+    #[tokio::test]
     async fn authorization_failures_are_retryable() {
         for (status, kind) in [
             (403, "AccessDeniedException"),
             (403, "UnrecognizedClientException"),
             (403, "InvalidSignatureException"),
             (403, "ExpiredTokenException"),
+            // Unlisted codes on 401 and 403.
+            (403, "OptInRequired"),
+            (401, "SomeFutureAuthException"),
         ] {
             let (endpoint, _mock) = mock_ses(status, Some(kind)).await;
 

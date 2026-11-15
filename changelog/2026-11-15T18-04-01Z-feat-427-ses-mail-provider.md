@@ -29,13 +29,20 @@
 - The SDK's own retries are disabled and each send is bounded at 30 s
   (10 s to connect): the mail queue owns retries, so an inner retry loop
   would only multiply attempts.
-- Credential and authorization failures (none found, expired or invalid
-  token, `AccessDenied`) are retryable, matching Postmark's 401 policy: an
-  operator can fix them within the 24-hour retry window. Account-level
+- Credential and authorization failures (none found, any 401 or 403,
+  expired or invalid token, `AccessDenied`) are retryable, matching
+  Postmark's 401 policy: an operator can fix them within the 24-hour retry
+  window. Account-level
   holds (`SendingPaused`, `AccountSuspended`) are retryable too.
   `MessageRejected`, an unverified MAIL FROM domain, bad requests, a
-  missing identity and other 4xx are permanent.
+  missing identity and other 4xx are permanent. An error SES does not
+  model for `SendEmail` is sorted by its code, then by its HTTP status:
+  401, 403, 408, 429 and every 5xx are retryable, so a gateway's 502 with
+  no error type does not fail the mail at once (found by the claims
+  audit).
 - Error text carries SES's error code and message only, never credentials
   or a message body; a test checks it.
 - Verified by reverting: with SDK retries on, the one-attempt test fails;
-  without the operation timeout, the stalled-send test fails.
+  without the operation timeout, the stalled-send test fails; without the
+  status fallback, the untyped-5xx, unlisted-code and authorization tests
+  fail.
