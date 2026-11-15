@@ -36,6 +36,7 @@ use crate::store::repair;
 use crate::store::settings::SettingKey;
 use crate::store::teams::Role;
 use crate::store::unlocks::Category;
+use crate::telemetry::{self, StartUp};
 
 // `src/cli/admin.rs`: the `settings` and `mail` handlers.
 mod admin;
@@ -714,6 +715,43 @@ fn parse_expiry(text: &str) -> Result<Duration, String> {
     humantime_serde::re::humantime::parse_duration(text).map_err(|error| error.to_string())
 }
 
+/// Runs `serve`: connects, loads the catalogs and serves until a signal.
+///
+/// # Arguments
+/// * `database_url` - `--database-url` / `DATABASE_URL`.
+/// * `config` - the loaded configuration (`--listen` overrides its address).
+/// * `args` - the `serve` flags.
+/// * `clock` - the source of every timestamp written.
+///
+/// # Errors
+/// Any failure to connect, load, bind or serve, with context.
+async fn serve(
+    database_url: Option<&str>,
+    mut config: Config,
+    args: ServeArgs,
+    clock: Arc<dyn Clock>,
+) -> anyhow::Result<()> {
+    let pool = connect(database_url, &config).await?;
+    if let Some(listen) = args.listen {
+        config.listen = listen;
+    }
+    let listen = config.listen;
+    let app = App::load(pool, config, clock)
+        .await
+        .context("load the catalogs")?;
+    let listener = TcpListener::bind(listen)
+        .await
+        .with_context(|| format!("listen on {listen}"))?;
+    tracing::info!(%listen, "serving");
+    let shutdown = CancellationToken::new();
+    // A background task; it cancels `shutdown` on the first signal.
+    tokio::spawn(cancel_on_signal(shutdown.clone()));
+    http::serve(app, listener, shutdown)
+        .await
+        .context("serve")?;
+    Ok(())
+}
+
 /// Runs one command line.
 ///
 /// # Arguments
@@ -724,34 +762,36 @@ fn parse_expiry(text: &str) -> Result<Duration, String> {
 /// # Errors
 /// Any failure, with context, for `main` to print.
 pub async fn run(cli: Cli, clock: Arc<dyn Clock>) -> anyhow::Result<()> {
-    // Read first so a bad file fails every command, not only `import`.
-    let config = Config::load(cli.config.as_deref())?;
+    // `serve` is also what no subcommand means.
+    let serving = matches!(cli.command, None | Some(Command::Serve(_)));
+    let env = |name: &str| std::env::var(name).ok();
+    // Reads the file first so a bad one fails every command, not only
+    // `import`; starts telemetry for `serve`; and drops its temporary
+    // start-up subscriber before the real one is installed below.
+    let StartUp { config, telemetry } =
+        telemetry::start_up(cli.config.as_deref(), serving, &env, std::io::stderr)?;
+    telemetry::install(
+        &config.telemetry,
+        telemetry.as_ref(),
+        env("RUST_LOG").as_deref(),
+    )?;
     // `unwrap_or_else` builds the default only when no subcommand was given.
     match cli
         .command
         .unwrap_or_else(|| Command::Serve(ServeArgs::default()))
     {
         Command::Serve(args) => {
-            let pool = connect(cli.database_url.as_deref(), &config).await?;
-            // `mut`: the flag may override the file.
-            let mut config = config;
-            if let Some(listen) = args.listen {
-                config.listen = listen;
+            let served = serve(cli.database_url.as_deref(), config, args, clock).await;
+            // The closed message only: the error's text can carry anything,
+            // and `main` prints the full chain to stderr.
+            if served.is_err() {
+                tracing::error!("serve failed");
             }
-            let listen = config.listen;
-            let app = App::load(pool, config, clock)
-                .await
-                .context("load the catalogs")?;
-            let listener = TcpListener::bind(listen)
-                .await
-                .with_context(|| format!("listen on {listen}"))?;
-            tracing::info!(%listen, "serving");
-            let shutdown = CancellationToken::new();
-            // A background task; it cancels `shutdown` on the first signal.
-            tokio::spawn(cancel_on_signal(shutdown.clone()));
-            http::serve(app, listener, shutdown)
-                .await
-                .context("serve")?;
+            // Flush last, so the line above is exported too.
+            if let Some(telemetry) = telemetry {
+                telemetry.shutdown().await;
+            }
+            served?;
         }
         Command::Migrate => {
             connect(cli.database_url.as_deref(), &config).await?;

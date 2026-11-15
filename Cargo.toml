@@ -75,6 +75,23 @@ lettre = { version = "0.11.23", default-features = false, features = ["tokio1-ru
 # `src/oidc.rs` adapts our reqwest 0.13 client instead (Decision 12).
 # `accept-string-booleans`: some providers send `"email_verified": "true"`.
 openidconnect = { version = "4.1.0", default-features = false, features = ["accept-string-booleans"] }
+# OpenTelemetry: spans and log events over OTLP/HTTP-protobuf (src/telemetry).
+# Every opentelemetry* crate is pinned at the release opentelemetry-prometheus
+# supports (Task 2): its reader must be the same SDK major as the provider,
+# or it is not the trait SdkMeterProvider accepts. Default features off: no
+# tonic (a second TLS stack), no blocking client. `reqwest-client` sends with
+# the async reqwest 0.13 below, on ring. The batch processors and the periodic
+# reader run on tokio (`rt-tokio` and the `experimental_*_with_async_runtime`
+# features). `internal-logs`: export failures become `tracing` events with the
+# exporting crate's name as target, which the OTLP layers turn off (they reach
+# stderr only).
+opentelemetry = { version = "0.33.1", default-features = false, features = ["trace", "logs", "metrics", "internal-logs"] }
+# Header extraction and injection for W3C trace context on http 1.x maps.
+opentelemetry-http = { version = "0.33.1", default-features = false }
+# `tracing` events as OTLP log records.
+opentelemetry-appender-tracing = { version = "0.33.1", default-features = false }
+opentelemetry-otlp = { version = "0.33.1", default-features = false, features = ["http-proto", "reqwest-client", "trace", "logs", "metrics", "internal-logs"] }
+opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["trace", "logs", "metrics", "internal-logs", "rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime", "experimental_logs_batch_log_processor_with_async_runtime", "experimental_metrics_periodicreader_with_async_runtime"] }
 # Markdown to HTML for the web console (src/render.rs), which escapes raw
 # HTML and filters link schemes itself. No default features: they only add
 # getopts for pulldown-cmark's own command-line tool.
@@ -125,7 +142,9 @@ toml = "1.1"
 # HTTP middleware: request tracing and timeouts.
 tower-http = { version = "0.6.11", features = ["trace", "timeout"] }
 tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["fmt", "env-filter"] }
+# `tracing` spans as OTLP spans. 0.34 is the release built on opentelemetry 0.33.
+tracing-opentelemetry = { version = "0.34.0", default-features = false }
+tracing-subscriber = { version = "0.3.19", features = ["fmt", "env-filter", "registry"] }
 # Parsing and checking OAuth URLs: CIMD client ids and redirect URIs
 # (`src/oauth/clients.rs`). Already in the tree through reqwest; pinned to
 # the same version so there is one copy.
@@ -140,6 +159,9 @@ webauthn-rs = { version = "0.6.2", features = ["conditional-ui"] }
 webauthn-rs-proto = "=0.6.2"
 
 [dev-dependencies]
+# The in-memory span, log and metric exporters the telemetry tests read back.
+# Features unify, so the test build gets them.
+opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["testing", "trace", "logs", "metrics"] }
 # Property-based tests (Hypothesis-backed); the library is imported as `hegel`.
 hegeltest = "0.50.3"
 # The end-to-end tests talk to the server as a real MCP client would.

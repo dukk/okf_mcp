@@ -594,10 +594,10 @@ let spans = opentelemetry_otlp::SpanExporter::builder()
     .with_http_client(http_client()?)
     .with_timeout(EXPORT_TIMEOUT)
     .build()
-    .map_err(|error| OkfError::Config { path: None, message: format!("OTLP span exporter: {error}") })?;
+    .map_err(|error| OkfError::Config { path: "[telemetry.otlp]".to_string(), message: format!("OTLP span exporter: {error}") })?;
 ```
 
-`LogExporter` is the same with `Signal::Logs`. `MetricExporter` uses `Signal::Metrics` and adds `.with_temporality(Temporality::Cumulative)`; Task 2 uses it. If `OkfError::Config`'s fields differ, follow its definition.
+`LogExporter` is the same with `Signal::Logs`. `MetricExporter` uses `Signal::Metrics` and adds `.with_temporality(Temporality::Cumulative)`; Task 2 uses it. `OkfError::Config { path: String, message }` has no `Option` path: telemetry problems use the path `[telemetry.otlp]` (`[telemetry]` from `install`).
 
 - **Counting exporters:** `CountingSpanExporter<E>` and `CountingLogExporter<E>`, exactly the probe's `CountingExporter`/`CountingLogExporter`, with a shared `ExportFailures` instead of a bare `AtomicU64`.
   - `ExportFailures` holds one `AtomicU64` per `(Signal, FailureReason)`, where `FailureReason` is `Timeout | Transport | Rejected | Other`.
@@ -785,6 +785,15 @@ Tests:
 If `set_global_default` fails (already set), return `OkfError::Config` ("a tracing subscriber is already installed"). Tests that call `cli::run` must not hit this; check `grep -rn "cli::run(" tests src`.
 
 Put the install sequence in one function, `telemetry::install(config, telemetry) -> Result<(), OkfError>`, called by `cli::run`. Regression test (its own integration-test binary, `tests/telemetry_install.rs`, since it sets the process's global subscriber): run the start-up sequence with a capturing writer, then emit an event **on the same thread** after `install`, and assert that the configured subscriber got it (the JSON format, so the line is distinguishable from the fallback's text) and the fallback did not.
+
+> **Corrected (issue #461, 2026-11-15).** What shipped differs from the sketches above in these ways; read `src/telemetry/` for the code.
+> - **`Config` is no longer `Eq`** (`sample_ratio` is an `f64`); it is still `PartialEq`.
+> - **The probe crate was not in the repository**, so `DispatchSlot`, `CaptureDispatch`, `JsonWithTrace` and the counting exporters were written from the verified facts. The batch processors come from the `*_with_async_runtime` modules (`BatchSpanProcessor`, `BatchLogProcessor`), not the crate-root ones.
+> - **Span-layer error options:** the layer turns off `with_error_fields_to_exceptions`, `with_error_records_to_exceptions`, `with_error_events_to_exceptions` and `with_error_events_to_status` (the plan's `with_error_records_to_exceptions(true)` put error text in `exception.message`, which the privacy rules forbid). An ERROR event still marks the span `Error`, with an empty description.
+> - **Filters are built per arm in `build_with_writer`:** a filter's type names its subscriber, so `settings.stderr.and(cap(false))` cannot be shared by the text and JSON arms. `build_with_writer` and `fallback(rust_log, writer)` take the stderr writer, so tests capture it.
+> - **`ShutdownReport { traces, logs }`** holds a `ProviderOutcome` each: `NotRunning`, `Flushed` (including an already shut-down provider), `Failed(message)` or `Abandoned`. `ShutdownReport::all_flushed()` is the assertion Task 7 wants. Task 2 adds a `metrics` field.
+> - **Start-up sequence:** `telemetry::start_up(path, serve, env, writer) -> StartUp { config, telemetry }` runs `Config::load` and `Telemetry::start` under the fallback and drops its guard on return; `telemetry::install(&config.telemetry, telemetry.as_ref(), rust_log)` then sets the global subscriber (`install_with_writer` for tests). `cli::run` calls both; the serve body moved to `cli::serve`, so `telemetry.shutdown()` runs after a failure too, after a closed-message `tracing::error!("serve failed")` (the error's text is not exported; `main` prints it).
+> - **The wire is tested** in `telemetry::tests::spans_and_logs_reach_the_receiver_with_their_headers` with a loopback receiver.
 
 - [ ] **Step 10: Gates and commit**
 

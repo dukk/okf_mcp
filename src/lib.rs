@@ -51,4 +51,5 @@ pub mod overlay;
 pub mod render;
 pub mod selection;
 pub mod store;
+pub mod telemetry;
 pub mod write;
