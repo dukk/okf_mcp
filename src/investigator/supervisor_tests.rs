@@ -702,6 +702,48 @@ async fn investigator_supervisor_maintenance_off_mid_run_is_a_stop_not_a_skip() 
 }
 
 #[tokio::test]
+async fn investigator_supervisor_maintenance_off_at_close_is_a_stop_after_every_receipt() {
+    let f = Fixture::new();
+    let mut c = f.client(1);
+    // Every submission is acknowledged; the owners turn maintenance off
+    // before the close.
+    c.fail = Some((AllowedTool::Close, RunnerError::MaintenanceOff));
+    let s = run(&f, &mut c, FakeInference::new(80)).await.unwrap();
+    assert_eq!(s.reason, "maintenance_off");
+    assert_eq!((s.failed, s.skipped), (0, 0), "the work counters are clean");
+    assert!(s.run_id.is_some());
+    assert_eq!(
+        s.exit_code(),
+        4,
+        "a claimed run that did not close is no skip"
+    );
+    let saved = f.store.load().unwrap().unwrap();
+    assert!(!saved.terminal, "the run is not closed yet");
+    let close = saved.pending.expect("the close stays for an exact replay");
+    assert_eq!(close.request.tool, AllowedTool::Close);
+
+    // Once maintenance is on again, the next run replays that close and the
+    // journal ends; the first stop stays its reported reason.
+    c.fail = None;
+    tokio::time::resume();
+    c.pause = true;
+    let s = run(&f, &mut c, FakeInference::new(80)).await.unwrap();
+    assert_eq!(s.reason, "maintenance_off");
+    assert_eq!(s.exit_code(), 4);
+    assert!(f.store.load().unwrap().unwrap().terminal);
+    let closes: Vec<_> = c
+        .calls
+        .iter()
+        .filter(|(_, r)| r.tool == AllowedTool::Close)
+        .map(|(_, r)| r.args["idempotency_key"].clone())
+        .collect();
+    assert_eq!(closes.len(), 2);
+    assert!(closes
+        .iter()
+        .all(|key| *key == close.request.args["idempotency_key"]));
+}
+
+#[tokio::test]
 async fn investigator_supervisor_revocation_during_inference_does_not_cleanup_remotely() {
     let f = Fixture::new();
     let mut c = f.client(2);

@@ -2563,3 +2563,29 @@ async fn a_run_ends_without_waiting_for_its_users_or_credentials_rows() {
         "the held row is skipped, not waited for"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_maintenance_run_entrys_findings_count_reads_one_run_by_index() {
+    let db = test_db().await;
+    let mut conn = db.pool.acquire().await.unwrap();
+    // The fixture tables are tiny, so the planner would scan them anyway:
+    // forbid the scan to see which index can serve the trigger's count.
+    sqlx::query("SET enable_seqscan = off")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+
+    let plan: Vec<String> = sqlx::query_scalar(
+        "EXPLAIN SELECT count(*) FROM maintenance_findings f \
+         WHERE f.catalog_id = 1 AND f.run_id = 'run'",
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .unwrap();
+
+    assert!(
+        plan.iter()
+            .any(|line| line.contains("maintenance_findings_run")),
+        "{plan:#?}"
+    );
+}

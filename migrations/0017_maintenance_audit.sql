@@ -18,6 +18,12 @@
 -- takes that lock anyway, and a row that forget_person is clearing (FOR
 -- UPDATE, during the user's deletion) is skipped rather than waited for;
 -- the entry then names no credential.
+-- The entry counts the run's findings while the run's transaction holds
+-- the catalog's locks; without this index that count would scan every
+-- finding the catalog ever had (0006 indexes findings by creation time and
+-- by work item, neither of which selects a run).
+CREATE INDEX maintenance_findings_run ON maintenance_findings (catalog_id, run_id);
+
 CREATE FUNCTION audit_maintenance_run() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
     credential bigint;
