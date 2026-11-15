@@ -1663,12 +1663,15 @@ mod tests {
     }
 
     /// Runs `set` to 4 and `reset` of `max_keys_per_user` at once, with an
-    /// override of 3 stored, and answers both results. The lock order is
-    /// forced: a held `server_state` row queues `set` on it first, then
-    /// `reset`; the hold is released only once both wait. Taken in the old
-    /// order (`reset` deleting before it bumps), `set` would win the
-    /// generation row and wait on the row `reset` deleted, while `reset`
-    /// waited on the generation row: a deadlock Postgres aborts.
+    /// override of 3 stored, and answers both results. Both are queued on a
+    /// held `server_state` row (`set` first, then `reset`), and the hold is
+    /// released only once both wait. Postgres does not promise to wake
+    /// row-lock waiters in the order they queued: the holder's `UPDATE`
+    /// leaves a new row version, and both waiters race for it, so either
+    /// may win. Taken in the old order (`reset` deleting before it bumps),
+    /// a `set` that won the generation row would wait on the row `reset`
+    /// deleted, while `reset` waited on the generation row: a deadlock
+    /// Postgres aborts.
     async fn set_and_reset_queued_on_the_generation_row(
         pool: &sqlx::PgPool,
     ) -> (Result<(), OkfError>, Result<(), OkfError>) {
@@ -1707,29 +1710,106 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_concurrent_set_and_reset_of_one_key_both_succeed_in_order() {
+    async fn a_concurrent_set_and_reset_of_one_key_both_succeed_in_either_order() {
         let db = test_db().await;
 
         let (set_result, reset_result) = set_and_reset_queued_on_the_generation_row(&db.pool).await;
 
         assert!(set_result.is_ok(), "{set_result:?}");
         assert!(reset_result.is_ok(), "{reset_result:?}");
+        // Every settings entry in id order: ids are taken under the
+        // generation row's lock, so this is the order the writes ran in.
+        let history: Vec<(String, Value)> = sqlx::query_as(
+            "SELECT action, details FROM audit_entries \
+             WHERE action IN ('setting.changed', 'setting.cleared') ORDER BY id",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        let stored: Option<Value> =
+            sqlx::query_scalar("SELECT value FROM server_settings WHERE key = $1")
+                .bind(SettingKey::MaxKeysPerUser.as_str())
+                .fetch_optional(&db.pool)
+                .await
+                .unwrap();
+        // The waiters may wake in either order (see the helper), so the
+        // stored state says which ran last, and the entries must be that
+        // serial history: each `from` is the value stored when it ran.
+        let entry = |action: &str, details: Value| (action.to_string(), details);
+        let stored_three = entry(
+            "setting.changed",
+            serde_json::json!({"from": null, "to": 3}),
+        );
+        let (expected, order) = match stored {
+            None => (
+                vec![
+                    stored_three,
+                    entry("setting.changed", serde_json::json!({"from": 3, "to": 4})),
+                    entry("setting.cleared", serde_json::json!({"from": 4})),
+                ],
+                "set ran first, and reset cleared what set stored",
+            ),
+            Some(value) => {
+                assert_eq!(value, serde_json::json!(4), "only set's 4 can be left");
+                (
+                    vec![
+                        stored_three,
+                        entry("setting.cleared", serde_json::json!({"from": 3})),
+                        entry(
+                            "setting.changed",
+                            serde_json::json!({"from": null, "to": 4}),
+                        ),
+                    ],
+                    "reset ran first, and set found no override",
+                )
+            }
+        };
+        assert_eq!(history, expected, "{order}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_set_queued_behind_a_new_override_records_it_as_from() {
+        use crate::http::api::testing::wait_for_lock_waiters;
+        let db = test_db().await;
+        // A held generation row whose transaction also inserts an override
+        // of 3, as a `set` that won the race would. Only a read taken after
+        // the generation lock sees it: a read before it, even `FOR UPDATE`,
+        // can neither see nor wait on a row inserted by an uncommitted
+        // transaction, and would record `from: null`.
+        let mut holder = db.pool.begin().await.unwrap();
+        bump_admin_generation(&mut holder).await.unwrap();
+        sqlx::query(
+            "INSERT INTO server_settings (key, value, updated_at, updated_by) \
+             VALUES ($1, $2, $3, 'carol')",
+        )
+        .bind(SettingKey::MaxKeysPerUser.as_str())
+        .bind(serde_json::json!(3))
+        .bind(now())
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+        let setter = tokio::spawn({
+            let pool = db.pool.clone();
+            async move { set(&pool, SettingKey::MaxKeysPerUser, "4", &by("alice"), now()).await }
+        });
+        wait_for_lock_waiters(&db.pool, 1).await;
+
+        holder.commit().await.unwrap();
+        let set_result = tokio::time::timeout(std::time::Duration::from_secs(30), setter)
+            .await
+            .expect("set finished within 30 s")
+            .expect("the set task did not panic");
+
+        assert!(set_result.is_ok(), "{set_result:?}");
         let changed = audit::testing::entries(&db.pool, "setting.changed").await;
-        let cleared = audit::testing::entries(&db.pool, "setting.cleared").await;
-        assert_eq!(changed[1].details, serde_json::json!({"from": 3, "to": 4}));
         assert_eq!(
-            cleared
+            changed
                 .iter()
                 .map(|e| e.details.clone())
                 .collect::<Vec<_>>(),
-            [serde_json::json!({"from": 4})],
-            "reset ran after set, and cleared what set stored"
+            [serde_json::json!({"from": 3, "to": 4})],
+            "set read the override after it waited, and found the 3 stored meanwhile"
         );
-        assert!(list(&db.pool, &defaults())
-            .await
-            .unwrap()
-            .iter()
-            .all(|row| !row.overridden));
     }
 
     #[tokio::test(flavor = "multi_thread")]
