@@ -49,7 +49,7 @@ use chrono::{DateTime, Utc};
 use humantime_serde::re::humantime;
 use serde::Serialize;
 use serde_json::Value;
-use sqlx::{PgConnection, PgPool};
+use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::config::{check_auth_duration, AuthConfig, MAX_KEYS_PER_USER_LIMIT};
 use crate::error::OkfError;
@@ -564,11 +564,13 @@ pub async fn brand_in(conn: &mut PgConnection) -> Result<Brand, OkfError> {
 }
 
 /// Every stored override.
-async fn stored(pool: &PgPool) -> Result<Vec<StoredSetting>, OkfError> {
+// `impl PgExecutor<'_>` takes a `&PgPool` or a `&mut PgConnection` (a
+// transaction), like a Python function typed against a protocol.
+async fn stored(executor: impl PgExecutor<'_>) -> Result<Vec<StoredSetting>, OkfError> {
     Ok(sqlx::query_as::<_, StoredSetting>(
         "SELECT key, value, updated_at, updated_by FROM server_settings",
     )
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await?)
 }
 
@@ -576,7 +578,8 @@ async fn stored(pool: &PgPool) -> Result<Vec<StoredSetting>, OkfError> {
 /// `App` itself when it loads or reloads) calls this.
 ///
 /// # Arguments
-/// * `pool` - the database.
+/// * `executor` - the database: the pool, or a transaction to read in
+///   (the key cache's gates read `require_unlock` in their snapshot).
 /// * `defaults` - the `[auth]` section.
 ///
 /// # Returns
@@ -584,8 +587,11 @@ async fn stored(pool: &PgPool) -> Result<Vec<StoredSetting>, OkfError> {
 ///
 /// # Errors
 /// [`OkfError::Database`]. An unreadable stored value is not an error.
-pub async fn load(pool: &PgPool, defaults: &AuthConfig) -> Result<Settings, OkfError> {
-    Ok(overlay(defaults, &stored(pool).await?))
+pub async fn load(
+    executor: impl PgExecutor<'_>,
+    defaults: &AuthConfig,
+) -> Result<Settings, OkfError> {
+    Ok(overlay(defaults, &stored(executor).await?))
 }
 
 /// What `settings list` shows as who wrote an override: the credential's

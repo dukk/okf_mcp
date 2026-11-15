@@ -21,13 +21,15 @@
 //! user never shows owners who it was.
 
 use chrono::{DateTime, TimeDelta, Utc};
-use sqlx::{PgConnection, PgPool};
+use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
 use crate::mail::queue;
 use crate::mail::templates::Template;
-use crate::store::audit::{self, Action, AuditActor, Entry, FixedPerson, People, RowLock, Target};
+use crate::store::audit::{
+    self, AccessKind, Action, AuditActor, Entry, FixedPerson, People, RowLock, Target,
+};
 use crate::store::catalogs::{self, bump_admin_generation, is_valid_name};
 
 /// `unlock_max_hours` with no override.
@@ -651,7 +653,8 @@ pub async fn list(pool: &PgPool, filter: &UnlockFilter<'_>) -> Result<Vec<Unlock
 /// expired, and of a user that still exists.
 ///
 /// # Arguments
-/// * `pool` - the database.
+/// * `executor` - the database: the pool, or the key cache's snapshot
+///   transaction (`impl PgExecutor<'_>` takes either).
 /// * `now` - the server clock.
 ///
 /// # Returns
@@ -659,7 +662,10 @@ pub async fn list(pool: &PgPool, filter: &UnlockFilter<'_>) -> Result<Vec<Unlock
 ///
 /// # Errors
 /// [`OkfError::Database`].
-pub async fn live(pool: &PgPool, now: DateTime<Utc>) -> Result<Vec<LiveUnlock>, OkfError> {
+pub async fn live(
+    executor: impl PgExecutor<'_>,
+    now: DateTime<Utc>,
+) -> Result<Vec<LiveUnlock>, OkfError> {
     Ok(sqlx::query_as::<_, LiveUnlock>(
         "SELECT u.id, u.user_id, c.name AS catalog, u.expires_at \
          FROM unlocks u JOIN catalogs c ON c.id = u.catalog_id \
@@ -667,8 +673,33 @@ pub async fn live(pool: &PgPool, now: DateTime<Utc>) -> Result<Vec<LiveUnlock>, 
          ORDER BY u.id",
     )
     .bind(now)
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await?)
+}
+
+/// Counts one request admitted under an unlock (spec Part 6: "reads,
+/// writes and exports are counted on the unlock"). Run in the background
+/// ([`crate::app::App::note_access`]); the unlock id was fixed at admission,
+/// so an unlock deleted with its catalog meanwhile is simply not found and
+/// nothing is updated.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `id` - the unlock's id.
+/// * `kind` - which count to add one to.
+///
+/// # Errors
+/// [`OkfError::Database`].
+pub async fn tally(pool: &PgPool, id: i64, kind: AccessKind) -> Result<(), OkfError> {
+    // One fixed statement per column: a column name cannot be a bind
+    // parameter. Every variant is named, so a new kind must pick a column.
+    let sql = match kind {
+        AccessKind::Read => "UPDATE unlocks SET reads = reads + 1 WHERE id = $1",
+        AccessKind::Write => "UPDATE unlocks SET writes = writes + 1 WHERE id = $1",
+        AccessKind::Export => "UPDATE unlocks SET exports = exports + 1 WHERE id = $1",
+    };
+    sqlx::query(sql).bind(id).execute(pool).await?;
+    Ok(())
 }
 
 #[cfg(test)]

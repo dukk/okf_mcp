@@ -558,6 +558,30 @@ pub(crate) async fn lock(conn: &mut PgConnection, catalog_id: i64) -> Result<(),
     Ok(())
 }
 
+/// Refuses a catalog that is no longer the incarnation a caller was
+/// admitted to: the access gates are loaded by name, so after a catalog is
+/// deleted and created again under its name, a request admitted from gates
+/// that predate the replacement (an unlock, a membership) must not reach
+/// the replacement. Shared by export and import, which look the catalog up
+/// by name in their own transaction.
+///
+/// # Arguments
+/// * `catalog` - the catalog's name, for the message.
+/// * `found` - the `catalogs.id` the transaction found.
+/// * `expected` - the id the caller was admitted to; `None` checks nothing.
+///
+/// # Errors
+/// [`OkfError::Busy`] on a mismatch: retryable, since a retry is admitted
+/// against fresh gates (and then refused or let in on its own terms).
+pub fn check_incarnation(catalog: &str, found: i64, expected: Option<i64>) -> Result<(), OkfError> {
+    match expected {
+        Some(expected) if expected != found => Err(OkfError::Busy {
+            reason: format!("catalog {catalog:?} was replaced since this request was admitted"),
+        }),
+        Some(_) | None => Ok(()),
+    }
+}
+
 /// Bumps `server_state.admin_generation` inside the caller's transaction.
 ///
 /// # Arguments
@@ -607,6 +631,19 @@ pub(crate) fn is_unique_violation(error: &sqlx::Error) -> bool {
 // `pub(crate)` so other store modules' tests share the lock helper below.
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn check_incarnation_refuses_only_another_catalog_id() {
+        assert!(
+            check_incarnation("main", 7, None).is_ok(),
+            "nothing to check"
+        );
+        assert!(check_incarnation("main", 7, Some(7)).is_ok());
+        assert!(matches!(
+            check_incarnation("main", 8, Some(7)),
+            Err(OkfError::Busy { .. })
+        ));
+    }
     use crate::db::{test_db, TEST_TEAM};
     use crate::store::audit::AuditActor;
     use chrono::TimeZone;

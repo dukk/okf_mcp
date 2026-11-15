@@ -9,13 +9,20 @@
 //! catalog, else the server's `default_catalog`, is the selection. Every
 //! name must exist and be reachable by the key: a list never grants.
 //!
-//! A suspended team's catalogs are refused when named and left out of a
-//! connection's list (milestone 13); admins are exempt.
+//! A closed catalog is refused when named and left out of a connection's
+//! list: one whose owner team is suspended (milestone 13; admins are
+//! exempt), and, through [`Principal::check_open`], one the caller may not
+//! open (milestone 14): with `require_unlock` on, operator staff without a
+//! live unlock, and the maintenance runner where the owners turned
+//! maintenance off. Reach is checked first, so a key that does not reach a
+//! catalog never learns it is closed.
 
 use axum::http::request::Parts;
+use chrono::{DateTime, Utc};
 
 use crate::auth::Principal;
 use crate::error::OkfError;
+use crate::store::keys::Access;
 
 /// The header naming a connection's catalogs (`pg,work`); HTTP header names
 /// are case-insensitive, and `http` stores them lowercase.
@@ -52,7 +59,8 @@ impl Selection {
 }
 
 /// Where a call's catalogs can come from, before the key's default.
-// `Copy`: three borrowed fields, so tests can build variants with `..base`.
+// `Copy`: borrowed fields and a timestamp, so tests can build variants with
+// `..base`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Sources<'a> {
     /// The tool call's `catalog` (as a one-name list) or `catalogs`.
@@ -61,6 +69,8 @@ pub struct Sources<'a> {
     pub connection: Option<&'a [String]>,
     /// The server's `default_catalog`.
     pub server_default: Option<&'a str>,
+    /// The server clock, for an unlock's expiry.
+    pub now: DateTime<Utc>,
 }
 
 /// Splits a comma-separated list, trimming names and dropping empty ones.
@@ -160,49 +170,63 @@ fn checked<'a>(
     Ok(Selection { catalogs })
 }
 
-/// `selection` refused whole if any of its catalogs is suspended: for a
-/// call that named them (its argument, or the key's or server's default).
+/// `selection` refused whole if any of its catalogs is closed
+/// ([`Principal::check_open`]): for a call that named them (its argument,
+/// or the key's or server's default).
 ///
 /// Every name in `selection` already passed the reach check, so a
-/// credential that does not reach a catalog never learns it is suspended.
+/// credential that does not reach a catalog never learns it is closed.
 ///
 /// # Arguments
-/// * `principal` - the calling key (an admin is never refused).
+/// * `principal` - the calling key.
 /// * `selection` - the checked selection.
+/// * `now` - the server clock.
 ///
 /// # Returns
 /// `selection`, unchanged.
 ///
 /// # Errors
-/// [`OkfError::Suspended`] for the first suspended catalog.
-fn refuse_suspended(principal: &Principal, selection: Selection) -> Result<Selection, OkfError> {
+/// The first closed catalog's refusal: [`OkfError::Suspended`],
+/// [`OkfError::UnlockRequired`] or [`OkfError::MaintenanceOff`].
+fn refuse_closed(
+    principal: &Principal,
+    selection: Selection,
+    now: DateTime<Utc>,
+) -> Result<Selection, OkfError> {
     for name in &selection.catalogs {
-        principal.check_not_suspended(name)?;
+        // The selection is for reading; a tool that writes checks its own
+        // level and the write's admission after (M14 Decision 24).
+        principal.check_open(name, Access::Read, now)?;
     }
     Ok(selection)
 }
 
-/// `selection` without its suspended catalogs: for a call that falls back
-/// to the connection's list, so one suspended team does not stop the rest.
+/// `selection` without its closed catalogs: for a call that falls back to
+/// the connection's list, so one closed catalog does not stop the rest.
 ///
 /// # Arguments
-/// * `principal` - the calling key (an admin keeps every catalog).
+/// * `principal` - the calling key.
 /// * `selection` - the checked connection list.
+/// * `now` - the server clock.
 ///
 /// # Returns
-/// The catalogs that are not suspended, in order; never empty.
+/// The catalogs that are open to the key, in order; never empty.
 ///
 /// # Errors
-/// [`OkfError::Suspended`] for the first catalog, when every one is
-/// suspended (a selection is never empty).
-fn without_suspended(principal: &Principal, selection: Selection) -> Result<Selection, OkfError> {
+/// The first catalog's refusal, as [`refuse_closed`], when every one is
+/// closed (a selection is never empty).
+fn without_closed(
+    principal: &Principal,
+    selection: Selection,
+    now: DateTime<Utc>,
+) -> Result<Selection, OkfError> {
     let mut kept = Vec::with_capacity(selection.catalogs.len());
     let mut first_refusal = None;
     // `selection.catalogs` is moved out (no `&`), so each kept name is reused
     // rather than copied.
     for name in selection.catalogs {
-        match principal.check_not_suspended(&name) {
-            Ok(()) => kept.push(name),
+        match principal.check_open(&name, Access::Read, now) {
+            Ok(_) => kept.push(name),
             // `get_or_insert` keeps the first refusal only.
             Err(error) => {
                 first_refusal.get_or_insert(error);
@@ -234,11 +258,14 @@ fn without_suspended(principal: &Principal, selection: Selection) -> Result<Sele
 /// [`OkfError::CatalogNotSelected`] naming the first catalog that does not
 /// exist, that the key does not reach, or (in the argument) that the
 /// connection's list leaves out; [`OkfError::Refused`] if no source names a
-/// catalog; then [`OkfError::Suspended`] (for a credential below admin) for
-/// a named or default catalog whose owner team is suspended. A selection
-/// that falls back to the connection's list leaves suspended catalogs out
-/// instead, and is refused only when every listed catalog is suspended.
-/// Reach is always checked first.
+/// catalog; then, for a named or default catalog that is closed to the
+/// key, its refusal: [`OkfError::Suspended`] (for a credential below admin)
+/// when its owner team is suspended, [`OkfError::UnlockRequired`] when the
+/// key needs an unlock it does not have, [`OkfError::MaintenanceOff`] for
+/// the maintenance runner on a catalog that opted out. A selection that
+/// falls back to the connection's list leaves closed catalogs out instead,
+/// and is refused only when every listed catalog is closed. Reach is
+/// always checked first.
 // `impl Fn(&str) -> bool`: any function or closure taking a name, like a
 // Python callable argument.
 pub fn resolve(
@@ -256,18 +283,18 @@ pub fn resolve(
     if let Some(connection) = set(sources.connection) {
         let scope = checked(connection.iter().map(String::as_str), available)?;
         return match argument {
-            None => without_suspended(principal, scope),
+            None => without_closed(principal, scope, sources.now),
             // Every scope name is available, so membership is the whole check.
-            // `and_then` runs the suspension check only on an `Ok` selection.
+            // `and_then` runs the open check only on an `Ok` selection.
             Some(list) => checked(list.iter().map(String::as_str), |name| {
                 scope.catalogs.iter().any(|listed| listed == name)
             })
-            .and_then(|selection| refuse_suspended(principal, selection)),
+            .and_then(|selection| refuse_closed(principal, selection, sources.now)),
         };
     }
     if let Some(list) = argument {
         return checked(list.iter().map(String::as_str), available)
-            .and_then(|selection| refuse_suspended(principal, selection));
+            .and_then(|selection| refuse_closed(principal, selection, sources.now));
     }
     // `as_deref`: `Option<String>` to `Option<&str>`, borrowing the name.
     match principal
@@ -275,9 +302,8 @@ pub fn resolve(
         .as_deref()
         .or(sources.server_default)
     {
-        Some(name) => {
-            checked([name], available).and_then(|selection| refuse_suspended(principal, selection))
-        }
+        Some(name) => checked([name], available)
+            .and_then(|selection| refuse_closed(principal, selection, sources.now)),
         None => Err(OkfError::Refused {
             reason: "no catalog selected: pass `catalog`, set the X-OKF-Catalogs header \
                      or `?catalogs=` on the MCP URL, or give the key a default catalog"
@@ -369,6 +395,7 @@ mod tests {
             argument: Some(&argument),
             connection: None,
             server_default: Some("pg"),
+            now: Utc::now(),
         };
 
         assert_eq!(select(&key, with_argument).unwrap(), ["work"]);
@@ -391,6 +418,7 @@ mod tests {
             argument: None,
             connection: Some(&connection),
             server_default: Some("pg"),
+            now: Utc::now(),
         };
 
         let alone = resolve(&key, base, exists).unwrap();
@@ -428,6 +456,7 @@ mod tests {
             argument: Some(&argument),
             connection: Some(&connection),
             server_default: Some("pg"),
+            now: Utc::now(),
         };
 
         let error = select(&key, sources).unwrap_err();
@@ -458,6 +487,7 @@ mod tests {
             argument: Some(&empty),
             connection: Some(&connection),
             server_default: None,
+            now: Utc::now(),
         };
 
         assert_eq!(select(&key, sources).unwrap(), ["work"]);
@@ -477,6 +507,7 @@ mod tests {
             argument: None,
             connection: Some(&connection),
             server_default: None,
+            now: Utc::now(),
         };
 
         let selection = resolve(&key, sources, exists).unwrap();
@@ -494,6 +525,7 @@ mod tests {
                 argument: None,
                 connection: Some(&connection),
                 server_default: None,
+                now: Utc::now(),
             };
 
             let error = select(&key, sources).unwrap_err();
@@ -512,6 +544,7 @@ mod tests {
             argument: None,
             connection: None,
             server_default: Some("pg"),
+            now: Utc::now(),
         };
 
         assert!(matches!(
@@ -527,6 +560,7 @@ mod tests {
             argument: None,
             connection: None,
             server_default: None,
+            now: Utc::now(),
         };
 
         let error = select(&key, sources).unwrap_err();
@@ -606,6 +640,7 @@ mod tests {
             argument: Some(&list),
             connection: None,
             server_default: None,
+            now: Utc::now(),
         };
         let narrowed = Sources {
             connection: Some(&connection),
@@ -628,6 +663,7 @@ mod tests {
             argument: None,
             connection: None,
             server_default: None,
+            now: Utc::now(),
         };
 
         assert_eq!(suspended_name(resolve(&key, sources, exists)), "work");
@@ -653,6 +689,7 @@ mod tests {
             argument: None,
             connection: Some(&connection),
             server_default: None,
+            now: Utc::now(),
         };
 
         let selection = resolve(&key, sources, exists).unwrap();
@@ -669,6 +706,7 @@ mod tests {
             argument: None,
             connection: Some(&connection),
             server_default: None,
+            now: Utc::now(),
         };
 
         assert_eq!(suspended_name(resolve(&key, sources, exists)), "pg");
@@ -684,6 +722,7 @@ mod tests {
             argument: None,
             connection: None,
             server_default: None,
+            now: Utc::now(),
         };
         let cases = [
             (
@@ -724,6 +763,7 @@ mod tests {
             argument: None,
             connection: None,
             server_default: None,
+            now: Utc::now(),
         };
 
         assert_eq!(select(&admin, base).unwrap(), ["pg"]);
@@ -748,6 +788,113 @@ mod tests {
             )
             .unwrap(),
             ["pg", "work"]
+        );
+    }
+
+    /// M14 Task 9b: with `require_unlock` on, a catalog the key's user has
+    /// no unlock for is closed like a suspended one: refused when named or
+    /// as the default, dropped from a connection's list, and the list
+    /// refused only when nothing is left. An expired unlock is no unlock.
+    #[test]
+    fn a_locked_catalog_is_refused_when_named_and_dropped_from_a_connection_list() {
+        use crate::auth::AccessGates;
+        use crate::store::unlocks::LiveUnlock;
+        let now = Utc::now();
+        let unlock = |catalog: &str, id, expires_at| LiveUnlock {
+            id,
+            user_id: "u-staff".to_string(),
+            catalog: catalog.to_string(),
+            expires_at,
+        };
+        let staff = Principal {
+            user_id: Some("u-staff".to_string()),
+            gates: std::sync::Arc::new(AccessGates {
+                admins: ["u-staff".to_string()].into(),
+                require_unlock: true,
+                unlocks: [(
+                    "u-staff".to_string(),
+                    vec![
+                        unlock("work", 1, now + chrono::TimeDelta::hours(1)),
+                        unlock("home", 2, now - chrono::TimeDelta::seconds(1)),
+                    ],
+                )]
+                .into(),
+                ..AccessGates::default()
+            }),
+            ..principal_with(&[], Some("pg"), &[])
+        };
+        let connection = names(&["pg", "work"]);
+        let only_pg = names(&["pg"]);
+        let named_pg = names(&["pg"]);
+        let named_home = names(&["home"]);
+        let base = Sources {
+            argument: None,
+            connection: None,
+            server_default: None,
+            now,
+        };
+        let kind = |refused: Result<Vec<String>, OkfError>| refused.unwrap_err().kind();
+
+        assert_eq!(
+            select(
+                &staff,
+                Sources {
+                    connection: Some(&connection),
+                    ..base
+                }
+            )
+            .unwrap(),
+            ["work"],
+            "the connection list keeps only the unlocked catalog"
+        );
+        assert_eq!(
+            kind(select(
+                &staff,
+                Sources {
+                    connection: Some(&connection),
+                    argument: Some(&named_pg),
+                    ..base
+                }
+            )),
+            "UnlockRequired",
+            "naming the locked one"
+        );
+        assert_eq!(
+            kind(select(&staff, base)),
+            "UnlockRequired",
+            "the key's default"
+        );
+        assert_eq!(
+            kind(select(
+                &staff,
+                Sources {
+                    connection: Some(&only_pg),
+                    ..base
+                }
+            )),
+            "UnlockRequired",
+            "a list of only locked catalogs"
+        );
+        assert_eq!(
+            kind(select(
+                &staff,
+                Sources {
+                    argument: Some(&named_home),
+                    ..base
+                }
+            )),
+            "UnlockRequired",
+            "an expired unlock"
+        );
+        let unlocked_later = Sources {
+            now: now + chrono::TimeDelta::hours(2),
+            connection: Some(&connection),
+            ..base
+        };
+        assert_eq!(
+            kind(select(&staff, unlocked_later)),
+            "UnlockRequired",
+            "the unlock of work expired too"
         );
     }
 }

@@ -163,6 +163,7 @@ async fn storage_round_trip_on_a_real_catalog() {
         replace: false,
         scope: ImportScope::Everything,
         expect_generation: None,
+        expect_catalog_id: None,
         actor: "smoke",
         audit: &okf_mcp::store::audit::AuditActor::cli(),
         now: Utc::now(),
@@ -212,8 +213,11 @@ async fn storage_round_trip_on_a_real_catalog() {
         &db.pool,
         "pg",
         Vec::new(),
-        &okf_mcp::store::audit::AuditActor::cli(),
-        chrono::Utc::now(),
+        &export::ExportOptions {
+            audit: &okf_mcp::store::audit::AuditActor::cli(),
+            now: chrono::Utc::now(),
+            expect_catalog_id: None,
+        },
     )
     .await
     .unwrap();

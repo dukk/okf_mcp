@@ -1,33 +1,41 @@
 //! The access gates the key cache loads (spec Parts 5 and 6): who is a
-//! customer of which catalog, who is an admin user, and the audit ids an
-//! operator's access is recorded with. The cache reloads them whenever
-//! `admin_generation` moves (every team, user, key and catalog write bumps
-//! it), so the ids and scopes an access is admitted with are as fresh as the
+//! customer of which catalog, who is an admin user, whether operator staff
+//! need an unlock and which unlocks are live, which catalogs keep the
+//! maintenance runner out, and the audit ids an operator's access is
+//! recorded with. The cache reloads them whenever `admin_generation` moves
+//! (every team, user, key, catalog, setting and unlock write bumps it), so
+//! the ids and scopes an access is admitted with are as fresh as the
 //! principal itself.
 
+use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
 use crate::auth::{AccessGates, CatalogScope};
+use crate::config::AuthConfig;
 use crate::error::OkfError;
+use crate::store::{settings, unlocks};
 
 /// Loads the gates. Creates the audit rows the maps need first
 /// (`ensure_audit_rows`), so every live credential, user and owner team
 /// has an audit id to record an access with; then reads every map in one
-/// read-only `REPEATABLE READ` transaction, so memberships, admins and
-/// catalog scopes describe one moment: never a catalog's replacement (or
-/// new owner) beside its old members, which would admit an admin read as
-/// a customer's.
+/// read-only `REPEATABLE READ` transaction, so memberships, entitlements,
+/// admins, unlocks, the `require_unlock` setting and catalog scopes
+/// describe one moment: never a catalog's replacement (or new owner)
+/// beside its old members, which would admit an admin read as a
+/// customer's.
 ///
 /// # Arguments
 /// * `pool` - the database.
+/// * `now` - the server clock: unlocks that ended or expired by then are
+///   left out (the rest are checked again on every request).
 ///
 /// # Returns
 /// The gates.
 ///
 /// # Errors
 /// [`OkfError::Database`].
-pub async fn load(pool: &PgPool) -> Result<AccessGates, OkfError> {
-    load_with(pool, || async {}).await
+pub async fn load(pool: &PgPool, now: DateTime<Utc>) -> Result<AccessGates, OkfError> {
+    load_with(pool, now, || async {}).await
 }
 
 /// [`load`], running `between` after the first read of the snapshot and
@@ -37,7 +45,11 @@ pub async fn load(pool: &PgPool) -> Result<AccessGates, OkfError> {
 /// [`OkfError::Database`].
 // `F: FnOnce() -> Fut` with `Fut: Future`: a closure returning a future,
 // the Rust spelling of "an async callback".
-async fn load_with<F, Fut>(pool: &PgPool, between: F) -> Result<AccessGates, OkfError>
+async fn load_with<F, Fut>(
+    pool: &PgPool,
+    now: DateTime<Utc>,
+    between: F,
+) -> Result<AccessGates, OkfError>
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = ()>,
@@ -74,9 +86,26 @@ where
     )
     .fetch_all(&mut *tx)
     .await?;
+    let entitled: Vec<(String, String)> = sqlx::query_as(
+        "SELECT e.user_id, c.name FROM user_catalogs e JOIN catalogs c ON c.id = e.catalog_id",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    let maintenance_off: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM catalogs WHERE NOT maintenance")
+            .fetch_all(&mut *tx)
+            .await?;
+    let live = unlocks::live(&mut *tx, now).await?;
+    // The unlock settings have no `[auth]` default, so the defaults passed
+    // here play no part in `require_unlock`.
+    let require_unlock = settings::load(&mut *tx, &AuthConfig::default())
+        .await?
+        .require_unlock;
     // Nothing was written; ending the transaction frees its connection.
     tx.commit().await?;
     let mut gates = AccessGates {
+        require_unlock,
+        maintenance_off: maintenance_off.into_iter().collect(),
         admins: admins.into_iter().collect(),
         people: people.into_iter().collect(),
         credentials: credentials.into_iter().collect(),
@@ -89,6 +118,17 @@ where
     for (user_id, catalog) in members {
         // `entry(..).or_default()`: Python's `setdefault(key, set())`.
         gates.members.entry(user_id).or_default().insert(catalog);
+    }
+    for (user_id, catalog) in entitled {
+        gates.entitled.entry(user_id).or_default().insert(catalog);
+    }
+    for unlock in live {
+        // `clone`: the map's key is the user id, which the unlock keeps too.
+        gates
+            .unlocks
+            .entry(unlock.user_id.clone())
+            .or_default()
+            .push(unlock);
     }
     Ok(gates)
 }
@@ -155,6 +195,8 @@ async fn ensure_audit_rows(pool: &PgPool) -> Result<(), OkfError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+
     use crate::db::{test_db, TEST_USER};
 
     #[tokio::test(flavor = "multi_thread")]
@@ -172,7 +214,7 @@ mod tests {
         .await
         .unwrap();
 
-        let gates = load(&db.pool).await.unwrap();
+        let gates = load(&db.pool, Utc::now()).await.unwrap();
 
         let (id, label): (i64, Option<String>) = sqlx::query_as(
             "SELECT id, label FROM audit_credentials WHERE credential_id = 'legacy'",
@@ -221,7 +263,7 @@ mod tests {
 
         // `main` is deleted and created again for bob's personal team after
         // the memberships are read and before the catalogs are.
-        let gates = load_with(&db.pool, || async {
+        let gates = load_with(&db.pool, Utc::now(), || async {
             catalogs::delete(&db.pool, "main", true, &cli, chrono::Utc::now())
                 .await
                 .unwrap();
@@ -240,5 +282,90 @@ mod tests {
             .is_some_and(|names| names.contains("main"));
         assert!(member);
         assert_eq!(gates.catalogs["main"].id, original, "{gates:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_gates_hold_entitlements_live_unlocks_opt_outs_and_require_unlock() {
+        use crate::store::audit::AuditActor;
+        use crate::store::catalogs::{self, NewCatalog};
+        use crate::store::ceiling::{self, NewEntitlement};
+        use crate::store::keys::Access;
+        use crate::store::settings::SettingKey;
+        use crate::store::unlocks::{Category, NewUnlock, UnlockPolicy};
+        use crate::store::users::{self, AdminChange, NewUser};
+        let db = test_db().await;
+        let (cli, now) = (AuditActor::cli(), Utc::now());
+        for name in ["main", "quiet"] {
+            let new = NewCatalog {
+                name,
+                description: "",
+                owner_team: TEST_USER,
+            };
+            catalogs::create(&db.pool, &new, &cli, now).await.unwrap();
+        }
+        for name in ["bob", "staff"] {
+            let user = NewUser {
+                name,
+                display_name: "",
+            };
+            users::create(&db.pool, &user, &cli, now).await.unwrap();
+        }
+        let admin = AdminChange {
+            on: true,
+            allow_last: false,
+        };
+        users::set_admin(&db.pool, "staff", admin, &cli, now)
+            .await
+            .unwrap();
+        let entitlement = NewEntitlement {
+            user: "bob",
+            catalog: "main",
+            access: Access::Read,
+        };
+        ceiling::entitle(&db.pool, &entitlement, &cli, now)
+            .await
+            .unwrap();
+        let policy = UnlockPolicy {
+            max_hours: 4,
+            notify_owners: false,
+        };
+        let unlock = |catalog| NewUnlock {
+            catalog,
+            user: "staff",
+            category: Category::Support,
+            reason: "ticket 12",
+            hours: 1,
+        };
+        let live = crate::store::unlocks::create(&db.pool, &unlock("main"), &policy, &cli, now)
+            .await
+            .unwrap();
+        // Made two hours ago for one hour: expired.
+        let two_hours_ago = now - chrono::TimeDelta::hours(2);
+        crate::store::unlocks::create(&db.pool, &unlock("quiet"), &policy, &cli, two_hours_ago)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE catalogs SET maintenance = false WHERE name = 'quiet'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        crate::store::settings::set(&db.pool, SettingKey::RequireUnlock, "on", &cli, now)
+            .await
+            .unwrap();
+        let id_of = |name: &'static str| {
+            sqlx::query_scalar::<_, String>("SELECT id FROM users WHERE name = $1").bind(name)
+        };
+        let bob = id_of("bob").fetch_one(&db.pool).await.unwrap();
+        let staff = id_of("staff").fetch_one(&db.pool).await.unwrap();
+
+        let gates = load(&db.pool, now).await.unwrap();
+
+        assert!(gates.require_unlock);
+        assert_eq!(gates.entitled[&bob], HashSet::from(["main".to_string()]));
+        assert_eq!(gates.maintenance_off, HashSet::from(["quiet".to_string()]));
+        let unlocks: Vec<(i64, &str)> = gates.unlocks[&staff]
+            .iter()
+            .map(|unlock| (unlock.id, unlock.catalog.as_str()))
+            .collect();
+        assert_eq!(unlocks, [(live.id, "main")], "the expired one is left out");
     }
 }

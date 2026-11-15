@@ -132,7 +132,9 @@ pub(crate) async fn maintenance_read_revision(
     params: MaintenanceReadRevisionParams,
 ) -> Result<MaintenanceResult<evidence::PinnedConcept>, OkfError> {
     let state = ctx.one(Some(&params.catalog))?;
-    ctx.principal().require(Access::Read, state.name())?;
+    // Refused before `admit` below, which ignores refusals.
+    ctx.principal()
+        .require_contents(Access::Read, state.name(), ctx.app().clock().now())?;
     let pin = RevisionPin {
         path: params.path,
         revision: params.revision,
@@ -174,7 +176,15 @@ pub(crate) async fn maintenance_close(
 ) -> Result<MaintenanceResult<runs::RunSummary>, OkfError> {
     let state = ctx.one(Some(&params.catalog))?;
     // Ordinary Write is an operator override, never a client-supplied option.
-    let operator = ctx.principal().require(Access::Write, state.name()).is_ok();
+    // It acts on the catalog as a write, so it needs the unlock a write
+    // would (M14 Task 9b); without one, only the caller's own run closes.
+    // Both the name and the incarnation closed (`check_contents`), so a
+    // stale unlock does not make an operator of the replacement's runs.
+    let operator = ctx
+        .principal()
+        .require_contents(Access::Write, state.name(), ctx.app().clock().now())
+        .is_ok()
+        && ctx.check_contents(&state, Access::Write).is_ok();
     if !operator {
         ctx.principal().require_maintenance_report(state.name())?;
     }
@@ -358,5 +368,45 @@ mod suspension_tests {
         }
         assert_eq!(admins[0].1, "ok", "an admin still claims");
         assert_eq!(admins[2].1, "ok", "an admin still reads a revision");
+    }
+
+    /// M14 Task 9b, the locked twin: with `require_unlock` on, operator
+    /// staff are refused every work tool with `UnlockRequired` at the
+    /// selection (before the tools' own checks, M14 Decision 24), the
+    /// maintenance runner needs no unlock, and a catalog whose owners
+    /// turned maintenance off refuses the runner with `MaintenanceOff`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn every_work_tool_needs_an_unlock_but_for_the_maintenance_runner() {
+        use crate::mcp::testing::{require_unlock, staff_key, staff_root};
+        let note = "---\ntype: Note\ntitle: A\ndescription: A note.\n---\n# A\n";
+        let test = app_with(
+            &[("pg", &[("a.md", note)]), ("quiet", &[("a.md", note)])],
+            Config::default(),
+        )
+        .await;
+        let staff = staff_root(&test).await;
+        let runner = staff_key(&test, "runner", Access::Read, true).await;
+        sqlx::query("UPDATE catalogs SET maintenance = false WHERE name = 'quiet'")
+            .execute(test.app.pool())
+            .await
+            .unwrap();
+        // `require_unlock` bumps the generation, so its poll loads both.
+        require_unlock(&test).await;
+
+        let locked = every_tool(&test, &staff, "pg").await;
+        let exempt = every_tool(&test, &runner, "pg").await;
+        let opted_out = every_tool(&test, &runner, "quiet").await;
+
+        for (tool, kind) in &locked {
+            assert_eq!(kind, "UnlockRequired", "{tool} as operator staff");
+        }
+        for (tool, kind) in &exempt {
+            assert_ne!(kind, "UnlockRequired", "{tool} as the runner");
+        }
+        assert_eq!(exempt[0].1, "ok", "the runner claims");
+        assert_eq!(exempt[2].1, "ok", "the runner reads a revision");
+        for (tool, kind) in &opted_out {
+            assert_eq!(kind, "Forbidden", "{tool}: maintenance is off");
+        }
     }
 }
