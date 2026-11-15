@@ -8,6 +8,11 @@ pub enum RunnerError {
     Busy,
     #[error("runner permission denied")]
     Permission,
+    /// The catalog's owners turned maintenance off: the server refused the
+    /// runner with `Forbidden` and `"maintenance": "off"`. A skip, not a
+    /// failure, when it refuses the claim.
+    #[error("runner skipped: maintenance is off for this catalog")]
+    MaintenanceOff,
     #[error("runner contract is unavailable or invalid")]
     Contract,
     #[error("runner transport failed")]

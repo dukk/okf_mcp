@@ -112,7 +112,14 @@ impl RunSummary {
         if self.accounting_known
             && self.failed == 0
             && self.skipped == 0
-            && matches!(self.reason.as_str(), "completed" | "empty")
+            && match self.reason.as_str() {
+                "completed" | "empty" => true,
+                // Success only as a claim-time skip: once a run was claimed,
+                // a refusal (of a renewal, a submission or the close) leaves
+                // the run unfinished, which is a failure like any other stop.
+                "maintenance_off" => self.run_id.is_none(),
+                _ => false,
+            }
         {
             0
         } else {

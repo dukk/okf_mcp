@@ -2326,3 +2326,266 @@ async fn maintenance_deleted_catalog_identity_cannot_replay() {
     .unwrap();
     assert!(fresh.leases.is_empty());
 }
+
+// ---- catalog.maintenance_run (M14 Task 9c) ----
+
+/// `catalog.maintenance_run` entries, oldest first: their details and the
+/// credential id their actor names (`None` without one).
+async fn run_entries(pool: &PgPool) -> Vec<(serde_json::Value, Option<String>, String)> {
+    sqlx::query_as(
+        "SELECT e.details, a.credential_id, e.source FROM audit_entries e \
+         LEFT JOIN audit_credentials a ON a.id = e.actor_credential_ref \
+         WHERE e.action = 'catalog.maintenance_run' ORDER BY e.id",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// Gives `id` the `audit_credentials` row the key cache gives every key.
+async fn audit_row(pool: &PgPool, id: &str) {
+    sqlx::query("INSERT INTO audit_credentials (credential_id, label) VALUES ($1, 'runner')")
+        .bind(id)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn each_run_that_ends_writes_one_maintenance_run_entry() {
+    let db = test_db().await;
+    let catalog = setup(&db.pool, &["a.md"]).await;
+    let runner = actor("runner");
+    audit_row(&db.pool, "runner").await;
+    let close = |run: String, key: &'static str| {
+        let pool = db.pool.clone();
+        let runner = runner.clone();
+        async move {
+            runs::close(
+                &pool,
+                catalog,
+                &runner,
+                &run,
+                RunState::Cancelled,
+                "stop",
+                false,
+                key,
+                t0(),
+            )
+            .await
+            .unwrap()
+        }
+    };
+
+    let first = runs::claim(
+        &db.pool,
+        catalog,
+        &runner,
+        "claim-1",
+        1,
+        Duration::days(30),
+        t0(),
+    )
+    .await
+    .unwrap();
+    close(first.run_id.clone(), "close-1").await;
+    // The same close again is a replay: the run already ended.
+    close(first.run_id.clone(), "close-1").await;
+    // A second run that recovery fails once its deadline passes; the claim
+    // that recovers it finds the work again and starts a third run.
+    let second = runs::claim(
+        &db.pool,
+        catalog,
+        &runner,
+        "claim-2",
+        1,
+        Duration::days(30),
+        t0(),
+    )
+    .await
+    .unwrap();
+    let late = t0() + Duration::seconds(3_601);
+    runs::claim(
+        &db.pool,
+        catalog,
+        &runner,
+        "claim-3",
+        1,
+        Duration::days(30),
+        late,
+    )
+    .await
+    .unwrap();
+
+    let entries = run_entries(&db.pool).await;
+    assert_eq!(
+        entries.len(),
+        2,
+        "one entry per pass that ended: {entries:?}"
+    );
+    let (details, credential, source) = &entries[0];
+    assert_eq!(details["run"], first.run_id.as_str());
+    assert_eq!(details["state"], "cancelled");
+    assert_eq!(details["findings"], 0);
+    assert_eq!(credential.as_deref(), Some("runner"));
+    assert_eq!(source, "system");
+    assert_eq!(entries[1].0["run"], second.run_id.as_str());
+    assert_eq!(entries[1].0["state"], "failed");
+    let recorded = crate::store::audit::testing::entries(&db.pool, "catalog.maintenance_run").await;
+    assert_eq!(recorded[0].actor_label, "system:maintenance");
+    assert!(
+        !recorded[0].actor_operator,
+        "a plain reporting key is no operator"
+    );
+    assert_eq!(recorded[0].target.as_deref(), Some("pg"));
+    assert_eq!(
+        recorded[0].teams,
+        [crate::db::TEST_USER],
+        "the owner team's"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pass_that_finds_nothing_writes_one_maintenance_run_entry() {
+    let db = test_db().await;
+    let catalog = setup(&db.pool, &[]).await;
+
+    let run = runs::claim(
+        &db.pool,
+        catalog,
+        &actor("runner"),
+        "claim-1",
+        1,
+        Duration::days(30),
+        t0(),
+    )
+    .await
+    .unwrap();
+
+    let entries = run_entries(&db.pool).await;
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].0["run"], run.run_id.as_str());
+    assert_eq!(entries[0].0["state"], "completed");
+    assert_eq!(
+        entries[0].1, None,
+        "a credential with no audit row is named by none"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_ends_without_waiting_for_its_users_or_credentials_rows() {
+    use crate::store::keys::{self, Access, Grants, NewKey};
+    let db = test_db().await;
+    let catalog = setup(&db.pool, &["a.md"]).await;
+    // A real reporting key of the fixture user, with the audit row the key
+    // cache gives it.
+    let new = NewKey {
+        name: "runner",
+        access: Access::Read,
+        maintenance_report: true,
+        grants: Grants::All,
+        default_catalog: None,
+        actor: "runner",
+        user: crate::db::TEST_USER,
+        self_issued: false,
+        expires_at: None,
+        levels: &[],
+    };
+    let key = keys::create_with_id(
+        &db.pool,
+        &new,
+        &crate::store::audit::AuditActor::cli(),
+        t0(),
+    )
+    .await
+    .unwrap()
+    .id;
+    sqlx::query("SELECT audit_credential($1, NULL, 'runner')")
+        .bind(&key)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let runner = Actor {
+        key_id: key.clone(),
+        actor: "runner".into(),
+    };
+    let run = runs::claim(
+        &db.pool,
+        catalog,
+        &runner,
+        "claim-1",
+        1,
+        Duration::days(30),
+        t0(),
+    )
+    .await
+    .unwrap();
+    // What users::delete holds while it forgets the key's user (the user
+    // row FOR UPDATE, then its audit_credentials rows) before it deletes
+    // the key, which updates the run's key_id: a run that waited on either
+    // here would deadlock against it.
+    let mut holder = db.pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM users WHERE name = $1 FOR UPDATE")
+        .bind(crate::db::TEST_USER)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query("SELECT id FROM audit_credentials WHERE credential_id = $1 FOR UPDATE")
+        .bind(&key)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+
+    let closed = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        runs::close(
+            &db.pool,
+            catalog,
+            &runner,
+            &run.run_id,
+            RunState::Cancelled,
+            "stop",
+            false,
+            "close-1",
+            t0(),
+        ),
+    )
+    .await;
+    holder.rollback().await.unwrap();
+
+    closed
+        .expect("the close finishes within 30 seconds while those rows are held")
+        .unwrap();
+    let entries = run_entries(&db.pool).await;
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(
+        entries[0].1, None,
+        "the held row is skipped, not waited for"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_maintenance_run_entrys_findings_count_reads_one_run_by_index() {
+    let db = test_db().await;
+    let mut conn = db.pool.acquire().await.unwrap();
+    // The fixture tables are tiny, so the planner would scan them anyway:
+    // forbid the scan to see which index can serve the trigger's count.
+    sqlx::query("SET enable_seqscan = off")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+
+    let plan: Vec<String> = sqlx::query_scalar(
+        "EXPLAIN SELECT count(*) FROM maintenance_findings f \
+         WHERE f.catalog_id = 1 AND f.run_id = 'run'",
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .unwrap();
+
+    assert!(
+        plan.iter()
+            .any(|line| line.contains("maintenance_findings_run")),
+        "{plan:#?}"
+    );
+}
