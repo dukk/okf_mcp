@@ -250,7 +250,7 @@ These were checked by compiling and running a probe crate on 2026-11-15, with ev
 - The justfile has `fmt`, `lint` (clippy `-D warnings` + `cargo doc -D warnings`), `test`, `test-ui` and `test-agentic`, and exports `SQLX_OFFLINE=true`.
 - `tools/agentic/gate.sh` maps `fmt|lint|test|test-ui|narrow` to timeouts and the shared lock (`:52-58`).
 - There is **no test CI**: `.github/workflows/` holds only `image.yml` and `maintenance-image.yml`.
-- `Cargo.toml` has no `[workspace]` or `[lints]` table.
+- `Cargo.toml` has no `[workspace]` or `[lints]` table. Task 8 adds an empty `[workspace]` (with `exclude = [".worktrees"]`) and `[lints.rust.unexpected_cfgs]`.
 
 **Policy lint**
 - The `hyp_tracing` library's `uninstrumented_fn` lint is pinned by tag `v0.1.2` in the policy-lints repository (tag object `3dc37e5`, commit `8661186`).
@@ -1356,9 +1356,17 @@ level = "warn"
 check-cfg = ["cfg(dylint_lib, values(any()))"]
 ```
 
-`[workspace.metadata.dylint]` needs a `[workspace]` table: add an empty `[workspace]` (a single-package workspace).
-- Check that `cargo build`, `sqlx` offline data and `just test` are unaffected (a `[workspace]` root changes nothing for one package, but verify `target/` and `.sqlx/` paths).
-- If dylint also reads `[package.metadata.dylint]`, prefer that and skip `[workspace]`. Record which in the plan.
+`[workspace.metadata.dylint]` needs a `[workspace]` table, so add one at the end of `Cargo.toml`:
+
+```toml
+[workspace]
+exclude = [".worktrees"]
+```
+
+> **Corrected (issue #469, 2026-11-15).** Verified on the real crate:
+> - dylint reads only `[workspace.metadata.dylint]`. With the same libraries under `[package.metadata.dylint]`, `cargo dylint list --all` prints "No libraries were found". The empty `[workspace]` table is required.
+> - `exclude = [".worktrees"]` is required too. This repository keeps git worktrees under `.worktrees/`, nested in the checkout. Without `exclude`, a worktree whose `Cargo.toml` predates the `[workspace]` table fails every cargo command with "current package believes it's in a workspace when it's not", so every open branch would need a merge of `main` first.
+> - A single-package workspace changes nothing else: `Cargo.lock` is unchanged, `target/` stays at the root, the repository has no `.sqlx/` directory (the `justfile` exports `SQLX_OFFLINE=true` for apalis' shipped cache), and `fmt`, `lint` and `test` pass as before.
 
 - [ ] **Step 2: `just dylint` and the gate**
 
@@ -1373,7 +1381,7 @@ dylint:
 
 In `gate.sh`, add `dylint) limit=${AGENTIC_TIMEOUT_DYLINT:-45m}; locked=1; cmd=(just dylint "$@") ;;` and list it in the usage text and the header comment's table. Update `tools/agentic/README.md`, `brief-common.md` ("Gates") and `AGENTS.md`'s table: `gate.sh dylint` is required for every task from M15 Task 8 on.
 
-Check that `-W uninstrumented_fn` really lowers the lint to a warning: with the flag, a known uninstrumented function must warn and the gate must pass. If the flag has no effect, set the level some other way that dylint documents, and record in this plan what worked.
+> **Corrected (issue #469, 2026-11-15).** Verified: the lint is deny by default (`cargo dylint list --all` shows `deny`; a run without the flag fails with 1798 errors in the library alone). `DYLINT_RUSTFLAGS="-W uninstrumented_fn"` makes every one a warning, and `gate.sh dylint` passes. **The flag is not part of cargo's fingerprint**, so a cached run replays the old level's diagnostics: Task 10 must `touch src/lib.rs src/main.rs src/bin/okf-maintenance.rs` after changing `-W` to `-D`, or the gate would keep passing on replayed warnings. `docs/contributing/policy-lints.md` says so.
 
 - [ ] **Step 3: `docs/contributing/policy-lints.md`**
 
@@ -1388,6 +1396,8 @@ Write the spec's "The instrument policy" as the contributor doc:
 - [ ] **Step 4: Verify**
 
 `tools/agentic/gate.sh dylint` passes, with warnings. Record the warning count in the PR: it is the sweep's size.
+
+> **Corrected (issue #469, 2026-11-15).** Measured on `2a879d4` plus this change: **1811 warnings**, 1798 in the library (`src/`, test code excluded), 1 in `okf-mcp` (`src/main.rs`) and 12 in `okf-maintenance` (`src/bin/okf-maintenance.rs`). The first run on a warm machine took about 70 s.
 
 - [ ] **Step 5: Commit**
 
@@ -1438,7 +1448,7 @@ Commit: `chore(tracing): instrument <group> (M15 Task 9x)`.
 
 **Files:** Modify `justfile` (`-W` becomes `-D`), `docs/contributing/policy-lints.md`, `tools/agentic/brief-common.md`
 
-- [ ] **Step 1:** Merge `main` and run `gate.sh dylint` with `-D uninstrumented_fn`. Fix any stragglers (functions added since the sweep), in their files.
+- [ ] **Step 1:** Merge `main`, change `-W` to `-D` in the `justfile`, `touch src/lib.rs src/main.rs src/bin/okf-maintenance.rs` (cargo does not see a lint-level change, Task 8), and run `gate.sh dylint`. Fix any stragglers (functions added since the sweep), in their files.
 - [ ] **Step 2:** Run `gate.sh dylint` with `-D` and see it pass. Then add a function without `#[instrument]` and see it fail, and remove it again. Say so in the PR.
 - [ ] **Step 2a:** Re-run Task 3's root-span tests with the span filter at `trace` over the swept tree: `a_forged_traceparent_is_a_link_not_the_parent` (parent none), `an_unmatched_path_makes_no_span` (nothing exported at all), `principal_ids_land_on_the_request_span_under_helper_spans` and `error_kind_lands_on_the_tool_span_under_helper_spans`. Task 3 already writes them to take the filter as a parameter and run at both `info` and `trace`.
 - [ ] **Step 2b:** Run the sentinel test over the swept tree, `tools/agentic/gate.sh narrow --test telemetry_privacy`, with `traces_filter` and `logs_filter` at `trace` (the test's own config), so every `trace`-level span the sweep added is exported and checked. Fix any field it catches in the file that added it.
