@@ -52,6 +52,7 @@ const SECTIONS: &str = "Sections";
 /// Python's `" ".join(text.split())`: runs of whitespace become one space,
 /// and leading and trailing whitespace goes. Shared with `move_concept` and
 /// `split_concept`, whose listings collapse the description the same way.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn collapse_whitespace(text: &str) -> String {
     text.split(is_py_space)
         .filter(|word| !word.is_empty())
@@ -74,6 +75,7 @@ pub(crate) fn collapse_whitespace(text: &str) -> String {
 ///
 /// # Errors
 /// [`OkfError::NotFound`] without a `log.md`; the workspace's write error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn log(
     workspace: &dyn Workspace,
     ctx: &OpContext<'_>,
@@ -122,6 +124,7 @@ pub(crate) struct Listing<'a> {
 /// # Errors
 /// [`OkfError::Refused`] without a folder `index.md`, or when `section`
 /// names a missing heading; the workspace's read or write error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn list_concept(
     workspace: &dyn Workspace,
     listing: &Listing<'_>,
@@ -158,6 +161,7 @@ pub(crate) fn list_concept(
 /// The bullet [`list_concept`] writes: `* [<title>](<file name>) - <summary>`,
 /// with `[` and `]` in the title escaped and the summary's whitespace
 /// collapsed.
+#[tracing::instrument(level = "trace", skip_all)]
 fn concept_bullet(listing: &Listing<'_>) -> String {
     let label = listing.title.replace('[', "\\[").replace(']', "\\]");
     format!(
@@ -184,6 +188,7 @@ fn concept_bullet(listing: &Listing<'_>) -> String {
 /// As [`crate::okf::ops::stamp`] when loading the concept;
 /// [`OkfError::Refused`] without a title, without a folder `index.md`, or
 /// for a missing `section` heading.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn index(
     workspace: &dyn Workspace,
     _ctx: &OpContext<'_>,
@@ -235,6 +240,7 @@ pub fn index(
 /// [`OkfError::NotFound`]). Files written before the error stay written,
 /// so run it on a scratch copy (as the write path does) and drop the copy
 /// on error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn ensure_index(
     workspace: &dyn Workspace,
     folder: &str,
@@ -279,6 +285,7 @@ pub fn ensure_index(
 ///
 /// # Errors
 /// The workspace's write error.
+#[tracing::instrument(level = "trace", skip_all)]
 fn insert_folder_listing(
     workspace: &dyn Workspace,
     folder: &str,
@@ -306,6 +313,7 @@ fn insert_folder_listing(
 /// index: `* [<Folder name>](<href>) - TODO: describe this folder`, with
 /// the href `/<folder>/` when the parent's bullets are absolute, else
 /// `<name>/`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn folder_bullet(folder: &str, parent_text: &str) -> String {
     let absolute = parent_text
         .split('\n')
@@ -324,11 +332,19 @@ fn folder_bullet(folder: &str, parent_text: &str) -> String {
 /// [`crate::okf::markdown`]), so `a note.md`, a folder `a]` or a title
 /// ending in `\` cannot be listed this way. The repair checks the exact
 /// bullet it would write and skips one that no later run would recognise.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "one-line delegation to an instrumented function"
+    )
+)]
 fn links_back(workspace: &dyn Workspace, index: &str, bullet: &str, target: &str) -> bool {
     lists_target(workspace, bullet, index, target)
 }
 
 /// The note for a listing [`repair_indexes`] cannot write.
+#[tracing::instrument(level = "trace", skip_all)]
 fn unlinkable_note(target: &str, index: &str) -> String {
     format!("did not list /{target} in /{index}: no markdown link to it can be written")
 }
@@ -360,6 +376,7 @@ pub const STARTER_FILE_COUNT: usize = 2;
 /// assert!(files[0].1.contains("okf_version") && files[0].1.contains("# pg\n\nSystems.\n"));
 /// assert!(files[1].1.ends_with("## 2026-11-14\n\n* **Creation:** Created the catalog.\n"));
 /// ```
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn starter_files(
     name: &str,
     description: &str,
@@ -404,6 +421,7 @@ pub fn starter_files(
 /// # Errors
 /// The workspace's listing, read or write error. Files written before the
 /// error stay written, so run it on a scratch copy (as the write path does).
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn repair_indexes(workspace: &dyn Workspace) -> Result<OpOutcome, OkfError> {
     let (mut outcome, placeholders) = repair_counted(workspace)?;
     outcome.message = repair_message(outcome.touched.len(), placeholders);
@@ -412,6 +430,7 @@ pub fn repair_indexes(workspace: &dyn Workspace) -> Result<OpOutcome, OkfError> 
 
 /// [`repair_indexes`]' edits, and how many TODO placeholders they wrote;
 /// the outcome's message is left empty for the caller.
+#[tracing::instrument(level = "trace", skip_all)]
 fn repair_counted(workspace: &dyn Workspace) -> Result<(OpOutcome, usize), OkfError> {
     let markdown = workspace.list_markdown()?;
     let mut outcome = OpOutcome::default();
@@ -529,6 +548,7 @@ fn repair_counted(workspace: &dyn Workspace) -> Result<(OpOutcome, usize), OkfEr
 }
 
 /// A repair's summary line.
+#[tracing::instrument(level = "trace", skip_all)]
 fn repair_message(written: usize, placeholders: usize) -> String {
     if written == 0 {
         "indexes complete: nothing to repair".to_string()
@@ -562,6 +582,7 @@ fn repair_message(written: usize, placeholders: usize) -> String {
 ///
 /// # Errors
 /// As [`repair_indexes`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn repair_catalog(
     workspace: &dyn Workspace,
     ctx: &OpContext<'_>,
@@ -622,6 +643,7 @@ impl ConceptAbout {
     ///
     /// # Errors
     /// The workspace's read error.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn read(workspace: &dyn Workspace, concept: &str) -> Result<Self, OkfError> {
         let text = workspace.read_text(concept)?;
         let doc = Doc::from_text(concept, &text);

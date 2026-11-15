@@ -100,6 +100,7 @@ pub struct LinkMatch {
 /// assert_eq!(links.len(), 1);
 /// assert_eq!(links[0].target, "/infra/x.md#ports");
 /// ```
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn find_links(text: &str) -> Vec<LinkMatch> {
     // Python's `(?<!!)` means: the char before `[` is not `!`. `regex` has no
     // lookbehind, so LINK consumes that char instead (`[^!]`, or `\A` at the
@@ -136,6 +137,7 @@ pub fn find_links(text: &str) -> Vec<LinkMatch> {
 ///
 /// Port of `okf.py`'s `split_frontmatter`: frontmatter needs a `---\n`
 /// first line and a later line starting with `---`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn split_frontmatter(text: &str) -> (&str, &str, usize) {
     if let Some(rest) = text.strip_prefix("---\n") {
         if let Some(end) = rest.find("\n---").map(|p| p + 4) {
@@ -157,6 +159,7 @@ pub fn split_frontmatter(text: &str) -> (&str, &str, usize) {
 /// use okf_mcp::okf::markdown::body_split;
 /// assert_eq!(body_split("---\na: 1\n---\nx"), (vec!["---", "a: 1", "---"], vec!["x"]));
 /// ```
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn body_split(text: &str) -> (Vec<&str>, Vec<&str>) {
     let lines: Vec<&str> = text.split('\n').collect();
     if lines.first().map(|l| l.trim_end_matches('\r')) == Some("---") {
@@ -174,6 +177,13 @@ pub fn body_split(text: &str) -> (Vec<&str>, Vec<&str>) {
 ///
 /// # Returns
 /// The marker, borrowed from `line`; `None` if the line is not a fence.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 pub(crate) fn fence_marker(line: &str) -> Option<&str> {
     FENCE
         .captures(line)
@@ -191,6 +201,13 @@ pub(crate) fn fence_marker(line: &str) -> Option<&str> {
 ///
 /// # Returns
 /// The marker of the fence open after this line, if any.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 pub(crate) fn next_fence<'a>(open: Option<&'a str>, marker: &'a str) -> Option<&'a str> {
     match open {
         Some(open) if open == marker => None,
@@ -220,6 +237,13 @@ pub struct Heading {
 /// # Returns
 /// `(number of #, text)` (`""` for a bare `#`), or `None` for any other line.
 /// It does not know about fences: [`headings`] skips fenced code itself.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 pub(crate) fn atx_heading(line: &str) -> Option<(usize, &str)> {
     // `?` on an `Option`: a line that is not a heading returns `None` here.
     let caps = HEADING.captures(line)?;
@@ -229,6 +253,7 @@ pub(crate) fn atx_heading(line: &str) -> Option<(usize, &str)> {
 }
 
 /// The ATX headings in `lines`, skipping fenced code, with their anchor slugs.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn headings(lines: &[&str]) -> Vec<Heading> {
     let mut found = Vec::new();
     let mut fence: Option<&str> = None;
@@ -274,6 +299,7 @@ pub fn headings(lines: &[&str]) -> Vec<Heading> {
 /// assert_eq!(slugify("Use `okf.py` [here](/x.md)"), "use-okfpy-here");
 /// assert_eq!(slugify("snake_case stays"), "snake_case-stays");
 /// ```
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn slugify(text: &str) -> String {
     let text = SLUG_LINK.replace_all(text, "$1");
     let text = SLUG_TAG.replace_all(&text, "");
@@ -294,6 +320,7 @@ pub fn slugify(text: &str) -> String {
 /// Every `*` goes. A run of `_` goes whole unless it sits between two word
 /// characters (so `snake_case` keeps its underscore). Neighbours are judged in
 /// the original text, so `a*_b` loses both.
+#[tracing::instrument(level = "trace", skip_all)]
 fn strip_emphasis(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.char_indices().peekable();
@@ -325,6 +352,7 @@ fn strip_emphasis(text: &str) -> String {
 
 /// Every fragment a link may target in a document: heading slugs plus HTML
 /// `<a name|id>` anchors.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn anchors_in(text: &str) -> BTreeSet<String> {
     let (_, body, _) = split_frontmatter(text);
     let lines: Vec<&str> = body.split('\n').collect();
@@ -337,6 +365,13 @@ pub fn anchors_in(text: &str) -> BTreeSet<String> {
 /// indented continuation lines, in first-definition order. A blank line
 /// ends a definition, as in `okf.py` (see [`footnote_paragraphs`] for the
 /// markdown reading, where it need not).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "one-line delegation to an instrumented function"
+    )
+)]
 pub fn footnote_defs(lines: &[&str]) -> IndexMap<String, Vec<usize>> {
     collect_footnotes(lines, false)
 }
@@ -352,12 +387,20 @@ pub fn footnote_defs(lines: &[&str]) -> IndexMap<String, Vec<usize>> {
 /// let defs = footnote_paragraphs(&["[^n]: One.", "", "    Two.", "Text."]);
 /// assert_eq!(defs.get("n"), Some(&vec![0, 2]));
 /// ```
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "one-line delegation to an instrumented function"
+    )
+)]
 pub fn footnote_paragraphs(lines: &[&str]) -> IndexMap<String, Vec<usize>> {
     collect_footnotes(lines, true)
 }
 
 /// The one walk behind [`footnote_defs`] and [`footnote_paragraphs`];
 /// `across_blank` says whether a blank line keeps the current definition open.
+#[tracing::instrument(level = "trace", skip_all)]
 fn collect_footnotes(lines: &[&str], across_blank: bool) -> IndexMap<String, Vec<usize>> {
     let mut defs: IndexMap<String, Vec<usize>> = IndexMap::new();
     let mut current: Option<String> = None;
@@ -398,6 +441,7 @@ fn collect_footnotes(lines: &[&str], across_blank: bool) -> IndexMap<String, Vec
 /// let refs = footnote_refs("Cited.[^a]\n\n[^a]: The definition.");
 /// assert_eq!(refs.into_iter().collect::<Vec<_>>(), ["a"]);
 /// ```
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn footnote_refs(text: &str) -> BTreeSet<String> {
     // Python's `(?!:)` rejects a match followed by `:`, and Python then tries
     // every later start inside it. Each of those ends at the same `]` (a
@@ -431,6 +475,7 @@ pub struct ResolvedLink {
 ///
 /// # Returns
 /// `None` for external links (any URI scheme) and pure `#fragment` links.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn resolve_link(workspace: &dyn Workspace, link: &str, source: &str) -> Option<ResolvedLink> {
     let target = link.split('#').next().unwrap_or_default();
     if target.is_empty() || URI_SCHEME.is_match(target) {

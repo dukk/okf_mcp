@@ -42,31 +42,73 @@ pub struct Overlay {
 
 impl Overlay {
     /// The snapshot of the overlaid files.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn snapshot(&self) -> &Snapshot {
         &self.snapshot
     }
 
     /// The overlaid files (what a write op reads, through a copy).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn workspace(&self) -> &MemWorkspace {
         &self.workspace
     }
 
     /// The published state it was built on.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn base(&self) -> &Arc<Loaded> {
         &self.base
     }
 
     /// The changeset's paths, sorted (deleted ones included).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn dirty(&self) -> &BTreeSet<String> {
         &self.dirty
     }
 
     /// The changeset it shows.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn changeset_id(&self) -> i64 {
         self.changeset_id
     }
 
     /// The changeset `version` it was built at.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn version(&self) -> i64 {
         self.version
     }
@@ -79,6 +121,13 @@ impl Overlay {
     ///
     /// # Returns
     /// The findings, as [`lint`] returns them.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line delegation to an instrumented function"
+        )
+    )]
     pub fn lint(&self, now: DateTime<Utc>) -> LintReport {
         lint(&self.snapshot, now, Some(&self.commit_times))
     }
@@ -100,6 +149,7 @@ impl Overlay {
 /// that is not UTF-8), its reason naming the changeset (every read through
 /// this overlay fails until the changeset is fixed, so the error says where
 /// to look); any other snapshot error, as for a published catalog.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn build_overlay(
     base: Arc<Loaded>,
     changeset: &ChangesetRow,
@@ -158,6 +208,7 @@ pub async fn build_overlay(
 /// An `InvalidPath` (a clash) or an `Io` (a pending file the snapshot cannot
 /// read) as an `InvalidPath` with the changeset in its reason; any other
 /// error as it is.
+#[tracing::instrument(level = "trace", skip_all)]
 fn in_changeset(error: OkfError, handle: &str) -> OkfError {
     // Each `format!` runs before the struct is built, because building it
     // moves `path` into the struct.
@@ -183,6 +234,13 @@ fn in_changeset(error: OkfError, handle: &str) -> OkfError {
 /// What an overlay was built at: the base `generation`, then the changeset
 /// `version`. Tuples compare field by field, like Python's, so a later
 /// generation always counts as newer.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial field accessor: returns a field or a borrow of one"
+    )
+)]
 fn built_at(overlay: &Overlay) -> (i64, i64) {
     (overlay.base.generation(), overlay.version)
 }
@@ -216,6 +274,7 @@ impl Overlays {
     ///
     /// # Returns
     /// The cache.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn new(idle: Duration, capacity: usize) -> Self {
         Self {
             idle,
@@ -241,6 +300,7 @@ impl Overlays {
     ///
     /// # Errors
     /// [`OkfError::Database`] reading the entries; as [`build_overlay`].
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn get(
         &self,
         pool: &PgPool,
@@ -280,6 +340,7 @@ impl Overlays {
     ///
     /// # Errors
     /// [`OkfError::Database`] reading the entries; as [`build_overlay`].
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn get_in(
         &self,
         conn: &mut PgConnection,
@@ -294,6 +355,7 @@ impl Overlays {
     // `impl PgExecutor<'_>` takes a `&PgPool` or a `&mut PgConnection`
     // alike, like a duck-typed "anything with execute()" argument in Python,
     // checked at compile time.
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn lookup_or_build(
         &self,
         executor: impl PgExecutor<'_>,
@@ -319,6 +381,7 @@ impl Overlays {
     ///
     /// # Arguments
     /// * `changeset_id` - the changeset.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn forget(&self, changeset_id: i64) {
         self.lock().remove(&changeset_id);
     }
@@ -330,6 +393,7 @@ impl Overlays {
     /// changeset's entry if it is older than the one asked for (each entry
     /// pins its base `Loaded`, so a stale one would keep an old generation in
     /// memory). A newer entry stays, for the callers that read the newer row.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn lookup(
         &self,
         changeset: &ChangesetRow,
@@ -357,6 +421,7 @@ impl Overlays {
     /// Caches `overlay`, unless a newer one for the same changeset is there
     /// (a slower build finishing last), first dropping every idle entry;
     /// then, past `capacity`, drops the least recently used other entry.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn store(&self, overlay: Arc<Overlay>, now: Instant) {
         let mut cached = self.lock();
         self.drop_idle(&mut cached, now);
@@ -384,10 +449,12 @@ impl Overlays {
     }
 
     /// Drops every entry unused for longer than `idle`.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn drop_idle(&self, cached: &mut HashMap<i64, Cached>, now: Instant) {
         cached.retain(|_, entry| now.saturating_duration_since(entry.used) <= self.idle);
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn lock(&self) -> MutexGuard<'_, HashMap<i64, Cached>> {
         self.cached.lock().expect("overlay cache lock poisoned")
     }
@@ -405,6 +472,7 @@ pub enum View {
 
 impl View {
     /// The snapshot to read.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn snapshot(&self) -> &Snapshot {
         match self {
             View::Published(loaded) => loaded.snapshot(),
@@ -419,6 +487,7 @@ impl View {
     ///
     /// # Returns
     /// The findings.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn lint(&self, now: DateTime<Utc>) -> LintReport {
         match self {
             View::Published(loaded) => loaded.lint(now),
@@ -427,6 +496,13 @@ impl View {
     }
 
     /// Does this view show pending edits?
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn pending(&self) -> bool {
         matches!(self, View::Pending(_))
     }

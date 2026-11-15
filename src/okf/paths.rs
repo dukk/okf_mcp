@@ -33,6 +33,13 @@ pub const SKIP_TOP: [&str; 2] = ["docs", "tests"];
 
 /// Is `first`, a path's first component, repository machinery where no
 /// concept may live? `okf.py`'s `SKIP_DIRS | SKIP_TOP | {"tools"}`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 fn is_machinery(first: &str) -> bool {
     first == "tools" || SKIP_DIRS.contains(&first) || SKIP_TOP.contains(&first)
 }
@@ -54,6 +61,7 @@ static KEBAB_NAME: LazyLock<Regex> =
 /// assert_eq!(normpath("../x"), "../x");
 /// assert_eq!(normpath(""), ".");
 /// ```
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn normpath(path: &str) -> String {
     let absolute = path.starts_with('/');
     let mut parts: Vec<&str> = Vec::new();
@@ -87,6 +95,13 @@ pub fn normpath(path: &str) -> String {
 ///
 /// # Returns
 /// `true` when the path climbs above its starting directory.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 pub fn escapes_root(normalized: &str) -> bool {
     normalized == ".." || normalized.starts_with("../")
 }
@@ -98,6 +113,13 @@ pub fn escapes_root(normalized: &str) -> bool {
 ///
 /// # Returns
 /// Everything before the last `/`, or `""` for a top-level file.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 pub fn dirname(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(dir, _)| dir)
 }
@@ -109,6 +131,13 @@ pub fn dirname(path: &str) -> &str {
 ///
 /// # Returns
 /// Everything after the last `/`, or the whole path if it has none.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 pub fn basename(path: &str) -> &str {
     path.rsplit_once('/').map_or(path, |(_, name)| name)
 }
@@ -121,6 +150,7 @@ pub fn basename(path: &str) -> &str {
 ///
 /// # Returns
 /// The joined path.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn join(dir: &str, path: &str) -> String {
     if path.starts_with('/') || dir.is_empty() {
         path.to_string()
@@ -151,9 +181,11 @@ pub fn join(dir: &str, path: &str) -> String {
 /// assert_eq!(relpath("infra/clock.md", "infra"), "clock.md");
 /// assert_eq!(relpath("infra", "infra"), ".");
 /// ```
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn relpath(path: &str, start: &str) -> String {
     // A nested `fn` (not a closure) so the returned slices can borrow from
     // the argument: the signature ties their lifetime to `p`'s.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn parts(p: &str) -> Vec<&str> {
         p.split('/')
             .filter(|part| !part.is_empty() && *part != ".")
@@ -183,6 +215,13 @@ pub fn relpath(path: &str, start: &str) -> String {
 ///
 /// # Returns
 /// `true` for those three files at the root, `false` for every other path.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 pub fn outside_link_graph(path: &str) -> bool {
     !path.contains('/') && NON_CONCEPTS.contains(&path) && !RESERVED.contains(&path)
 }
@@ -194,6 +233,13 @@ pub fn outside_link_graph(path: &str) -> bool {
 ///
 /// # Returns
 /// `true` when the file's name is not in [`NON_CONCEPTS`].
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 pub fn is_concept(path: &str) -> bool {
     !NON_CONCEPTS.contains(&basename(path))
 }
@@ -208,6 +254,7 @@ pub fn is_concept(path: &str) -> bool {
 /// paths.sort_by(|x, y| walk_order(x, y));
 /// assert_eq!(paths, ["a.md", "c.md", "a/z.md", "b/x.md"]);
 /// ```
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn walk_order(left: &str, right: &str) -> Ordering {
     // `split` is a lazy iterator, and `peekable` lets us look one item ahead
     // without consuming it: a component is a file when nothing follows it.
@@ -243,6 +290,7 @@ pub fn walk_order(left: &str, right: &str) -> Ordering {
 /// # Errors
 /// * [`OkfError::InvalidPath`] when the file exists but is not a concept.
 /// * [`OkfError::NotFound`] when no candidate exists.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn resolve_concept(workspace: &dyn Workspace, reference: &str) -> Result<String, OkfError> {
     let bare = reference.trim_start_matches('/');
     // `Cow` holds either a borrowed `&str` or an owned `String`, so the first
@@ -280,6 +328,7 @@ pub fn resolve_concept(workspace: &dyn Workspace, reference: &str) -> Result<Str
 /// # Errors
 /// [`OkfError::InvalidPath`] when the path leaves the catalog, uses a
 /// reserved name, sits in machinery or a dot-directory, or already exists.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn new_concept_path(
     workspace: &dyn Workspace,
     reference: &str,

@@ -3,6 +3,7 @@
 //! so it needs neither a database nor a real filesystem in tests.
 
 pub mod analysis;
+pub(crate) mod caller;
 pub mod doc;
 pub mod markdown;
 pub mod ops;

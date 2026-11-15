@@ -22,6 +22,13 @@ use crate::okf::yaml::Value;
 
 /// Python's `str.isspace()`: Unicode White_Space plus U+001C..U+001F, which
 /// Rust's `char::is_whitespace` leaves out.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 pub fn is_py_space(c: char) -> bool {
     c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
 }
@@ -31,6 +38,13 @@ pub fn is_py_space(c: char) -> bool {
 /// Not `char::is_alphanumeric` (which counts combining marks and other
 /// `Alphabetic` characters that Python's `\w` rejects). Matches the class the
 /// ported regexes spell out, by asking the `regex` crate with that very class.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 pub fn is_py_word(c: char) -> bool {
     static WORD: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^[\p{L}\p{N}_]$").expect("word regex is valid"));
@@ -39,16 +53,37 @@ pub fn is_py_word(c: char) -> bool {
 }
 
 /// Python's `s.strip()`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 pub fn py_strip(s: &str) -> &str {
     s.trim_matches(is_py_space)
 }
 
 /// Python's `s.rstrip()`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 pub fn py_rstrip(s: &str) -> &str {
     s.trim_end_matches(is_py_space)
 }
 
 /// Python's `s.lstrip()`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 pub fn py_lstrip(s: &str) -> &str {
     s.trim_start_matches(is_py_space)
 }
@@ -64,6 +99,7 @@ pub fn py_lstrip(s: &str) -> &str {
 ///
 /// Returns the input unchanged, without allocating, when it has no `\r`.
 /// (`Cow` is "clone on write": either a borrow of `text` or a new `String`.)
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn universal_newlines(text: &str) -> Cow<'_, str> {
     let Some(first) = text.find('\r') else {
         return Cow::Borrowed(text);
@@ -97,6 +133,7 @@ pub fn universal_newlines(text: &str) -> Cow<'_, str> {
 ///
 /// # Returns
 /// The quoted text, byte for byte what Python's `repr(text)` prints.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn py_repr_str(text: &str) -> String {
     static NON_PRINTABLE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"^[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Zs}]$")
@@ -150,6 +187,7 @@ pub fn py_repr_str(text: &str) -> String {
 ///
 /// # Returns
 /// The text Python's `repr()` gives for the equivalent `None`/`str`/`list`/`dict`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn py_repr(value: &Value) -> String {
     match value {
         Value::Null => "None".to_string(),
@@ -175,6 +213,7 @@ pub fn py_repr(value: &Value) -> String {
 ///
 /// # Returns
 /// `"None"` for a missing key, otherwise [`py_repr`] of the value.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn py_repr_opt(value: Option<&Value>) -> String {
     value.map_or_else(|| "None".to_string(), py_repr)
 }
@@ -187,6 +226,7 @@ pub fn py_repr_opt(value: Option<&Value>) -> String {
 ///
 /// # Returns
 /// The string Python's `str(value)` gives.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn py_str(value: &Value) -> String {
     match value {
         Value::Str(text) => text.clone(),
@@ -202,6 +242,7 @@ pub fn py_str(value: &Value) -> String {
 ///
 /// # Returns
 /// What `bool(d.get(key))` gives in Python.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn py_truthy(value: Option<&Value>) -> bool {
     match value {
         None | Some(Value::Null) => false,
@@ -219,6 +260,7 @@ pub fn py_truthy(value: Option<&Value>) -> bool {
 ///
 /// # Returns
 /// [`py_str`] of the value when it is truthy ([`py_truthy`]), else `None`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn py_truthy_str(value: Option<&Value>) -> Option<String> {
     if py_truthy(value) {
         value.map(py_str)
@@ -238,6 +280,7 @@ pub fn py_truthy_str(value: Option<&Value>) -> Option<String> {
 ///
 /// # Returns
 /// A regex fragment; it only has Python's `re.I` meaning inside `(?i:...)`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn ignorecase_literal(literal: &str) -> String {
     let escaped = regex::escape(literal);
     // `regex::escape` only adds backslashes before ASCII punctuation, so no
@@ -262,6 +305,7 @@ pub fn ignorecase_literal(literal: &str) -> String {
 ///
 /// # Returns
 /// The decoded text, borrowed without allocating when `text` has no `%`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn py_unquote(text: &str) -> Cow<'_, str> {
     if !text.contains('%') {
         return Cow::Borrowed(text);

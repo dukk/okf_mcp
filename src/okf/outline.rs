@@ -71,6 +71,7 @@ impl<'t> Outline<'t> {
     /// assert_eq!((entries[0].slug.as_str(), entries[0].line), ("a", 4));
     /// assert_eq!(outline.section("b").unwrap().1, "## B\nText.\n");
     /// ```
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn of(text: &'t str) -> Self {
         let (head, body) = body_split(text);
         let found = headings(&body);
@@ -91,6 +92,7 @@ impl<'t> Outline<'t> {
     }
 
     /// Every heading, in file order, with its section's size.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn entries(&self) -> Vec<OutlineHeading> {
         (0..self.found.len()).map(|k| self.entry(k)).collect()
     }
@@ -109,6 +111,7 @@ impl<'t> Outline<'t> {
     /// [`OkfError::Refused`], as `split_concept` words it: no heading
     /// matches (the message lists every heading), or several share the text
     /// (it lists their slugs, which tell them apart).
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn section(&self, want: &str) -> Result<(OutlineHeading, String), OkfError> {
         // Slugs are unique, so an exact one picks its heading even where
         // another heading's text spells it (`# Hello World` is
@@ -138,6 +141,7 @@ impl<'t> Outline<'t> {
     }
 
     /// The `k`th heading's entry.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn entry(&self, k: usize) -> OutlineHeading {
         let heading = &self.found[k];
         let (start, end) = (heading.index, self.ends[k]);
@@ -161,6 +165,7 @@ impl<'t> Outline<'t> {
 ///
 /// # Returns
 /// One end per heading, exclusive; never before the line after the heading.
+#[tracing::instrument(level = "trace", skip_all)]
 fn section_ends(body: &[&str], found: &[Heading]) -> Vec<usize> {
     let mut ends = vec![body.len(); found.len()];
     // A stack of the headings whose section is still open, by position in

@@ -42,6 +42,7 @@ use crate::okf::workspace::{MemWorkspace, Workspace};
 ///   as it is for `Snapshot::build` (and so for publish). A stored catalog
 ///   holds none: import refuses such a file and the write tools write only
 ///   UTF-8.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn delete_concept(workspace: &MemWorkspace, reference: &str) -> Result<OpOutcome, OkfError> {
     let path = check_path(&resolve_concept(workspace, reference)?)?;
     let folder = dirname(&path);
@@ -96,6 +97,7 @@ pub fn delete_concept(workspace: &MemWorkspace, reference: &str) -> Result<OpOut
 ///
 /// # Errors
 /// The workspace's read error.
+#[tracing::instrument(level = "trace", skip_all)]
 fn links_into(
     workspace: &dyn Workspace,
     path: &str,
@@ -138,6 +140,7 @@ fn links_into(
 ///
 /// # Errors
 /// The workspace's listing error (none for a `MemWorkspace`).
+#[tracing::instrument(level = "trace", skip_all)]
 fn only_the_index_is_left(
     workspace: &dyn Workspace,
     folder: &str,

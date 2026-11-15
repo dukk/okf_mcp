@@ -49,6 +49,7 @@ impl Redirect {
     ///
     /// # Returns
     /// The new target and fragment, or `None` to leave the link alone.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn apply(&self, target: &str, fragment: Option<&str>) -> Option<(String, Option<String>)> {
         if target != self.from {
             return None;
@@ -92,6 +93,7 @@ pub struct Moved<'a> {
 /// # Errors
 /// The workspace's read or write error (a markdown file that is not UTF-8
 /// is [`OkfError::Io`], where `okf.py` raises `UnicodeDecodeError`).
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn rewrite_links(
     workspace: &dyn Workspace,
     redirect: &Redirect,
@@ -135,6 +137,7 @@ pub fn rewrite_links(
 ///
 /// # Returns
 /// The new text, or `None` when no line changed.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn rewrite_text(
     workspace: &dyn Workspace,
     path: &str,
@@ -161,6 +164,7 @@ pub(crate) fn rewrite_text(
 
 /// `LINK_RE.sub(repl, line)`: the line with each redirected link's target
 /// replaced, or `None` if no link was redirected.
+#[tracing::instrument(level = "trace", skip_all)]
 fn rewrite_line(
     workspace: &dyn Workspace,
     path: &str,
@@ -190,6 +194,7 @@ fn rewrite_line(
 
 /// `rewrite_links`' `repl`: the new target text of one link, or `None` to
 /// keep the link as written.
+#[tracing::instrument(level = "trace", skip_all)]
 fn redirected_target(
     workspace: &dyn Workspace,
     path: &str,

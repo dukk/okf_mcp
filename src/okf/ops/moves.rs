@@ -57,6 +57,7 @@ use crate::okf::workspace::{MemWorkspace, Workspace};
 ///
 /// The path checks come before anything is written. Run the op on a
 /// scratch copy, as the write path does, and drop the copy on error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn move_concept(workspace: &MemWorkspace, old: &str, new: &str) -> Result<OpOutcome, OkfError> {
     let old = resolve_concept(workspace, old)?;
     let (new, note) = new_concept_path(workspace, new)?;
@@ -133,6 +134,7 @@ pub fn move_concept(workspace: &MemWorkspace, old: &str, new: &str) -> Result<Op
 ///
 /// As in `okf.py`, the first `(<target>` in the link's text is replaced, so
 /// a link whose text itself holds `(<target>` changes there.
+#[tracing::instrument(level = "trace", skip_all)]
 fn relinked_bullet(
     workspace: &dyn Workspace,
     bullet: &str,
@@ -173,6 +175,7 @@ fn relinked_bullet(
 /// # Errors
 /// [`OkfError::FrontmatterParse`] when the frontmatter does not parse; the
 /// workspace's read error.
+#[tracing::instrument(level = "trace", skip_all)]
 fn frontmatter_bullet(workspace: &dyn Workspace, new: &str) -> Result<String, OkfError> {
     let data = Doc::from_text(new, &workspace.read_to_string(new)?).parse_checked()?;
     let name = basename(new);

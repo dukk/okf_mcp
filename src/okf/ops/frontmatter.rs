@@ -29,6 +29,7 @@ const OPEN_QUESTIONS: &str = "open_questions";
 const SOURCES: &str = "sources";
 
 /// One always-quoted list item: `" " * ind + "- " + scalar(q, force=True)`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn quoted_item(text: &str, indent: usize) -> String {
     format!(
         "{}- {}",
@@ -40,12 +41,14 @@ fn quoted_item(text: &str, indent: usize) -> String {
 /// `okf.py`'s `render=lambda v, ind: [... scalar(v, force=True)]`: an
 /// existing item re-rendered when a flow list becomes a block list. Python's
 /// `scalar` calls `str(v)` first, so a mapping item becomes its `repr` text.
+#[tracing::instrument(level = "trace", skip_all)]
 fn render_quoted(value: &Value, indent: usize) -> Vec<String> {
     vec![quoted_item(&py_str(value), indent)]
 }
 
 /// A key's list items, refusing anything but a list or nothing
 /// (`okf.py`'s "`<key>` is not a list; fix it by hand").
+#[tracing::instrument(level = "trace", skip_all)]
 fn list_or_nothing<'d>(
     path: &str,
     data: &'d IndexMap<String, Value>,
@@ -80,6 +83,7 @@ fn list_or_nothing<'d>(
 /// `index.md`); [`OkfError::Refused`] when it has no frontmatter;
 /// [`OkfError::FrontmatterParse`] when its frontmatter does not parse, or
 /// the edit would break it; [`OkfError::Shape`] when `verified` is a scalar.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn stamp(
     workspace: &dyn Workspace,
     ctx: &OpContext<'_>,
@@ -119,6 +123,7 @@ pub fn stamp(
 /// # Errors
 /// [`OkfError::Refused`] for an unknown outcome; as [`stamp`] otherwise
 /// ([`OkfError::Shape`] when `open_questions` is a scalar).
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn review(
     workspace: &dyn Workspace,
     ctx: &OpContext<'_>,
@@ -196,6 +201,7 @@ pub fn review(
 /// # Errors
 /// As [`stamp`] when loading the concept; [`OkfError::Shape`] when
 /// `open_questions` is not a list.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn question(
     workspace: &dyn Workspace,
     _ctx: &OpContext<'_>,
@@ -226,6 +232,7 @@ pub fn question(
 
 /// The 0-based index `unquestion` removes: a 1-based number, else the
 /// item whose text is exactly `question`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn question_index(path: &str, questions: &[Value], question: &str) -> Result<usize, OkfError> {
     let is_number = !question.is_empty() && question.bytes().all(|b| b.is_ascii_digit());
     if is_number {
@@ -268,6 +275,7 @@ fn question_index(path: &str, questions: &[Value], question: &str) -> Result<usi
 /// # Errors
 /// [`OkfError::Refused`] when there are no open questions, the index is out
 /// of range, or no question matches; as [`stamp`] when loading the concept.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn unquestion(
     workspace: &dyn Workspace,
     _ctx: &OpContext<'_>,
@@ -338,6 +346,7 @@ pub fn unquestion(
 /// # Errors
 /// [`OkfError::Shape`] when `sources` is not a list; [`OkfError::Refused`]
 /// when an entry with this id exists; as [`stamp`] when loading the concept.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn source(
     workspace: &dyn Workspace,
     _ctx: &OpContext<'_>,
@@ -381,6 +390,7 @@ pub fn source(
 
 /// Does `text` hold `token` with no word character (letter, digit, `_`,
 /// `-`) on either side? So id `s1` matches "see s1." but not "s12".
+#[tracing::instrument(level = "trace", skip_all)]
 fn contains_token(text: &str, token: &str) -> bool {
     let word = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
     // `match_indices` yields each occurrence's byte offset, like `re.finditer`.
@@ -398,6 +408,7 @@ fn contains_token(text: &str, token: &str) -> bool {
 /// Stricter than `split_concept`'s choice of sources to carry, which also
 /// counts the id as a bare substring: a false match there copies one extra
 /// source, but here it would refuse a removal for good.
+#[tracing::instrument(level = "trace", skip_all)]
 fn citing_footnote(body: &str, source: &IndexMap<String, Value>, id: &str) -> Option<String> {
     let lines: Vec<&str> = body.lines().collect();
     // A definition's later indented paragraphs cite too, so read it as
@@ -438,6 +449,7 @@ fn citing_footnote(body: &str, source: &IndexMap<String, Value>, id: &str) -> Op
 /// [`OkfError::Shape`] when `sources` is not a list; [`OkfError::Refused`]
 /// when no entry has this id, or a footnote cites it (the message names the
 /// footnote); as [`stamp`] when loading the concept.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn remove_source(
     workspace: &dyn Workspace,
     _ctx: &OpContext<'_>,

@@ -18,6 +18,8 @@ use std::cmp::Ordering;
 // `rayon::prelude` brings `par_iter` into scope (trait methods are only
 // callable when the trait is imported).
 use rayon::prelude::*;
+
+use crate::okf::caller::Caller;
 use serde::Serialize;
 
 use crate::okf::markdown::split_frontmatter;
@@ -67,6 +69,7 @@ impl SearchFields {
     /// # Returns
     /// The lowercased fields. Non-string `type`, `description` and `status`
     /// count as empty; a scalar `tags` counts as a one-item list.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn of(doc: &SnapshotDoc) -> Self {
         let data = doc.frontmatter().data();
         // A closure (Python lambda) capturing `data`; `unwrap_or_default` on
@@ -110,6 +113,13 @@ impl SearchFields {
     }
 
     /// Does `field` contain the lowercased `needle`?
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+        )
+    )]
     fn contains(&self, field: Field, needle: &str) -> bool {
         match field {
             Field::Names => self.names.iter().any(|n| n.contains(needle)),
@@ -120,6 +130,13 @@ impl SearchFields {
     }
 
     /// The best field containing `needle`, or `None` if none does.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+        )
+    )]
     fn best_field(&self, needle: &str) -> Option<Field> {
         Field::ALL
             .into_iter()
@@ -153,6 +170,7 @@ impl SearchQuery {
     ///
     /// # Returns
     /// The query; set the public fields to add filters or change the limit.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn new(text: &str) -> Self {
         Self {
             text: text.to_string(),
@@ -218,6 +236,7 @@ struct Prepared {
 ///
 /// # Returns
 /// At most `query.limit` hits, best first ([`SearchRank`], then path).
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn search(snapshot: &Snapshot, query: &SearchQuery) -> Vec<SearchHit> {
     if query.limit == 0 {
         return Vec::new();
@@ -237,25 +256,32 @@ pub fn search(snapshot: &Snapshot, query: &SearchQuery) -> Vec<SearchHit> {
 
     // Matching is independent per document, so it runs in parallel; the
     // `?` inside `filter_map`'s closure returns `None` (skip) early.
+    // `map_init` re-enters the caller's span on each worker (see `okf::caller`);
+    // `flatten` then drops the `None`s that `filter_map` would have dropped.
+    let caller = Caller::capture();
     let mut ranked: Vec<(SearchRank, &SnapshotDoc, &SearchFields)> = snapshot
         .docs()
         .par_iter()
-        .filter_map(|doc| {
-            let fields = doc.search_fields()?;
-            let filtered_out = wanted_type
-                .as_ref()
-                .is_some_and(|t| *t != fields.concept_type)
-                || wanted_status.as_ref().is_some_and(|s| *s != fields.status)
-                || !wanted_tags.iter().all(|t| fields.tags.contains(t));
-            if filtered_out {
-                return None;
-            }
-            let rank = SearchRank {
-                deprecated: fields.status == "deprecated",
-                tier: tier(fields, &prepared)?,
-            };
-            Some((rank, doc, fields))
-        })
+        .map_init(
+            || caller.enter(),
+            |_entered, doc| {
+                let fields = doc.search_fields()?;
+                let filtered_out = wanted_type
+                    .as_ref()
+                    .is_some_and(|t| *t != fields.concept_type)
+                    || wanted_status.as_ref().is_some_and(|s| *s != fields.status)
+                    || !wanted_tags.iter().all(|t| fields.tags.contains(t));
+                if filtered_out {
+                    return None;
+                }
+                let rank = SearchRank {
+                    deprecated: fields.status == "deprecated",
+                    tier: tier(fields, &prepared)?,
+                };
+                Some((rank, doc, fields))
+            },
+        )
+        .flatten()
         .collect();
 
     let order = |a: &(SearchRank, &SnapshotDoc, &SearchFields),
@@ -295,6 +321,7 @@ pub struct CatalogHit {
 ///
 /// # Returns
 /// At most `query.limit` hits.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn search_catalogs(catalogs: &[(&str, &Snapshot)], query: &SearchQuery) -> Vec<CatalogHit> {
     // Each search already runs across its documents with rayon and returns
     // at most `limit` hits, so the merge sorts at most catalogs x limit.
@@ -328,6 +355,7 @@ pub fn search_catalogs(catalogs: &[(&str, &Snapshot)], query: &SearchQuery) -> V
 }
 
 /// The tier, or `None` when some term occurs in no field.
+#[tracing::instrument(level = "trace", skip_all)]
 fn tier(fields: &SearchFields, query: &Prepared) -> Option<u8> {
     if query.terms.is_empty() {
         return Some(0);
@@ -350,6 +378,7 @@ fn tier(fields: &SearchFields, query: &Prepared) -> Option<u8> {
 }
 
 /// Builds the result for a ranked concept.
+#[tracing::instrument(level = "trace", skip_all)]
 fn hit(doc: &SnapshotDoc, fields: &SearchFields, rank: SearchRank, query: &Prepared) -> SearchHit {
     let description = doc
         .frontmatter()
@@ -379,6 +408,7 @@ fn hit(doc: &SnapshotDoc, fields: &SearchFields, rank: SearchRank, query: &Prepa
 /// `lowered` is `body.to_lowercase()`. Lowercasing never adds or removes a
 /// `\n`, so the two split into the same lines and can be zipped, which avoids
 /// lowercasing the body again.
+#[tracing::instrument(level = "trace", skip_all)]
 fn snippet(body: &str, lowered: &str, query: &Prepared) -> Option<String> {
     if query.terms.is_empty() {
         return None;
@@ -396,6 +426,7 @@ fn snippet(body: &str, lowered: &str, query: &Prepared) -> Option<String> {
 }
 
 /// A line stripped and cut to [`SNIPPET_LEN`] characters (not bytes).
+#[tracing::instrument(level = "trace", skip_all)]
 fn cut(line: &str) -> String {
     let text = py_strip(line);
     // `char_indices().nth(n)` finds the byte offset of the n-th character, so

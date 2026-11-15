@@ -87,6 +87,7 @@ pub struct OpOutcome {
 
 impl OpOutcome {
     /// An outcome that changed nothing, carrying `okf.py`'s message.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn unchanged(message: String) -> Self {
         // `..Self::default()` fills the other fields with their defaults.
         Self {
@@ -96,6 +97,7 @@ impl OpOutcome {
     }
 
     /// Records that `path` was written (once; later calls are no-ops).
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn touch(&mut self, path: &str) {
         if !self.touched.iter().any(|p| p == path) {
             self.touched.push(path.to_string());
@@ -103,6 +105,7 @@ impl OpOutcome {
     }
 
     /// Records that `path` was written by a replayable edit.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn record(&mut self, path: &str, op: ReplayOp) {
         self.touch(path);
         // `entry(..).or_default()` is `dict.setdefault(key, [])`.
@@ -116,6 +119,7 @@ impl OpOutcome {
     /// # Arguments
     /// * `changed` - the paths [`relink::rewrite_links`] returned.
     /// * `redirect` - the redirect it applied.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn record_rewrites(&mut self, changed: &[String], redirect: &Redirect) {
         for path in changed {
             if is_bookkeeping(path) {
@@ -148,6 +152,7 @@ pub enum StampField {
 
 impl StampField {
     /// The key's name, as `okf.py` prints it.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn as_str(self) -> &'static str {
         match self {
             StampField::Generated => "generated",
@@ -190,6 +195,7 @@ pub enum LogKind {
 
 impl LogKind {
     /// The kind as written in the bullet, `Update` etc.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn as_str(self) -> &'static str {
         match self {
             LogKind::Update => "Update",
@@ -217,6 +223,7 @@ pub(crate) struct LoadedConcept {
 /// [`OkfError::NotFound`] / [`OkfError::InvalidPath`] from
 /// [`resolve_concept`]; [`OkfError::Refused`] without frontmatter;
 /// [`OkfError::FrontmatterParse`] when it does not parse.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn load_concept(
     workspace: &dyn Workspace,
     reference: &str,
@@ -237,6 +244,7 @@ pub(crate) fn load_concept(
 /// # Errors
 /// [`OkfError::FrontmatterParse`] (nothing is written), or the workspace's
 /// write error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn save(
     workspace: &dyn Workspace,
     doc: &Doc,
@@ -249,6 +257,7 @@ pub(crate) fn save(
 }
 
 /// `{ by, at }` for a stamp: the actor and the frozen "now".
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn stamp_value(ctx: &OpContext<'_>) -> Value {
     Value::Map(IndexMap::from([
         ("by".to_string(), Value::Str(ctx.by.to_string())),
@@ -257,6 +266,13 @@ pub(crate) fn stamp_value(ctx: &OpContext<'_>) -> Value {
 }
 
 /// `okf.py`'s `die(reason)` as an error.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial constructor: builds a value from its arguments"
+    )
+)]
 pub(crate) fn refused(reason: String) -> OkfError {
     OkfError::Refused { reason }
 }
@@ -264,11 +280,25 @@ pub(crate) fn refused(reason: String) -> OkfError {
 /// The refusal for a concept `type` that is blank (Python's `str.strip()`)
 /// or not a string: `set_frontmatter`'s and `split_concept`'s rule, since
 /// every concept needs one.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "one-line delegation to an instrumented function"
+    )
+)]
 pub(crate) fn blank_type() -> OkfError {
     refused("type must be a non-blank string; every concept needs one".to_string())
 }
 
 /// Does publish replay edits to this file (`index.md`, `log.md`)?
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 fn is_bookkeeping(path: &str) -> bool {
     matches!(basename(path), "index.md" | "log.md")
 }
