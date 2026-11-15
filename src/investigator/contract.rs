@@ -209,7 +209,18 @@ pub(crate) fn result(
 ) -> Result<Value, RunnerError> {
     // No text fallback, including error text. isError wins over plausible data.
     if response.is_error == Some(true) {
-        return Err(RunnerError::Permission);
+        // The server's maintenance opt-out (a `Forbidden` whose body says
+        // `"maintenance": "off"`, M14 Decision 7) is a skip, not a
+        // permission failure. Only those two fixed fields are read.
+        let off = response
+            .structured_content
+            .as_ref()
+            .is_some_and(|body| body["error"] == "Forbidden" && body["maintenance"] == "off");
+        return Err(if off {
+            RunnerError::MaintenanceOff
+        } else {
+            RunnerError::Permission
+        });
     }
     bounded(&response)?;
     let value = response.structured_content.ok_or(RunnerError::Contract)?;
@@ -433,6 +444,29 @@ mod tests {
             .unwrap();
         tool["inputSchema"]["$defs"]["Token"] = serde_json::json!({"$ref":"#/$defs/Token"});
         assert!(validate_tools(&serde_json::from_value::<Vec<Tool>>(wire).unwrap()).is_err());
+    }
+
+    #[test]
+    fn investigator_contract_tells_a_maintenance_opt_out_from_a_refusal() {
+        let refusal = |body: Value| CallToolResult::structured_error(body);
+        let off = refusal(
+            json!({"error":"Forbidden","catalog":"pg","maintenance":"off",
+                                 "message":"forbidden: maintenance is off"}),
+        );
+        let forbidden = refusal(json!({"error":"Forbidden","message":"no"}));
+        // The marker alone, under another kind, is no opt-out.
+        let other = refusal(json!({"error":"UnlockRequired","maintenance":"off"}));
+
+        for (response, want) in [
+            (off, RunnerError::MaintenanceOff),
+            (forbidden, RunnerError::Permission),
+            (other, RunnerError::Permission),
+        ] {
+            assert_eq!(
+                result(AllowedTool::Claim, response, "pg").unwrap_err(),
+                want
+            );
+        }
     }
 
     #[test]

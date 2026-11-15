@@ -192,6 +192,15 @@ pub enum CatalogCommand {
         #[arg(long, value_enum)]
         access: MemberAccess,
     },
+    /// Let the maintenance runner check a catalog (`on`, the default) or
+    /// keep it out (`off`), whatever its key's grants.
+    SetMaintenance {
+        /// The catalog.
+        name: String,
+        /// `on` or `off`.
+        #[arg(value_enum)]
+        state: catalogs::Switch,
+    },
     /// Delete a catalog with its documents, history, pending changes and grants.
     Delete {
         /// Its name.
@@ -1007,6 +1016,12 @@ async fn run_catalog(
             print!(
                 "{}",
                 people::set_member_access(pool, &name, access, clock.now()).await?
+            );
+        }
+        CatalogCommand::SetMaintenance { name, state } => {
+            print!(
+                "{}",
+                people::set_maintenance(pool, &name, state, clock.now()).await?
             );
         }
         CatalogCommand::Delete { name, force } => {

@@ -112,7 +112,10 @@ impl RunSummary {
         if self.accounting_known
             && self.failed == 0
             && self.skipped == 0
-            && matches!(self.reason.as_str(), "completed" | "empty")
+            && matches!(
+                self.reason.as_str(),
+                "completed" | "empty" | "maintenance_off"
+            )
         {
             0
         } else {

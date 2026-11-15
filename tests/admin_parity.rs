@@ -55,6 +55,7 @@ const COVERED: &[&str] = &[
     "team unsuspend",
     "catalog set-owner",
     "catalog set-member-access",
+    "catalog set-maintenance",
     "key assign",
     "oauth code assign",
     "unassigned",

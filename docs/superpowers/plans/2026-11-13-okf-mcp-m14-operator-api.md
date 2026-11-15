@@ -244,7 +244,7 @@ Why each edge, and the shared files to merge with care:
 | 8c | Console Audit page |
 | 9a | Migration `0016`; unlock settings, `store::unlocks`, the two error kinds, the owner email |
 | 9b | The unlock check at every content choke point; tallies; the maintenance runner's exemption |
-| 9c | Migration `0017`; the per-catalog `maintenance` flag (store, REST, CLI), `catalog.maintenance_run` entries, the runner's skip |
+| 9c | Migration `0017` (the `maintenance_run` audit trigger; the column is `0016`'s); setting the per-catalog `maintenance` flag (store, REST, CLI), `catalog.maintenance_run` entries, the runner's skip |
 | 9d | `POST/GET/DELETE /api/v1/unlocks`, `okf-mcp unlock create/list/end`; parity |
 | 9e | Console: Unlock form on refusal, Unlocks page, catalog maintenance switch |
 | 10 | Documentation, README status, spec "What shipped differently", close-out |
@@ -286,7 +286,7 @@ Why each edge, and the shared files to merge with care:
 | `src/http/ui/index.html`, `js/core/shell.js` | Brand (2); nav links (8c, 9e) | 2, 8c, 9e |
 | `src/store/users.rs` | `find_record_by_email` (3); `delete` (4); actors and guards elsewhere (6a) | 3, 4, 6a |
 | `src/store/teams.rs` | Actors, guards (6b); `owned_by` (8a) | 6b, 8a |
-| `src/store/catalogs.rs` | Actors (6b); `maintenance` column and `set_maintenance` (9c) | 6b, 9c |
+| `src/store/catalogs.rs` | Actors (6b); `Switch` and `set_maintenance` (9c) | 6b, 9c |
 | `src/store/ceiling.rs` | Actors (6a entitlements, 6b member access); provisioner in `may_set_member_access` (5) | 5, 6a, 6b |
 | `src/store/keys.rs` | `create_provisioner`, `KeyRecord.provisioner` (5); actors (6c) | 5, 6c |
 | `src/store/oauth/codes.rs`, `src/store/oauth/grants.rs` | Actors | 6c |
@@ -6352,7 +6352,7 @@ git commit -m "feat(auth): operator access to customer catalogs needs an unlock 
 
 **Files:**
 - Create: `migrations/0017_maintenance_audit.sql`
-- Modify: `src/store/catalogs.rs` (`Catalog.maintenance`, `set_maintenance`), `src/store/teams.rs` (`owns_catalog`), `src/http/api/catalogs.rs` (route, `CatalogSummary.maintenance`), `src/cli.rs` (`CatalogCommand::SetMaintenance`), `src/investigator/{error,contract,supervisor,types}.rs`, `tests/admin_parity.rs`, `docs/operations.md`
+- Modify: `src/store/catalogs.rs` (`Switch`, `MaintenanceChange`, `set_maintenance`; *corrected, issue #407: no `Catalog.maintenance`, and no `teams::owns_catalog`*), `src/http/api/catalogs.rs` (route, `CatalogSummary.maintenance`), `src/cli.rs` (`CatalogCommand::SetMaintenance`), `src/investigator/{error,contract,supervisor,types}.rs`, `tests/admin_parity.rs`, `docs/operations.md`
 
 - [ ] **Step 1: Write the migration**
 
@@ -6650,6 +6650,14 @@ The runner (`src/investigator`): `RunnerError::MaintenanceOff` (`"runner skipped
 ```
 
 and the API row; "Report-only runner" gains the `maintenance_off` reason.
+
+> **Corrected (issue #407, 2026-11-15).** What shipped differs from the steps above in these ways:
+> - **Migration `0017` is still needed, for the audit trigger only.** The `catalogs.maintenance` column is in `0016_unlocks.sql` (Task 9a). `0017_maintenance_audit.sql` adds `audit_maintenance_run()` and two triggers: `maintenance_runs_audit_end` (`AFTER UPDATE OF state`, `OLD.state = 'running' AND NEW.state <> 'running'`) and `maintenance_runs_audit_empty` (`AFTER INSERT`, `NEW.state <> 'running'`), because a claim that finds nothing inserts its run already `completed`, and that pass needs its entry too. The function calls **no** audit resolver: `audit_credential`/`audit_person`/`audit_team_ref` lock users `FOR KEY SHARE`, and a run ends under its catalog's locks while `users::delete` holds the key's user `FOR UPDATE`, forgets its `audit_credentials` rows and then deletes the key (which sets `maintenance_runs.key_id` to NULL): a deadlock. It reads the run credential's `audit_credentials` row `FOR KEY SHARE SKIP LOCKED` (every key gets one from `gates::ensure_audit_rows`; a row being forgotten is skipped and the entry names no credential) and the owner team's `audit_teams` id with a plain `SELECT`. `actor_operator` is true for an admin-level key or a key of an admin user (issue #402's rule), else false. Tests in `src/store/maintenance/tests.rs`: `each_run_that_ends_writes_one_maintenance_run_entry` (close, replayed close, and a run failed by recovery past its deadline), `a_pass_that_finds_nothing_writes_one_maintenance_run_entry`, `a_run_ends_without_waiting_for_its_users_or_credentials_rows`.
+> - **No `Catalog.maintenance` field.** Nothing reads it: the listing takes the flag from the key cache, and `POST /api/v1/catalogs` answers `on` (the column's default; `create` never sets it).
+> - **No `teams::owns_catalog`.** The owner check is inside the store function, under its locks, so a demotion or a transfer racing the switch cannot let a former owner through. `catalogs::set_maintenance(pool, &MaintenanceChange { catalog, to: Switch, owner: Option<&str /* users.id */> }, actor, now) -> Result<Switch, OkfError>` (the previous flag). Order: `audit::lock_people(.., catalogs: &[name])`, then for an owner its `team_members` row `FOR SHARE OF m` (role `owner`, team = the catalog's owner team), then the catalog row `FOR NO KEY UPDATE` (re-checking that the owner team is the one the membership names), then `record_catalog(CatalogEvent { action: CatalogMaintenanceChanged, .. })` and `bump_admin_generation`. The same flag again records and bumps nothing. With an owner to check, an unknown or malformed catalog and a non-owner are both `Forbidden` (no existence oracle); without one, `CatalogNotSelected`. Tests: `store::catalogs::tests::{set_maintenance_records_a_change_bumps_and_nothing_for_the_same_flag, only_an_owner_of_the_owner_team_passes_the_owner_check, an_owners_switch_and_their_demotion_at_once_both_finish}`.
+> - **`Switch` lives in `src/store/catalogs.rs`** (`as_str`, `is_on`, `From<bool>`), shared by the store, REST and the CLI. The handler: `require_every_catalog` passes with `owner: None`; otherwise a console session passes its `user_id` as the owner to check, and any other credential gets the admin refusal. The route is not in `PROVISIONER_ROUTES`.
+> - **The runner's skip leaves no stop behind.** A `MaintenanceOff` while the journal has no `run_id` (the claim was refused) records no `stop_reason`; the pending claim stays (the journal never drops an unacknowledged mutation) and replays with its idempotency key on the next run, which works normally once the flag is on. A `MaintenanceOff` after the claim is an ordinary stop (reason `maintenance_off`, exit 4: work was left). `journal::valid_failure` accepts `maintenance_off`. Tests: `investigator_supervisor_skips_a_catalog_with_maintenance_off` (with the second run), `investigator_supervisor_maintenance_off_mid_run_is_a_stop_not_a_skip`, `contract::tests::investigator_contract_tells_a_maintenance_opt_out_from_a_refusal`.
+> - **The plan's REST runner test** uses `staff_root` / `staff_key(test, "runner", Access::Read, true)` and `require_unlock`, and the owner's console session turns the flag off through the route. CLI test: `cli::people::tests::set_maintenance_reports_the_previous_flag_and_records_the_cli`.
 
 - [ ] **Step 5: Run, gate, commit**
 
@@ -6986,6 +6994,7 @@ git commit -m "feat(console): unlock a locked catalog, the Unlocks page and the 
   - "Troubleshooting": `UnlockRequired` on a key with no user (assign it a user); `maintenance_off` from the runner.
   - Check every new route has an API reference row and every new subcommand a parity row (`tools/agentic/gate.sh narrow --test admin_parity`).
   - The API reference's counts (`docs/operations.md`, "### API reference" lead). M13 left them at 88 endpoints, "Users and teams" 21. This milestone adds six: `GET /api/v1/audit` and `GET /api/v1/audit/export` (8a), `PUT /api/v1/catalogs/{catalog}/maintenance` (9c), and `POST /api/v1/unlocks`, `GET /api/v1/unlocks`, `DELETE /api/v1/unlocks/{id}` (9d), so 94, with "Catalogs and import/export" 9 to 10 and two new areas in the lead's list, Audit (2) and Unlocks (3); "Users and teams" stays 21 (Tasks 3 to 5 change existing routes only). Recount from the router before writing them: a task may have added or merged a route since. `/ui/brand.json` (Task 2) is not under `/api/v1` and not counted. *(Corrected, M13 merged, 2026-11-14: the plan named no counts; M13 Task 8 found them stale.)*
+    *(Corrected, issue #407, 2026-11-15: Task 9c already set the lead to 94 endpoints and "Catalogs and import/export" to 10, since 8a and 9d had already updated theirs; recount before changing them.)*
   - "Upgrades" already has M13's bullet on `team list` (the display name moved from field 5 to field 6); M14 changes no `team list` column, so a script that parses it needs nothing new.
 - [ ] **Step 2: `README.md`** status paragraph: "Milestone 14 added the operator API: branding, finding and deleting users, provisioner keys, a stored audit log readable by team owners, and unlock-before-access for operator staff (`docs/operations.md`; design: `docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`)."
 - [ ] **Step 3: The spec**: set its status to "Delivered" and add "What shipped differently", listing this plan's Decisions 1 to 12 that the spec did not already state, and every dated correction the tasks recorded.
