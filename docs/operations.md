@@ -521,11 +521,35 @@ A new catalog is not empty: it starts with a root `index.md` (headed with
 its name, its description as the first paragraph) and a `log.md` with one
 `Creation` entry, so agents can list concepts and log changes at once.
 Importing into it before anything is published replaces them without
-`--replace`. A catalog created before starter files existed (or one
-imported without indexes) is repaired through any agent with write access:
-open a changeset, call `repair_indexes`, review `pending_changes`, fill in
-the `TODO` placeholders it names, and publish. The maintenance runner does
-not do this for you; it only reports.
+`--replace`.
+
+**Repair catalogs without indexes.** A catalog created before starter files
+existed (or one imported without indexes) has no root `index.md`, so agents
+cannot list concepts in it. Repair every such catalog from the command line,
+checking first with `--dry-run`:
+
+```sh
+kubectl -n okf-mcp exec deploy/okf-mcp -- \
+    okf-mcp catalog repair-indexes --missing-only --dry-run
+kubectl -n okf-mcp exec deploy/okf-mcp -- \
+    okf-mcp catalog repair-indexes --missing-only
+```
+
+or name catalogs (`okf-mcp catalog repair-indexes notes recipes`). Each
+repair is published at once, under the catalog's lock as an import is: a
+missing root `index.md` is the one a new catalog gets (its name and
+description), then a `log.md`, folder indexes, and folder and concept
+listings are added where missing, and `log.md` records the repair. Nothing
+existing is changed, so a second run writes nothing. Listings of concepts
+without a title or description get `TODO` placeholders; the output names
+each one. A changeset someone left open on an affected index replays its
+bookkeeping onto the repaired text or conflicts at publish, as after any
+publish. The running server shows the result within `poll_interval`.
+
+An agent with write access can do the same for one catalog through a
+changeset, to review before publishing: `open_changeset`, `repair_indexes`,
+`pending_changes`, then `publish`. The maintenance runner does neither; it
+only reports.
 
 **Change a catalog's description** (what `list_catalogs` tells agents, for
 example when a catalog becomes the source of truth). It prints the old and
@@ -727,6 +751,7 @@ takes effect at once.
 | `okf-mcp team suspend NAME [--notice TEXT]` | Suspends the team: its catalogs refuse every non-admin credential except export (see [Suspending a team](#suspending-a-team)). Prints `suspended team NAME`. Repeating it replaces the notice (none when `--notice` is left out) and keeps the first suspension time |
 | `okf-mcp team unsuspend NAME` | Lifts the suspension. Prints `lifted the suspension of team NAME`; no change when the team is active |
 | `okf-mcp catalog create NAME --owner TEAM [--description TEXT]` | `--owner` is required |
+| `okf-mcp catalog repair-indexes [NAME...] [--missing-only] [--dry-run] [--actor ACTOR]` | Adds the root `index.md`, `log.md`, folder indexes and listings the named catalogs are missing, and publishes them at once. `--missing-only` keeps only catalogs without a root `index.md` (every such catalog when none is named); `--dry-run` writes nothing. Prints, per catalog, its summary, the files written and a note per created file and `TODO` placeholder, then `repaired N of M catalog(s)`. A failing catalog does not stop the others; the command then exits non-zero naming it. Revisions record `ACTOR` (default `okf-mcp/repair-indexes`) and the message `repair indexes` |
 | `okf-mcp catalog set-owner NAME --team TEAM` | Moves a catalog to another team, or gives a legacy catalog its first owner. Prints `catalog C: owner OLD -> NEW` (`(none)` for a legacy catalog) |
 | `okf-mcp catalog set-member-access NAME --access none\|read\|write` | What members of the owner team reach through their own keys and grants (default `write`). Prints `catalog C: member access OLD -> NEW` |
 | `okf-mcp key create NAME --user USER [--provisioner] ...` | `--user` is required; `--actor` still defaults to `NAME`. `--provisioner` takes no `--access`, `--all`, `--catalogs`, `--default` or `--maintenance-report` |
@@ -1043,6 +1068,7 @@ the setting and belongs to no team.
 | `catalog.description_changed` | A catalog's description changes (`catalog update`, `PATCH /api/v1/catalogs/{catalog}`). The same text again records nothing | `length` (in characters; never the text) |
 | `catalog.member_access_changed` | A catalog's member access changes (`catalog set-member-access`, `PUT /api/v1/catalogs/{catalog}/member-access`). The same value again records nothing | `from`, `to` (`none`, `read` or `write`) |
 | `catalog.deleted` | A catalog is deleted (`catalog delete`, `DELETE /api/v1/catalogs/{catalog}`), recorded before the row goes. A refused deletion records nothing | `forced` (unpublished changes were deleted with it), `generation` |
+| `catalog.repaired` | `okf-mcp catalog repair-indexes` writes at least one file (a dry run, or a catalog with nothing missing, records nothing) | `files` (the paths written), `generation` (after the repair) |
 | `catalog.imported` | An import writes or deletes at least one file (`okf-mcp import`, `POST /catalogs/{name}/import` and its `/api/v1` twin, the console). An import that changes nothing, or is refused, records nothing | `replace`, `scope` (`everything` or `machinery`), `written` (files added or changed), `deleted`, `generation` (after the import) |
 | `key.created` | An admin or signed-in user creates a key (CLI, API, console, self-service); provisioner creation also records this action | `access`, `all_catalogs`, `catalogs` (count), `maintenance_report`, `self_issued`, `expires` (boolean); a provisioner records only `provisioner: true` |
 | `key.revoked`, `oauth.grant_revoked` | An API key or OAuth grant is revoked, including self-service. An already revoked or unknown target records nothing | none |

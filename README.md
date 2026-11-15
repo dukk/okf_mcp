@@ -70,7 +70,7 @@ server" (the subcommands read only `max_import_bytes`, default `64MiB`, the
 largest uncompressed import, but a file that fails validation fails every
 subcommand). Every subcommand applies the embedded migrations first, so
 `migrate` is only needed as a separate deploy step. `okf-mcp --help` and
-`okf-mcp <command> --help` list the rest: `catalog update|list|delete`,
+`okf-mcp <command> --help` list the rest: `catalog update|list|delete|repair-indexes`,
 `key list|revoke|grant|ungrant|maintenance-report`, `import --replace
 [--only-machinery] [--expect-generation N]`.
 `key create --maintenance-report` opts a key into reporting independently of
@@ -459,7 +459,10 @@ Bookkeeping (`write`), ports of `okf.py`'s commands with its exact output:
 | `repair_indexes` | Creates whatever bookkeeping the catalog is missing: the root `index.md` and `log.md`, folder indexes, and folder and concept listings (see below; not in `okf.py`) |
 
 `repair_indexes` repairs a catalog created before new catalogs got starter
-files, or one whose indexes were never written. It only adds: existing
+files, or one whose indexes were never written. Operators can repair every
+such catalog at once with `okf-mcp catalog repair-indexes --missing-only`
+(`--dry-run` first), which publishes directly and logs the repair in each
+catalog's `log.md`. It only adds: existing
 headings, prose, listings and summaries stay as they are, a target an index
 already links is not listed again, and a second run changes nothing. A
 listing takes the concept's `title` (else its first `# ` heading, else its

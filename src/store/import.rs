@@ -69,17 +69,22 @@ pub struct ImportReport {
 
 /// A document row as import compares it (tombstones included).
 #[derive(sqlx::FromRow)]
-struct ExistingRow {
-    path: String,
-    content: Vec<u8>,
-    executable: bool,
-    revision: i32,
-    deleted_at: Option<DateTime<Utc>>,
+pub(crate) struct ExistingRow {
+    /// Catalog-relative path.
+    pub(crate) path: String,
+    /// The bytes (empty for a tombstone).
+    pub(crate) content: Vec<u8>,
+    /// The execute bit.
+    pub(crate) executable: bool,
+    /// The current revision, tombstones included.
+    pub(crate) revision: i32,
+    /// Set for a tombstone.
+    pub(crate) deleted_at: Option<DateTime<Utc>>,
 }
 
 impl ExistingRow {
     /// Not a tombstone?
-    fn is_live(&self) -> bool {
+    pub(crate) fn is_live(&self) -> bool {
         self.deleted_at.is_none()
     }
 
@@ -149,24 +154,15 @@ pub async fn import(
         },
     )
     .await?;
-    let found = catalogs::find(&mut *tx, catalog).await?;
-    catalogs::lock(&mut tx, found.id).await?;
-    // A delete holding the lock may have removed (or replaced) the catalog
-    // while this import waited; look again now that nothing else can. The
-    // second look is also the generation no publish can move any more.
-    let locked = catalogs::find(&mut *tx, catalog).await?;
-    if locked.id != found.id {
-        return Err(OkfError::CatalogNotSelected {
-            catalog: catalog.to_string(),
-        });
-    }
+    // Under the lock, and read again: see `lock_by_name`.
+    let found = catalogs::lock_by_name(&mut tx, catalog).await?;
     if let Some(expected) = options.expect_generation {
-        if locked.generation != expected {
+        if found.generation != expected {
             return Err(OkfError::Refused {
                 reason: format!(
                     "catalog {catalog:?} is at generation {}, not {expected}: it changed \
                      since the export; export it again",
-                    locked.generation
+                    found.generation
                 ),
             });
         }
@@ -175,7 +171,7 @@ pub async fn import(
     // Generation 0: nothing was ever published or imported, so the live
     // documents are the starter files `catalogs::create` wrote, which an
     // import replaces without `replace` (`files` decides what stays).
-    if !options.replace && locked.generation != 0 && existing.values().any(ExistingRow::is_live) {
+    if !options.replace && found.generation != 0 && existing.values().any(ExistingRow::is_live) {
         return Err(OkfError::Refused {
             reason: format!(
                 "catalog {catalog:?} is not empty; pass --replace to replace its contents"
@@ -345,7 +341,7 @@ fn refuse_markdown_that_is_not_text(files: &Files) -> Result<(), OkfError> {
 }
 
 /// Every row of the catalog, tombstones included, by path.
-async fn existing_rows(
+pub(crate) async fn existing_rows(
     conn: &mut PgConnection,
     catalog_id: i64,
 ) -> Result<HashMap<String, ExistingRow>, OkfError> {

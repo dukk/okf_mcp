@@ -46,7 +46,9 @@ pub mod split;
 pub use content::{create_concept, edit_document, replace_body, set_frontmatter, NewConcept};
 pub use delete::delete_concept;
 pub use frontmatter::{question, remove_source, review, source, stamp, unquestion, OUTCOMES};
-pub use log_index::{ensure_index, index, log, repair_indexes, starter_files, STARTER_FILE_COUNT};
+pub use log_index::{
+    ensure_index, index, log, repair_catalog, repair_indexes, starter_files, STARTER_FILE_COUNT,
+};
 pub use moves::move_concept;
 pub use relink::{rewrite_links, Moved, Redirect};
 // `replay` names both the module and its main function: Rust keeps modules

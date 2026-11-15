@@ -248,6 +248,7 @@ actions! {
     CatalogMemberAccessChanged => "catalog.member_access_changed",
     CatalogDescriptionChanged => "catalog.description_changed",
     CatalogImported => "catalog.imported",
+    CatalogRepaired => "catalog.repaired",
     CatalogMaintenanceChanged => "catalog.maintenance_changed",
     KeyCreated => "key.created",
     KeyRevoked => "key.revoked",

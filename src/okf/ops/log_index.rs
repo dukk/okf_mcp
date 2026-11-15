@@ -6,7 +6,7 @@
 //! [`starter_files`] a new catalog is created with, and [`repair_indexes`],
 //! which creates the root `index.md` and `log.md`, folder indexes and listings
 //! a catalog is missing, so a catalog created empty can be repaired through a
-//! changeset.
+//! changeset; [`repair_catalog`] is the operator's direct-write variant.
 //!
 //! Divergences from `okf.py`:
 //! - a missing `log.md` is [`OkfError::NotFound`] (okf.py: `no log.md at <root>`);
@@ -372,6 +372,14 @@ pub fn starter_files(
 /// The workspace's listing, read or write error. Files written before the
 /// error stay written, so run it on a scratch copy (as the write path does).
 pub fn repair_indexes(workspace: &dyn Workspace) -> Result<OpOutcome, OkfError> {
+    let (mut outcome, placeholders) = repair_counted(workspace)?;
+    outcome.message = repair_message(outcome.touched.len(), placeholders);
+    Ok(outcome)
+}
+
+/// [`repair_indexes`]' edits, and how many TODO placeholders they wrote;
+/// the outcome's message is left empty for the caller.
+fn repair_counted(workspace: &dyn Workspace) -> Result<(OpOutcome, usize), OkfError> {
     let markdown = workspace.list_markdown()?;
     let mut outcome = OpOutcome::default();
     let mut placeholders = 0_usize;
@@ -452,14 +460,81 @@ pub fn repair_indexes(workspace: &dyn Workspace) -> Result<OpOutcome, OkfError> 
         };
         list_concept(workspace, &listing, &mut outcome)?;
     }
-    outcome.message = if outcome.touched.is_empty() {
+    Ok((outcome, placeholders))
+}
+
+/// A repair's summary line.
+fn repair_message(written: usize, placeholders: usize) -> String {
+    if written == 0 {
         "indexes complete: nothing to repair".to_string()
     } else {
         format!(
-            "repaired {} file(s); {placeholders} TODO placeholder(s) to fill in (see notes)",
-            outcome.touched.len()
+            "repaired {written} file(s); {placeholders} TODO placeholder(s) to fill in (see notes)"
         )
-    };
+    }
+}
+
+/// The operator's repair (`okf-mcp catalog repair-indexes`): as
+/// [`repair_indexes`], except that a missing root `index.md` is the one a
+/// new catalog gets (headed with the catalog's name, its description as the
+/// first paragraph, see [`starter_files`]), and a repair that wrote anything
+/// adds an `Update` entry to `log.md` saying so, since no agent is there to
+/// log it.
+///
+/// The outcome is for a direct write, not a changeset: it records no replay
+/// ops, because the edit is published at once under the catalog's lock.
+///
+/// # Arguments
+/// * `workspace` - the catalog's live documents.
+/// * `ctx` - its `now` dates the log entry.
+/// * `name` - the catalog's name.
+/// * `description` - the catalog's description.
+///
+/// # Returns
+/// The files written (the root first), a summary message and one note per
+/// created file and per TODO placeholder; nothing written when nothing is
+/// missing.
+///
+/// # Errors
+/// As [`repair_indexes`].
+pub fn repair_catalog(
+    workspace: &dyn Workspace,
+    ctx: &OpContext<'_>,
+    name: &str,
+    description: &str,
+) -> Result<OpOutcome, OkfError> {
+    let mut outcome = OpOutcome::default();
+    let mut placeholders = 0_usize;
+    if !workspace.exists(ROOT_INDEX) {
+        workspace.write_atomic(ROOT_INDEX, &root_index_text(name, description))?;
+        outcome.touch(ROOT_INDEX);
+        if collapse_whitespace(description).is_empty() {
+            outcome.notes.push(
+                "created /index.md; the catalog has no description, so replace its TODO line"
+                    .to_string(),
+            );
+            placeholders += 1;
+        } else {
+            outcome
+                .notes
+                .push("created /index.md from the catalog's name and description".to_string());
+        }
+    }
+    let (repaired, more) = repair_counted(workspace)?;
+    placeholders += more;
+    for path in &repaired.touched {
+        outcome.touch(path);
+    }
+    outcome.notes.extend(repaired.notes);
+    if !outcome.touched.is_empty() {
+        let text = format!(
+            "Repaired the catalog's indexes (okf-mcp catalog repair-indexes): wrote {}.",
+            outcome.touched.join(", ")
+        );
+        log(workspace, ctx, LogKind::Update, &text)?;
+        outcome.touch(LOG);
+    }
+    outcome.message = repair_message(outcome.touched.len(), placeholders);
     Ok(outcome)
 }
 
@@ -994,5 +1069,58 @@ mod tests {
             log(&ws, &ctx(), LogKind::Update, "x").unwrap().touched,
             ["log.md"]
         );
+    }
+
+    #[test]
+    fn repair_catalog_names_the_root_and_logs_what_it_wrote() {
+        let ws = MemWorkspace::from_files([("infra/ntp.md", "---\ntype: S\ntitle: NTP\n---\n")]);
+
+        let outcome = repair_catalog(&ws, &ctx(), "pg", "Team notes.").unwrap();
+        let again = repair_catalog(&ws, &ctx(), "pg", "Team notes.").unwrap();
+
+        assert_eq!(outcome.touched, ["index.md", "log.md", "infra/index.md"]);
+        assert!(
+            outcome.replay.is_empty(),
+            "a direct write records no replay"
+        );
+        assert_eq!(
+            ws.read_to_string("index.md").unwrap(),
+            concat!(
+                "---\nokf_version: \"0.2\"\n---\n\n# pg\n\nTeam notes.\n\n# Sections\n\n",
+                "* [Infra](infra/) - TODO: describe this folder\n",
+            )
+        );
+        assert_eq!(
+            ws.read_to_string("log.md").unwrap(),
+            concat!(
+                "# Knowledge Catalog Update Log\n\n## 2026-10-27\n\n",
+                "* **Update:** Repaired the catalog's indexes (okf-mcp catalog repair-indexes): ",
+                "wrote index.md, log.md, infra/index.md.\n",
+            )
+        );
+        assert_eq!(
+            outcome.notes[0],
+            "created /index.md from the catalog's name and description"
+        );
+        // infra/index.md and its listing (2), and NTP's missing description.
+        assert_eq!(
+            outcome.message,
+            "repaired 3 file(s); 3 TODO placeholder(s) to fill in (see notes)"
+        );
+        assert!(again.touched.is_empty(), "{again:?}");
+        assert_eq!(again.message, "indexes complete: nothing to repair");
+    }
+
+    #[test]
+    fn repair_catalog_of_a_complete_catalog_logs_nothing() {
+        let ws = MemWorkspace::from_files([
+            ("index.md", "---\nokf_version: \"0.2\"\n---\n# Root\n"),
+            ("log.md", "# Log\n"),
+        ]);
+
+        let outcome = repair_catalog(&ws, &ctx(), "pg", "").unwrap();
+
+        assert!(outcome.touched.is_empty());
+        assert_eq!(ws.read_to_string("log.md").unwrap(), "# Log\n");
     }
 }

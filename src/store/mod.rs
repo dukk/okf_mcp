@@ -18,6 +18,7 @@ pub mod oauth;
 pub mod passkeys;
 pub mod passwords;
 pub mod publish;
+pub mod repair;
 pub mod settings;
 pub mod sign_in_events;
 pub mod sign_in_methods;

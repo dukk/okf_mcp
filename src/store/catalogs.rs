@@ -616,6 +616,33 @@ pub(crate) async fn lock(conn: &mut PgConnection, catalog_id: i64) -> Result<(),
     Ok(())
 }
 
+/// Finds catalog `name` and takes its lock ([`lock`]), then reads it again:
+/// a delete holding the lock may have removed (or replaced) the catalog
+/// while this waited. The second read is also the generation no publish or
+/// import can move until the transaction ends.
+///
+/// # Arguments
+/// * `conn` - the transaction's connection.
+/// * `name` - the catalog's name.
+///
+/// # Returns
+/// The catalog's row, read under its lock.
+///
+/// # Errors
+/// [`OkfError::CatalogNotSelected`] for an unknown (or malformed) catalog,
+/// or one deleted or replaced while this waited; [`OkfError::Database`].
+pub(crate) async fn lock_by_name(conn: &mut PgConnection, name: &str) -> Result<Catalog, OkfError> {
+    let found = find(&mut *conn, name).await?;
+    lock(conn, found.id).await?;
+    let locked = find(&mut *conn, name).await?;
+    if locked.id != found.id {
+        return Err(OkfError::CatalogNotSelected {
+            catalog: name.to_string(),
+        });
+    }
+    Ok(locked)
+}
+
 /// Bumps `server_state.admin_generation` inside the caller's transaction.
 ///
 /// # Arguments

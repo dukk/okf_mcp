@@ -20,6 +20,19 @@
   root: both keep whatever file exists at publish, so a repair published
   after someone else's curated root or log adds its listings to that text
   instead of overwriting it.
+- `okf-mcp catalog repair-indexes [NAME...] [--missing-only] [--dry-run]
+  [--actor ACTOR]`, so an operator can repair users' catalogs that have no
+  root index without an agent: `store::repair::repair` runs
+  `okf::ops::repair_catalog` (as `repair_indexes`, but a missing root gets
+  the catalog's name and description, and `log.md` records the repair) on
+  the live documents and writes the result at once, in one transaction under
+  the catalog's lock, as the command-line import does. Each path continues
+  its revision numbers (`create` or `update` revisions, message
+  `repair indexes`), the generation is bumped and `catalog.repaired` is
+  recorded. `--missing-only` selects catalogs without a live root
+  `index.md` (`store::repair::missing_root_index`); `--dry-run` writes
+  nothing. A failing catalog does not stop the rest.
+- Audit action `catalog.repaired` (`files`, `generation`).
 - Test helpers `mcp::testing::app_with_new` (catalogs created, nothing
   imported) and `store::catalogs::tests::drop_starter_files` (an empty
   catalog, as one created before this change is).
@@ -41,6 +54,8 @@
   (pinned by `tests/golden/ops.json`); its parameter docs name the tool.
 - `ensure_index`'s parent listing moved into `insert_folder_listing`, shared
   with `repair_indexes`.
+- Import's find-lock-find step is `store::catalogs::lock_by_name`, shared
+  with the repair; `ExistingRow` and `existing_rows` are crate-visible.
 - The console's New catalog dialog, `catalog create`'s help and the README
   and operations guide say a new catalog holds starter files, and describe
   `repair_indexes`.

@@ -32,6 +32,7 @@ use crate::store::export;
 use crate::store::import::{self, ImportOptions, ImportScope};
 use crate::store::keys::{self, Access, Grants, KeyKind, NewKey};
 use crate::store::oauth::codes::{self, NewSignInCode, SignInCodeRecord};
+use crate::store::repair;
 use crate::store::settings::SettingKey;
 use crate::store::teams::Role;
 
@@ -179,6 +180,25 @@ pub enum CatalogCommand {
         /// `none`, `read` or `write`.
         #[arg(long, value_enum)]
         access: MemberAccess,
+    },
+    /// Create the root index.md, log.md, folder indexes and listings that
+    /// catalogs are missing, and publish them at once (each repaired
+    /// catalog's log.md records it). Only adds: existing text is kept, and
+    /// a second run changes nothing. A running server shows the result
+    /// within one `poll_interval`.
+    RepairIndexes {
+        /// The catalogs to repair. With `--missing-only`, only those of them
+        /// without a root index.md; with none named, every such catalog.
+        names: Vec<String>,
+        /// Repair only catalogs that have no root index.md.
+        #[arg(long)]
+        missing_only: bool,
+        /// Report what each repair would write, and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Recorded as the revisions' actor.
+        #[arg(long, default_value = "okf-mcp/repair-indexes")]
+        actor: String,
     },
     /// Delete a catalog with its documents, history, pending changes and grants.
     Delete {
@@ -892,8 +912,122 @@ async fn run_catalog(
             catalogs::delete(pool, &name, force, &AuditActor::cli(), clock.now()).await?;
             println!("deleted catalog {name}");
         }
+        CatalogCommand::RepairIndexes {
+            names,
+            missing_only,
+            dry_run,
+            actor,
+        } => {
+            let targets = repair_targets(pool, names, missing_only).await?;
+            let audit = AuditActor::cli();
+            let options = repair::RepairOptions {
+                dry_run,
+                actor: &actor,
+                audit: &audit,
+                now: clock.now(),
+            };
+            print!("{}", repair_catalogs(pool, &targets, &options).await?);
+        }
     }
     Ok(())
+}
+
+/// The catalogs `catalog repair-indexes` repairs.
+///
+/// # Arguments
+/// * `pool` - the migrated database.
+/// * `names` - the catalogs named on the command line.
+/// * `missing_only` - keep only catalogs without a root `index.md` (every
+///   such catalog when none is named).
+///
+/// # Returns
+/// The names, in the order given (sorted for `--missing-only` alone).
+///
+/// # Errors
+/// Neither a name nor `--missing-only`; a database error.
+async fn repair_targets(
+    pool: &PgPool,
+    names: Vec<String>,
+    missing_only: bool,
+) -> anyhow::Result<Vec<String>> {
+    if !missing_only {
+        anyhow::ensure!(
+            !names.is_empty(),
+            "name the catalogs to repair, or pass --missing-only for every catalog \
+             without a root index.md"
+        );
+        return Ok(names);
+    }
+    let missing = repair::missing_root_index(pool).await?;
+    if names.is_empty() {
+        return Ok(missing);
+    }
+    // `retain` filters in place, like a list comprehension over `names`.
+    let mut names = names;
+    names.retain(|name| missing.contains(name));
+    Ok(names)
+}
+
+/// Repairs each catalog in turn, carrying on past one that fails, and
+/// describes each result.
+///
+/// # Arguments
+/// * `pool` - the migrated database.
+/// * `targets` - the catalogs.
+/// * `options` - dry run, actor and time.
+///
+/// # Returns
+/// The report: per catalog its summary, the files written (or that would
+/// be) and the notes; then a total line.
+///
+/// # Errors
+/// When any catalog fails, after every other one was tried: the error holds
+/// the whole report, then each failed catalog and why.
+async fn repair_catalogs(
+    pool: &PgPool,
+    targets: &[String],
+    options: &repair::RepairOptions<'_>,
+) -> anyhow::Result<String> {
+    let mut out = String::new();
+    let mut failures = Vec::new();
+    let mut repaired = 0_usize;
+    let mode = if options.dry_run {
+        " (dry run: nothing written)"
+    } else {
+        ""
+    };
+    for name in targets {
+        match repair::repair(pool, name, options).await {
+            Ok(report) => {
+                if !report.written.is_empty() {
+                    repaired += 1;
+                }
+                out.push_str(&format!("{name}{mode}: {}\n", report.message));
+                for path in &report.written {
+                    out.push_str(&format!("  {path}\n"));
+                }
+                for note in &report.notes {
+                    out.push_str(&format!("  note: {note}\n"));
+                }
+            }
+            Err(error) => failures.push(format!("{name}: {error}")),
+        }
+    }
+    let verb = if options.dry_run {
+        "would repair"
+    } else {
+        "repaired"
+    };
+    out.push_str(&format!(
+        "{verb} {repaired} of {} catalog(s)\n",
+        targets.len()
+    ));
+    if failures.is_empty() {
+        Ok(out)
+    } else {
+        // The successes are part of the error, so nothing done is unreported.
+        anyhow::bail!("{out}failed:\n  {}", failures.join("\n  "))
+    }
 }
 
 /// Runs `okf-mcp key ...`. `create` prints the key alone on stdout (so
@@ -2049,6 +2183,99 @@ mod tests {
             "laptop\texample-actor\tcode-id\tread\tredeemed\t*\tdefault main\t\
              expires 2026-11-12T12:00:00Z\tgrant grant-id\tuser -"
         );
+    }
+
+    #[test]
+    fn repair_indexes_parses_names_and_flags() {
+        let parsed = Cli::try_parse_from([
+            "okf-mcp",
+            "catalog",
+            "repair-indexes",
+            "pg",
+            "work",
+            "--missing-only",
+            "--dry-run",
+        ])
+        .unwrap();
+        let bare = Cli::try_parse_from(["okf-mcp", "catalog", "repair-indexes", "--missing-only"])
+            .unwrap();
+
+        assert!(matches!(
+            parsed.command,
+            Some(Command::Catalog(CatalogCommand::RepairIndexes {
+                ref names,
+                missing_only: true,
+                dry_run: true,
+                ref actor,
+            })) if names == &["pg", "work"] && actor == "okf-mcp/repair-indexes"
+        ));
+        assert!(matches!(
+            bare.command,
+            Some(Command::Catalog(CatalogCommand::RepairIndexes {
+                ref names,
+                missing_only: true,
+                dry_run: false,
+                ..
+            })) if names.is_empty()
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn repair_indexes_repairs_catalogs_without_a_root_index() {
+        let db = crate::db::test_db().await;
+        for name in ["old", "fresh"] {
+            let new = catalogs::NewCatalog {
+                name,
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            };
+            catalogs::create(&db.pool, &new, &AuditActor::cli(), chrono::Utc::now())
+                .await
+                .unwrap();
+        }
+        // `old` loses its starter files, as a catalog from before them has none.
+        let old = catalogs::find(&db.pool, "old").await.unwrap();
+        catalogs::tests::drop_starter_files(&db.pool, old.id).await;
+        let audit = AuditActor::cli();
+        let options = |dry_run| repair::RepairOptions {
+            dry_run,
+            actor: "okf-mcp/repair-indexes",
+            audit: &audit,
+            now: chrono::Utc::now(),
+        };
+
+        let unnamed = repair_targets(&db.pool, Vec::new(), false)
+            .await
+            .unwrap_err();
+        let targets = repair_targets(&db.pool, Vec::new(), true).await.unwrap();
+        let filtered = repair_targets(&db.pool, vec!["fresh".into(), "old".into()], true)
+            .await
+            .unwrap();
+        let dry = repair_catalogs(&db.pool, &targets, &options(true))
+            .await
+            .unwrap();
+        let done = repair_catalogs(&db.pool, &targets, &options(false))
+            .await
+            .unwrap();
+        let after = repair_targets(&db.pool, Vec::new(), true).await.unwrap();
+        let failed = repair_catalogs(&db.pool, &["nope".to_string()], &options(false))
+            .await
+            .unwrap_err();
+
+        assert!(unnamed.to_string().contains("--missing-only"), "{unnamed}");
+        assert_eq!(targets, ["old"]);
+        assert_eq!(filtered, ["old"]);
+        assert!(
+            dry.starts_with("old (dry run: nothing written): repaired 2 file(s)"),
+            "{dry}"
+        );
+        assert!(dry.contains("  /index.md\n  /log.md\n"), "{dry}");
+        assert!(dry.ends_with("would repair 1 of 1 catalog(s)\n"), "{dry}");
+        assert!(done.starts_with("old: repaired 2 file(s)"), "{done}");
+        assert!(done.ends_with("repaired 1 of 1 catalog(s)\n"), "{done}");
+        assert!(after.is_empty(), "{after:?}");
+        let failed = failed.to_string();
+        assert!(failed.contains("failed:\n  nope: "), "{failed}");
     }
 
     #[test]
