@@ -1,6 +1,8 @@
 // Catalogs: the catalogs this key reaches, with their owner teams. Admins
 // edit descriptions and delete; an admin key that reaches every catalog
-// also creates them and changes their owner (plan Decision 3).
+// also creates them and changes their owner (plan Decision 3). Anyone may
+// open a catalog's drawer for its maintenance switch, which an every-catalog
+// admin and the owners of the catalog's team change (M14 Task 9e).
 import { $, h, fill, pill } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
@@ -10,7 +12,7 @@ import { ago, count } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
 import { confirmDialog } from '../components/confirm.js';
 import { namesOf, picker, assignControl } from '../components/picker.js';
-import { refreshIdentity, refreshUnassigned } from '../core/shell.js';
+import { canAdministerPeople, freshAccount, refreshIdentity, refreshUnassigned } from '../core/shell.js';
 import { guard, once, recheck } from '../core/pending.js';
 
 export async function render(main) {
@@ -36,7 +38,7 @@ export async function render(main) {
         { key: 'last_change', label: 'Last change', sort: row => row.last_change ?? '',
           render: row => ago(row.last_change) },
     ];
-    const table = listTable(columns, [], { onRow: admin ? openEdit : null, empty: 'This key reaches no catalog.' });
+    const table = listTable(columns, [], { onRow: admin ? openEdit : openMaintenance, empty: 'This key reaches no catalog.' });
 
     async function load() {
         try { table.redraw((await api.get('/catalogs')).catalogs); } catch { /* toasted */ }
@@ -131,15 +133,27 @@ export async function render(main) {
             await settled(ticket);
         });
         const members = memberAccess(row, creator, ticket);
-        ticket.open(row.name, `generation ${row.generation} - ${count(row.concepts, 'concept')}, ${count(row.files, 'file')}`,
+        const switcher = maintenance(row, await maySwitchMaintenance(row), ticket);
+        if (!ticket.current()) return;
+        ticket.open(row.name, subtitle(row),
             edit,
             owner,
             members.section,
+            switcher,
             h('section', { class: 'danger-zone' },
                 h('h3', {}, 'Delete'),
                 h('label', {}, force, ' Also discard unpublished changes (force)'),
                 remove));
         await members.refresh();
+    }
+
+    // Someone who administers no catalog: the drawer holds the maintenance
+    // switch alone.
+    async function openMaintenance(row) {
+        const ticket = drawerTicket(main);
+        const allowed = await maySwitchMaintenance(row);
+        if (!ticket.current()) return;
+        ticket.open(row.name, subtitle(row), maintenance(row, allowed, ticket));
     }
 
     // fill(), not native append: the note may be null (issue #302).
@@ -248,4 +262,113 @@ function memberAccess(row, allowed, ticket) {
         refusal,
         allowed ? null : h('p', { class: 'muted small' }, 'Changing it needs an admin key that reaches every catalog.'));
     return { section, refresh };
+}
+
+// A catalog drawer's subtitle.
+function subtitle(row) {
+    return `generation ${row.generation} - ${count(row.concepts, 'concept')}, ${count(row.files, 'file')}`;
+}
+
+// Whether to enable `row`'s maintenance switch: for an every-catalog admin,
+// and for an owner of the catalog's team (GET /me's `owned_teams`, a
+// console session's). Only a hint, since the server checks the owner under
+// its locks: when /me cannot be read, the switch is offered and the server
+// decides.
+async function maySwitchMaintenance(row) {
+    if (canAdministerPeople()) return true;
+    if (!store.session || !row.owner_team) return false;
+    try {
+        return (await freshAccount()).owned_teams.includes(row.owner_team);
+    } catch {
+        return true;   // toasted; the server refuses a non-owner
+    }
+}
+
+// The maintenance section the catalog drawer shows (or last showed):
+// {catalog, ticket, refresh, report, take}. See maintenance.
+let shownMaintenance = null;
+
+// The drawer's "Maintenance" section: the switch that lets the maintenance
+// runner check this catalog (`on`) or keeps it out (`off`), from the row
+// the drawer opened with. Toggling it is a pending write keyed
+// `catalog:<name>:maintenance` (core/pending.js), so a drawer opened again
+// while it runs draws the switch disabled. A settled write draws its answer
+// in the section the drawer shows now if it is this catalog's (through
+// `shownMaintenance`, as memberAccess does), keeps a refusal's reason in
+// #catalog-maintenance-error until the next write, and reads the catalogs
+// again (GET /catalogs). Reads are numbered, and a write takes the next
+// number as it settles, so an older read never draws over it. A read that
+// fails keeps the last value, marked as possibly out of date, with the
+// switch usable. Returns the section.
+function maintenance(row, allowed, ticket) {
+    const name = row.name;
+    const key = `catalog:${name}:maintenance`;
+    let value = row.maintenance;
+    let stale = false;
+    const toggle = guard(h('input', { type: 'checkbox', role: 'switch', id: 'catalog-maintenance',
+                                      'aria-label': `Maintenance for ${name}` }), key, allowed);
+    const state = h('span', { id: 'catalog-maintenance-state', class: 'mono' });
+    const refusal = h('p', { id: 'catalog-maintenance-error', class: 'error small', role: 'alert', hidden: true });
+    const draw = () => {
+        toggle.checked = value === 'on';
+        state.textContent = `${value}${stale ? ' (could not be read again, may be out of date)' : ''}`;
+    };
+    draw();
+
+    let reads = 0;
+    async function refresh() {
+        const mine = ++reads;
+        let listing = null;
+        try { listing = await api.get('/catalogs'); } catch { /* toasted */ }
+        if (mine !== reads || !ticket.current()) return;
+        const found = listing?.catalogs.find(catalog => catalog.name === name);
+        stale = !found;
+        if (found) value = found.maintenance;
+        draw();
+    }
+    // Draws a settled write's answer (null for a refusal: the last value
+    // again, so the switch shows the server's state) and cancels any read
+    // that started before it.
+    const take = answer => {
+        reads++;
+        if (answer !== null) {
+            value = answer;
+            stale = false;
+        }
+        draw();
+    };
+    const report = reason => {
+        refusal.textContent = reason ?? '';
+        refusal.hidden = reason === null;
+    };
+    const self = { catalog: name, ticket, refresh, report, take };
+    shownMaintenance = self;
+
+    toggle.addEventListener('change', () => {
+        const to = toggle.checked ? 'on' : 'off';
+        once(key, async () => {
+            let answer = null;
+            let refused = null;
+            try {
+                answer = (await api.put(`/catalogs/${enc(name)}/maintenance`, { maintenance: to })).maintenance;
+                toast(`Maintenance is ${answer} for ${name}.`, 'ok');
+            } catch (error) {
+                refused = error.message;   // already toasted
+            }
+            const shown = shownMaintenance;
+            const view = shown?.catalog === name && shown.ticket.current() ? shown : self;
+            view.report(refused);
+            view.take(answer);
+            await view.refresh();
+        });
+    });
+
+    return h('section', { id: 'catalog-maintenance-section' },
+        h('h3', {}, 'Maintenance'),
+        h('label', {}, toggle, ' Maintenance runner: ', state),
+        h('p', { class: 'muted small' },
+            'Lets the maintenance runner check this catalog for stale, bloated and broken notes. Turn it off to keep the runner out.'),
+        refusal,
+        allowed ? null : h('p', { class: 'muted small' },
+            `Changing it needs an admin that reaches every catalog, or an owner of ${row.owner_team ?? 'its owner team'}.`));
 }

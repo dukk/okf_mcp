@@ -6,6 +6,9 @@
 import { store } from './store.js';
 import { toast } from './toast.js';
 import { h } from './dom.js';
+// A cycle (unlock.js imports this module), safe because neither module calls
+// the other while it loads, only later, when a refusal arrives.
+import { canUnlock, openUnlock } from '../components/unlock.js';
 
 export class ApiError extends Error {
     constructor(status, body) {
@@ -32,6 +35,18 @@ export function authHeaders(method, { key = store.key, csrf = store.csrf } = {})
     return {};
 }
 
+// The error kinds whose 403 shows the server's own message.
+const OWN_MESSAGE = new Set(['Suspended', 'UnlockRequired']);
+
+// A refusal's toast: its message and, for a catalog that needs an unlock and
+// a credential that may ask for one, an Unlock action that opens the form.
+function refusalMessage(error) {
+    const catalog = error.body?.catalog;
+    if (error.body?.error !== 'UnlockRequired' || !catalog || !canUnlock()) return error.message;
+    return [error.message, ' ',
+        h('button', { type: 'button', class: 'text-btn', onclick: () => openUnlock(catalog) }, 'Unlock')];
+}
+
 async function request(method, path, { body, raw = false, quiet = false, key } = {}) {
     const headers = authHeaders(method, { key: key ?? store.key });
     let payload;
@@ -52,10 +67,13 @@ async function request(method, path, { body, raw = false, quiet = false, key } =
         try { errorBody = await response.json(); } catch { /* not JSON */ }
         const error = new ApiError(response.status, errorBody);
         const denied = store.key ? 'Your key cannot do this.' : 'Your account cannot do this.';
-        // A suspended team's 403 carries its own message (the catalog, the
-        // team and the operator's notice): show it, not "cannot do this".
-        const generic = response.status === 403 && errorBody?.error !== 'Suspended';
-        if (!quiet) toast(generic ? denied : error.message, 'error');
+        // Some 403s carry their own message: show it, not "cannot do this". A
+        // suspended team's (the catalog, the team and the operator's
+        // notice), a catalog that needs an unlock first, and the maintenance
+        // runner on a catalog whose owners turned maintenance off.
+        const generic = response.status === 403
+            && !OWN_MESSAGE.has(errorBody?.error) && errorBody?.maintenance !== 'off';
+        if (!quiet) toast(generic ? denied : refusalMessage(error), 'error');
         throw error;
     }
     if (raw) return response;

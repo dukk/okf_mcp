@@ -33,14 +33,18 @@ export async function refreshIdentity() {
 }
 
 // Whether an element marked data-need="<need>" shows: "session" for the
-// account pages (signed in with an account, not a key), "audit" (below),
-// else an access level.
-// "audit" for the Audit page: an admin that reaches every catalog, or anyone
-// signed in with an account (every user owns at least its personal team, and
-// the page lists the teams it owns).
+// account pages (signed in with an account, not a key), "audit" and "owner"
+// (below), else an access level.
+// "audit" for the Records group (the Audit and Unlocks pages): an admin that
+// reaches every catalog, or anyone signed in with an account (every user
+// owns at least its personal team, and the pages list the teams it owns).
+// "owner" for the Catalogs link of someone signed in with an account who is
+// not an admin (the Administer group has it for admins): its drawer holds
+// the maintenance switch of the catalogs their teams own.
 function shows(need) {
     if (need === 'session') return !!store.session;
     if (need === 'audit') return canAdministerPeople() || !!store.session;
+    if (need === 'owner') return !!store.session && !store.session.admin;
     return store.can(need);
 }
 
