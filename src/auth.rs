@@ -37,6 +37,7 @@ use crate::store::ceiling::{self, cap, Ceiling};
 use crate::store::gates;
 use crate::store::keys::{self as key_rows, Access, KeyKind, KeyRecord};
 use crate::store::teams::{self, SuspendedCatalog};
+use crate::store::unlocks::LiveUnlock;
 use crate::store::users::{self, UserAuth};
 
 /// The `key_id` prefix of a console session's principal. Key ids match
@@ -78,16 +79,29 @@ pub enum CredentialKind {
 /// key-cache load, shared (through an `Arc`) by every principal built from it.
 pub type Suspensions = HashMap<String, SuspendedCatalog>;
 
-/// Who reaches which catalog as a customer, and the audit ids an operator's
-/// access is recorded with: loaded with the key cache and shared by every
-/// principal of that load (as the suspension map is). Task 9b of M14 adds
-/// the unlock and maintenance fields.
+/// Who reaches which catalog as a customer, who needs an unlock, and the
+/// audit ids an operator's access is recorded with: loaded with the key
+/// cache and shared by every principal of that load (as the suspension map
+/// is).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AccessGates {
     /// By `users.id`: the catalogs owned by the user's teams.
     pub members: HashMap<String, HashSet<String>>,
+    /// By `users.id`: the catalogs the user is entitled to (`user_catalogs`).
+    /// An entitled non-admin is a customer; an admin user's entitlement is
+    /// not (spec "Who needs an unlock").
+    pub entitled: HashMap<String, HashSet<String>>,
     /// The `users.id` of every admin user.
     pub admins: HashSet<String>,
+    /// The `require_unlock` setting.
+    pub require_unlock: bool,
+    /// By `users.id`: the user's live unlocks. Expiry is checked on every
+    /// request ([`Principal::admission`]), so an unlock ends on time even
+    /// between reloads.
+    pub unlocks: HashMap<String, Vec<LiveUnlock>>,
+    /// The catalogs whose `maintenance` flag is off: the maintenance
+    /// runner is refused there ([`OkfError::MaintenanceOff`]).
+    pub maintenance_off: HashSet<String>,
     /// By `users.id`: the user's `audit_people` id. Resolved here, at load,
     /// so an access is recorded with ids fixed at admission (M14 Decision 21).
     pub people: HashMap<String, i64>,
@@ -116,17 +130,30 @@ pub enum Admission {
     /// are recorded as publishes).
     Untracked,
     /// An admin credential reading a catalog outside its user's teams: an
-    /// hourly `catalog.admin_read` bucket.
+    /// hourly `catalog.admin_read` bucket (only while `require_unlock` is
+    /// off).
     AdminRead,
+    /// The maintenance runner reading (M14 Decision 8): nothing is recorded
+    /// here; its passes are (Task 9c).
+    Maintenance,
+    /// Let in by a live unlock: the unlock's read, write or export tally.
+    Unlocked {
+        /// The unlock's id, fixed at admission.
+        unlock_id: i64,
+    },
 }
 
 impl Admission {
-    /// Whether this admission writes an audit row.
+    /// Whether this admission writes an audit row (or an unlock's tally).
     ///
     /// # Returns
-    /// `true` for [`Admission::AdminRead`].
+    /// `true` for [`Admission::AdminRead`] and [`Admission::Unlocked`].
     pub fn is_recorded(self) -> bool {
-        matches!(self, Admission::AdminRead)
+        // Every variant is named, so a new one must decide.
+        match self {
+            Admission::AdminRead | Admission::Unlocked { .. } => true,
+            Admission::Customer | Admission::Untracked | Admission::Maintenance => false,
+        }
     }
 }
 
@@ -352,45 +379,141 @@ impl Principal {
         }
     }
 
-    /// How this principal is let into `catalog`'s contents for `access`.
-    /// Call it only on a catalog the principal reaches at that level.
+    /// How this principal is let into `catalog`'s contents for `access`
+    /// (spec "Who needs an unlock"). Call it only on a catalog the
+    /// principal reaches at that level.
+    ///
+    /// In order: the maintenance runner (a non-admin reporting key) is
+    /// refused where the catalog's owners turned maintenance off, whatever
+    /// its grants and whatever `require_unlock`, and needs no unlock to read
+    /// (M14 Decision 8: reads only); a customer (in the owner team, or a
+    /// non-admin user entitled to the catalog) is let in; with
+    /// `require_unlock` off everyone else is too, an admin credential's read
+    /// as an admin read; with it on, everyone else needs a live unlock of
+    /// their own user on this catalog.
     ///
     /// # Arguments
     /// * `catalog` - the catalog.
     /// * `access` - what the operation needs.
-    /// * `now` - the server clock (unlock expiry, M14 Task 9b).
+    /// * `now` - the server clock, for the unlock's expiry.
     ///
     /// # Returns
-    /// The admission: a customer in the owner team, an admin read by an
-    /// admin credential from outside it (a credential with no user always
-    /// counts), or untracked.
+    /// The admission.
     ///
     /// # Errors
-    /// None yet; M14 Task 9b adds `UnlockRequired` and `MaintenanceOff`.
+    /// [`OkfError::MaintenanceOff`] for the runner on a catalog that opted
+    /// out; [`OkfError::UnlockRequired`] when `require_unlock` is on and
+    /// nothing above lets the principal in.
     pub fn admission(
         &self,
         catalog: &str,
         access: Access,
         now: DateTime<Utc>,
     ) -> Result<Admission, OkfError> {
-        // Task 9b reads it; `let _` marks it used until then.
-        let _ = now;
-        if self.is_member_of_owner(catalog) {
+        let gates = &*self.gates;
+        if self.maintenance_report && self.access != Access::Admin {
+            if gates.maintenance_off.contains(catalog) {
+                return Err(OkfError::MaintenanceOff {
+                    catalog: catalog.to_string(),
+                });
+            }
+            if access == Access::Read {
+                return Ok(Admission::Maintenance);
+            }
+        }
+        let user = self.user_id.as_deref();
+        let admin_user = user.is_some_and(|id| gates.admins.contains(id));
+        if self.is_member_of_owner(catalog) || (!admin_user && self.holds(&gates.entitled, catalog))
+        {
             return Ok(Admission::Customer);
         }
-        Ok(if self.access == Access::Admin && access == Access::Read {
-            Admission::AdminRead
-        } else {
-            Admission::Untracked
-        })
+        if !gates.require_unlock {
+            return Ok(if self.access == Access::Admin && access == Access::Read {
+                Admission::AdminRead
+            } else {
+                Admission::Untracked
+            });
+        }
+        // `and_then` chains lookups that may each be missing, like Python's
+        // `a and a.get(...)`; `find` stops at the first live match.
+        let unlock = user.and_then(|id| gates.unlocks.get(id)).and_then(|live| {
+            live.iter()
+                .find(|unlock| unlock.catalog == catalog && unlock.expires_at > now)
+        });
+        match unlock {
+            Some(unlock) => Ok(Admission::Unlocked {
+                unlock_id: unlock.id,
+            }),
+            None => Err(OkfError::UnlockRequired {
+                catalog: catalog.to_string(),
+                has_user: user.is_some(),
+            }),
+        }
+    }
+
+    /// The content gate at the selection: suspension (M13), then the
+    /// admission. The selection has checked reach but no level: a tool that
+    /// selects first checks its own level after (M14 Decision 24), so there
+    /// a lock is refused before a low level is.
+    ///
+    /// # Arguments
+    /// * `catalog` - a catalog the principal reaches (check reach first).
+    /// * `access` - what the operation needs.
+    /// * `now` - the server clock.
+    ///
+    /// # Returns
+    /// The admission.
+    ///
+    /// # Errors
+    /// [`OkfError::Suspended`] (see [`Self::check_not_suspended`]); then as
+    /// [`Self::admission`].
+    pub fn check_open(
+        &self,
+        catalog: &str,
+        access: Access,
+        now: DateTime<Utc>,
+    ) -> Result<Admission, OkfError> {
+        self.check_not_suspended(catalog)?;
+        self.admission(catalog, access, now)
+    }
+
+    /// The whole check for a route that reads or writes a catalog's
+    /// contents itself: reach, level and suspension ([`Self::require`]),
+    /// then the admission (spec "The refusal": the unlock is checked last).
+    /// Administrative routes keep [`Self::require`].
+    ///
+    /// # Arguments
+    /// * `access` - the level the operation needs.
+    /// * `catalog` - the catalog it acts on.
+    /// * `now` - the server clock.
+    ///
+    /// # Returns
+    /// The admission.
+    ///
+    /// # Errors
+    /// As [`Self::require`]; then as [`Self::admission`].
+    pub fn require_contents(
+        &self,
+        access: Access,
+        catalog: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Admission, OkfError> {
+        self.require(access, catalog)?;
+        self.admission(catalog, access, now)
+    }
+
+    /// Whether the credential's user holds `catalog` in `map` (one of the
+    /// gates' by-user catalog maps).
+    fn holds(&self, map: &HashMap<String, HashSet<String>>, catalog: &str) -> bool {
+        self.user_id
+            .as_deref()
+            .and_then(|user_id| map.get(user_id))
+            .is_some_and(|catalogs| catalogs.contains(catalog))
     }
 
     /// Whether the credential's user is in the catalog's owner team.
     fn is_member_of_owner(&self, catalog: &str) -> bool {
-        self.user_id
-            .as_deref()
-            .and_then(|user_id| self.gates.members.get(user_id))
-            .is_some_and(|catalogs| catalogs.contains(catalog))
+        self.holds(&self.gates.members, catalog)
     }
 
     /// The scope of the catalog incarnation `catalog_id`, if this
@@ -738,7 +861,7 @@ impl KeyCache {
         // the audit rows of every credential and user read above, so each
         // principal of this load finds its audit ids (a key created since
         // also moved `admin_generation`, so the next poll reloads).
-        let gates = Arc::new(gates::load(pool).await?);
+        let gates = Arc::new(gates::load(pool, now).await?);
         Ok(
             Self::from_records(records, ceilings, Arc::new(suspended), gates, now)
                 .with_users(users),
@@ -2346,5 +2469,243 @@ mod tests {
             assert!(!token.is_empty());
             assert_eq!(token, token.trim());
         }
+    }
+
+    /// M14 Task 9b's gates: `u-member` is in `main`'s owner team,
+    /// `u-entitled` (a customer) and `u-staff` (an admin user) are entitled
+    /// to it, and nobody has an unlock.
+    fn unlock_gates(require_unlock: bool) -> AccessGates {
+        AccessGates {
+            members: HashMap::from([("u-member".to_string(), HashSet::from(["main".to_string()]))]),
+            entitled: HashMap::from([
+                (
+                    "u-entitled".to_string(),
+                    HashSet::from(["main".to_string()]),
+                ),
+                ("u-staff".to_string(), HashSet::from(["main".to_string()])),
+            ]),
+            admins: HashSet::from(["u-staff".to_string()]),
+            require_unlock,
+            // The audit-id maps (Task 7b) play no part in admission.
+            ..AccessGates::default()
+        }
+    }
+
+    /// A key of `user` (none for a legacy key) on `main` at `access`, with
+    /// `gates`, and not a reporting key (`key_on` opts into reporting,
+    /// which `admission` treats as the maintenance runner).
+    fn as_user(user: Option<&str>, access: Access, gates: AccessGates) -> Principal {
+        Principal {
+            user_id: user.map(str::to_string),
+            gates: Arc::new(gates),
+            maintenance_report: false,
+            ..key_on(&["main"], access, Arc::default())
+        }
+    }
+
+    #[test]
+    fn with_require_unlock_operators_are_refused_and_customers_are_not() {
+        let now = Utc::now();
+        let refused = |principal: Principal| {
+            matches!(
+                principal.admission("main", Access::Read, now),
+                Err(OkfError::UnlockRequired { .. })
+            )
+        };
+        let admitted = |principal: Principal| principal.admission("main", Access::Read, now);
+
+        assert!(
+            refused(as_user(Some("u-staff"), Access::Admin, unlock_gates(true))),
+            "an admin user, even entitled"
+        );
+        assert!(
+            refused(as_user(Some("u-other"), Access::Read, unlock_gates(true))),
+            "an admin-issued key outside its teams"
+        );
+        assert!(
+            matches!(
+                as_user(None, Access::Read, unlock_gates(true)).admission(
+                    "main",
+                    Access::Read,
+                    now
+                ),
+                Err(OkfError::UnlockRequired {
+                    has_user: false,
+                    ..
+                })
+            ),
+            "a key with no user, told it has none"
+        );
+        assert_eq!(
+            admitted(as_user(Some("u-member"), Access::Admin, unlock_gates(true))).unwrap(),
+            Admission::Customer,
+            "a member's admin key"
+        );
+        assert_eq!(
+            admitted(as_user(
+                Some("u-entitled"),
+                Access::Read,
+                unlock_gates(true)
+            ))
+            .unwrap(),
+            Admission::Customer,
+            "an entitled customer"
+        );
+        assert_eq!(
+            admitted(as_user(Some("u-staff"), Access::Admin, unlock_gates(false))).unwrap(),
+            Admission::AdminRead,
+            "off: nothing changes but the hourly record"
+        );
+        assert_eq!(
+            admitted(as_user(None, Access::Read, unlock_gates(false))).unwrap(),
+            Admission::Untracked
+        );
+    }
+
+    #[test]
+    fn an_unlock_admits_exactly_its_user_to_exactly_its_catalog_until_it_expires() {
+        let now = Utc::now();
+        let mut with_unlock = unlock_gates(true);
+        with_unlock.unlocks.insert(
+            "u-staff".to_string(),
+            vec![LiveUnlock {
+                id: 7,
+                user_id: "u-staff".into(),
+                catalog: "main".into(),
+                expires_at: now + chrono::TimeDelta::hours(1),
+            }],
+        );
+        let staff = as_user(Some("u-staff"), Access::Admin, with_unlock.clone());
+        let other = as_user(Some("u-other"), Access::Admin, with_unlock);
+        let elsewhere = Principal {
+            reach: Reach::All,
+            ..staff.clone()
+        };
+
+        assert_eq!(
+            staff.admission("main", Access::Write, now).unwrap(),
+            Admission::Unlocked { unlock_id: 7 }
+        );
+        assert_eq!(
+            staff.admission("main", Access::Read, now).unwrap(),
+            Admission::Unlocked { unlock_id: 7 }
+        );
+        assert!(Admission::Unlocked { unlock_id: 7 }.is_recorded());
+        assert!(
+            staff
+                .admission("main", Access::Read, now + chrono::TimeDelta::hours(1))
+                .is_err(),
+            "expired at its expiry"
+        );
+        assert!(
+            other.admission("main", Access::Read, now).is_err(),
+            "another admin"
+        );
+        assert!(
+            elsewhere.admission("other", Access::Read, now).is_err(),
+            "another catalog"
+        );
+    }
+
+    #[test]
+    fn the_maintenance_runner_needs_no_unlock_unless_the_catalog_opted_out() {
+        let now = Utc::now();
+        let runner = |maintenance_off: bool, access| Principal {
+            maintenance_report: true,
+            ..as_user(
+                Some("u-other"),
+                access,
+                AccessGates {
+                    maintenance_off: if maintenance_off {
+                        HashSet::from(["main".to_string()])
+                    } else {
+                        HashSet::new()
+                    },
+                    ..unlock_gates(true)
+                },
+            )
+        };
+
+        assert_eq!(
+            runner(false, Access::Read)
+                .admission("main", Access::Read, now)
+                .unwrap(),
+            Admission::Maintenance
+        );
+        assert!(!Admission::Maintenance.is_recorded());
+        assert!(matches!(
+            runner(true, Access::Read).admission("main", Access::Read, now),
+            Err(OkfError::MaintenanceOff { .. })
+        ));
+        assert!(
+            matches!(
+                runner(false, Access::Admin).admission("main", Access::Read, now),
+                Err(OkfError::UnlockRequired { .. })
+            ),
+            "an admin key with the flag is not exempt"
+        );
+        assert!(
+            matches!(
+                runner(false, Access::Write).admission("main", Access::Write, now),
+                Err(OkfError::UnlockRequired { .. })
+            ),
+            "the exemption covers reads and reports only"
+        );
+        assert!(
+            matches!(
+                Principal {
+                    maintenance_report: true,
+                    ..as_user(
+                        Some("u-member"),
+                        Access::Read,
+                        AccessGates {
+                            maintenance_off: HashSet::from(["main".to_string()]),
+                            ..unlock_gates(false)
+                        }
+                    )
+                }
+                .admission("main", Access::Read, now),
+                Err(OkfError::MaintenanceOff { .. })
+            ),
+            "off keeps the runner out on any server, whatever its grants"
+        );
+    }
+
+    #[test]
+    fn require_contents_checks_level_and_suspension_before_the_unlock() {
+        let now = Utc::now();
+        let reader = as_user(Some("u-other"), Access::Read, unlock_gates(true));
+        let suspended = Principal {
+            suspended: suspended_on(&["main"]),
+            ..reader.clone()
+        };
+
+        assert!(matches!(
+            reader.require_contents(Access::Write, "main", now),
+            Err(OkfError::Forbidden { .. })
+        ));
+        assert!(matches!(
+            reader.require_contents(Access::Read, "elsewhere", now),
+            Err(OkfError::CatalogNotSelected { .. })
+        ));
+        assert!(matches!(
+            suspended.require_contents(Access::Read, "main", now),
+            Err(OkfError::Suspended { .. })
+        ));
+        assert!(matches!(
+            reader.require_contents(Access::Read, "main", now),
+            Err(OkfError::UnlockRequired { .. })
+        ));
+        assert!(matches!(
+            suspended.check_open("main", Access::Read, now),
+            Err(OkfError::Suspended { .. })
+        ));
+        assert!(
+            matches!(
+                reader.check_open("main", Access::Write, now),
+                Err(OkfError::UnlockRequired { .. })
+            ),
+            "the selection checks no level"
+        );
     }
 }

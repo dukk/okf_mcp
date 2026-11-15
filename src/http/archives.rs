@@ -13,12 +13,12 @@ use serde::Deserialize;
 
 use crate::app::App;
 use crate::archive::read_tarball;
-use crate::auth::Principal;
+use crate::auth::{Admission, Principal};
 use crate::error::OkfError;
 use crate::http::requester::Requester;
 use crate::http::{timeout_layer, AppError, REQUEST_TIMEOUT};
 use crate::mcp::blocking;
-use crate::store::audit::AuditActor;
+use crate::store::audit::{AccessKind, AuditActor};
 use crate::store::export::export;
 use crate::store::import::{import, ImportOptions, ImportScope};
 use crate::store::keys::Access;
@@ -86,6 +86,38 @@ fn body_limit(max_import_bytes: u64) -> usize {
     usize::try_from(max_import_bytes.saturating_add(slack)).unwrap_or(usize::MAX)
 }
 
+/// Counts an export or import under an unlock on that unlock (M14 Task 9b),
+/// in the background. Any other admission records nothing here: the export
+/// and import write their own entries.
+///
+/// # Arguments
+/// * `app` - the shared state.
+/// * `principal` - the caller.
+/// * `requester` - its address and source.
+/// * `name` - the catalog.
+/// * `admission` - how the caller was let in.
+/// * `kind` - [`AccessKind::Export`] or [`AccessKind::Write`].
+fn note_unlocked(
+    app: &App,
+    principal: &Principal,
+    requester: &Requester,
+    name: &str,
+    admission: Admission,
+    kind: AccessKind,
+) {
+    // `let ... else`: leave unless the admission is an unlock's.
+    let Admission::Unlocked { .. } = admission else {
+        return;
+    };
+    // The gates that admitted it hold the catalog the unlock is on (one
+    // snapshot, and an unlock belongs to one catalog), so its scope is
+    // there; the tally needs only the unlock's id.
+    if let Some(scope) = principal.gates.catalogs.get(name).copied() {
+        let record = principal.access_record(requester, name, scope, app.clock().now());
+        app.note_access(record, kind, admission);
+    }
+}
+
 /// `GET /catalogs/{name}/export`: the published documents as a `.tar.gz`,
 /// for a key with `read` on the catalog.
 ///
@@ -100,7 +132,10 @@ fn body_limit(max_import_bytes: u64) -> usize {
 ///
 /// # Errors
 /// 404 ([`OkfError::CatalogNotSelected`]) for a catalog that does not exist
-/// or that the key does not reach; 500 for a database or archive failure.
+/// or that the key does not reach; 403 ([`OkfError::UnlockRequired`]) for
+/// operator staff without an unlock while `require_unlock` is on, or
+/// ([`OkfError::MaintenanceOff`]) for the maintenance runner on a catalog
+/// that opted out; 500 for a database or archive failure.
 // Each argument is an extractor: axum fills it from the request (the state,
 // the auth layer's principal, the `{name}` path segment), much as a Python
 // web framework injects arguments by their annotations.
@@ -114,11 +149,21 @@ async fn export_catalog(
     // Export stays open while the owner team is suspended (M13 spec), so
     // members can take their data; reach and read access still apply.
     principal.require_export(&name)?;
+    // Then the unlock (M14 Task 9b), before anything is read or recorded.
+    let now = app.clock().now();
+    let admission = principal.admission(&name, Access::Read, now)?;
     // M3's export builds the whole tarball in memory (a `Vec<u8>`).
     // The generation is for the command line's `import --expect-generation`.
     let actor = AuditActor::of(&principal, &requester);
-    let (bytes, _generation) =
-        export(app.pool(), &name, Vec::new(), &actor, app.clock().now()).await?;
+    let (bytes, _generation) = export(app.pool(), &name, Vec::new(), &actor, now).await?;
+    note_unlocked(
+        &app,
+        &principal,
+        &requester,
+        &name,
+        admission,
+        AccessKind::Export,
+    );
     // `name` is a catalog that exists, so it is `[a-z0-9-]+` and safe in a header.
     let disposition = format!("attachment; filename=\"{name}.tar.gz\"");
     let headers = [
@@ -162,6 +207,7 @@ struct ImportQuery {
 /// * `app` - the shared state.
 /// * `principal` - the caller, from the auth layer.
 /// * `actor` - the caller, as the audit log's `catalog.imported` records it.
+/// * `requester` - its address and source, for an unlock's tally.
 /// * `name` - the catalog, from the path.
 /// * `query` - the import options.
 /// * `request` - the rest of the request: its body is the tarball.
@@ -172,7 +218,9 @@ struct ImportQuery {
 ///
 /// # Errors
 /// 404 for a catalog that does not exist or that the key does not reach;
-/// 403 ([`OkfError::Forbidden`]) for a key below `admin`; 400
+/// 403 ([`OkfError::Forbidden`]) for a key below `admin`, or
+/// ([`OkfError::UnlockRequired`]) for operator staff without an unlock
+/// while `require_unlock` is on; 400
 /// ([`OkfError::ImportRefused`]) for an unreadable or rule-breaking archive;
 /// 409 ([`OkfError::Refused`]) for a non-empty catalog without
 /// `?replace=true`, or one no longer at `expect_generation`; 500 for a
@@ -182,6 +230,7 @@ async fn import_catalog(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
     actor: AuditActor,
+    requester: Requester,
     Path(name): Path<String>,
     Query(query): Query<ImportQuery>,
     // The whole request, unread, must come last: reading its body consumes
@@ -190,6 +239,9 @@ async fn import_catalog(
     request: Request,
 ) -> Result<Response, AppError> {
     principal.require(Access::Admin, &name)?;
+    // An import rewrites the catalog's contents: a write, which needs the
+    // unlock a write does (M14 Task 9b). Checked before the body is read.
+    let admission = principal.admission(&name, Access::Write, app.clock().now())?;
     let max_bytes = app.config().max_import_bytes.as_u64();
     // An `async` block is a future that runs only when awaited (here, under
     // the deadline). Its error is the response to send instead.
@@ -253,6 +305,14 @@ async fn import_catalog(
             );
         }
     }
+    note_unlocked(
+        &app,
+        &principal,
+        &requester,
+        &name,
+        admission,
+        AccessKind::Write,
+    );
     // The key's id, never the key itself.
     tracing::info!(catalog = %name, key = %principal.key_id, "imported");
     Ok(Json(report).into_response())

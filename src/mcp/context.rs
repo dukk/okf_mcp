@@ -220,6 +220,7 @@ impl ToolContext {
             argument,
             connection: self.connection.as_deref(),
             server_default: self.app.config().default_catalog.as_deref(),
+            now: self.app.clock().now(),
         };
         // The closure borrows `self.catalogs`, so `resolve` checks names
         // against the same map `states` then reads.
@@ -304,11 +305,12 @@ impl ToolContext {
     /// * `kind` - what the call does with its contents.
     ///
     /// # Errors
-    /// [`OkfError::Busy`] for an admin credential when no gates know the
-    /// incarnation read (the catalog was deleted and created again, or
-    /// created, while the cache and the map were being reloaded): its read
-    /// may be an admin read, and is neither recorded under the wrong
-    /// catalog or team nor left out. A retry sees a settled cache.
+    /// [`OkfError::Busy`] for an admin credential, or one admitted under an
+    /// unlock, when no gates know the incarnation read (the catalog was
+    /// deleted and created again, or created, while the cache and the map
+    /// were being reloaded): its access may be recorded, and is neither
+    /// recorded under the wrong catalog or team nor left out. A retry sees
+    /// a settled cache.
     pub(crate) fn admit(&self, state: &CatalogState, kind: AccessKind) -> Result<(), OkfError> {
         if let Some(admitted) = self.admission_of(state, kind)? {
             self.note(admitted, kind);
@@ -371,21 +373,27 @@ impl ToolContext {
                 ..(*self.principal).clone()
             }),
         };
+        let now = self.app.clock().now();
+        // A refusal (checked before this runs, by the selection or
+        // `require_contents`) or an admission that records nothing notes
+        // nothing.
+        let admitted = principal
+            .admission(catalog, access, now)
+            .ok()
+            .filter(|admission| admission.is_recorded());
         let Some(scope) = principal.scope_of(catalog, catalog_id) else {
-            // Only an admin credential's read can be an admin read.
-            if self.principal.access == Access::Admin {
+            // An admin credential's read can be an admin read, and any
+            // credential's access can be under an unlock: neither may be
+            // recorded under the wrong catalog or left out.
+            if self.principal.access == Access::Admin || admitted.is_some() {
                 return Err(OkfError::Busy {
                     reason: format!("catalog {catalog:?} is being reloaded"),
                 });
             }
             return Ok(None);
         };
-        let now = self.app.clock().now();
-        // A refusal (Task 9b checks those before this runs) or an admission
-        // that records nothing notes nothing.
-        let admission = match principal.admission(catalog, access, now) {
-            Ok(admission) if admission.is_recorded() => admission,
-            Ok(_) | Err(_) => return Ok(None),
+        let Some(admission) = admitted else {
+            return Ok(None);
         };
         let record = principal.access_record(&self.requester, catalog, scope, now);
         Ok(Some((record, admission)))
@@ -519,6 +527,8 @@ impl ToolContext {
     ///   that the connection's list leaves out), or
     ///   belongs to another key while this one is not `admin`;
     /// - [`OkfError::Forbidden`] below `access`;
+    /// - [`OkfError::UnlockRequired`] or [`OkfError::MaintenanceOff`] as
+    ///   [`Principal::admission`] for `access`;
     /// - [`OkfError::Refused`] for a changeset that was published or
     ///   discarded (a discarded one with a hint that an empty changeset is
     ///   discarded after 24 hours);
@@ -571,7 +581,10 @@ impl ToolContext {
         if !self.offers(state.name()) || !(own || admin) {
             return Err(unknown());
         }
-        self.principal.require(access, state.name())?;
+        // The whole content check, the unlock last (M14 Task 9b): it refuses
+        // here, before `changeset` admits, because `admit` ignores refusals.
+        self.principal
+            .require_contents(access, state.name(), self.app.clock().now())?;
         // Only a discarded changeset gets the 24-hour hint: the prune is one
         // way to be discarded, and a published one was never pruned.
         let hint = match row.state {

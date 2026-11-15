@@ -14,6 +14,7 @@ use crate::http::api::context;
 use crate::http::requester::Requester;
 use crate::http::AppError;
 use crate::mcp::search::{run, SearchParams, SearchResult};
+use crate::store::keys::Access;
 
 /// This area's routes.
 pub(crate) fn routes() -> Router<Arc<App>> {
@@ -74,11 +75,15 @@ async fn search(
         // `Catalogs` is a BTreeMap, so the names come out sorted. An empty
         // list (a key that reaches nothing active) falls back to the key's
         // default inside the selection, which then refuses as the tool would.
-        // A suspended team's catalogs are not searched (M13), and reach is
-        // checked first; naming one explicitly is refused by the selection.
+        // A closed catalog is not searched: a suspended team's (M13), or one
+        // the key needs an unlock for (M14). Reach is checked first; naming
+        // one explicitly is refused by the selection.
+        let now = app.clock().now();
         app.catalogs()
             .keys()
-            .filter(|name| principal.reaches(name) && principal.check_not_suspended(name).is_ok())
+            .filter(|name| {
+                principal.reaches(name) && principal.check_open(name, Access::Read, now).is_ok()
+            })
             .cloned()
             .collect()
     } else {

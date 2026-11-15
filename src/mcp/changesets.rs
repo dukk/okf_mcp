@@ -122,13 +122,17 @@ pub(crate) async fn list_changesets(
         None => {
             // A list naming a bad catalog fails here as it does elsewhere.
             ctx.check_connection()?;
+            let now = ctx.app().clock().now();
             ctx.catalogs()
                 .values()
-                // A suspended team's catalog shows no changesets (M13): its
-                // handles and paths are part of what suspension withholds.
+                // A closed catalog shows no changesets: its handles and paths
+                // are part of what suspension (M13) and a lock (M14) withhold.
                 // `offers` (reach) is checked first.
                 .filter(|state| {
-                    ctx.offers(state.name()) && principal.check_not_suspended(state.name()).is_ok()
+                    ctx.offers(state.name())
+                        && principal
+                            .check_open(state.name(), Access::Read, now)
+                            .is_ok()
                 })
                 .map(|state| state.id())
                 .collect()
@@ -244,8 +248,10 @@ pub(crate) async fn open_changeset(
             reason: "a console session cannot open a changeset; use an API key".to_string(),
         });
     }
-    principal.require(Access::Write, state.name())?;
     let now = ctx.app().clock().now();
+    // The changeset's writes go to the catalog's contents, so they need
+    // what any write does, the unlock included (M14 Task 9b).
+    principal.require_contents(Access::Write, state.name(), now)?;
     // The lock order of every changeset write: the catalog row first, so a
     // concurrent `catalog delete` either waits for this or is seen here.
     let mut tx = ctx.app().pool().begin().await?;

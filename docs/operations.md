@@ -1113,6 +1113,52 @@ its expiry). The reason is in the audit log's `catalog.unlocked` entry.
 The same over REST is in the [Unlocks API](#unlocks-api); a catalog's
 owners read its unlocks there redacted.
 
+**Who needs one.** With `require_unlock` on, every credential that is not
+a customer of the catalog: an admin key, an admin user's console session,
+any other key that reaches the catalog without its user being in the
+owner team (an admin-issued key outside its teams), and a key with no
+user (which cannot be unlocked: give it one). A customer is a member of
+the catalog's owner team, or a user who is not an admin and is entitled
+to the catalog; neither ever needs an unlock, whatever their key's level.
+An admin user's own entitlement does not count. An unlock lets in exactly
+its user, through any of that user's credentials, to exactly its catalog,
+until it expires or is ended. With `require_unlock` off nothing changes:
+operator reads are recorded as hourly `catalog.admin_read` entries.
+
+**What "contents" covers.** Every read or write of a catalog's documents:
+the MCP read and write tools (a changeset handle included, so an open
+changeset stops working when its unlock ends), opening a changeset,
+`list_changesets` (a locked catalog's changesets are left out, and naming
+it is refused), the browse routes (tree, documents, concepts, history,
+revisions), search (an unnamed search leaves a locked catalog out),
+export, import, and every maintenance tool (each selects its catalog
+first). Metadata and administration need none: listing catalogs, a
+catalog's description, owner and member access, users, teams, keys,
+settings, the audit log and unlocks themselves. The command line works on
+the database directly and needs none (its export and import are audited
+with source `cli`).
+
+**The refusal.** 403 with `"error": "UnlockRequired"` and the `catalog`;
+its message says how to get an unlock, or, for a key with no user, that
+it needs one first. Reach, level and suspension are checked first, so a
+credential that does not reach the catalog still gets 404, and one below
+the level a route needs gets `Forbidden`. Tools that select their catalog
+before checking their own level (`open_changeset`, `maintenance_dispose`,
+the maintenance work tools) answer `UnlockRequired` first, as they do for
+a suspended catalog. A connection list leaves a locked catalog out, and
+is refused only when every catalog in it is locked. Each request made
+under an unlock adds one to its reads, writes (a changeset write, an
+import) or exports, shown by `unlock list`; those counts replace the
+hourly admin-read entries.
+
+**The maintenance runner.** A reporting key that is not an admin key
+needs no unlock to read and report (claims, renewals, submissions), on
+any server. Its writes get no exemption: a reporting key with write
+access needs an unlock to write like any other operator credential. A
+catalog whose `maintenance` flag is off keeps the runner out whatever its
+grants and whatever `require_unlock`: it is refused with 403 `Forbidden`
+and `"maintenance": "off"`.
+
 ## Signing in and self-service
 
 People sign in to the console as themselves, with any of three methods: a

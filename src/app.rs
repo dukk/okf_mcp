@@ -31,7 +31,7 @@ use crate::store::oauth::{
     clients as oauth_clients, codes as sign_in_codes, tokens as oauth_tokens,
 };
 use crate::store::settings::{self, Settings};
-use crate::store::{catalogs, changesets, email_tokens, sign_in_events, user_sessions};
+use crate::store::{catalogs, changesets, email_tokens, sign_in_events, unlocks, user_sessions};
 
 /// Every loaded catalog, by name (a `BTreeMap`, so iteration is in name
 /// order, like `catalog list`).
@@ -218,7 +218,8 @@ impl App {
     }
 
     /// Records one operator access in the background, off the request path
-    /// (plan Decision 5): an admin read's hourly bucket. A failure is
+    /// (plan Decision 5): an admin read's hourly bucket, or an unlock's
+    /// read, write or export tally. A failure is
     /// logged; [`App::settle_access`] waits for every write.
     ///
     /// # Arguments
@@ -242,7 +243,10 @@ impl App {
             let _held = hold.lock().await;
             let written = match admission {
                 Admission::AdminRead => audit::record_admin_read(&pool, &record).await,
-                Admission::Customer | Admission::Untracked => Ok(()),
+                // The unlock id was fixed at admission; the record is not
+                // needed for a tally.
+                Admission::Unlocked { unlock_id } => unlocks::tally(&pool, unlock_id, kind).await,
+                Admission::Customer | Admission::Untracked | Admission::Maintenance => Ok(()),
             };
             if let Err(error) = written {
                 tracing::error!(

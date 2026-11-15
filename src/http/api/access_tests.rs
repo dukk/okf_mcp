@@ -9,9 +9,10 @@ use chrono::Utc;
 
 use crate::db::{TEST_TEAM, TEST_USER};
 use crate::http::api::testing::{app, keys, send};
-use crate::mcp::testing::{settle_access, staff_root, TestApp};
+use crate::mcp::testing::{require_unlock, settle_access, staff_key, staff_root, TestApp};
 use crate::store::audit::{self, AuditActor};
 use crate::store::catalogs::{self, NewCatalog};
+use crate::store::keys::Access;
 use crate::store::teams::{self, NewTeam};
 
 /// Reads `main`'s tree as `key` with the background write held.
@@ -552,5 +553,402 @@ async fn a_maintenance_mutation_records_no_read_and_a_revision_read_records_one(
         admin_reads(&test).await.len(),
         1,
         "the document text was read"
+    );
+}
+
+// ---- M14 Task 9b: the unlock check and the maintenance exemption ----
+
+/// Makes user `staff` (from [`staff_root`]) an admin user, as unlocks need.
+async fn make_staff_admin(test: &TestApp) {
+    let change = crate::store::users::AdminChange {
+        on: true,
+        allow_last: false,
+    };
+    crate::store::users::set_admin(
+        test.app.pool(),
+        "staff",
+        change,
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+}
+
+/// A one-hour unlock of `catalog` for `staff`, polled in.
+///
+/// # Returns
+/// The unlock's id.
+async fn unlock(test: &TestApp, catalog: &str) -> i64 {
+    let id = create_unlock(test, catalog).await;
+    test.app.poll().await.unwrap();
+    id
+}
+
+/// [`unlock`] without the poll.
+async fn create_unlock(test: &TestApp, catalog: &str) -> i64 {
+    use crate::store::unlocks::{self, Category, NewUnlock, UnlockPolicy};
+    let new = NewUnlock {
+        catalog,
+        user: "staff",
+        category: Category::Support,
+        reason: "ticket 12",
+        hours: 1,
+    };
+    let policy = UnlockPolicy {
+        max_hours: 4,
+        notify_owners: false,
+    };
+    let created = unlocks::create(
+        test.app.pool(),
+        &new,
+        &policy,
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    created.id
+}
+
+/// An unlock's (reads, writes, exports).
+async fn tallies(test: &TestApp, id: i64) -> (i64, i64, i64) {
+    let found = crate::store::unlocks::find(test.app.pool(), id)
+        .await
+        .unwrap();
+    (found.reads, found.writes, found.exports)
+}
+
+/// `POST /api/v1/catalogs/main/import?replace=true` of `archive` as `key`.
+async fn import_main(
+    test: &TestApp,
+    key: &str,
+    archive: Vec<u8>,
+) -> (StatusCode, serde_json::Value) {
+    use tower::ServiceExt;
+    let request = axum::http::Request::post("/api/v1/catalogs/main/import?replace=true")
+        .header("authorization", format!("Bearer {key}"))
+        .body(axum::body::Body::from(archive))
+        .unwrap();
+    let response = crate::http::router(
+        std::sync::Arc::clone(&test.app),
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .oneshot(request)
+    .await
+    .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or_default())
+}
+
+/// The staff key's MCP context, as a tool call would build it.
+fn staff_context(test: &TestApp, secret: &str) -> crate::mcp::context::ToolContext {
+    crate::mcp::testing::context(
+        test,
+        crate::mcp::testing::cached_principal(test, secret),
+        None,
+    )
+}
+
+/// Opens a changeset on `main` as `ctx`'s key.
+async fn open_main(
+    ctx: &crate::mcp::context::ToolContext,
+) -> Result<String, crate::error::OkfError> {
+    let params = crate::mcp::changesets::OpenParams {
+        catalog: Some("main".to_string()),
+    };
+    crate::mcp::changesets::open_changeset(ctx, params)
+        .await
+        .map(|opened| opened.changeset)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn with_require_unlock_staff_need_an_unlock_for_reads_writes_and_exports() {
+    let test = app().await;
+    let scoped = keys(&test).await;
+    let staff = staff_root(&test).await;
+    make_staff_admin(&test).await;
+    require_unlock(&test).await;
+    let tree = "/api/v1/catalogs/main/tree";
+    let export = "/api/v1/catalogs/main/export";
+    let archive = || crate::http::archives::tarball_of(&[("index.md", "# Main\n\nImported.\n")]);
+
+    let (locked, refused) = send(&test, "GET", tree, Some(&staff), None).await;
+    let (locked_export, _) = send(&test, "GET", export, Some(&staff), None).await;
+    let (locked_import, import_refused) = import_main(&test, &staff, archive()).await;
+    let locked_open = open_main(&staff_context(&test, &staff)).await;
+    let (member, _) = send(&test, "GET", tree, Some(&scoped.read), None).await;
+    let (member_export, _) = send(&test, "GET", export, Some(&scoped.read), None).await;
+    let (listing, _) = send(&test, "GET", "/api/v1/catalogs", Some(&staff), None).await;
+    let (users, _) = send(&test, "GET", "/api/v1/users", Some(&staff), None).await;
+    let exported_before = audit::testing::entries(test.app.pool(), "catalog.exported").await;
+
+    assert_eq!(locked, StatusCode::FORBIDDEN);
+    assert_eq!(refused["error"], "UnlockRequired");
+    assert_eq!(refused["catalog"], "main");
+    assert_eq!(
+        locked_export,
+        StatusCode::FORBIDDEN,
+        "export needs an unlock too"
+    );
+    assert_eq!(
+        (locked_import, import_refused["error"].as_str()),
+        (StatusCode::FORBIDDEN, Some("UnlockRequired")),
+        "so does import"
+    );
+    assert!(
+        matches!(
+            locked_open,
+            Err(crate::error::OkfError::UnlockRequired { .. })
+        ),
+        "and opening a changeset: {locked_open:?}"
+    );
+    assert_eq!((member, member_export), (StatusCode::OK, StatusCode::OK));
+    assert_eq!(listing, StatusCode::OK, "metadata needs none");
+    assert_eq!(users, StatusCode::OK, "administration needs none");
+    assert_eq!(
+        exported_before.len(),
+        1,
+        "only the member's export is recorded"
+    );
+
+    let id = unlock(&test, "main").await;
+    let (open, _) = send(&test, "GET", tree, Some(&staff), None).await;
+    send(&test, "GET", tree, Some(&staff), None).await;
+    let (exported, _) = send(&test, "GET", export, Some(&staff), None).await;
+    let ctx = staff_context(&test, &staff);
+    let handle = open_main(&ctx)
+        .await
+        .expect("an unlocked admin opens a changeset");
+    let write = staff_context(&test, &staff)
+        .changeset(&handle, Access::Write)
+        .await
+        .map(drop);
+    let (imported, report) = import_main(&test, &staff, archive()).await;
+    settle_access(&test).await;
+
+    assert_eq!((open, exported), (StatusCode::OK, StatusCode::OK));
+    assert!(write.is_ok(), "{write:?}");
+    assert_eq!(imported, StatusCode::OK, "{report}");
+    assert_eq!(
+        tallies(&test, id).await,
+        (2, 2, 1),
+        "two reads; a changeset write and an import; one export"
+    );
+    assert!(
+        admin_reads(&test).await.is_empty(),
+        "the unlock's tallies replace the hourly record"
+    );
+
+    // Ended, the unlock lets nothing in, an open changeset included.
+    crate::store::unlocks::end(test.app.pool(), id, &AuditActor::cli(), Utc::now())
+        .await
+        .unwrap();
+    test.app.poll().await.unwrap();
+    let (ended, _) = send(&test, "GET", tree, Some(&staff), None).await;
+    let ended_write = staff_context(&test, &staff)
+        .changeset(&handle, Access::Write)
+        .await
+        .map(drop);
+    settle_access(&test).await;
+
+    assert_eq!(ended, StatusCode::FORBIDDEN);
+    assert!(
+        matches!(
+            ended_write,
+            Err(crate::error::OkfError::UnlockRequired { .. })
+        ),
+        "{ended_write:?}"
+    );
+    assert_eq!(
+        tallies(&test, id).await,
+        (2, 2, 1),
+        "a refusal counts nothing"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unlock_of_one_catalog_opens_only_that_one_and_a_refused_call_queues_nothing() {
+    let test = app().await;
+    let staff = staff_root(&test).await;
+    make_staff_admin(&test).await;
+    require_unlock(&test).await;
+    let id = unlock(&test, "main").await;
+
+    let (both, refused) = send(
+        &test,
+        "GET",
+        "/api/v1/search?q=alpha&catalogs=main,other",
+        Some(&staff),
+        None,
+    )
+    .await;
+    let (other_tree, _) = send(
+        &test,
+        "GET",
+        "/api/v1/catalogs/other/tree",
+        Some(&staff),
+        None,
+    )
+    .await;
+    settle_access(&test).await;
+    let after_refusals = tallies(&test, id).await;
+    // Unnamed, the search leaves the locked catalog out and reads the other.
+    let (unnamed, found) = send(&test, "GET", "/api/v1/search?q=alpha", Some(&staff), None).await;
+    settle_access(&test).await;
+
+    assert_eq!(both, StatusCode::FORBIDDEN);
+    assert_eq!(
+        (refused["error"].as_str(), refused["catalog"].as_str()),
+        (Some("UnlockRequired"), Some("other"))
+    );
+    assert_eq!(
+        other_tree,
+        StatusCode::FORBIDDEN,
+        "the unlock is of main only"
+    );
+    assert_eq!(
+        after_refusals,
+        (0, 0, 0),
+        "a refused search reads, and counts, nothing, main's unlock included"
+    );
+    assert_eq!(unnamed, StatusCode::OK, "{found}");
+    let hits = found["hits"].as_array().unwrap();
+    assert!(
+        !hits.is_empty() && hits.iter().all(|hit| hit["catalog"] == "main"),
+        "{found}"
+    );
+    assert_eq!(tallies(&test, id).await, (1, 0, 0));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_maintenance_runner_reads_without_an_unlock_until_the_catalog_opts_out() {
+    let test = app().await;
+    staff_root(&test).await;
+    // A reporting key of a user outside main's owner team.
+    let runner = staff_key(&test, "runner", Access::Read, true).await;
+    // A reporting key with write access: exempt for reads, not for writes.
+    let writing_runner = staff_key(&test, "writing-runner", Access::Write, true).await;
+    require_unlock(&test).await;
+    let tree = "/api/v1/catalogs/main/tree";
+
+    let (exempt, _) = send(&test, "GET", tree, Some(&runner), None).await;
+    let (writer_reads, _) = send(&test, "GET", tree, Some(&writing_runner), None).await;
+    let writer_opens = open_main(&staff_context(&test, &writing_runner)).await;
+    let mut tx = test.app.pool().begin().await.unwrap();
+    sqlx::query("UPDATE catalogs SET maintenance = false WHERE name = 'main'")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    catalogs::bump_admin_generation(&mut tx).await.unwrap();
+    tx.commit().await.unwrap();
+    test.app.poll().await.unwrap();
+    let (opted_out, refused) = send(&test, "GET", tree, Some(&runner), None).await;
+    let (other, _) = send(
+        &test,
+        "GET",
+        "/api/v1/catalogs/other/tree",
+        Some(&runner),
+        None,
+    )
+    .await;
+
+    assert_eq!(exempt, StatusCode::OK, "reads need no unlock");
+    assert_eq!(writer_reads, StatusCode::OK);
+    assert!(
+        matches!(
+            writer_opens,
+            Err(crate::error::OkfError::UnlockRequired { .. })
+        ),
+        "writes get no exemption: {writer_opens:?}"
+    );
+    assert_eq!(opted_out, StatusCode::FORBIDDEN);
+    assert_eq!(refused["error"], "Forbidden");
+    assert_eq!(refused["maintenance"], "off");
+    assert_eq!(other, StatusCode::OK, "only the catalog that opted out");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unlocked_read_of_an_old_catalog_map_is_refused_not_left_out() {
+    let test = app().await;
+    staff_root(&test).await;
+    make_staff_admin(&test).await;
+    // A non-admin key of the admin user: under `require_unlock` its reads
+    // are let in, and counted, only by an unlock.
+    let reader = staff_key(&test, "staff-reader", Access::Read, false).await;
+    require_unlock(&test).await;
+    let original = catalog_id(&test, "main").await;
+    replace_main_for_acme(&test).await;
+    let id = create_unlock(&test, "main").await;
+    // What `App::poll` does first: the key cache (its gates now hold the
+    // unlock of the replacement) moves while the catalog map still holds
+    // the old `main`.
+    test.app.keys().reload(test.app.pool()).await.unwrap();
+    let ctx = crate::mcp::testing::context(
+        &test,
+        crate::mcp::testing::cached_principal(&test, &reader),
+        None,
+    );
+    assert_eq!(ctx.catalogs()["main"].id(), original, "the old map");
+
+    let state = ctx.one(Some("main")).unwrap();
+    let refused = ctx.admit(&state, audit::AccessKind::Read);
+    settle_access(&test).await;
+
+    assert!(
+        matches!(refused, Err(crate::error::OkfError::Busy { .. })),
+        "{refused:?}"
+    );
+    assert_eq!(
+        tallies(&test, id).await,
+        (0, 0, 0),
+        "nothing counted against the wrong catalog"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_changeset_list_leaves_out_a_catalog_whose_unlock_ended() {
+    let test = app().await;
+    let staff = staff_root(&test).await;
+    make_staff_admin(&test).await;
+    require_unlock(&test).await;
+    unlock(&test, "main").await;
+    let other = unlock(&test, "other").await;
+    let ctx = staff_context(&test, &staff);
+    for catalog in ["main", "other"] {
+        let params = crate::mcp::changesets::OpenParams {
+            catalog: Some(catalog.to_string()),
+        };
+        crate::mcp::changesets::open_changeset(&ctx, params)
+            .await
+            .unwrap();
+    }
+    crate::store::unlocks::end(test.app.pool(), other, &AuditActor::cli(), Utc::now())
+        .await
+        .unwrap();
+    test.app.poll().await.unwrap();
+    let listed = |catalog: Option<&str>| {
+        let ctx = staff_context(&test, &staff);
+        let params = crate::mcp::changesets::ListParams {
+            catalog: catalog.map(str::to_string),
+        };
+        async move { crate::mcp::changesets::list_changesets(&ctx, params).await }
+    };
+
+    let unnamed = listed(None).await.unwrap();
+    let named = listed(Some("other")).await;
+
+    let catalogs: Vec<&str> = unnamed
+        .changesets
+        .iter()
+        .map(|changeset| changeset.catalog.as_str())
+        .collect();
+    assert_eq!(catalogs, ["main"], "its handles and paths stay locked");
+    assert!(
+        matches!(named, Err(crate::error::OkfError::UnlockRequired { .. })),
+        "{named:?}"
     );
 }

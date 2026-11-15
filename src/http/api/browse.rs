@@ -332,9 +332,9 @@ async fn revision(
     requester: Requester,
     Path((catalog, revision, path)): Path<(String, i32, String)>,
 ) -> Result<Json<RevisionView>, AppError> {
-    // This reads the store directly, so it checks access itself (before the
-    // principal moves into the context).
-    principal.require(Access::Read, &catalog)?;
+    // This reads the store directly, so it checks access itself, the unlock
+    // included (before the principal moves into the context).
+    principal.require_contents(Access::Read, &catalog, app.clock().now())?;
     let ctx = context(&app, principal, requester);
     // `history` resolves the path as the History tab spelled it (`.md`
     // optional) and answers 404 for a path that never existed.
