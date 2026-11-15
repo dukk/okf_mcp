@@ -1,7 +1,13 @@
 # okf-mcp operator API (milestone 14): design
 
-Status: draft for approval, 2026-11-13. Milestone 15 ("teams run
-themselves") follows it and is out of scope here.
+Status: delivered in milestone 14 (epic #390; sub-issues #391-#410; PRs
+#411-#413, #415-#417, #419, #420, #422, #424, #428, #429, #433, #436-#438,
+#442, #444, #445 and the PR for #410), 2026-11-15 (plan
+`docs/superpowers/plans/2026-11-13-okf-mcp-m14-operator-api.md`). It closes
+#297 and #379. What differs from this design is under "What shipped
+differently" at the end; the operator's view is `docs/operations.md`,
+"Users and teams" and its "Audit log" and "Unlock before access" sections.
+Milestone 15 ("teams run themselves") follows it and is out of scope here.
 
 ## Intent
 
@@ -212,7 +218,9 @@ owner `NOT NULL`) is unaffected.
   any team and any catalog through the routes above.
 - One check function decides, from an explicit allow-list of route
   templates, so adding a route never widens a provisioner by accident.
-- Everything it does is audited with its key as the actor.
+- Everything it does is audited with its key as the actor. *(Qualified,
+  issue #410, 2026-11-15: what shipped records every state change it makes,
+  not every use; see "What shipped differently" and #423.)*
 
 ## Part 5: the audit log
 
@@ -548,3 +556,214 @@ notes).
   switch it; admin keys with the report flag are not exempt.
 - Owners see the category but not the free-text reason; owners are
   emailed when an unlock starts.
+
+## What shipped differently
+
+Read the plan's "Decisions taken while planning" and its dated `Corrected
+(issue #N)` notes for the detail; the per-task changelogs
+(`changelog/*-m14-task-*`) give the reasons. The design above held; these
+are the places where what shipped is narrower, wider or more exact.
+
+### Decided while planning (not stated above)
+
+- **The actor is an argument** (`actor: &AuditActor`) on every recording
+  store function; functions that would pass five arguments take an input
+  struct (`AdminChange`, `NewEntitlement`, `Membership`, `NewCatalog`,
+  `PublishInput`). In `src/store/keys.rs` it is named `audit` (Decision 1).
+- **Admin-read counts live beside the entry**, in `audit_access_counts`,
+  since the trigger forbids updating an entry; the hour's first read creates
+  the entry and an upsert keeps the count exact (Decision 4). They are
+  written **in the background** (`App::note_access`), at most once per call,
+  catalog and kind, and a stopping server waits for them, bounded at 30
+  seconds (`ACCESS_SETTLE_LIMIT`); a crash between a request and its write
+  can lose that one count (Decision 5, #401).
+- **An all-catalogs credential's events belong to no team** (operator only);
+  its uses of a customer catalog are still recorded in that customer's log
+  (Decision 6).
+- **`MaintenanceOff` is its own error**, kind `Forbidden` with
+  `"maintenance": "off"` in the body, so the runner can tell an opt-out from
+  a revoked key (Decision 7). **The maintenance exemption covers reads and
+  reports only**: a reporting key with write access needs an unlock to
+  write (Decision 8).
+- **Provisioner refusals of admin targets are in the store**, under the row
+  locks `users::set_admin` conflicts with, so a promotion racing a
+  provisioner's change cannot hand it an admin. Its lookup by email *hides*
+  admin users instead of answering 403, so it cannot probe who is an admin
+  (Decision 9). `create_provisioner` is its own store function, not a
+  `NewKey` field (Decision 10).
+- **The Users page gained a filter box** (name, display name and email):
+  it had none to extend (Decision 11).
+- **Retention runs at the first poll and then daily, with an hour's
+  margin** for skew between the server and database clocks (Decision 12).
+  `audit_retention_days` is 30 to 3650 and `unlock_max_hours` 1 to 72
+  (Decision 13).
+- **Owners read unlocks two ways**: as redacted `catalog.unlocked` entries
+  and through `GET /api/v1/unlocks?team=`, with the tallies, both through a
+  console session only (Decision 14). The parity test learned flag entries
+  (`user list --email`, `key create --provisioner`) (Decision 15).
+
+### Behaviour
+
+- **The provisioner's auditing is of state changes, not every use.** Part 4
+  says everything a provisioner does is audited. What shipped (PR #422 and
+  the recording tasks) records every administrative change it makes, in the
+  change's transaction, with its key as the actor; its metadata reads
+  (`GET /users?email=`, `GET /users/{name}`, `GET /teams/{name}`), requests
+  that change nothing and refused requests write no entry. This is a
+  partial meeting of the design, not an authorization gap; #423 tracks
+  either adding bounded request-use events or narrowing the requirement.
+  It is not claimed complete.
+- **A provisioner's server-wide reach includes admins' personal teams.**
+  Team and catalog operations are server-wide, as Part 4's allow-list says,
+  so they may act on a team that is an admin user's personal team; what is
+  refused is a named admin user as the target, owner or member (user
+  routes, a team's first owner, a membership change). Review found no
+  authorization bypass in this reading (PR #422).
+- **No change, no entry, everywhere.** A write that changes nothing (the
+  same value, flag, role, owner, description or notice again; assigning a
+  credential to its current user; a publish that writes no revision; an
+  import that writes nothing) records nothing and does not bump the
+  administrative generation; a refused change records nothing (#396, #397,
+  #398, #399, #400). `team.suspended`'s `already` therefore means the
+  notice changed on an already suspended team.
+- **Access is recorded at the read, not the selection** (Decision 23, the
+  founder, 2026-11-14). Only a catalog a call actually reads is admitted and
+  recorded: validating a connection, listing catalogs or changesets,
+  opening a changeset and the maintenance mutations admit nothing, and a
+  read that answers from the first catalog of a connection's list records
+  only that one. A search checks every catalog's admission first and
+  records none if any is refused (#401, PR #433 rounds 2 and 3).
+- **The gates are one snapshot, bound to a catalog's incarnation.** The key
+  cache's gates (memberships, entitlements, unlocks, opt-outs, the owner
+  scope) are loaded in one read-only `REPEATABLE READ` transaction, so a
+  catalog replaced mid-load is never paired with its old members (#401). A
+  catalog can be deleted and created again under its name before the cache
+  reloads, so every admission decided by name carries the catalog's
+  `catalogs.id` and refuses a mismatch with `Busy` (retryable) inside its
+  snapshot or lock: reads through `ToolContext::admission_to`, export and
+  import through `catalogs::check_incarnation`, `open_changeset` too. An
+  admin credential's read that no gates can place is refused with `Busy`
+  rather than recorded against the wrong catalog (#401, #406, PR #442).
+- **An admin user acting is an operator whatever its credential**: a
+  self-issued key or a grant of an admin user is shown to owners as "an
+  operator" and is never matched by their actor filter (#402).
+- **Owners see only their own team in `teams`**, since an entry can also
+  belong to another customer's team or a staff member's personal team
+  (#402).
+- **An unlock's person is fixed when it begins** (`FixedPerson { person_id,
+  operator: true }`, `audit::record_for_person`). Both unlock entries name
+  the unlocked admin that way, so an unlock ended after its admin was
+  demoted or deleted still hides who it was from owners (#405, PR #428).
+- **Unlocks by scoped admins are scoped.** Creating one needs `admin` on the
+  named catalog (otherwise 404 `CatalogNotSelected`, like an unknown
+  catalog); a scoped admin lists and ends only the unlocks of the catalogs
+  it administers (404 for any other id), since its user's console session
+  would otherwise open every catalog and read every reason. Naming another
+  `user` needs an every-catalog admin. A credential with no user is refused
+  (403) before any target is chosen, even when it names another `user`
+  (#408, PR #437).
+- **The maintenance flag's owner check is in the store**, under the
+  catalog's and the membership's locks, so a demotion or transfer racing
+  the switch cannot let a former owner through; an unknown catalog and a
+  non-owner are both `Forbidden` to an owner (no existence oracle) (#407).
+- **A maintenance pass is recorded by a database trigger**
+  (`0017_maintenance_audit.sql`): when a run leaves `running` however it
+  ends, or when a claim that finds nothing inserts its run already
+  completed. The trigger calls no audit resolver (they lock users, which
+  deadlocks with a user's deletion) and reads the run credential's
+  `audit_credentials` row `FOR KEY SHARE SKIP LOCKED`, so an entry written
+  while that row is being forgotten names no credential (#407, PR #444).
+- **The runner's skip.** Refused at its claim (`maintenance_off`), the runner
+  exits 0 and records no stop, keeping the claim to replay; refused after it
+  claimed work, it stops with that reason and exit 4 (#407).
+- **The unlock email** names the product in its subject (`An operator opened
+  {catalog} in {product}`), and says "contact the operator" only when no
+  `support_contact` is set (#405). Every email gained the product name in
+  its subject (#392).
+- **Refusal order for selection-first tools** (Decision 24, the founder,
+  2026-11-14): `open_changeset`, `maintenance_dispose` and the maintenance
+  work tools refuse `UnlockRequired` at the selection, before their own
+  level check, as milestone 13 shipped for `Suspended` ("The refusal"
+  carries the qualification).
+
+### Locks and schema
+
+- **One lock order for every recorder: `audit::lock_people`.** `record`
+  locks users `FOR KEY SHARE` mid-transaction (the actor, its credential's
+  owner, the entry's person, a personal team's person), which deadlocked
+  against `users::set_admin` and user deletion when taken after a team,
+  catalog or the generation row (#396, #397, PR #416, PR #419). Every store
+  function that records first calls `audit::lock_people(&mut tx, actor,
+  &People { target, users, teams, catalogs })`, which takes those users in
+  `set_admin`'s order (admins by id, then the rest by id); then teams,
+  catalogs and changesets, then `server_state`, then the rest. Credential
+  writers use `audit::lock_credential_people`, which snapshots, locks and
+  rechecks (#398). The rule is in `tools/agentic/lessons.md`. Two known
+  gaps remain: #418 and #421 (below).
+- **Migration `0014_audit_row_locks.sql`** (PR #419 review). The resolvers
+  upserted their audit row on every call, and `ON CONFLICT DO UPDATE` locks
+  the row even when nothing changes, so two admins acting on each other
+  deadlocked on two `audit_people` rows. Now a resolver reads an existing
+  row without a lock and refreshes a stale one only under `FOR NO KEY
+  UPDATE SKIP LOCKED`; every user and team gets its row in the transaction
+  that creates it (and 0014 backfills the existing ones). The design's
+  migrations therefore moved up one: the provisioner is `0015`, unlocks
+  `0016` (which also adds `catalogs.maintenance`) and the maintenance audit
+  trigger `0017`.
+- **User deletion locks its keys and grants** before discarding their
+  changesets, so a changeset opened meanwhile waits and finds its key gone
+  (#394).
+- **Settings writes** take the actor's users, then `server_state`, then the
+  setting row, and bump before reading the previous value, so `from` is
+  exact (#399, PR #416).
+
+### Surfaces
+
+- **`okf-mcp key list`** gained a `provisioner yes|no` cell before its last
+  `user U` cell (#395). `okf-mcp audit list`'s actor cell reads `credential
+  ID` (it may be a grant) and its target cell adds `person NAME`; control
+  characters are escaped (#403). The CLI and the route share one filter
+  parser (`audit::parse_filters`) and one export (`audit::export_lines`)
+  (#402, #403).
+- **The audit export is built in memory**, page by page, rather than
+  streamed: streaming needed a new dependency, and retention bounds it
+  (#402).
+- **Console: the Records and "Your teams" nav groups.** Audit and Unlocks are
+  in a Records group (`data-need="records"`): Audit for every-catalog admins
+  and every account session (every user owns its personal team), Unlocks
+  for those and any admin credential, so a scoped admin reaches Unlocks but
+  not Audit. A "Your teams" group (`data-need="owner"`, a session that is not
+  an admin) holds a second Catalogs link, whose drawer holds only the
+  Maintenance switch, since the Catalogs link was otherwise in Administer
+  only. The switch reads the catalog when the drawer opens (PR #445). The
+  console offers Unlock to an admin credential with a user (`whoami` has no
+  admin-user field); the server refuses the rest (#404, #409).
+- **A user's audit link** opens `#/users/detail/<name>`, a route of its own,
+  so a user named `unassigned` opens its own drawer (#404).
+
+### Not built here, and follow-ups
+
+- Self-service account deletion (#355) and owners managing members (#352)
+  stay with milestone 15, as planned. #296 (credential user and catalog
+  owner `NOT NULL`) is unaffected.
+- Follow-ups open at the close of the milestone:
+  - #418: a publish by a user's key can deadlock with deleting that user
+    (the publish records under the user's lock after taking its
+    changeset); Postgres aborts one as `Busy`, retryable, nothing half
+    done.
+  - #421: `lock_people` snapshots a catalog's owner before the catalog
+    lock, so a concurrent transfer can still need a retry.
+  - #423: the provisioner's every-use auditing (above).
+  - #430: the owner view exposes global entry ids, which show other teams'
+    activity volume.
+  - #434 and #440: test flakes (the settings set/reset race test, the
+    passkey journey).
+  - From milestone 13: #361, #381 and #385 (console follow-ups).
+
+### Open question for the maintainer
+
+- **Should an unlock require the acting credential's user to be an admin
+  user?** Today any admin-level credential that has a user may unlock (for
+  its own user, which must be an admin user, or, as an every-catalog admin,
+  for another admin user it names), whether or not its own user is an
+  admin. The question was raised in review of PR #437 and left as is.

@@ -7010,6 +7010,8 @@ git commit -m "feat(console): unlock a locked catalog, the Unlocks page and the 
 - [ ] **Step 5: Issues**: close #297 (deletion meets its goal); file follow-ups for anything deferred during review.
 - [ ] **Step 6: Gates and commit**
 
+> **Corrected (issue #410, 2026-11-15).** As shipped: the endpoint counts were recounted from the routers (`src/http/api/mod.rs` and each area's `routes()`, with `archives::export_route` / `import_route` under Catalogs) and were already right at 94, so they did not change. The audit action table in `docs/operations.md` is grouped as the spec's Part 5 groups it, plus an "Unlocks and maintenance passes" group, and gained the two unlock rows (`catalog.unlocked`, `catalog.unlock_ended`) Task 9d had left out. The Upgrades bullet also notes that `key list`'s `user` cell moved from field 9 to 10 (Task 5's `provisioner` cell); "no listing changes columns" was wrong for `key list`. The milestone changelog follows milestone 13's (`changelog/2026-11-14T02-37-58Z-milestone-13-team-suspension.md`), not milestone 12's. #297 was already closed (Task 4); no new follow-up was filed. The spec's Part 4 sentence "Everything it does is audited" is qualified: only state changes are (#423).
+
 Run: `tools/agentic/gate.sh fmt`, `tools/agentic/gate.sh lint`, `tools/agentic/gate.sh test`, `tools/agentic/gate.sh test-ui`.
 
 ```bash

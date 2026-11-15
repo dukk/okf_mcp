@@ -549,7 +549,7 @@ id on stderr; only the key's SHA-256 is stored. Put it straight
 into a password manager or a secret store. Never paste it into logs, tickets,
 chat or shell history (a leading space keeps a command out of history in most
 shells). `key list` shows name, actor, id, access, state, grants, `default
-X`, `maintenance_report true|false` and `user U` (`-` for a key from before
+X`, `maintenance_report true|false`, `provisioner yes|no` and `user U` (`-` for a key from before
 users existed that nobody has assigned), grouped by name. Use
 `okf-mcp key maintenance-report ID --enabled true|false [--actor ACTOR]` to
 change the reporting flag. `revoke`, `grant`, `ungrant` and `maintenance-report`
@@ -687,6 +687,21 @@ catalog to a **team**:
   it is granted; owning a catalog, or being in the team that owns it, adds
   nothing.
 
+**Running okf-mcp for other people.** An operator who runs the server for
+its staff or its customers has four more tools, all off or neutral until
+used: the product name and support contact people see in email and on the
+server's pages ([Settings](#settings), `product_name` and
+`support_contact`); a [provisioner key](#provisioner-keys) for the
+operator's own signup and offboarding automation, which manages accounts,
+teams and catalogs but reads no catalog; a stored, append-only
+[audit log](#audit-log) of administrative changes, catalog writes, exports
+and operator reads, which admins read in full and each team's owners read
+for their team; and [unlock before access](#unlock-before-access), which,
+once `require_unlock` is on, keeps operator staff out of a customer's
+catalog until they unlock it with a reason and a time limit. Finding a
+user by email (`user list --email`) and deleting a user with everything
+only theirs ([Deletion rules](#deletion-rules)) complete the lifecycle.
+
 User and team names are `[a-z0-9-]+` and are unique across both: `user
 create alice` is refused while a team `alice` exists, and the other way
 round. Every command below needs the database, as every subcommand does; the
@@ -747,7 +762,8 @@ them out, detail refuses them, and mutations check the live flag under the user
 row lock. User detail never shows key, grant or sign-in-code lists to a
 provisioner; the user view retains their aggregate count. Administrative state
 changes are audited with its key as actor; metadata reads, unchanged operations
-and refusals do not themselves create use-log entries. Team and catalog
+and refusals do not themselves create use-log entries (the design asked for
+every use to be recorded; #423 tracks that gap). Team and catalog
 management remains server-wide, as the allow-list specifies; the admin-target
 refusal applies to named user operations and membership/initial-owner targets.
 
@@ -771,7 +787,7 @@ does not add permission):
 | POST | `/api/v1/catalogs` |
 | DELETE | `/api/v1/catalogs/{catalog}` |
 | PUT | `/api/v1/catalogs/{catalog}/member-access` |
-| GET | `/api/v1/audit` (own entries; reserved for the audit-reader task) |
+| GET | `/api/v1/audit` (only the entries it wrote; not the export) |
 
 Every other API route is refused, including listing all users or teams, managing
 keys or grants, changing settings or admin flags, entitlements and session
@@ -1011,16 +1027,16 @@ controls disabled, or the Unassigned view a note, saying why.
 
 Every change below writes one entry in the change's own transaction: the
 change and its entry commit together, and a change whose entry cannot be
-written fails. A catalog entry names the catalog and belongs to its owner
+written fails. Operator reads (`catalog.admin_read`), which change nothing,
+are counted in the background instead (below). A catalog entry names the catalog and belongs to its owner
 team; a user entry names the user only through its audit person, which
 reads `deleted user #N` once the user is deleted; a settings entry names
-the setting and belongs to no team.
+the setting and belongs to no team. The groups are the design's (Part 5
+of `docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`).
 
 | Action | Recorded when | Details |
 |---|---|---|
-| `catalog.published` | A publish writes at least one revision (one that changes nothing writes none and records nothing). Moves, splits and concept deletes are publishes and are recorded as such | `changeset` (the handle; the diff stays in the catalog's history), `files` (revisions written), `generation_from`, `generation_to` |
-| `catalog.reverted` | A `revert` succeeds: a document's old revision (or its deletion) goes into a changeset. A refused revert records nothing | `path`, `revision`, `changeset` |
-| `catalog.changeset_discarded` | An admin closes another key's changeset (`discard` without `paths`, or `DELETE /api/v1/changesets/{handle}`), or a user deletion discards an open changeset of one of the user's keys (the entry's person is that user). A key discarding its own changeset records nothing | `changeset`, `files` (entries dropped), `reason` (`admin` or `user_deleted`) |
+| **Users** | | |
 | `user.deleted` | A user is deleted (`user delete`, `DELETE /api/v1/users/{name}`, the console). A refused deletion records nothing | `keys` (keys and grants deleted), `codes` (sign-in codes deleted), `changesets_discarded` |
 | `user.created` | A user is created (`user create`, `POST /api/v1/users`, the console). A refused create records nothing | none |
 | `user.email_changed` | A user's email is set or cleared (`user set-email`, `PUT /api/v1/users/{name}/email`). A change of letter case only, or clearing an email that is not set, records nothing | `cleared` (never the address) |
@@ -1029,6 +1045,7 @@ the setting and belongs to no team.
 | `user.entitlement_set` | A user is given a catalog, or its level changes (`user entitle`, `PUT /api/v1/users/{name}/entitlements/{catalog}`). The entry belongs to the catalog's owner team. The level it already has records nothing | `catalog`, `access`, `previous` (`read`, `write`, or `null` for a new one) |
 | `user.entitlement_removed` | An entitlement is removed (`user unentitle`, `DELETE /api/v1/users/{name}/entitlements/{catalog}`). The entry belongs to the catalog's owner team. Removing one not given records nothing | `catalog` |
 | `user.sessions_revoked` | An admin ends a user's console sessions (`user revoke-sessions`, `DELETE /api/v1/users/{name}/sessions`, or one session with `DELETE /api/v1/users/{name}/sessions/{id_prefix}`). Ending none records nothing; a user ending their own session, and the sessions an admin-flag change ends, record no entry of this kind | `sessions` (how many ended) |
+| **Teams** | | |
 | `team.created` | A shared team is created (`team create`, `POST /api/v1/teams`); its person is the first owner | none |
 | `team.member_added` | A user joins a team (`team add-member`, `PUT /api/v1/teams/{name}/members/{user}`); its person is the user | `role`, `from` (`null`) |
 | `team.role_changed` | A member's role changes (`team set-role`, the same `PUT`). Setting the role a member already has records nothing | `role`, `from` |
@@ -1036,14 +1053,15 @@ the setting and belongs to no team.
 | `team.deleted` | A shared team is deleted (`team delete`, `DELETE /api/v1/teams/{name}`), recorded before the row goes. A refused deletion records nothing | none |
 | `team.suspended` | A team is suspended or its notice changes (`team suspend`, `PUT /api/v1/teams/{name}/suspension`). Suspending a suspended team with the same notice, a refused notice and an unknown or malformed name record nothing | `notice` (whether there is one; never its text), `already` (it was suspended before) |
 | `team.unsuspended` | A suspension is lifted (`team unsuspend`, the same `PUT`). Lifting an active team's suspension records nothing | none |
+| **Catalogs** | | |
 | `catalog.created` | A catalog is created (`catalog create`, `POST /api/v1/catalogs`) | none |
 | `catalog.owner_changed` | A catalog gets another owner team (`catalog set-owner`, `PUT /api/v1/catalogs/{catalog}/owner`); the entry belongs to both teams. Giving it to the team that owns it records nothing | `from` (the old team's audit id, `null` for a catalog that had no owner), `to` |
 | `catalog.description_changed` | A catalog's description changes (`catalog update`, `PATCH /api/v1/catalogs/{catalog}`). The same text again records nothing | `length` (in characters; never the text) |
 | `catalog.member_access_changed` | A catalog's member access changes (`catalog set-member-access`, `PUT /api/v1/catalogs/{catalog}/member-access`). The same value again records nothing | `from`, `to` (`none`, `read` or `write`) |
 | `catalog.maintenance_changed` | A catalog's maintenance flag changes (`catalog set-maintenance`, `PUT /api/v1/catalogs/{catalog}/maintenance`), by an admin or an owner of its team. The same value again, and a refused change, record nothing | `from`, `to` (`on` or `off`) |
-| `catalog.maintenance_run` | A maintenance run ends, however it ends (closed by the runner or an operator, completed, or failed by recovery once its deadline passes), or a claim finds nothing to do. Source `system`, actor label `system:maintenance`, naming the run's credential; an admin-level key or a key of an admin user shows to owners as an operator. The runner's individual reads are not recorded | `run` (its id), `state` (`completed`, `failed` or `cancelled`), `findings` (reported in that run) |
 | `catalog.deleted` | A catalog is deleted (`catalog delete`, `DELETE /api/v1/catalogs/{catalog}`), recorded before the row goes. A refused deletion records nothing | `forced` (unpublished changes were deleted with it), `generation` |
 | `catalog.imported` | An import writes or deletes at least one file (`okf-mcp import`, `POST /catalogs/{name}/import` and its `/api/v1` twin, the console). An import that changes nothing, or is refused, records nothing | `replace`, `scope` (`everything` or `machinery`), `written` (files added or changed), `deleted`, `generation` (after the import) |
+| **Credentials** | | |
 | `key.created` | An admin or signed-in user creates a key (CLI, API, console, self-service); provisioner creation also records this action | `access`, `all_catalogs`, `catalogs` (count), `maintenance_report`, `self_issued`, `expires` (boolean); a provisioner records only `provisioner: true` |
 | `key.revoked`, `oauth.grant_revoked` | An API key or OAuth grant is revoked, including self-service. An already revoked or unknown target records nothing | none |
 | `key.catalog_granted`, `key.catalog_ungranted` | A key's or OAuth grant's catalog grant is added or removed (the entry's target is a `key` or a `grant`); unchanged grants record nothing. Scoped to that catalog's owner team | `catalog` |
@@ -1051,10 +1069,20 @@ the setting and belongs to no team.
 | `key.report_flag_changed` | A key's reporting flag changes; an unchanged or refused flag records nothing | `from`, `to` |
 | `oauth.code_created`, `oauth.code_revoked` | A sign-in code is created or revoked; refused operations record nothing | Creation: `access`, `all_catalogs`, `catalogs` (count); revocation: none |
 | `oauth.grant_created` | A sign-in code is redeemed (system actor `oauth`), or a signed-in user approves consent (their console-session actor) | `client` (host only), plus `code` (the immutable code id, not its secret) for redemption |
+| **Settings** | | |
 | `setting.changed` | `settings set` or `PUT /api/v1/settings/{key}` changes a setting ([Settings](#settings)). Setting the value already stored records nothing | `from` (the stored value before, `null` without an override) and `to`; for `support_contact` only `set` (whether a contact is set now), never the address |
 | `setting.cleared` | `settings reset` or `DELETE /api/v1/settings/{key}` removes an override (with none, nothing is recorded) | `from`; nothing for `support_contact` |
+| **Catalog writes** | | |
+| `catalog.published` | A publish writes at least one revision (one that changes nothing writes none and records nothing). Moves, splits and concept deletes are publishes and are recorded as such | `changeset` (the handle; the diff stays in the catalog's history), `files` (revisions written), `generation_from`, `generation_to` |
+| `catalog.reverted` | A `revert` succeeds: a document's old revision (or its deletion) goes into a changeset. A refused revert records nothing | `path`, `revision`, `changeset` |
+| `catalog.changeset_discarded` | An admin closes another key's changeset (`discard` without `paths`, or `DELETE /api/v1/changesets/{handle}`), or a user deletion discards an open changeset of one of the user's keys (the entry's person is that user). A key discarding its own changeset records nothing | `changeset`, `files` (entries dropped), `reason` (`admin` or `user_deleted`) |
+| **Data access** | | |
 | `catalog.exported` | Every export, whoever asks: `okf-mcp export` (source `cli`), `GET /catalogs/{name}/export` and its `/api/v1` twin, the console. Written before the archive is compressed; an export whose entry cannot be written fails. A refused export records nothing | `generation` (the one the archive holds), `files`, `catalog_id`; the entry belongs to the team that owned the catalog when it was read |
 | `catalog.admin_read` | An admin credential reads a catalog's contents (MCP read tools, a changeset read, the console's and the API's browse, history and search routes) and its user is not in the catalog's owner team; a key with no user always counts. One entry per credential (or session user), catalog identity, owning team and clock hour, with an exact request count; members' reads, writes (recorded as publishes) and paths that read no contents (listing catalogs or changesets, opening a changeset, the connection's catalog list) record nothing. Only the catalogs a call actually reads count: a read that answers from the first catalog of a connection's list records only that one | `hour` (its start), `catalog_id` (the catalog's immutable id), and the request count |
+| **Unlocks and maintenance passes** | | |
+| `catalog.unlocked` | An admin unlocks a catalog (`unlock create`, `POST /api/v1/unlocks`, the console's Unlock). The entry's person is the unlocked admin, marked operator, so owners see neither who it was nor the reason. A refused unlock records nothing | `unlock` (its id), `category`, `reason` (removed for owners), `starts`, `expires` |
+| `catalog.unlock_ended` | An admin ends a live unlock early (`unlock end`, `DELETE /api/v1/unlocks/{id}`, Unlocks → End); its person is the unlock's admin, as above. An unlock that simply expires records nothing more, and ending one already ended or expired is refused and records nothing | `unlock` |
+| `catalog.maintenance_run` | A maintenance run ends, however it ends (closed by the runner or an operator, completed, or failed by recovery once its deadline passes), or a claim finds nothing to do. Source `system`, actor label `system:maintenance`, naming the run's credential; an admin-level key or a key of an admin user shows to owners as an operator. The runner's individual reads are not recorded | `run` (its id), `state` (`completed`, `failed` or `cancelled`), `findings` (reported in that run) |
 
 Credential events belong to the owner teams of their granted catalogs
 (all-catalogs credentials belong to no team); a code assignment belongs to
@@ -1087,6 +1115,68 @@ once a day, the server deletes the entries older than
 server and the database); nothing else deletes them. Lowering the setting
 takes effect at the next daily pass; raising it keeps the entries not yet
 deleted.
+
+**Not recorded.** Ordinary reads by a catalog's customers (members of the
+owner team, entitled non-admins); sign-ins (they are in
+`okf-mcp user sign-ins`); the maintenance runner's individual reads and
+reports (in their own tables; each pass writes one
+`catalog.maintenance_run`); reads under an unlock (they are tallied on the
+unlock instead, shown by `unlock list`); and a provisioner's metadata
+reads, unchanged requests and refusals (#423). A change that changes
+nothing, and a refused change, record nothing.
+
+**People, teams and credentials in entries.** No column of an entry holds a
+person's name, an email address or a secret. An entry names people through
+`audit_people`, teams through `audit_teams` and keys, grants and sign-in
+codes through `audit_credentials`; it keeps no foreign key to users, teams,
+keys or catalogs, so deleting one never changes an entry. Deleting a user
+renames its `audit_people` row to `deleted user #N` and clears its
+credentials' ids and labels (`credential #N`), in the deletion's own
+transaction. A team is its immutable identity: a team deleted and created
+again under the same name is a new `audit_teams` row, so its owners never
+see the old team's entries. The actor label is only a kind (`console
+session`, `api key`, `oauth grant`), `cli:<os user>` or `system:<what>`;
+a key's own label lives in `audit_credentials`. Client IPs of web requests
+are kept for the retention period.
+
+**Who reads it.** An admin that reaches every catalog (or an admin user's
+console session) reads every entry in full; the command line reads the
+same. A team's owner, signed in to the console, reads the entries that
+belong to that team, with operator staff shown as "an operator" (no
+person, credential, label or IP), other people's IPs left out, an unlock's
+reason removed and only their own team in `teams`. A provisioner reads the
+entries it wrote. Nobody else reads it; the full rules are in the
+[Audit API](#audit-api).
+
+**Where.** `okf-mcp audit list` and `okf-mcp audit export` on the command
+line, `GET /api/v1/audit` and `GET /api/v1/audit/export` over REST (both
+in the [Audit API](#audit-api)), and the console's Audit page (Records →
+Audit; an owner picks one of their teams), with the same filters and an
+Export button that downloads `audit.jsonl`.
+
+A `catalog.unlocked` entry, as an admin reads it (`GET /api/v1/audit`):
+
+```json
+{
+  "id": 412,
+  "at": "2026-11-13T12:00:00Z",
+  "action": "catalog.unlocked",
+  "source": "console",
+  "actor": {"kind": "known", "person": "staff", "credential": null,
+            "label": "console session", "operator": true},
+  "ip": "192.0.2.10",
+  "target": {"kind": "catalog", "name": "main", "person": "staff"},
+  "teams": ["family"],
+  "details": {"unlock": 1, "category": "support", "reason": "ticket 12",
+              "starts": "2026-11-13T12:00:00Z",
+              "expires": "2026-11-13T14:00:00Z"},
+  "requests": null
+}
+```
+
+The owner of `family` reads the same entry as `"actor": {"kind":
+"operator"}`, `"ip": null`, `"target": {"kind": "catalog", "name": "main",
+"person": null}` and `details` without `reason`.
 
 ### Unlock before access
 
@@ -2128,6 +2218,18 @@ account" (My keys, My grants, Account), and Administer only to an admin
 user; hiding it is a convenience, since the API refuses a member's session on
 admin routes (403).
 
+Two more groups follow. **Records** holds Audit, for an admin that reaches
+every catalog and for anyone signed in with an account (every user owns
+at least its personal team; an owner picks one of the teams they own), and
+Unlocks, for those and for any admin credential (a scoped admin sees the
+unlocks of the catalogs it administers). **Your teams** shows to someone
+signed in with an account who is not an admin: its Catalogs link lists the
+catalogs the user reaches, and a catalog's drawer holds only the
+Maintenance switch, enabled for an owner of the catalog's owner team. Where a
+locked catalog is refused (`UnlockRequired`), the console offers Unlock,
+to an admin credential with a user, with a short form for the category,
+reason and hours.
+
 ### API reference
 
 The API has 94 endpoints (a method and path each). The identity endpoints
@@ -3002,6 +3104,27 @@ take the server out of service. Alert on the `error` log line, not on
   before the display name, so a script that reads that listing by position
   (`cut -f`) takes the display name from field 6, not 5
   ([Suspending a team](#suspending-a-team)).
+- **The operator API (milestone 14; also after 0.15.0)** adds migrations
+  `0012_audit.sql` to `0017_maintenance_audit.sql`, and an older binary
+  refuses the migrated database. One changes behaviour:
+  `0013_user_deletion.sql` turns the user references of `api_keys`,
+  `sign_in_codes` and `team_members` into `ON DELETE CASCADE`, so deleting
+  a user now deletes its keys, grants, sign-in codes and memberships with
+  it (see [Deletion rules](#deletion-rules); the refusals that remain are
+  the code's). The others only add: the audit tables and their append-only
+  trigger (`0012`); an `audit_people` row for every user and an
+  `audit_teams` row for every team (`0014`, a backfill); the `provisioner`
+  key flag (`0015`, `false` for every existing key); the `unlocks` table
+  and `catalogs.maintenance` (`0016`, `on` for every catalog); and the
+  trigger that records each maintenance pass (`0017`). Nothing is locked
+  after the upgrade: `require_unlock` stays off until an operator turns it
+  on, and the branding settings default to `okf` and no contact. The log
+  starts empty, and from the upgrade on every recorded change, export and
+  operator read writes an entry. `team list` keeps its columns, but
+  `okf-mcp key list` gains a `provisioner yes|no` cell before its last
+  `user U` cell, so a script that reads the user by position (`cut -f`)
+  takes it from field 10, not 9. `user list` gains `--email`, and
+  `GET /api/v1/catalogs` a `maintenance` field.
 
 ### Preparing and shipping a release
 
@@ -3272,7 +3395,9 @@ curl -sf -H "Authorization: Bearer $OKF_MCP_KEY" -o notes.tar.gz \
 | A tool returns `UnknownChangeset`, or `Refused` naming a closed changeset ("is published", "is discarded", "was published or discarded while this write waited", "is no longer open") | `UnknownChangeset`: the handle is mistyped or belongs to another key (only its key, and an `admin` that reaches its catalog, may use it). `Refused`: its changeset is closed, by `publish`, by `discard`, or by the prune of changesets left empty for 24 hours, possibly while the call waited for it. `list_changesets` lists the open handles the key may use; otherwise call `open_changeset` |
 | A tool or `/api/v1` route returns 403 `Suspended` | The catalog's owner team is suspended (the body names the `catalog`, the `team` and the operator's `notice`). Export still works. An admin lifts it with `okf-mcp team unsuspend TEAM` ([Suspending a team](#suspending-a-team)) |
 | A tool or `/api/v1` route returns 403 `UnlockRequired` | `require_unlock` is on and an operator credential opened a customer catalog's contents without a live unlock (the body names the `catalog`). Unlock it with `okf-mcp unlock create`, `POST /api/v1/unlocks` or Unlock in the console; a key with no user cannot be unlocked: give it one (`okf-mcp key assign`) |
-| The maintenance runner gets 403 `Forbidden` with `"maintenance": "off"` | The catalog's owners turned maintenance off (the body names the `catalog`); the runner skips it. An owner of its team can turn it back on |
+| The maintenance runner gets 403 `Forbidden` with `"maintenance": "off"`, or reports reason `maintenance_off` | The catalog's owners turned maintenance off (the body names the `catalog`). Refused at its claim, the runner skips the catalog and exits 0 with reason `maintenance_off`, keeping the claim to replay; refused after it claimed work, it stops with that reason and exit 4. Either way nothing is lost: an owner of its team (or an every-catalog admin) turns it back on with `okf-mcp catalog set-maintenance C on` or the catalog's Maintenance switch, and the next run carries on ([Report-only runner](#report-only-runner)) |
+| A team owner gets 403 from `GET /api/v1/audit` or `GET /api/v1/unlocks` | Owners read their team's entries and unlocks through a signed-in console session only, naming the team (`?team=NAME`), never through their keys. A plain member, a team the user does not own and a missing or malformed `team` get 403 too ([Audit API](#audit-api)) |
+| `user delete` is refused (409) | Its personal team owns a catalog, it is the last owner of a shared team, or (over REST and in the console) it is the last admin user. The message names the cause ([Deletion rules](#deletion-rules)) |
 | A tool returns `CatalogNotSelected` or `Forbidden` | The key is not granted that catalog, or its access level is too low (a `read` key calling a write tool). `okf-mcp key grant`, or a key with more access |
 | 404 on an archive route | The catalog doesn't exist or the key isn't granted it (never 403, so a key can't probe which catalogs exist) |
 | 403 on an archive route | The key reaches the catalog but its level is too low: import needs `admin` |

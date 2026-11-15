@@ -24,6 +24,11 @@ Milestone 13 added team suspension: an operator can suspend a team, whose
 catalogs then refuse every non-admin credential except export until it is
 lifted (`docs/operations.md`, "Suspending a team"; design:
 `docs/superpowers/specs/2026-11-13-okf-team-suspension-design.md`).
+Milestone 14 added the operator API: branding, finding and deleting users,
+provisioner keys, a stored audit log readable by team owners, and
+unlock-before-access for operator staff (`docs/operations.md`, "Users and
+teams"; design:
+`docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`).
 
 Deployed (every route but `/healthz` needs a bearer key) from the image `ghcr.io/hypotheosis/okf-mcp`, with its database
 backed up continuously and a restore drill done.
@@ -92,6 +97,12 @@ creates its personal team of the same name. Ownership grants no access.
 `mail test|queue|retry|delete` manage sign-in, the ceiling, policy and mail
 (`docs/operations.md`, "Signing in and self-service"). `user invite` and
 `mail test` only queue the mail; a running server's worker sends it.
+`okf-mcp user list --email ADDRESS` finds a user by email, `user delete`
+takes a user with everything only theirs, `key create --provisioner` makes
+an automation key that manages accounts, teams and catalogs but reads no
+catalog, `audit list|export` read the audit log, `unlock create|list|end`
+manage unlocks, and `catalog set-maintenance` lets the maintenance runner
+in or keeps it out (`docs/operations.md`, "Users and teams").
 
 `import` takes a `.tar.gz` file, `-` for one on stdin, or a directory. A
 `git archive` tarball imports exactly the checkout's tracked files, and a
@@ -331,7 +342,10 @@ the other route errors have the body `{"error": ..., "message": ...}`; the
 401, the 413, the timeout layer's 503 below and `/healthz`'s own body are the
 exceptions. A catalog whose owner team is suspended answers every non-admin
 credential with 403 `Suspended` (naming the `catalog`, `team` and `notice`),
-except export (`docs/operations.md`, "Suspending a team").
+except export (`docs/operations.md`, "Suspending a team"). With
+`require_unlock` on, an operator credential opening a customer catalog's
+contents without a live unlock gets 403 `UnlockRequired` (naming the
+`catalog`) (`docs/operations.md`, "Unlock before access").
 
 The import checks the key before it reads the upload. It then reads and checks
 the tarball (400 with every problem for an unreadable or rule-breaking
@@ -369,6 +383,11 @@ server.
 
 Maintenance findings can be triaged (accepted, dismissed, needs input,
 reopened) and runs inspected from the browser.
+
+The Records group holds the audit log (every entry for an admin, a team's
+own entries for its owners) and the unlocks; a locked catalog offers Unlock
+where it is refused, and a team's owners turn a catalog's maintenance on or
+off from Your teams > Catalogs.
 
 Every console action is an `/api/v1` call with the same credential (the
 bearer key, or the session cookie with its `X-OKF-CSRF` header on writes), so
