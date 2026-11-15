@@ -2215,8 +2215,8 @@ The routes behind reading the [audit log](#audit-log). Who reads what:
 - Anyone else gets 403.
 
 What an owner sees is redacted when it is read (the stored entry never
-changes): an entry whose actor is an admin credential or a provisioner shows
-the actor as `{"kind": "operator"}`, with no person, credential, label or
+changes): an entry whose actor is an admin credential, a provisioner, or
+any credential of an admin user (a self-issued key, a grant) shows the actor as `{"kind": "operator"}`, with no person, credential, label or
 IP; client IPs show only for the team's own members; a target person who
 was an admin user when the entry was written (such as the admin an unlock
 is for) is hidden, and so is a key, grant or code of theirs; an unlock's

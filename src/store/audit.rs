@@ -386,11 +386,15 @@ pub async fn record(
     // `stored_label`. `target_operator`: the target person, or the owner of
     // a target key, grant or code (which `audit_credential` resolves the
     // same way), is an admin user now, so owners never see who it is.
+    // `actor_operator` likewise: an operator credential, or any credential
+    // of an admin user (a self-issued key, a grant), which is still
+    // operator staff acting (issue #402).
     Ok(sqlx::query_scalar(
         "INSERT INTO audit_entries (at, action, source, actor_credential_ref, actor_person_id, \
              actor_label, actor_operator, client_ip, target_kind, target_name, target_team_ref, \
              target_credential_ref, target_person_id, target_operator, teams, details) \
-         SELECT $1, $2, $3, audit_credential($4, p.actor, $5), p.actor, $6, $7, $8::inet, $9, \
+         SELECT $1, $2, $3, audit_credential($4, p.actor, $5), p.actor, $6, \
+                $7 OR COALESCE((SELECT is_admin FROM users WHERE id = $16), false), $8::inet, $9, \
                 $10, audit_team_ref((SELECT id FROM teams WHERE name = $11)), \
                 audit_credential($12, p.target, NULL), p.target, \
                 COALESCE((SELECT bool_or(is_admin) FROM users WHERE id IN ($13, \
@@ -1083,7 +1087,10 @@ pub async fn list(
 /// `$4` target, `$5` since, `$6` until, `$7` cursor, `$8` credential, `$9`
 /// the owner's `teams.id`, `$10` owner view, `$11` limit, `$12` a team
 /// name (every audit team that had it, a personal team by its person).
-/// Newest first is `ORDER BY id DESC`, the primary key.
+/// Newest first is `ORDER BY id DESC`, the primary key. The target filter's
+/// `target_name` and `tt.name` branches need no operator guard: they hold
+/// only catalog, setting and unlock names and shared teams' names (a
+/// personal team's `name` is NULL), never a person's.
 const LIST_SQL: &str = "\
     SELECT e.id, e.at, e.action, e.source, e.actor_operator, \
            COALESCE(ac.credential_id, 'credential #' || ac.id) AS actor_credential, \
@@ -2343,6 +2350,59 @@ mod tests {
             (person.as_deref(), credential.as_deref()),
             (Some("staff"), Some("staff-key"))
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_admin_user_acting_through_a_non_admin_credential_is_an_operator_to_owners() {
+        let db = test_db().await;
+        users::create(
+            &db.pool,
+            &NewUser {
+                name: "staff",
+                display_name: "",
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        let promote = users::AdminChange {
+            on: true,
+            allow_last: true,
+        };
+        users::set_admin(&db.pool, "staff", promote, &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        let staff = user_id(&db.pool, "staff").await;
+        store_key(&db.pool, "staff-own", Some(&staff)).await;
+        let mut conn = db.pool.acquire().await.unwrap();
+        let team = team_ref(&mut conn, TEST_TEAM).await.unwrap();
+        drop(conn);
+        // A self-issued write key of the admin user: not an operator
+        // credential by its access.
+        let actor = AuditActor {
+            credential: Some("staff-own".to_string()),
+            user_id: Some(staff.clone()),
+            label: "laptop".to_string(),
+            operator: false,
+            ..admin_actor(&staff)
+        };
+        let published = Entry {
+            teams: std::slice::from_ref(&team),
+            ..entry(Action::CatalogPublished, Target::Catalog("main"))
+        };
+        record_one(&db.pool, &actor, &published).await;
+        let owner_view = owner_of(&db.pool, TEST_TEAM).await;
+
+        let owner = list(&db.pool, &owner_view, &AuditQuery::default())
+            .await
+            .unwrap();
+        let probe = list(&db.pool, &owner_view, &by(Some("staff"), None))
+            .await
+            .unwrap();
+
+        assert_eq!(owner[0].actor, ActorView::Operator);
+        assert!(probe.is_empty(), "the actor filter is no staff oracle");
     }
 
     #[tokio::test(flavor = "multi_thread")]
