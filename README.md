@@ -461,8 +461,8 @@ Bookkeeping (`write`), ports of `okf.py`'s commands with its exact output:
 `repair_indexes` repairs a catalog created before new catalogs got starter
 files, or one whose indexes were never written. Operators can repair every
 such catalog at once with `okf-mcp catalog repair-indexes --missing-only`
-(`--dry-run` first), which publishes directly and logs the repair in each
-catalog's `log.md`. It only adds: existing
+(`--dry-run` first), which publishes directly and adds a line recording the
+repair to each catalog's `log.md`; no existing index text is changed. It only adds: existing
 headings, prose, listings and summaries stay as they are, a target an index
 already links is not listed again, and a second run changes nothing. A
 listing takes the concept's `title` (else its first `# ` heading, else its

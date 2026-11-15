@@ -918,7 +918,10 @@ async fn run_catalog(
             dry_run,
             actor,
         } => {
-            let targets = repair_targets(pool, names, missing_only).await?;
+            let (targets, skipped) = repair_targets(pool, names, missing_only).await?;
+            for name in &skipped {
+                println!("skipped {name}: it has a root index.md, or does not exist");
+            }
             let audit = AuditActor::cli();
             let options = repair::RepairOptions {
                 dry_run,
@@ -941,7 +944,9 @@ async fn run_catalog(
 ///   such catalog when none is named).
 ///
 /// # Returns
-/// The names, in the order given (sorted for `--missing-only` alone).
+/// The names to repair, in the order given (sorted for `--missing-only`
+/// alone), and the named ones `--missing-only` left out (they have a root
+/// `index.md`, or no such catalog exists), so the caller can say so.
 ///
 /// # Errors
 /// Neither a name nor `--missing-only`; a database error.
@@ -949,23 +954,21 @@ async fn repair_targets(
     pool: &PgPool,
     names: Vec<String>,
     missing_only: bool,
-) -> anyhow::Result<Vec<String>> {
+) -> anyhow::Result<(Vec<String>, Vec<String>)> {
     if !missing_only {
         anyhow::ensure!(
             !names.is_empty(),
             "name the catalogs to repair, or pass --missing-only for every catalog \
              without a root index.md"
         );
-        return Ok(names);
+        return Ok((names, Vec::new()));
     }
     let missing = repair::missing_root_index(pool).await?;
     if names.is_empty() {
-        return Ok(missing);
+        return Ok((missing, Vec::new()));
     }
-    // `retain` filters in place, like a list comprehension over `names`.
-    let mut names = names;
-    names.retain(|name| missing.contains(name));
-    Ok(names)
+    // `partition` splits one list in two by a test, like two comprehensions.
+    Ok(names.into_iter().partition(|name| missing.contains(name)))
 }
 
 /// Repairs each catalog in turn, carrying on past one that fails, and
@@ -2223,7 +2226,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn repair_indexes_repairs_catalogs_without_a_root_index() {
         let db = crate::db::test_db().await;
-        for name in ["old", "fresh"] {
+        for name in ["old", "other", "fresh"] {
             let new = catalogs::NewCatalog {
                 name,
                 description: "",
@@ -2233,9 +2236,12 @@ mod tests {
                 .await
                 .unwrap();
         }
-        // `old` loses its starter files, as a catalog from before them has none.
-        let old = catalogs::find(&db.pool, "old").await.unwrap();
-        catalogs::tests::drop_starter_files(&db.pool, old.id).await;
+        // `old` and `other` lose their starter files, as a catalog from
+        // before them has none.
+        for name in ["old", "other"] {
+            let legacy = catalogs::find(&db.pool, name).await.unwrap();
+            catalogs::tests::drop_starter_files(&db.pool, legacy.id).await;
+        }
         let audit = AuditActor::cli();
         let options = |dry_run| repair::RepairOptions {
             dry_run,
@@ -2247,35 +2253,40 @@ mod tests {
         let unnamed = repair_targets(&db.pool, Vec::new(), false)
             .await
             .unwrap_err();
-        let targets = repair_targets(&db.pool, Vec::new(), true).await.unwrap();
-        let filtered = repair_targets(&db.pool, vec!["fresh".into(), "old".into()], true)
-            .await
-            .unwrap();
+        let (targets, none_skipped) = repair_targets(&db.pool, Vec::new(), true).await.unwrap();
+        let named = vec!["fresh".into(), "old".into(), "typo".into()];
+        let (filtered, skipped) = repair_targets(&db.pool, named, true).await.unwrap();
         let dry = repair_catalogs(&db.pool, &targets, &options(true))
             .await
             .unwrap();
-        let done = repair_catalogs(&db.pool, &targets, &options(false))
+        let still_missing = repair_targets(&db.pool, Vec::new(), true).await.unwrap().0;
+        // A failing catalog in the middle of a batch stops neither neighbour.
+        let batch = ["old".to_string(), "nope".to_string(), "other".to_string()];
+        let mixed = repair_catalogs(&db.pool, &batch, &options(false))
             .await
-            .unwrap();
-        let after = repair_targets(&db.pool, Vec::new(), true).await.unwrap();
-        let failed = repair_catalogs(&db.pool, &["nope".to_string()], &options(false))
-            .await
-            .unwrap_err();
+            .unwrap_err()
+            .to_string();
+        let after = repair_targets(&db.pool, Vec::new(), true).await.unwrap().0;
 
         assert!(unnamed.to_string().contains("--missing-only"), "{unnamed}");
-        assert_eq!(targets, ["old"]);
+        assert_eq!(targets, ["old", "other"]);
+        assert!(none_skipped.is_empty());
         assert_eq!(filtered, ["old"]);
+        assert_eq!(skipped, ["fresh", "typo"]);
         assert!(
             dry.starts_with("old (dry run: nothing written): repaired 2 file(s)"),
             "{dry}"
         );
         assert!(dry.contains("  /index.md\n  /log.md\n"), "{dry}");
-        assert!(dry.ends_with("would repair 1 of 1 catalog(s)\n"), "{dry}");
-        assert!(done.starts_with("old: repaired 2 file(s)"), "{done}");
-        assert!(done.ends_with("repaired 1 of 1 catalog(s)\n"), "{done}");
+        assert!(dry.ends_with("would repair 2 of 2 catalog(s)\n"), "{dry}");
+        assert_eq!(still_missing, ["old", "other"], "the dry run wrote nothing");
+        assert!(mixed.starts_with("old: repaired 2 file(s)"), "{mixed}");
+        assert!(mixed.contains("\nother: repaired 2 file(s)"), "{mixed}");
+        assert!(
+            mixed.contains("repaired 2 of 3 catalog(s)\nfailed:\n  nope: "),
+            "{mixed}"
+        );
         assert!(after.is_empty(), "{after:?}");
-        let failed = failed.to_string();
-        assert!(failed.contains("failed:\n  nope: "), "{failed}");
     }
 
     #[test]

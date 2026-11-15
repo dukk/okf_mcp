@@ -539,8 +539,10 @@ or name catalogs (`okf-mcp catalog repair-indexes notes recipes`). Each
 repair is published at once, under the catalog's lock as an import is: a
 missing root `index.md` is the one a new catalog gets (its name and
 description), then a `log.md`, folder indexes, and folder and concept
-listings are added where missing, and `log.md` records the repair. Nothing
-existing is changed, so a second run writes nothing. Listings of concepts
+listings are added where missing, and `log.md` gets a line recording the
+repair. No existing index text (headings, prose, listings, summaries) is
+changed, so a second run writes nothing. With names, `--missing-only` says
+which of them it skipped (those with a root `index.md`, or misspelled). Listings of concepts
 without a title or description get `TODO` placeholders; the output names
 each one. A changeset someone left open on an affected index replays its
 bookkeeping onto the repaired text or conflicts at publish, as after any

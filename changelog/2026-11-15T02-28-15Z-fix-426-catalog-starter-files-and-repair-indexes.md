@@ -31,7 +31,9 @@
   `repair indexes`), the generation is bumped and `catalog.repaired` is
   recorded. `--missing-only` selects catalogs without a live root
   `index.md` (`store::repair::missing_root_index`); `--dry-run` writes
-  nothing. A failing catalog does not stop the rest.
+  nothing; with names, it prints each one it skipped (it has a root
+  `index.md`, or no such catalog exists). A failing catalog does not stop
+  the rest.
 - Audit action `catalog.repaired` (`files`, `generation`).
 - Test helpers `mcp::testing::app_with_new` (catalogs created, nothing
   imported) and `store::catalogs::tests::drop_starter_files` (an empty

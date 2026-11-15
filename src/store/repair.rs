@@ -411,6 +411,59 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn a_repair_that_waited_for_a_publish_builds_on_what_it_wrote() {
+        let db = test_db().await;
+        legacy(&db.pool, "pg", "", &[("a.md", NOTE)]).await;
+        let catalog = catalogs::find(&db.pool, "pg").await.unwrap();
+        // Hold the catalog's lock, as a publish in progress does, and write
+        // a curated root index.md under it.
+        let mut holder = db.pool.begin().await.unwrap();
+        catalogs::lock(&mut holder, catalog.id).await.unwrap();
+        let pool = db.pool.clone();
+        let waiting = tokio::spawn(async move {
+            let audit = AuditActor::cli();
+            repair(&pool, "pg", &options(&audit, false)).await
+        });
+        catalogs::tests::until_a_lock_is_awaited(&db.pool).await;
+        let curated = "---\nokf_version: \"0.2\"\n---\n# Ours\n\nCurated words.\n";
+        let file = StoredFile {
+            content: curated.as_bytes().to_vec(),
+            executable: false,
+        };
+        // The starter index.md's tombstone is revision 2.
+        let write = DocumentWrite {
+            catalog_id: catalog.id,
+            path: "index.md",
+            revision: 3,
+            actor: "publisher",
+            now: at(1),
+        };
+        documents::write_document(&mut holder, &write, &file, &Derived::default())
+            .await
+            .unwrap();
+        holder.commit().await.unwrap();
+        let repaired = tokio::time::timeout(std::time::Duration::from_secs(30), waiting)
+            .await
+            .expect("the repair waited for the held catalog lock and never finished")
+            .unwrap()
+            .unwrap();
+
+        // The repair saw the published root: it kept it, listed the concept
+        // in it, and continued its revision.
+        // The root existed, so only the log was created; the listing came after.
+        assert_eq!(repaired.written, ["/log.md", "/index.md"], "{repaired:?}");
+        let root = live_text(&db.pool, "index.md").await.unwrap();
+        assert!(root.starts_with(curated), "{root}");
+        assert!(root.contains("* [A](a.md) - A note."), "{root}");
+        let revision: i32 =
+            sqlx::query_scalar("SELECT revision FROM documents WHERE path = 'index.md'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(revision, 4);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_dry_run_reports_the_repair_and_writes_nothing() {
         let db = test_db().await;
         legacy(&db.pool, "pg", "", &[("a.md", NOTE)]).await;
