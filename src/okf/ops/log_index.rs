@@ -401,28 +401,48 @@ fn repair_counted(workspace: &dyn Workspace) -> Result<(OpOutcome, usize), OkfEr
         outcome.record(LOG, ReplayOp::CreateLog);
         outcome.notes.push("created /log.md".to_string());
     }
-    // Every folder below the root that holds a concept or an index, sorted
-    // (a `BTreeSet` is a sorted set), so a parent comes before its children.
     let concepts: Vec<&str> = markdown
         .iter()
         .map(String::as_str)
         .filter(|path| is_concept(path) && !is_machinery(path))
         .collect();
-    let folders: BTreeSet<&str> = markdown
-        .iter()
-        .map(String::as_str)
-        .filter(|path| !is_machinery(path) && (basename(path) == INDEX || is_concept(path)))
-        .map(dirname)
-        .filter(|folder| !folder.is_empty())
-        .collect();
+    // Every folder below the root that holds a concept or an index, and
+    // every ancestor of one (an existing nested index may have lost its
+    // parent's), sorted: a `BTreeSet` is a sorted set, and a folder sorts
+    // before anything inside it, so a parent's index exists before its
+    // children are listed in it.
+    let mut folders: BTreeSet<&str> = BTreeSet::new();
+    for path in markdown.iter().map(String::as_str) {
+        if is_machinery(path) || (basename(path) != INDEX && !is_concept(path)) {
+            continue;
+        }
+        let mut folder = dirname(path);
+        // `insert` returns false once a folder (and so all its ancestors)
+        // is already in the set.
+        while !folder.is_empty() && folders.insert(folder) {
+            folder = dirname(folder);
+        }
+    }
     for folder in folders {
-        let created = outcome.notes.len();
-        ensure_index(workspace, folder, &mut outcome)?;
-        // Each created index holds a TODO line, and so does its listing.
-        placeholders += 2 * (outcome.notes.len() - created);
+        let index_path = join(folder, INDEX);
+        if !workspace.exists(&index_path) {
+            // Not `ensure_index`: that lists the new index in its parent
+            // unconditionally, and the parent may link the folder already.
+            workspace.write_atomic(&index_path, &new_index_text(folder))?;
+            outcome.record(
+                &index_path,
+                ReplayOp::CreateIndex {
+                    folder: folder.to_string(),
+                },
+            );
+            outcome
+                .notes
+                .push(format!("created /{index_path}; replace its TODO line"));
+            placeholders += 1;
+        }
         let parent_index = join(dirname(folder), INDEX);
         let parent_text = workspace.read_text(&parent_index)?;
-        if !lists_target(workspace, &parent_text, &parent_index, &join(folder, INDEX)) {
+        if !lists_target(workspace, &parent_text, &parent_index, &index_path) {
             insert_folder_listing(workspace, folder, &parent_text, &mut outcome)?;
             outcome.notes.push(format!(
                 "listed /{folder}/ in /{parent_index} with a TODO summary"
@@ -927,11 +947,12 @@ mod tests {
             sorted(outcome.notes),
             [
                 "created /index.md; replace its heading and TODO line",
-                "created /infra/hosts/index.md; replace its TODO lines (and the parent's listing)",
+                "created /infra/hosts/index.md; replace its TODO line",
                 "created /log.md",
                 "listed /a-note.md under its file name: it has no title",
                 "listed /a-note.md with a TODO summary: it has no description",
                 "listed /infra/ in /index.md with a TODO summary",
+                "listed /infra/hosts/ in /infra/index.md with a TODO summary",
                 "listed /infra/hosts/web.md with a TODO summary: it has no description",
             ]
         );
@@ -1003,6 +1024,80 @@ mod tests {
             outcome.notes,
             ["listed /ops/deep/ in /ops/index.md with a TODO summary"]
         );
+    }
+
+    #[test]
+    fn repair_indexes_creates_the_missing_ancestors_of_a_nested_index() {
+        // `infra/hosts/index.md` exists, `infra/index.md` does not: the
+        // ancestor is created and listed, and the nested index listed in it.
+        let hosts = "# Hosts\n\nCurated hosts.\n";
+        let ws = MemWorkspace::from_files([
+            ("index.md", "---\nokf_version: \"0.2\"\n---\n# Root\n"),
+            ("log.md", "# Log\n"),
+            ("infra/hosts/index.md", hosts),
+        ]);
+
+        let outcome = repair_indexes(&ws).unwrap();
+        let again = repair_indexes(&ws).unwrap();
+
+        assert_eq!(outcome.touched, ["infra/index.md", "index.md"]);
+        assert_eq!(
+            ws.read_to_string("infra/index.md").unwrap(),
+            concat!(
+                "# Infra\n\nTODO: say what this folder holds.\n\n# Sections\n\n",
+                "* [Hosts](hosts/) - TODO: describe this folder\n",
+            )
+        );
+        assert_eq!(
+            ws.read_to_string("index.md").unwrap(),
+            concat!(
+                "---\nokf_version: \"0.2\"\n---\n# Root\n\n# Sections\n\n",
+                "* [Infra](infra/) - TODO: describe this folder\n",
+            )
+        );
+        assert_eq!(ws.read_to_string("infra/hosts/index.md").unwrap(), hosts);
+        assert_eq!(
+            outcome.message,
+            "repaired 2 file(s); 3 TODO placeholder(s) to fill in (see notes)"
+        );
+        assert!(again.touched.is_empty() && again.notes.is_empty());
+    }
+
+    #[test]
+    fn repair_indexes_keeps_a_curated_link_to_a_folder_whose_index_is_missing() {
+        // The root links `infra/` already, but `infra/index.md` is gone: the
+        // index is created, and the root keeps its one curated link.
+        let root = concat!(
+            "---\nokf_version: \"0.2\"\n---\n# Root\n\n# Sections\n\n",
+            "* [Our systems](infra/) - curated\n",
+        );
+        let ws = MemWorkspace::from_files([
+            ("index.md", root),
+            ("log.md", "# Log\n"),
+            (
+                "infra/ntp.md",
+                "---\ntype: Note\ntitle: NTP\ndescription: Keeps time.\n---\n",
+            ),
+        ]);
+
+        let outcome = repair_indexes(&ws).unwrap();
+        let again = repair_indexes(&ws).unwrap();
+
+        assert_eq!(outcome.touched, ["infra/index.md"]);
+        assert_eq!(ws.read_to_string("index.md").unwrap(), root);
+        assert_eq!(
+            ws.read_to_string("infra/index.md").unwrap(),
+            concat!(
+                "# Infra\n\nTODO: say what this folder holds.\n\n# Concepts\n\n",
+                "* [NTP](ntp.md) - Keeps time.\n",
+            )
+        );
+        assert!(!outcome.replay.contains_key("index.md"));
+        assert_eq!(
+            outcome.notes,
+            ["created /infra/index.md; replace its TODO line"]
+        );
+        assert!(again.touched.is_empty() && again.notes.is_empty());
     }
 
     #[test]
