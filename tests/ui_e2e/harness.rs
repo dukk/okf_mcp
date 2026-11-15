@@ -394,7 +394,21 @@ impl Ui {
         if let Some(context) = target["targetInfo"]["browserContextId"].as_str() {
             behavior["browserContextId"] = serde_json::json!(context);
         }
-        devtools.call(None, "Browser.setDownloadBehavior", behavior);
+        // A context rustwright created belongs to its own connection: Chrome
+        // answers "Failed to find browser context" to any other. Fall back to
+        // the default context, as rustwright's own `enable_downloads` does.
+        if let Err(error) = devtools.try_call(None, "Browser.setDownloadBehavior", behavior.clone())
+        {
+            assert!(
+                error.to_string().contains("Failed to find browser context"),
+                "Browser.setDownloadBehavior: {error}"
+            );
+            // `as_object_mut` borrows the JSON object mutably, like a dict.
+            if let Some(params) = behavior.as_object_mut() {
+                params.remove("browserContextId");
+            }
+            devtools.call(None, "Browser.setDownloadBehavior", behavior);
+        }
         self.click(selector);
         let deadline = Instant::now() + WAIT;
         let begun = devtools.event("Browser.downloadWillBegin", deadline, |_| true);
@@ -555,6 +569,23 @@ impl DevTools {
         method: &str,
         params: serde_json::Value,
     ) -> serde_json::Value {
+        self.try_call(session, method, params)
+            .unwrap_or_else(|error| panic!("{method}: {error}"))
+    }
+
+    /// [`DevTools::call`], but Chromium's error answer is returned.
+    ///
+    /// # Returns
+    /// The command's result, or the `error` object Chromium answered with.
+    ///
+    /// # Panics
+    /// If the connection fails or no answer arrives in time.
+    fn try_call(
+        &mut self,
+        session: Option<&str>,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, serde_json::Value> {
         self.next_id += 1;
         let mut command =
             serde_json::json!({ "id": self.next_id, "method": method, "params": params });
@@ -571,8 +602,10 @@ impl DevTools {
                 continue;
             };
             if reply["id"] == self.next_id {
-                assert!(reply.get("error").is_none(), "{method}: {reply}");
-                return reply["result"].clone();
+                return match reply.get("error") {
+                    Some(error) => Err(error.clone()),
+                    None => Ok(reply["result"].clone()),
+                };
             }
         }
     }
