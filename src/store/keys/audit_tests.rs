@@ -495,7 +495,10 @@ async fn assert_owner_deleted_while_locking_is_unknown(change: WaitingChange) {
             "DELETE FROM teams WHERE personal_of = $1",
             "DELETE FROM users WHERE id = $1",
         ] {
-            sqlx::query(sql).bind(&bob.id).execute(&mut *deleting).await?;
+            sqlx::query(sql)
+                .bind(&bob.id)
+                .execute(&mut *deleting)
+                .await?;
         }
         deleting.commit().await?;
         Ok::<_, OkfError>(())
