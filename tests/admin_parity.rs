@@ -8,8 +8,8 @@
 //! - every covered subcommand exists in the clap tree, and every covered
 //!   flag (an entry such as `user list --email`) is an option of its
 //!   subcommand;
-//! - every `user`, `team`, `settings` and `mail` subcommand is covered, so
-//!   a new one fails until it is added to the table;
+//! - every `user`, `team`, `settings`, `mail` and `unlock` subcommand is
+//!   covered, so a new one fails until it is added to the table;
 //! - each covered subcommand has a parity row whose REST cell names a route
 //!   that `docs/operations.md`'s API reference documents, and whose console
 //!   cell is not empty.
@@ -64,10 +64,13 @@ const COVERED: &[&str] = &[
     "mail queue",
     "mail retry",
     "mail delete",
+    "unlock create",
+    "unlock list",
+    "unlock end",
 ];
 
 /// The command groups whose every subcommand must be covered.
-const SCANNED_GROUPS: &[&str] = &["user", "team", "settings", "mail"];
+const SCANNED_GROUPS: &[&str] = &["user", "team", "settings", "mail", "unlock"];
 
 /// The parity section: from its heading to the next heading of any level.
 ///

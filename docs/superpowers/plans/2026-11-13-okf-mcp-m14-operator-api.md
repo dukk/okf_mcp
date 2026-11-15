@@ -6700,6 +6700,14 @@ pub(crate) struct UnlockView {
 }
 ```
 
+> **Corrected (issue #408, 2026-11-15).** What shipped differs from the text above in these ways (read `src/http/api/unlocks.rs` and `src/cli/unlock.rs`):
+> - **Scoped admins are scoped.** `require_admin` alone let an admin key granted only `other` unlock `main` (and so open it through its user's console session, which reaches every catalog), and read every unlock's reason, which the audit log shows only to every-catalog admins. So `POST` also needs `admin` on the named catalog (`Principal::level(catalog) == Some(Access::Admin)`; otherwise 404 `CatalogNotSelected`, worded like an unknown catalog), `GET` shows an admin only the unlocks of the catalogs it administers, and `DELETE` answers 404 `NotFound` for an unlock of a catalog the caller does not administer (as for an unknown id). An every-catalog admin and an admin user's session are unaffected. Test `unlocks_refuse_everyone_but_admins_and_scope_a_scoped_admin`.
+> - **State and end in the store.** `store::unlocks` gained `UnlockState { Live, Expired, Ended }` (serde snake_case, `as_str`), `UnlockRecord::state(now)` and `UnlockRecord::ends()` (the early end, else the expiry), shared by the views and `unlock list`. `UnlockView.state` and `OwnerUnlockView.state` are `UnlockState`, which serializes to the same strings. `OwnerUnlockView.ends` is `ends()`. `GET /unlocks` answers `{"unlocks": [...]}` with either view (an `untagged` enum).
+> - **The owner's scope** is the team that owns the catalog now: after `teams::owned_by` confirms the session's user owns the named team, `UnlockFilter { team }` matches the catalogs' current owner team by name (unique at any moment), so an unlock made before a transfer shows to the new owner, redacted. An owner's key, a non-owner, a missing `team` and a malformed name get 403.
+> - **The test.** `staff_root` is defined in `src/http/api/unlocks/tests.rs` (admin user `staff`, every-catalog admin key `staff-root`), since Task 9b had not merged. The test also checks `catalog.unlock_ended` is in the owner's log and a second `DELETE` is 409. An unknown query parameter is 400 (axum's `Query` rejection), not 422.
+> - **The CLI** reads the policy with `settings::load(pool, &config.auth)`; `unlock list`'s user cell is the record's `person` (`deleted user #N` for a deleted user), and its `until` is `ends()`.
+> - **Docs.** `docs/operations.md` had no "Unlock before access" section yet; this task added it (after "Audit log") with the commands, and Task 10 owns the rest of it.
+
 `src/cli.rs`:
 
 ```rust
@@ -6877,6 +6885,8 @@ function showLocked(view, catalog, body) {
 (Use the whoami field that says the session is an admin user; `h()` drops the `null`. `route()` from `core/router.js` renders the current hash again; the page's `render` takes `(main, rest)`, not a view and a catalog. *(Corrected, M13 merged, 2026-11-14: follows M13's `showSuspended`, `pages/browse.js:78-88`, with the `.notice` style M13 added to `styles.css` and `role="status"`; browse.js imports `clear`, not `fill`.)*)
 
 `pages/unlocks.js`: `#unlocks-table` with Catalog, User, Category, Reason, From, Until, State, Reads, Writes, Exports, and an End button `[data-test=unlock-end-<catalog>]` for live ones (`confirmDialog`, then `DELETE /unlocks/{id}`); an "Unlock a catalog" button opening `openUnlock` with a catalog picker. For a non-admin session it shows its owned teams' unlocks (`?team=`), redacted, with no End.
+
+> **Corrected (issue #408, 2026-11-15).** The rows come from `GET /unlocks`' `{"unlocks": [...]}`. An admin's row is `{id, catalog, owner_team, user, category, reason, starts, expires, ended, state, reads, writes, exports}` (Until is `ended ?? expires`); an owner's is `{id, catalog, category, starts, ends, state, reads, writes, exports, by}` (no `user`, no `reason`: draw those columns only for admin rows). A scoped admin's list holds only the catalogs it administers, and its `POST` for another catalog is 404 `CatalogNotSelected`; a `DELETE` refused with 404 or 409 keeps its reason beside the row.
 
 `catalogs.js`: in the catalog drawer, a `Maintenance` section with `#catalog-maintenance` (`input type=checkbox role=switch`, checked when `row.maintenance === 'on'`), enabled for an every-catalog admin and for the owner of the catalog's team (`/me`'s `owned_teams` includes `row.owner_team`); toggling `PUT /catalogs/{c}/maintenance` and toasting `Maintenance is on|off for ${name}.`; a muted line: "Lets the maintenance runner check this catalog for stale, bloated and broken notes. Turn it off to keep the runner out."
 

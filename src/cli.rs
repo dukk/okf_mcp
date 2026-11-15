@@ -34,11 +34,14 @@ use crate::store::keys::{self, Access, Grants, KeyKind, NewKey};
 use crate::store::oauth::codes::{self, NewSignInCode, SignInCodeRecord};
 use crate::store::settings::SettingKey;
 use crate::store::teams::Role;
+use crate::store::unlocks::Category;
 
 // `src/cli/admin.rs`: the `settings` and `mail` handlers.
 mod admin;
 // `src/cli/people.rs`: the user, team, assignment and `unassigned` handlers.
 mod people;
+// `src/cli/unlock.rs`: the `unlock` handlers.
+mod unlock;
 
 /// `okf-mcp`: an MCP server for OKF knowledge catalogs.
 // `derive(Parser)` generates the argument parser from the struct, as
@@ -92,6 +95,10 @@ pub enum Command {
     /// Send a test email, and list, retry or delete queued mail.
     #[command(subcommand)]
     Mail(MailCommand),
+    /// Unlock a customer catalog for an admin user, list unlocks, or end
+    /// one early.
+    #[command(subcommand)]
+    Unlock(UnlockCommand),
     /// List keys, grants, sign-in codes and catalogs with no user or owner.
     Unassigned,
     /// Import a directory or a .tar.gz into an existing catalog.
@@ -435,6 +442,45 @@ pub enum SettingsCommand {
     },
 }
 
+/// `okf-mcp unlock ...`: operator access to a customer catalog's contents
+/// on a server with `require_unlock` on.
+#[derive(Debug, Subcommand)]
+pub enum UnlockCommand {
+    /// Unlock a catalog for an admin user, for a reason, for a while.
+    Create {
+        /// The catalog.
+        #[arg(long)]
+        catalog: String,
+        /// The admin user it is for.
+        #[arg(long)]
+        user: String,
+        /// Why, as a category its owners see.
+        // `Category` spells its clap values as stored (`deletion_request`).
+        #[arg(long, value_enum)]
+        category: Category,
+        /// Why, in words (a ticket number); owners never see it.
+        #[arg(long)]
+        reason: String,
+        /// How long, in hours (default and maximum: `unlock_max_hours`).
+        #[arg(long)]
+        hours: Option<u32>,
+    },
+    /// List unlocks, newest first.
+    List {
+        /// Only this catalog's.
+        #[arg(long)]
+        catalog: Option<String>,
+        /// Only live ones.
+        #[arg(long)]
+        live: bool,
+    },
+    /// End an unlock before it expires.
+    End {
+        /// Its id.
+        id: i64,
+    },
+}
+
 /// `okf-mcp mail ...`.
 #[derive(Debug, Subcommand)]
 pub enum MailCommand {
@@ -664,6 +710,13 @@ pub async fn run(cli: Cli, clock: Arc<dyn Clock>) -> anyhow::Result<()> {
             // is needed here.
             let pool = connect(cli.database_url.as_deref(), &config).await?;
             print!("{}", admin::mail(&pool, command, clock.now()).await?);
+        }
+        Command::Unlock(command) => {
+            let pool = connect(cli.database_url.as_deref(), &config).await?;
+            print!(
+                "{}",
+                unlock::unlock(&pool, &config.auth, command, clock.now()).await?
+            );
         }
         Command::Unassigned => {
             let pool = connect(cli.database_url.as_deref(), &config).await?;

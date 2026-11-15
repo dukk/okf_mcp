@@ -943,11 +943,11 @@ do; the command line needs only the database, as every subcommand does.
 
 ### CLI, API and console parity
 
-Every admin command for users, teams, assignment, sign-in, settings and
-mail has a REST route and a console control. `tests/admin_parity.rs` fails
-when a `user`, `team`, `settings` or `mail` subcommand, or one of the other
-commands below, has no row here or its row names a route the API reference
-does not document. A row may name a subcommand's flag (`user list --email`);
+Every admin command for users, teams, assignment, sign-in, settings, mail
+and unlocks has a REST route and a console control. `tests/admin_parity.rs`
+fails when a `user`, `team`, `settings`, `mail` or `unlock` subcommand, or
+one of the other commands below, has no row here or its row names a route
+the API reference does not document. A row may name a subcommand's flag (`user list --email`);
 the test checks the flag exists.
 
 | CLI | REST | Console |
@@ -985,6 +985,9 @@ the test checks the flag exists.
 | `okf-mcp mail queue` | `GET /api/v1/mail/queue` | Settings → Mail queue |
 | `okf-mcp mail retry` | `POST /api/v1/mail/queue/{id}/retry` | Settings → Mail queue → Retry |
 | `okf-mcp mail delete` | `DELETE /api/v1/mail/queue/{id}` | Settings → Mail queue → Delete |
+| `okf-mcp unlock create` | `POST /api/v1/unlocks` | Unlock (on a locked catalog), or Unlocks → Unlock a catalog |
+| `okf-mcp unlock list` | `GET /api/v1/unlocks` | Unlocks |
+| `okf-mcp unlock end` | `DELETE /api/v1/unlocks/{id}` | Unlocks → End |
 
 `GET /api/v1/users/{name}` and `GET /api/v1/teams/{name}` (a user's or a
 team's drawer in the console) have no command of their own: `user list` and
@@ -1062,6 +1065,35 @@ once a day, the server deletes the entries older than
 server and the database); nothing else deletes them. Lowering the setting
 takes effect at the next daily pass; raising it keeps the entries not yet
 deleted.
+
+### Unlock before access
+
+With `require_unlock` on ([Settings](#settings)), operator staff open a
+customer catalog's contents only under a live unlock: one admin user, one
+catalog, a reason category (`support`, `deletion_request`,
+`export_request`, `security_investigation`, `legal` or `other`), a
+free-text reason (a ticket number) and at most `unlock_max_hours`. It
+applies to that admin's console session and own keys, and ends at its
+expiry or when an admin ends it; it cannot be extended.
+
+```sh
+okf-mcp unlock create --catalog main --user staff --category support \
+    --reason "ticket 12" --hours 2
+# unlocked main for staff until 2026-11-13T14:00:00Z (unlock 1)
+okf-mcp unlock list [--catalog main] [--live]
+# 1  main  staff  support  live  reads 0  writes 0  exports 0  until 2026-11-13T14:00:00Z
+okf-mcp unlock end 1
+# ended unlock 1
+```
+
+`--hours` defaults to `unlock_max_hours`; a longer one, 0, a blank or
+over-long reason, a user who is not an admin (or does not exist) and an
+unknown catalog are refused. `unlock list` shows every unlock, newest
+first, tab-separated: its state (`live`, `expired` or `ended`), the reads,
+writes and exports made under it, and when it ends (an early end, else
+its expiry). The reason is in the audit log's `catalog.unlocked` entry.
+The same over REST is in the [Unlocks API](#unlocks-api); a catalog's
+owners read its unlocks there redacted.
 
 ## Signing in and self-service
 
@@ -2009,14 +2041,14 @@ admin routes (403).
 
 ### API reference
 
-The API has 90 endpoints (a method and path each). The identity endpoints
+The API has 93 endpoints (a method and path each). The identity endpoints
 are below (3), and each area's endpoints are in its own subsection:
 [API keys](#api-keys) (7),
 [OAuth sign-in codes](#oauth-sign-in-codes) (4),
 [Users and teams](#users-and-teams-api) (21),
 [Your account](#your-account-api) (19),
 [Settings and mail](#settings-and-mail-api) (7),
-[Audit](#audit-api) (2),
+[Audit](#audit-api) (2), [Unlocks](#unlocks-api) (3),
 [Health](#health) (2), [Browse and search](#browse-and-search) (7),
 [Catalogs and import/export](#catalogs-and-importexport) (9),
 [Findings and runs](#findings-and-runs) (6) and [Changesets](#changesets) (3).
@@ -2254,6 +2286,45 @@ entry's request count, else `null`.
 ```sh
 curl -s -H "Authorization: Bearer $OKF_MCP_KEY" \
     "https://okf-mcp.example.com/api/v1/audit?action=user.created&limit=20"
+```
+
+### Unlocks API
+
+The routes behind `okf-mcp unlock ...` ([Unlock before
+access](#unlock-before-access)). Who may do what:
+
+- **Creating** needs an admin credential at `admin` on the catalog (a
+  scoped admin naming a catalog it does not administer gets 404, as for
+  an unknown one). The unlock is for the caller's own user; naming another
+  `user` needs an admin that reaches every catalog. A key with no user gets
+  403 ("give it a user"); a user who is not an admin, 409.
+- **Listing**: an admin reads full records (a scoped admin only those of
+  the catalogs it administers). A team's owner, through a signed-in console
+  session only and naming the team (`?team=NAME`), reads the unlocks of the
+  catalogs that team owns now, redacted: `{id, catalog, category, starts,
+  ends, state, reads, writes, exports, by}`, with `by` always `"an
+  operator"` and never the reason or who it was. Anyone else gets 403, a
+  malformed team name included.
+- **Ending** needs an admin (any admin, not only the unlock's); a scoped
+  admin ends only the unlocks of the catalogs it administers (any other id
+  is 404).
+- A provisioner key gets 403 on every route.
+
+An admin's record is `{id, catalog, owner_team, user, category, reason,
+starts, expires, ended, state, reads, writes, exports}`: `user` is the
+admin's name, or `deleted user #N`; `ended` is `null` unless it was ended
+early; `state` is `live`, `expired` or `ended`.
+
+| Method and path | Key | Does |
+|---|---|---|
+| `POST /api/v1/unlocks` | admin on the catalog; another `user` needs every catalog | Body `{catalog, category, reason, hours?, user?}` (`hours` defaults to `unlock_max_hours`). Records `catalog.unlocked`, emails the owners when `unlock_notify_owners` is on, and answers 201 with the record. 404 for an unknown catalog or user, 409 for a user who is not an admin, 422 for `hours` outside 1 to `unlock_max_hours` (`LimitExceeded`, `limit: "unlock_max_hours"`), a blank, over-500-character or control-character reason (`limit: "reason"`), an unknown category or field |
+| `GET /api/v1/unlocks` | admin; a team owner's console session with `?team=` | `{unlocks}`, newest first. Filters: `catalog`, `team` (the catalog's owner team now) and `live=true` (neither ended nor expired); an unknown one is 400, and a malformed name matches nothing |
+| `DELETE /api/v1/unlocks/{id}` | admin | Ends a live unlock now; records `catalog.unlock_ended` and answers 200 with the record (`state: "ended"`). 404 for an unknown id, 409 for one already ended or expired |
+
+```sh
+curl -s -X POST -H "Authorization: Bearer $OKF_MCP_KEY" -H 'content-type: application/json' \
+    -d '{"catalog": "main", "category": "support", "reason": "ticket 12", "hours": 2}' \
+    https://okf-mcp.example.com/api/v1/unlocks
 ```
 
 ### Health
