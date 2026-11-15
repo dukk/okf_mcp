@@ -1,0 +1,248 @@
+// The audit log (M14 Task 8c): administrative changes, catalog writes,
+// exports and admin reads, newest first. An every-catalog admin reads
+// everything and may filter by any team's name; a person signed in with an
+// account picks one of the teams they own and reads that team's entries.
+// The server decides what each reader sees (an owner gets operator staff as
+// "an operator", no staff IPs and no unlock reasons): this page only draws
+// the answer, and the export downloads the same filters as JSON Lines.
+//
+// Every table load (a filter change, the team picker, Refresh) is numbered,
+// and only the newest one draws; a "Load more" answer appends only while
+// the load it continues is still the newest. A failed load keeps the rows
+// drawn, marked as possibly out of date, with its reason on screen and
+// every control usable.
+import { h, fill } from '../core/dom.js';
+import { api, enc } from '../core/api.js';
+import { store } from '../core/store.js';
+import { ago, when, count } from '../core/format.js';
+import { listTable } from '../components/list-table.js';
+import { canAdministerPeople, freshAccount } from '../core/shell.js';
+
+// The filters, by query parameter, in the order they are sent. Empty values
+// are left out, so the query names only what the reader chose.
+const FILTERS = ['team', 'action', 'actor', 'target', 'since', 'until'];
+const NO_TEAM = "You own no team; the audit log shows your teams' entries to their owners.";
+const DENIED = 'The audit log is for an admin key that reaches every catalog, '
+    + 'or for a team owner signed in with their account.';
+
+// Who acted: "an operator" when the server says so (a team owner reading
+// staff's entries), else the person and what they acted through (the key's
+// or grant's label, or "console session"), or the label alone (the CLI, the
+// system); the key or grant id is the tooltip, and the address shows when
+// the reader may see it.
+function actorCell(entry) {
+    const actor = entry.actor;
+    if (actor.kind === 'operator') return h('span', { class: 'muted' }, 'an operator');
+    const who = actor.person ?? actor.label;
+    const via = actor.person ? actor.label : null;
+    return h('span', { title: actor.credential ?? null }, who,
+        via ? [' ', h('span', { class: 'mono small muted' }, via)] : null,
+        entry.ip ? [' ', h('span', { class: 'mono small muted' }, entry.ip)] : null);
+}
+
+// What it was about: "user NAME" or "KIND NAME". A target the reader may not
+// see (operator staff, for a team owner) has neither a name nor a person.
+// For an admin, a user target links to that user's drawer on the Users page,
+// whose Recent sign-ins lists what the audit log does not.
+function targetCell(entry, admin) {
+    const { kind, name, person } = entry.target;
+    if (kind === 'user') {
+        if (!person) return 'user an operator';
+        const linked = admin && !person.startsWith('deleted user');
+        return h('span', {}, 'user ',
+            linked ? h('a', { href: `#/users/${enc(person)}` }, person) : person);
+    }
+    const label = name ?? person ?? 'an operator';
+    return h('span', {}, `${kind} `, h('code', {}, label),
+        name && person ? [' ', h('span', { class: 'muted small' }, person)] : null);
+}
+
+// The details: a count for an admin read, a word for a maintenance run, then
+// the stored JSON (already redacted for owners), or "-" when there is none.
+function detailsCell(entry) {
+    const summary = entry.action === 'catalog.admin_read' ? count(entry.requests ?? 0, 'request')
+        : entry.action === 'catalog.maintenance_run' ? 'maintenance ran'
+            : null;
+    const details = entry.details && Object.keys(entry.details).length
+        ? h('span', { class: 'mono small' }, JSON.stringify(entry.details)) : null;
+    if (!summary && !details) return h('span', { class: 'muted' }, '-');
+    return h('span', {}, summary, summary && details ? ' ' : null, details);
+}
+
+function columns(admin) {
+    return [
+        { key: 'at', label: 'When', render: e => h('span', { title: when(e.at) }, ago(e.at)) },
+        { key: 'action', label: 'Action', render: e => h('code', {}, e.action) },
+        { key: 'actor', label: 'Actor', render: actorCell },
+        { key: 'target', label: 'Target', render: e => targetCell(e, admin) },
+        { key: 'teams', label: 'Teams', render: e => (e.teams.length ? e.teams.join(', ') : h('span', { class: 'muted' }, '-')) },
+        { key: 'details', label: 'Details', render: detailsCell },
+    ];
+}
+
+// A datetime-local value (the browser's local time) as UTC RFC 3339, the
+// form the server parses; an empty field is no filter.
+function utc(value) {
+    if (!value) return '';
+    const time = new Date(value);
+    return Number.isNaN(time.getTime()) ? value : time.toISOString();
+}
+
+export async function render(main) {
+    const admin = canAdministerPeople();
+    if (!admin && !store.session) {
+        main.append(h('h1', {}, 'Audit'), h('p', { class: 'muted', id: 'audit-denied' }, DENIED));
+        return;
+    }
+    // A team owner needs its teams before it can ask for anything (the
+    // server reads an owner's log one team at a time).
+    let owned = [];
+    if (!admin) {
+        try {
+            owned = (await freshAccount()).owned_teams;
+        } catch {
+            if (main.isConnected) {
+                main.append(h('h1', {}, 'Audit'),
+                    h('p', { class: 'error', id: 'audit-error' }, 'Your teams could not be read. Reload the page to try again.'));
+            }
+            return;   // toasted
+        }
+        if (!main.isConnected) return;
+        if (!owned.length) {
+            fill(main, h('h1', {}, 'Audit'), h('p', { class: 'muted', id: 'audit-no-team' }, NO_TEAM));
+            return;
+        }
+    }
+
+    const inputs = {
+        team: admin
+            ? h('input', { type: 'search', id: 'audit-team', name: 'team', placeholder: 'any team', autocomplete: 'off' })
+            : h('select', { id: 'audit-team', name: 'team' }, owned.map(name => h('option', { value: name }, name))),
+        action: h('select', { id: 'audit-action', name: 'action' }, h('option', { value: '' }, 'Any action')),
+        actor: h('input', { type: 'search', id: 'audit-actor', name: 'actor', placeholder: 'person, key or label', autocomplete: 'off' }),
+        target: h('input', { type: 'search', id: 'audit-target', name: 'target', placeholder: 'name or person', autocomplete: 'off' }),
+        since: h('input', { type: 'datetime-local', id: 'audit-since', name: 'since' }),
+        until: h('input', { type: 'datetime-local', id: 'audit-until', name: 'until' }),
+    };
+    const LABELS = { team: 'Team', action: 'Action', actor: 'Actor', target: 'Target', since: 'Since', until: 'Until' };
+    const form = h('form', { id: 'audit-filters', class: 'audit-filters' },
+        FILTERS.map(name => h('label', {}, LABELS[name], inputs[name])));
+    // Enter in a text field commits it (`change`) rather than submitting.
+    form.addEventListener('submit', event => event.preventDefault());
+    for (const input of Object.values(inputs)) input.addEventListener('change', () => load());
+
+    // The query the filters spell now. `after` continues a load; it goes
+    // first, so every query for the same filters ends the same way.
+    function query(after = null) {
+        const params = new URLSearchParams();
+        if (after !== null) params.set('after', String(after));
+        for (const name of FILTERS) {
+            const raw = inputs[name].value.trim();
+            const value = name === 'since' || name === 'until' ? utc(raw) : raw;
+            if (value) params.set(name, value);
+        }
+        return params;
+    }
+
+    let rows = [];
+    let next = null;     // the cursor of the newest completed load, if more may follow
+    let loads = 0;       // the number of the newest table load
+    let actionsShown = false;
+
+    const table = listTable(columns(admin), rows, { empty: 'No entries match.' });
+    table.id = 'audit-table';
+    const more = h('button', { type: 'button', id: 'audit-more', class: 'secondary', hidden: true, onclick: () => loadMore() }, 'Load more');
+    const status = h('div', { id: 'audit-status' });
+
+    // The reason a read failed and the stale mark, or nothing. fill() drops
+    // the null children (issue #302).
+    function showStatus(error) {
+        fill(status,
+            error ? h('p', { class: 'error small', id: 'audit-error', role: 'alert' }, error.message || 'The audit log could not be read.') : null,
+            error && rows.length ? h('p', { class: 'error small', id: 'audit-stale', role: 'status' }, 'The entries below may be out of date.') : null);
+    }
+
+    // The action filter's options, once, from the first answer's list.
+    function showActions(actions) {
+        if (actionsShown) return;
+        actionsShown = true;
+        const chosen = inputs.action.value;
+        fill(inputs.action, h('option', { value: '' }, 'Any action'),
+            actions.map(name => h('option', { value: name }, name)));
+        inputs.action.value = chosen;
+    }
+
+    // A new first page for the filters as they are now. Dropping the old
+    // cursor at once means "Load more" cannot continue the previous filters
+    // while this load is pending.
+    async function load() {
+        const mine = ++loads;
+        next = null;
+        more.hidden = true;
+        let page;
+        try {
+            page = await api.get(`/audit?${query()}`, { quiet: true });
+        } catch (error) {
+            if (mine === loads && main.isConnected) showStatus(error);
+            return;
+        }
+        if (mine !== loads || !main.isConnected) return;   // a newer load overtook this one
+        rows = page.entries;
+        showActions(page.actions);
+        table.redraw(rows);
+        showStatus(null);
+        // A full last page is followed by an empty one, so an empty answer
+        // ends the list whatever its cursor.
+        next = page.entries.length ? page.next_after : null;
+        more.hidden = next === null;
+    }
+
+    // The next page of the newest load. Its cursor is taken (and the button
+    // hidden) at once, so a second click cannot append the same page twice;
+    // the answer appends only while that load is still the newest.
+    async function loadMore() {
+        if (next === null) return;
+        const mine = loads;
+        const after = next;
+        next = null;
+        more.hidden = true;
+        let page;
+        try {
+            page = await api.get(`/audit?${query(after)}`, { quiet: true });
+        } catch (error) {
+            if (mine !== loads || !main.isConnected) return;
+            next = after;   // the same page can be asked for again
+            more.hidden = false;
+            showStatus(error);
+            return;
+        }
+        if (mine !== loads || !main.isConnected) return;
+        rows = rows.concat(page.entries);
+        table.redraw(rows);
+        showStatus(null);
+        next = page.entries.length ? page.next_after : null;
+        more.hidden = next === null;
+    }
+
+    // The export downloads every entry the filters select, with the
+    // console's own credential. Its refusal stays on screen like a load's.
+    async function exportLog() {
+        try {
+            await api.download(`/audit/export?${query()}`, 'audit.jsonl', { quiet: true });
+        } catch (error) {
+            if (main.isConnected) showStatus(error);
+        }
+    }
+
+    main.append(
+        h('header', { class: 'page-head' },
+            h('div', {}, h('h1', {}, 'Audit'),
+                h('p', { class: 'muted' }, admin
+                    ? 'Administrative changes, catalog writes, exports and admin reads, newest first. Sign-ins are listed in each user\'s drawer.'
+                    : 'What happened in a team you own, newest first. Operator staff show as "an operator".')),
+            h('div', { class: 'actions' },
+                h('button', { type: 'button', id: 'audit-refresh', class: 'secondary', onclick: () => load() }, 'Refresh'),
+                h('button', { type: 'button', id: 'audit-export', class: 'secondary', onclick: exportLog }, 'Export'))),
+        form, status, table, more);
+    await load();
+}

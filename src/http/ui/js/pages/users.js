@@ -2,7 +2,8 @@
 // lists them (to pick one for a key); an admin key that reaches every
 // catalog creates and deletes them (plan Decision 3), and for any other the
 // controls render disabled. '#/users/unassigned' lists every key, grant,
-// code and catalog with no user or owner, each with an inline Assign.
+// code and catalog with no user or owner, each with an inline Assign;
+// '#/users/<name>' opens that user's drawer.
 // The server enforces every rule; this page only explains what cannot work.
 import { h, pill, fill } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
@@ -77,6 +78,8 @@ export async function render(main, rest) {
     // of its reads (see openDetail).
     let shown = null;
     let reads = 0;
+    // '#/users/<name>' opens that user's drawer (the Audit page links here).
+    if (rest[0]) await openDetail(rest[0]);
 
     async function load() {
         try {

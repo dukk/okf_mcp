@@ -5555,6 +5555,17 @@ export async function download(path, filename) {
 
 `index.html`: an `Audit` link (`data-nav="audit"`, `href="#/audit"`) under the admin links, shown to admins and to sessions that own a team (`shell.js` hides it otherwise); `ui.rs`'s manifest lists `audit`.
 
+> **Corrected (issue #404, 2026-11-15).** What shipped differs from the text above in these ways; read `src/http/ui/js/pages/audit.js` and `tests/ui_e2e/audit.rs`:
+> - **No change to `ui.rs`.** The manifest lists every embedded `js/pages/*.js` by itself (`page_names`), so adding `pages/audit.js` lists `audit`. Task 9e's "manifest entry" for Unlocks is the same: adding `pages/unlocks.js` is enough.
+> - **The nav link is its own group**, `<div class="nav-group" data-need="audit">` ("Records"), after the Administer group, and `shell.js`' `shows("audit")` is `canAdministerPeople() || !!store.session`. Every user owns its personal team (`/me`'s `owned_teams` includes it, 8a's heads-up), so "a session that owns a team" is every session, and the shell needs no extra `/me` read. `data-need` sits on the wrapper, not the link: `router.start` hides a link whose page is not built, and `refreshIdentity` would unhide it. Task 9e's Unlocks link can join this group.
+> - **`api.download(path, filename, opts)`** passes `opts` through (the page sends `quiet: true` and shows a refusal in the page), and revokes the object URL on the next turn rather than at once.
+> - **Queries name only the chosen filters, `after` first** (`?after=N&action=...`), so a journey can hold a page by its filters' suffix; no `limit` is sent (the server's default page is 100).
+> - **The owner's teams come from `freshAccount()`** (`GET /me`) when the page opens; the select defaults to the first. A failed read leaves the page with its reason (`#audit-error`); with no team, the page shows the "You own no team" text through `fill()`.
+> - **Loads and refusals.** Table loads are numbered; "Load more" takes the cursor at once (hiding the button, so a double click cannot append twice) and appends only while its load is still the newest. A load answers `quiet`, and a failure (or an export refusal) shows the server's reason in `#audit-error`, with `#audit-stale` over rows kept from the last answer. An empty page ends the list whatever its `next_after`.
+> - **The actor cell** shows the person and the label they acted through (`console-admin`, `console session`), or the label alone (`cli:<os user>`), with the key or grant id as the tooltip and the IP when present; a UUID key id was unreadable as the main text.
+> - **The person link.** For an admin, a `user` target links to `#/users/<name>`; `pages/users.js` now opens that user's drawer from `rest[0]`.
+> - **Journeys.** Besides the two above (the owner's also holds its export, `?team=family`), `a_late_table_load_never_draws_over_a_newer_filter` (with a `fail_next` load that keeps rows, reason and Refresh) and `load_more_appends_only_to_the_newest_table_load` (101 users, the second page held across a filter change). The owner's teams are created over REST with an admin key, as written.
+
 - [ ] **Step 4: Run, gate, commit**
 
 ```bash
@@ -6889,7 +6900,7 @@ function showLocked(view, catalog, body) {
 > - **Side reads.** The Unlock form's `GET /settings` (for `max`) and the Unlocks page's catalog picker are side reads: when one fails, fall back (4 hours; a free-text catalog) and never lose a write's answer.
 > - **Journeys** (add to `tests/ui_e2e/unlocks.rs`): `ui.hold_next("PUT", "/api/v1/catalogs/main/maintenance")`, `ui.click_twice("#catalog-maintenance")`, close and reopen the drawer, `assert_eq!(ui.held_matches(), 1)`; `ui.hold_next("POST", "/api/v1/unlocks")` with `click_twice` on the form's submit; `ui.fail_next("PUT", "/api/v1/catalogs/main/maintenance", 403, ..)` then `ui.fail_next` on the follow-up GET, checking `#catalog-maintenance-error` is visible (`ui.wait_visible`, not only `wait_text`) and the switch is enabled; and `ui.hold_answer` on a first Unlocks load that settles after a second.
 
-`index.html` and `ui.rs`: the `Unlocks` nav link and manifest entry (admins, and owners of a team).
+`index.html` and `ui.rs`: the `Unlocks` nav link and manifest entry (admins, and owners of a team). *(Corrected, issue #404, 2026-11-15: `ui.rs` needs no change, its manifest lists every embedded page; put the link in Task 8c's `data-need="audit"` "Records" group, which `shell.js` shows to every-catalog admins and every session.)*
 
 - [ ] **Step 4: Run, gate, commit**
 
