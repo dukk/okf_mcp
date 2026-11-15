@@ -125,6 +125,7 @@ async fn the_links_tab_shows_backlinks_and_a_revision_opens_its_diff() {
         replace: true,
         scope: ImportScope::Everything,
         expect_generation: None,
+        expect_catalog_id: None,
         actor: "editor",
         audit: &okf_mcp::store::audit::AuditActor::cli(),
         now: Utc::now(),

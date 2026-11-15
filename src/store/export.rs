@@ -30,8 +30,7 @@ use crate::store::{catalogs, documents};
 /// * `pool` - the database.
 /// * `catalog` - the catalog's name.
 /// * `out` - where to write (a `Vec<u8>`, a file, an HTTP body buffer).
-/// * `audit` - who exports, for the entry.
-/// * `now` - when (server clock).
+/// * `options` - who exports and when, and the incarnation expected.
 ///
 /// # Returns
 /// `out`, with the archive finished, and the catalog generation the archive
@@ -39,6 +38,8 @@ use crate::store::{catalogs, documents};
 ///
 /// # Errors
 /// [`OkfError::CatalogNotSelected`] for an unknown catalog;
+/// [`OkfError::Busy`] when it is no longer `options.expect_catalog_id`
+/// (checked in the snapshot, before any document is read);
 /// [`OkfError::Database`]; [`OkfError::Io`] if writing fails.
 // `W: Write + Send + 'static`: `out` moves to a blocking thread, so it must
 // be safe to send there (`Send`) and must not borrow anything that thread
@@ -47,12 +48,16 @@ pub async fn export<W>(
     pool: &PgPool,
     catalog: &str,
     out: W,
-    audit: &AuditActor,
-    now: DateTime<Utc>,
+    options: &ExportOptions<'_>,
 ) -> Result<(W, i64), OkfError>
 where
     W: Write + Send + 'static,
 {
+    let ExportOptions {
+        audit,
+        now,
+        expect_catalog_id,
+    } = *options;
     let mut tx = pool.begin().await?;
     // Must be the transaction's first statement. Under the default
     // READ COMMITTED each query would see its own snapshot.
@@ -60,6 +65,7 @@ where
         .execute(&mut *tx)
         .await?;
     let found = catalogs::find(&mut *tx, catalog).await?;
+    catalogs::check_incarnation(catalog, found.id, expect_catalog_id)?;
     let rows = documents::published(&mut *tx, found.id).await?;
     // The owner team's audit id, in the same snapshot as the rows: the
     // entry belongs to the team that owned what was exported, even if the
@@ -102,6 +108,20 @@ where
     // (as `import` does).
     .unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic()))?;
     Ok((archive, found.generation))
+}
+
+/// How to export.
+// `Copy`: a borrow, a timestamp and an id, so `export` copies the fields out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExportOptions<'a> {
+    /// Who exports, for the `catalog.exported` entry.
+    pub audit: &'a AuditActor,
+    /// When (server clock).
+    pub now: DateTime<Utc>,
+    /// Refuse unless the catalog is still this `catalogs.id`, the
+    /// incarnation the caller was admitted to; `None` checks nothing (the
+    /// command line).
+    pub expect_catalog_id: Option<i64>,
 }
 
 /// What one export read, as its entry records it: all from the read's
@@ -196,6 +216,7 @@ mod tests {
             replace: false,
             scope: ImportScope::Everything,
             expect_generation: None,
+            expect_catalog_id: None,
             actor: "t",
             audit: &crate::store::audit::AuditActor::cli(),
             now,
@@ -212,6 +233,7 @@ mod tests {
             replace: true,
             scope: ImportScope::Everything,
             expect_generation: None,
+            expect_catalog_id: None,
             actor: "t",
             audit: &crate::store::audit::AuditActor::cli(),
             now: later,
@@ -220,10 +242,18 @@ mod tests {
             .await
             .unwrap();
 
-        let (tarball, generation) =
-            export(&db.pool, "pg", Vec::new(), &AuditActor::cli(), Utc::now())
-                .await
-                .unwrap();
+        let (tarball, generation) = export(
+            &db.pool,
+            "pg",
+            Vec::new(),
+            &ExportOptions {
+                audit: &AuditActor::cli(),
+                now: Utc::now(),
+                expect_catalog_id: None,
+            },
+        )
+        .await
+        .unwrap();
 
         // Two imports wrote, so the archive holds generation 2.
         assert_eq!(generation, 2);
@@ -271,9 +301,18 @@ mod tests {
         .unwrap();
 
         let catalog_id = catalogs::find(&db.pool, "pg").await.unwrap().id;
-        let (_, generation) = export(&db.pool, "pg", Vec::new(), &AuditActor::cli(), now)
-            .await
-            .unwrap();
+        let (_, generation) = export(
+            &db.pool,
+            "pg",
+            Vec::new(),
+            &ExportOptions {
+                audit: &AuditActor::cli(),
+                now,
+                expect_catalog_id: None,
+            },
+        )
+        .await
+        .unwrap();
 
         let entries = crate::store::audit::testing::entries(&db.pool, "catalog.exported").await;
         assert_eq!(entries.len(), 1);
@@ -355,7 +394,19 @@ mod tests {
             .unwrap();
         let exporting = tokio::spawn({
             let pool = pool.clone();
-            async move { export(&pool, "pg", Vec::new(), &actor, Utc::now()).await }
+            async move {
+                export(
+                    &pool,
+                    "pg",
+                    Vec::new(),
+                    &ExportOptions {
+                        audit: &actor,
+                        now: Utc::now(),
+                        expect_catalog_id: None,
+                    },
+                )
+                .await
+            }
         });
         // The read has committed; the entry waits on the held row.
         crate::http::api::testing::wait_for_lock_waiters(pool, 1).await;
@@ -421,7 +472,17 @@ mod tests {
         crate::http::api::testing::fail_on(&db.pool, "BEFORE INSERT ON audit_entries FOR EACH ROW")
             .await;
 
-        let failed = export(&db.pool, "pg", Vec::new(), &AuditActor::cli(), Utc::now()).await;
+        let failed = export(
+            &db.pool,
+            "pg",
+            Vec::new(),
+            &ExportOptions {
+                audit: &AuditActor::cli(),
+                now: Utc::now(),
+                expect_catalog_id: None,
+            },
+        )
+        .await;
 
         crate::http::api::testing::allow(&db.pool, "audit_entries").await;
         assert!(
@@ -451,11 +512,29 @@ mod tests {
         .await
         .unwrap();
 
-        let (tarball, generation) =
-            export(&db.pool, "pg", Vec::new(), &AuditActor::cli(), Utc::now())
-                .await
-                .unwrap();
-        let unknown = export(&db.pool, "nope", Vec::new(), &AuditActor::cli(), Utc::now()).await;
+        let (tarball, generation) = export(
+            &db.pool,
+            "pg",
+            Vec::new(),
+            &ExportOptions {
+                audit: &AuditActor::cli(),
+                now: Utc::now(),
+                expect_catalog_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let unknown = export(
+            &db.pool,
+            "nope",
+            Vec::new(),
+            &ExportOptions {
+                audit: &AuditActor::cli(),
+                now: Utc::now(),
+                expect_catalog_id: None,
+            },
+        )
+        .await;
 
         assert!(archive::read_tarball(tarball.as_slice(), u64::MAX)
             .unwrap()

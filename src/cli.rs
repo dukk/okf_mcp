@@ -803,6 +803,9 @@ pub async fn run(cli: Cli, clock: Arc<dyn Clock>) -> anyhow::Result<()> {
                     ImportScope::Everything
                 },
                 expect_generation,
+                // The command line works on the database directly: no
+                // admission, so no incarnation to hold it to.
+                expect_catalog_id: None,
                 actor: &actor,
                 audit: &AuditActor::cli(),
                 now: clock.now(),
@@ -815,9 +818,17 @@ pub async fn run(cli: Cli, clock: Arc<dyn Clock>) -> anyhow::Result<()> {
             // Build the archive in memory first: no `StdoutLock` is held across
             // `.await` (which would make this future impossible to
             // `tokio::spawn`), and an unknown catalog leaves no file behind.
-            let (tarball, generation) =
-                export::export(&pool, &catalog, Vec::new(), &AuditActor::cli(), clock.now())
-                    .await?;
+            let (tarball, generation) = export::export(
+                &pool,
+                &catalog,
+                Vec::new(),
+                &export::ExportOptions {
+                    audit: &AuditActor::cli(),
+                    now: clock.now(),
+                    expect_catalog_id: None,
+                },
+            )
+            .await?;
             // Writing is blocking I/O: run it on a blocking thread.
             tokio::task::spawn_blocking(move || write_output(&output, &tarball))
                 .await

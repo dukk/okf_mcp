@@ -40,6 +40,12 @@ runner reads without one unless the catalog's owners turned maintenance off.
   recorded (an unlocked non-admin key included, not only an admin
   credential) when no gates know the incarnation read.
 - `unlocks::live` and `settings::load` take `impl PgExecutor<'_>`.
+- Export and import are bound to the catalog incarnation the admission was
+  decided for (PR #442 review): `store::export::export` takes
+  `ExportOptions { audit, now, expect_catalog_id }`, `ImportOptions` gains
+  `expect_catalog_id`, and `catalogs::check_incarnation` refuses a catalog
+  created again under the name with `Busy`, before anything is read or
+  written. `open_changeset` refuses the same way. The CLI checks nothing.
 
 ## Notes
 

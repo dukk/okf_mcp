@@ -790,6 +790,7 @@ mod tests {
             replace,
             scope: ImportScope::Everything,
             expect_generation: None,
+            expect_catalog_id: None,
             actor: "tester",
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),

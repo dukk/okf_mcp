@@ -42,6 +42,7 @@ async fn round_trip(files: &Files) -> (Files, ImportReport) {
         replace: false,
         scope: ImportScope::Everything,
         expect_generation: None,
+        expect_catalog_id: None,
         actor: "test/roundtrip",
         audit: &okf_mcp::store::audit::AuditActor::cli(),
         now: Utc::now(),
@@ -52,8 +53,11 @@ async fn round_trip(files: &Files) -> (Files, ImportReport) {
         &db.pool,
         "rt",
         Vec::new(),
-        &okf_mcp::store::audit::AuditActor::cli(),
-        chrono::Utc::now(),
+        &export::ExportOptions {
+            audit: &okf_mcp::store::audit::AuditActor::cli(),
+            now: chrono::Utc::now(),
+            expect_catalog_id: None,
+        },
     )
     .await
     .unwrap();
@@ -62,6 +66,7 @@ async fn round_trip(files: &Files) -> (Files, ImportReport) {
         replace: true,
         scope: ImportScope::Everything,
         expect_generation: None,
+        expect_catalog_id: None,
         actor: "test/roundtrip",
         audit: &okf_mcp::store::audit::AuditActor::cli(),
         now: Utc::now(),

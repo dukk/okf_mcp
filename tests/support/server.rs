@@ -161,6 +161,7 @@ impl TestServer {
                 replace: false,
                 scope: ImportScope::Everything,
                 expect_generation: None,
+                expect_catalog_id: None,
                 actor: "tester",
                 audit: &okf_mcp::store::audit::AuditActor::cli(),
                 now: Utc::now(),

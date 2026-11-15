@@ -91,6 +91,7 @@ pub(crate) async fn app_at(
             replace: false,
             scope: ImportScope::Everything,
             expect_generation: None,
+            expect_catalog_id: None,
             actor: "tester",
             audit: &AuditActor::cli(),
             now: imported,

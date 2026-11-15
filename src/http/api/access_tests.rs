@@ -957,3 +957,139 @@ async fn a_changeset_list_leaves_out_a_catalog_whose_unlock_ended() {
         "{named:?}"
     );
 }
+
+/// Unlocks `main` for an admin `staff`, then replaces `main` with a
+/// one-document catalog of team `acme` without polling, so the key cache
+/// still admits through the old catalog's unlock (PR #442 review).
+///
+/// # Returns
+/// The staff key's secret, the old unlock's id and the replacement's id.
+async fn stale_unlock_of_a_replaced_main(test: &TestApp) -> (String, i64, i64) {
+    let staff = staff_root(test).await;
+    make_staff_admin(test).await;
+    require_unlock(test).await;
+    let id = unlock(test, "main").await;
+    replace_main_for_acme(test).await;
+    let replacement = catalog_id(test, "main").await;
+    let archive = crate::http::archives::tarball_of(&[("index.md", "# Acme\n\nPrivate.\n")]);
+    let options = crate::store::import::ImportOptions {
+        replace: true,
+        scope: crate::store::import::ImportScope::Everything,
+        expect_generation: None,
+        expect_catalog_id: None,
+        actor: "cli",
+        audit: &AuditActor::cli(),
+        now: Utc::now(),
+    };
+    let files = crate::archive::read_tarball(archive.as_slice(), 1 << 20).unwrap();
+    crate::store::import::import(test.app.pool(), "main", files, &options)
+        .await
+        .unwrap();
+    (staff, id, replacement)
+}
+
+/// The replacement's (generation, live document paths and contents).
+async fn replacement_contents(test: &TestApp, id: i64) -> (i64, Vec<(String, Vec<u8>)>) {
+    let generation = sqlx::query_scalar("SELECT generation FROM catalogs WHERE id = $1")
+        .bind(id)
+        .fetch_one(test.app.pool())
+        .await
+        .unwrap();
+    let documents = sqlx::query_as(
+        "SELECT path, content FROM documents \
+         WHERE catalog_id = $1 AND deleted_at IS NULL ORDER BY path",
+    )
+    .bind(id)
+    .fetch_all(test.app.pool())
+    .await
+    .unwrap();
+    (generation, documents)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stale_unlock_exports_nothing_of_the_catalog_that_replaced_its_own() {
+    let test = app().await;
+    let (staff, id, replacement) = stale_unlock_of_a_replaced_main(&test).await;
+    // Still the old gates: the cache was not reloaded.
+    let cached = crate::mcp::testing::cached_principal(&test, &staff);
+    assert_ne!(cached.gates.catalogs["main"].id, replacement);
+
+    let (status, body) = send(
+        &test,
+        "GET",
+        "/api/v1/catalogs/main/export",
+        Some(&staff),
+        None,
+    )
+    .await;
+    settle_access(&test).await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"], "Busy");
+    let exported = audit::testing::entries(test.app.pool(), "catalog.exported").await;
+    assert!(
+        exported.is_empty(),
+        "nothing of the replacement left: {exported:?}"
+    );
+    assert_eq!(
+        tallies_or_gone(&test, id).await,
+        None,
+        "the old unlock went with its catalog"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stale_unlock_cannot_import_over_the_catalog_that_replaced_its_own() {
+    let test = app().await;
+    let (staff, _, replacement) = stale_unlock_of_a_replaced_main(&test).await;
+    let before = replacement_contents(&test, replacement).await;
+
+    let overwrite = crate::http::archives::tarball_of(&[("index.md", "# Overwritten\n")]);
+    let (status, body) = import_main(&test, &staff, overwrite).await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"], "Busy");
+    assert_eq!(
+        replacement_contents(&test, replacement).await,
+        before,
+        "the replacement is untouched"
+    );
+}
+
+/// An unlock's tallies, or `None` once it is gone (deleted with its catalog).
+async fn tallies_or_gone(test: &TestApp, id: i64) -> Option<(i64, i64, i64)> {
+    sqlx::query_as("SELECT reads, writes, exports FROM unlocks WHERE id = $1")
+        .bind(id)
+        .fetch_optional(test.app.pool())
+        .await
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_old_unlocked_principal_opens_no_changeset_in_the_replacement() {
+    let test = app().await;
+    let staff = staff_root(&test).await;
+    make_staff_admin(&test).await;
+    require_unlock(&test).await;
+    unlock(&test, "main").await;
+    // Captured before the replacement, as a request in flight holds it.
+    let old_principal = crate::mcp::testing::cached_principal(&test, &staff);
+    replace_main_for_acme(&test).await;
+    test.app.poll().await.unwrap();
+    let replacement = catalog_id(&test, "main").await;
+    let ctx = crate::mcp::testing::context(&test, old_principal, None);
+    assert_eq!(ctx.catalogs()["main"].id(), replacement, "the new map");
+
+    let refused = open_main(&ctx).await;
+    let opened: i64 = sqlx::query_scalar("SELECT count(*) FROM changesets WHERE catalog_id = $1")
+        .bind(replacement)
+        .fetch_one(test.app.pool())
+        .await
+        .unwrap();
+
+    assert!(
+        matches!(refused, Err(crate::error::OkfError::Busy { .. })),
+        "{refused:?}"
+    );
+    assert_eq!(opened, 0, "nothing opened in the replacement");
+}

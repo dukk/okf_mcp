@@ -251,7 +251,15 @@ pub(crate) async fn open_changeset(
     let now = ctx.app().clock().now();
     // The changeset's writes go to the catalog's contents, so they need
     // what any write does, the unlock included (M14 Task 9b).
-    principal.require_contents(Access::Write, state.name(), now)?;
+    let admission = principal.require_contents(Access::Write, state.name(), now)?;
+    // An unlock is of one catalog incarnation: one let in by gates that
+    // predate this call's catalog map (the catalog was created again under
+    // its name) must not open a changeset in the replacement (PR #442).
+    if admission.is_recorded() && principal.scope_of(state.name(), state.id()).is_none() {
+        return Err(OkfError::Busy {
+            reason: format!("catalog {:?} is being reloaded", state.name()),
+        });
+    }
     // The lock order of every changeset write: the catalog row first, so a
     // concurrent `catalog delete` either waits for this or is seen here.
     let mut tx = ctx.app().pool().begin().await?;
@@ -1584,6 +1592,7 @@ mod publish_tests {
             replace: true,
             scope: ImportScope::Everything,
             expect_generation: None,
+            expect_catalog_id: None,
             actor: "t",
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),
@@ -1776,6 +1785,7 @@ mod publish_tests {
             replace: true,
             scope: ImportScope::Everything,
             expect_generation: None,
+            expect_catalog_id: None,
             actor: "cli",
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),
@@ -2055,6 +2065,7 @@ mod changes_tests {
             replace: true,
             scope: ImportScope::Everything,
             expect_generation: None,
+            expect_catalog_id: None,
             actor: "tester",
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),

@@ -19,7 +19,7 @@ use crate::http::requester::Requester;
 use crate::http::{timeout_layer, AppError, REQUEST_TIMEOUT};
 use crate::mcp::blocking;
 use crate::store::audit::{AccessKind, AuditActor};
-use crate::store::export::export;
+use crate::store::export::{export, ExportOptions};
 use crate::store::import::{import, ImportOptions, ImportScope};
 use crate::store::keys::Access;
 
@@ -84,6 +84,23 @@ fn body_limit(max_import_bytes: u64) -> usize {
     // `try_from` fails only for a `u64` that does not fit a `usize` (a
     // 32-bit target), which is larger than any body anyway.
     usize::try_from(max_import_bytes.saturating_add(slack)).unwrap_or(usize::MAX)
+}
+
+/// The `catalogs.id` the principal's gates hold for `name`: the catalog
+/// incarnation its admission was decided for. The gates are loaded by name
+/// in one snapshot, so every membership, entitlement or unlock that admits
+/// the principal names a catalog they hold; `None` (gates built outside the
+/// key cache, or a catalog created since they loaded) means no admission
+/// depended on a name the gates resolved.
+///
+/// # Arguments
+/// * `principal` - the caller.
+/// * `name` - the catalog's name.
+///
+/// # Returns
+/// The id the store must still find, if any.
+fn admitted_id(principal: &Principal, name: &str) -> Option<i64> {
+    principal.gates.catalogs.get(name).map(|scope| scope.id)
 }
 
 /// Counts an export or import under an unlock on that unlock (M14 Task 9b),
@@ -155,7 +172,14 @@ async fn export_catalog(
     // M3's export builds the whole tarball in memory (a `Vec<u8>`).
     // The generation is for the command line's `import --expect-generation`.
     let actor = AuditActor::of(&principal, &requester);
-    let (bytes, _generation) = export(app.pool(), &name, Vec::new(), &actor, now).await?;
+    let options = ExportOptions {
+        audit: &actor,
+        now,
+        // The incarnation the admission was decided for: the store refuses
+        // a catalog created again under this name since the gates loaded.
+        expect_catalog_id: admitted_id(&principal, &name),
+    };
+    let (bytes, _generation) = export(app.pool(), &name, Vec::new(), &options).await?;
     note_unlocked(
         &app,
         &principal,
@@ -274,6 +298,8 @@ async fn import_catalog(
             ImportScope::Everything
         },
         expect_generation: query.expect_generation,
+        // As for export: the store checks it under the catalog's lock.
+        expect_catalog_id: admitted_id(&principal, &name),
         actor: &principal.actor,
         audit: &actor,
         now: app.clock().now(),

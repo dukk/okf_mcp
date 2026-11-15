@@ -42,6 +42,11 @@ pub struct ImportOptions<'a> {
     /// Refuse unless the catalog is at this generation (the one its export
     /// reported), so a publish since the export is not silently reverted.
     pub expect_generation: Option<i64>,
+    /// Refuse unless the catalog is still this `catalogs.id`: the
+    /// incarnation the caller was admitted to (an unlock or a membership is
+    /// of one catalog, not of whatever later takes its name). `None` checks
+    /// nothing (the command line).
+    pub expect_catalog_id: Option<i64>,
     /// Recorded as `updated_by` and the revisions' `actor`.
     pub actor: &'a str,
     /// Who, for the audit log's `catalog.imported` entry.
@@ -127,7 +132,9 @@ struct Analyzed {
 /// [`MemWorkspace::from_stored`]); [`OkfError::CatalogNotSelected`] for an
 /// unknown (or malformed) catalog, or one deleted while the import waited
 /// for its lock; [`OkfError::Refused`] for a non-empty catalog without
-/// `replace`, or one not at `expect_generation`; [`OkfError::Database`], a
+/// `replace`, or one not at `expect_generation`; [`OkfError::Busy`] when
+/// the catalog is no longer `expect_catalog_id` (replaced since the caller
+/// was admitted; a retry is admitted afresh); [`OkfError::Database`], a
 /// failed audit write included.
 pub async fn import(
     pool: &PgPool,
@@ -158,6 +165,9 @@ pub async fn import(
             catalog: catalog.to_string(),
         });
     }
+    // Under the lock, before anything is written: a replacement under the
+    // same name is not what the caller was let into.
+    catalogs::check_incarnation(catalog, locked.id, options.expect_catalog_id)?;
     if let Some(expected) = options.expect_generation {
         if locked.generation != expected {
             return Err(OkfError::Refused {
@@ -377,6 +387,7 @@ mod tests {
             replace,
             scope: ImportScope::Everything,
             expect_generation: None,
+            expect_catalog_id: None,
             actor: "test/import",
             audit: &CLI,
             now,
@@ -735,6 +746,7 @@ mod tests {
         .unwrap();
         let guarded = |generation| ImportOptions {
             expect_generation: Some(generation),
+            expect_catalog_id: None,
             ..options(true, at(2))
         };
 
@@ -793,6 +805,7 @@ mod tests {
         let waiting = tokio::spawn(async move {
             let guarded = ImportOptions {
                 expect_generation: Some(1),
+                expect_catalog_id: None,
                 ..options(true, at(3))
             };
             import(&pool, "pg", files(&[("a.md", b"stale", false)]), &guarded).await
