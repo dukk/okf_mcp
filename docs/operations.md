@@ -1316,9 +1316,9 @@ mail stays valid until it expires; send a new one to replace it.
 
 Policy and branding settings live in the database, so the Settings page
 changes them without a restart; the config file's `[auth]` table gives each
-policy setting's default. The two branding settings and
-`audit_retention_days` have no config key: their defaults are `okf`, `none`
-and `400`.
+policy setting's default. The two branding settings,
+`audit_retention_days` and the three unlock settings have no config key:
+their defaults are `okf`, `none`, `400`, `false`, `4` and `true`.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -1332,6 +1332,9 @@ and `400`.
 | `product_name` | `okf` | The product name people see: in every email (subjects and text), the console (sidebar, login card and tab title) and the sign-in, forgot, setup, reset and OAuth consent pages. 1 to 60 characters with no control characters; surrounding spaces are trimmed |
 | `support_contact` | `none` | An email address or an `https://` URL (with a host). When set, every email ends with "Questions? Contact ..." and the server pages show the same line (a URL as a link); `none` shows no line |
 | `audit_retention_days` | `400` | How many days [audit log](#audit-log) entries are kept, `30` to `3650`. A daily pass deletes older ones |
+| `require_unlock` | `false` | Whether operator credentials (admin keys, admin users' sessions) need an unlock, with a reason and a time limit, before they open a customer catalog's contents |
+| `unlock_max_hours` | `4` | The longest an unlock lasts, in hours, `1` to `72`; a longer one is refused (422, `limit: "unlock_max_hours"`) |
+| `unlock_notify_owners` | `true` | Whether the owners of a catalog's owner team (those with an email address) are emailed when it is unlocked: the catalog, the category and the end, never who or the reason |
 
 ```sh
 okf-mcp settings list                      # key, value, then "default" or "set by WHO at T"
@@ -3042,6 +3045,8 @@ curl -sf -H "Authorization: Bearer $OKF_MCP_KEY" -o notes.tar.gz \
 | 404 on `/mcp` with "Session not found" | The `Mcp-Session-Id` was opened by another key, idled out past `session_idle_timeout`, or predates a restart. Reconnect with the key that opened it |
 | A tool returns `UnknownChangeset`, or `Refused` naming a closed changeset ("is published", "is discarded", "was published or discarded while this write waited", "is no longer open") | `UnknownChangeset`: the handle is mistyped or belongs to another key (only its key, and an `admin` that reaches its catalog, may use it). `Refused`: its changeset is closed, by `publish`, by `discard`, or by the prune of changesets left empty for 24 hours, possibly while the call waited for it. `list_changesets` lists the open handles the key may use; otherwise call `open_changeset` |
 | A tool or `/api/v1` route returns 403 `Suspended` | The catalog's owner team is suspended (the body names the `catalog`, the `team` and the operator's `notice`). Export still works. An admin lifts it with `okf-mcp team unsuspend TEAM` ([Suspending a team](#suspending-a-team)) |
+| A tool or `/api/v1` route returns 403 `UnlockRequired` | `require_unlock` is on and an operator credential opened a customer catalog's contents without a live unlock (the body names the `catalog`). Unlock it with `okf-mcp unlock create`, `POST /api/v1/unlocks` or Unlock in the console; a key with no user cannot be unlocked: give it one (`okf-mcp key assign`) |
+| The maintenance runner gets 403 `Forbidden` with `"maintenance": "off"` | The catalog's owners turned maintenance off (the body names the `catalog`); the runner skips it. An owner of its team can turn it back on |
 | A tool returns `CatalogNotSelected` or `Forbidden` | The key is not granted that catalog, or its access level is too low (a `read` key calling a write tool). `okf-mcp key grant`, or a key with more access |
 | 404 on an archive route | The catalog doesn't exist or the key isn't granted it (never 403, so a key can't probe which catalogs exist) |
 | 403 on an archive route | The key reaches the catalog but its level is too low: import needs `admin` |

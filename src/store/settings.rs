@@ -13,12 +13,17 @@
 //! | `product_name` | JSON string | 1 to 60 characters, no control characters (trimmed) |
 //! | `support_contact` | JSON string or `null` | an email address, an `https://` URL, or `none` |
 //! | `audit_retention_days` | JSON number | `30` to `3650` |
+//! | `require_unlock` | JSON boolean | `true`, `false`, `on`, `off` |
+//! | `unlock_max_hours` | JSON number | `1` to `72` |
+//! | `unlock_notify_owners` | JSON boolean | `true`, `false`, `on`, `off` |
 //!
 //! The two branding settings (`product_name`, `support_contact`) have no
 //! `[auth]` config key: their defaults are [`DEFAULT_PRODUCT_NAME`] and no
 //! contact. Neither has `audit_retention_days` (default
 //! [`audit::DEFAULT_RETENTION_DAYS`]), which the audit log's append-only
-//! trigger reads from the same row (`migrations/0012_audit.sql`).
+//! trigger reads from the same row (`migrations/0012_audit.sql`), nor the
+//! three unlock settings (spec Part 6; defaults off, [`unlocks::DEFAULT_MAX_HOURS`]
+//! and on).
 //!
 //! [`set`] and [`reset`] record each change in the audit log
 //! (`setting.changed`, `setting.cleared`) in their own transaction.
@@ -50,6 +55,7 @@ use crate::config::{check_auth_duration, AuthConfig, MAX_KEYS_PER_USER_LIMIT};
 use crate::error::OkfError;
 use crate::store::audit::{self, Action, AuditActor, Entry, Target, Via};
 use crate::store::catalogs::bump_admin_generation;
+use crate::store::unlocks;
 
 /// The product name with no override.
 pub const DEFAULT_PRODUCT_NAME: &str = "okf";
@@ -107,6 +113,15 @@ pub struct Settings {
     /// How many days audit entries are kept before the daily prune deletes
     /// them ([`audit::DEFAULT_RETENTION_DAYS`] by default).
     pub audit_retention_days: u32,
+    /// Whether operator credentials need an unlock to open a customer's
+    /// catalog contents (off by default).
+    pub require_unlock: bool,
+    /// The longest unlock, in hours ([`unlocks::DEFAULT_MAX_HOURS`] by
+    /// default).
+    pub unlock_max_hours: u32,
+    /// Whether the owner team's owners are emailed when one of its
+    /// catalogs is unlocked (on by default).
+    pub unlock_notify_owners: bool,
 }
 
 impl Settings {
@@ -130,6 +145,9 @@ impl Settings {
             product_name: DEFAULT_PRODUCT_NAME.to_string(),
             support_contact: None,
             audit_retention_days: audit::DEFAULT_RETENTION_DAYS,
+            require_unlock: false,
+            unlock_max_hours: unlocks::DEFAULT_MAX_HOURS,
+            unlock_notify_owners: true,
         }
     }
 
@@ -179,11 +197,20 @@ pub enum SettingKey {
     /// `audit_retention_days`.
     #[value(name = "audit_retention_days")]
     AuditRetentionDays,
+    /// `require_unlock`.
+    #[value(name = "require_unlock")]
+    RequireUnlock,
+    /// `unlock_max_hours`.
+    #[value(name = "unlock_max_hours")]
+    UnlockMaxHours,
+    /// `unlock_notify_owners`.
+    #[value(name = "unlock_notify_owners")]
+    UnlockNotifyOwners,
 }
 
 impl SettingKey {
     /// Every key, in the order `settings list` shows them.
-    pub const ALL: [SettingKey; 10] = [
+    pub const ALL: [SettingKey; 13] = [
         SettingKey::PasswordSignIn,
         SettingKey::MaxKeysPerUser,
         SettingKey::MaxKeyLifetime,
@@ -194,6 +221,9 @@ impl SettingKey {
         SettingKey::ProductName,
         SettingKey::SupportContact,
         SettingKey::AuditRetentionDays,
+        SettingKey::RequireUnlock,
+        SettingKey::UnlockMaxHours,
+        SettingKey::UnlockNotifyOwners,
     ];
 
     /// The stored name.
@@ -212,6 +242,9 @@ impl SettingKey {
             SettingKey::ProductName => "product_name",
             SettingKey::SupportContact => "support_contact",
             SettingKey::AuditRetentionDays => "audit_retention_days",
+            SettingKey::RequireUnlock => "require_unlock",
+            SettingKey::UnlockMaxHours => "unlock_max_hours",
+            SettingKey::UnlockNotifyOwners => "unlock_notify_owners",
         }
     }
 
@@ -298,17 +331,33 @@ fn check_support_contact(text: &str) -> Result<(), String> {
     crate::store::users::check_email(text).map_err(|_| refuse())
 }
 
+/// Reads the text of a boolean setting: `true`/`on` or `false`/`off`.
+fn parse_boolean(key: SettingKey, text: &str) -> Result<Value, String> {
+    match text {
+        "true" | "on" => Ok(Value::Bool(true)),
+        "false" | "off" => Ok(Value::Bool(false)),
+        _ => Err(format!(
+            "{} takes true or false, not {text:?}",
+            key.as_str()
+        )),
+    }
+}
+
+/// The refusal text for an `unlock_max_hours` outside its range.
+fn unlock_hours_range() -> String {
+    format!(
+        "unlock_max_hours takes a whole number from 1 to {}",
+        unlocks::MAX_HOURS_LIMIT
+    )
+}
+
 /// Turns the text [`set`] was given into the JSON to store.
 fn parse_value(key: SettingKey, text: &str) -> Result<Value, String> {
     let text = text.trim();
     match key {
-        SettingKey::PasswordSignIn => match text {
-            "true" | "on" => Ok(Value::Bool(true)),
-            "false" | "off" => Ok(Value::Bool(false)),
-            _ => Err(format!(
-                "password_sign_in takes true or false, not {text:?}"
-            )),
-        },
+        SettingKey::PasswordSignIn | SettingKey::RequireUnlock | SettingKey::UnlockNotifyOwners => {
+            parse_boolean(key, text)
+        }
         // `u32` parsing refuses a sign, so "-1" fails here; the upper
         // bound is `apply`'s.
         SettingKey::MaxKeysPerUser => text.parse::<u32>().map(Value::from).map_err(|_| {
@@ -335,6 +384,11 @@ fn parse_value(key: SettingKey, text: &str) -> Result<Value, String> {
             .parse::<u32>()
             .map(Value::from)
             .map_err(|_| retention_range()),
+        // A JSON number; the range is `apply`'s.
+        SettingKey::UnlockMaxHours => text
+            .parse::<u32>()
+            .map(Value::from)
+            .map_err(|_| unlock_hours_range()),
     }
 }
 
@@ -359,11 +413,22 @@ fn apply(settings: &mut Settings, key: SettingKey, value: &Value) -> Result<(), 
             .ok_or_else(|| format!("{} must be a duration string", key.as_str()))?;
         duration(key, text)
     };
+    // And the three boolean keys.
+    let as_bool = |value: &Value| -> Result<bool, String> {
+        value
+            .as_bool()
+            .ok_or_else(|| format!("{} must be true or false", key.as_str()))
+    };
     match key {
-        SettingKey::PasswordSignIn => {
-            settings.password_sign_in = value
-                .as_bool()
-                .ok_or_else(|| "password_sign_in must be true or false".to_string())?;
+        SettingKey::PasswordSignIn => settings.password_sign_in = as_bool(value)?,
+        SettingKey::RequireUnlock => settings.require_unlock = as_bool(value)?,
+        SettingKey::UnlockNotifyOwners => settings.unlock_notify_owners = as_bool(value)?,
+        SettingKey::UnlockMaxHours => {
+            settings.unlock_max_hours = value
+                .as_u64()
+                .and_then(|hours| u32::try_from(hours).ok())
+                .filter(|hours| (1..=unlocks::MAX_HOURS_LIMIT).contains(hours))
+                .ok_or_else(unlock_hours_range)?;
         }
         SettingKey::MaxKeysPerUser => {
             // `as_u64` is `None` for negatives, fractions and non-numbers;
@@ -439,6 +504,9 @@ fn display(settings: &Settings, key: SettingKey) -> String {
             .clone()
             .unwrap_or_else(|| "none".to_string()),
         SettingKey::AuditRetentionDays => settings.audit_retention_days.to_string(),
+        SettingKey::RequireUnlock => settings.require_unlock.to_string(),
+        SettingKey::UnlockMaxHours => settings.unlock_max_hours.to_string(),
+        SettingKey::UnlockNotifyOwners => settings.unlock_notify_owners.to_string(),
     }
 }
 
@@ -533,7 +601,8 @@ fn updated_by(actor: &AuditActor) -> String {
 /// An entry's details for a setting's value: the stored JSON, except for
 /// `support_contact`, which can be an email address and is never written
 /// into an entry (spec "People in entries"). Every key is listed, so a new
-/// setting must decide which arm it takes.
+/// setting must decide which arm it takes. The unlock settings are policy
+/// (a flag and a number of hours), never a person, so they are recorded.
 fn audited_value(key: SettingKey, value: &Value) -> Option<&Value> {
     match key {
         SettingKey::SupportContact => None,
@@ -545,7 +614,10 @@ fn audited_value(key: SettingKey, value: &Value) -> Option<&Value> {
         | SettingKey::SetupLinkTtl
         | SettingKey::ResetLinkTtl
         | SettingKey::ProductName
-        | SettingKey::AuditRetentionDays => Some(value),
+        | SettingKey::AuditRetentionDays
+        | SettingKey::RequireUnlock
+        | SettingKey::UnlockMaxHours
+        | SettingKey::UnlockNotifyOwners => Some(value),
     }
 }
 
@@ -1290,6 +1362,111 @@ mod tests {
             .find(|row| row.key == SettingKey::AuditRetentionDays)
             .unwrap();
         assert_eq!(shown.value, "90");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_unlock_settings_default_off_four_hours_and_on_and_are_recorded() {
+        let db = test_db().await;
+        let defaults_now = load(&db.pool, &defaults()).await.unwrap();
+        let refused = [
+            (SettingKey::UnlockMaxHours, "0"),
+            (SettingKey::UnlockMaxHours, "73"),
+            (SettingKey::UnlockMaxHours, "-1"),
+            (SettingKey::UnlockMaxHours, "4h"),
+            (SettingKey::RequireUnlock, "yes"),
+            (SettingKey::UnlockNotifyOwners, "1"),
+        ];
+        let mut refusals = Vec::with_capacity(refused.len());
+        for (key, value) in refused {
+            refusals.push(set(&db.pool, key, value, &by("alice"), now()).await);
+        }
+
+        for (key, value) in [
+            (SettingKey::RequireUnlock, "on"),
+            (SettingKey::UnlockMaxHours, "1"),
+            (SettingKey::UnlockMaxHours, "72"),
+            (SettingKey::UnlockNotifyOwners, "off"),
+        ] {
+            set(&db.pool, key, value, &by("alice"), now())
+                .await
+                .unwrap();
+        }
+        let loaded = load(&db.pool, &defaults()).await.unwrap();
+        let rows = list(&db.pool, &defaults()).await.unwrap();
+        reset(&db.pool, SettingKey::UnlockMaxHours, &by("alice"), now())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (
+                defaults_now.require_unlock,
+                defaults_now.unlock_max_hours,
+                defaults_now.unlock_notify_owners
+            ),
+            (false, 4, true)
+        );
+        for result in refusals {
+            assert!(
+                matches!(
+                    result,
+                    Err(OkfError::LimitExceeded {
+                        limit: "setting",
+                        ..
+                    })
+                ),
+                "{result:?}"
+            );
+        }
+        assert_eq!(
+            (
+                loaded.require_unlock,
+                loaded.unlock_max_hours,
+                loaded.unlock_notify_owners
+            ),
+            (true, 72, false)
+        );
+        let shown: Vec<(&str, &str)> = rows
+            .iter()
+            .filter(|row| row.key.as_str().contains("unlock"))
+            .map(|row| (row.key.as_str(), row.value.as_str()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("require_unlock", "true"),
+                ("unlock_max_hours", "72"),
+                ("unlock_notify_owners", "false")
+            ]
+        );
+        // None is sensitive: the entries hold the values themselves.
+        let changed = audit::testing::entries(&db.pool, "setting.changed").await;
+        let details: Vec<(Option<&str>, &Value)> = changed
+            .iter()
+            .map(|entry| (entry.target.as_deref(), &entry.details))
+            .collect();
+        assert_eq!(
+            details,
+            [
+                (
+                    Some("require_unlock"),
+                    &serde_json::json!({"from": null, "to": true})
+                ),
+                (
+                    Some("unlock_max_hours"),
+                    &serde_json::json!({"from": null, "to": 1})
+                ),
+                (
+                    Some("unlock_max_hours"),
+                    &serde_json::json!({"from": 1, "to": 72})
+                ),
+                (
+                    Some("unlock_notify_owners"),
+                    &serde_json::json!({"from": null, "to": false})
+                ),
+            ]
+        );
+        let cleared = audit::testing::entries(&db.pool, "setting.cleared").await;
+        assert_eq!(cleared[0].details, serde_json::json!({"from": 72}));
     }
 
     #[tokio::test(flavor = "multi_thread")]
