@@ -33,8 +33,6 @@ pub struct PageView {
     pub client_host: String,
     /// The client came from a CIMD URL (its name is that site's own).
     pub verified: bool,
-    /// The redirect URI's origin, for the CSP's `form-action`.
-    pub redirect_origin: String,
 }
 
 impl std::fmt::Debug for PageView {
@@ -46,7 +44,6 @@ impl std::fmt::Debug for PageView {
             .field("client_name", &self.client_name)
             .field("client_host", &self.client_host)
             .field("verified", &self.verified)
-            .field("redirect_origin", &self.redirect_origin)
             .finish()
     }
 }
@@ -66,48 +63,22 @@ pub struct GrantSummary {
     pub default_catalog: Option<String>,
 }
 
-/// The page's Content-Security-Policy.
+/// The pages' Content-Security-Policy.
 ///
-/// Browsers apply `form-action` to the redirect that follows a form POST,
-/// so the redirect URI's origin must be listed, or Approve (and Deny) would
-/// be blocked on its way to the client. No `script-src` and no
-/// `'unsafe-inline'`: `default-src 'none'` forbids every script and inline
-/// style.
-///
-/// # Arguments
-/// * `redirect_origin` - the validated redirect URI's origin; `None` on the
-///   error page, which has no form.
-///
-/// # Returns
-/// The policy.
-pub(crate) fn content_security_policy(redirect_origin: Option<&str>) -> String {
-    let form_action = match redirect_origin {
-        Some(origin) => format!("'self' {origin}"),
-        None => "'self'".to_string(),
-    };
-    format!(
-        "default-src 'none'; style-src 'self' https://fonts.googleapis.com; \
-         font-src https://fonts.gstatic.com; img-src 'self' data:; \
-         frame-ancestors 'none'; base-uri 'none'; form-action {form_action};"
-    )
-}
+/// `form-action 'self'`: every form posts to this server, and Approve and
+/// Deny answer with [`forward_page`] rather than a redirect, so no other
+/// origin is ever a form's destination (issue #435). No `script-src` and
+/// no `'unsafe-inline'`: `default-src 'none'` forbids every script and
+/// inline style.
+pub(crate) const CONTENT_SECURITY_POLICY: &str =
+    "default-src 'none'; style-src 'self' https://fonts.googleapis.com; \
+     font-src https://fonts.gstatic.com; img-src 'self' data:; \
+     frame-ancestors 'none'; base-uri 'none'; form-action 'self';";
 
-/// A consent page: [`pages::page`] with [`content_security_policy`],
+/// A consent page: [`pages::page`] with [`CONTENT_SECURITY_POLICY`],
 /// branded with `brand`.
-fn page(
-    status: StatusCode,
-    title: &str,
-    body: &str,
-    redirect_origin: Option<&str>,
-    brand: &Brand,
-) -> Response {
-    pages::page(
-        status,
-        title,
-        body,
-        &content_security_policy(redirect_origin),
-        brand,
-    )
+fn page(status: StatusCode, title: &str, body: &str, brand: &Brand) -> Response {
+    pages::page(status, title, body, CONTENT_SECURITY_POLICY, brand)
 }
 
 /// The client block shared by both steps.
@@ -189,7 +160,6 @@ pub fn code_page(view: &PageView, error: Option<&str>, brand: &Brand) -> Respons
         StatusCode::OK,
         "Connect a client",
         &code_page_html(view, error),
-        Some(&view.redirect_origin),
         brand,
     )
 }
@@ -268,7 +238,6 @@ pub fn summary_page(
         StatusCode::OK,
         "Allow access?",
         &summary_page_html(view, grant, summary_nonce),
-        Some(&view.redirect_origin),
         brand,
     )
 }
@@ -417,7 +386,6 @@ pub fn user_page(
         StatusCode::OK,
         "Allow access?",
         &user_page_html(view, user, error),
-        Some(&view.redirect_origin),
         brand,
     )
 }
@@ -448,11 +416,50 @@ pub(crate) fn error_page_html(message: &str) -> String {
 /// # Returns
 /// The page with `status`.
 pub fn error_page(status: StatusCode, message: &str, brand: &Brand) -> Response {
+    page(status, "Cannot connect", &error_page_html(message), brand)
+}
+
+/// The forwarding page's HTML: a zero-delay refresh to `target` and a link
+/// to it for a browser that does not follow refreshes.
+///
+/// # Arguments
+/// * `target` - the client's redirect URI with the answer added.
+///
+/// # Returns
+/// The page body (no form).
+pub(crate) fn forward_page_html(target: &str) -> String {
+    // A `<meta>` in the body is still processed: the HTML parser applies a
+    // refresh wherever the element appears. The URL is unquoted after
+    // `url=`; it starts with its scheme, so it never begins with a quote.
+    format!(
+        r#"        <meta http-equiv="refresh" content="0;url={target}">
+        <h1>Returning to your client</h1>
+        <p class="muted">If nothing happens, <a id="consent-forward" href="{target}">continue</a>.</p>"#,
+        target = escape(target)
+    )
+}
+
+/// The answer to a consent form's Approve or Deny: a page that sends the
+/// browser on to the client, in place of a 303.
+///
+/// Browsers apply `form-action` to every redirect that follows a form
+/// POST, the client's own included, so a redirect URI that itself
+/// redirects to another origin (`www.` to the bare domain, say) would be
+/// blocked after a 303. A refresh is not a form submission, so neither it
+/// nor any redirect after it is subject to `form-action`. With no form
+/// here, the policy names only `'self'`.
+///
+/// # Arguments
+/// * `target` - the client's redirect URI with the answer added.
+/// * `brand` - the product name and support contact.
+///
+/// # Returns
+/// A 200 page.
+pub fn forward_page(target: &str, brand: &Brand) -> Response {
     page(
-        status,
-        "Cannot connect",
-        &error_page_html(message),
-        None,
+        StatusCode::OK,
+        "Returning to your client",
+        &forward_page_html(target),
         brand,
     )
 }
@@ -468,7 +475,6 @@ mod tests {
             client_name: "<Example & Co>".to_string(),
             client_host: "client.example.com".to_string(),
             verified: false,
-            redirect_origin: "https://client.example.com".to_string(),
         }
     }
 
@@ -513,14 +519,13 @@ mod tests {
     }
 
     #[test]
-    fn the_csp_allows_self_and_exactly_the_redirect_origin() {
-        let csp = content_security_policy(Some("https://client.example.com"));
-        assert!(csp.contains("form-action 'self' https://client.example.com;"));
+    fn the_csp_allows_forms_to_post_only_to_this_server() {
+        let csp = CONTENT_SECURITY_POLICY;
+        assert!(csp.ends_with("form-action 'self';"));
         assert!(csp.starts_with("default-src 'none';"));
         assert!(csp.contains("frame-ancestors 'none'"));
         assert!(!csp.contains("script-src"), "the page runs no script");
         assert!(!csp.contains("unsafe-inline"), "no inline style or script");
-        assert!(content_security_policy(None).contains("form-action 'self';"));
     }
 
     #[test]
@@ -532,10 +537,7 @@ mod tests {
         assert_eq!(headers["referrer-policy"], "no-referrer");
         assert_eq!(headers["x-content-type-options"], "nosniff");
         assert_eq!(headers["content-type"], "text/html; charset=utf-8");
-        assert!(headers["content-security-policy"]
-            .to_str()
-            .unwrap()
-            .contains("form-action 'self' https://client.example.com;"));
+        assert_eq!(headers["content-security-policy"], CONTENT_SECURITY_POLICY);
     }
 
     #[test]
@@ -708,6 +710,27 @@ mod tests {
             .contains("form-action 'self';"));
         let html = error_page_html("Unknown <client>.");
         assert!(html.contains("Unknown &lt;client&gt;."));
+        assert!(!html.contains("<form"));
+    }
+
+    #[test]
+    fn the_forward_page_refreshes_and_links_to_the_escaped_target() {
+        let target = "https://client.example.com/cb?code=c1&state=a\"b";
+
+        let response = forward_page(target, &Brand::default());
+        let html = forward_page_html(target);
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get("location").is_none());
+        assert!(response.headers()["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .contains("form-action 'self';"));
+        let escaped = "https://client.example.com/cb?code=c1&amp;state=a&quot;b";
+        assert!(html.contains(&format!(
+            r#"<meta http-equiv="refresh" content="0;url={escaped}">"#
+        )));
+        assert!(html.contains(&format!(r#"id="consent-forward" href="{escaped}""#)));
         assert!(!html.contains("<form"));
     }
 }

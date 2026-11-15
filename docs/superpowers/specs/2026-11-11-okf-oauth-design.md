@@ -76,7 +76,7 @@ MCP client ── POST /mcp (no token) ────────────► 4
            ── POST /oauth/register (DCR clients only) ────► client_id
 browser    ── GET /oauth/authorize ─► consent page (step 1: sign-in code)
            ── POST /oauth/authorize ─► step 2: what will be granted ─► Approve
-           ◄── 303 redirect_uri?code&state&iss
+           ◄── forwarding page ─► redirect_uri?code&state&iss
 MCP client ── POST /oauth/token ───────────────► okfat_ + okfrt_
            ── POST /mcp (Bearer okfat_...) ─► BearerVerifier ─► Principal ─► tools
 ```
@@ -361,10 +361,12 @@ Plan deviation 7).
 
    Then drop the pending authorization, reload the key cache (so the grant
    is known before the token request arrives), mint the in-memory
-   authorization code (`okfac_`) and redirect (303) to `redirect_uri` with
-   `code`, `state` and `iss`. A full code map (10,000 entries) answers a 503
+   authorization code (`okfac_`) and answer with the forwarding page (see
+   Browser security) to `redirect_uri` with `code`, `state` and `iss`. A
+   full code map (10,000 entries) answers a 503
    page instead; the grant stays and can be revoked.
-4. **Deny** redirects with `error=access_denied`, `state` and `iss`.
+4. **Deny** forwards the same way with `error=access_denied`, `state` and
+   `iss`.
 5. **Failures.** An unknown, expired, redeemed or revoked code re-renders step
    1 with one generic message, so the page does not say which. After 5 failed
    attempts the pending authorization is dropped and the page tells the person
@@ -379,11 +381,14 @@ Plan deviation 7).
   `X-Content-Type-Options: nosniff`.
 - CSP: `default-src 'none'; style-src 'self' https://fonts.googleapis.com;
   font-src https://fonts.gstatic.com; img-src 'self' data:;
-  frame-ancestors 'none'; base-uri 'none'; form-action 'self' <origin of this
-  request's redirect URI>`. The font hosts are the console's (Plan deviation
-  7). Browsers apply `form-action` to the redirect that follows a form POST,
-  so `'self'` alone would block the hand-off to the client (verified with
-  Chromium).
+  frame-ancestors 'none'; base-uri 'none'; form-action 'self'`. The font
+  hosts are the console's (Plan deviation 7).
+- Approve and Deny answer with a forwarding page, not a 303: a zero-delay
+  `<meta http-equiv="refresh">` to the client plus a link. Browsers apply
+  `form-action` to every redirect that follows a form POST, the client's own
+  included, so after a 303 a redirect URI that redirects again to another
+  origin (`www.` to the bare domain) was blocked (issue #435). A refresh is
+  not a form submission. The GET's errors to the client stay 303s.
 - The page's stylesheets are served from the existing `/ui/` assets: Pico,
   the console's `styles.css`, and `consent.css`, which maps the tokens onto
   Pico's variables under `:root:not([data-theme])`.
@@ -800,7 +805,9 @@ The code is the reference; each item names the file to read.
   `:root` mapping loses to Pico when no `data-theme` is set
   (`src/http/ui/consent.css`; Plan deviation 7).
 - Verified with Chromium: with `form-action 'self'` alone, the 303 to the
-  client after Approve is blocked (`tests/ui_e2e/consent.rs`).
+  client after Approve is blocked (`tests/ui_e2e/consent.rs`). Superseded by
+  issue #435: Approve and Deny now answer with a forwarding page and
+  `form-action` is `'self'` alone.
 - `TestServer::start_with` and the bind-first `serve_app` landed here, not in
   Task 6, because the consent journey needed them first
   (`tests/support/server.rs`; Plan deviation 13).

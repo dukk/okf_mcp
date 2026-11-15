@@ -461,9 +461,9 @@ mod tests {
     use crate::mcp::testing::TestApp;
     use crate::oauth::state::code_key;
     use crate::oauth::testing::{
-        authorize_query, authorize_query_for, form, hidden, insert_loopback_client, oauth_app,
-        send, sign_in_code, CLIENT_ID, LOOPBACK_CLIENT_ID, LOOPBACK_ON_PORT, LOOPBACK_REDIRECT_URI,
-        REDIRECT_URI, RESOURCE, VERIFIER,
+        authorize_query, authorize_query_for, form, forwarded, hidden, insert_loopback_client,
+        oauth_app, send, sign_in_code, CLIENT_ID, LOOPBACK_CLIENT_ID, LOOPBACK_ON_PORT,
+        LOOPBACK_REDIRECT_URI, REDIRECT_URI, RESOURCE, VERIFIER,
     };
     use crate::store::keys::Access;
 
@@ -490,7 +490,7 @@ mod tests {
             ])),
         )
         .await;
-        let (status, headers, _) = send(
+        let (status, headers, page) = send(
             test,
             "POST",
             "/oauth/authorize",
@@ -502,9 +502,7 @@ mod tests {
             ])),
         )
         .await;
-        assert_eq!(status, StatusCode::SEE_OTHER);
-        let target = url::Url::parse(headers["location"].to_str().unwrap()).unwrap();
-        target
+        forwarded(status, &headers, &page)
             .query_pairs()
             .find(|(key, _)| key == "code")
             .map(|(_, value)| value.into_owned())
