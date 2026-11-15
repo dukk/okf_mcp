@@ -479,6 +479,8 @@ async fn insert(
 /// How a change locks its target user's row ([`People::target`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowLock {
+    /// `FOR SHARE`: a guarded insert excludes non-key user changes too.
+    Share,
     /// `FOR UPDATE`: the change writes the row's key-adjacent columns or
     /// must exclude `users::set_admin` (an email, the admin flag).
     Update,
@@ -577,6 +579,9 @@ pub async fn lock_people(
     let mut locked = None;
     for (id, _, is_target) in &rows {
         let sql = match people.target {
+            Some((_, RowLock::Share)) if *is_target => {
+                "SELECT is_admin FROM users WHERE id = $1 FOR SHARE"
+            }
             Some((_, RowLock::Update)) if *is_target => {
                 "SELECT is_admin FROM users WHERE id = $1 FOR UPDATE"
             }
@@ -598,6 +603,94 @@ pub async fn lock_people(
         (Some(name), None) => Err(unknown(name)),
         (_, locked) => Ok(locked),
     }
+}
+
+/// Locks a credential's owner and granted catalogs' people before its row.
+/// Reads the owner and grants without locking first, then rechecks them under
+/// the credential lock. A concurrent assignment or grant change is refused
+/// for retry instead of taking a newly discovered user out of order.
+///
+/// # Arguments
+/// * `conn` - the change's transaction.
+/// * `actor` - who makes the change.
+/// * `id` - the immutable credential id.
+/// * `code` - whether this is a sign-in code rather than a key or grant.
+/// * `people` - additional users and catalogs (including an assignment's new owner).
+///
+/// # Returns
+/// Nothing; the locks last until the transaction ends. An absent credential,
+/// including one deleted with its owner while this waited, is left for the
+/// caller's existing unknown-target handling.
+///
+/// # Errors
+/// [`OkfError::Refused`] if ownership or grants changed while locking;
+/// [`OkfError::Database`] or [`OkfError::UnknownName`] from locking people.
+pub async fn lock_credential_people(
+    conn: &mut PgConnection,
+    actor: &AuditActor,
+    id: &str,
+    code: bool,
+    people: &People<'_>,
+) -> Result<(), OkfError> {
+    let snapshot_sql = if code {
+        "SELECT s.user_id, u.name FROM sign_in_codes s LEFT JOIN users u ON u.id = s.user_id WHERE s.id = $1"
+    } else {
+        "SELECT s.user_id, u.name FROM api_keys s LEFT JOIN users u ON u.id = s.user_id WHERE s.id = $1"
+    };
+    let before: Option<(Option<String>, Option<String>)> = sqlx::query_as(snapshot_sql)
+        .bind(id)
+        .fetch_optional(&mut *conn)
+        .await?;
+    let catalog_sql = if code {
+        "SELECT c.name FROM sign_in_code_catalogs g JOIN catalogs c ON c.id = g.catalog_id WHERE g.code_id = $1 ORDER BY c.name"
+    } else {
+        "SELECT c.name FROM key_catalogs g JOIN catalogs c ON c.id = g.catalog_id WHERE g.key_id = $1 ORDER BY c.name"
+    };
+    let catalogs: Vec<String> = sqlx::query_scalar(catalog_sql)
+        .bind(id)
+        .fetch_all(&mut *conn)
+        .await?;
+    let mut users = people.users.to_vec();
+    if let Some((_, Some(name))) = &before {
+        users.push(name);
+    }
+    let mut names = people.catalogs.to_vec();
+    names.extend(catalogs.iter().map(String::as_str));
+    lock_people(
+        conn,
+        actor,
+        &People {
+            users: &users,
+            catalogs: &names,
+            ..*people
+        },
+    )
+    .await?;
+    let lock_sql = if code {
+        "SELECT user_id FROM sign_in_codes WHERE id = $1 FOR UPDATE"
+    } else {
+        "SELECT user_id FROM api_keys WHERE id = $1 FOR UPDATE"
+    };
+    let after: Option<Option<String>> = sqlx::query_scalar(lock_sql)
+        .bind(id)
+        .fetch_optional(&mut *conn)
+        .await?;
+    let current_catalogs: Vec<String> = sqlx::query_scalar(catalog_sql)
+        .bind(id)
+        .fetch_all(&mut *conn)
+        .await?;
+    // Gone under the lock (its owner was deleted meanwhile, which cascades):
+    // not a change to retry, so the caller's own lookup answers "unknown".
+    // `let ... else`: bind the row when there is one, else return early.
+    let Some(after) = after else {
+        return Ok(());
+    };
+    if before.map(|(owner, _)| owner) != Some(after) || catalogs != current_catalogs {
+        return Err(OkfError::Refused {
+            reason: "credential changed while locking; retry the request".to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// How entries name a team: its `audit_teams` id, which follows the team's
@@ -676,6 +769,29 @@ pub async fn key_teams(conn: &mut PgConnection, key_id: &str) -> Result<Vec<i64>
          ORDER BY 1",
     )
     .bind(key_id)
+    .fetch_all(&mut *conn)
+    .await?)
+}
+
+/// The audit teams of the catalogs granted by a sign-in code.
+///
+/// # Arguments
+/// * `conn` - the change's transaction.
+/// * `code_id` - the sign-in code's immutable id.
+///
+/// # Returns
+/// The distinct audit team references, sorted by id; none for an all-catalogs code.
+///
+/// # Errors
+/// [`OkfError::Database`].
+pub async fn code_teams(conn: &mut PgConnection, code_id: &str) -> Result<Vec<i64>, OkfError> {
+    Ok(sqlx::query_scalar(
+        "SELECT audit_team_ref(t.owner_team_id) FROM \
+         (SELECT DISTINCT c.owner_team_id FROM sign_in_code_catalogs g \
+          JOIN catalogs c ON c.id = g.catalog_id \
+          WHERE g.code_id = $1 AND c.owner_team_id IS NOT NULL) t ORDER BY 1",
+    )
+    .bind(code_id)
     .fetch_all(&mut *conn)
     .await?)
 }
