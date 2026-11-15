@@ -45,6 +45,7 @@ const MUTATION_WINDOW: Duration = Duration::from_secs(33);
 /// Run one bounded batch or recover its journal, without scheduling another run.
 /// The caller supplies a locked store bound to its authenticated client credential.
 /// No credential is read here. Inference must honor cancellation and reap its child.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn run_once<C: CatalogClient, I: Inference + 'static>(
     config: &RunnerConfig,
     client: &mut C,
@@ -67,6 +68,7 @@ pub async fn run_once<C: CatalogClient, I: Inference + 'static>(
 
 /// Run with the caller's monotonic deadline, including time already spent on setup.
 /// Cancellation still awaits owned readiness and inference child reaping.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn run_once_with_deadline<C: CatalogClient, I: Inference + 'static>(
     config: &RunnerConfig,
     client: &mut C,
@@ -260,10 +262,18 @@ struct Controller<'a, C> {
     cleanup: bool,
 }
 impl<C: CatalogClient> Controller<'_, C> {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line adapter that only delegates to an instrumented function"
+        )
+    )]
     fn save(&self) -> Result<(), RunnerError> {
         self.store.save(&self.journal)
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn stop(&mut self, error: RunnerError) -> Result<(), RunnerError> {
         if self.journal.stop_reason.is_none() {
             self.journal.stop_reason = Some(kind(error).into());
@@ -272,6 +282,7 @@ impl<C: CatalogClient> Controller<'_, C> {
         Ok(())
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn check(&self, recovering: bool) -> Result<(), RunnerError> {
         let elapsed = self.started.elapsed();
         let expected =
@@ -311,6 +322,13 @@ impl<C: CatalogClient> Controller<'_, C> {
         }
         Ok(())
     }
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn active_leases(&self) -> impl Iterator<Item = &Lease> {
         self.journal.leases.iter().filter(|l| {
             self.journal.work.iter().any(|w| {
@@ -318,11 +336,13 @@ impl<C: CatalogClient> Controller<'_, C> {
             })
         })
     }
+    #[tracing::instrument(level = "trace", skip_all)]
     fn renewal_runway(&self) -> Duration {
         // Start the first sweep early enough to service queued leases. Later
         // sweeps have their own cadence; runway does not re-qualify fresh acks.
         (RPC * self.active_leases().count() as u32).min(HEARTBEAT - RPC)
     }
+    #[tracing::instrument(level = "trace", skip_all)]
     fn next_renew(&self) -> Option<Instant> {
         let due = self
             .active_leases()
@@ -342,6 +362,7 @@ impl<C: CatalogClient> Controller<'_, C> {
 
     // None means an interrupted read, not an ambiguous mutation. Read retry state
     // stays with the caller while it services the due heartbeat.
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn attempt(
         &mut self,
         request: ToolRequest,
@@ -398,6 +419,7 @@ impl<C: CatalogClient> Controller<'_, C> {
             }
         }
     }
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn delay(&self, seconds: u64, recovering: bool) -> Result<(), RunnerError> {
         for _ in 0..seconds {
             tokio::time::sleep(Duration::from_secs(1)).await;
@@ -405,6 +427,7 @@ impl<C: CatalogClient> Controller<'_, C> {
         }
         Ok(())
     }
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn read(&mut self, request: ToolRequest) -> Result<Value, RunnerError> {
         let request = normalized(request, &self.config.catalog)?;
         let mut attempts = 0;
@@ -424,6 +447,7 @@ impl<C: CatalogClient> Controller<'_, C> {
             }
         }
     }
+    #[tracing::instrument(level = "trace", skip_all)]
     fn prepare(&mut self, tool: AllowedTool, mut args: Value) -> Result<(), RunnerError> {
         if self.journal.pending.is_some() {
             return Err(RunnerError::Journal);
@@ -435,6 +459,7 @@ impl<C: CatalogClient> Controller<'_, C> {
         )?);
         self.save()
     }
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn replay(&mut self, recovering: bool) -> Result<(), RunnerError> {
         let pending = self.journal.pending.clone().ok_or(RunnerError::Journal)?;
         let mut result = None;
@@ -554,6 +579,7 @@ impl<C: CatalogClient> Controller<'_, C> {
         // renewals are acknowledged locally but cannot authorize further work.
         self.check(recovering)
     }
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn heartbeat(&mut self, ahead: Duration) -> Result<(), RunnerError> {
         self.check(false)?;
         if self.journal.pending.is_some() {
@@ -583,6 +609,7 @@ impl<C: CatalogClient> Controller<'_, C> {
         self.sweep_at = Some(now + HEARTBEAT);
         self.check(false)
     }
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn execute<I: Inference + 'static>(
         &mut self,
         inference: Arc<I>,
@@ -821,6 +848,7 @@ impl<C: CatalogClient> Controller<'_, C> {
         }
         self.finish(None).await
     }
+    #[tracing::instrument(level = "trace", skip_all)]
     fn observed_budget(&self) -> Result<(), RunnerError> {
         if tokens(&self.journal.usage).is_none_or(|n| n >= self.config.observed_token_stop)
             || self.journal.usage.cost_microusd > self.config.run_microusd
@@ -834,6 +862,7 @@ impl<C: CatalogClient> Controller<'_, C> {
         }
         Ok(())
     }
+    #[tracing::instrument(level = "trace", skip_all)]
     fn budget(&self) -> Result<(), RunnerError> {
         self.check(false)?;
         if !self.journal.accounting_known {
@@ -852,6 +881,7 @@ impl<C: CatalogClient> Controller<'_, C> {
         }
         Ok(())
     }
+    #[tracing::instrument(level = "trace", skip_all, fields(index = i64::try_from(index).unwrap_or(i64::MAX)))]
     fn record_model(
         &mut self,
         index: usize,
@@ -900,6 +930,7 @@ impl<C: CatalogClient> Controller<'_, C> {
             Err(RunnerError::UnknownAccounting)
         }
     }
+    #[tracing::instrument(level = "trace", skip_all, fields(index = i64::try_from(index).unwrap_or(i64::MAX)))]
     async fn submit(&mut self, index: usize, stop: Option<RunnerError>) -> Result<(), RunnerError> {
         self.heartbeat(MUTATION_WINDOW).await?;
         self.check(false)?;
@@ -941,6 +972,7 @@ impl<C: CatalogClient> Controller<'_, C> {
         )?;
         self.replay(false).await
     }
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn finish(&mut self, stop: Option<RunnerError>) -> Result<(), RunnerError> {
         if self.journal.terminal {
             return Ok(());
@@ -964,6 +996,7 @@ impl<C: CatalogClient> Controller<'_, C> {
         self.prepare(AllowedTool::Close,json!({"run_id":self.journal.run_id,"state":state,"rationale":stop.map(kind).unwrap_or("completed")}))?;
         self.replay(false).await
     }
+    #[tracing::instrument(level = "trace", skip_all)]
     fn summary(&self, reason: &str) -> RunSummary {
         let count = |outcome| {
             self.journal
@@ -984,11 +1017,13 @@ impl<C: CatalogClient> Controller<'_, C> {
         }
     }
 }
+#[tracing::instrument(level = "trace", skip_all)]
 fn timestamp(value: &str) -> Result<DateTime<Utc>, RunnerError> {
     DateTime::parse_from_rfc3339(value)
         .map(|d| d.with_timezone(&Utc))
         .map_err(|_| RunnerError::Contract)
 }
+#[tracing::instrument(level = "trace", skip_all)]
 fn normalized(request: ToolRequest, catalog: &str) -> Result<ToolRequest, RunnerError> {
     let tool = request.tool;
     Ok(ToolRequest {
@@ -996,6 +1031,7 @@ fn normalized(request: ToolRequest, catalog: &str) -> Result<ToolRequest, Runner
         args: Value::Object(contract::arguments(request, catalog)?),
     })
 }
+#[tracing::instrument(level = "trace", skip_all)]
 fn body<T: DeserializeOwned>(mut value: Value) -> Result<T, RunnerError> {
     value
         .as_object_mut()
@@ -1003,6 +1039,13 @@ fn body<T: DeserializeOwned>(mut value: Value) -> Result<T, RunnerError> {
         .remove("catalog");
     serde_json::from_value(value).map_err(|_| RunnerError::Contract)
 }
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn tokens(usage: &ModelUsage) -> Option<u64> {
     usage
         .input
@@ -1010,6 +1053,7 @@ fn tokens(usage: &ModelUsage) -> Option<u64> {
         .checked_add(usage.cache_creation)?
         .checked_add(usage.cache_read)
 }
+#[tracing::instrument(level = "trace", skip_all)]
 fn add_usage(a: &ModelUsage, b: &ModelUsage) -> Option<ModelUsage> {
     Some(ModelUsage {
         input: a.input.checked_add(b.input)?,
@@ -1021,6 +1065,7 @@ fn add_usage(a: &ModelUsage, b: &ModelUsage) -> Option<ModelUsage> {
 }
 /// The failed submission for work without a usable proposal. A journaled
 /// rejection reason (indices and check names only) becomes its summary.
+#[tracing::instrument(level = "trace", skip_all)]
 fn generic(rejection: Option<&str>) -> Submission {
     Submission {
         outcome: WorkOutcome::Failed,
@@ -1034,9 +1079,17 @@ fn generic(rejection: Option<&str>) -> Submission {
         reported_tokens: None,
     }
 }
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn persistence(error: RunnerError) -> bool {
     matches!(error, RunnerError::Journal | RunnerError::Io)
 }
+#[tracing::instrument(level = "trace", skip_all)]
 fn failure_kind(value: &str) -> Option<RunnerError> {
     [
         RunnerError::Config,
@@ -1057,6 +1110,13 @@ fn failure_kind(value: &str) -> Option<RunnerError> {
     .into_iter()
     .find(|error| kind(*error) == value)
 }
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn kind(error: RunnerError) -> &'static str {
     match error {
         RunnerError::Config => "config",

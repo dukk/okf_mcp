@@ -60,23 +60,65 @@ struct ConfigInput {
     observed_token_stop: u64,
 }
 
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn default_batch() -> u32 {
     10
 }
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn default_run_seconds() -> u64 {
     1_800
 }
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn default_invocation_microusd() -> u64 {
     100_000
 }
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn default_run_microusd() -> u64 {
     1_000_000
 }
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn default_token_stop() -> u64 {
     100_000
 }
 
 impl From<ConfigInput> for RunnerConfig {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn from(input: ConfigInput) -> Self {
         Self {
             endpoint: input.endpoint,
@@ -100,6 +142,7 @@ impl From<ConfigInput> for RunnerConfig {
 
 impl RunnerConfig {
     /// Read TOML without exposing parser errors (which can quote credentials).
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn load(path: &Path) -> Result<Self, RunnerError> {
         let text = std::fs::read_to_string(path).map_err(|_| RunnerError::Io)?;
         let config: Self = toml::from_str(&text).map_err(|_| RunnerError::Config)?;
@@ -108,6 +151,7 @@ impl RunnerConfig {
     }
 
     /// Check static inputs only; valid offline configuration is not live consent.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn validate(&self) -> Result<(), RunnerError> {
         self.endpoint_url()?;
         if self.catalog.trim().is_empty()
@@ -132,6 +176,7 @@ impl RunnerConfig {
     }
 
     /// Required before any live operation; neither flag implies the other.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn validate_consent(&self) -> Result<(), RunnerError> {
         self.validate()?;
         if !self.allow_model_upload || !self.acknowledge_inflight_budget_overshoot {
@@ -141,6 +186,7 @@ impl RunnerConfig {
     }
 
     /// Bind local state to the entire endpoint, catalog and credential identity.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn binding(&self, token: &str) -> Result<Binding, RunnerError> {
         self.validate()?;
         if token.trim().is_empty() {
@@ -156,6 +202,7 @@ impl RunnerConfig {
         })
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn endpoint_url(&self) -> Result<Url, RunnerError> {
         let url = Url::parse(&self.endpoint).map_err(|_| RunnerError::Config)?;
         if url.scheme() != "https"
@@ -187,7 +234,9 @@ pub struct Secrets {
 
 impl Secrets {
     /// Load only the runner token and provider key, for network/live use.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn from_env() -> Result<Self, RunnerError> {
+        #[tracing::instrument(level = "trace", skip_all)]
         fn required(name: &str) -> Result<String, RunnerError> {
             let value = std::env::var(name).map_err(|_| RunnerError::Config)?;
             if value.trim().is_empty() {
@@ -202,11 +251,25 @@ impl Secrets {
     }
 
     /// Explicit access for authenticated transport; never log this value.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn token(&self) -> &str {
         &self.token
     }
 
     /// Explicit access for the child environment; never log this value.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn anthropic_api_key(&self) -> &str {
         &self.anthropic_api_key
     }
