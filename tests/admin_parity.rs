@@ -1,5 +1,5 @@
-//! Every admin subcommand for users, teams, assignment, sign-in, settings
-//! and mail has a documented REST route and console control (users and
+//! Every admin subcommand for users, teams, assignment, sign-in, settings,
+//! mail and the audit log has a documented REST route and console control (users and
 //! teams design, "Web console"; user login design, "Admin surface"): the
 //! parity table in `docs/operations.md` lists each one, so the CLI, the API
 //! and the console cannot drift apart unnoticed.
@@ -8,7 +8,8 @@
 //! - every covered subcommand exists in the clap tree, and every covered
 //!   flag (an entry such as `user list --email`) is an option of its
 //!   subcommand;
-//! - every `user`, `team`, `settings` and `mail` subcommand is covered, so
+//! - every `user`, `team`, `settings`, `mail` and `audit` subcommand is
+//!   covered, so
 //!   a new one fails until it is added to the table;
 //! - each covered subcommand has a parity row whose REST cell names a route
 //!   that `docs/operations.md`'s API reference documents, and whose console
@@ -64,10 +65,12 @@ const COVERED: &[&str] = &[
     "mail queue",
     "mail retry",
     "mail delete",
+    "audit list",
+    "audit export",
 ];
 
 /// The command groups whose every subcommand must be covered.
-const SCANNED_GROUPS: &[&str] = &["user", "team", "settings", "mail"];
+const SCANNED_GROUPS: &[&str] = &["user", "team", "settings", "mail", "audit"];
 
 /// The parity section: from its heading to the next heading of any level.
 ///
