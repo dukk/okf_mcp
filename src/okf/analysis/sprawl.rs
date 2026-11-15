@@ -107,6 +107,13 @@ pub struct SprawlQuery<'a> {
 
 impl Default for SprawlQuery<'_> {
     /// `okf.py`'s defaults: `-n 5`, no concept.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial constructor: builds a value from its arguments"
+        )
+    )]
     fn default() -> Self {
         Self {
             concept: None,
@@ -158,6 +165,7 @@ static LEADIN: LazyLock<Regex> =
 
 /// `volatile_reason`: the first volatile word, lowercased, else the first
 /// date as written.
+#[tracing::instrument(level = "trace", skip_all)]
 fn volatile_reason(text: &str) -> Option<String> {
     if let Some(found) = VOLATILE.captures(text) {
         // Indexing group 1 is safe: it is mandatory in the pattern.
@@ -167,6 +175,7 @@ fn volatile_reason(text: &str) -> Option<String> {
 }
 
 /// `DATE_RE.findall(line)`: non-overlapping dates, left to right.
+#[tracing::instrument(level = "trace", skip_all)]
 fn dates_in(line: &str) -> impl Iterator<Item = &str> {
     let mut pos = 0;
     // `from_fn` builds an iterator from a closure that returns the next item
@@ -185,6 +194,7 @@ fn dates_in(line: &str) -> impl Iterator<Item = &str> {
 /// plain left-to-right `+`: `1.05 + 0.5 + 1.0 + 0.0 + 0.6000000000000001`
 /// is `3.15` added naively but `3.1500000000000004` in Python, which rounds
 /// to `3.2`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn py_float_sum(values: impl IntoIterator<Item = f64>) -> f64 {
     let (mut total, mut compensation) = (0.0_f64, 0.0_f64);
     for value in values {
@@ -206,11 +216,13 @@ fn py_float_sum(values: impl IntoIterator<Item = f64>) -> f64 {
 }
 
 /// Non-blank lines (Python's `l.strip()` is truthy).
+#[tracing::instrument(level = "trace", skip_all)]
 fn non_blank(lines: &[&str]) -> usize {
     lines.iter().filter(|l| !py_strip(l).is_empty()).count()
 }
 
 /// Which body lines are fenced code, the fence lines included.
+#[tracing::instrument(level = "trace", skip_all)]
 fn code_lines(body: &[&str]) -> Vec<bool> {
     let mut fence: Option<&str> = None;
     body.iter()
@@ -233,6 +245,7 @@ fn code_lines(body: &[&str]) -> Vec<bool> {
 ///
 /// # Returns
 /// The report `okf.py` builds for it, line numbers counted in the file.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn sprawl_of(doc: &SnapshotDoc) -> SprawlReport {
     let (head, body) = body_split(doc.text());
     let data = doc.frontmatter().data();
@@ -354,6 +367,7 @@ pub fn sprawl_of(doc: &SnapshotDoc) -> SprawlReport {
 /// From [`Snapshot::resolve_concept`] when `query.concept` names no concept
 /// ([`OkfError::NotFound`]) or a document that is not one
 /// ([`OkfError::InvalidPath`]).
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn sprawl(snapshot: &Snapshot, query: SprawlQuery<'_>) -> Result<Vec<SprawlReport>, OkfError> {
     if let Some(reference) = query.concept {
         let path = snapshot.resolve_concept(reference)?;

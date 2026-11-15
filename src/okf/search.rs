@@ -67,6 +67,7 @@ impl SearchFields {
     /// # Returns
     /// The lowercased fields. Non-string `type`, `description` and `status`
     /// count as empty; a scalar `tags` counts as a one-item list.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn of(doc: &SnapshotDoc) -> Self {
         let data = doc.frontmatter().data();
         // A closure (Python lambda) capturing `data`; `unwrap_or_default` on
@@ -110,6 +111,13 @@ impl SearchFields {
     }
 
     /// Does `field` contain the lowercased `needle`?
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+        )
+    )]
     fn contains(&self, field: Field, needle: &str) -> bool {
         match field {
             Field::Names => self.names.iter().any(|n| n.contains(needle)),
@@ -120,6 +128,13 @@ impl SearchFields {
     }
 
     /// The best field containing `needle`, or `None` if none does.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+        )
+    )]
     fn best_field(&self, needle: &str) -> Option<Field> {
         Field::ALL
             .into_iter()
@@ -153,6 +168,7 @@ impl SearchQuery {
     ///
     /// # Returns
     /// The query; set the public fields to add filters or change the limit.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn new(text: &str) -> Self {
         Self {
             text: text.to_string(),
@@ -218,6 +234,7 @@ struct Prepared {
 ///
 /// # Returns
 /// At most `query.limit` hits, best first ([`SearchRank`], then path).
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn search(snapshot: &Snapshot, query: &SearchQuery) -> Vec<SearchHit> {
     if query.limit == 0 {
         return Vec::new();
@@ -295,6 +312,7 @@ pub struct CatalogHit {
 ///
 /// # Returns
 /// At most `query.limit` hits.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn search_catalogs(catalogs: &[(&str, &Snapshot)], query: &SearchQuery) -> Vec<CatalogHit> {
     // Each search already runs across its documents with rayon and returns
     // at most `limit` hits, so the merge sorts at most catalogs x limit.
@@ -328,6 +346,13 @@ pub fn search_catalogs(catalogs: &[(&str, &Snapshot)], query: &SearchQuery) -> V
 }
 
 /// The tier, or `None` when some term occurs in no field.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 fn tier(fields: &SearchFields, query: &Prepared) -> Option<u8> {
     if query.terms.is_empty() {
         return Some(0);
@@ -350,6 +375,7 @@ fn tier(fields: &SearchFields, query: &Prepared) -> Option<u8> {
 }
 
 /// Builds the result for a ranked concept.
+#[tracing::instrument(level = "trace", skip_all)]
 fn hit(doc: &SnapshotDoc, fields: &SearchFields, rank: SearchRank, query: &Prepared) -> SearchHit {
     let description = doc
         .frontmatter()
@@ -379,6 +405,7 @@ fn hit(doc: &SnapshotDoc, fields: &SearchFields, rank: SearchRank, query: &Prepa
 /// `lowered` is `body.to_lowercase()`. Lowercasing never adds or removes a
 /// `\n`, so the two split into the same lines and can be zipped, which avoids
 /// lowercasing the body again.
+#[tracing::instrument(level = "trace", skip_all)]
 fn snippet(body: &str, lowered: &str, query: &Prepared) -> Option<String> {
     if query.terms.is_empty() {
         return None;
@@ -396,6 +423,7 @@ fn snippet(body: &str, lowered: &str, query: &Prepared) -> Option<String> {
 }
 
 /// A line stripped and cut to [`SNIPPET_LEN`] characters (not bytes).
+#[tracing::instrument(level = "trace", skip_all)]
 fn cut(line: &str) -> String {
     let text = py_strip(line);
     // `char_indices().nth(n)` finds the byte offset of the n-th character, so

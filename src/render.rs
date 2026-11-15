@@ -62,6 +62,7 @@ impl<'a> Page<'a> {
     /// * `path` - the document's catalog-relative path, without a leading `/`.
     /// * `workspace` - the catalog's files (a loaded catalog's
     ///   [`crate::catalog::Loaded::workspace`]).
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn new(catalog: &'a str, path: &'a str, workspace: &'a dyn Workspace) -> Self {
         Self {
             catalog,
@@ -94,6 +95,7 @@ enum Fate {
 /// The markdown extensions the console renders: GitHub tables,
 /// strikethrough and task lists. Heading attributes (`{#id}`) stay off, so
 /// a heading's text and slug are the outline's.
+#[tracing::instrument(level = "trace", skip_all)]
 fn options() -> Options {
     Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS
 }
@@ -119,6 +121,7 @@ fn options() -> Options {
 /// assert!(html.contains(r##"<a href="#/browse/main/b.md">B</a>"##));
 /// assert!(!html.contains("title: A"));
 /// ```
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn to_html(text: &str, page: &Page<'_>) -> String {
     let (_, lines) = body_split(text);
     // The outline's headings and slugs, found on the same body lines.
@@ -258,6 +261,7 @@ pub fn to_html(text: &str, page: &Page<'_>) -> String {
 /// # Returns
 /// An owned event (`'static`: it borrows nothing), which fits a list of
 /// events borrowing the body.
+#[tracing::instrument(level = "trace", skip_all)]
 fn heading(level: HeadingLevel, slug: &str) -> Event<'static> {
     Event::Start(Tag::Heading {
         level,
@@ -272,6 +276,7 @@ fn heading(level: HeadingLevel, slug: &str) -> Event<'static> {
 
 /// `base`, or `base-1`, `base-2`, ... : the first not yet taken, which is
 /// then taken (the outline numbers repeated headings the same way).
+#[tracing::instrument(level = "trace", skip_all)]
 fn unique(base: String, taken: &mut HashSet<String>) -> String {
     let slug = if taken.contains(&base) {
         (1..)
@@ -289,6 +294,7 @@ fn unique(base: String, taken: &mut HashSet<String>) -> String {
 ///
 /// # Returns
 /// The scheme as written; `None` for a relative URL or a bare `#fragment`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn scheme(url: &str) -> Option<&str> {
     let end = url.find(':')?;
     let candidate = &url[..end];
@@ -302,6 +308,7 @@ fn scheme(url: &str) -> Option<&str> {
 /// Whether `url` is free of control characters and uses one of `schemes`.
 /// Browsers drop tabs and newlines inside a URL and leading spaces, so
 /// `jav&#9;ascript:` would run; a URL with any control character is refused.
+#[tracing::instrument(level = "trace", skip_all)]
 fn has_scheme(url: &str, schemes: &[&str]) -> bool {
     !url.chars().any(|c| c.is_ascii_control())
         && scheme(url.trim_start_matches(' ')).is_some_and(|found| {
@@ -325,6 +332,7 @@ fn has_scheme(url: &str, schemes: &[&str]) -> bool {
 /// [`Destination::Text`] for anything else (another scheme, a control
 /// character, a protocol-relative `//host` URL, a path leaving the catalog,
 /// a link to a file that is not markdown).
+#[tracing::instrument(level = "trace", skip_all)]
 fn destination(link_type: LinkType, url: &str, page: &Page<'_>) -> Destination {
     if link_type == LinkType::Email {
         return Destination::Keep;
@@ -373,6 +381,7 @@ fn destination(link_type: LinkType, url: &str, page: &Page<'_>) -> Destination {
 ///
 /// # Returns
 /// The slug to put in the console route.
+#[tracing::instrument(level = "trace", skip_all)]
 fn section_slug(fragment: &str) -> String {
     py_unquote(fragment).to_lowercase()
 }
@@ -394,6 +403,7 @@ fn section_slug(fragment: &str) -> String {
 /// use okf_mcp::render::browse_route;
 /// assert_eq!(browse_route("main", "/a b/c.md", Some("notes")), "#/browse/main/a%20b/c.md/notes");
 /// ```
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn browse_route(catalog: &str, path: &str, section: Option<&str>) -> String {
     let mut route = String::with_capacity(16 + catalog.len() + path.len());
     route.push_str("#/browse/");
@@ -411,6 +421,7 @@ pub fn browse_route(catalog: &str, path: &str, section: Option<&str>) -> String 
 
 /// Appends `segment` percent-encoded: every byte but the RFC 3986
 /// unreserved ones (`A-Z a-z 0-9 - . _ ~`) becomes `%XX`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn push_segment(out: &mut String, segment: &str) {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     for byte in segment.bytes() {

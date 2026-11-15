@@ -68,6 +68,7 @@ pub enum DocKind {
 
 impl DocKind {
     /// The kind of the markdown file at `path`.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn of(path: &str) -> Self {
         match basename(path) {
             "index.md" => DocKind::Index,
@@ -94,6 +95,7 @@ impl Frontmatter {
     ///
     /// # Returns
     /// `Some` for [`Frontmatter::Parsed`], `None` if absent or invalid.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn data(&self) -> Option<&IndexMap<String, Value>> {
         match self {
             Frontmatter::Parsed(data) => Some(data),
@@ -149,16 +151,37 @@ pub struct SnapshotDoc {
 
 impl SnapshotDoc {
     /// Catalog-relative path, e.g. `infra/time-server.md`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn path(&self) -> &str {
         &self.path
     }
 
     /// What the file is.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn kind(&self) -> DocKind {
         self.kind
     }
 
     /// The text for analysis: universal newlines, as `okf.py` reads it.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn text(&self) -> &str {
         &self.text
     }
@@ -167,36 +190,85 @@ impl SnapshotDoc {
     ///
     /// # Returns
     /// A new `String` each call; the snapshot does not store the raw text twice.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line delegation to an instrumented function"
+        )
+    )]
     pub fn raw(&self) -> String {
         self.doc.render()
     }
 
     /// The byte-preserving document model (frontmatter blocks, key lines).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn doc(&self) -> &Doc {
         &self.doc
     }
 
     /// The parsed frontmatter.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn frontmatter(&self) -> &Frontmatter {
         &self.frontmatter
     }
 
     /// `title` if it is a string (or, for invalid frontmatter, the regex fallback).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn title(&self) -> Option<&str> {
         self.title.as_deref()
     }
 
     /// The string `aliases` (a scalar alias counts as a one-item list).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn aliases(&self) -> &[String] {
         &self.aliases
     }
 
     /// Every internal link, in file order (external links are dropped).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn links(&self) -> &[SnapshotLink] {
         &self.links
     }
 
     /// Lowercased heading slugs and HTML anchors.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn anchors(&self) -> &BTreeSet<String> {
         &self.anchors
     }
@@ -205,6 +277,13 @@ impl SnapshotDoc {
     ///
     /// # Returns
     /// `Some` for concepts, `None` for every other kind (search skips them).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn search_fields(&self) -> Option<&SearchFields> {
         self.search.as_ref()
     }
@@ -215,6 +294,13 @@ impl SnapshotDoc {
     /// `true` for everything except the root `AGENTS.md`, `CLAUDE.md` and
     /// `README.md` (`build_docs` skips them): the negation of
     /// [`outside_link_graph`], so the snapshot and `rewrite_links` share one rule.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line delegation to an instrumented function"
+        )
+    )]
     pub fn in_link_graph(&self) -> bool {
         !outside_link_graph(&self.path)
     }
@@ -252,6 +338,7 @@ impl Snapshot {
     /// [`OkfError::Io`] if a directory can't be listed or a markdown file
     /// can't be read (non-markdown files that fail to read are skipped, as
     /// `okf.py`'s secret walk skips them).
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn build(workspace: &dyn Workspace) -> Result<Self, OkfError> {
         let paths = workspace.list_markdown()?;
         // `par_iter` splits the work across a thread pool; collecting into a
@@ -284,6 +371,7 @@ impl Snapshot {
     /// The one definition shared by `links_report`, whose mention *sources*
     /// they are, and [`Snapshot::mention_matcher`], whose *targets* they are,
     /// so the two can't drift apart.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn link_graph_concepts(&self) -> impl Iterator<Item = &SnapshotDoc> {
         self.docs
             .iter()
@@ -296,6 +384,7 @@ impl Snapshot {
     /// # Returns
     /// The matcher, built on the first call and reused by every later one
     /// (the snapshot is immutable, so it never goes stale).
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn mention_matcher(&self) -> &MentionMatcher {
         self.mention_matcher.get_or_init(|| {
             let concepts: Vec<&SnapshotDoc> = self.link_graph_concepts().collect();
@@ -304,16 +393,37 @@ impl Snapshot {
     }
 
     /// Every markdown document, in `os.walk` order.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn docs(&self) -> &[SnapshotDoc] {
         &self.docs
     }
 
     /// The document at a catalog-relative path, or `None` if there is none.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn get(&self, path: &str) -> Option<&SnapshotDoc> {
         self.by_path.get(path).map(|&index| &self.docs[index])
     }
 
     /// The concept documents, in `os.walk` order (`okf.py`'s `concepts(root)`).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn concepts(&self) -> impl Iterator<Item = &SnapshotDoc> {
         self.docs.iter().filter(|d| d.kind == DocKind::Concept)
     }
@@ -323,6 +433,7 @@ impl Snapshot {
     /// # Returns
     /// The anchors of a snapshot document, or of another markdown file some
     /// fragment link targets; `None` if the file was not read.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn anchors_of(&self, path: &str) -> Option<&BTreeSet<String>> {
         self.get(path)
             .map(SnapshotDoc::anchors)
@@ -334,6 +445,7 @@ impl Snapshot {
     ///
     /// # Returns
     /// An empty slice when nothing links to `path`.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn backlinks(&self, path: &str) -> &[Backlink] {
         // `&[Backlink]` implements `Default` (the empty slice).
         self.backlinks
@@ -344,6 +456,13 @@ impl Snapshot {
 
     /// Secret-scan findings for every file except `tools/okf.py`, in walk
     /// order, then line order (unsorted; `lint` sorts its whole report).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn secret_findings(&self) -> &[Finding] {
         &self.secrets
     }
@@ -358,6 +477,7 @@ impl Snapshot {
     /// # Errors
     /// [`OkfError::InvalidPath`] when the document exists but is not a concept;
     /// [`OkfError::NotFound`] otherwise.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn resolve_concept(&self, reference: &str) -> Result<String, OkfError> {
         let bare = reference.trim_start_matches('/');
         for candidate in [normpath(bare), normpath(&format!("{bare}.md"))] {
@@ -383,6 +503,7 @@ impl Snapshot {
 }
 
 /// Reads one markdown file and derives everything the analyses need.
+#[tracing::instrument(level = "trace", skip_all)]
 fn read_document(workspace: &dyn Workspace, path: &str) -> Result<SnapshotDoc, OkfError> {
     let raw = workspace.read_to_string(path)?;
     // `Doc` keeps its own copy of every line (head, frontmatter and tail), so
@@ -436,6 +557,7 @@ fn read_document(workspace: &dyn Workspace, path: &str) -> Result<SnapshotDoc, O
 /// string and no title. `okf.py` does exactly the same (`Doc(path).parse()`,
 /// then `_fm_fallback(fm, ...)` on `split_frontmatter(text)`), so the port
 /// keeps the re-split rather than reusing `Doc`'s lines.
+#[tracing::instrument(level = "trace", skip_all)]
 fn title_and_aliases(frontmatter: &Frontmatter, text: &str) -> (Option<String>, Vec<String>) {
     let data = match frontmatter {
         Frontmatter::Invalid(_) => {
@@ -463,6 +585,7 @@ fn title_and_aliases(frontmatter: &Frontmatter, text: &str) -> (Option<String>, 
 }
 
 /// Every internal link in `text`, line by line (`build_docs`' link loop).
+#[tracing::instrument(level = "trace", skip_all)]
 fn links_of(workspace: &dyn Workspace, path: &str, text: &str) -> Vec<SnapshotLink> {
     let mut links = Vec::new();
     for (index, line) in text.split('\n').enumerate() {
@@ -502,6 +625,7 @@ fn links_of(workspace: &dyn Workspace, path: &str, text: &str) -> Vec<SnapshotLi
 }
 
 /// `{a.lower() for a in anchors_in(text)}`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn lowercase_anchors(text: &str) -> BTreeSet<String> {
     anchors_in(text)
         .into_iter()
@@ -512,6 +636,7 @@ fn lowercase_anchors(text: &str) -> BTreeSet<String> {
 /// Anchors for fragment-link targets that are markdown files but not
 /// snapshot documents (for example in a dot-directory). Unreadable targets
 /// are left out; `okf.py` would crash on them.
+#[tracing::instrument(level = "trace", skip_all)]
 fn extra_anchors(
     workspace: &dyn Workspace,
     docs: &[SnapshotDoc],
@@ -536,6 +661,7 @@ fn extra_anchors(
 }
 
 /// Target path to the links into it, from documents in the link graph.
+#[tracing::instrument(level = "trace", skip_all)]
 fn backlinks_of(docs: &[SnapshotDoc]) -> HashMap<String, Vec<Backlink>> {
     let mut backlinks: HashMap<String, Vec<Backlink>> = HashMap::new();
     for doc in docs.iter().filter(|d| d.in_link_graph()) {
@@ -556,6 +682,7 @@ fn backlinks_of(docs: &[SnapshotDoc]) -> HashMap<String, Vec<Backlink>> {
 /// The secret scan over every file, reusing the text of markdown documents
 /// already read. Unreadable files (not UTF-8, vanished) are skipped, as
 /// `okf.py` skips `UnicodeDecodeError` and `OSError`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn scan_all(
     workspace: &dyn Workspace,
     docs: &[SnapshotDoc],
@@ -587,6 +714,7 @@ fn scan_all(
 ///
 /// # Returns
 /// The value, or `None` when no line starts with `key:` and a value.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn fm_fallback_scalar(fm: &str, key: &str) -> Option<String> {
     // Only runs for documents whose frontmatter does not parse, so compiling
     // the pattern per call costs nothing in the normal case.
@@ -603,6 +731,7 @@ pub(crate) fn fm_fallback_scalar(fm: &str, key: &str) -> Option<String> {
 ///
 /// # Returns
 /// The items; empty when neither form is found.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn fm_fallback_list(fm: &str, key: &str) -> Vec<String> {
     let key = regex::escape(key);
     let flow = format!(r"(?m)^{key}:[\s\x1c-\x1f]*\[(.*?)\][\s\x1c-\x1f]*$");
@@ -624,6 +753,13 @@ pub(crate) fn fm_fallback_list(fm: &str, key: &str) -> Vec<String> {
 }
 
 /// Python's `s.strip("\"'")`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 fn strip_quotes(text: &str) -> &str {
     text.trim_matches(['"', '\''])
 }

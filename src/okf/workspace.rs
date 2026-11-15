@@ -40,6 +40,7 @@ pub trait Workspace: Send + Sync {
     ///
     /// # Errors
     /// As [`Workspace::read_to_string`].
+    #[tracing::instrument(level = "trace", skip_all)]
     fn read_text(&self, path: &str) -> Result<String, OkfError> {
         let raw = self.read_to_string(path)?;
         match universal_newlines(&raw) {
@@ -66,6 +67,13 @@ pub trait Workspace: Send + Sync {
     fn write_atomic(&self, path: &str, contents: &str) -> Result<(), OkfError>;
 
     /// Is there a file or directory at `path`?
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line delegation to an instrumented function"
+        )
+    )]
     fn exists(&self, path: &str) -> bool {
         self.is_file(path) || self.is_dir(path)
     }
@@ -106,6 +114,7 @@ pub trait Workspace: Send + Sync {
 /// The mode requested for a newly created file: 0o666, which the kernel
 /// masks with the process umask, as for Python's `open(path, "w")`.
 #[cfg(unix)]
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn new_file_permissions() -> std::fs::Permissions {
     // `PermissionsExt` is a Unix-only extension trait adding `from_mode`.
     use std::os::unix::fs::PermissionsExt;
@@ -113,6 +122,7 @@ pub(crate) fn new_file_permissions() -> std::fs::Permissions {
 }
 
 /// Normalizes a bundle-relative path and refuses one that leaves the bundle.
+#[tracing::instrument(level = "trace", skip_all)]
 fn checked(path: &str) -> Result<String, OkfError> {
     let normalized = normpath(path.trim_start_matches('/'));
     if escapes_root(&normalized) {
@@ -126,6 +136,7 @@ fn checked(path: &str) -> Result<String, OkfError> {
 
 /// Like [`checked`], but also refuses the catalog root itself, which can
 /// never be a file. Every write goes through this.
+#[tracing::instrument(level = "trace", skip_all)]
 fn checked_file(path: &str) -> Result<String, OkfError> {
     let normalized = checked(path)?;
     if normalized == "." {
@@ -162,6 +173,7 @@ enum Listing {
 impl Listing {
     /// Does the walk descend into a directory with this name? `at_root` is
     /// true for a directory directly under the catalog root.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn descends_into(self, dir_name: &str, at_root: bool) -> bool {
         match self {
             Listing::Markdown => {
@@ -175,6 +187,7 @@ impl Listing {
 
     /// Does the walk list the file at `path` (bundle-relative), given that
     /// it exists? Checks every directory component and the file name.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn lists(self, path: &str) -> bool {
         // `rsplit_once` splits at the last `/`, like `path.rpartition("/")`.
         let Some((dir, name)) = path.rsplit_once('/') else {
@@ -188,6 +201,7 @@ impl Listing {
     }
 
     /// Does the walk list a file with this name?
+    #[tracing::instrument(level = "trace", skip_all)]
     fn includes(self, file_name: &str) -> bool {
         match self {
             Listing::Markdown => file_name.ends_with(".md"),
@@ -236,6 +250,7 @@ impl DiskWorkspace {
     ///
     /// # Errors
     /// [`OkfError::Io`] if `root` does not exist or can't be canonicalized.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn new(root: impl Into<PathBuf>) -> Result<Self, OkfError> {
         let root = root.into();
         let canonical = root.canonicalize().map_err(|source| OkfError::Io {
@@ -246,11 +261,19 @@ impl DiskWorkspace {
     }
 
     /// The canonical root directory.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn root(&self) -> &Path {
         &self.root
     }
 
     /// The lexical on-disk path for a bundle-relative path (no symlink checks).
+    #[tracing::instrument(level = "trace", skip_all)]
     fn full(&self, path: &str) -> Result<PathBuf, OkfError> {
         let rel = checked(path)?;
         Ok(if rel == "." {
@@ -261,6 +284,7 @@ impl DiskWorkspace {
     }
 
     /// Resolves symlinks in `full` and classifies the result.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn resolve(&self, full: &Path) -> Resolution {
         match full.canonicalize() {
             Err(_) => Resolution::Missing,
@@ -270,6 +294,7 @@ impl DiskWorkspace {
     }
 
     /// The full path if it exists inside the catalog, else `None`.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn existing_inside(&self, path: &str) -> Option<PathBuf> {
         let full = self.full(path).ok()?;
         matches!(self.resolve(&full), Resolution::Inside).then_some(full)
@@ -277,6 +302,7 @@ impl DiskWorkspace {
 
     /// Recursively lists the files `listing` selects under `dir`, whose
     /// catalog-relative name is `prefix`.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn collect(
         &self,
         listing: Listing,
@@ -336,6 +362,7 @@ impl DiskWorkspace {
     }
 
     /// Runs one walk from the root and sorts it into `os.walk` order.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn listing(&self, listing: Listing) -> Result<Vec<String>, OkfError> {
         let mut out = Vec::new();
         self.collect(listing, &self.root, "", &mut out)?;
@@ -345,6 +372,7 @@ impl DiskWorkspace {
 }
 
 impl Workspace for DiskWorkspace {
+    #[tracing::instrument(level = "debug", skip_all)]
     fn read_to_string(&self, path: &str) -> Result<String, OkfError> {
         let full = self.full(path)?;
         if matches!(self.resolve(&full), Resolution::Outside) {
@@ -364,6 +392,7 @@ impl Workspace for DiskWorkspace {
         })
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     fn write_atomic(&self, path: &str, contents: &str) -> Result<(), OkfError> {
         let rel = checked_file(path)?;
         let target = self.root.join(rel);
@@ -463,30 +492,66 @@ impl Workspace for DiskWorkspace {
         Ok(())
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line delegation to an instrumented function"
+        )
+    )]
     fn exists(&self, path: &str) -> bool {
         // `existing_inside` already requires the path to exist.
         self.existing_inside(path).is_some()
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line delegation to an instrumented function"
+        )
+    )]
     fn is_file(&self, path: &str) -> bool {
         // `is_ok_and`/`is_some_and` run the closure only on `Ok`/`Some`.
         self.existing_inside(path).is_some_and(|p| p.is_file())
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line delegation to an instrumented function"
+        )
+    )]
     fn is_dir(&self, path: &str) -> bool {
         self.existing_inside(path).is_some_and(|p| p.is_dir())
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line delegation to an instrumented function"
+        )
+    )]
     fn list_markdown(&self) -> Result<Vec<String>, OkfError> {
         self.listing(Listing::Markdown)
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line delegation to an instrumented function"
+        )
+    )]
     fn list_files(&self) -> Result<Vec<String>, OkfError> {
         self.listing(Listing::AllFiles)
     }
 }
 
 /// Is there any key starting with `prefix`? One ordered-map probe, O(log n).
+#[tracing::instrument(level = "trace", skip_all)]
 fn has_key_with_prefix(files: &BTreeMap<String, StoredFile>, prefix: &str) -> bool {
     files
         .range::<str, _>((Bound::Included(prefix), Bound::Unbounded))
@@ -503,6 +568,7 @@ fn has_key_with_prefix(files: &BTreeMap<String, StoredFile>, prefix: &str) -> bo
 ///
 /// # Returns
 /// `write_atomic`'s reason, or `None` when the path is free to hold a file.
+#[tracing::instrument(level = "trace", skip_all)]
 fn placement_conflict(files: &BTreeMap<String, StoredFile>, rel: &str) -> Option<&'static str> {
     if has_key_with_prefix(files, &format!("{rel}/")) {
         Some("is a directory")
@@ -523,6 +589,7 @@ fn placement_conflict(files: &BTreeMap<String, StoredFile>, rel: &str) -> Option
 ///
 /// # Returns
 /// A lazy iterator over the clashing paths, O(log n) per path checked.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn files_that_are_directories(
     files: &BTreeMap<String, StoredFile>,
 ) -> impl Iterator<Item = &String> {
@@ -581,6 +648,7 @@ impl MemWorkspace {
     ///
     /// # Panics
     /// If a path escapes the catalog (a bad test fixture).
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn from_files<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>) -> Self {
         let map = files
             .into_iter()
@@ -614,6 +682,7 @@ impl MemWorkspace {
     /// [`OkfError::InvalidPath`] if a path escapes the catalog or is the root,
     /// if two paths normalize to the same one (`./a.md` and `a.md`), or if a
     /// file is also a directory of another (`a` beside `a/b.md`).
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn from_stored(
         files: impl IntoIterator<Item = (String, StoredFile)>,
     ) -> Result<Self, OkfError> {
@@ -648,6 +717,7 @@ impl MemWorkspace {
     /// # Returns
     /// A copy of its bytes and execute bit; `None` if there is no such file
     /// (or the path escapes the catalog).
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn stored(&self, path: &str) -> Option<StoredFile> {
         let rel = checked(path).ok()?;
         self.files().get(&rel).cloned()
@@ -668,6 +738,7 @@ impl MemWorkspace {
     ///
     /// # Errors
     /// [`OkfError::InvalidPath`] if the path escapes the catalog or is the root.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn remove(&self, path: &str) -> Result<bool, OkfError> {
         let rel = checked_file(path)?;
         // `remove` gives back the old value, if any: `is_some` says whether
@@ -701,6 +772,7 @@ impl MemWorkspace {
     /// # Errors
     /// [`OkfError::InvalidPath`] if the path escapes the catalog or is the
     /// root, is a directory, or sits below a file.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn check_placement(&self, path: &str) -> Result<(), OkfError> {
         let rel = checked_file(path)?;
         // `map_or`: no conflict is `Ok`, a conflict becomes the error.
@@ -717,6 +789,7 @@ impl MemWorkspace {
     /// the root, or `to` already exists, is a directory, or sits below a
     /// file; [`OkfError::NotFound`] if there is no file at `from`. `to` is
     /// checked first, so a missing `from` with a bad `to` is `InvalidPath`.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn rename(&self, from: &str, to: &str) -> Result<(), OkfError> {
         let (from_rel, to_rel) = (checked_file(from)?, checked_file(to)?);
         let mut files = self.files.write().expect("MemWorkspace lock poisoned");
@@ -739,6 +812,7 @@ impl MemWorkspace {
     ///
     /// # Returns
     /// Catalog-relative path to file, sorted by path.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn into_stored(self) -> BTreeMap<String, StoredFile> {
         // `into_inner` takes the map out of the lock; it fails only if a
         // thread panicked while holding the lock.
@@ -762,6 +836,7 @@ impl MemWorkspace {
     /// # Errors
     /// [`OkfError::InvalidPath`] if a path escapes the catalog or is the root,
     /// or if the result has a file that is also a directory of another.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn with_changes(
         &self,
         changes: impl IntoIterator<Item = (String, Option<StoredFile>)>,
@@ -792,6 +867,7 @@ impl MemWorkspace {
         })
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn files(&self) -> std::sync::RwLockReadGuard<'_, BTreeMap<String, StoredFile>> {
         // A poisoned lock means a thread panicked mid-write; propagating the panic is right.
         self.files.read().expect("MemWorkspace lock poisoned")
@@ -799,6 +875,7 @@ impl MemWorkspace {
 
     /// The stored paths `listing` selects, in `os.walk` order: the same rules
     /// [`DiskWorkspace`]'s walk applies, checked per path instead of per directory.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn listing(&self, listing: Listing) -> Vec<String> {
         let mut out: Vec<String> = self
             .files()
@@ -812,6 +889,7 @@ impl MemWorkspace {
 }
 
 impl Workspace for MemWorkspace {
+    #[tracing::instrument(level = "debug", skip_all)]
     fn read_to_string(&self, path: &str) -> Result<String, OkfError> {
         let rel = checked(path)?;
         let files = self.files();
@@ -828,6 +906,7 @@ impl Workspace for MemWorkspace {
             })
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     fn write_atomic(&self, path: &str, contents: &str) -> Result<(), OkfError> {
         let rel = checked_file(path)?;
         let mut files = self.files.write().expect("MemWorkspace lock poisoned");
@@ -851,10 +930,12 @@ impl Workspace for MemWorkspace {
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     fn is_file(&self, path: &str) -> bool {
         checked(path).is_ok_and(|rel| self.files().contains_key(&rel))
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     fn is_dir(&self, path: &str) -> bool {
         let Ok(rel) = checked(path) else { return false };
         if rel == "." {
@@ -863,10 +944,24 @@ impl Workspace for MemWorkspace {
         has_key_with_prefix(&self.files(), &format!("{rel}/"))
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line delegation to an instrumented function"
+        )
+    )]
     fn list_markdown(&self) -> Result<Vec<String>, OkfError> {
         Ok(self.listing(Listing::Markdown))
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line delegation to an instrumented function"
+        )
+    )]
     fn list_files(&self) -> Result<Vec<String>, OkfError> {
         Ok(self.listing(Listing::AllFiles))
     }

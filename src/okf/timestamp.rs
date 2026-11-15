@@ -54,6 +54,7 @@ impl PyDateTime {
     /// `YYYY-MM-DDTHH:MM:SS`, then `.ffffff` when the microseconds are not
     /// zero, then (aware values only) the offset as `+HH:MM`, with `:SS` added
     /// when the offset has seconds.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn isoformat(&self) -> String {
         match self {
             PyDateTime::Aware(t) => t.to_string_iso(),
@@ -69,6 +70,7 @@ impl PyDateTime {
     ///
     /// Takes `self` by value: `PyDateTime` is `Copy`, so this copies rather
     /// than consuming the caller's variable.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn aware(self) -> Option<DateTime<FixedOffset>> {
         match self {
             PyDateTime::Aware(t) => Some(t),
@@ -91,6 +93,7 @@ pub trait IsoFormat {
 }
 
 impl IsoFormat for DateTime<FixedOffset> {
+    #[tracing::instrument(level = "debug", skip_all)]
     fn to_string_iso(&self) -> String {
         // 26 for the local time with microseconds, 9 for `+HH:MM:SS`.
         let mut out = String::with_capacity(35);
@@ -109,6 +112,7 @@ impl IsoFormat for DateTime<FixedOffset> {
 }
 
 /// Appends `YYYY-MM-DDTHH:MM:SS[.ffffff]` (Python's naive `isoformat()`).
+#[tracing::instrument(level = "trace", skip_all)]
 fn push_naive(out: &mut String, t: &NaiveDateTime) {
     let _ = write!(
         out,
@@ -138,6 +142,7 @@ fn push_naive(out: &mut String, t: &NaiveDateTime) {
 ///
 /// # Returns
 /// `true` when `re.match(ISO_RE, text)` would succeed.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn is_iso_timestamp(text: &str) -> bool {
     // `LazyLock` compiles the regex once, on first use, like a module-level
     // `re.compile` in Python.
@@ -167,6 +172,7 @@ pub fn is_iso_timestamp(text: &str) -> bool {
 /// assert!(matches!(parse_iso("2026-10-26"), Some(PyDateTime::Naive(_))));
 /// assert!(parse_iso("2026-02-29T10:00:00Z").is_none());
 /// ```
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn parse_iso(text: &str) -> Option<PyDateTime> {
     // `Cow` ("clone on write") holds either the borrowed input or a new
     // `String`, so text without a `Z` is not copied.
@@ -222,6 +228,7 @@ struct RawDate {
 
 impl RawDate {
     /// Python's `date(year, month, day)` checks: year 1..=9999, a real day.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn validate(self) -> Option<NaiveDate> {
         if !(1..=MAX_YEAR).contains(&self.year) {
             return None;
@@ -235,6 +242,7 @@ impl RawDate {
     /// it advances only when `month <= 12` and `day` is at most the month's
     /// length (month 0 has length 0), so `2026-10-00T24:00` is October 1st,
     /// `2026-00-00T24:00` is January 1st and `0000-12-31T24:00` is year 1.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn next_day_unchecked(self) -> Self {
         let RawDate { year, month, day } = self;
         if month > 12 || day > days_in_month(year, month) {
@@ -260,6 +268,13 @@ impl RawDate {
 }
 
 /// CPython's `days_in_month` table, indexed by month 0..=12 (0 for month 0).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 fn days_in_month(year: u32, month: u32) -> u32 {
     let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
     match month {
@@ -276,6 +291,7 @@ fn days_in_month(year: u32, month: u32) -> u32 {
 /// CPython decides the date's length from its fifth character: `-` means the
 /// extended form (10 characters), anything else the basic form (8). A `W`
 /// there (an ISO week date) is a documented divergence and is rejected.
+#[tracing::instrument(level = "trace", skip_all)]
 fn parse_date(text: &str) -> Option<(RawDate, &str)> {
     let bytes = text.as_bytes();
     let extended = match bytes.get(4)? {
@@ -301,6 +317,13 @@ fn parse_date(text: &str) -> Option<(RawDate, &str)> {
 /// The `n` ASCII digits at `bytes[at..at + n]` as a number, or `None` when
 /// any is missing or not an ASCII digit (CPython checks bytes, so
 /// `\u{ff11}` and other Unicode digits are rejected).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 fn digits(bytes: &[u8], at: usize, n: usize) -> Option<u32> {
     bytes.get(at..at + n)?.iter().try_fold(0u32, |acc, &b| {
         b.is_ascii_digit().then(|| acc * 10 + u32::from(b - b'0'))
@@ -327,6 +350,7 @@ struct Fields {
 /// The fields, and whether one character or more was left over (CPython's
 /// return value 1, which its callers treat as an error only where no offset
 /// follows). `None` for a malformed string (CPython's negative codes).
+#[tracing::instrument(level = "trace", skip_all)]
 fn parse_fields(bytes: &[u8]) -> Option<(Fields, bool)> {
     let mut values = [0u32; 3];
     let mut pos = 0;
@@ -393,6 +417,7 @@ fn parse_fields(bytes: &[u8]) -> Option<(Fields, bool)> {
 /// A zero offset is UTC even with a fraction (`+00:00:00.5`), as CPython
 /// does; any other offset with a fraction is rejected (documented divergence:
 /// chrono's `FixedOffset` has whole seconds only).
+#[tracing::instrument(level = "trace", skip_all)]
 fn parse_offset(text: &str) -> Option<FixedOffset> {
     let negative = text.starts_with('-');
     // The first byte is the ASCII sign.
@@ -411,6 +436,7 @@ fn parse_offset(text: &str) -> Option<FixedOffset> {
 /// The local date and time, with Python's range checks: hour 0..=23,
 /// minute and second 0..=59 (no leap second 60), and `24:00:00` as the next
 /// day's midnight (see [`RawDate::next_day_unchecked`]).
+#[tracing::instrument(level = "trace", skip_all)]
 fn local_datetime(date: RawDate, fields: Fields) -> Option<NaiveDateTime> {
     if fields.hour == 24 {
         if (fields.minute, fields.second, fields.micros) != (0, 0, 0) {

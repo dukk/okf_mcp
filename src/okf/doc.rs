@@ -94,17 +94,26 @@ pub struct Doc {
 
 /// Splits text into lines that keep their `\n` (Python's `splitlines(keepends=True)`
 /// restricted to `\n` and `\r\n`).
+#[tracing::instrument(level = "trace", skip_all)]
 fn lines_with_endings(text: &str) -> Vec<String> {
     // `split_inclusive` is like `splitlines(keepends=True)`: each piece keeps its `\n`.
     text.split_inclusive('\n').map(str::to_string).collect()
 }
 
 /// Python's `line.rstrip("\r\n")`: removes every trailing `\r` and `\n`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 fn strip_line_ending(line: &str) -> &str {
     line.trim_end_matches(['\r', '\n'])
 }
 
 /// The exact ending of `line`: `"\r\n"`, `"\n"` or `""` (one ending only).
+#[tracing::instrument(level = "trace", skip_all)]
 fn line_ending(line: &str) -> &'static str {
     if line.ends_with("\r\n") {
         "\r\n"
@@ -116,6 +125,7 @@ fn line_ending(line: &str) -> &'static str {
 }
 
 /// The top-level key blocks of frontmatter `lines`, in order.
+#[tracing::instrument(level = "trace", skip_all)]
 fn blocks_of(lines: &[String]) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut i = 0;
@@ -157,6 +167,7 @@ fn blocks_of(lines: &[String]) -> Vec<Block> {
 ///
 /// # Returns
 /// `true` when `key:` matches the block-key pattern with `key` as its key.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn is_top_key(key: &str) -> bool {
     // `is_some_and` is `x is not None and pred(x)`; `&caps[1]` is group 1.
     TOP_KEY
@@ -181,6 +192,7 @@ impl Doc {
     /// assert!(doc.has_frontmatter());
     /// assert_eq!(doc.render(), "---\ntype: Note\n---\nBody\n");
     /// ```
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn from_text(path: &str, text: &str) -> Self {
         let mut lines = lines_with_endings(text);
         let newline = if lines.first().is_some_and(|l| l.ends_with("\r\n")) {
@@ -225,11 +237,25 @@ impl Doc {
     }
 
     /// The catalog-relative path given to [`Doc::from_text`].
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn path(&self) -> &str {
         &self.path
     }
 
     /// Whether the document has a frontmatter block.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn has_frontmatter(&self) -> bool {
         self.has_frontmatter
     }
@@ -238,6 +264,13 @@ impl Doc {
     ///
     /// `pub(crate)`: the raw lines are an implementation detail; outside the
     /// crate, read values with [`Doc::parse`] and positions with [`Doc::key_line`].
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub(crate) fn frontmatter(&self) -> &[String] {
         &self.frontmatter
     }
@@ -245,6 +278,7 @@ impl Doc {
     /// Replaces `frontmatter[range]` with `new_lines` (Python's slice
     /// assignment `fm[a:b] = new_lines`; an empty `new_lines` is `del fm[a:b]`).
     /// Inserted lines get [`Doc`]'s `newline`; the endings vector stays in step.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn splice_lines(&mut self, range: Range<usize>, new_lines: Vec<String>) {
         let endings = std::iter::repeat_n(self.newline, new_lines.len());
         // `splice` returns an iterator over the removed items; dropping it applies the edit.
@@ -256,6 +290,13 @@ impl Doc {
     ///
     /// # Returns
     /// One [`Block`] per `key:` line, with its continuation lines.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line delegation to an instrumented function"
+        )
+    )]
     pub fn blocks(&self) -> Vec<Block> {
         blocks_of(&self.frontmatter)
     }
@@ -267,6 +308,7 @@ impl Doc {
     ///
     /// # Returns
     /// The first block with that key, or `None`.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn block(&self, key: &str) -> Option<Block> {
         self.blocks().into_iter().find(|b| b.key == key)
     }
@@ -276,6 +318,13 @@ impl Doc {
     /// # Errors
     /// [`YamlError`] for a duplicate key, an unparseable value, or a line
     /// that belongs to no key. Line numbers are 1-based file lines.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line delegation to an instrumented function"
+        )
+    )]
     pub fn parse(&self) -> Result<IndexMap<String, Value>, YamlError> {
         parse_frontmatter_lines(&self.frontmatter)
     }
@@ -284,10 +333,18 @@ impl Doc {
     ///
     /// # Errors
     /// [`OkfError::FrontmatterParse`] with this document's path.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line delegation to an instrumented function"
+        )
+    )]
     pub fn parse_checked(&self) -> Result<IndexMap<String, Value>, OkfError> {
         self.parse().map_err(|e| self.parse_error(e))
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn parse_error(&self, error: YamlError) -> OkfError {
         OkfError::FrontmatterParse {
             path: self.path.clone(),
@@ -297,11 +354,19 @@ impl Doc {
     }
 
     /// The 1-based file line of `key` (1 when absent), for lint messages.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line delegation to an instrumented function"
+        )
+    )]
     pub fn key_line(&self, key: &str) -> usize {
         self.block(key).map_or(1, |b| b.start + 2)
     }
 
     /// Reassembles the file text, each line with its own ending.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn render(&self) -> String {
         let mut out = String::new();
         out.extend(self.head.iter().map(String::as_str));
@@ -325,6 +390,7 @@ impl Doc {
     /// let doc = Doc::from_text("a.md", "---\ntype: Note\n---\nBody\n");
     /// assert_eq!(doc.body(), "Body\n");
     /// ```
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn body(&self) -> String {
         // `from_text` keeps the closing `---` as the tail's first line, so a
         // document with frontmatter skips it (`usize::from(true)` is 1).
@@ -340,6 +406,7 @@ impl Doc {
     /// # Errors
     /// [`OkfError::FrontmatterParse`] if an edit broke the frontmatter; the
     /// caller must then not write the file.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn render_checked(&self) -> Result<String, OkfError> {
         self.parse_checked()?;
         Ok(self.render())
@@ -351,6 +418,7 @@ impl Doc {
     /// * `key` - the top-level key.
     /// * `new_lines` - the replacement lines; `new_lines[0]` must be the
     ///   `key:` line, or the key will not be found again.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn set_block(&mut self, key: &str, new_lines: Vec<String>) {
         let blocks = self.blocks();
         if let Some(b) = blocks.iter().find(|b| b.key == key) {
@@ -387,6 +455,7 @@ impl Doc {
     ///
     /// # Arguments
     /// * `key` - the top-level key; a missing key is a no-op.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn delete_block(&mut self, key: &str) {
         if let Some(b) = self.block(key) {
             self.splice_lines(b.start..b.end, Vec::new());
@@ -403,6 +472,13 @@ impl Doc {
     /// # Panics
     /// If `range` is out of bounds, which a span taken from this document's
     /// current state never is (like slicing a Python list out of range).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line delegation to an instrumented function"
+        )
+    )]
     pub(crate) fn remove_lines(&mut self, range: Range<usize>) {
         self.splice_lines(range, Vec::new());
     }
@@ -420,6 +496,7 @@ impl Doc {
     /// The item indent (2 when there are no items) and each item's span, or
     /// `None` when the key is absent, has an inline value, or its
     /// continuation isn't a plain block list.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn seq_items(&self, key: &str) -> Option<SeqItems> {
         let b = self.block(key)?;
         let inline = self.frontmatter[b.start]
@@ -493,6 +570,7 @@ impl Doc {
     /// # Errors
     /// [`OkfError::FrontmatterParse`] when the frontmatter does not parse, and
     /// [`OkfError::Shape`] when the key is a scalar.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn append_seq_item(
         &mut self,
         key: &str,
@@ -569,6 +647,7 @@ impl Doc {
 }
 
 /// Parses frontmatter lines (no delimiters) the way `Doc.parse` does.
+#[tracing::instrument(level = "trace", skip_all)]
 fn parse_frontmatter_lines(lines: &[String]) -> Result<IndexMap<String, Value>, YamlError> {
     let mut data = IndexMap::new();
     let mut covered = vec![false; lines.len()];

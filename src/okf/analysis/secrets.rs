@@ -137,6 +137,7 @@ static CALL_LIKE: LazyLock<Regex> =
 
 /// `_literal_secret`: why an assigned value looks like a real credential,
 /// or `None` for prose, references and placeholders.
+#[tracing::instrument(level = "trace", skip_all)]
 fn literal_secret(value: &str) -> Option<&'static str> {
     // Python's `len` counts code points, as `chars().count()` does.
     let length = value.chars().count();
@@ -168,6 +169,7 @@ fn literal_secret(value: &str) -> Option<&'static str> {
 
 /// `_mask`: the first four characters and `...`, or just `...` for a value
 /// of four characters or fewer.
+#[tracing::instrument(level = "trace", skip_all)]
 fn mask(value: &str) -> String {
     // `char_indices().nth(4)` is the byte offset of the fifth character, so
     // slicing there never splits a multi-byte UTF-8 character.
@@ -199,6 +201,7 @@ fn mask(value: &str) -> String {
 /// assert_eq!(hits[0].rule, "secret:assignment");
 /// assert!(scan_secrets("notes.md", "password = changeme").is_empty());
 /// ```
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn scan_secrets(path: &str, text: &str) -> Vec<Finding> {
     // `&*RULES` forces the `LazyLock` and borrows the `Rules` inside it.
     let rules = &*RULES;
@@ -237,6 +240,7 @@ pub fn scan_secrets(path: &str, text: &str) -> Vec<Finding> {
 
 /// `ASSIGN_RE.finditer(line)` filtered by [`literal_secret`], appended to
 /// `hits`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn assignments(assign: &Regex, path: &str, number: usize, line: &str, hits: &mut Vec<Finding>) {
     let mut pos = 0;
     // `captures_at` still sees the text before `pos`, so `\A` only matches

@@ -119,6 +119,7 @@ struct Header<'a> {
 /// errors do not: that `NotFound` and any read or write error after the
 /// parent and the new concept are written leave them in place. Run the op
 /// on a scratch copy, as the write path does, and drop the copy on any error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn split_concept(
     workspace: &dyn Workspace,
     ctx: &OpContext<'_>,
@@ -352,6 +353,7 @@ pub fn split_concept(
 /// # Errors
 /// [`OkfError::Refused`]: no match (the message lists every heading), or
 /// several (the message lists their slugs).
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn find_section<'h>(
     sections: &'h [Heading],
     want: &str,
@@ -415,6 +417,7 @@ pub(crate) fn find_section<'h>(
 
 /// The section's content lines: `moved` without footnote definitions,
 /// without blank lines at either end (`section_idx`).
+#[tracing::instrument(level = "trace", skip_all)]
 fn section_lines(body: &[&str], moved: &Range<usize>, def_lines: &HashSet<usize>) -> Vec<usize> {
     let mut lines: Vec<usize> = moved.clone().filter(|i| !def_lines.contains(i)).collect();
     while lines.last().is_some_and(|&i| py_strip(body[i]).is_empty()) {
@@ -430,12 +433,14 @@ fn section_lines(body: &[&str], moved: &Range<usize>, def_lines: &HashSet<usize>
 }
 
 /// Lines joined with `\n` (`"\n".join(...)`).
+#[tracing::instrument(level = "trace", skip_all)]
 fn join_lines<'a>(lines: impl Iterator<Item = &'a str>) -> String {
     lines.collect::<Vec<_>>().join("\n")
 }
 
 /// A moved line, its heading re-levelled so the section's subsections
 /// start at `#`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn relevel(line: &str, is_heading: bool, level: usize) -> String {
     match atx_heading(line) {
         Some((marks, text)) if is_heading => {
@@ -447,6 +452,7 @@ fn relevel(line: &str, is_heading: bool, level: usize) -> String {
 }
 
 /// The parent's `sources` entries that are mappings (`srcs`).
+#[tracing::instrument(level = "trace", skip_all)]
 fn source_entries(data: &IndexMap<String, Value>) -> Vec<&Value> {
     match data.get("sources") {
         Some(Value::Seq(items)) => items
@@ -458,6 +464,7 @@ fn source_entries(data: &IndexMap<String, Value>) -> Vec<&Value> {
 }
 
 /// One field of a source entry (`x.get(key)`).
+#[tracing::instrument(level = "trace", skip_all)]
 fn field<'v>(source: &'v Value, key: &str) -> Option<&'v Value> {
     match source {
         Value::Map(map) => map.get(key),
@@ -468,6 +475,7 @@ fn field<'v>(source: &'v Value, key: &str) -> Option<&'v Value> {
 /// A source entry's `id`, when it is a string. A `fn`, not a closure, so
 /// the returned `&str` can borrow from the argument (a closure cannot tie
 /// its result's lifetime to its parameter's).
+#[tracing::instrument(level = "trace", skip_all)]
 fn source_id(source: &Value) -> Option<&str> {
     field(source, "id").and_then(Value::as_str)
 }
@@ -478,6 +486,7 @@ fn source_id(source: &Value) -> Option<&str> {
 ///
 /// # Errors
 /// [`OkfError::Refused`] for a named id the parent does not have.
+#[tracing::instrument(level = "trace", skip_all)]
 fn choose_sources<'v>(
     parent: &str,
     sources: Vec<&'v Value>,
@@ -536,6 +545,7 @@ fn choose_sources<'v>(
 
 /// The definition lines of the footnotes the section cites, in the order
 /// they are defined in the parent (`foot`).
+#[tracing::instrument(level = "trace", skip_all)]
 fn carried_footnotes<'b>(
     defs: &IndexMap<String, Vec<usize>>,
     used: &BTreeSet<String>,
@@ -555,6 +565,7 @@ fn carried_footnotes<'b>(
 }
 
 /// The new concept's frontmatter, delimiters included (`fm`).
+#[tracing::instrument(level = "trace", skip_all)]
 fn frontmatter_lines(header: &Header<'_>, ctx: &OpContext<'_>, sources: &[&Value]) -> Vec<String> {
     let mut lines = vec![
         "---".to_string(),
@@ -588,6 +599,7 @@ fn frontmatter_lines(header: &Header<'_>, ctx: &OpContext<'_>, sources: &[&Value
 ///   elsewhere and an orphan (cited nowhere) inside the section alike;
 /// - every other definition, orphans outside the section included, stays
 ///   where it is.
+#[tracing::instrument(level = "trace", skip_all)]
 fn parent_footnotes<'b>(
     defs: &IndexMap<String, Vec<usize>>,
     used_moved: &BTreeSet<String>,
@@ -610,6 +622,7 @@ fn parent_footnotes<'b>(
 
 /// `amap`: the section's own anchor (a link to it loses its fragment) and
 /// each moved subsection's anchor in the new concept, paired by position.
+#[tracing::instrument(level = "trace", skip_all)]
 fn moved_anchors(
     sections: &[Heading],
     section: &Heading,

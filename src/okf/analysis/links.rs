@@ -119,6 +119,7 @@ pub struct LinksReport {
 ///
 /// # Returns
 /// The report; `okf.py links --json` prints the same JSON.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn links_report(snapshot: &Snapshot, mentions: bool) -> LinksReport {
     let graph: Vec<&SnapshotDoc> = snapshot
         .docs()
@@ -208,6 +209,7 @@ pub(crate) static INDEX_HEADING: LazyLock<Regex> =
 
 /// Every concept listed by its folder's `index.md`, every folder index by
 /// its parent's; and no concept bullet under an index's `# Sections`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn index_drift(
     snapshot: &Snapshot,
     graph: &[&SnapshotDoc],
@@ -270,6 +272,7 @@ fn index_drift(
 
 /// `names_for`: the file stem, the title and the aliases, at least
 /// [`MIN_NAME_LEN`] characters long, sorted and without duplicates.
+#[tracing::instrument(level = "trace", skip_all)]
 fn names_for(doc: &SnapshotDoc) -> Vec<String> {
     // `os.path.basename(p)[:-3]`: drop one `.md` (every document has it).
     // `strip_suffix` removes it once; `trim_end_matches` would strip `a.md.md`
@@ -289,6 +292,7 @@ fn names_for(doc: &SnapshotDoc) -> Vec<String> {
 
 /// `(?<![\w/-])NAME(?![\w-])` with `re.I`, lookaround emulated by consumed
 /// neighbour characters (an existence test only needs that).
+#[tracing::instrument(level = "trace", skip_all)]
 fn mention_pattern(name: &str) -> String {
     format!(
         r"(?:\A|[^\p{{L}}\p{{N}}_/\-])(?i:{})(?:[^\p{{L}}\p{{N}}_\-]|\z)",
@@ -346,12 +350,20 @@ impl MentionMatcher {
     /// # Returns
     /// The matcher; it never fails (a set too big to compile falls back to
     /// [`NameSearch::Literals`]).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line delegation to an instrumented function"
+        )
+    )]
     pub(crate) fn new(concepts: &[&SnapshotDoc]) -> Self {
         Self::with_set_limit(concepts, SET_SIZE_LIMIT)
     }
 
     /// [`MentionMatcher::new`] with a given compile limit for the set, so
     /// tests can force the [`NameSearch::Literals`] fallback.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn with_set_limit(concepts: &[&SnapshotDoc], set_limit: usize) -> Self {
         let targets: Vec<(String, Vec<String>)> = concepts
             .iter()
@@ -388,6 +400,7 @@ impl MentionMatcher {
     }
 
     /// The patterns (indexes into `owners`) that match `line`, ascending.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn matching(&self, line: &str) -> Vec<usize> {
         match &self.search {
             NameSearch::Set(set) => set.matches(line).into_iter().collect(),
@@ -406,6 +419,7 @@ impl MentionMatcher {
 /// Compiled without a size limit: an escaped literal's program grows
 /// linearly with the name, which is already held in memory, so it always
 /// compiles.
+#[tracing::instrument(level = "trace", skip_all)]
 fn literal_regex(name: &str) -> Regex {
     RegexBuilder::new(&format!("(?i:{})", ignorecase_literal(name)))
         .size_limit(usize::MAX)
@@ -418,6 +432,7 @@ fn literal_regex(name: &str) -> Regex {
 /// Tries every start, overlapping ones included: each literal character
 /// matches exactly one character, so there is one match per start, and
 /// checking each start's neighbours is what `okf.py`'s lookarounds do.
+#[tracing::instrument(level = "trace", skip_all)]
 fn has_mention(literal: &Regex, line: &str) -> bool {
     let mut start = 0;
     // `find_at` searches from byte `start` and returns the leftmost match.
@@ -436,6 +451,7 @@ fn has_mention(literal: &Regex, line: &str) -> bool {
 }
 
 /// `(?<![\w/-])` before byte `start` and `(?![\w-])` after byte `end`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn is_mention_at(line: &str, start: usize, end: usize) -> bool {
     // `next_back` is the last character before `start`; `None` at the edges.
     let before = line[..start].chars().next_back();
@@ -446,6 +462,7 @@ fn is_mention_at(line: &str, start: usize, end: usize) -> bool {
 
 /// `link_analysis`'s mention pass: for each concept (in walk order), every
 /// other concept it names in prose without linking to it.
+#[tracing::instrument(level = "trace", skip_all)]
 fn unlinked_mentions(concepts: &[&SnapshotDoc], matcher: &MentionMatcher) -> Vec<UnlinkedMention> {
     // One task per mentioning concept; `collect` keeps concept order.
     let per_source: Vec<Vec<UnlinkedMention>> = concepts
@@ -457,6 +474,7 @@ fn unlinked_mentions(concepts: &[&SnapshotDoc], matcher: &MentionMatcher) -> Vec
 
 /// The unlinked mentions in one concept, in target order (`okf.py`'s
 /// `patterns` order), each with its hits in line order.
+#[tracing::instrument(level = "trace", skip_all)]
 fn mentions_in(source: &SnapshotDoc, matcher: &MentionMatcher) -> Vec<UnlinkedMention> {
     let linked: HashSet<&str> = source.links().iter().map(|l| l.target.as_str()).collect();
     let mut hits: Vec<Vec<MentionHit>> = vec![Vec::new(); matcher.targets.len()];
@@ -510,6 +528,7 @@ static FOOTNOTE_LINE: LazyLock<Regex> =
 /// `prose_lines`: `(file line, masked line, original line)` for body prose,
 /// skipping fenced code and footnote definitions, with code spans, links and
 /// URLs replaced by a space.
+#[tracing::instrument(level = "trace", skip_all)]
 fn prose_lines(text: &str) -> Vec<(usize, String, &str)> {
     let (_, body, offset) = split_frontmatter(text);
     let mut in_fence = false;
@@ -531,6 +550,7 @@ fn prose_lines(text: &str) -> Vec<(usize, String, &str)> {
 }
 
 /// `LINK_RE.sub(" ", text)`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn mask_links(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut copied = 0;
@@ -544,6 +564,7 @@ fn mask_links(text: &str) -> String {
 }
 
 /// The first `n` characters (Python's `s[:n]`).
+#[tracing::instrument(level = "trace", skip_all)]
 fn truncate_chars(text: &str, n: usize) -> &str {
     text.char_indices()
         .nth(n)

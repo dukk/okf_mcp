@@ -44,6 +44,7 @@ const TOOLS: &str = "tools";
 /// assert!(is_machinery("infra/install/setup.md"));
 /// assert!(!is_machinery("infra/docs/notes.md"));
 /// ```
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn is_machinery(path: &str) -> bool {
     // `split_once` is Python's `str.partition` without the separator: `None`
     // when there is no `/`, i.e. a file at the catalog root.
@@ -72,6 +73,7 @@ pub fn is_machinery(path: &str) -> bool {
 /// # Errors
 /// [`OkfError::InvalidPath`] for a path outside the catalog (`..`), the
 /// root itself, or machinery ([`is_machinery`]).
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn check_path(path: &str) -> Result<String, OkfError> {
     let normalized = normpath(path.trim_start_matches('/'));
     if normalized == "." || escapes_root(&normalized) {
@@ -103,6 +105,7 @@ pub fn check_path(path: &str) -> Result<String, OkfError> {
 /// the line `lint` would report (the scan reads universal-newline text);
 /// [`OkfError::FrontmatterParse`] for a `.md` file whose frontmatter does
 /// not parse.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn check_content(path: &str, text: &str) -> Result<(), OkfError> {
     // `into_iter().next()` takes the first finding, by value.
     if let Some(hit) = scan_secrets(path, &universal_newlines(text))

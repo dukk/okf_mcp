@@ -123,6 +123,7 @@ pub enum ReplayOp {
 /// assert_eq!(once, "# Log\n\n## 2026-11-03\n\n* **Update:** x\n");
 /// assert_eq!(replay("log.md", Some(&once), &ops).unwrap(), once);
 /// ```
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn replay(path: &str, current: Option<&str>, ops: &[ReplayOp]) -> Result<String, OkfError> {
     // Publish has no directory listing, so links resolve as if no path were
     // a directory; `lists_target` then also accepts `folder` for `folder/index.md`.
@@ -188,6 +189,7 @@ pub fn replay(path: &str, current: Option<&str>, ops: &[ReplayOp]) -> Result<Str
 }
 
 /// The current text, or `NotFound` for an operation that needs a file.
+#[tracing::instrument(level = "trace", skip_all)]
 fn present<'t>(path: &str, text: &'t Option<Cow<'_, str>>) -> Result<&'t str, OkfError> {
     text.as_deref().ok_or_else(|| OkfError::NotFound {
         path: path.to_string(),
@@ -195,6 +197,7 @@ fn present<'t>(path: &str, text: &'t Option<Cow<'_, str>>) -> Result<&'t str, Ok
 }
 
 /// `okf.py`'s "no heading 'X' in <path>" refusal of a listing.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn missing_heading(path: &str, section: &str) -> OkfError {
     OkfError::Refused {
         reason: format!("no heading {} in {path}", py_repr_str(section)),
@@ -206,6 +209,7 @@ pub(crate) fn missing_heading(path: &str, section: &str) -> OkfError {
 /// `folder/index.md`, which only matters when `workspace` cannot tell that
 /// `folder` is a directory (replay): a concept target never ends in
 /// `/index.md`, so `index`'s own check is exactly `okf.py`'s.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn lists_target(
     workspace: &dyn Workspace,
     text: &str,
@@ -233,6 +237,7 @@ pub(crate) fn lists_target(
 ///
 /// # Returns
 /// The 0-based line index, or `None` when no bullet links `target`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn listing_line(
     workspace: &dyn Workspace,
     text: &str,
@@ -257,6 +262,7 @@ pub(crate) fn listing_line(
 /// # Returns
 /// The text without that line and the line itself, or `None` when no
 /// bullet links `target`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn unlist_text(
     workspace: &dyn Workspace,
     text: &str,
@@ -272,6 +278,7 @@ pub(crate) fn unlist_text(
 
 /// The refusal of a stored `Relink` whose source is not a concept: the
 /// replay's empty workspace cannot resolve directory links into it.
+#[tracing::instrument(level = "trace", skip_all)]
 fn non_concept_relink(path: &str, from: &str) -> OkfError {
     OkfError::Refused {
         reason: format!(
@@ -283,6 +290,7 @@ fn non_concept_relink(path: &str, from: &str) -> OkfError {
 }
 
 /// The refusal of a move's `Unlist` whose listing changed since the move.
+#[tracing::instrument(level = "trace", skip_all)]
 fn changed_listing(index: &str, target: &str) -> OkfError {
     OkfError::Refused {
         reason: format!(
@@ -296,6 +304,7 @@ fn changed_listing(index: &str, target: &str) -> OkfError {
 
 /// Python's `str.capitalize`: the first character upper-cased, the rest
 /// lower-cased.
+#[tracing::instrument(level = "trace", skip_all)]
 fn capitalize(text: &str) -> String {
     let mut chars = text.chars();
     match chars.next() {
@@ -310,6 +319,7 @@ fn capitalize(text: &str) -> String {
 }
 
 /// A folder's heading: `ensure_index`'s `name.replace("-", " ").capitalize()`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn folder_heading(folder: &str) -> String {
     capitalize(&basename(folder).replace('-', " "))
 }
@@ -336,6 +346,7 @@ pub(crate) const ROOT_TODO: &str = "TODO: say what this catalog holds.";
 ///
 /// # Returns
 /// The file's text, ending in a newline.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn root_index_text(heading: &str, about: &str) -> String {
     let about = crate::okf::ops::log_index::collapse_whitespace(about);
     let about = if about.is_empty() { ROOT_TODO } else { &about };
@@ -344,6 +355,7 @@ pub(crate) fn root_index_text(heading: &str, about: &str) -> String {
 
 /// The `index.md` `ensure_index` writes for a new folder; for the root
 /// (`""`), the [`root_index_text`] `repair_indexes` writes.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn new_index_text(folder: &str) -> String {
     if folder.is_empty() {
         return root_index_text(ROOT_HEADING, "");
@@ -373,6 +385,7 @@ pub(crate) fn new_index_text(folder: &str) -> String {
 /// assert_eq!(text, "# Log\n\n## 2026-11-03\n\n* **Update:** x\n");
 /// assert_eq!(log_text(&text, "2026-11-03", "* **Update:** x"), None);
 /// ```
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn log_text(text: &str, date: &str, bullet: &str) -> Option<String> {
     let heading = format!("## {date}");
     // `lines` borrows from `text`, `heading` and `bullet`; Rust checks they
@@ -418,11 +431,19 @@ pub fn log_text(text: &str, date: &str, bullet: &str) -> Option<String> {
 }
 
 /// Is this line an index bullet (`okf.py`'s `_index_bullet`)?
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 fn is_bullet(line: &str) -> bool {
     line.starts_with("* ") || line.starts_with("- ")
 }
 
 /// Drops trailing empty lines (`while lines and lines[-1] == "": lines.pop()`).
+#[tracing::instrument(level = "trace", skip_all)]
 fn trim_trailing_blank(lines: &mut Vec<Cow<'_, str>>) {
     while lines.last().is_some_and(|line| line.is_empty()) {
         lines.pop();
@@ -431,6 +452,7 @@ fn trim_trailing_blank(lines: &mut Vec<Cow<'_, str>>) {
 
 /// The first bullet of a heading's span at `start`, with the blank lines
 /// `okf.py` puts around it.
+#[tracing::instrument(level = "trace", skip_all)]
 fn insert_first_bullet<'a>(lines: &mut Vec<Cow<'a, str>>, start: usize, bullet: &'a str) {
     let text_follows = lines
         .get(start)
@@ -457,6 +479,7 @@ fn insert_first_bullet<'a>(lines: &mut Vec<Cow<'a, str>>, start: usize, bullet: 
 /// # Returns
 /// The new text, ending in a newline; `None` when `section` is missing and
 /// `create_section` is false (`okf.py`'s "no heading 'X'").
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn insert_index_bullet_text(
     text: &str,
     bullet: &str,

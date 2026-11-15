@@ -49,6 +49,7 @@ pub enum Value {
 
 impl Value {
     /// Returns the string if this is a scalar.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::Str(s) => Some(s),
@@ -60,6 +61,7 @@ impl Value {
     /// tests compare against `okf.py`'s `json.dumps` output. Map keys keep
     /// their source order (serde_json's `preserve_order` feature), as Python
     /// dicts do.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn to_json(&self) -> serde_json::Value {
         match self {
             Value::Null => serde_json::Value::Null,
@@ -87,6 +89,13 @@ pub struct YamlError {
 }
 
 impl YamlError {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial constructor: builds a value from its arguments"
+        )
+    )]
     fn new(message: impl Into<String>, line: Option<usize>) -> Self {
         Self {
             message: message.into(),
@@ -101,11 +110,25 @@ impl YamlError {
 pub(crate) type NumberedLine<'a> = (usize, &'a str);
 
 /// Number of leading spaces (tabs don't count, as in `okf.py`).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 pub(crate) fn indent_of(text: &str) -> usize {
     text.len() - text.trim_start_matches(' ').len()
 }
 
 /// `text` without its first `n` characters (Python's `t[n:]`; never panics).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 fn skip_chars(text: &str, n: usize) -> &str {
     match text.char_indices().nth(n) {
         Some((byte_index, _)) => &text[byte_index..],
@@ -130,6 +153,7 @@ struct Inline<'a> {
 // `'a` is a lifetime parameter: `source` is a borrowed `&str` that must
 // outlive the parser, much like holding a reference to a Python string.
 impl<'a> Inline<'a> {
+    #[tracing::instrument(level = "trace", skip_all)]
     fn new(source: &'a str, line: Option<usize>) -> Self {
         Self {
             chars: source.chars().collect(),
@@ -140,6 +164,13 @@ impl<'a> Inline<'a> {
         }
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial constructor: builds a value from its arguments"
+        )
+    )]
     fn err(&self, message: &str) -> YamlError {
         YamlError::new(
             format!("{message} in {}", py_repr_str(self.source)),
@@ -147,16 +178,31 @@ impl<'a> Inline<'a> {
         )
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+        )
+    )]
     fn skip_ws(&mut self) {
         while matches!(self.peek(), Some(' ' | '\t')) {
             self.pos += 1;
         }
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+        )
+    )]
     fn peek(&self) -> Option<char> {
         self.chars.get(self.pos).copied()
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn node(&mut self, flow: bool) -> Result<Value, YamlError> {
         self.skip_ws();
         match self.peek() {
@@ -178,6 +224,7 @@ impl<'a> Inline<'a> {
     }
 
     /// Runs a flow-collection parser one level deeper, enforcing the limit.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn nested(
         &mut self,
         parse: fn(&mut Self) -> Result<Value, YamlError>,
@@ -191,6 +238,7 @@ impl<'a> Inline<'a> {
         result
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn double_quoted(&mut self) -> Result<String, YamlError> {
         self.pos += 1;
         let mut out = String::new();
@@ -239,6 +287,7 @@ impl<'a> Inline<'a> {
         }
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn single_quoted(&mut self) -> Result<String, YamlError> {
         self.pos += 1;
         let mut out = String::new();
@@ -262,6 +311,7 @@ impl<'a> Inline<'a> {
     }
 
     /// A plain (unquoted) scalar; `None` for the null spellings.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn plain(&mut self, flow: bool) -> Option<String> {
         let start = self.pos;
         while let Some(c) = self.peek() {
@@ -292,6 +342,7 @@ impl<'a> Inline<'a> {
         }
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn key(&mut self) -> Result<String, YamlError> {
         self.skip_ws();
         let key = match self.peek() {
@@ -307,6 +358,7 @@ impl<'a> Inline<'a> {
         Ok(key)
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn flow_map(&mut self) -> Result<Value, YamlError> {
         self.pos += 1;
         let mut map = IndexMap::new();
@@ -336,6 +388,7 @@ impl<'a> Inline<'a> {
         }
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn flow_seq(&mut self) -> Result<Value, YamlError> {
         self.pos += 1;
         let mut items = Vec::new();
@@ -355,6 +408,7 @@ impl<'a> Inline<'a> {
         }
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn finish(&mut self) -> Result<(), YamlError> {
         self.skip_ws();
         match self.peek() {
@@ -365,6 +419,13 @@ impl<'a> Inline<'a> {
 }
 
 /// The single-character escapes of a double-quoted scalar.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 fn simple_escape(c: char) -> Option<char> {
     Some(match c {
         'n' => '\n',
@@ -404,6 +465,7 @@ fn simple_escape(c: char) -> Option<char> {
 /// assert_eq!(parse_inline("[a, 'b c']", None).unwrap(),
 ///            Value::Seq(vec![Value::Str("a".into()), Value::Str("b c".into())]));
 /// ```
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn parse_inline(text: &str, line: Option<usize>) -> Result<Value, YamlError> {
     let mut parser = Inline::new(text, line);
     let value = parser.node(false)?;
@@ -421,6 +483,13 @@ pub fn parse_inline(text: &str, line: Option<usize>) -> Result<Value, YamlError>
 }
 
 /// Strips a value's surrounding whitespace, or all of it when it is a comment.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 pub(crate) fn strip_comment(text: &str) -> &str {
     let trimmed = py_strip(text);
     if trimmed.starts_with('#') {
@@ -442,12 +511,20 @@ static MAP_KEY: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// True for a line that carries content (not blank, not a comment).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 fn is_content_line(text: &str) -> bool {
     let stripped = py_strip(text);
     !stripped.is_empty() && !stripped.starts_with('#')
 }
 
 /// Lines that carry content (not blank, not a comment).
+#[tracing::instrument(level = "trace", skip_all)]
 fn content_lines<'a>(lines: &[NumberedLine<'a>]) -> Vec<NumberedLine<'a>> {
     lines
         .iter()
@@ -457,6 +534,13 @@ fn content_lines<'a>(lines: &[NumberedLine<'a>]) -> Vec<NumberedLine<'a>> {
 }
 
 /// True for a block-list item line (`-` or `- ...`), already dedented.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 pub(crate) fn is_seq_start(text: &str) -> bool {
     text == "-" || text.starts_with("- ")
 }
@@ -473,6 +557,7 @@ pub(crate) fn is_seq_start(text: &str) -> bool {
 ///
 /// `pub(crate)`: callers outside the crate parse whole documents with
 /// [`Doc::parse`](crate::okf::doc::Doc::parse) instead.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn parse_value(
     inline: &str,
     children: &[NumberedLine<'_>],
@@ -517,6 +602,7 @@ pub(crate) fn parse_value(
 }
 
 /// Parses a block node (list or mapping) from content lines.
+#[tracing::instrument(level = "trace", skip_all)]
 fn parse_node(content: &[NumberedLine<'_>]) -> Result<Value, YamlError> {
     let indent = indent_of(content[0].1);
     if is_seq_start(&content[0].1[indent..]) {
@@ -529,6 +615,7 @@ fn parse_node(content: &[NumberedLine<'_>]) -> Result<Value, YamlError> {
 /// Parses a block list. Items are validated and parsed one at a time, as
 /// `okf.py`'s generator-based `_split_items` does, so an error in an early
 /// item is reported before a malformed later line is even looked at.
+#[tracing::instrument(level = "trace", skip_all)]
 fn parse_seq(content: &[NumberedLine<'_>], indent: usize) -> Result<Value, YamlError> {
     let mut items = Vec::new();
     let mut i = 0;
@@ -575,6 +662,7 @@ fn parse_seq(content: &[NumberedLine<'_>], indent: usize) -> Result<Value, YamlE
     Ok(Value::Seq(items))
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn parse_map(content: &[NumberedLine<'_>], indent: usize) -> Result<Value, YamlError> {
     let mut map = IndexMap::new();
     let mut i = 0;
@@ -645,6 +733,7 @@ const RESERVED_WORDS: [&str; 10] = [
 /// # Arguments
 /// * `text` - the scalar.
 /// * `flow` - whether it sits inside a flow collection, where `,[]{}` are syntax.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn needs_quote(text: &str, flow: bool) -> bool {
     if text.is_empty() || text != py_strip(text) || !PLAIN_SAFE.is_match(text) {
         return true;
@@ -663,6 +752,7 @@ pub fn needs_quote(text: &str, flow: bool) -> bool {
 }
 
 /// Double-quotes a scalar, escaping quotes, backslashes and control characters.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn double_quote(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
     out.push('"');
@@ -716,6 +806,7 @@ pub enum ScalarStyle {
 /// assert_eq!(scalar("a: b", ScalarStyle::Block), "\"a: b\"");
 /// assert_eq!(scalar("x", ScalarStyle::Quoted), "\"x\"");
 /// ```
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn scalar(text: &str, style: ScalarStyle) -> String {
     // `match` on an enum must cover every variant (no `_` arm), so adding a
     // style later is a compile error here until it is handled.
@@ -732,6 +823,7 @@ pub fn scalar(text: &str, style: ScalarStyle) -> String {
 }
 
 /// Renders a value in flow style on one line: `{ by: x, at: y }`, `[a, b]`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn flow_value(value: &Value) -> String {
     match value {
         Value::Map(map) => {
@@ -753,6 +845,7 @@ pub fn flow_value(value: &Value) -> String {
 /// A key as a block mapping writes it: plain when [`MAP_KEY`] reads it back
 /// unquoted, else double-quoted (a key that needs quotes anyway, or a plain
 /// one starting with a character a block key cannot, such as `.`).
+#[tracing::instrument(level = "trace", skip_all)]
 fn block_key(key: &str) -> String {
     let plain = scalar(key, ScalarStyle::Block);
     let reads_back = MAP_KEY
@@ -773,6 +866,7 @@ fn block_key(key: &str) -> String {
 /// # Arguments
 /// * `value` - the item.
 /// * `indent` - spaces before the dash.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn block_item(value: &Value, indent: usize) -> Vec<String> {
     let pad = " ".repeat(indent);
     match value {

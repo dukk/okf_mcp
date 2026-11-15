@@ -65,6 +65,13 @@ impl CommitTimes {
     /// stored paths already have that form. A caller filling this from git
     /// must strip the catalog's prefix when the catalog is not the repository
     /// root, or the check silently stops firing for those files.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial constructor: builds a value from its arguments"
+        )
+    )]
     pub fn new(times: HashMap<String, DateTime<FixedOffset>>, dirty: HashSet<String>) -> Self {
         Self { times, dirty }
     }
@@ -78,6 +85,7 @@ impl CommitTimes {
     ///
     /// # Returns
     /// A new record; this one is unchanged.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn with_dirty(&self, dirty: impl IntoIterator<Item = String>) -> Self {
         let mut marked = self.clone();
         marked.dirty.extend(dirty);
@@ -87,6 +95,7 @@ impl CommitTimes {
     /// The last commit time of a clean, committed file: `None` when the
     /// file has uncommitted changes or was never committed (`okf.py` then
     /// skips the check).
+    #[tracing::instrument(level = "trace", skip_all)]
     fn committed_clean(&self, path: &str) -> Option<DateTime<FixedOffset>> {
         if self.dirty.contains(path) {
             return None;
@@ -106,6 +115,7 @@ pub struct LintReport {
 
 impl LintReport {
     /// Appends `other`'s findings after this report's, keeping both orders.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn append(&mut self, mut other: LintReport) {
         self.errors.append(&mut other.errors);
         self.warnings.append(&mut other.warnings);
@@ -124,6 +134,7 @@ impl LintReport {
 /// # Returns
 /// The findings, each list sorted by (file, line, rule) with ties in
 /// `okf.py`'s discovery order.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn lint(snapshot: &Snapshot, now: DateTime<Utc>, commits: Option<&CommitTimes>) -> LintReport {
     let now = now.fixed_offset();
     // Each document is checked on rayon's thread pool. `collect` into a `Vec`
@@ -159,6 +170,7 @@ pub fn lint(snapshot: &Snapshot, now: DateTime<Utc>, commits: Option<&CommitTime
 }
 
 /// Builds one finding.
+#[tracing::instrument(level = "trace", skip_all)]
 fn finding(file: &str, line: usize, rule: &str, message: String) -> Finding {
     Finding {
         file: file.to_string(),
@@ -179,6 +191,7 @@ struct Linter<'a> {
 }
 
 impl<'a> Linter<'a> {
+    #[tracing::instrument(level = "trace", skip_all)]
     fn new(path: &'a str, now: DateTime<FixedOffset>) -> Self {
         Self {
             path,
@@ -187,17 +200,20 @@ impl<'a> Linter<'a> {
         }
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn error(&mut self, line: usize, rule: &str, message: String) {
         let found = finding(self.path, line, rule, message);
         self.report.errors.push(found);
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn warn(&mut self, line: usize, rule: &str, message: String) {
         let found = finding(self.path, line, rule, message);
         self.report.warnings.push(found);
     }
 
     /// `frontmatter does not parse`, at the error's line (1 when unknown).
+    #[tracing::instrument(level = "trace", skip_all)]
     fn parse_error(&mut self, error: &YamlError) {
         let message = format!("frontmatter does not parse: {}", error.message);
         self.error(error.line.unwrap_or(1), "frontmatter-parse", message);
@@ -205,6 +221,7 @@ impl<'a> Linter<'a> {
 
     /// Routes a document to the index or concept checks; `log.md` and
     /// machinery documents have none.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn document(&mut self, doc: &SnapshotDoc, commits: Option<&CommitTimes>) {
         match doc.kind() {
             DocKind::Index => self.index(doc),
@@ -218,6 +235,7 @@ impl<'a> Linter<'a> {
 
     /// `index.md` rules: no frontmatter below the root; the root declares
     /// `okf_version`.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn index(&mut self, doc: &SnapshotDoc) {
         if self.path != "index.md" {
             if doc.doc().has_frontmatter() {
@@ -239,6 +257,7 @@ impl<'a> Linter<'a> {
 
     /// A `sprawl` warning when the concept scores above [`SPRAWL_WARN`] and
     /// its type is not exempt.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn sprawl(&mut self, doc: &SnapshotDoc) {
         let sprawl = sprawl_of(doc);
         if sprawl.score <= SPRAWL_WARN || sprawl.exempt.is_some() {
@@ -255,6 +274,7 @@ impl<'a> Linter<'a> {
     }
 
     /// The concept checks, in `okf.py`'s order.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn concept(&mut self, doc: &SnapshotDoc, commits: Option<&CommitTimes>) {
         let data = match doc.frontmatter() {
             Frontmatter::Absent => {
@@ -323,6 +343,7 @@ impl<'a> Linter<'a> {
     }
 
     /// `generated`: a mapping with `by` and `at`; returns the parsed `at`.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn generated(&mut self, line: usize, value: &Value) -> Option<DateTime<FixedOffset>> {
         let map = as_map(value);
         if !map.is_some_and(|m| m.contains_key("at") && m.contains_key("by")) {
@@ -335,6 +356,7 @@ impl<'a> Linter<'a> {
     }
 
     /// `verified`: one mapping with `at`, or a list of them.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn verified(&mut self, line: usize, value: &Value) {
         let items = match value {
             Value::Seq(items) => items.as_slice(),
@@ -355,6 +377,7 @@ impl<'a> Linter<'a> {
     }
 
     /// `reviewed`: a mapping with `at` and a known `outcome`.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn reviewed(&mut self, line: usize, value: &Value) {
         let Some((map, at)) = as_map(value).and_then(|m| Some((m, m.get("at")?))) else {
             return self.warn(line, "reviewed-shape", REVIEWED_SHAPE.to_string());
@@ -375,6 +398,7 @@ impl<'a> Linter<'a> {
     }
 
     /// `stale_after`: a valid timestamp that has not passed yet.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn stale_after(&mut self, line: usize, value: &Value) {
         let Some(ts) = self.check_ts(value, "stale_after", line, false) else {
             return;
@@ -389,6 +413,7 @@ impl<'a> Linter<'a> {
 
     /// `sources`: a list of mappings with a `resource`, and a valid
     /// `last_modified` where one is given.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn sources(&mut self, line: usize, value: &Value) {
         let Value::Seq(items) = value else {
             return self.warn(
@@ -416,6 +441,7 @@ impl<'a> Linter<'a> {
     /// `check_ts`: shape, validity, UTC and (optionally) not in the future.
     ///
     /// Returns the parsed instant when the value is a valid timestamp.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn check_ts(
         &mut self,
         value: &Value,
@@ -452,11 +478,19 @@ impl<'a> Linter<'a> {
 
 /// `d.get(key)` treating a YAML `null` like a missing key, as `okf.py`'s
 /// `d.get(key) is not None` does.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 fn get<'v>(data: &'v IndexMap<String, Value>, key: &str) -> Option<&'v Value> {
     data.get(key).filter(|v| !matches!(v, Value::Null))
 }
 
 /// `isinstance(value, dict)`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn as_map(value: &Value) -> Option<&IndexMap<String, Value>> {
     match value {
         Value::Map(map) => Some(map),
@@ -465,6 +499,7 @@ fn as_map(value: &Value) -> Option<&IndexMap<String, Value>> {
 }
 
 /// The link report's findings, as `okf.py` maps them.
+#[tracing::instrument(level = "trace", skip_all)]
 fn link_findings(snapshot: &Snapshot) -> LintReport {
     let links = links_report(snapshot, false);
     let mut report = LintReport::default();
