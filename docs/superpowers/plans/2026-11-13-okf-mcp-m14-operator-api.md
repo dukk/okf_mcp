@@ -5343,6 +5343,13 @@ git commit -m "feat(api): read and export the audit log; owners see their team, 
 - Create: `src/cli/audit.rs`
 - Modify: `src/cli.rs` (`Command::Audit(AuditCommand)`, dispatch), `tests/admin_parity.rs`, `docs/operations.md` (commands, parity rows)
 
+> **Corrected (issue #403, 2026-11-15).** What shipped differs from the code below in these ways; read `src/cli/audit.rs`:
+> - **One export, shared.** The paging loop moved out of `export_audit` into the store as `audit::export_lines(pool, viewer, query) -> Result<String, OkfError>` (JSON Lines, `MAX_PAGE` at a time, `after` a starting cursor, `limit` ignored). The route and `audit export` both call it, so they cannot differ.
+> - **`audit(pool, &AuditCommand)`** takes the command by reference, and `AuditArgs.limit` is `Option<i64>` (no clap default): `parse_filters` applies `DEFAULT_PAGE`, as it does for the route. `AuditArgs` also derives `PartialEq, Eq`.
+> - **The line.** The actor cell reads `credential ID` (not `key ID`: it may be an OAuth grant); the target cell adds ` person NAME` after `KIND NAME` when the entry names one (`team family person bob`), and `-` for a missing name; teams are comma-separated, `-` for none; control characters in names and labels are escaped, so a stored tab or newline cannot shift a column or forge a line. The plan's test checks cells by position (`cells[4] == "user alice"`).
+> - **`comma_list`** moved from `src/cli/people.rs` to `src/cli.rs` beside `tab_row` and `labelled`, for both modules.
+> - **More tests** in `src/cli/audit.rs`: the export across a page boundary from any cursor (1003 entries, bounded by a 20 s timeout), bad filters naming the filter, control characters, and flag parsing.
+
 - [ ] **Step 1: Write the failing tests**
 
 `tests/admin_parity.rs`: `"audit list"`, `"audit export"` in `COVERED`; `"audit"` in `SCANNED_GROUPS`.
