@@ -484,7 +484,7 @@ such catalog at once with `okf-mcp catalog repair-indexes --missing-only`
 repair to each catalog's `log.md`; no existing index text is changed. It only adds: existing
 headings, prose, listings and summaries stay as they are, a target an index
 already links is not listed again, and a second run changes nothing. A
-path no markdown link can reach (one with a space, `)` or `#`) is not listed;
+path no markdown link can reach (a space, `)` or `#` in it, or a label that cannot be written, such as a folder named `a]`) is not listed;
 `notes` names it instead. A
 listing takes the concept's `title` (else its first `# ` heading, else its
 file name) and `description`; whatever is missing becomes a `TODO`

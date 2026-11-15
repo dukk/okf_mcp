@@ -138,12 +138,7 @@ pub(crate) fn list_concept(
     if lists_target(workspace, &text, &index_path, listing.concept) {
         return Ok(format!("{index_path}: already lists {}", listing.concept));
     }
-    let label = listing.title.replace('[', "\\[").replace(']', "\\]");
-    let bullet = format!(
-        "* [{label}]({}) - {}",
-        basename(listing.concept),
-        collapse_whitespace(listing.summary)
-    );
+    let bullet = concept_bullet(listing);
     let updated = insert_index_bullet_text(&text, &bullet, listing.section, false)
         .ok_or_else(|| missing_heading(&index_path, listing.section.unwrap_or("")))?;
     workspace.write_atomic(&index_path, &updated)?;
@@ -158,6 +153,18 @@ pub(crate) fn list_concept(
         },
     );
     Ok(message)
+}
+
+/// The bullet [`list_concept`] writes: `* [<title>](<file name>) - <summary>`,
+/// with `[` and `]` in the title escaped and the summary's whitespace
+/// collapsed.
+fn concept_bullet(listing: &Listing<'_>) -> String {
+    let label = listing.title.replace('[', "\\[").replace(']', "\\]");
+    format!(
+        "* [{label}]({}) - {}",
+        basename(listing.concept),
+        collapse_whitespace(listing.summary)
+    )
 }
 
 /// Port of `cmd_index`: lists a concept in its folder's `index.md`.
@@ -279,8 +286,7 @@ fn insert_folder_listing(
     outcome: &mut OpOutcome,
 ) -> Result<(), OkfError> {
     let parent_index = join(dirname(folder), INDEX);
-    let href = folder_href(folder, parent_text);
-    let bullet = format!("* [{}]({href}) - {FOLDER_TODO}", folder_heading(folder));
+    let bullet = folder_bullet(folder, parent_text);
     let updated = insert_index_bullet_text(parent_text, &bullet, Some(SECTIONS), true)
         .expect("create_section always finds a place for the bullet");
     workspace.write_atomic(&parent_index, &updated)?;
@@ -296,32 +302,35 @@ fn insert_folder_listing(
     Ok(())
 }
 
-/// The link [`insert_folder_listing`] writes to `folder` from its parent's
-/// index: `/<folder>/` when the parent's bullets are absolute, else
+/// The bullet [`insert_folder_listing`] writes for `folder` in its parent's
+/// index: `* [<Folder name>](<href>) - TODO: describe this folder`, with
+/// the href `/<folder>/` when the parent's bullets are absolute, else
 /// `<name>/`.
-fn folder_href(folder: &str, parent_text: &str) -> String {
+fn folder_bullet(folder: &str, parent_text: &str) -> String {
     let absolute = parent_text
         .split('\n')
         .any(|line| line.starts_with("* [") && line.contains("](/"));
-    if absolute {
+    let href = if absolute {
         format!("/{folder}/")
     } else {
         format!("{}/", basename(folder))
-    }
+    };
+    format!("* [{}]({href}) - {FOLDER_TODO}", folder_heading(folder))
 }
 
-/// Does a link to `href`, written in `index`, resolve to `target`? Not for
-/// every path: a link's destination stops at whitespace or `)`, and `#`
-/// starts its fragment (see [`crate::okf::markdown`]), with no escape, so
-/// `a note.md` cannot be linked. The repair skips such a listing rather
-/// than write one no later run recognises.
-fn links_back(workspace: &dyn Workspace, index: &str, href: &str, target: &str) -> bool {
-    lists_target(workspace, &format!("[]({href})"), index, target)
+/// Does `bullet`, written in `index`, link `target`? Not for every path or
+/// label: a link's destination stops at whitespace or `)`, `#` starts its
+/// fragment, and its label ends at the first unescaped `]` (see
+/// [`crate::okf::markdown`]), so `a note.md`, a folder `a]` or a title
+/// ending in `\` cannot be listed this way. The repair checks the exact
+/// bullet it would write and skips one that no later run would recognise.
+fn links_back(workspace: &dyn Workspace, index: &str, bullet: &str, target: &str) -> bool {
+    lists_target(workspace, bullet, index, target)
 }
 
 /// The note for a listing [`repair_indexes`] cannot write.
 fn unlinkable_note(target: &str, index: &str) -> String {
-    format!("did not list /{target} in /{index}: its path cannot be written as a markdown link")
+    format!("did not list /{target} in /{index}: no markdown link to it can be written")
 }
 
 /// How many [`starter_files`] a new catalog holds.
@@ -373,9 +382,10 @@ pub fn starter_files(
 /// Existing text is only ever added to: headings, prose, bullets and
 /// summaries stay as they are, nothing is removed, and a target an index
 /// already links (however it is worded) is not listed again. So running it
-/// twice changes nothing the second time. A file or folder whose path no
-/// markdown link can reach (a space, `)` or `#` in it) is not listed; a
-/// note names it instead. Every edit is a replay op
+/// twice changes nothing the second time. A file or folder no markdown link
+/// can list (a space, `)` or `#` in its path, or a label that cannot be
+/// written, such as a folder named `a]`) is not listed; a note names it
+/// instead. Every edit is a replay op
 /// ([`ReplayOp::CreateIndex`], [`ReplayOp::CreateLog`],
 /// [`ReplayOp::ListBullet`]), so publish redoes it onto indexes that changed
 /// meanwhile instead of overwriting them.
@@ -466,8 +476,8 @@ fn repair_counted(workspace: &dyn Workspace) -> Result<(OpOutcome, usize), OkfEr
         let parent_index = join(dirname(folder), INDEX);
         let parent_text = workspace.read_text(&parent_index)?;
         if !lists_target(workspace, &parent_text, &parent_index, &index_path) {
-            let href = folder_href(folder, &parent_text);
-            if !links_back(workspace, &parent_index, &href, &index_path) {
+            let bullet = folder_bullet(folder, &parent_text);
+            if !links_back(workspace, &parent_index, &bullet, &index_path) {
                 outcome
                     .notes
                     .push(unlinkable_note(&format!("{folder}/"), &parent_index));
@@ -486,11 +496,21 @@ fn repair_counted(workspace: &dyn Workspace) -> Result<(OpOutcome, usize), OkfEr
         if lists_target(workspace, &text, &index_path, concept) {
             continue;
         }
-        if !links_back(workspace, &index_path, basename(concept), concept) {
+        let about = ConceptAbout::read(workspace, concept)?;
+        let title = about
+            .title
+            .clone()
+            .unwrap_or_else(|| folder_heading(concept.strip_suffix(".md").unwrap_or(concept)));
+        let listing = Listing {
+            concept,
+            title: &title,
+            summary: about.description.as_deref().unwrap_or(CONCEPT_TODO),
+            section: None,
+        };
+        if !links_back(workspace, &index_path, &concept_bullet(&listing), concept) {
             outcome.notes.push(unlinkable_note(concept, &index_path));
             continue;
         }
-        let about = ConceptAbout::read(workspace, concept)?;
         if about.title.is_none() {
             outcome.notes.push(format!(
                 "listed /{concept} under its file name: it has no title"
@@ -503,15 +523,6 @@ fn repair_counted(workspace: &dyn Workspace) -> Result<(OpOutcome, usize), OkfEr
             ));
             placeholders += 1;
         }
-        let title = about
-            .title
-            .unwrap_or_else(|| folder_heading(concept.strip_suffix(".md").unwrap_or(concept)));
-        let listing = Listing {
-            concept,
-            title: &title,
-            summary: about.description.as_deref().unwrap_or(CONCEPT_TODO),
-            section: None,
-        };
         list_concept(workspace, &listing, &mut outcome)?;
     }
     Ok((outcome, placeholders))
@@ -1181,11 +1192,11 @@ mod tests {
                     .collect()
             ),
             [
-                "did not list /a note.md in /index.md: its path cannot be written as a markdown link",
-                "did not list /h#1.md in /index.md: its path cannot be written as a markdown link",
-                "did not list /my notes/ in /index.md: its path cannot be written as a markdown link",
-                "did not list /tab\tx.md in /index.md: its path cannot be written as a markdown link",
-                "did not list /x)y.md in /index.md: its path cannot be written as a markdown link",
+                "did not list /a note.md in /index.md: no markdown link to it can be written",
+                "did not list /h#1.md in /index.md: no markdown link to it can be written",
+                "did not list /my notes/ in /index.md: no markdown link to it can be written",
+                "did not list /tab\tx.md in /index.md: no markdown link to it can be written",
+                "did not list /x)y.md in /index.md: no markdown link to it can be written",
             ]
         );
         // The second run writes nothing; it only repeats the notes.
@@ -1194,6 +1205,47 @@ mod tests {
             .notes
             .iter()
             .all(|line| line.starts_with("did not list")));
+    }
+
+    #[test]
+    fn repair_indexes_checks_the_whole_bullet_label_included() {
+        // The path is linkable but the label is not: a folder `a]` gets the
+        // heading `A]`, and a title ending in `\` escapes the closing `]`.
+        // Neither bullet would parse, so neither is written, and the
+        // repair settles.
+        let ws = MemWorkspace::from_files([
+            ("index.md", "---\nokf_version: \"0.2\"\n---\n# Root\n"),
+            ("log.md", "# Log\n"),
+            ("a]/index.md", "# A\n"),
+            (
+                "c.md",
+                "---\ntype: Note\ntitle: 'C:\\'\ndescription: A drive.\n---\n",
+            ),
+            (
+                "d.md",
+                "---\ntype: Note\ntitle: D [draft]\ndescription: Kept.\n---\n",
+            ),
+        ]);
+
+        let outcome = repair_indexes(&ws).unwrap();
+        let again = repair_indexes(&ws).unwrap();
+
+        // The title with brackets is escaped and listed; the others aren't.
+        assert_eq!(
+            ws.read_to_string("index.md").unwrap(),
+            concat!(
+                "---\nokf_version: \"0.2\"\n---\n# Root\n\n# Concepts\n\n",
+                "* [D \\[draft\\]](d.md) - Kept.\n",
+            )
+        );
+        assert_eq!(
+            sorted(outcome.notes),
+            [
+                "did not list /a]/ in /index.md: no markdown link to it can be written",
+                "did not list /c.md in /index.md: no markdown link to it can be written",
+            ]
+        );
+        assert!(again.touched.is_empty() && again.replay.is_empty());
     }
 
     #[test]

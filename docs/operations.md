@@ -542,7 +542,7 @@ description), then a `log.md`, folder indexes, and folder and concept
 listings are added where missing, and `log.md` gets a line recording the
 repair. No existing index text (headings, prose, listings, summaries) is
 changed, so a second run writes nothing. A file or folder whose path no
-markdown link can reach (a space, `)` or `#` in it) is not listed; the output
+markdown link can reach (a space, `)` or `#` in it, or a label that cannot be written, such as a folder named `a]`) is not listed; the output
 names it. With names, `--missing-only` says
 which of them it skipped (those with a root `index.md`, or misspelled). Listings of concepts
 without a title or description get `TODO` placeholders; the output names
