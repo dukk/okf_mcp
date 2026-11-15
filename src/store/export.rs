@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
 use crate::archive::{self, ExportFile};
+use crate::auth::CatalogScope;
 use crate::error::OkfError;
 use crate::store::audit::{self, Action, AuditActor, Entry, People, Target};
 use crate::store::{catalogs, documents};
@@ -21,8 +22,8 @@ use crate::store::{catalogs, documents};
 /// Compressing is CPU work and runs on a blocking thread.
 ///
 /// Every export is recorded (`catalog.exported`, spec Part 5), whoever asks,
-/// in a short transaction of its own once the read has ended and before
-/// compressing: a failed record fails the export, so no archive leaves
+/// scoped to the owner team the read's snapshot saw, in a short transaction
+/// of its own once the read has ended and before compressing: a failed record fails the export, so no archive leaves
 /// without its entry.
 ///
 /// # Arguments
@@ -60,18 +61,28 @@ where
         .await?;
     let found = catalogs::find(&mut *tx, catalog).await?;
     let rows = documents::published(&mut *tx, found.id).await?;
+    // The owner team's audit id, in the same snapshot as the rows: the
+    // entry belongs to the team that owned what was exported, even if the
+    // catalog moves or is deleted before the entry is written. A plain read
+    // (every team has its `audit_teams` row from creation, migration 0014),
+    // since a read-only transaction cannot run `audit_team_ref`.
+    let team: Option<i64> = sqlx::query_scalar(
+        "SELECT a.id FROM catalogs c JOIN audit_teams a ON a.team_id = c.owner_team_id \
+         WHERE c.id = $1",
+    )
+    .bind(found.id)
+    .fetch_optional(&mut *tx)
+    .await?;
     // Nothing was written; ending the transaction now frees its connection
     // before the (possibly long) compression.
     tx.commit().await?;
-    record_export(
-        pool,
+    let exported = Exported {
         catalog,
-        found.id,
-        (found.generation, rows.len()),
-        audit,
-        now,
-    )
-    .await?;
+        scope: CatalogScope { id: found.id, team },
+        generation: found.generation,
+        files: rows.len(),
+    };
+    record_export(pool, &exported, audit, now).await?;
     // `move` hands `rows` and `out` to the closure; `ExportFile`s borrow from
     // `rows` inside it, so nothing is copied.
     let archive = tokio::task::spawn_blocking(move || {
@@ -93,15 +104,27 @@ where
     Ok((archive, found.generation))
 }
 
-/// Records `catalog.exported` in a transaction of its own, taking the lock
-/// order every recorder takes (`audit::lock_people` first: the actor, its
-/// credential's owner and the person of a personal owner team).
+/// What one export read, as its entry records it: all from the read's
+/// snapshot.
+struct Exported<'a> {
+    /// The catalog's name.
+    catalog: &'a str,
+    /// Its `catalogs.id` and owner team's audit id when it was read.
+    scope: CatalogScope,
+    /// The generation the archive holds.
+    generation: i64,
+    /// How many files it holds.
+    files: usize,
+}
+
+/// Records `catalog.exported` in a transaction of its own, scoped as the
+/// export's snapshot read it. `audit::lock_people` comes first, the lock
+/// order every recorder takes; with the team given as its audit id, the
+/// entry resolves only the actor (and its credential's owner).
 ///
 /// # Arguments
 /// * `pool` - the database.
-/// * `catalog` - the catalog's name.
-/// * `catalog_id` - its id, as the export read it.
-/// * `(generation, files)` - the generation and file count exported.
+/// * `exported` - what was exported, and its scope then.
 /// * `audit` - who exports.
 /// * `now` - when.
 ///
@@ -109,30 +132,24 @@ where
 /// [`OkfError::Database`].
 async fn record_export(
     pool: &PgPool,
-    catalog: &str,
-    catalog_id: i64,
-    (generation, files): (i64, usize),
+    exported: &Exported<'_>,
     audit: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<(), OkfError> {
     let mut tx = pool.begin().await?;
-    let named = [catalog];
-    audit::lock_people(
-        &mut tx,
-        audit,
-        &People {
-            catalogs: &named,
-            ..People::default()
-        },
-    )
-    .await?;
-    let teams = audit::catalog_teams(&mut tx, catalog_id).await?;
+    audit::lock_people(&mut tx, audit, &People::default()).await?;
+    // `into_iter().collect()` turns the `Option` into a zero- or one-item Vec.
+    let teams: Vec<i64> = exported.scope.team.into_iter().collect();
     let entry = Entry {
         action: Action::CatalogExported,
-        target: Target::Catalog(catalog),
+        target: Target::Catalog(exported.catalog),
         person: None,
         teams: &teams,
-        details: serde_json::json!({ "generation": generation, "files": files }),
+        details: serde_json::json!({
+            "generation": exported.generation,
+            "files": exported.files,
+            "catalog_id": exported.scope.id,
+        }),
     };
     audit::record(&mut tx, audit, &entry, now).await?;
     tx.commit().await?;
@@ -253,6 +270,7 @@ mod tests {
         .await
         .unwrap();
 
+        let catalog_id = catalogs::find(&db.pool, "pg").await.unwrap().id;
         let (_, generation) = export(&db.pool, "pg", Vec::new(), &AuditActor::cli(), now)
             .await
             .unwrap();
@@ -264,7 +282,156 @@ mod tests {
         assert_eq!(entries[0].teams, [crate::db::TEST_USER]);
         assert_eq!(
             entries[0].details,
-            serde_json::json!({"generation": generation, "files": 0})
+            serde_json::json!({"generation": generation, "files": 0, "catalog_id": catalog_id})
+        );
+    }
+
+    /// Creates catalog `pg` (owned by the test user's personal team), team
+    /// `family` and user `staff`; returns an actor acting as `staff`, whose
+    /// user row a test can hold to stop an export between its read and its
+    /// entry (the entry's transaction locks the actor's user first).
+    async fn export_race_setup(pool: &PgPool) -> AuditActor {
+        let cli = AuditActor::cli();
+        catalogs::create(
+            pool,
+            &catalogs::NewCatalog {
+                name: "pg",
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            },
+            &cli,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        crate::store::teams::create(
+            pool,
+            &crate::store::teams::NewTeam {
+                name: "family",
+                display_name: "",
+                owner: crate::db::TEST_USER,
+            },
+            &cli,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        let staff = crate::store::users::NewUser {
+            name: "staff",
+            display_name: "",
+        };
+        crate::store::users::create(pool, &staff, &cli, Utc::now())
+            .await
+            .unwrap();
+        let staff_id: String = sqlx::query_scalar("SELECT id FROM users WHERE name = 'staff'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        AuditActor {
+            source: crate::store::audit::Source::Console,
+            credential: None,
+            user_id: Some(staff_id),
+            label: "staff".to_string(),
+            via: crate::store::audit::Via::Session,
+            operator: true,
+            provisioner: false,
+            ip: None,
+        }
+    }
+
+    /// Runs an export of `pg` as `actor` while its entry's first lock (the
+    /// actor's user row) is held, runs `between` once the export waits on
+    /// it, then lets it finish.
+    async fn export_across<F, Fut>(pool: &PgPool, actor: AuditActor, between: F)
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        let mut hold = pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+            .bind(&actor.user_id)
+            .execute(&mut *hold)
+            .await
+            .unwrap();
+        let exporting = tokio::spawn({
+            let pool = pool.clone();
+            async move { export(&pool, "pg", Vec::new(), &actor, Utc::now()).await }
+        });
+        // The read has committed; the entry waits on the held row.
+        crate::http::api::testing::wait_for_lock_waiters(pool, 1).await;
+        between().await;
+        hold.rollback().await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(30), exporting)
+            .await
+            .expect("the export finishes once the row is released")
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_export_belongs_to_the_owner_it_read_even_if_the_catalog_moves_or_goes() {
+        let db = test_db().await;
+        let actor = export_race_setup(&db.pool).await;
+        let pg = catalogs::find(&db.pool, "pg").await.unwrap().id;
+
+        export_across(&db.pool, actor.clone(), || async {
+            catalogs::set_owner(&db.pool, "pg", "family", &AuditActor::cli(), Utc::now())
+                .await
+                .unwrap();
+        })
+        .await;
+        export_across(&db.pool, actor, || async {
+            catalogs::delete(&db.pool, "pg", true, &AuditActor::cli(), Utc::now())
+                .await
+                .unwrap();
+        })
+        .await;
+
+        let entries = crate::store::audit::testing::entries(&db.pool, "catalog.exported").await;
+        let scopes: Vec<(Vec<String>, Option<i64>)> = entries
+            .iter()
+            .map(|entry| (entry.teams.clone(), entry.details["catalog_id"].as_i64()))
+            .collect();
+        let family = vec!["family".to_string()];
+        assert_eq!(
+            scopes,
+            [
+                (vec![crate::db::TEST_USER.to_string()], Some(pg)),
+                (family, Some(pg))
+            ],
+            "each export with the owner its snapshot saw, the deleted one included"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_export_whose_entry_fails_fails_and_records_nothing() {
+        let db = test_db().await;
+        catalogs::create(
+            &db.pool,
+            &catalogs::NewCatalog {
+                name: "pg",
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        crate::http::api::testing::fail_on(&db.pool, "BEFORE INSERT ON audit_entries FOR EACH ROW")
+            .await;
+
+        let failed = export(&db.pool, "pg", Vec::new(), &AuditActor::cli(), Utc::now()).await;
+
+        crate::http::api::testing::allow(&db.pool, "audit_entries").await;
+        assert!(
+            matches!(failed, Err(OkfError::Database { .. })),
+            "{failed:?}"
+        );
+        assert!(
+            crate::store::audit::testing::entries(&db.pool, "catalog.exported")
+                .await
+                .is_empty()
         );
     }
 

@@ -393,6 +393,29 @@ impl Principal {
             .is_some_and(|catalogs| catalogs.contains(catalog))
     }
 
+    /// The scope of the catalog incarnation `catalog_id`, if this
+    /// principal's gates were loaded with that incarnation under `catalog`.
+    /// The gates and the catalog map a call reads are published separately
+    /// (`App::poll` swaps the key cache first), so a call can read one
+    /// incarnation of a name (deleted and created again) while the gates
+    /// describe another; only a matching id makes the gates' membership and
+    /// owner team true of what is read.
+    ///
+    /// # Arguments
+    /// * `catalog` - the catalog's name.
+    /// * `catalog_id` - the `catalogs.id` of the state the call reads.
+    ///
+    /// # Returns
+    /// Its id and owner team, or `None` when the gates do not know that
+    /// incarnation.
+    pub fn scope_of(&self, catalog: &str, catalog_id: i64) -> Option<CatalogScope> {
+        self.gates
+            .catalogs
+            .get(catalog)
+            .copied()
+            .filter(|scope| scope.id == catalog_id)
+    }
+
     /// This principal's access to `catalog` as the audit log will record
     /// it, with every identity and scope fixed now from the key cache, so
     /// a write that runs later neither looks anything up by name nor
@@ -400,25 +423,21 @@ impl Principal {
     ///
     /// # Arguments
     /// * `requester` - the request's address and source.
-    /// * `catalog` - the catalog.
+    /// * `catalog` - the catalog's name.
+    /// * `scope` - the incarnation read, from [`Self::scope_of`].
     /// * `now` - when it was admitted (server clock).
     ///
     /// # Returns
-    /// The record, or `None` for a catalog the cache does not know (created
-    /// since its load, or a principal built outside the cache), which is
-    /// logged at `warn`.
+    /// The record.
     pub fn access_record(
         &self,
         requester: &Requester,
         catalog: &str,
+        scope: CatalogScope,
         now: DateTime<Utc>,
-    ) -> Option<AccessRecord> {
-        let Some(scope) = self.gates.catalogs.get(catalog).copied() else {
-            tracing::warn!(%catalog, "an operator access to a catalog the key cache does not know");
-            return None;
-        };
+    ) -> AccessRecord {
         let actor = AuditActor::of(self, requester);
-        Some(AccessRecord {
+        AccessRecord {
             source: requester.source,
             actor_credential: actor
                 .credential
@@ -436,7 +455,7 @@ impl Principal {
             catalog: catalog.to_string(),
             scope,
             at: now,
-        })
+        }
     }
 
     /// Requires read access to the catalog and the independent reporting flag.
