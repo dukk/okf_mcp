@@ -23,5 +23,6 @@ pub mod sign_in_events;
 pub mod sign_in_methods;
 pub mod teams;
 pub mod unassigned;
+pub mod unlocks;
 pub mod user_sessions;
 pub mod users;
