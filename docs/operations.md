@@ -1795,8 +1795,9 @@ A catalog whose owners turned maintenance off (`catalog set-maintenance C off`)
 refuses its claim with `Forbidden` and `"maintenance": "off"`. The runner then
 claims nothing and exits 0 with reason `maintenance_off`, recording no stop: the
 pending claim replays exactly on the next run, which works normally once the flag
-is on again. Refused after it claimed work (the flag turned off mid-run), it stops
-with reason `maintenance_off` and exit 4, like any interrupted run.
+is on again. Refused after it claimed work (the flag turned off mid-run, even
+after every submission, before the close), it stops with reason `maintenance_off`
+and exit 4, like any interrupted run; the pending request replays on the next run.
 
 ### Prerequisites and commands
 
