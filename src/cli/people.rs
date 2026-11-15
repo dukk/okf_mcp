@@ -16,7 +16,7 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-use super::{labelled, tab_row, TeamCommand, UserCommand};
+use super::{comma_list, labelled, tab_row, TeamCommand, UserCommand};
 use crate::clock::format_timestamp;
 use crate::config::Config;
 use crate::mail::invite;
@@ -503,18 +503,6 @@ fn format_team(team: &TeamRecord) -> String {
         ),
         &team.display_name,
     ])
-}
-
-/// Comma-joins `items`, or `None` when there are none (a `-` cell).
-///
-/// # Arguments
-/// * `items` - the names.
-///
-/// # Returns
-/// `"a,b"`, or `None` for an empty slice.
-fn comma_list(items: &[String]) -> Option<String> {
-    // `then` runs the closure only when the condition holds: `x if c else None`.
-    (!items.is_empty()).then(|| items.join(","))
 }
 
 /// Joins listing lines, each followed by a newline (nothing for no lines).
