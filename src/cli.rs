@@ -37,6 +37,8 @@ use crate::store::teams::Role;
 
 // `src/cli/admin.rs`: the `settings` and `mail` handlers.
 mod admin;
+// `src/cli/audit.rs`: the `audit` handlers.
+mod audit;
 // `src/cli/people.rs`: the user, team, assignment and `unassigned` handlers.
 mod people;
 
@@ -92,6 +94,10 @@ pub enum Command {
     /// Send a test email, and list, retry or delete queued mail.
     #[command(subcommand)]
     Mail(MailCommand),
+    /// Read the audit log: administrative changes, catalog writes, exports
+    /// and operators' reads.
+    #[command(subcommand)]
+    Audit(AuditCommand),
     /// List keys, grants, sign-in codes and catalogs with no user or owner.
     Unassigned,
     /// Import a directory or a .tar.gz into an existing catalog.
@@ -457,6 +463,52 @@ pub enum MailCommand {
     },
 }
 
+/// `okf-mcp audit ...`. The CLI has operator access: it reads every entry,
+/// unredacted, as an every-catalog admin does over REST.
+#[derive(Debug, Subcommand)]
+pub enum AuditCommand {
+    /// Entries, newest first, one tab-separated line each: id, time,
+    /// action, actor, target, teams, details.
+    List(AuditArgs),
+    /// Every matching entry as JSON Lines on stdout, newest first (as
+    /// `GET /api/v1/audit/export`; `--limit` is ignored).
+    Export(AuditArgs),
+}
+
+/// The audit filters, as `GET /api/v1/audit` takes them. An empty value is
+/// no filter.
+// `Clone` and `Default` let a test build one filter set and run it through
+// both subcommands.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Args)]
+pub struct AuditArgs {
+    /// Only entries of this team (every team that had the name; a personal
+    /// team by its user's name).
+    #[arg(long)]
+    pub team: Option<String>,
+    /// Only this action (`user.created`, ...).
+    #[arg(long)]
+    pub action: Option<String>,
+    /// Only this actor: a person, a credential id or an actor label.
+    #[arg(long)]
+    pub actor: Option<String>,
+    /// Only this target: a name, a person or a credential id.
+    #[arg(long)]
+    pub target: Option<String>,
+    /// From this RFC 3339 time on.
+    #[arg(long)]
+    pub since: Option<String>,
+    /// Before this RFC 3339 time.
+    #[arg(long)]
+    pub until: Option<String>,
+    /// Only entries older than this id: pass a full page's last id to read
+    /// the next page.
+    #[arg(long, value_name = "ID")]
+    pub after: Option<i64>,
+    /// At most this many (`list` only; default 100, at most 500).
+    #[arg(long, value_name = "N")]
+    pub limit: Option<i64>,
+}
+
 /// `okf-mcp key create`'s options.
 // `derive(Args)` makes this struct a group of options that a subcommand
 // variant (`Create(KeyCreateArgs)`) can hold.
@@ -664,6 +716,10 @@ pub async fn run(cli: Cli, clock: Arc<dyn Clock>) -> anyhow::Result<()> {
             // is needed here.
             let pool = connect(cli.database_url.as_deref(), &config).await?;
             print!("{}", admin::mail(&pool, command, clock.now()).await?);
+        }
+        Command::Audit(command) => {
+            let pool = connect(cli.database_url.as_deref(), &config).await?;
+            print!("{}", audit::audit(&pool, &command).await?);
         }
         Command::Unassigned => {
             let pool = connect(cli.database_url.as_deref(), &config).await?;
@@ -1040,6 +1096,18 @@ fn tab_row(cells: &[&str]) -> String {
 /// The cell.
 fn labelled(label: &str, value: Option<&str>) -> String {
     format!("{label} {}", value.unwrap_or("-"))
+}
+
+/// Comma-joins `items`, or `None` when there are none (a `-` cell).
+///
+/// # Arguments
+/// * `items` - the names.
+///
+/// # Returns
+/// `"a,b"`, or `None` for an empty slice.
+fn comma_list(items: &[String]) -> Option<String> {
+    // `then` runs the closure only when the condition holds: `x if c else None`.
+    (!items.is_empty()).then(|| items.join(","))
 }
 
 /// One `catalog list` line, tab-separated: name, `generation N`, `owner T`
