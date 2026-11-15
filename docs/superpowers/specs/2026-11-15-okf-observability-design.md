@@ -250,6 +250,9 @@ Rules (checked at load, with the existing `Config::validate` style):
   `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_TRACES_SAMPLER` when `sample_ratio`
   is unset, `OTEL_BSP_*`, `OTEL_METRIC_EXPORT_INTERVAL`) still apply as the
   SDK defines them. `OTEL_SDK_DISABLED=true` turns OTLP off.
+  `OTEL_EXPORTER_OTLP_HEADERS` is merged over the headers from
+  `headers_env`, so a header named in both takes the environment's
+  value (the SDK's behaviour). *(Corrected, M15 plan, 2026-11-15.)*
 
 The resource carries `service.name`, `service.version` (the crate
 version), `deployment.environment.name` when set, and whatever
@@ -262,8 +265,8 @@ version), `deployment.environment.name` when set, and whatever
 
 | Area | Span | Attributes |
 |---|---|---|
-| HTTP, every route | `TraceLayer` with a span maker: `otel.name = "<METHOD> <route>"`, `otel.kind = server` | `http.request.method` (unknown ones as `_OTHER`), `http.route` from `MatchedPath`, `http.response.status_code` (i64), `otel.status_code = ERROR` for 5xx only, `enduser.id` and `okf.team.id`/`okf.key.id` once the principal is known. An unmatched route gets no span. No URI, query or header |
-| MCP tools | `#[instrument(level = "info", skip_all, fields(otel.name = "mcp <tool>", okf.tool, okf.catalog, okf.outcome))]` below each `#[tool]` | outcome and error kind recorded at the end |
+| HTTP, every route | `TraceLayer` with a span maker: `otel.name = "<METHOD> <route>"`, `otel.kind = server` | `http.request.method` (unknown ones as `_OTHER`), `http.route` from `MatchedPath`, `http.response.status_code` (i64), `otel.status_code = ERROR` for 5xx only, `enduser.id` and `okf.key.id` once the principal is known (`Principal` has no team; corrected, M15 plan, 2026-11-15). An unmatched route gets no span. No URI, query or header |
+| MCP tools (42) | one `info` span per call, `otel.name = "mcp <tool>"`, opened in `OkfServer::call_tool`, the single choke point (corrected, M15 plan, 2026-11-15: was `#[instrument]` on each tool, which now carry `debug` spans beneath it) | `okf.tool`, `okf.catalog`, `okf.outcome`, `okf.error.kind`, `enduser.id`, `okf.key.id` |
 | Publish | `okf.publish`, children for the lock wait, lint, write, commit | `okf.catalog`, `okf.changeset.entries` |
 | Poll loop | `okf.poll` root per tick; a child per catalog refresh and the key-cache reload | `okf.catalog`, `okf.refresh.result` |
 | Mail | `okf.mail.job` root per apalis job | `okf.mail.provider`, outcome; never the address |
@@ -300,10 +303,9 @@ OTel names; the Prometheus reader renders them with `_` and unit and
 | `okf.mail.jobs` | counter | `provider`, `outcome` |
 | `okf.mail.queue.depth` | gauge | `status` |
 | `db.client.connection.count` | gauge | `state` (`idle`, `used`) |
-| `db.client.connection.wait_time` | histogram, s | |
 | `okf.clock.offset` | gauge, s | |
 | `okf.clock.checks` | counter | `outcome` |
-| `okf.archive.bytes` | counter, By | `direction`, `catalog` |
+| `okf.archive.size` | counter, By (rendered `okf_archive_size_bytes_total`; corrected, M15 plan, 2026-11-15: `okf.archive.bytes` would render `_bytes_bytes_total`) | `direction`, `catalog` |
 | `okf.archive.duration` | histogram, s | `direction`, `outcome` |
 | `okf.telemetry.export.failures` | counter | `signal`, `reason` |
 | `okf.build.info` | gauge (1) | `version` |
@@ -320,7 +322,7 @@ series stop at the next collection.
   method, rule, reason and status enums. Never a user, team, key, path or
   id.
 - **Span attributes** may also carry principal ids: `enduser.id` (the
-  user's numeric id), `okf.team.id`, `okf.key.id`. Never names, email
+  user's id) and `okf.key.id`. *(Corrected, M15 plan, 2026-11-15.)* Never names, email
   addresses, display names or key material.
 - **Never recorded anywhere:** URIs, query strings, headers, request or
   response bodies, document or concept text, concept paths, SQL, bind
@@ -348,7 +350,10 @@ scope. `docs/contributing/policy-lints.md` (new) carries the rules below.
   disabled callsites (one atomic load each) and cost nothing; raising
   `traces_filter` to `debug` or `trace` gives the full call tree.
 - **`skip_all`, always,** with safe values through `fields(...)`.
-- **MCP tools.** `#[tracing::instrument]` goes below `#[tool]`; the
+- **MCP tools.** The `info` span of a tool call comes from
+  `OkfServer::call_tool`; each tool method takes
+  `#[tracing::instrument(level = "debug", skip_all, ...)]` below
+  `#[tool]`. *(Corrected, M15 plan, 2026-11-15.)* The
   `RequestContext` argument carries the request's headers, the bearer
   credential among them. Functions the rmcp macros generate are not
   flagged.
