@@ -5,6 +5,7 @@
 // handler main.js installs.
 import { store } from './store.js';
 import { toast } from './toast.js';
+import { h } from './dom.js';
 
 export class ApiError extends Error {
     constructor(status, body) {
@@ -61,8 +62,23 @@ async function request(method, path, { body, raw = false, quiet = false, key } =
     return response.status === 204 ? null : response.json();
 }
 
+// Downloads a GET answer as a file with the console's own credential (the
+// bearer key, or the session cookie), which a plain link cannot carry for a
+// key. Refuses as `request` does (toasted unless `quiet`).
+async function download(path, filename, opts) {
+    const response = await request('GET', path, { ...opts, raw: true });
+    const url = URL.createObjectURL(await response.blob());
+    const link = h('a', { href: url, download: filename, hidden: true });
+    document.body.append(link);
+    link.click();
+    link.remove();
+    // Revoked on the next turn, once the browser has started the download.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 export const api = {
     get: (path, opts) => request('GET', path, opts),
+    download,
     post: (path, body, opts) => request('POST', path, { ...opts, body }),
     put: (path, body, opts) => request('PUT', path, { ...opts, body }),
     patch: (path, body, opts) => request('PATCH', path, { ...opts, body }),

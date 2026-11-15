@@ -84,6 +84,7 @@ main { padding: 1.75rem 2.25rem; min-width: 0; }
 .page-head .actions { display: flex; gap: .5rem; }
 .page-head button { width: auto; margin: 0; }
 .page-head input[type=search] { width: 16rem; margin: 0; }
+.audit-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: 0 1rem; margin-bottom: .5rem; }
 
 /* tiles, segments, tables, pills */
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .75rem; margin-bottom: 1.25rem; }
