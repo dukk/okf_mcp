@@ -943,9 +943,10 @@ do; the command line needs only the database, as every subcommand does.
 
 ### CLI, API and console parity
 
-Every admin command for users, teams, assignment, sign-in, settings and
-mail has a REST route and a console control. `tests/admin_parity.rs` fails
-when a `user`, `team`, `settings` or `mail` subcommand, or one of the other
+Every admin command for users, teams, assignment, sign-in, settings, mail
+and the audit log has a REST route and a console control.
+`tests/admin_parity.rs` fails when a `user`, `team`, `settings`, `mail` or
+`audit` subcommand, or one of the other
 commands below, has no row here or its row names a route the API reference
 does not document. A row may name a subcommand's flag (`user list --email`);
 the test checks the flag exists.
@@ -985,6 +986,8 @@ the test checks the flag exists.
 | `okf-mcp mail queue` | `GET /api/v1/mail/queue` | Settings → Mail queue |
 | `okf-mcp mail retry` | `POST /api/v1/mail/queue/{id}/retry` | Settings → Mail queue → Retry |
 | `okf-mcp mail delete` | `DELETE /api/v1/mail/queue/{id}` | Settings → Mail queue → Delete |
+| `okf-mcp audit list` | `GET /api/v1/audit` | Audit |
+| `okf-mcp audit export` | `GET /api/v1/audit/export` | Audit → Export |
 
 `GET /api/v1/users/{name}` and `GET /api/v1/teams/{name}` (a user's or a
 team's drawer in the console) have no command of their own: `user list` and
@@ -2269,6 +2272,25 @@ entry's request count, else `null`.
 ```sh
 curl -s -H "Authorization: Bearer $OKF_MCP_KEY" \
     "https://okf-mcp.example.com/api/v1/audit?action=user.created&limit=20"
+```
+
+The CLI reads the same log with operator access (every entry, unredacted,
+as an every-catalog admin), taking the same filters as flags (`--team`,
+`--action`, `--actor`, `--target`, `--since`, `--until`, `--after`,
+`--limit`) and refusing a bad one the same way:
+
+```sh
+# Newest first, one tab-separated line per entry: id, time, action, actor
+# (`person NAME`, else `credential ID`, else the actor label), target
+# (`user NAME`, or `KIND NAME`, then `person NAME` when the entry names one),
+# teams (comma-separated, `-` for none) and the details as JSON. Control
+# characters in names and labels are escaped. Pass a full page's last id as
+# --after for the next page.
+okf-mcp audit list --action user.created --limit 20
+
+# Every matching entry as JSON Lines, the records `GET /api/v1/audit/export`
+# answers (`--after` starts it; `--limit` is ignored).
+okf-mcp audit export --team family --since 2026-01-01T00:00:00Z > audit.jsonl
 ```
 
 ### Health

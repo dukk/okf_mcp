@@ -1278,6 +1278,51 @@ pub async fn list(
     Ok(rows.into_iter().map(|row| row.into_record(owner)).collect())
 }
 
+/// Every entry a viewer may read that the filters select, as JSON Lines
+/// (one [`AuditRecord`] per line, newest first): the export behind `GET
+/// /api/v1/audit/export` and `okf-mcp audit export`, so the two cannot
+/// differ. `query.after` is a starting cursor and `query.limit` is
+/// ignored: it reads [`MAX_PAGE`] entries at a time, moving the cursor to
+/// each full page's last id, until a page is not full. Retention bounds
+/// the total.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `viewer` - who reads ([`list`] redacts for them).
+/// * `query` - the filters.
+///
+/// # Returns
+/// The lines, each ending in `\n` (empty when nothing matches).
+///
+/// # Errors
+/// [`OkfError::Database`].
+pub async fn export_lines(
+    pool: &PgPool,
+    viewer: &Viewer,
+    query: &AuditQuery<'_>,
+) -> Result<String, OkfError> {
+    // A copy with the page size fixed; `..query.clone()` takes the other
+    // fields from the caller's query, like `dataclasses.replace`.
+    let mut page_query = AuditQuery {
+        limit: MAX_PAGE,
+        ..query.clone()
+    };
+    let mut lines = String::new();
+    loop {
+        let page = list(pool, viewer, &page_query).await?;
+        for record in &page {
+            // A record holds only strings, numbers and JSON values, so
+            // serializing it cannot fail.
+            lines.push_str(&serde_json::to_string(record).expect("an audit record serializes"));
+            lines.push('\n');
+        }
+        match page.last() {
+            Some(last) if page.len() as i64 == MAX_PAGE => page_query.after = Some(last.id),
+            _ => return Ok(lines),
+        }
+    }
+}
+
 /// The listing. `$1` an owner's audit team id, `$2` action, `$3` actor,
 /// `$4` target, `$5` since, `$6` until, `$7` cursor, `$8` credential, `$9`
 /// the owner's `teams.id`, `$10` owner view, `$11` limit, `$12` a team
