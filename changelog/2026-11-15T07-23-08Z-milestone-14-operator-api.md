@@ -168,8 +168,7 @@ Each became a rule in `tools/agentic/lessons.md`:
     console), #381 (the team drawer's membership and delete controls are
     not guarded by a pending-write key) and #385 (the users and My keys
     drawers number their redraw after the list refresh).
-- Open question for the maintainer: should an unlock require the acting
-  credential's user to be an admin user? Today any admin-level credential
-  with a user may unlock (an every-catalog one for another admin user it
-  names), whether or not its own user is an admin. Raised in review of PR
-  #437 and left as is.
+- Open question for the maintainer, decided 2026-11-15 (issue #447): an
+  unlock must be created by a credential whose user is an admin user;
+  ending one needs only an admin credential on the catalog. Raised in
+  review of PR #437.

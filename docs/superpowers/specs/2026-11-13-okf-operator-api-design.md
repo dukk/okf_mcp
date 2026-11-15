@@ -415,11 +415,17 @@ can opt out.
   category** (`support`, `deletion_request`, `export_request`,
   `security_investigation`, `legal`, `other`), a free-text **reason** (for
   example a ticket number; required) and a **duration**, at most the
-  setting `unlock_max_hours` (default 4).
+  setting `unlock_max_hours` (default 4). *(Decided, issue #447,
+  2026-11-15.)* Over HTTP the creating credential's own user must be an
+  admin user, so the audit log's granting person is always staff; the CLI
+  acts on the database as the operator, with no user.
 - It applies to that admin user's credentials (console session and their
   own keys). A key with no user can't be unlocked: give it a user.
 - It ends at its expiry, or earlier when ended by its admin or any admin.
-  It can't be extended; a new unlock is a new record.
+  It can't be extended; a new unlock is a new record. *(Decided, issue
+  #447, 2026-11-15.)* Ending needs an admin credential on the catalog, not
+  an admin user: it only takes access away, so whoever administers the
+  catalog may close it.
 - Surfaces: `okf-mcp unlock create --catalog C --user U --category K
   --reason TEXT [--hours N]`, `okf-mcp unlock list`, `okf-mcp unlock end
   ID`; `POST /api/v1/unlocks`, `GET /api/v1/unlocks`,
@@ -737,8 +743,9 @@ are the places where what shipped is narrower, wider or more exact.
   an admin) holds a second Catalogs link, whose drawer holds only the
   Maintenance switch, since the Catalogs link was otherwise in Administer
   only. The switch reads the catalog when the drawer opens (PR #445). The
-  console offers Unlock to an admin credential with a user (`whoami` has no
-  admin-user field); the server refuses the rest (#404, #409).
+  console offers Unlock to an admin credential whose user is an admin user
+  (`whoami`'s `user_admin`, added by #447); the server refuses the rest
+  (#404, #409, #447).
 - **A user's audit link** opens `#/users/detail/<name>`, a route of its own,
   so a user named `unassigned` opens its own drawer (#404).
 
@@ -761,10 +768,14 @@ are the places where what shipped is narrower, wider or more exact.
     passkey journey).
   - From milestone 13: #361, #381 and #385 (console follow-ups).
 
-### Open question for the maintainer
+### Decided after the milestone
 
-- **Should an unlock require the acting credential's user to be an admin
-  user?** Today any admin-level credential that has a user may unlock (for
-  its own user, which must be an admin user, or, as an every-catalog admin,
-  for another admin user it names), whether or not its own user is an
-  admin. The question was raised in review of PR #437 and left as is.
+- **An unlock is created only by a credential whose user is an admin
+  user** (maintainer's decision, 2026-11-15, issue #447; raised in review
+  of PR #437). `POST /api/v1/unlocks` refuses anyone else with 403 before
+  it looks at the target, from the key cache, and `unlocks::create` checks
+  the creator's admin flag again under its user row's lock, so a demotion
+  committed meanwhile is refused too. The CLI is unchanged. Ending an
+  unlock does not need an admin user: any admin credential that
+  administers the catalog may end it, since ending only takes access
+  away.

@@ -8,8 +8,9 @@
 
 use chrono::Utc;
 use okf_mcp::store::audit::AuditActor;
+use okf_mcp::store::keys::{self, Access, Grants, NewKey};
 use okf_mcp::store::settings::{self, SettingKey};
-use okf_mcp::store::users::{self, AdminChange};
+use okf_mcp::store::users::{self, AdminChange, NewUser};
 
 use crate::harness::{drive, Ui};
 use crate::self_service::{console_base, login_server};
@@ -107,6 +108,51 @@ async fn a_refused_admin_unlocks_main_reads_it_and_ends_the_unlock() {
             "the owner's table names the reason or the staff member: {table}"
         );
         ui.wait_hidden("[data-test=unlock-end-main]");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_non_admin_users_admin_key_is_not_offered_unlock() {
+    // Issue #447: only operator staff make unlocks. `helper` is not an
+    // admin user and not in `main`'s owner team, so its every-catalog admin
+    // key is refused `main` (an unlock is required) and offered no Unlock,
+    // in Browse or on the Unlocks page.
+    let server = locked_server().await;
+    let pool = &server.db.pool;
+    let helper = NewUser {
+        name: "helper",
+        display_name: "",
+    };
+    users::create(pool, &helper, &AuditActor::cli(), Utc::now())
+        .await
+        .expect("create helper");
+    let new = NewKey {
+        name: "helper-root",
+        access: Access::Admin,
+        maintenance_report: false,
+        grants: Grants::All,
+        default_catalog: Some("main"),
+        actor: "helper-root",
+        user: "helper",
+        self_issued: false,
+        expires_at: None,
+        levels: &[],
+    };
+    let key = keys::create(pool, &new, &AuditActor::cli(), Utc::now())
+        .await
+        .expect("create helper's admin key");
+    server.app.poll().await.expect("poll");
+    drive(console_base(&server), move |ui| {
+        ui.login(&key);
+        ui.open("/browse/main");
+        ui.wait_visible("#browse-locked");
+        ui.wait_text("#browse-locked", "needs an unlock");
+        // The notice and its button are drawn together.
+        ui.wait_hidden("#browse-unlock");
+        ui.open("/unlocks");
+        ui.wait_visible("#unlocks-refresh");
+        ui.wait_hidden("#unlocks-new");
     })
     .await;
 }

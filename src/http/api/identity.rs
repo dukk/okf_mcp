@@ -52,6 +52,10 @@ pub(crate) struct WhoAmI {
     /// That user's teams, sorted (empty without a user, or once the user
     /// is deleted).
     pub teams: Vec<String>,
+    /// Whether that user is an admin user (operator staff), the only users
+    /// whose admin credentials may create an unlock (issue #447); `false`
+    /// without a user, or once the user is deleted.
+    pub user_admin: bool,
 }
 
 /// The signed-in console session, as the console reads it at boot.
@@ -92,22 +96,24 @@ pub(crate) fn routes() -> Router<Arc<App>> {
         .route("/session", get(session).delete(sign_out))
 }
 
-/// The teams of the user called `name`, sorted.
+/// The teams of the user called `name`, sorted, and whether it is an admin
+/// user.
 ///
 /// # Arguments
 /// * `pool` - the database.
 /// * `name` - the user's name.
 ///
 /// # Returns
-/// Its teams, or none once the user is gone: a user deleted between
-/// reading the key and reading the user is not an error here.
+/// Its teams and admin flag, or no teams and `false` once the user is
+/// gone: a user deleted between reading the key and reading the user is
+/// not an error here.
 ///
 /// # Errors
 /// [`OkfError::Database`].
-async fn teams_of(pool: &PgPool, name: &str) -> Result<Vec<String>, OkfError> {
+async fn teams_of(pool: &PgPool, name: &str) -> Result<(Vec<String>, bool), OkfError> {
     match users::find(pool, name).await {
-        Ok(record) => Ok(record.teams),
-        Err(OkfError::UnknownName { .. }) => Ok(Vec::new()),
+        Ok(record) => Ok((record.teams, record.is_admin)),
+        Err(OkfError::UnknownName { .. }) => Ok((Vec::new(), false)),
         Err(other) => Err(other),
     }
 }
@@ -138,9 +144,9 @@ async fn whoami(
             (name, user.flatten())
         }
     };
-    let teams = match &user {
+    let (teams, user_admin) = match &user {
         Some(name) => teams_of(app.pool(), name).await?,
-        None => Vec::new(),
+        None => (Vec::new(), false),
     };
     // `Catalogs` is a BTreeMap, so its keys come out sorted.
     let catalogs = app
@@ -168,6 +174,7 @@ async fn whoami(
         client_name,
         user,
         teams,
+        user_admin,
     }))
 }
 
@@ -277,6 +284,31 @@ mod tests {
         assert_eq!(status.as_u16(), 200);
         assert_eq!(body["user"], crate::db::TEST_USER);
         assert_eq!(body["teams"], serde_json::json!([crate::db::TEST_TEAM]));
+        assert_eq!(body.get("user_admin"), Some(&serde_json::json!(false)));
+    }
+
+    #[tokio::test]
+    async fn whoami_says_whether_the_keys_user_is_an_admin_user() {
+        let test = app().await;
+        let keys = keys(&test).await;
+        let on = crate::store::users::AdminChange {
+            on: true,
+            allow_last: true,
+        };
+        crate::store::users::set_admin(
+            test.app.pool(),
+            crate::db::TEST_USER,
+            on,
+            &crate::store::audit::AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+
+        let (status, body) = send(&test, "GET", "/api/v1/whoami", Some(&keys.read), None).await;
+
+        assert_eq!(status.as_u16(), 200);
+        assert_eq!(body.get("user_admin"), Some(&serde_json::json!(true)));
     }
 
     #[tokio::test]
@@ -299,6 +331,7 @@ mod tests {
         assert_eq!(status.as_u16(), 200);
         assert_eq!(body["user"], serde_json::Value::Null);
         assert_eq!(body["teams"], serde_json::json!([]));
+        assert_eq!(body.get("user_admin"), Some(&serde_json::json!(false)));
     }
 
     #[tokio::test]
@@ -307,7 +340,7 @@ mod tests {
 
         let teams = super::teams_of(test.app.pool(), "no-such-user").await;
 
-        assert_eq!(teams.expect("not an error"), Vec::<String>::new());
+        assert_eq!(teams.expect("not an error"), (Vec::<String>::new(), false));
     }
 
     #[tokio::test]

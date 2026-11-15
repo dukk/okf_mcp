@@ -2227,7 +2227,8 @@ signed in with an account who is not an admin: its Catalogs link lists the
 catalogs the user reaches, and a catalog's drawer holds only the
 Maintenance switch, enabled for an owner of the catalog's owner team. Where a
 locked catalog is refused (`UnlockRequired`), the console offers Unlock,
-to an admin credential with a user, with a short form for the category,
+to an admin credential whose user is an admin user (`whoami`'s
+`user_admin`), with a short form for the category,
 reason and hours.
 
 ### API reference
@@ -2251,7 +2252,7 @@ key and acts only on the signed-in user's own rows. Every endpoint also takes a 
 
 | Method and path | Key | Does |
 |---|---|---|
-| `GET /api/v1/whoami` | any | The calling credential: `key_id`, `name`, `actor`, `access`, `maintenance_report`, `all_catalogs`, `catalogs` (the loaded catalogs it reaches, sorted), `default_catalog`, `kind` (`key`, `oauth` or `session`), `client_name` (a grant's client), `user` (the user it belongs to, `null` when unassigned) and `teams` (that user's teams, sorted). A session's `key_id` is `session:<user>`, its `name` `null` and its `actor` the user's name. Never a key, token or hash |
+| `GET /api/v1/whoami` | any | The calling credential: `key_id`, `name`, `actor`, `access`, `maintenance_report`, `all_catalogs`, `catalogs` (the loaded catalogs it reaches, sorted), `default_catalog`, `kind` (`key`, `oauth` or `session`), `client_name` (a grant's client), `user` (the user it belongs to, `null` when unassigned), `teams` (that user's teams, sorted) and `user_admin` (whether that user is an admin user, `false` without one; the console offers Unlock only when it is true). A session's `key_id` is `session:<user>`, its `name` `null` and its `actor` the user's name. Never a key, token or hash |
 | `GET /api/v1/session` | console session | `{user, email, admin, csrf, ceiling, expires_at}`: the signed-in user's name, email and admin flag, the CSRF token writes must send as `X-OKF-CSRF`, the ceiling (`{catalog: "read"\|"write"}`) and when the session ends at the latest. 401 without a usable session (a dead cookie is cleared); a bearer credential gets 403 |
 | `DELETE /api/v1/session` | console session | Signs out: deletes the session and clears the cookie; 204. Needs `X-OKF-CSRF` (403 without); a bearer credential gets 403 |
 
@@ -2508,7 +2509,13 @@ access](#unlock-before-access)). Who may do what:
   an unknown one). The unlock is for the caller's own user; naming another
   `user` needs an admin that reaches every catalog. A key with no user gets
   403 ("give it a user") whether or not it names a `user`: it may not
-  unlock for anyone. A user who is not an admin gets 409.
+  unlock for anyone. *(Decided 2026-11-15, issue #447.)* The credential's
+  own user must be an admin user: an admin key issued to anyone else gets
+  403 ("not an admin user"), whoever it names, before the target is looked
+  at, and nothing is recorded, so the person granting an unlock is always
+  operator staff. A demotion that commits while the unlock waits is
+  refused the same way. A named `user` who is not an admin gets 409. The
+  CLI (`okf-mcp unlock create`) acts as the operator and is unchanged.
 - **Listing**: an admin reads full records (a scoped admin only those of
   the catalogs it administers). A team's owner, through a signed-in console
   session only and naming the team (`?team=NAME`), reads the unlocks of the
@@ -2518,7 +2525,9 @@ access](#unlock-before-access)). Who may do what:
   malformed team name included.
 - **Ending** needs an admin (any admin, not only the unlock's); a scoped
   admin ends only the unlocks of the catalogs it administers (any other id
-  is 404).
+  is 404). Ending does not need an admin user (decided 2026-11-15, issue
+  #447): it only takes access away, so any admin credential on the catalog
+  may close an unlock.
 - A provisioner key gets 403 on every route.
 
 An admin's record is `{id, catalog, owner_team, user, category, reason,
@@ -2528,7 +2537,7 @@ early; `state` is `live`, `expired` or `ended`.
 
 | Method and path | Key | Does |
 |---|---|---|
-| `POST /api/v1/unlocks` | admin on the catalog; another `user` needs every catalog | Body `{catalog, category, reason, hours?, user?}` (`hours` defaults to `unlock_max_hours`). Records `catalog.unlocked`, emails the owners when `unlock_notify_owners` is on, and answers 201 with the record. 404 for an unknown catalog or user, 409 for a user who is not an admin, 422 for `hours` outside 1 to `unlock_max_hours` (`LimitExceeded`, `limit: "unlock_max_hours"`), a blank, over-500-character or control-character reason (`limit: "reason"`), an unknown category or field, or an `hours` that is negative or not a whole number (a body error, not `LimitExceeded`) |
+| `POST /api/v1/unlocks` | admin on the catalog, of an admin user; another `user` needs every catalog | Body `{catalog, category, reason, hours?, user?}` (`hours` defaults to `unlock_max_hours`). Records `catalog.unlocked`, emails the owners when `unlock_notify_owners` is on, and answers 201 with the record. 403 for a credential with no user or whose user is not an admin user, 404 for an unknown catalog or user, 409 for a user who is not an admin, 422 for `hours` outside 1 to `unlock_max_hours` (`LimitExceeded`, `limit: "unlock_max_hours"`), a blank, over-500-character or control-character reason (`limit: "reason"`), an unknown category or field, or an `hours` that is negative or not a whole number (a body error, not `LimitExceeded`) |
 | `GET /api/v1/unlocks` | admin; a team owner's console session with `?team=` | `{unlocks}`, newest first. Filters: `catalog`, `team` (the catalog's owner team now) and `live=true` (neither ended nor expired); an unknown one is 400, and a malformed name matches nothing |
 | `DELETE /api/v1/unlocks/{id}` | admin | Ends a live unlock now; records `catalog.unlock_ended` and answers 200 with the record (`state: "ended"`). 404 for an unknown id, 409 for one already ended or expired |
 
