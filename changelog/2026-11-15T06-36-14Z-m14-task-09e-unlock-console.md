@@ -11,7 +11,8 @@ Issue #409, part of epic #390.
   `GET /catalogs`, or a text field when that read fails. The submit is a
   pending write keyed `unlock:<catalog>:create`, and a refusal stays in
   `#unlock-form-error`.
-- `pages/unlocks.js`: the Unlocks page, in the Records nav group. An admin
+- `pages/unlocks.js`: the Unlocks page, in the Records nav group. That group now
+  also shows to a scoped admin, with only the Unlocks link. An admin
   sees full rows (user, reason, until, tallies), can End a live unlock
   (`unlock:<id>:end`, with its refusal kept beside the row) and can "Unlock
   a catalog". A team owner picks an owned team and reads its unlocks
@@ -27,7 +28,7 @@ Issue #409, part of epic #390.
 - A "Your teams" nav group with Catalogs, for account users who are not
   admins. For them the catalog drawer holds only the Maintenance section.
 - `TestServer::owner_with_password`, and four journeys in
-  `tests/ui_e2e/unlocks.rs`.
+  `tests/ui_e2e/unlocks.rs`. The smoke journey also visits Unlocks.
 
 ## Changed
 
