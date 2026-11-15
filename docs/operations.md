@@ -541,7 +541,9 @@ missing root `index.md` is the one a new catalog gets (its name and
 description), then a `log.md`, folder indexes, and folder and concept
 listings are added where missing, and `log.md` gets a line recording the
 repair. No existing index text (headings, prose, listings, summaries) is
-changed, so a second run writes nothing. With names, `--missing-only` says
+changed, so a second run writes nothing. A file or folder whose path no
+markdown link can reach (a space, `)` or `#` in it) is not listed; the output
+names it. With names, `--missing-only` says
 which of them it skipped (those with a root `index.md`, or misspelled). Listings of concepts
 without a title or description get `TODO` placeholders; the output names
 each one. A changeset someone left open on an affected index replays its

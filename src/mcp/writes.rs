@@ -921,7 +921,9 @@ impl OkfServer {
                        listing in its parent's # Sections, and each concept's listing in its \
                        folder's index.md (its title and description; TODO placeholders where \
                        they are missing, each named in `notes`). Only adds: existing text, \
-                       listings and summaries are kept, and a second run changes nothing. \
+                       listings and summaries are kept, and a second run changes nothing. A path \
+                       no markdown link can reach (a space, `)` or `#`) is not listed; `notes` \
+                       names it. \
                        Review the result with pending_changes before publishing. Write access.",
         annotations(
             title = "Repair Indexes",

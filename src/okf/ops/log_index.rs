@@ -279,14 +279,7 @@ fn insert_folder_listing(
     outcome: &mut OpOutcome,
 ) -> Result<(), OkfError> {
     let parent_index = join(dirname(folder), INDEX);
-    let absolute = parent_text
-        .split('\n')
-        .any(|line| line.starts_with("* [") && line.contains("](/"));
-    let href = if absolute {
-        format!("/{folder}/")
-    } else {
-        format!("{}/", basename(folder))
-    };
+    let href = folder_href(folder, parent_text);
     let bullet = format!("* [{}]({href}) - {FOLDER_TODO}", folder_heading(folder));
     let updated = insert_index_bullet_text(parent_text, &bullet, Some(SECTIONS), true)
         .expect("create_section always finds a place for the bullet");
@@ -301,6 +294,34 @@ fn insert_folder_listing(
         },
     );
     Ok(())
+}
+
+/// The link [`insert_folder_listing`] writes to `folder` from its parent's
+/// index: `/<folder>/` when the parent's bullets are absolute, else
+/// `<name>/`.
+fn folder_href(folder: &str, parent_text: &str) -> String {
+    let absolute = parent_text
+        .split('\n')
+        .any(|line| line.starts_with("* [") && line.contains("](/"));
+    if absolute {
+        format!("/{folder}/")
+    } else {
+        format!("{}/", basename(folder))
+    }
+}
+
+/// Does a link to `href`, written in `index`, resolve to `target`? Not for
+/// every path: a link's destination stops at whitespace or `)`, and `#`
+/// starts its fragment (see [`crate::okf::markdown`]), with no escape, so
+/// `a note.md` cannot be linked. The repair skips such a listing rather
+/// than write one no later run recognises.
+fn links_back(workspace: &dyn Workspace, index: &str, href: &str, target: &str) -> bool {
+    lists_target(workspace, &format!("[]({href})"), index, target)
+}
+
+/// The note for a listing [`repair_indexes`] cannot write.
+fn unlinkable_note(target: &str, index: &str) -> String {
+    format!("did not list /{target} in /{index}: its path cannot be written as a markdown link")
 }
 
 /// How many [`starter_files`] a new catalog holds.
@@ -352,7 +373,9 @@ pub fn starter_files(
 /// Existing text is only ever added to: headings, prose, bullets and
 /// summaries stay as they are, nothing is removed, and a target an index
 /// already links (however it is worded) is not listed again. So running it
-/// twice changes nothing the second time. Every edit is a replay op
+/// twice changes nothing the second time. A file or folder whose path no
+/// markdown link can reach (a space, `)` or `#` in it) is not listed; a
+/// note names it instead. Every edit is a replay op
 /// ([`ReplayOp::CreateIndex`], [`ReplayOp::CreateLog`],
 /// [`ReplayOp::ListBullet`]), so publish redoes it onto indexes that changed
 /// meanwhile instead of overwriting them.
@@ -443,6 +466,13 @@ fn repair_counted(workspace: &dyn Workspace) -> Result<(OpOutcome, usize), OkfEr
         let parent_index = join(dirname(folder), INDEX);
         let parent_text = workspace.read_text(&parent_index)?;
         if !lists_target(workspace, &parent_text, &parent_index, &index_path) {
+            let href = folder_href(folder, &parent_text);
+            if !links_back(workspace, &parent_index, &href, &index_path) {
+                outcome
+                    .notes
+                    .push(unlinkable_note(&format!("{folder}/"), &parent_index));
+                continue;
+            }
             insert_folder_listing(workspace, folder, &parent_text, &mut outcome)?;
             outcome.notes.push(format!(
                 "listed /{folder}/ in /{parent_index} with a TODO summary"
@@ -454,6 +484,10 @@ fn repair_counted(workspace: &dyn Workspace) -> Result<(OpOutcome, usize), OkfEr
         let index_path = join(dirname(concept), INDEX);
         let text = workspace.read_text(&index_path)?;
         if lists_target(workspace, &text, &index_path, concept) {
+            continue;
+        }
+        if !links_back(workspace, &index_path, basename(concept), concept) {
+            outcome.notes.push(unlinkable_note(concept, &index_path));
             continue;
         }
         let about = ConceptAbout::read(workspace, concept)?;
@@ -1098,6 +1132,68 @@ mod tests {
             ["created /infra/index.md; replace its TODO line"]
         );
         assert!(again.touched.is_empty() && again.notes.is_empty());
+    }
+
+    #[test]
+    fn repair_indexes_skips_listings_no_link_can_reach_and_settles() {
+        // A link's destination stops at whitespace or `)`, and `#` starts
+        // its fragment: these names cannot be linked, so the repair notes
+        // them instead of writing a listing no later run recognises. A
+        // folder with a space still gets its index, and linkable files in
+        // it are listed relatively; under an absolute-style parent the
+        // folder's own listing would need its path, so it is skipped too.
+        let note = "---\ntype: Note\ntitle: N\ndescription: D.\n---\n";
+        let root = "---\nokf_version: \"0.2\"\n---\n# Root\n\n* [Top](/top.md) - curated\n";
+        let ws = MemWorkspace::from_files([
+            ("index.md", root),
+            ("log.md", "# Log\n"),
+            ("top.md", note),
+            ("a note.md", note),
+            ("x)y.md", note),
+            ("h#1.md", note),
+            ("tab\tx.md", note),
+            ("my notes/a.md", note),
+            ("ok/b.md", note),
+        ]);
+
+        let outcome = repair_indexes(&ws).unwrap();
+        let again = repair_indexes(&ws).unwrap();
+
+        assert_eq!(
+            outcome.touched,
+            ["my notes/index.md", "ok/index.md", "index.md"]
+        );
+        assert_eq!(
+            ws.read_to_string("index.md").unwrap(),
+            format!("{root}\n# Sections\n\n* [Ok](/ok/) - TODO: describe this folder\n")
+        );
+        assert!(ws
+            .read_to_string("my notes/index.md")
+            .unwrap()
+            .ends_with("# Concepts\n\n* [N](a.md) - D.\n"));
+        assert_eq!(
+            sorted(
+                outcome
+                    .notes
+                    .iter()
+                    .filter(|line| line.starts_with("did not list"))
+                    .cloned()
+                    .collect()
+            ),
+            [
+                "did not list /a note.md in /index.md: its path cannot be written as a markdown link",
+                "did not list /h#1.md in /index.md: its path cannot be written as a markdown link",
+                "did not list /my notes/ in /index.md: its path cannot be written as a markdown link",
+                "did not list /tab\tx.md in /index.md: its path cannot be written as a markdown link",
+                "did not list /x)y.md in /index.md: its path cannot be written as a markdown link",
+            ]
+        );
+        // The second run writes nothing; it only repeats the notes.
+        assert!(again.touched.is_empty() && again.replay.is_empty());
+        assert!(again
+            .notes
+            .iter()
+            .all(|line| line.starts_with("did not list")));
     }
 
     #[test]
