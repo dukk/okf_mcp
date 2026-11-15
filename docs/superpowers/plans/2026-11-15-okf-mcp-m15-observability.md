@@ -742,7 +742,11 @@ impl Telemetry {
     /// Flushes and shuts down every provider in parallel, each on a plain
     /// thread, within [`SHUTDOWN_DEADLINE`]. A flush still running at the
     /// deadline is abandoned and named on stderr. Idempotent.
-    pub async fn shutdown(self) { .. }
+    ///
+    /// # Returns
+    /// Each provider's outcome (`Ok`, failed, or abandoned at the deadline),
+    /// which Task 7's sentinel test asserts on.
+    pub async fn shutdown(self) -> ShutdownReport { .. }
 }
 ```
 
@@ -1227,7 +1231,9 @@ Each uses `app_with_metrics` plus the in-memory span exporter:
 
 - **Pool gauges.** Observable gauges over `Weak<App>`, from `pool.size()` and `pool.num_idle()`.
 - **Clock checks.** `check_clock_until` runs each check in `info_span!(parent: None, "okf.clock.check")`.
-- **Archives.** `export_catalog` and `import_catalog` get `#[instrument(level = "info", skip_all, fields(okf.catalog = %name, okf.archive.size = tracing::field::Empty))]`. The size is recorded as `i64`.
+- **Archives.** `export_catalog` and `import_catalog` get `#[instrument(level = "info", skip_all, fields(okf.catalog = tracing::field::Empty, okf.archive.size = tracing::field::Empty))]`. `name` comes straight from `Path<String>` and is evaluated before any check, so it is **not** an attribute up front. The handler records `okf.catalog` only after the catalog is resolved and admitted (the loaded `CatalogState`'s name), and a refused or unknown name never reaches the span or the archive metrics (those take the resolved name too) (review of PR #459). The size is recorded as `i64`. Test: export and import of an unknown catalog whose path segment holds the sentinel record no `okf.catalog` and no metric series; Task 7's sentinel test gains the same case for both routes.
+
+  The same rule holds everywhere: **a span field or metric label taken from a path segment, query or body is recorded only after it has been validated against server state** (a loaded catalog, an existing user id). Task 8's policy doc states it.
 - **`propagation::inject(headers: &mut reqwest::header::HeaderMap)`** is the probe's `inject`. reqwest 0.13's `HeaderMap` is http 1.x's.
 - **Outbound clients.** Every outbound request goes through it: the OIDC client (`oidc.rs:276`; its requests are built in the openidconnect adapter, so inject there), CIMD (`oauth/clients.rs:635`) and Postmark (`mail/postmark.rs:80`). The investigator client is `okf-maintenance`'s and is out of scope.
 
@@ -1261,7 +1267,7 @@ An axum server on `127.0.0.1:0` with `POST /v1/traces`, `/v1/logs` and `/v1/metr
 
 - [ ] **Step 3: The sentinel test**
 
-Start a `TestServer` with OTLP to the collector, traces and logs at `trace`, and a short batch delay (`OTEL_BSP_SCHEDULE_DELAY=100` through the injected env).
+Start a `TestServer` with OTLP to the collector, traces and logs at `trace`, and `export_interval = "1s"`.
 
 Plant `SENTINEL = "zq-sentinel-7f3a"` variants:
 - in a bearer key's secret (create a key, then also send a wrong `Bearer zq-sentinel-7f3a-bad`);
@@ -1270,7 +1276,8 @@ Plant `SENTINEL = "zq-sentinel-7f3a"` variants:
 - a path segment (`/api/v1/users/zq-sentinel-7f3a-path`);
 - a JSON body (a sign-in password);
 - a concept's text (publish one containing it);
-- an archive import (a document containing it).
+- an archive import (a document containing it);
+- the catalog segment of both archive routes (`/catalogs/zq-sentinel-7f3a-cat/export` and `/import`), which must be refused without the name reaching any span or label.
 
 Exercise:
 - MCP: `search` for the sentinel, `create_concept`, `publish`;
@@ -1279,7 +1286,18 @@ Exercise:
 - import and export;
 - Task 1b's sites: a sign-up invitation through the `log` mail provider, a refused OAuth client whose id holds the sentinel, and an internal error whose text holds it (a test hook in `tests/support`, or a store failure the test can force).
 
-Then `wait_for` the collector to stop receiving (two quiet intervals). Assert that no decoded span name, attribute value, event, log body or log attribute, and no metric attribute, contains `zq-sentinel-7f3a`. Also scrape `/metrics` and assert the same.
+Then establish that everything was exported before inspecting anything (review of PR #459: a quiet collector also means "never wired", and the metric reader would otherwise wait up to its interval):
+1. Scrape `/metrics` first and keep the body.
+2. Stop the server through its shutdown token, so `Telemetry::shutdown` flushes all three providers. `TestServer` exposes the result, a `ShutdownReport` that `Telemetry::shutdown` returns (Task 1 makes it return one, naming each provider's outcome). Assert that every provider flushed `Ok`, with none abandoned at the deadline.
+3. **Positive assertions** that the records which could carry a leak arrived:
+   - a span for every route exercised (by `http.route`);
+   - an `mcp search` span;
+   - an `okf.publish` span;
+   - at least one log record from each exercised path;
+   - metric points for `http.server.request.duration`, `okf.mcp.tool.duration` and `okf.publish.duration`.
+
+   If any is missing, the test fails as "not exported", never as passed.
+4. Only then assert that no decoded span name, attribute value, event, link attribute, log body or log attribute, and no metric attribute, contains `zq-sentinel-7f3a`, and that the scraped `/metrics` body does not either.
 
 **Revert check:** temporarily record `url.full` in `request_span`. The test must fail. Say so in the PR.
 
@@ -1411,7 +1429,7 @@ Commit: `chore(tracing): instrument <group> (M15 Task 9x)`.
   - OTLP to a receiver, to Sentry (DSN), and through an OpenTelemetry Collector;
   - the metrics listener and why it is separate;
   - tuning stderr down and reading the receiver instead;
-  - what is never recorded;
+  - what is never exported, and that stderr is the one exception: `okf_mcp::local_only` events carry caller text, full errors and (with the `log` mail provider) whole messages, so stderr stays in the cluster or is filtered on that target before shipping;
   - the metric reference (every family, its labels, its meaning) and the span reference (names, attributes).
 - **Section 5's YAML:**
   - the Deployment gains `containerPort: 9464` (named `metrics`);

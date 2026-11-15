@@ -125,8 +125,9 @@ export stack's own targets (`opentelemetry`, `hyper`, `hyper_util`,
 `reqwest`, `h2`), which reach stderr only. Without that, an export failure
 becomes a log record that is exported, fails, and so on.
 
-`EnvFilter` is not `Clone`; each layer builds its own from the same
-directive string. Directive components are trimmed before parsing.
+Each layer gets its own `EnvFilter`, cloned or built from the same
+directive string (`EnvFilter` is `Clone` in tracing-subscriber 0.3.23).
+Directive components are trimmed before parsing. *(Corrected, review of PR #459, 2026-11-15.)*
 
 `global::set_tracer_provider` is set so outgoing propagation and any
 library span find the provider; the providers are also held in the
@@ -154,12 +155,12 @@ to `okf.telemetry.export.failures{signal, reason}`. That counter lives on
 ### Metrics provider
 
 One `SdkMeterProvider`, built whenever `serve` runs (also with OTLP off,
-so `/metrics` always has every family), with:
+so `/metrics` always works), with:
 
 - the `PeriodicReader` over the OTLP metric exporter, present only when
   OTLP is configured, every `export_interval` (default 60 s);
 - the `opentelemetry-prometheus` exporter as a reader, built
-  `without_target_info()` and `without_scope_info()`, rendering into its
+  `without_target_info()` and `scope_info_enabled(false)` *(Corrected, review of PR #459, 2026-11-15.)*, rendering into its
   own `prometheus::Registry`.
 
 The global meter provider is set before any instrument is created, so no
@@ -324,10 +325,21 @@ series stop at the next collection.
 - **Span attributes** may also carry principal ids: `enduser.id` (the
   user's id) and `okf.key.id`. *(Corrected, M15 plan, 2026-11-15.)* Never names, email
   addresses, display names or key material.
-- **Never recorded anywhere:** URIs, query strings, headers, request or
+- **Never exported** (no OTLP span, event, log record or metric, and
+  nothing on `/metrics`): URIs, query strings, headers, request or
   response bodies, document or concept text, concept paths, SQL, bind
   values, error messages (only the error's kind, a closed enum),
-  passwords, tokens, codes, cookies.
+  passwords, tokens, codes, cookies. *(Corrected, review of PR #459, 2026-11-15.)*
+- **stderr is the one exception, and it is sensitive.** Events with
+  target `okf_mcp::local_only` (below) reach stderr only, and may carry
+  caller-supplied text, an error's full text and, with the `log` mail
+  provider, whole messages with their setup and reset links, exactly as
+  stderr does today. Operators treat the pod's stderr as they treat the
+  server's own log: it stays in the cluster, it is not shipped to a
+  third party, and a log pipeline that does ship it filters
+  `okf_mcp::local_only` out (with the JSON format, the `target` field).
+  The `log` mail provider is for development only. `docs/operations.md`
+  says so (plan Task 11). *(Corrected, review of PR #459, 2026-11-15.)*
 - **Existing events.** `skip_all` protects only arguments. An event that
   carries caller-supplied text, an error's full text or content (the `log`
   mail provider's message) logs it with target `okf_mcp::local_only`,
@@ -378,7 +390,9 @@ scope. `docs/contributing/policy-lints.md` (new) carries the rules below.
     (a span there feeds back into the exporter);
   - constant trait plumbing (`JsonSchema` impls returning fixed schemas).
 - **Rollout.** The lint is wired in warn mode first, the sweep runs module
-  by module, and the last step makes it deny in `just dylint` and CI.
+  by module, and the last step makes it deny in `just dylint` and the
+  `gate.sh dylint` gate (the repository has no test CI; no CI job is
+  added). *(Corrected, review of PR #459, 2026-11-15.)*
 
 ## Testing
 
@@ -398,8 +412,10 @@ scope. `docs/contributing/policy-lints.md` (new) carries the rules below.
   template, the i64 status, 5xx as error and 4xx not, an unmatched route
   producing no span, a forged `traceparent` producing a link and a fresh
   trace id.
-- **Metrics.** A real `/metrics` listener scraped over TCP: every family
-  present before the first request, no duplicate `# TYPE` line, seconds
+- **Metrics.** A real `/metrics` listener scraped over TCP: every
+  observable family (build info, export failures, the gauges) present
+  before the first request, and each event-driven family after its first
+  event, with no fake seeding. *(Corrected, review of PR #459, 2026-11-15.)* No duplicate `# TYPE` line, seconds
   buckets, no `target_info` or `otel_scope_*` labels, and an unknown tool
   name counted as `other`.
 - **Mock OTLP collector.** An in-process axum server on `/v1/traces`,
@@ -445,7 +461,8 @@ One epic, with sub-issues:
 5. **Auth, OAuth, rate limits and mail**.
 6. **Postgres pool, clock check, archives, outbound propagation**.
 7. **Privacy sentinel test and mock collector**.
-8. **Dylint wiring and policy doc**, in warn mode, with the CI job.
+8. **Dylint wiring and policy doc**, in warn mode, with a `gate.sh dylint`
+   gate. *(Corrected, review of PR #459, 2026-11-15.)*
 9. **The `#[instrument]` sweep**, in parallel: (a) `store`; (b) `okf`;
    (c) `http`, `oauth`, `oidc`; (d) `mcp`, `auth`, `mail`, `cli` and the
    small modules; (e) `investigator`, `bin`, `maintenance`.
