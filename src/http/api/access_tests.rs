@@ -835,7 +835,9 @@ async fn the_maintenance_runner_reads_without_an_unlock_until_the_catalog_opts_o
     require_unlock(&test).await;
     let tree = "/api/v1/catalogs/main/tree";
 
+    let export = "/api/v1/catalogs/main/export";
     let (exempt, _) = send(&test, "GET", tree, Some(&runner), None).await;
+    let (exempt_export, _) = send(&test, "GET", export, Some(&runner), None).await;
     let (writer_reads, _) = send(&test, "GET", tree, Some(&writing_runner), None).await;
     let writer_opens = open_main(&staff_context(&test, &writing_runner)).await;
     let mut tx = test.app.pool().begin().await.unwrap();
@@ -847,6 +849,7 @@ async fn the_maintenance_runner_reads_without_an_unlock_until_the_catalog_opts_o
     tx.commit().await.unwrap();
     test.app.poll().await.unwrap();
     let (opted_out, refused) = send(&test, "GET", tree, Some(&runner), None).await;
+    let (opted_out_export, _) = send(&test, "GET", export, Some(&runner), None).await;
     let (other, _) = send(
         &test,
         "GET",
@@ -857,6 +860,7 @@ async fn the_maintenance_runner_reads_without_an_unlock_until_the_catalog_opts_o
     .await;
 
     assert_eq!(exempt, StatusCode::OK, "reads need no unlock");
+    assert_eq!(exempt_export, StatusCode::OK, "an export is a read");
     assert_eq!(writer_reads, StatusCode::OK);
     assert!(
         matches!(
@@ -868,6 +872,7 @@ async fn the_maintenance_runner_reads_without_an_unlock_until_the_catalog_opts_o
     assert_eq!(opted_out, StatusCode::FORBIDDEN);
     assert_eq!(refused["error"], "Forbidden");
     assert_eq!(refused["maintenance"], "off");
+    assert_eq!(opted_out_export, StatusCode::FORBIDDEN, "nor may it export");
     assert_eq!(other, StatusCode::OK, "only the catalog that opted out");
 }
 
