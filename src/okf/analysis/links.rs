@@ -13,6 +13,8 @@ use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use rayon::prelude::*;
+
+use crate::okf::caller::Caller;
 use regex::{Regex, RegexBuilder, RegexSet, RegexSetBuilder};
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -465,9 +467,14 @@ fn is_mention_at(line: &str, start: usize, end: usize) -> bool {
 #[tracing::instrument(level = "trace", skip_all)]
 fn unlinked_mentions(concepts: &[&SnapshotDoc], matcher: &MentionMatcher) -> Vec<UnlinkedMention> {
     // One task per mentioning concept; `collect` keeps concept order.
+    // `map_init` re-enters the caller's span on each worker (see `okf::caller`).
+    let caller = Caller::capture();
     let per_source: Vec<Vec<UnlinkedMention>> = concepts
         .par_iter()
-        .map(|source| mentions_in(source, matcher))
+        .map_init(
+            || caller.enter(),
+            |_entered, source| mentions_in(source, matcher),
+        )
         .collect();
     per_source.into_iter().flatten().collect()
 }

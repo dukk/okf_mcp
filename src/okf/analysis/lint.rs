@@ -17,6 +17,8 @@ use std::collections::{HashMap, HashSet};
 use chrono::{DateTime, FixedOffset, TimeDelta, Utc};
 use indexmap::IndexMap;
 use rayon::prelude::*;
+
+use crate::okf::caller::Caller;
 use schemars::JsonSchema;
 use serde::Serialize;
 
@@ -142,14 +144,19 @@ pub fn lint(snapshot: &Snapshot, now: DateTime<Utc>, commits: Option<&CommitTime
     // `okf.py` finds sprawl in a later loop, after the links; scoring it here
     // in the same pass changes no order, because the `sprawl` rule occurs at
     // most once per file and so never ties with another finding.
+    // `map_init` re-enters the caller's span on each worker (see `okf::caller`).
+    let caller = Caller::capture();
     let per_doc: Vec<LintReport> = snapshot
         .docs()
         .par_iter()
-        .map(|doc| {
-            let mut linter = Linter::new(doc.path(), now);
-            linter.document(doc, commits);
-            linter.report
-        })
+        .map_init(
+            || caller.enter(),
+            |_entered, doc| {
+                let mut linter = Linter::new(doc.path(), now);
+                linter.document(doc, commits);
+                linter.report
+            },
+        )
         .collect();
     let mut report = LintReport::default();
     for doc_report in per_doc {

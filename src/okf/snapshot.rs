@@ -32,6 +32,8 @@ use indexmap::IndexMap;
 // `rayon::prelude` brings the `par_iter` extension method into scope (Rust
 // methods from traits are only callable when the trait is imported).
 use rayon::prelude::*;
+
+use crate::okf::caller::Caller;
 use regex::Regex;
 
 use crate::error::OkfError;
@@ -337,9 +339,14 @@ impl Snapshot {
         let paths = workspace.list_markdown()?;
         // `par_iter` splits the work across a thread pool; collecting into a
         // `Result<Vec<_>, _>` keeps the input order and stops at the first error.
+        // `map_init` re-enters the caller's span on each worker (see `okf::caller`).
+        let caller = Caller::capture();
         let docs: Vec<SnapshotDoc> = paths
             .par_iter()
-            .map(|path| read_document(workspace, path))
+            .map_init(
+                || caller.enter(),
+                |_entered, path| read_document(workspace, path),
+            )
             .collect::<Result<_, _>>()?;
         let by_path: HashMap<String, usize> = docs
             .iter()
@@ -683,19 +690,23 @@ fn scan_all(
     by_path: &HashMap<String, usize>,
 ) -> Result<Vec<Finding>, OkfError> {
     let files = workspace.list_files()?;
+    let caller = Caller::capture();
     let per_file: Vec<Vec<Finding>> = files
         .par_iter()
         .filter(|path| path.as_str() != OKF_PY_PATH)
-        .map(|path| match by_path.get(path) {
-            Some(&index) => scan_secrets(path, &docs[index].text),
-            None => match workspace.read_text(path) {
-                Ok(text) => scan_secrets(path, &text),
-                Err(error) => {
-                    tracing::debug!(%path, %error, "secret scan skips an unreadable file");
-                    Vec::new()
-                }
+        .map_init(
+            || caller.enter(),
+            |_entered, path| match by_path.get(path) {
+                Some(&index) => scan_secrets(path, &docs[index].text),
+                None => match workspace.read_text(path) {
+                    Ok(text) => scan_secrets(path, &text),
+                    Err(error) => {
+                        tracing::debug!(%path, %error, "secret scan skips an unreadable file");
+                        Vec::new()
+                    }
+                },
             },
-        })
+        )
         .collect();
     Ok(per_file.into_iter().flatten().collect())
 }

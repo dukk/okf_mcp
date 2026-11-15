@@ -18,6 +18,8 @@ use std::cmp::Ordering;
 // `rayon::prelude` brings `par_iter` into scope (trait methods are only
 // callable when the trait is imported).
 use rayon::prelude::*;
+
+use crate::okf::caller::Caller;
 use serde::Serialize;
 
 use crate::okf::markdown::split_frontmatter;
@@ -254,25 +256,32 @@ pub fn search(snapshot: &Snapshot, query: &SearchQuery) -> Vec<SearchHit> {
 
     // Matching is independent per document, so it runs in parallel; the
     // `?` inside `filter_map`'s closure returns `None` (skip) early.
+    // `map_init` re-enters the caller's span on each worker (see `okf::caller`);
+    // `flatten` then drops the `None`s that `filter_map` would have dropped.
+    let caller = Caller::capture();
     let mut ranked: Vec<(SearchRank, &SnapshotDoc, &SearchFields)> = snapshot
         .docs()
         .par_iter()
-        .filter_map(|doc| {
-            let fields = doc.search_fields()?;
-            let filtered_out = wanted_type
-                .as_ref()
-                .is_some_and(|t| *t != fields.concept_type)
-                || wanted_status.as_ref().is_some_and(|s| *s != fields.status)
-                || !wanted_tags.iter().all(|t| fields.tags.contains(t));
-            if filtered_out {
-                return None;
-            }
-            let rank = SearchRank {
-                deprecated: fields.status == "deprecated",
-                tier: tier(fields, &prepared)?,
-            };
-            Some((rank, doc, fields))
-        })
+        .map_init(
+            || caller.enter(),
+            |_entered, doc| {
+                let fields = doc.search_fields()?;
+                let filtered_out = wanted_type
+                    .as_ref()
+                    .is_some_and(|t| *t != fields.concept_type)
+                    || wanted_status.as_ref().is_some_and(|s| *s != fields.status)
+                    || !wanted_tags.iter().all(|t| fields.tags.contains(t));
+                if filtered_out {
+                    return None;
+                }
+                let rank = SearchRank {
+                    deprecated: fields.status == "deprecated",
+                    tier: tier(fields, &prepared)?,
+                };
+                Some((rank, doc, fields))
+            },
+        )
+        .flatten()
         .collect();
 
     let order = |a: &(SearchRank, &SnapshotDoc, &SearchFields),

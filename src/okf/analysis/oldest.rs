@@ -26,6 +26,8 @@ use std::sync::LazyLock;
 use chrono::{DateTime, FixedOffset, Utc};
 use indexmap::IndexMap;
 use rayon::prelude::*;
+
+use crate::okf::caller::Caller;
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -105,11 +107,13 @@ pub fn oldest(snapshot: &Snapshot, now: DateTime<Utc>, query: OldestQuery) -> Ve
     let now = now.fixed_offset();
     // `par_iter` describes the concepts on a thread pool. The input order does
     // not matter: paths are unique, so the sort below fixes the final order.
+    // `map_init` re-enters the caller's span on each worker (see `okf::caller`).
+    let caller = Caller::capture();
     let mut rows: Vec<OldestRow> = snapshot
         .docs()
         .par_iter()
         .filter(|doc| doc.kind() == DocKind::Concept)
-        .map(|doc| describe(doc, now))
+        .map_init(|| caller.enter(), |_entered, doc| describe(doc, now))
         .filter(|row| row.status != "deprecated" && wanted(row, query))
         .collect();
     // `(fresh, path)` is a total order with no equal rows (paths are unique),

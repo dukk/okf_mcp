@@ -22,6 +22,8 @@ use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use rayon::prelude::*;
+
+use crate::okf::caller::Caller;
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -376,11 +378,13 @@ pub fn sprawl(snapshot: &Snapshot, query: SprawlQuery<'_>) -> Result<Vec<SprawlR
     }
     // `par_iter` scores the concepts on a thread pool. Dropping exempt rows
     // before the sort keeps the same rows as `okf.py` dropping them after.
+    // `map_init` re-enters the caller's span on each worker (see `okf::caller`).
+    let caller = Caller::capture();
     let mut rows: Vec<SprawlReport> = snapshot
         .docs()
         .par_iter()
         .filter(|doc| doc.kind() == DocKind::Concept)
-        .map(sprawl_of)
+        .map_init(|| caller.enter(), |_entered, doc| sprawl_of(doc))
         .filter(|row| row.exempt.is_none())
         .collect();
     // Highest score first, then path: a total order with no equal rows (paths
