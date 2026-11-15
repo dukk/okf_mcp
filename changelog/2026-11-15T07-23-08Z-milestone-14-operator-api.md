@@ -70,8 +70,9 @@ console are at parity. Design:
   export, import, changesets, maintenance tools), the maintenance runner's
   exemption, the tallies, and catalog-incarnation binding.
 - **Task 9c, the maintenance flag (#407, PR #444):** `okf-mcp catalog
-  set-maintenance`, `PUT /api/v1/catalogs/{catalog}/maintenance` (admins
-  and the owner team's owners), `catalog.maintenance_changed`, and migration
+  set-maintenance`, `PUT /api/v1/catalogs/{catalog}/maintenance` (an admin
+  that reaches every catalog, or an owner of the owner team signed in to the
+  console), `catalog.maintenance_changed`, and migration
   `0017_maintenance_audit.sql`'s `catalog.maintenance_run` trigger; the
   runner's `maintenance_off` skip.
 - **Task 9d, unlocks over REST and the CLI (#408, PR #437):** `POST`,
@@ -131,9 +132,10 @@ Each became a rule in `tools/agentic/lessons.md`:
 
 - Gates at the close (Task 10, `tools/agentic/gate.sh`): `fmt` and `lint`
   passed; `test` passed on its first run with **2080 passed**, 0 failed and
-  17 ignored across 21 test binaries and the doc-tests (library 1808,
+  17 ignored across 20 test binaries and the doc-tests (library 1808,
   browser journeys 121, doc-tests 27). At the end of milestone 13 the same
-  gate passed 1836, so this milestone added 244 tests.
+  gate passed 1836 (the epic coordinator's record of M13's close), so this
+  milestone added 244 tests.
 - Migrations `0012` to `0017`; only `0013` changes behaviour (the
   cascades). `require_unlock` is off until an operator turns it on, so a
   self-hosted server behaves as before apart from the log being written.
@@ -144,7 +146,8 @@ Each became a rule in `tools/agentic/lessons.md`:
   refusals. #423 tracks it; it is not claimed complete. A provisioner's
   server-wide team and catalog operations may act on an admin user's
   personal team; named admin users as targets, owners or members are
-  refused (PR #422 review found no bypass).
+  refused (the review of PR #422 found no bypass; see the maintainer's
+  comment on #410).
 - What differs from the design is in the spec's "What shipped differently":
   among others `lock_people` and the lock order; migration `0014`, which
   moved the later migrations up one; access recorded at the read (Decision

@@ -3,8 +3,8 @@
 Status: delivered in milestone 14 (epic #390; sub-issues #391-#410; PRs
 #411-#413, #415-#417, #419, #420, #422, #424, #428, #429, #433, #436-#438,
 #442, #444, #445 and the PR for #410), 2026-11-15 (plan
-`docs/superpowers/plans/2026-11-13-okf-mcp-m14-operator-api.md`). It closes
-#297 and #379. What differs from this design is under "What shipped
+`docs/superpowers/plans/2026-11-13-okf-mcp-m14-operator-api.md`). It meets
+#297's goal (by deletion) and closes #379. What differs from this design is under "What shipped
 differently" at the end; the operator's view is `docs/operations.md`,
 "Users and teams" and its "Audit log" and "Unlock before access" sections.
 Milestone 15 ("teams run themselves") follows it and is out of scope here.
@@ -617,8 +617,9 @@ are the places where what shipped is narrower, wider or more exact.
   Team and catalog operations are server-wide, as Part 4's allow-list says,
   so they may act on a team that is an admin user's personal team; what is
   refused is a named admin user as the target, owner or member (user
-  routes, a team's first owner, a membership change). Review found no
-  authorization bypass in this reading (PR #422).
+  routes, a team's first owner, a membership change). The review of PR #422
+  found no authorization bypass in this reading (the maintainer's comment
+  on #410).
 - **No change, no entry, everywhere.** A write that changes nothing (the
   same value, flag, role, owner, description or notice again; assigning a
   credential to its current user; a publish that writes no revision; an
