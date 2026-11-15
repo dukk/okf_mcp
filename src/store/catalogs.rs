@@ -6,8 +6,15 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::error::OkfError;
+use crate::okf::ops::starter_files;
+use crate::okf::snapshot::Snapshot;
+use crate::okf::workspace::{MemWorkspace, StoredFile};
 use crate::store::audit::{self, Action, AuditActor, Entry, People, Target};
+use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
 use crate::store::teams;
+
+/// The `revisions.message` of a new catalog's [`starter_files`].
+pub const STARTER_MESSAGE: &str = "create catalog";
 
 /// The first key of every catalog lock (`okf` in ASCII), separating this
 /// crate's advisory locks from anyone else's on a shared database.
@@ -68,8 +75,12 @@ pub struct NewCatalog<'a> {
     pub owner_team: &'a str,
 }
 
-/// Creates an empty catalog, records `catalog.created`, and bumps the
-/// administrative generation, in one transaction.
+/// Creates a catalog holding only its [`starter_files`] (a root
+/// `index.md` and a `log.md`, revision 1 each, `create` revisions with the
+/// message [`STARTER_MESSAGE`]), records `catalog.created`, and bumps the
+/// administrative generation, in one transaction. The catalog's own
+/// generation stays 0: an import into it before any publish or import
+/// replaces the starter files as if the catalog were empty.
 ///
 /// # Arguments
 /// * `pool` - the database.
@@ -139,6 +150,7 @@ pub async fn create(
         }
         Err(error) => return Err(error.into()),
     };
+    write_starter_files(&mut tx, &catalog, &actor.label, now).await?;
     record_catalog(
         &mut tx,
         actor,
@@ -154,6 +166,52 @@ pub async fn create(
     bump_admin_generation(&mut tx).await?;
     tx.commit().await?;
     Ok(catalog)
+}
+
+/// Writes a new catalog's [`starter_files`] as revision 1 of each path.
+///
+/// # Arguments
+/// * `conn` - the creating transaction's connection.
+/// * `catalog` - the new row (its name and description fill the index).
+/// * `actor` - recorded as `updated_by` and the revisions' `actor`.
+/// * `now` - the creation time.
+///
+/// # Errors
+/// [`OkfError::Database`]; the starter files themselves always parse.
+async fn write_starter_files(
+    conn: &mut PgConnection,
+    catalog: &Catalog,
+    actor: &str,
+    now: DateTime<Utc>,
+) -> Result<(), OkfError> {
+    let files = starter_files(&catalog.name, &catalog.description, now);
+    // The derived columns (kind, title) come from a snapshot, as an
+    // import's do; two small files, so building it inline is cheap.
+    let workspace =
+        MemWorkspace::from_files(files.iter().map(|(path, text)| (*path, text.as_str())));
+    let snapshot = Snapshot::build(&workspace)?;
+    for (path, text) in &files {
+        let file = StoredFile {
+            content: text.clone().into_bytes(),
+            executable: false,
+        };
+        let write = DocumentWrite {
+            catalog_id: catalog.id,
+            path,
+            revision: 1,
+            actor,
+            now,
+        };
+        let record = RevisionRecord {
+            op: RevisionOp::Create,
+            file: Some(&file),
+            changeset_id: None,
+            message: STARTER_MESSAGE,
+        };
+        documents::write_document(conn, &write, &file, &Derived::of(snapshot.get(path))).await?;
+        documents::record_revision(conn, &write, &record).await?;
+    }
+    Ok(())
 }
 
 /// Makes `team` the owner of catalog `name` (moving it, or assigning a
@@ -745,6 +803,33 @@ pub(crate) async fn lock(conn: &mut PgConnection, catalog_id: i64) -> Result<(),
     Ok(())
 }
 
+/// Finds catalog `name` and takes its lock ([`lock`]), then reads it again:
+/// a delete holding the lock may have removed (or replaced) the catalog
+/// while this waited. The second read is also the generation no publish or
+/// import can move until the transaction ends.
+///
+/// # Arguments
+/// * `conn` - the transaction's connection.
+/// * `name` - the catalog's name.
+///
+/// # Returns
+/// The catalog's row, read under its lock.
+///
+/// # Errors
+/// [`OkfError::CatalogNotSelected`] for an unknown (or malformed) catalog,
+/// or one deleted or replaced while this waited; [`OkfError::Database`].
+pub(crate) async fn lock_by_name(conn: &mut PgConnection, name: &str) -> Result<Catalog, OkfError> {
+    let found = find(&mut *conn, name).await?;
+    lock(conn, found.id).await?;
+    let locked = find(&mut *conn, name).await?;
+    if locked.id != found.id {
+        return Err(OkfError::CatalogNotSelected {
+            catalog: name.to_string(),
+        });
+    }
+    Ok(locked)
+}
+
 /// Refuses a catalog that is no longer the incarnation a caller was
 /// admitted to: the access gates are loaded by name, so after a catalog is
 /// deleted and created again under its name, a request admitted from gates
@@ -887,6 +972,67 @@ pub(crate) mod tests {
             Err(OkfError::CatalogNotSelected { catalog }) if catalog == "nope"
         ));
         assert_eq!(admin_generation(&db.pool).await.unwrap(), start + 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_new_catalog_holds_its_starter_files_at_generation_0() {
+        let db = test_db().await;
+
+        let pg = create(
+            &db.pool,
+            &NewCatalog {
+                name: "pg",
+                description: "pgrace's catalog",
+                owner_team: TEST_TEAM,
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+
+        let rows = documents::published(&db.pool, pg.id).await.unwrap();
+        let stored: Vec<(&str, &[u8], i32)> = rows
+            .iter()
+            .map(|row| (row.path.as_str(), row.content.as_slice(), row.revision))
+            .collect();
+        let starter = starter_files("pg", "pgrace's catalog", now());
+        assert_eq!(
+            stored,
+            [
+                ("index.md", starter[0].1.as_bytes(), 1),
+                ("log.md", starter[1].1.as_bytes(), 1),
+            ]
+        );
+        assert!(starter[0].1.contains("# pg\n\npgrace's catalog\n"));
+        assert_eq!(pg.generation, 0);
+        // The derived columns are filled in, as an import's are.
+        let kinds: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT kind, title FROM documents WHERE catalog_id = $1 ORDER BY path")
+                .bind(pg.id)
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(kinds[0].0, "index");
+        assert_eq!(kinds[1].0, "log");
+        let revisions: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT path, op, message FROM revisions WHERE catalog_id = $1 ORDER BY path",
+        )
+        .bind(pg.id)
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        let create_catalog = |path: &str| {
+            (
+                path.to_string(),
+                "create".to_string(),
+                STARTER_MESSAGE.to_string(),
+            )
+        };
+        assert_eq!(
+            revisions,
+            [create_catalog("index.md"), create_catalog("log.md")]
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1320,6 +1466,23 @@ pub(crate) mod tests {
         assert!(taken, "the lock outlived its transaction");
     }
 
+    /// Drops a catalog's every document and revision (its starter files, in
+    /// a new catalog): an empty catalog, as one created before starter
+    /// files existed is, for tests that build its rows themselves.
+    pub(crate) async fn drop_starter_files(pool: &PgPool, catalog_id: i64) {
+        // Two static statements: sqlx refuses SQL built at run time.
+        for statement in [
+            "DELETE FROM revisions WHERE catalog_id = $1",
+            "DELETE FROM documents WHERE catalog_id = $1",
+        ] {
+            sqlx::query(statement)
+                .bind(catalog_id)
+                .execute(pool)
+                .await
+                .expect("drop the starter files");
+        }
+    }
+
     /// Counts the lock requests blocked in this test's own database: the
     /// test server may be shared by other tests, whose waits are not ours.
     pub(crate) const AWAITED_LOCKS: &str = "SELECT count(*) FROM pg_locks l \
@@ -1678,6 +1841,13 @@ pub(crate) mod tests {
         let deleted = delete(&db.pool, "pg", false, &actor, now()).await;
 
         assert!(created.is_err() && moved.is_err() && described.is_err() && deleted.is_err());
+        // The starter files went with the rolled-back row: only pg's remain.
+        let starters: i64 = sqlx::query_scalar("SELECT count(*) FROM revisions WHERE message = $1")
+            .bind(STARTER_MESSAGE)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(starters, 2);
         let pg = find(&db.pool, "pg").await.unwrap();
         assert_eq!(pg.owner_team.as_deref(), Some(TEST_TEAM));
         assert_eq!(pg.description, "");

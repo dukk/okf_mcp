@@ -75,7 +75,7 @@ server" (the subcommands read only `max_import_bytes`, default `64MiB`, the
 largest uncompressed import, but a file that fails validation fails every
 subcommand). Every subcommand applies the embedded migrations first, so
 `migrate` is only needed as a separate deploy step. `okf-mcp --help` and
-`okf-mcp <command> --help` list the rest: `catalog update|list|delete`,
+`okf-mcp <command> --help` list the rest: `catalog update|list|delete|repair-indexes`,
 `key list|revoke|grant|ungrant|maintenance-report`, `import --replace
 [--only-machinery] [--expect-generation N]`.
 `key create --maintenance-report` opts a key into reporting independently of
@@ -351,7 +351,9 @@ The import checks the key before it reads the upload. It then reads and checks
 the tarball (400 with every problem for an unreadable or rule-breaking
 archive), and only then looks the catalog up, so a key granted every catalog
 that posts a bad archive to an unknown one gets 400, not 404. It answers 409
-for a non-empty catalog without `?replace=true` (the message says to add it),
+for a non-empty catalog without `?replace=true` (the message says to add it;
+a new catalog that has had no publish or import yet counts as empty, so its
+starter files are replaced),
 or when `?expect_generation=N` no longer matches (the message says to export
 again). `?only_machinery=true` replaces only repository machinery, as
 `--only-machinery` does.
@@ -473,6 +475,23 @@ Bookkeeping (`write`), ports of `okf.py`'s commands with its exact output:
 | `remove_source` | Removes a `sources` entry by `id`, deleting the key when none are left; refused while a footnote still cites it (not in `okf.py`) |
 | `log` | `* **<kind>:** <text>` under today's date in `log.md`, the only way to write it (`kind`: `Update`, `Creation`, `Change`, `Import`) |
 | `index` | Lists a concept in its folder's `index.md` |
+| `repair_indexes` | Creates whatever bookkeeping the catalog is missing: the root `index.md` and `log.md`, folder indexes, and folder and concept listings (see below; not in `okf.py`) |
+
+`repair_indexes` repairs a catalog created before new catalogs got starter
+files, or one whose indexes were never written. Operators can repair every
+such catalog at once with `okf-mcp catalog repair-indexes --missing-only`
+(`--dry-run` first), which publishes directly and adds a line recording the
+repair to each catalog's `log.md`; no existing index text is changed. It only adds: existing
+headings, prose, listings and summaries stay as they are, a target an index
+already links is not listed again, and a second run changes nothing. A
+path no markdown link can reach (a space, `)` or `#` in it, or a label that cannot be written, such as a folder named `a]`) is not listed;
+`notes` names it instead. A
+listing takes the concept's `title` (else its first `# ` heading, else its
+file name) and `description`; whatever is missing becomes a `TODO`
+placeholder, and the result's `notes` name each one, so check
+`pending_changes` and fill them in before you `publish`. Its edits are
+replayed at publish like `index`'s, so an index someone changed meanwhile is
+added to, never overwritten. Machinery is skipped.
 
 Restructuring (`write`):
 

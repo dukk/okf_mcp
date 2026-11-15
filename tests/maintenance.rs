@@ -538,7 +538,7 @@ async fn maintenance_http_tool_schemas_are_exact() {
     let tools = client.list_all_tools().await.unwrap();
     assert_eq!(
         tools.len(),
-        41,
+        42,
         "31 existing tools plus 10 maintenance tools"
     );
     for name in [
@@ -573,6 +573,7 @@ async fn maintenance_http_tool_schemas_are_exact() {
         "remove_source",
         "log",
         "index",
+        "repair_indexes",
     ] {
         assert!(
             tools.iter().any(|tool| tool.name == name),

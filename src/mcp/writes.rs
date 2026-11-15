@@ -439,7 +439,7 @@ pub struct LogParams {
 /// `index`'s arguments.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 pub struct IndexParams {
-    /// The concept to list, with or without `.md`, e.g. `/infra/ntp`; its folder's index.md must exist.
+    /// The concept to list, with or without `.md`, e.g. `/infra/ntp`; its folder's index.md must exist (`repair_indexes` creates missing ones).
     pub path: String,
     /// The text after the link's ` - `.
     pub summary: String,
@@ -447,6 +447,13 @@ pub struct IndexParams {
     pub section: Option<String>,
     /// The link text (default: the concept's frontmatter title).
     pub title: Option<String>,
+    /// The changeset to write to: the handle `open_changeset` returned.
+    pub changeset: String,
+}
+
+/// `repair_indexes`'s arguments.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+pub struct RepairIndexesParams {
     /// The changeset to write to: the handle `open_changeset` returned.
     pub changeset: String,
 }
@@ -686,6 +693,30 @@ pub(crate) async fn index(ctx: &ToolContext, params: IndexParams) -> Result<Writ
     .await
 }
 
+/// Creates the bookkeeping the changeset's catalog is missing: the root
+/// `index.md` and `log.md`, folder indexes and listings (see
+/// [`ops::repair_indexes`]). Its replay ops are stored on each index's entry.
+///
+/// # Arguments
+/// * `ctx` - the call's context.
+/// * `params` - the changeset.
+///
+/// # Returns
+/// The write's report: the files written, and one note per created file
+/// and per TODO placeholder; nothing touched when nothing is missing.
+///
+/// # Errors
+/// As [`apply`] (below `write`, [`OkfError::Forbidden`]).
+pub(crate) async fn repair_indexes(
+    ctx: &ToolContext,
+    params: RepairIndexesParams,
+) -> Result<WriteReport, OkfError> {
+    apply(ctx, &params.changeset, None, |ws, _| {
+        ops::repair_indexes(ws)
+    })
+    .await
+}
+
 // The bookkeeping tools; `OkfServer::tools` joins `bookkeeping_router()`.
 #[tool_router(router = bookkeeping_router, vis = "pub(crate)")]
 impl OkfServer {
@@ -879,6 +910,36 @@ impl OkfServer {
     ) -> Result<Json<WriteReport>, CallToolResult> {
         let ctx = self.context(&parts)?;
         reply(index(&ctx, params).await)
+    }
+
+    /// The `repair_indexes` tool.
+    #[tool(
+        title = "Repair Indexes",
+        description = "Create whatever bookkeeping the catalog is missing, in the changeset \
+                       `changeset` names (open one with open_changeset): the root index.md and \
+                       log.md, an index.md for every folder holding concepts, each folder's \
+                       listing in its parent's # Sections, and each concept's listing in its \
+                       folder's index.md (its title and description; TODO placeholders where \
+                       they are missing, each named in `notes`). Only adds: existing text, \
+                       listings and summaries are kept, and a second run changes nothing. A file or \
+                       folder no markdown link can list (a space, `)` or `#` in its path, or a \
+                       `]` in a folder name) is not listed; `notes` names it. \
+                       Review the result with pending_changes before publishing. Write access.",
+        annotations(
+            title = "Repair Indexes",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn repair_indexes(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(params): Parameters<RepairIndexesParams>,
+    ) -> Result<Json<WriteReport>, CallToolResult> {
+        let ctx = self.context(&parts)?;
+        reply(repair_indexes(&ctx, params).await)
     }
 }
 
@@ -1417,10 +1478,11 @@ mod bookkeeping_tests {
             "remove_source",
             "log",
             "index",
+            "repair_indexes",
         ] {
             assert!(names.contains(&name), "{name} is registered");
         }
-        assert_eq!(names.len(), 8, "{names:?}");
+        assert_eq!(names.len(), 9, "{names:?}");
         assert!(kind.contains("default Update"), "{kind}");
         for tool in &tools {
             let output = tool.output_schema.as_ref().expect("an output schema");
@@ -1433,5 +1495,313 @@ mod bookkeeping_tests {
                 tool.name
             );
         }
+    }
+}
+
+/// Issue #426: a new catalog works with the bookkeeping tools at once, and
+/// `repair_indexes` repairs a catalog created empty, through a changeset.
+#[cfg(test)]
+mod repair_tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::mcp::changesets::{publish, PublishParams, Published};
+    use crate::mcp::testing::{
+        app_with, app_with_new, context, open, principal_as, writer, TestApp,
+    };
+    use crate::store::keys::Access;
+
+    const NOTE: &str = "---\ntype: Note\ntitle: A\ndescription: A note.\n---\n# A\n";
+    const NTP: &str = "---\ntype: System\ntitle: NTP\ndescription: Hosts sync.\n---\n# NTP\n";
+
+    /// A catalog created before starter files: concepts, no index or log.
+    async fn legacy() -> TestApp {
+        app_with(
+            &[("pg", &[("a.md", NOTE), ("infra/ntp.md", NTP)])],
+            Config::default(),
+        )
+        .await
+    }
+
+    fn published_text(test: &TestApp, path: &str) -> Option<String> {
+        let loaded = test.app.catalog("pg").unwrap().current();
+        loaded
+            .snapshot()
+            .get(path)
+            .map(|doc| doc.text().to_string())
+    }
+
+    async fn publish_as(ctx: &ToolContext, handle: &str) -> Result<Published, OkfError> {
+        let params = PublishParams {
+            message: "repair".to_string(),
+            changeset: handle.to_string(),
+        };
+        publish(ctx, params).await
+    }
+
+    async fn repair(ctx: &ToolContext, handle: &str) -> Result<WriteReport, OkfError> {
+        let params = RepairIndexesParams {
+            changeset: handle.to_string(),
+        };
+        repair_indexes(ctx, params).await
+    }
+
+    fn concept(path: &str, title: &str, summary: &str, handle: &str) -> CreateConceptParams {
+        let frontmatter = serde_json::json!({"type": "Note", "title": title});
+        CreateConceptParams {
+            path: path.to_string(),
+            frontmatter: frontmatter.as_object().unwrap().clone(),
+            body: format!("# {title}\n"),
+            index_summary: Some(summary.to_string()),
+            index_section: None,
+            by: None,
+            changeset: handle.to_string(),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_new_catalog_lists_root_and_nested_concepts_and_logs_at_once() {
+        let test = app_with_new(&["pg"], Config::default()).await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+
+        create_concept(&ctx, concept("/hello", "Hello", "The first note.", &handle))
+            .await
+            .unwrap();
+        create_concept(&ctx, concept("/infra/hosts/web", "Web", "A host.", &handle))
+            .await
+            .unwrap();
+        // Created unlisted, then listed with the `index` tool.
+        let mut later = concept("/later", "Later", "unused", &handle);
+        later.index_summary = None;
+        create_concept(&ctx, later).await.unwrap();
+        let indexed = index(
+            &ctx,
+            IndexParams {
+                path: "/later".to_string(),
+                summary: "Listed afterwards.".to_string(),
+                section: None,
+                title: None,
+                changeset: handle.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        let logged = log(
+            &ctx,
+            LogParams {
+                text: "Added the first notes.".to_string(),
+                kind: None,
+                changeset: handle.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        let published = publish_as(&ctx, &handle).await.unwrap();
+
+        assert!(published.report.published, "{published:?}");
+        assert_eq!(logged.touched, ["/log.md"]);
+        let root = published_text(&test, "index.md").unwrap();
+        assert!(
+            root.contains("* [Hello](hello.md) - The first note."),
+            "{root}"
+        );
+        assert_eq!(indexed.touched, ["/index.md"]);
+        assert!(
+            root.contains("* [Later](later.md) - Listed afterwards."),
+            "{root}"
+        );
+        // The nested indexes are created and linked from their parents.
+        assert!(root.contains("* [Infra](infra/) - "), "{root}");
+        let infra = published_text(&test, "infra/index.md").unwrap();
+        assert!(infra.contains("* [Hosts](hosts/) - "), "{infra}");
+        let hosts = published_text(&test, "infra/hosts/index.md").unwrap();
+        assert!(hosts.contains("* [Web](web.md) - A host."), "{hosts}");
+        assert!(published_text(&test, "log.md")
+            .unwrap()
+            .contains("* **Update:** Added the first notes."));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_changeset_based_on_a_starter_file_conflicts_after_the_first_import() {
+        let test = app_with_new(&["pg"], Config::default()).await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        // A free edit of the starter index.md (revision 1), not yet published.
+        edit_document(
+            &ctx,
+            EditDocumentParams {
+                path: "/index.md".to_string(),
+                old_str: "TODO: say what this catalog holds.".to_string(),
+                new_str: "Stale words.".to_string(),
+                replace_all: false,
+                changeset: handle.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        // The first import replaces the starter files without `replace`.
+        let options = crate::store::import::ImportOptions {
+            replace: false,
+            scope: crate::store::import::ImportScope::Everything,
+            expect_generation: None,
+            expect_catalog_id: None,
+            actor: "tester",
+            audit: &crate::store::audit::AuditActor::cli(),
+            now: chrono::Utc::now(),
+        };
+        let imported = "---\nokf_version: \"0.2\"\n---\n# Imported\n";
+        crate::store::import::import(
+            test.app.pool(),
+            "pg",
+            crate::mcp::testing::files(&[("index.md", imported), ("log.md", "# Log\n")]),
+            &options,
+        )
+        .await
+        .unwrap();
+        test.app.poll().await.unwrap();
+
+        let refused = publish_as(&ctx, &handle).await.unwrap_err();
+
+        // The import's index.md is revision 2, so the edit based on
+        // revision 1 conflicts instead of overwriting it.
+        assert!(matches!(refused, OkfError::Conflict { .. }), "{refused:?}");
+        assert_eq!(published_text(&test, "index.md").unwrap(), imported);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_legacy_catalog_refuses_listings_until_repaired() {
+        let test = legacy().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        assert_eq!(published_text(&test, "index.md"), None);
+
+        let refused = create_concept(&ctx, concept("/b", "B", "b", &handle))
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(&refused, OkfError::Refused { reason } if reason.contains("repair_indexes")),
+            "{refused:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn repair_indexes_stages_a_legacy_catalog_s_indexes_until_publish() {
+        let test = legacy().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+
+        let report = repair(&ctx, &handle).await.unwrap();
+
+        assert_eq!(
+            report.touched,
+            ["/index.md", "/log.md", "/infra/index.md"],
+            "{report:?}"
+        );
+        // Each TODO the user should fill in is named.
+        assert!(report
+            .notes
+            .iter()
+            .any(|note| note == "created /index.md; replace its heading and TODO line"));
+        assert!(
+            report.message.starts_with("repaired 3 file(s)"),
+            "{report:?}"
+        );
+        // Staged: nothing is live before publish.
+        assert_eq!(published_text(&test, "index.md"), None);
+        let published = publish_as(&ctx, &handle).await.unwrap();
+        assert!(published.report.published);
+        let root = published_text(&test, "index.md").unwrap();
+        assert!(
+            root.starts_with("---\nokf_version: \"0.2\"\n---\n"),
+            "{root}"
+        );
+        assert!(root.contains("* [A](a.md) - A note."), "{root}");
+        assert!(
+            root.contains("* [Infra](infra/) - TODO: describe this folder"),
+            "{root}"
+        );
+        let infra = published_text(&test, "infra/index.md").unwrap();
+        assert!(infra.contains("* [NTP](ntp.md) - Hosts sync."), "{infra}");
+        assert_eq!(
+            published_text(&test, "log.md").unwrap(),
+            "# Knowledge Catalog Update Log\n"
+        );
+
+        // Repeating it changes nothing, so it leaves the new changeset empty.
+        let again_handle = open(&ctx).await;
+        let again = repair(&ctx, &again_handle).await.unwrap();
+        assert!(again.touched.is_empty(), "{again:?}");
+        assert_eq!(again.message, "indexes complete: nothing to repair");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn repair_indexes_needs_write_access() {
+        let test = legacy().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        // The same key, demoted to read: it still owns the changeset.
+        let reader = context(
+            &test,
+            principal_as("writer-a", Access::Read, &[], Some("pg")),
+            None,
+        );
+
+        let refused = repair(&reader, &handle).await.unwrap_err();
+
+        assert!(matches!(refused, OkfError::Forbidden { .. }), "{refused:?}");
+        assert_eq!(published_text(&test, "index.md"), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_repair_published_after_another_keeps_the_curated_indexes() {
+        let test = legacy().await;
+        let first = writer(&test, "writer-a", "pg").await;
+        let second = writer(&test, "writer-b", "pg").await;
+        let first_handle = open(&first).await;
+        let second_handle = open(&second).await;
+        repair(&first, &first_handle).await.unwrap();
+        repair(&second, &second_handle).await.unwrap();
+        // The second writer curates both new indexes, then publishes first.
+        edit_document(
+            &second,
+            EditDocumentParams {
+                path: "/index.md".to_string(),
+                old_str: "# Catalog\n\nTODO: say what this catalog holds.".to_string(),
+                new_str: "# Ours\n\nCurated words.".to_string(),
+                replace_all: false,
+                changeset: second_handle.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        edit_document(
+            &second,
+            EditDocumentParams {
+                path: "/infra/index.md".to_string(),
+                old_str: "TODO: say what this folder holds.".to_string(),
+                new_str: "Our systems.".to_string(),
+                replace_all: false,
+                changeset: second_handle.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        publish_as(&second, &second_handle).await.unwrap();
+        let curated_root = published_text(&test, "index.md").unwrap();
+        let curated_infra = published_text(&test, "infra/index.md").unwrap();
+
+        // The first repair replays onto the curated files: nothing is
+        // overwritten, and nothing listed twice.
+        let published = publish_as(&first, &first_handle).await.unwrap();
+
+        assert!(published.report.published, "{published:?}");
+        assert_eq!(published_text(&test, "index.md").unwrap(), curated_root);
+        assert_eq!(
+            published_text(&test, "infra/index.md").unwrap(),
+            curated_infra
+        );
+        assert!(curated_root.contains("Curated words.") && curated_infra.contains("Our systems."));
+        assert_eq!(curated_root.matches("(a.md)").count(), 1, "{curated_root}");
     }
 }

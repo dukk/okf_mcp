@@ -469,7 +469,8 @@ mod tests {
         let rows = published(&db.pool, catalog.id).await.unwrap();
 
         let paths: Vec<&str> = rows.iter().map(|row| row.path.as_str()).collect();
-        assert_eq!(paths, ["a.md", "b.md"]);
+        // index.md and log.md are the catalog's starter files.
+        assert_eq!(paths, ["a.md", "b.md", "index.md", "log.md"]);
         assert_eq!(
             rows[0],
             DocumentRow {

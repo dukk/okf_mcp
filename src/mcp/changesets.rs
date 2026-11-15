@@ -2855,7 +2855,8 @@ mod restructure_publish_tests {
                 ("/infra/index.md", "update", 2),
                 ("/infra/x.md", "delete", 2),
                 ("/infra/z.md", "create", 1),
-                ("/log.md", "update", 2),
+                // Revision 1 is the starter log.md, 2 the fixture's import.
+                ("/log.md", "update", 3),
             ]
         );
         assert!(published.report.replayed.is_empty());

@@ -20,6 +20,7 @@ use crate::clock::format_timestamp;
 use crate::error::OkfError;
 use crate::http::{archives, AppError};
 use crate::mcp::catalogs::SuspensionInfo;
+use crate::okf::ops::STARTER_FILE_COUNT;
 use crate::store::audit::AuditActor;
 use crate::store::catalogs::{self as catalog_rows, MaintenanceChange, Switch};
 use crate::store::ceiling::{self, MemberAccess};
@@ -197,7 +198,8 @@ async fn list_catalogs(
     Ok(Json(CatalogListing { catalogs }))
 }
 
-/// `POST /catalogs`: creates an empty catalog, then polls so it is served at
+/// `POST /catalogs`: creates a catalog holding only its starter files (a
+/// root `index.md` and a `log.md`), then polls so it is served at
 /// once. It needs an admin key that reaches every catalog: a key granted
 /// named catalogs would not reach the new one, and grants are made with the
 /// keys routes.
@@ -240,16 +242,18 @@ async fn create_catalog(
         .suspensions()
         .get(&row.name)
         .map(SuspensionInfo::from);
-    // Built from the row, not the loaded state: a new catalog is empty, and
-    // the answer must not depend on the poll having loaded it.
+    // Built from the row, not the loaded state: a new catalog holds only its
+    // starter files (a root index.md and a log.md, no concepts), written
+    // when it was created, and the answer must not depend on the poll
+    // having loaded it.
     let summary = CatalogSummary {
         name: row.name,
         description: row.description,
         owner_team: row.owner_team,
-        files: 0,
+        files: STARTER_FILE_COUNT,
         concepts: 0,
         generation: row.generation,
-        last_change: None,
+        last_change: Some(format_timestamp(row.created_at)),
         suspended,
         // `catalogs.maintenance` defaults to true and `create` never sets it.
         maintenance: Switch::On,
@@ -928,7 +932,13 @@ mod tests {
         assert_eq!(created["name"], "scratch");
         assert_eq!(created["description"], "Scratch space");
         assert_eq!(created["owner_team"], TEST_TEAM);
-        assert_eq!(created["files"], 0);
+        // Its starter files: a root index.md and a log.md, no concepts.
+        assert_eq!(created["files"], 2);
+        assert_eq!(created["concepts"], 0);
+        assert!(created["last_change"].is_string(), "{created}");
+        let served = test.app.catalog("scratch").expect("loaded at once");
+        assert_eq!(served.current().files(), 2);
+        assert!(served.current().snapshot().get("index.md").is_some());
         // Polled at once: loaded, and listed for a key that reaches it.
         assert!(test.app.catalog("scratch").is_some());
         assert_eq!(names(&test, &root).await, ["main", "other", "scratch"]);

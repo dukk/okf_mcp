@@ -321,7 +321,7 @@ mod tests {
         assert_eq!(entries[0].teams, [crate::db::TEST_USER]);
         assert_eq!(
             entries[0].details,
-            serde_json::json!({"generation": generation, "files": 0, "catalog_id": catalog_id})
+            serde_json::json!({"generation": generation, "files": 2, "catalog_id": catalog_id})
         );
     }
 
@@ -497,7 +497,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn an_empty_catalog_exports_an_empty_archive_and_unknown_ones_fail() {
+    async fn a_new_catalog_exports_its_starter_files_and_unknown_ones_fail() {
         let db = test_db().await;
         catalogs::create(
             &db.pool,
@@ -536,9 +536,10 @@ mod tests {
         )
         .await;
 
-        assert!(archive::read_tarball(tarball.as_slice(), u64::MAX)
-            .unwrap()
-            .is_empty());
+        // A new catalog holds only its starter files.
+        let exported = archive::read_tarball(tarball.as_slice(), u64::MAX).unwrap();
+        let paths: Vec<&str> = exported.keys().map(String::as_str).collect();
+        assert_eq!(paths, ["index.md", "log.md"]);
         assert_eq!(generation, 0);
         assert!(matches!(unknown, Err(OkfError::CatalogNotSelected { .. })));
     }

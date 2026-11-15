@@ -35,6 +35,9 @@ pub(super) async fn setup(pool: &PgPool, paths: &[&str]) -> i64 {
     .await
     .unwrap()
     .id;
+    // The fixture's rows are the whole catalog: drop the starter files
+    // `create` wrote, so paths such as `index.md` start at revision 1.
+    catalogs::tests::drop_starter_files(pool, catalog).await;
     for path in paths {
         revision(pool, catalog, path, 1, t0(), "---\ntype: Note\n---\nBody\n").await;
     }

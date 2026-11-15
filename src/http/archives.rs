@@ -203,12 +203,13 @@ async fn export_catalog(
 /// axum's 400.
 #[derive(Debug, Default, Deserialize)]
 struct ImportQuery {
-    /// Replace a non-empty catalog's documents.
+    /// Replace a non-empty catalog's documents (not needed at generation 0).
     #[serde(default)]
     replace: bool,
     /// Replace only repository machinery ([`ImportScope::Machinery`]); the
     /// archive's other files are ignored and the catalog's concepts are
-    /// kept. A non-empty catalog also needs `replace`, as with the CLI.
+    /// kept. A non-empty catalog past generation 0 also needs `replace`, as
+    /// with the CLI.
     #[serde(default)]
     only_machinery: bool,
     /// Refuse (409) unless the catalog is still at this generation, the one
@@ -246,8 +247,8 @@ struct ImportQuery {
 /// ([`OkfError::UnlockRequired`]) for operator staff without an unlock
 /// while `require_unlock` is on; 400
 /// ([`OkfError::ImportRefused`]) for an unreadable or rule-breaking archive;
-/// 409 ([`OkfError::Refused`]) for a non-empty catalog without
-/// `?replace=true`, or one no longer at `expect_generation`; 500 for a
+/// 409 ([`OkfError::Refused`]) for a non-empty catalog past generation 0
+/// without `?replace=true`, or one no longer at `expect_generation`; 500 for a
 /// database failure. A refresh that fails after the import committed is
 /// logged, not returned.
 async fn import_catalog(
@@ -498,6 +499,8 @@ mod tests {
     #[tokio::test]
     async fn a_slow_upload_is_503_and_imports_nothing() {
         let test = app_with(&[("pg", &[])], Config::default()).await;
+        let before = stored(&test).await;
+        let files_before = test.app.catalog("pg").unwrap().current().files();
         let archive = tarball();
         let (head, tail) = archive.split_at(archive.len() / 2);
         // An in-memory pipe: the request body reads `reader` as `writer`
@@ -527,8 +530,11 @@ mod tests {
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(json["error"], "Timeout");
         assert!(late.is_err(), "the late bytes were read: {late:?}");
-        assert_eq!(stored(&test).await, (0, 0));
-        assert_eq!(test.app.catalog("pg").unwrap().current().files(), 0);
+        assert_eq!(stored(&test).await, before);
+        assert_eq!(
+            test.app.catalog("pg").unwrap().current().files(),
+            files_before
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
