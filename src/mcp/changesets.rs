@@ -118,21 +118,22 @@ pub(crate) async fn list_changesets(
     let catalog_ids: Vec<i64> = match params.catalog.as_deref() {
         // `one` refuses a catalog the key does not reach; it admits
         // nothing, and a list of changesets reads no catalog's contents.
+        // `one` checks the name and the incarnation whose changesets are
+        // listed; it admits nothing.
         Some(name) => vec![ctx.one(Some(name))?.id()],
         None => {
             // A list naming a bad catalog fails here as it does elsewhere.
             ctx.check_connection()?;
-            let now = ctx.app().clock().now();
             ctx.catalogs()
                 .values()
                 // A closed catalog shows no changesets: its handles and paths
                 // are part of what suspension (M13) and a lock (M14) withhold.
-                // `offers` (reach) is checked first.
+                // `offers` (reach) is checked first; the lock is checked
+                // against the incarnation listed, not only its name.
                 .filter(|state| {
                     ctx.offers(state.name())
-                        && principal
-                            .check_open(state.name(), Access::Read, now)
-                            .is_ok()
+                        && principal.check_not_suspended(state.name()).is_ok()
+                        && ctx.check_contents(state, Access::Read).is_ok()
                 })
                 .map(|state| state.id())
                 .collect()
@@ -251,15 +252,11 @@ pub(crate) async fn open_changeset(
     let now = ctx.app().clock().now();
     // The changeset's writes go to the catalog's contents, so they need
     // what any write does, the unlock included (M14 Task 9b).
-    let admission = principal.require_contents(Access::Write, state.name(), now)?;
+    principal.require_contents(Access::Write, state.name(), now)?;
     // An unlock is of one catalog incarnation: one let in by gates that
     // predate this call's catalog map (the catalog was created again under
     // its name) must not open a changeset in the replacement (PR #442).
-    if admission.is_recorded() && principal.scope_of(state.name(), state.id()).is_none() {
-        return Err(OkfError::Busy {
-            reason: format!("catalog {:?} is being reloaded", state.name()),
-        });
-    }
+    ctx.check_contents(&state, Access::Write)?;
     // The lock order of every changeset write: the catalog row first, so a
     // concurrent `catalog delete` either waits for this or is seen here.
     let mut tx = ctx.app().pool().begin().await?;

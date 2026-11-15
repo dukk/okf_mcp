@@ -329,8 +329,15 @@ async fn a_read_of_an_old_catalog_map_under_newer_gates_is_refused_not_misrecord
     );
     assert_eq!(ctx.catalogs()["main"].id(), original, "the old map");
 
-    let state = ctx.one(Some("main")).unwrap();
+    // `one` checks the incarnation (PR #442 review, round 2), and `admit`
+    // on the map's state refuses it the same way.
+    let state = std::sync::Arc::clone(&ctx.catalogs()["main"]);
+    let selected = ctx.one(Some("main")).map(drop);
     let refused = ctx.admit(&state, audit::AccessKind::Read);
+    assert!(
+        matches!(selected, Err(crate::error::OkfError::Busy { .. })),
+        "{selected:?}"
+    );
     settle_access(&test).await;
 
     assert!(
@@ -899,8 +906,15 @@ async fn an_unlocked_read_of_an_old_catalog_map_is_refused_not_left_out() {
     );
     assert_eq!(ctx.catalogs()["main"].id(), original, "the old map");
 
-    let state = ctx.one(Some("main")).unwrap();
+    // `one` checks the incarnation (PR #442 review, round 2), and `admit`
+    // on the map's state refuses it the same way.
+    let state = std::sync::Arc::clone(&ctx.catalogs()["main"]);
+    let selected = ctx.one(Some("main")).map(drop);
     let refused = ctx.admit(&state, audit::AccessKind::Read);
+    assert!(
+        matches!(selected, Err(crate::error::OkfError::Busy { .. })),
+        "{selected:?}"
+    );
     settle_access(&test).await;
 
     assert!(
@@ -971,20 +985,7 @@ async fn stale_unlock_of_a_replaced_main(test: &TestApp) -> (String, i64, i64) {
     let id = unlock(test, "main").await;
     replace_main_for_acme(test).await;
     let replacement = catalog_id(test, "main").await;
-    let archive = crate::http::archives::tarball_of(&[("index.md", "# Acme\n\nPrivate.\n")]);
-    let options = crate::store::import::ImportOptions {
-        replace: true,
-        scope: crate::store::import::ImportScope::Everything,
-        expect_generation: None,
-        expect_catalog_id: None,
-        actor: "cli",
-        audit: &AuditActor::cli(),
-        now: Utc::now(),
-    };
-    let files = crate::archive::read_tarball(archive.as_slice(), 1 << 20).unwrap();
-    crate::store::import::import(test.app.pool(), "main", files, &options)
-        .await
-        .unwrap();
+    import_private_index(test).await;
     (staff, id, replacement)
 }
 
@@ -1065,31 +1066,164 @@ async fn tallies_or_gone(test: &TestApp, id: i64) -> Option<(i64, i64, i64)> {
         .unwrap()
 }
 
+/// An unlocked admin `staff` whose principal was captured before `main`
+/// was replaced by `acme`'s one-document catalog holding an open changeset,
+/// then polled: the old principal (its gates hold the old `main`'s unlock)
+/// against the new catalog map, as a request in flight across a poll sees
+/// them (PR #442 review, round 2).
+///
+/// # Returns
+/// The old principal, the replacement's id and its changeset's handle.
+async fn old_unlock_against_a_new_map(
+    test: &TestApp,
+) -> (std::sync::Arc<crate::auth::Principal>, i64, String) {
+    let staff = staff_root(test).await;
+    make_staff_admin(test).await;
+    require_unlock(test).await;
+    unlock(test, "main").await;
+    let old_principal = crate::mcp::testing::cached_principal(test, &staff);
+    // The replacement and its document, without a poll in between.
+    replace_main_for_acme(test).await;
+    import_private_index(test).await;
+    let replacement = catalog_id(test, "main").await;
+    crate::mcp::testing::store_key(test, "acme-writer").await;
+    let mut conn = test.app.pool().acquire().await.unwrap();
+    let opened = crate::store::changesets::open(
+        &mut conn,
+        replacement,
+        "acme-writer",
+        "acme-writer",
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    drop(conn);
+    test.app.poll().await.unwrap();
+    (old_principal, replacement, opened.handle)
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn an_old_unlocked_principal_opens_no_changeset_in_the_replacement() {
     let test = app().await;
-    let staff = staff_root(&test).await;
-    make_staff_admin(&test).await;
-    require_unlock(&test).await;
-    unlock(&test, "main").await;
-    // Captured before the replacement, as a request in flight holds it.
-    let old_principal = crate::mcp::testing::cached_principal(&test, &staff);
-    replace_main_for_acme(&test).await;
-    test.app.poll().await.unwrap();
-    let replacement = catalog_id(&test, "main").await;
+    let (old_principal, replacement, _) = old_unlock_against_a_new_map(&test).await;
     let ctx = crate::mcp::testing::context(&test, old_principal, None);
     assert_eq!(ctx.catalogs()["main"].id(), replacement, "the new map");
 
     let refused = open_main(&ctx).await;
-    let opened: i64 = sqlx::query_scalar("SELECT count(*) FROM changesets WHERE catalog_id = $1")
-        .bind(replacement)
-        .fetch_one(test.app.pool())
-        .await
-        .unwrap();
+    let opened: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM changesets WHERE catalog_id = $1 AND key_id <> 'acme-writer'",
+    )
+    .bind(replacement)
+    .fetch_one(test.app.pool())
+    .await
+    .unwrap();
 
     assert!(
-        matches!(refused, Err(crate::error::OkfError::Busy { .. })),
+        matches!(refused, Err(crate::error::OkfError::UnlockRequired { .. })),
         "{refused:?}"
     );
     assert_eq!(opened, 0, "nothing opened in the replacement");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_old_unlocked_principal_lists_none_of_the_replacements_changesets() {
+    let test = app().await;
+    let (old_principal, _, handle) = old_unlock_against_a_new_map(&test).await;
+    let list = |catalog: Option<&str>| {
+        let ctx = crate::mcp::testing::context(&test, std::sync::Arc::clone(&old_principal), None);
+        let params = crate::mcp::changesets::ListParams {
+            catalog: catalog.map(str::to_string),
+        };
+        async move { crate::mcp::changesets::list_changesets(&ctx, params).await }
+    };
+
+    let unnamed = list(None).await.unwrap();
+    let named = list(Some("main")).await;
+
+    assert!(
+        unnamed
+            .changesets
+            .iter()
+            .all(|listed| listed.changeset != handle),
+        "unnamed: {unnamed:?}"
+    );
+    assert!(
+        matches!(named, Err(crate::error::OkfError::UnlockRequired { .. })),
+        "named: {named:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_old_unlocked_principal_reads_none_of_the_replacements_contents() {
+    use axum::Extension;
+    use tower::ServiceExt;
+    let test = app().await;
+    let (old_principal, _, _) = old_unlock_against_a_new_map(&test).await;
+    let ctx = crate::mcp::testing::context(&test, std::sync::Arc::clone(&old_principal), None);
+
+    let one = ctx.one(Some("main")).map(drop);
+    // `view` on the new map's state, as a tool that resolved it otherwise
+    // would: refused by the gates that know it, not read unrecorded.
+    let state = std::sync::Arc::clone(&ctx.catalogs()["main"]);
+    let viewed = ctx.view(&state, None).await.map(drop);
+    let read = crate::mcp::documents::read_document(
+        &ctx,
+        crate::mcp::documents::ReadDocumentParams {
+            path: Some("/index.md".to_string()),
+            catalog: Some("main".to_string()),
+            changeset: None,
+        },
+    )
+    .await;
+    // The REST browse routes, with the old principal as the auth layer
+    // would have put it in the request.
+    let routes = super::browse::routes()
+        .layer(Extension(std::sync::Arc::clone(&old_principal)))
+        .with_state(std::sync::Arc::clone(&test.app));
+    let mut rest = Vec::new();
+    for uri in ["/catalogs/main/tree", "/catalogs/main/documents/index.md"] {
+        let request = axum::http::Request::get(uri)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = routes.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        rest.push((uri, status, String::from_utf8_lossy(&bytes).into_owned()));
+    }
+    settle_access(&test).await;
+
+    let locked = |result: &Result<(), crate::error::OkfError>| {
+        matches!(result, Err(crate::error::OkfError::UnlockRequired { .. }))
+    };
+    assert!(locked(&one), "one: {one:?}");
+    assert!(locked(&viewed), "view: {viewed:?}");
+    assert!(
+        matches!(read, Err(crate::error::OkfError::UnlockRequired { .. })),
+        "read_document: {read:?}"
+    );
+    for (uri, status, body) in &rest {
+        assert_eq!(*status, StatusCode::FORBIDDEN, "{uri}: {body}");
+        assert!(!body.contains("Private"), "{uri} leaked: {body}");
+    }
+}
+
+/// Imports one private `index.md` into the current `main` (the CLI's way:
+/// no admission), so a test can tell the replacement's contents apart.
+async fn import_private_index(test: &TestApp) {
+    let archive = crate::http::archives::tarball_of(&[("index.md", "# Acme\n\nPrivate.\n")]);
+    let options = crate::store::import::ImportOptions {
+        replace: true,
+        scope: crate::store::import::ImportScope::Everything,
+        expect_generation: None,
+        expect_catalog_id: None,
+        actor: "cli",
+        audit: &AuditActor::cli(),
+        now: Utc::now(),
+    };
+    let files = crate::archive::read_tarball(archive.as_slice(), 1 << 20).unwrap();
+    crate::store::import::import(test.app.pool(), "main", files, &options)
+        .await
+        .unwrap();
 }

@@ -7,9 +7,10 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use axum::http::request::Parts;
+use chrono::{DateTime, Utc};
 
 use crate::app::{App, Catalogs};
-use crate::auth::{Admission, Principal};
+use crate::auth::{Admission, CatalogScope, Principal};
 use crate::catalog::CatalogState;
 use crate::error::OkfError;
 use crate::http::requester::Requester;
@@ -281,12 +282,18 @@ impl ToolContext {
     /// That catalog's state.
     ///
     /// # Errors
-    /// As [`ToolContext::select`].
+    /// As [`ToolContext::select`]; then as `ToolContext::check_contents`
+    /// for the state's incarnation.
     pub fn one(&self, catalog: Option<&str>) -> Result<Arc<CatalogState>, OkfError> {
         let argument = catalog.map(str::to_string);
         let selection = self.select(argument.as_ref().map(std::slice::from_ref))?;
         // `write_target` is the first selected catalog.
-        Ok(self.state(selection.write_target()))
+        let state = self.state(selection.write_target());
+        // The selection checked the name; every caller acts on this state's
+        // `catalogs.id`, so check the incarnation too (records nothing):
+        // an unlock of a deleted catalog must not reach its replacement.
+        self.check_contents(&state, Access::Read)?;
+        Ok(state)
     }
 
     /// Notes one access to `state`'s contents for the audit log: at most
@@ -305,12 +312,14 @@ impl ToolContext {
     /// * `kind` - what the call does with its contents.
     ///
     /// # Errors
+    /// The refusal of the gates that describe the incarnation read (an
+    /// unlock of a deleted catalog does not open its replacement); or
     /// [`OkfError::Busy`] for an admin credential, or one admitted under an
     /// unlock, when no gates know the incarnation read (the catalog was
     /// deleted and created again, or created, while the cache and the map
     /// were being reloaded): its access may be recorded, and is neither
     /// recorded under the wrong catalog or team nor left out. A retry sees
-    /// a settled cache.
+    /// a settled cache. See [`ToolContext::admission_to`].
     pub(crate) fn admit(&self, state: &CatalogState, kind: AccessKind) -> Result<(), OkfError> {
         if let Some(admitted) = self.admission_of(state, kind)? {
             self.note(admitted, kind);
@@ -352,7 +361,7 @@ impl ToolContext {
     /// records nothing.
     ///
     /// # Errors
-    /// [`OkfError::Busy`] as `ToolContext::admit`.
+    /// As `ToolContext::admit`.
     fn admission_of(
         &self,
         state: &CatalogState,
@@ -362,10 +371,75 @@ impl ToolContext {
             AccessKind::Write => Access::Write,
             AccessKind::Read | AccessKind::Export => Access::Read,
         };
+        let Some(bound) = self.admission_to(state, access)? else {
+            return Ok(None);
+        };
+        if !bound.admission.is_recorded() {
+            return Ok(None);
+        }
+        let record =
+            bound
+                .principal
+                .access_record(&self.requester, state.name(), bound.scope, bound.now);
+        Ok(Some((record, bound.admission)))
+    }
+
+    /// Checks that this call may reach `state`'s contents for `access`,
+    /// decided by gates that describe that very incarnation
+    /// ([`ToolContext::admission_to`]): for a path that reads or writes by
+    /// `state.id()` without admitting (a changeset list, opening a
+    /// changeset). Name-based checks (the selection, `require_contents`)
+    /// alone would let an old principal's unlock of a deleted catalog
+    /// reach its replacement.
+    ///
+    /// # Arguments
+    /// * `state` - a catalog from this call's map.
+    /// * `access` - what the call does with it.
+    ///
+    /// # Errors
+    /// As [`ToolContext::admission_to`].
+    pub(crate) fn check_contents(
+        &self,
+        state: &CatalogState,
+        access: Access,
+    ) -> Result<(), OkfError> {
+        self.admission_to(state, access).map(drop)
+    }
+
+    /// The admission of this call's principal to `state` for `access`, from
+    /// gates that describe the incarnation this call reads (the state's
+    /// `catalogs.id`): the principal's own, else the key cache's current
+    /// ones, which `App::poll` publishes before the catalog map that goes
+    /// with them. A refusal from those gates is returned, never turned into
+    /// an unrecorded success: a principal admitted by name through an
+    /// unlock of a deleted catalog is refused its replacement here.
+    ///
+    /// # Arguments
+    /// * `state` - a catalog from this call's map.
+    /// * `access` - what the call does with it.
+    ///
+    /// # Returns
+    /// The admission with the gates and scope it was decided by, or `None`
+    /// when no gates know the incarnation and nothing about the access
+    /// would be recorded (a non-admin, not unlocked: let through
+    /// unrecorded, as before M14).
+    ///
+    /// # Errors
+    /// As [`Principal::admission`] from the gates that know the
+    /// incarnation; [`OkfError::Busy`] when none do and the access could be
+    /// recorded (an admin credential, or one admitted under an unlock): its
+    /// access is neither recorded under the wrong catalog nor let through.
+    /// A retry sees a settled cache.
+    fn admission_to(
+        &self,
+        state: &CatalogState,
+        access: Access,
+    ) -> Result<Option<BoundAdmission<'_>>, OkfError> {
         let (catalog, catalog_id) = (state.name(), state.id());
-        // A principal whose gates describe this incarnation, borrowed as it
-        // is, or a copy carrying the cache's current gates (`Cow` holds
-        // either, like a value that is "maybe a reference").
+        let now = self.app.clock().now();
+        // The principal as it is when its gates know this incarnation, else
+        // a copy carrying the cache's current gates (`Cow` holds either,
+        // like a value that is "maybe a reference").
         let principal = match self.principal.scope_of(catalog, catalog_id) {
             Some(_) => Cow::Borrowed(&*self.principal),
             None => Cow::Owned(Principal {
@@ -373,30 +447,25 @@ impl ToolContext {
                 ..(*self.principal).clone()
             }),
         };
-        let now = self.app.clock().now();
-        // A refusal (checked before this runs, by the selection or
-        // `require_contents`) or an admission that records nothing notes
-        // nothing.
-        let admitted = principal
-            .admission(catalog, access, now)
-            .ok()
-            .filter(|admission| admission.is_recorded());
-        let Some(scope) = principal.scope_of(catalog, catalog_id) else {
-            // An admin credential's read can be an admin read, and any
-            // credential's access can be under an unlock: neither may be
-            // recorded under the wrong catalog or left out.
-            if self.principal.access == Access::Admin || admitted.is_some() {
-                return Err(OkfError::Busy {
-                    reason: format!("catalog {catalog:?} is being reloaded"),
-                });
-            }
-            return Ok(None);
-        };
-        let Some(admission) = admitted else {
-            return Ok(None);
-        };
-        let record = principal.access_record(&self.requester, catalog, scope, now);
-        Ok(Some((record, admission)))
+        if let Some(scope) = principal.scope_of(catalog, catalog_id) {
+            // `?`: these gates describe what is read, so their refusal stands.
+            let admission = principal.admission(catalog, access, now)?;
+            return Ok(Some(BoundAdmission {
+                principal,
+                admission,
+                scope,
+                now,
+            }));
+        }
+        // No gates know this incarnation: only the principal's own (older)
+        // view of the name is left. Its refusal stands too.
+        let stale = self.principal.admission(catalog, access, now)?;
+        if self.principal.access == Access::Admin || stale.is_recorded() {
+            return Err(OkfError::Busy {
+                reason: format!("catalog {catalog:?} is being reloaded"),
+            });
+        }
+        Ok(None)
     }
 
     /// Notes an admitted access, once per call, catalog and kind.
@@ -608,6 +677,18 @@ impl ToolContext {
             .expect("select only returns names in this call's map");
         Arc::clone(state)
     }
+}
+
+/// An admission and the gates that decided it ([`ToolContext::admission_to`]).
+struct BoundAdmission<'a> {
+    /// The principal with the gates that know the incarnation.
+    principal: Cow<'a, Principal>,
+    /// How it is let in.
+    admission: Admission,
+    /// The incarnation, as those gates hold it.
+    scope: CatalogScope,
+    /// When it was decided (server clock).
+    now: DateTime<Utc>,
 }
 
 /// Refuses a pinned changeset whose catalog the call does not read (M8

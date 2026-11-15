@@ -45,7 +45,15 @@ runner reads without one unless the catalog's owners turned maintenance off.
   `ExportOptions { audit, now, expect_catalog_id }`, `ImportOptions` gains
   `expect_catalog_id`, and `catalogs::check_incarnation` refuses a catalog
   created again under the name with `Busy`, before anything is read or
-  written. `open_changeset` refuses the same way. The CLI checks nothing.
+  written. The CLI checks nothing.
+- Every `ToolContext` check against a catalog state is bound to its
+  incarnation through one helper (PR #442 review, round 2):
+  `admission_to` decides with gates that know the state's `catalogs.id`
+  and returns their refusal (it used to discard it, so an old principal's
+  unlock of a deleted catalog could read its replacement); `admit` and the
+  new `check_contents` use it; `one` checks what it returns, and
+  `list_changesets`, `open_changeset` and `maintenance_close`'s override
+  check what they act on.
 
 ## Notes
 

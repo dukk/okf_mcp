@@ -178,10 +178,13 @@ pub(crate) async fn maintenance_close(
     // Ordinary Write is an operator override, never a client-supplied option.
     // It acts on the catalog as a write, so it needs the unlock a write
     // would (M14 Task 9b); without one, only the caller's own run closes.
+    // Both the name and the incarnation closed (`check_contents`), so a
+    // stale unlock does not make an operator of the replacement's runs.
     let operator = ctx
         .principal()
         .require_contents(Access::Write, state.name(), ctx.app().clock().now())
-        .is_ok();
+        .is_ok()
+        && ctx.check_contents(&state, Access::Write).is_ok();
     if !operator {
         ctx.principal().require_maintenance_report(state.name())?;
     }
