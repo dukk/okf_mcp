@@ -68,7 +68,7 @@ fn load_profile(user: &User, name: &str) -> Result<Profile, OkfError> { ... }
   failures, and records the error's text. `ret` records the return value.
 - **MCP tools (`rmcp` macros).** The functions that `#[tool_router]`, `#[tool]` and
   `#[tool_handler]` generate are not flagged and need no exemption. The `info` span of a
-  tool call comes from `OkfServer::call_tool`; each tool method takes
+  tool call comes from `OkfServer::call_tool` (written by M15 Task 3); each tool method takes
   `#[tracing::instrument(level = "debug", skip_all, ...)]` below `#[tool]`. The
   `RequestContext` argument carries the request's headers, the bearer credential among them,
   so `skip_all` is not optional.
@@ -87,7 +87,7 @@ kinds of content that must not be exported:
 - **Content:** a document, a mail body, a link.
 
 Send all three to the target `okf_mcp::local_only` (the `LOCAL_ONLY` constant in
-`src/telemetry/`), which both OTLP layers turn off, so they reach stderr only. The exported
+`src/telemetry/`, added by M15 Task 1), which both OTLP layers turn off, so they reach stderr only. The exported
 event beside it keeps a closed value (`kind`, a count, a status):
 
 ```rust
@@ -120,10 +120,10 @@ accepted reasons. Anything else needs a review discussion.
 - **Per-byte or per-element predicates in a hot loop** (the `okf` parser).
 - **One-line adapters** that only delegate to an instrumented function.
 - **Code that runs before the subscriber exists:** `main`, `Telemetry::start` and the
-  subscriber builder. A span there is recorded nowhere.
+  subscriber builder (the last two arrive with M15 Task 1). A span there is recorded nowhere.
 - **Exporter, processor and subscriber trait impls in `src/telemetry/`.** A span there feeds
   back into the exporter.
 - **Constant trait plumbing,** such as `JsonSchema` impls that return fixed schemas.
 - **Span makers and code that captures the enclosing span:** `request_span`, the
-  `on_response` hook and `capture_request_span`. Their own span would become the request's
+  `on_response` hook and `capture_request_span` (the span-making code of M15 Task 3). Their own span would become the request's
   parent, or be captured in place of it.
