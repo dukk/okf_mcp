@@ -337,7 +337,7 @@ audit tables), so deleting one never changes or removes its entries.
   an operator, so they cannot be used to find out who staff are.
 - *(Corrected, issue #402, 2026-11-15.)* An admin user acting through any
   credential (a self-issued key, a grant) counts as an operator too.
-  An owner sees only its own team
+- *(Corrected, issue #402, 2026-11-15.)* An owner sees only its own team
   in an entry's `teams`: an entry can also belong to another team (a
   catalog's old owner, another catalog a key is granted), which may be
   another customer's team or a staff member's personal team, shown as that
