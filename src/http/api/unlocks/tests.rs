@@ -9,35 +9,37 @@ use crate::store::audit::AuditActor;
 use crate::store::keys::{self, Access, Grants, NewKey, NewProvisioner};
 use crate::store::users::{self, AdminChange, NewUser};
 
-/// Admin user `staff` with an every-catalog admin key `staff-root`,
-/// polled in.
+/// Makes `user` an admin user (creating it if missing) with an admin key
+/// `name` reaching `grants`, polled in.
 ///
 /// # Returns
 /// The key's secret.
-async fn staff_root(test: &TestApp) -> String {
+async fn admin_user_key(test: &TestApp, user: &str, name: &str, grants: Grants<'_>) -> String {
     let pool = test.app.pool();
-    let user = NewUser {
-        name: "staff",
-        display_name: "",
-    };
-    users::create(pool, &user, &AuditActor::cli(), Utc::now())
-        .await
-        .unwrap();
+    if users::find(pool, user).await.is_err() {
+        let new = NewUser {
+            name: user,
+            display_name: "",
+        };
+        users::create(pool, &new, &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap();
+    }
     let on = AdminChange {
         on: true,
         allow_last: true,
     };
-    users::set_admin(pool, "staff", on, &AuditActor::cli(), Utc::now())
+    users::set_admin(pool, user, on, &AuditActor::cli(), Utc::now())
         .await
         .unwrap();
     let new = NewKey {
-        name: "staff-root",
+        name,
         access: Access::Admin,
         maintenance_report: false,
-        grants: Grants::All,
+        grants,
         default_catalog: Some("main"),
-        actor: "staff-root",
-        user: "staff",
+        actor: name,
+        user,
         self_issued: false,
         expires_at: None,
         levels: &[],
@@ -48,6 +50,11 @@ async fn staff_root(test: &TestApp) -> String {
         .key;
     test.app.poll().await.unwrap();
     key
+}
+
+/// Admin user `staff` with an every-catalog admin key `staff-root`.
+async fn staff_root(test: &TestApp) -> String {
+    admin_user_key(test, "staff", "staff-root", Grants::All).await
 }
 
 /// A support unlock of `main` for one hour, with `extra` merged in.
@@ -190,29 +197,34 @@ async fn an_admin_unlocks_lists_and_ends_and_an_owner_sees_the_redacted_record()
     assert_eq!(probe_actor.parts().1["entries"], json!([]));
 }
 
+/// How many unlocks exist, and how many `catalog.unlocked` entries.
+async fn unlocks_and_entries(test: &TestApp) -> (i64, i64) {
+    let unlocks: i64 = sqlx::query_scalar("SELECT count(*) FROM unlocks")
+        .fetch_one(test.app.pool())
+        .await
+        .unwrap();
+    let entries: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_entries WHERE action = 'catalog.unlocked'")
+            .fetch_one(test.app.pool())
+            .await
+            .unwrap();
+    (unlocks, entries)
+}
+
 #[tokio::test(flavor = "multi_thread")]
-async fn the_hours_default_to_the_limit_and_an_admin_may_name_another_admin() {
+async fn the_hours_default_to_the_limit_and_an_admin_user_may_name_another_admin() {
     let test = app().await;
     let staff = staff_root(&test).await;
-    // `root` belongs to TEST_USER, who is not an admin user.
-    let root = every_catalog_admin(&test).await;
+    let ops = admin_user_key(&test, "ops", "ops-root", Grants::All).await;
 
     let (status, unlock) = send(
         &test,
         "POST",
         "/api/v1/unlocks",
-        Some(&root),
+        Some(&ops),
         Some(json!({
             "catalog": "main", "category": "legal", "reason": "case 7", "user": "staff"
         })),
-    )
-    .await;
-    let (own, refusal) = send(
-        &test,
-        "POST",
-        "/api/v1/unlocks",
-        Some(&root),
-        Some(body(json!({}))),
     )
     .await;
     let (_, live) = send(
@@ -231,10 +243,77 @@ async fn the_hours_default_to_the_limit_and_an_admin_may_name_another_admin() {
     let expires: chrono::DateTime<Utc> = unlock["expires"].as_str().unwrap().parse().unwrap();
     // `unlock_max_hours` is 4 with no override.
     assert_eq!(expires - starts, chrono::TimeDelta::hours(4));
-    // The caller's own user is not an admin: the store refuses it.
-    assert_eq!(own, StatusCode::CONFLICT, "{refusal}");
-    assert_eq!(refusal["error"], "Refused");
     assert_eq!(live["unlocks"].as_array().map(Vec::len), Some(1), "{live}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_non_admin_users_every_catalog_admin_key_cannot_unlock_and_writes_nothing() {
+    // Issue #447: only operator staff make unlocks. `root` is an
+    // every-catalog admin key of TEST_USER, who is not an admin user.
+    let test = app().await;
+    let root = every_catalog_admin(&test).await;
+    staff_root(&test).await;
+
+    let mut answers = Vec::new();
+    // Naming an admin target, naming nobody (its own user), and naming an
+    // unknown user: all 403 before any target is looked at.
+    for extra in [
+        json!({"user": "staff"}),
+        json!({}),
+        json!({"user": "nobody"}),
+    ] {
+        answers.push(
+            send(
+                &test,
+                "POST",
+                "/api/v1/unlocks",
+                Some(&root),
+                Some(body(extra)),
+            )
+            .await,
+        );
+    }
+
+    for (status, answer) in &answers {
+        assert_eq!(*status, StatusCode::FORBIDDEN, "{answer}");
+        assert!(
+            answer["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("not an admin user")),
+            "{answer}"
+        );
+    }
+    assert_eq!(unlocks_and_entries(&test).await, (0, 0));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_non_admin_users_key_may_still_end_an_unlock_of_a_catalog_it_administers() {
+    // Issue #447's ending rule: ending only takes access away, so it needs
+    // an admin credential on the catalog, not an admin user.
+    let test = app().await;
+    let staff = staff_root(&test).await;
+    let root = every_catalog_admin(&test).await;
+    let (_, unlock) = send(
+        &test,
+        "POST",
+        "/api/v1/unlocks",
+        Some(&staff),
+        Some(body(json!({}))),
+    )
+    .await;
+    let id = unlock["id"].as_i64().unwrap();
+
+    let (status, ended) = send(
+        &test,
+        "DELETE",
+        &format!("/api/v1/unlocks/{id}"),
+        Some(&root),
+        None,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{ended}");
+    assert_eq!(ended["state"], "ended");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -266,6 +345,10 @@ async fn unlocks_refuse_everyone_but_admins_and_scope_a_scoped_admin() {
     .await;
     let id = unlock["id"].as_i64().unwrap();
     let one = format!("/api/v1/unlocks/{id}");
+    let only_main = ["main".to_string()];
+    let staff_main =
+        admin_user_key(&test, "staff", "staff-main", Grants::Catalogs(&only_main)).await;
+    admin_user_key(&test, "ops", "ops-root", Grants::All).await;
     let by_team = format!("/api/v1/unlocks?team={TEST_TEAM}");
 
     let cases: Vec<(&str, &str, &str, Option<Value>, StatusCode)> = vec![
@@ -313,12 +396,13 @@ async fn unlocks_refuse_everyone_but_admins_and_scope_a_scoped_admin() {
             StatusCode::NOT_FOUND,
         ),
         (&keys.stranger, "DELETE", &one, None, StatusCode::NOT_FOUND),
-        // A scoped admin of `main` may not name another user.
+        // A scoped admin of `main` may not name another user, even when
+        // its user is an admin user.
         (
-            &keys.admin,
+            &staff_main,
             "POST",
             "/api/v1/unlocks",
-            Some(body(json!({"user": "staff"}))),
+            Some(body(json!({"user": "ops"}))),
             StatusCode::FORBIDDEN,
         ),
         // Inputs.
@@ -511,15 +595,6 @@ async fn a_key_with_no_user_cannot_unlock_for_itself_or_anyone_else() {
             .await,
         );
     }
-    let unlocks: i64 = sqlx::query_scalar("SELECT count(*) FROM unlocks")
-        .fetch_one(test.app.pool())
-        .await
-        .unwrap();
-    let entries: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM audit_entries WHERE action = 'catalog.unlocked'")
-            .fetch_one(test.app.pool())
-            .await
-            .unwrap();
 
     for (status, answer) in &answers {
         assert_eq!(*status, StatusCode::FORBIDDEN, "{answer}");
@@ -530,5 +605,5 @@ async fn a_key_with_no_user_cannot_unlock_for_itself_or_anyone_else() {
             "{answer}"
         );
     }
-    assert_eq!((unlocks, entries), (0, 0));
+    assert_eq!(unlocks_and_entries(&test).await, (0, 0));
 }
