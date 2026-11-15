@@ -1367,7 +1367,8 @@ Each sub-task is its own PR and covers only its module group (the File map). The
    - trivial accessors, grouped in one exempt `impl`;
    - one-line delegations;
    - code that runs before the subscriber exists;
-   - `src/telemetry/` trait impls.
+   - `src/telemetry/` trait impls;
+   - code that captures the enclosing span (`capture_request_span`, Task 3), whose own span would be captured instead.
 
    Anything else goes in the PR description for review.
 4. **Benchmark-sensitive paths** (`okf` parsing and analysis, `rayon` loops): a `trace`-level disabled span is one atomic load. Exempt only an inner per-element function, and say which in the PR.
