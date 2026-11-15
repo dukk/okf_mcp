@@ -3,7 +3,8 @@
 //!
 //! Nothing filters the whole stack. Each layer has its own filter, so a
 //! quiet stderr never silences the exporters (spec Decision 3). Each filter
-//! is ANDed with a fixed cap (`cap`) that the configuration cannot lift.
+//! is ANDed with a fixed cap (`stderr_cap`, `otlp_cap`) that the
+//! configuration cannot lift.
 
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
@@ -52,25 +53,38 @@ pub const LOCAL_ONLY: &str = "okf_mcp::local_only";
 /// JSON-RPC messages, credentials among them.
 const RMCP_CAP: Level = Level::INFO;
 
-/// What every layer ANDs with its own filter.
+/// Whether `target` is this crate's own, and may reach OTLP: exactly
+/// `okf_mcp`, or a module path under it (`okf_mcp::`), never a longer name
+/// that merely starts with it (`okf_mcp_other`), and never [`LOCAL_ONLY`] or
+/// anything under it.
+fn is_exportable_target(target: &str) -> bool {
+    let own = target == "okf_mcp" || target.starts_with("okf_mcp::");
+    let local_only = target == LOCAL_ONLY
+        || target
+            .strip_prefix(LOCAL_ONLY)
+            .is_some_and(|rest| rest.starts_with("::"));
+    own && !local_only
+}
+
+/// What the OTLP layers AND with their own filter: an allow-list of this
+/// crate's own targets (see [`is_exportable_target`]), not a deny-list.
+/// Dependency events are out of the privacy rules' reach: `sqlx` logs
+/// statement text at `debug` (and slow queries at `warn`), and `apalis`,
+/// `openidconnect`, the AWS SDK and the export stack ([`EXPORT_STACK`]) have
+/// their own.
 ///
-/// stderr takes every target, `rmcp` capped. The OTLP layers take **only
-/// this crate's own targets** (an allow-list, not a deny-list): dependency
-/// events are out of the privacy rules' reach. `sqlx` logs statement text
-/// at `debug` (and slow queries at `warn`), and `apalis`, `openidconnect`,
-/// the AWS SDK and the export stack ([`EXPORT_STACK`]) have their own.
-/// `Targets` picks the most specific matching target, so [`LOCAL_ONLY`] (a
-/// sub-target of `okf_mcp`) stays off.
-///
-/// # Arguments
-/// * `otlp` - `true` for the OTLP layers, `false` for stderr.
-fn cap(otlp: bool) -> Targets {
-    if otlp {
-        return Targets::new()
-            .with_default(LevelFilter::OFF)
-            .with_target("okf_mcp", LevelFilter::TRACE)
-            .with_target(LOCAL_ONLY, LevelFilter::OFF);
-    }
+/// A `filter_fn` rather than `Targets`, whose directives match by string
+/// prefix (`okf_mcp` would take `okf_mcp_other`).
+fn otlp_cap<S>() -> impl tracing_subscriber::layer::Filter<S>
+where
+    S: tracing::Subscriber,
+{
+    // A closure (Python's lambda) over the span or event's metadata.
+    tracing_subscriber::filter::filter_fn(|metadata| is_exportable_target(metadata.target()))
+}
+
+/// What stderr ANDs with its own filter: every target, `rmcp` capped.
+fn stderr_cap() -> Targets {
     Targets::new()
         .with_default(LevelFilter::TRACE)
         .with_target("rmcp", RMCP_CAP)
@@ -187,7 +201,7 @@ where
             Some(
                 fmt::layer()
                     .with_writer(writer)
-                    .with_filter(settings.stderr.and(cap(false))),
+                    .with_filter(settings.stderr.and(stderr_cap())),
             ),
             None,
         ),
@@ -197,7 +211,7 @@ where
                 fmt::layer()
                     .with_writer(writer)
                     .event_format(JsonWithTrace(slot.clone()))
-                    .with_filter(settings.stderr.and(cap(false))),
+                    .with_filter(settings.stderr.and(stderr_cap())),
             ),
         ),
     };
@@ -215,10 +229,15 @@ where
             .with_threads(false)
             .with_target(false)
             .with_tracked_inactivity(false)
-            .with_filter(settings.traces.and(cap(true)))
+            // Entering a span makes its OTel context the thread's current one,
+            // which is how the log bridge gives a record the span's trace and
+            // span ids (`opentelemetry-appender-tracing` 0.33 has no feature
+            // for it). Stated here so a changed default cannot drop it.
+            .with_context_activation(true)
+            .with_filter(settings.traces.and(otlp_cap()))
     });
     let logs = logger.map(|provider| {
-        OpenTelemetryTracingBridge::new(provider).with_filter(settings.logs.and(cap(true)))
+        OpenTelemetryTracingBridge::new(provider).with_filter(settings.logs.and(otlp_cap()))
     });
     Registry::default()
         .with(CaptureDispatch(slot))
@@ -247,7 +266,7 @@ where
     Registry::default().with(
         fmt::layer()
             .with_writer(writer)
-            .with_filter(filter.and(cap(false))),
+            .with_filter(filter.and(stderr_cap())),
     )
 }
 
@@ -293,33 +312,28 @@ pub(crate) mod capture {
             CaptureWriter(Arc::clone(&self.0))
         }
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use opentelemetry::trace::Status;
     use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
     use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 
-    use super::capture::Capture;
-    use super::*;
-
     /// Everything one run of a subscriber produced.
-    struct Observed {
-        stderr: String,
-        spans: Vec<opentelemetry_sdk::trace::SpanData>,
-        logs: Vec<String>,
+    pub(crate) struct Observed {
+        pub stderr: String,
+        pub spans: Vec<opentelemetry_sdk::trace::SpanData>,
+        pub logs: Vec<String>,
+        /// The log records, with their trace context.
+        pub records: Vec<opentelemetry_sdk::logs::SdkLogRecord>,
     }
 
     /// Builds the subscriber with in-memory exporters, runs `body` under it
     /// as the thread's default, then shuts the providers down (after the
     /// dispatcher is gone: dropping a provider inside the dispatcher's lock
     /// has deadlocked other projects' tests).
-    fn observe(
+    pub(crate) fn observe(
         stderr: &str,
         traces: &str,
         logs: &str,
-        format: LogFormat,
+        format: super::LogFormat,
         body: impl FnOnce(),
     ) -> Observed {
         let span_exporter = InMemorySpanExporter::default();
@@ -331,19 +345,26 @@ mod tests {
             .with_simple_exporter(log_exporter.clone())
             .build();
         let capture = Capture::default();
-        let settings = LayerSettings {
+        let settings = super::LayerSettings {
             format,
-            stderr: parse_filter(stderr).expect("stderr filter"),
-            traces: parse_filter(traces).expect("traces filter"),
-            logs: parse_filter(logs).expect("logs filter"),
+            stderr: super::parse_filter(stderr).expect("stderr filter"),
+            traces: super::parse_filter(traces).expect("traces filter"),
+            logs: super::parse_filter(logs).expect("logs filter"),
         };
-        let subscriber = build_with_writer(settings, Some(&tracer), Some(&logger), capture.clone());
+        let subscriber =
+            super::build_with_writer(settings, Some(&tracer), Some(&logger), capture.clone());
         tracing::subscriber::with_default(subscriber, body);
         tracer.force_flush().expect("flush spans");
         logger.force_flush().expect("flush logs");
         let observed = Observed {
             stderr: capture.text(),
             spans: span_exporter.get_finished_spans().expect("spans"),
+            records: log_exporter
+                .get_emitted_logs()
+                .expect("logs")
+                .iter()
+                .map(|record| record.record.clone())
+                .collect(),
             logs: log_exporter
                 .get_emitted_logs()
                 .expect("logs")
@@ -366,6 +387,14 @@ mod tests {
         let _ = logger.shutdown();
         observed
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use opentelemetry::trace::Status;
+
+    use super::capture::{observe, Capture};
+    use super::*;
 
     #[test]
     fn stderr_at_warn_still_exports_debug_spans() {
@@ -477,6 +506,64 @@ mod tests {
             Status::Unset,
             "a local-only error does not mark the span"
         );
+    }
+
+    #[test]
+    fn a_target_that_merely_starts_with_okf_mcp_is_not_exported() {
+        assert!(is_exportable_target("okf_mcp"));
+        assert!(is_exportable_target("okf_mcp::store::publish"));
+        for target in [
+            "okf_mcp_other",
+            "okf_mcpx::a",
+            "okf_mcp-other",
+            LOCAL_ONLY,
+            "okf_mcp::local_only::x",
+        ] {
+            assert!(!is_exportable_target(target), "{target}");
+        }
+        let observed = observe("trace", "trace", "trace", LogFormat::Text, || {
+            let span = tracing::info_span!(target: "okf_mcp_other", "other_span");
+            let _entered = span.enter();
+            tracing::error!(target: "okf_mcp_other", "other-event");
+            tracing::error!(target: "okf_mcp", "root-event");
+        });
+        assert!(observed.spans.iter().all(|span| span.name != "other_span"));
+        assert!(
+            observed.logs.iter().all(|log| !log.contains("other-event")),
+            "{:?}",
+            observed.logs
+        );
+        assert!(
+            observed.logs.iter().any(|log| log.contains("root-event")),
+            "{:?}",
+            observed.logs
+        );
+        assert!(
+            observed.stderr.contains("other-event"),
+            "{}",
+            observed.stderr
+        );
+    }
+
+    #[test]
+    fn an_exported_log_carries_the_enclosing_spans_ids() {
+        let observed = observe("warn", "info", "info", LogFormat::Text, || {
+            let span = tracing::info_span!(target: "okf_mcp::test", "parent");
+            let _entered = span.enter();
+            tracing::info!(target: "okf_mcp::test", "correlated");
+        });
+        let span = observed
+            .spans
+            .iter()
+            .find(|span| span.name == "parent")
+            .expect("span");
+        let context = observed
+            .records
+            .iter()
+            .find_map(|record| record.trace_context())
+            .expect("the log record has a trace context");
+        assert_eq!(context.trace_id, span.span_context.trace_id());
+        assert_eq!(context.span_id, span.span_context.span_id());
     }
 
     /// Emits an event at every level and a span, all with `$target`.

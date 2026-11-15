@@ -12,6 +12,12 @@
 - `Config` gains `telemetry` and loses `Eq` (an `f64` ratio).
 - M15 plan Task 1 corrected where the code differs (see its "Corrected (issue #461)" note).
 
+## Review round 1 (PR #480)
+- `LogMailer` logs to `okf_mcp::local_only`, so a reset link never reaches OTLP.
+- The OTLP cap matches `okf_mcp` exactly or `okf_mcp::`, not `okf_mcp_other`.
+- `OTEL_SDK_DISABLED` is checked before OTLP credentials are resolved.
+- Context activation is explicit, and a test checks an exported log carries its span's trace and span ids.
+
 ## Notes
 - Span-layer error-to-exception options are off so error text never becomes an attribute or status description.
 - No metrics, request spans or privacy audit yet: Tasks 1b, 2 and 3.

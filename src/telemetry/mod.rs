@@ -130,7 +130,8 @@ impl Telemetry {
                 failures,
             });
         };
-        let target = OtlpTarget::resolve(otlp, env)?;
+        // Before the target is resolved: a disabled SDK never needs the
+        // credentials, so removing them must not stop the service starting.
         if env("OTEL_SDK_DISABLED").is_some_and(|value| value.trim().eq_ignore_ascii_case("true")) {
             tracing::info!("OTLP export is off: OTEL_SDK_DISABLED is true");
             return Ok(Self {
@@ -139,6 +140,7 @@ impl Telemetry {
                 failures,
             });
         }
+        let target = OtlpTarget::resolve(otlp, env)?;
         let resource = resource(config);
 
         let tracer = match otlp::span_exporter(&target, &failures) {
@@ -469,6 +471,28 @@ mod tests {
             "{error}"
         );
         assert!(!error.to_string().contains("no-equals-secret"), "{error}");
+    }
+
+    #[test]
+    fn otel_sdk_disabled_needs_no_credentials() {
+        let mut config = TelemetryConfig::default();
+        config.otlp = Some(config::OtlpConfig {
+            endpoint: Some("https://otlp.example.com".to_string()),
+            headers_env: Some("OTLP_HEADERS_FOR_TEST".to_string()),
+            ..config::OtlpConfig::default()
+        });
+        // The headers variable is unset, and `OTEL_SDK_DISABLED` is the only
+        // variable the callback answers.
+        let only_disabled = |name: &str| (name == "OTEL_SDK_DISABLED").then(|| "true".to_string());
+        let telemetry =
+            Telemetry::start(&config, &only_disabled).expect("starts without credentials");
+        assert!(!telemetry.traces_enabled() && !telemetry.logs_enabled());
+        let mut dsn = TelemetryConfig::default();
+        dsn.otlp = Some(config::OtlpConfig {
+            sentry_dsn_env: Some("DSN_FOR_TEST".to_string()),
+            ..config::OtlpConfig::default()
+        });
+        Telemetry::start(&dsn, &only_disabled).expect("starts without a DSN");
     }
 
     #[tokio::test]
