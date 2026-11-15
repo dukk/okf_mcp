@@ -2223,6 +2223,7 @@ mod tests {
             .unwrap();
         let staff = user_id(&db.pool, "staff").await;
         store_key(&db.pool, "staff-key", Some(&staff)).await;
+        store_code(&db.pool, "staff-code", &staff).await;
         let mut conn = db.pool.acquire().await.unwrap();
         let team = team_ref(&mut conn, TEST_TEAM).await.unwrap();
         drop(conn);
@@ -2239,12 +2240,21 @@ mod tests {
             teams: std::slice::from_ref(&team),
             details: serde_json::json!({"category": "support", "reason": "ticket 12", "unlock": 1}),
         };
-        // A key of the staff member as a target: hidden with its id.
-        let granted = Entry {
-            teams: std::slice::from_ref(&team),
-            ..entry(Action::KeyCatalogGranted, Target::Key("staff-key"))
-        };
-        record_one(&db.pool, &actor, &granted).await;
+        // The staff member's credentials as targets (a key, a grant, as
+        // `keys::key_target` names an OAuth grant, and a code): each is
+        // hidden with its id.
+        let targets = [
+            Target::Key("staff-key"),
+            Target::Grant("staff-key"),
+            Target::Code("staff-code"),
+        ];
+        for target in targets {
+            let granted = Entry {
+                teams: std::slice::from_ref(&team),
+                ..entry(Action::KeyCatalogGranted, target)
+            };
+            record_one(&db.pool, &actor, &granted).await;
+        }
         record_one(&db.pool, &actor, &unlocked).await;
         let owner_view = owner_of(&db.pool, TEST_TEAM).await;
 
@@ -2270,22 +2280,30 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(owner.len(), 2, "both entries are the team's");
+        assert_eq!(owner.len(), 4, "every entry is the team's");
         assert_eq!(owner[0].actor, ActorView::Operator);
         assert_eq!(owner[0].ip, None);
-        assert_eq!(owner[0].target.person, None, "the unlocked staff member is hidden");
+        assert_eq!(
+            owner[0].target.person, None,
+            "the unlocked staff member is hidden"
+        );
         assert_eq!(
             owner[0].details,
             serde_json::json!({"category": "support", "unlock": 1})
         );
+        let hidden: Vec<TargetView> = owner[1..]
+            .iter()
+            .map(|record| record.target.clone())
+            .collect();
+        let hide = |kind: &str| TargetView {
+            kind: kind.to_string(),
+            name: None,
+            person: None,
+        };
         assert_eq!(
-            owner[1].target,
-            TargetView {
-                kind: "key".to_string(),
-                name: None,
-                person: None
-            },
-            "a staff member's key is hidden as a target"
+            hidden,
+            [hide("code"), hide("grant"), hide("key")],
+            "staff credentials"
         );
         // The whole record, as the API would send it.
         let whole = serde_json::to_string(&owner).unwrap();
@@ -2296,16 +2314,25 @@ mod tests {
                 && !whole.contains("192.0.2"),
             "{whole}"
         );
-        assert_eq!(owner_hits, [0; 6], "no filter matches an operator for an owner");
+        assert_eq!(
+            owner_hits, [0; 6],
+            "no filter matches an operator for an owner"
+        );
         // The same filters do match for an admin: the target person matches
         // the unlock and staff's own `user.created` and `user.admin_changed`;
-        // each actor filter matches both staff-key entries.
-        assert_eq!(admin_hits, [3, 1, 2, 2, 2, 2]);
+        // the credential id the key and the grant; each actor filter all
+        // four of staff's entries.
+        assert_eq!(admin_hits, [3, 2, 4, 4, 4, 4]);
         assert_eq!(admin[0].details["reason"], "ticket 12");
         assert_eq!(admin[0].target.person.as_deref(), Some("staff"));
         assert_eq!(admin[0].ip.as_deref(), Some("192.0.2.7"));
-        assert_eq!(admin[0].teams, [TEST_USER], "a personal team reads as its user");
-        assert_eq!(admin[1].target.name.as_deref(), Some("staff-key"));
+        assert_eq!(
+            admin[0].teams,
+            [TEST_USER],
+            "a personal team reads as its user"
+        );
+        assert_eq!(admin[1].target.name.as_deref(), Some("staff-code"));
+        assert_eq!(admin[3].target.name.as_deref(), Some("staff-key"));
         let ActorView::Known {
             person, credential, ..
         } = &admin[0].actor
@@ -2361,18 +2388,29 @@ mod tests {
         operator.operator = true;
         record_one(&db.pool, &operator, &moved).await;
 
-        let owner = list(&db.pool, &owner_of(&db.pool, TEST_TEAM).await, &AuditQuery::default())
-            .await
-            .unwrap();
+        let owner = list(
+            &db.pool,
+            &owner_of(&db.pool, TEST_TEAM).await,
+            &AuditQuery::default(),
+        )
+        .await
+        .unwrap();
         let admin = list(&db.pool, &Viewer::Admin, &AuditQuery::default())
             .await
             .unwrap();
 
         assert_eq!(owner.len(), 3);
         assert_eq!(owner[0].ip, None, "an operator, though a member");
-        assert_eq!(owner[1].ip.as_deref(), Some("192.0.2.22"), "the team's own member");
+        assert_eq!(
+            owner[1].ip.as_deref(),
+            Some("192.0.2.22"),
+            "the team's own member"
+        );
         assert_eq!(owner[2].ip, None, "not a member of the team");
-        assert!(owner.iter().all(|record| record.teams == [TEST_USER]), "only the owner's own team");
+        assert!(
+            owner.iter().all(|record| record.teams == [TEST_USER]),
+            "only the owner's own team"
+        );
         assert_eq!(admin[0].teams, ["bob", TEST_USER]);
         assert_eq!(admin[0].ip.as_deref(), Some("192.0.2.23"));
         assert_eq!(admin[2].ip.as_deref(), Some("192.0.2.21"));
@@ -2437,9 +2475,13 @@ mod tests {
         let admin = list(&db.pool, &Viewer::Admin, &AuditQuery::default())
             .await
             .unwrap();
-        let owner = list(&db.pool, &owner_of(&db.pool, "family").await, &AuditQuery::default())
-            .await
-            .unwrap();
+        let owner = list(
+            &db.pool,
+            &owner_of(&db.pool, "family").await,
+            &AuditQuery::default(),
+        )
+        .await
+        .unwrap();
         // Before the deletion she is named (so the check below is not vacuous).
         assert!(serde_json::to_string(&before).unwrap().contains("alice"));
         for (view, records) in [("admin", &admin), ("owner", &owner)] {
@@ -2485,9 +2527,13 @@ mod tests {
             .await
             .unwrap();
 
-        let seen = list(&db.pool, &owner_of(&db.pool, "family").await, &AuditQuery::default())
-            .await
-            .unwrap();
+        let seen = list(
+            &db.pool,
+            &owner_of(&db.pool, "family").await,
+            &AuditQuery::default(),
+        )
+        .await
+        .unwrap();
         let by_name = list(
             &db.pool,
             &Viewer::Admin,
@@ -2506,7 +2552,10 @@ mod tests {
             "only the new team's own creation, never the old team's entries"
         );
         // An admin's filter by name spans every team that had it.
-        let actions: Vec<&str> = by_name.iter().map(|record| record.action.as_str()).collect();
+        let actions: Vec<&str> = by_name
+            .iter()
+            .map(|record| record.action.as_str())
+            .collect();
         assert_eq!(actions, ["team.created", "team.deleted", "team.created"]);
     }
 
@@ -2520,12 +2569,26 @@ mod tests {
             credential: Some("k2".to_string()),
             ..admin_actor(&me)
         };
-        record_one(&db.pool, &admin_actor(&me), &entry(Action::SettingChanged, Target::Setting("a"))).await;
-        record_one(&db.pool, &other, &entry(Action::SettingChanged, Target::Setting("b"))).await;
+        record_one(
+            &db.pool,
+            &admin_actor(&me),
+            &entry(Action::SettingChanged, Target::Setting("a")),
+        )
+        .await;
+        record_one(
+            &db.pool,
+            &other,
+            &entry(Action::SettingChanged, Target::Setting("b")),
+        )
+        .await;
 
-        let seen = list(&db.pool, &Viewer::Credential("k1".to_string()), &AuditQuery::default())
-            .await
-            .unwrap();
+        let seen = list(
+            &db.pool,
+            &Viewer::Credential("k1".to_string()),
+            &AuditQuery::default(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].target.name.as_deref(), Some("a"));
@@ -2538,13 +2601,21 @@ mod tests {
         let mut tx = db.pool.begin().await.unwrap();
         for (minutes, key) in [(0, "a"), (10, "b"), (20, "c")] {
             let at = now() + TimeDelta::minutes(minutes);
-            record(&mut tx, &admin_actor(&me), &entry(Action::SettingChanged, Target::Setting(key)), at)
-                .await
-                .unwrap();
+            record(
+                &mut tx,
+                &admin_actor(&me),
+                &entry(Action::SettingChanged, Target::Setting(key)),
+                at,
+            )
+            .await
+            .unwrap();
         }
         tx.commit().await.unwrap();
         let names = |records: Vec<AuditRecord>| -> Vec<String> {
-            records.into_iter().filter_map(|record| record.target.name).collect()
+            records
+                .into_iter()
+                .filter_map(|record| record.target.name)
+                .collect()
         };
         let query = |since, until, after, limit| AuditQuery {
             action: Some(Action::SettingChanged),
@@ -2555,26 +2626,53 @@ mod tests {
             ..AuditQuery::default()
         };
 
-        let first = list(&db.pool, &Viewer::Admin, &query(None, None, None, 2)).await.unwrap();
-        let rest = list(&db.pool, &Viewer::Admin, &query(None, None, Some(first[1].id), 2))
+        let first = list(&db.pool, &Viewer::Admin, &query(None, None, None, 2))
             .await
             .unwrap();
-        let window = query(Some(now() + TimeDelta::minutes(5)), Some(now() + TimeDelta::minutes(20)), None, 0);
+        let rest = list(
+            &db.pool,
+            &Viewer::Admin,
+            &query(None, None, Some(first[1].id), 2),
+        )
+        .await
+        .unwrap();
+        let window = query(
+            Some(now() + TimeDelta::minutes(5)),
+            Some(now() + TimeDelta::minutes(20)),
+            None,
+            0,
+        );
         let windowed = list(&db.pool, &Viewer::Admin, &window).await.unwrap();
 
         assert_eq!(names(first), ["c", "b"]);
         assert_eq!(names(rest), ["a"]);
-        assert_eq!(names(windowed), ["b"], "since is inclusive, until exclusive");
+        assert_eq!(
+            names(windowed),
+            ["b"],
+            "since is inclusive, until exclusive"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_filter_that_names_nothing_matches_nothing_without_sql() {
         let db = test_db().await;
         let queries = [
-            AuditQuery { team: Some("a\0b"), ..AuditQuery::default() },
-            AuditQuery { team: Some("Not A Name"), ..AuditQuery::default() },
-            AuditQuery { actor: Some("a\0b"), ..AuditQuery::default() },
-            AuditQuery { target: Some("a\0b"), ..AuditQuery::default() },
+            AuditQuery {
+                team: Some("a\0b"),
+                ..AuditQuery::default()
+            },
+            AuditQuery {
+                team: Some("Not A Name"),
+                ..AuditQuery::default()
+            },
+            AuditQuery {
+                actor: Some("a\0b"),
+                ..AuditQuery::default()
+            },
+            AuditQuery {
+                target: Some("a\0b"),
+                ..AuditQuery::default()
+            },
         ];
 
         for query in &queries {
@@ -2594,17 +2692,34 @@ mod tests {
         };
 
         let query = parse_filters(&good).unwrap();
-        let bad_action = parse_filters(&FilterText { action: Some("no.such"), ..good });
-        let bad_time = parse_filters(&FilterText { until: Some("yesterday"), ..good });
+        let bad_action = parse_filters(&FilterText {
+            action: Some("no.such"),
+            ..good
+        });
+        let bad_time = parse_filters(&FilterText {
+            until: Some("yesterday"),
+            ..good
+        });
 
         assert_eq!(query.team, None);
         assert_eq!(query.actor, None);
         assert_eq!(query.action, Some(Action::UserCreated));
         assert_eq!(query.since, Some("2026-11-13T11:00:00Z".parse().unwrap()));
         assert_eq!(query.page_size(), DEFAULT_PAGE);
-        assert!(matches!(bad_action, Err(OkfError::InvalidPath { ref path, .. }) if path == "action"));
+        assert!(
+            matches!(bad_action, Err(OkfError::InvalidPath { ref path, .. }) if path == "action")
+        );
         assert!(matches!(bad_time, Err(OkfError::InvalidPath { ref path, .. }) if path == "until"));
-        let size = |limit| AuditQuery { limit, ..AuditQuery::default() }.page_size();
-        assert_eq!([size(-1), size(0), size(7), size(10_000)], [DEFAULT_PAGE, DEFAULT_PAGE, 7, MAX_PAGE]);
+        let size = |limit| {
+            AuditQuery {
+                limit,
+                ..AuditQuery::default()
+            }
+            .page_size()
+        };
+        assert_eq!(
+            [size(-1), size(0), size(7), size(10_000)],
+            [DEFAULT_PAGE, DEFAULT_PAGE, 7, MAX_PAGE]
+        );
     }
 }

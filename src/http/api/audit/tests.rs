@@ -35,9 +35,21 @@ async fn provisioner(test: &TestApp) -> String {
 async fn family(test: &TestApp, root: &str) {
     let steps = [
         ("POST", "/api/v1/users", json!({"name": "bob"})),
-        ("POST", "/api/v1/teams", json!({"name": "family", "owner": TEST_USER})),
-        ("PUT", "/api/v1/teams/family/members/bob", json!({"role": "member"})),
-        ("POST", "/api/v1/teams", json!({"name": "other", "owner": "bob"})),
+        (
+            "POST",
+            "/api/v1/teams",
+            json!({"name": "family", "owner": TEST_USER}),
+        ),
+        (
+            "PUT",
+            "/api/v1/teams/family/members/bob",
+            json!({"role": "member"}),
+        ),
+        (
+            "POST",
+            "/api/v1/teams",
+            json!({"name": "other", "owner": "bob"}),
+        ),
     ];
     for (method, uri, body) in steps {
         let (status, answer) = send(test, method, uri, Some(root), Some(body)).await;
@@ -50,7 +62,14 @@ async fn an_admin_reads_everything_newest_first_with_filters_and_a_cursor() {
     let test = app().await;
     let root = every_catalog_admin(&test).await;
     for name in ["alice", "bob", "carol"] {
-        send(&test, "POST", "/api/v1/users", Some(&root), Some(json!({"name": name}))).await;
+        send(
+            &test,
+            "POST",
+            "/api/v1/users",
+            Some(&root),
+            Some(json!({"name": name})),
+        )
+        .await;
     }
 
     let (status, page) = send(
@@ -61,7 +80,9 @@ async fn an_admin_reads_everything_newest_first_with_filters_and_a_cursor() {
         None,
     )
     .await;
-    let after = page["next_after"].as_i64().expect("a full page has a cursor");
+    let after = page["next_after"]
+        .as_i64()
+        .expect("a full page has a cursor");
     let (_, rest) = send(
         &test,
         "GET",
@@ -70,8 +91,22 @@ async fn an_admin_reads_everything_newest_first_with_filters_and_a_cursor() {
         None,
     )
     .await;
-    let (bad, refusal) = send(&test, "GET", "/api/v1/audit?action=no.such", Some(&root), None).await;
-    let (bad_time, _) = send(&test, "GET", "/api/v1/audit?since=yesterday", Some(&root), None).await;
+    let (bad, refusal) = send(
+        &test,
+        "GET",
+        "/api/v1/audit?action=no.such",
+        Some(&root),
+        None,
+    )
+    .await;
+    let (bad_time, _) = send(
+        &test,
+        "GET",
+        "/api/v1/audit?since=yesterday",
+        Some(&root),
+        None,
+    )
+    .await;
     let (unknown, _) = send(&test, "GET", "/api/v1/audit?colour=red", Some(&root), None).await;
     let (by_actor, mine) = send(&test, "GET", "/api/v1/audit?actor=root", Some(&root), None).await;
 
@@ -92,13 +127,20 @@ async fn an_admin_reads_everything_newest_first_with_filters_and_a_cursor() {
         .collect();
     assert_eq!(rest_names, ["alice", TEST_USER]);
     assert_eq!(page["entries"][0]["actor"]["kind"], "known");
-    assert_eq!(page["entries"][0]["actor"]["credential"].as_str().is_some(), true);
+    assert!(page["entries"][0]["actor"]["credential"].is_string());
     assert_eq!(page["entries"][0]["actor"]["operator"], true);
-    assert!(page["actions"].as_array().unwrap().contains(&json!("catalog.unlocked")));
+    assert!(page["actions"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("catalog.unlocked")));
     assert_eq!(bad, StatusCode::BAD_REQUEST);
     assert_eq!(refusal["error"], "InvalidPath");
     assert_eq!(bad_time, StatusCode::BAD_REQUEST);
-    assert_eq!(unknown, StatusCode::BAD_REQUEST, "unknown filters are refused");
+    assert_eq!(
+        unknown,
+        StatusCode::BAD_REQUEST,
+        "unknown filters are refused"
+    );
     assert_eq!(by_actor, StatusCode::OK);
     assert_eq!(mine["entries"].as_array().unwrap().len(), 3, "{mine}");
     assert_eq!(mine.get("next_after"), Some(&Value::Null));
@@ -112,18 +154,42 @@ async fn an_owner_session_sees_its_team_with_operators_redacted_and_a_member_see
     let mut owner = Browser::session_for(&test, TEST_USER).await;
     let mut member = Browser::session_for(&test, "bob").await;
 
-    let mine = owner.send(&test, "GET", "/api/v1/audit?team=family", Payload::Empty).await;
-    let not_mine = owner.send(&test, "GET", "/api/v1/audit?team=other", Payload::Empty).await;
-    let no_team = owner.send(&test, "GET", "/api/v1/audit", Payload::Empty).await;
-    let malformed = owner.send(&test, "GET", "/api/v1/audit?team=a%00b", Payload::Empty).await;
-    let as_member = member.send(&test, "GET", "/api/v1/audit?team=family", Payload::Empty).await;
-    let bobs_own = member.send(&test, "GET", "/api/v1/audit?team=other", Payload::Empty).await;
+    let mine = owner
+        .send(&test, "GET", "/api/v1/audit?team=family", Payload::Empty)
+        .await;
+    let not_mine = owner
+        .send(&test, "GET", "/api/v1/audit?team=other", Payload::Empty)
+        .await;
+    let no_team = owner
+        .send(&test, "GET", "/api/v1/audit", Payload::Empty)
+        .await;
+    let malformed = owner
+        .send(&test, "GET", "/api/v1/audit?team=a%00b", Payload::Empty)
+        .await;
+    let as_member = member
+        .send(&test, "GET", "/api/v1/audit?team=family", Payload::Empty)
+        .await;
+    let bobs_own = member
+        .send(&test, "GET", "/api/v1/audit?team=other", Payload::Empty)
+        .await;
     let scoped = keys(&test).await;
-    let (by_key, _) = send(&test, "GET", "/api/v1/audit?team=family", Some(&scoped.admin), None).await;
+    let (by_key, _) = send(
+        &test,
+        "GET",
+        "/api/v1/audit?team=family",
+        Some(&scoped.admin),
+        None,
+    )
+    .await;
     let (admin_malformed, admin_body) =
         send(&test, "GET", "/api/v1/audit?team=a%00b", Some(&root), None).await;
     let export = owner
-        .send(&test, "GET", "/api/v1/audit/export?team=family", Payload::Empty)
+        .send(
+            &test,
+            "GET",
+            "/api/v1/audit/export?team=family",
+            Payload::Empty,
+        )
         .await;
 
     let (status, body) = mine.parts();
@@ -134,20 +200,35 @@ async fn an_owner_session_sees_its_team_with_operators_redacted_and_a_member_see
         .iter()
         .map(|entry| entry["action"].as_str().unwrap())
         .collect();
-    assert_eq!(actions, ["team.member_added", "team.created"], "only family's entries");
+    assert_eq!(
+        actions,
+        ["team.member_added", "team.created"],
+        "only family's entries"
+    );
     assert_eq!(body["entries"][0]["actor"], json!({"kind": "operator"}));
     // `get`: `entry["ip"]` is `Null` for a missing key too (lessons.md).
     assert_eq!(body["entries"][0].get("ip"), Some(&Value::Null));
     assert_eq!(body["entries"][0]["teams"], json!(["family"]));
     assert_eq!(body["entries"][0]["target"]["person"], "bob");
     assert!(!body.to_string().contains("root"), "{body}");
-    assert_eq!(lines(&export.text()), body["entries"].as_array().unwrap().clone());
+    assert_eq!(
+        lines(&export.text()),
+        body["entries"].as_array().unwrap().clone()
+    );
     assert_eq!(not_mine.status, StatusCode::FORBIDDEN);
-    assert_eq!(no_team.status, StatusCode::FORBIDDEN, "an owner names its team");
+    assert_eq!(
+        no_team.status,
+        StatusCode::FORBIDDEN,
+        "an owner names its team"
+    );
     assert_eq!(malformed.status, StatusCode::FORBIDDEN);
     assert_eq!(as_member.status, StatusCode::FORBIDDEN);
     assert_eq!(bobs_own.status, StatusCode::OK, "bob owns other");
-    assert_eq!(by_key, StatusCode::FORBIDDEN, "owners read through a console session only");
+    assert_eq!(
+        by_key,
+        StatusCode::FORBIDDEN,
+        "owners read through a console session only"
+    );
     assert_eq!(admin_malformed, StatusCode::OK);
     assert_eq!(admin_body["entries"], json!([]));
 }
@@ -157,10 +238,31 @@ async fn a_provisioner_reads_only_its_own_entries() {
     let test = app().await;
     let root = every_catalog_admin(&test).await;
     let key = provisioner(&test).await;
-    send(&test, "POST", "/api/v1/users", Some(&root), Some(json!({"name": "by-root"}))).await;
-    send(&test, "POST", "/api/v1/users", Some(&key), Some(json!({"name": "by-signup"}))).await;
+    send(
+        &test,
+        "POST",
+        "/api/v1/users",
+        Some(&root),
+        Some(json!({"name": "by-root"})),
+    )
+    .await;
+    send(
+        &test,
+        "POST",
+        "/api/v1/users",
+        Some(&key),
+        Some(json!({"name": "by-signup"})),
+    )
+    .await;
 
-    let (status, page) = send(&test, "GET", "/api/v1/audit?action=user.created", Some(&key), None).await;
+    let (status, page) = send(
+        &test,
+        "GET",
+        "/api/v1/audit?action=user.created",
+        Some(&key),
+        None,
+    )
+    .await;
     let (all, everything) = send(&test, "GET", "/api/v1/audit", Some(&key), None).await;
     let (export, _) = send(&test, "GET", "/api/v1/audit/export", Some(&key), None).await;
 
@@ -170,15 +272,30 @@ async fn a_provisioner_reads_only_its_own_entries() {
     assert_eq!(entries[0]["target"]["person"], "by-signup");
     assert_eq!(all, StatusCode::OK);
     // Its own creation was the CLI's, so its only entry is the user it made.
-    assert_eq!(everything["entries"].as_array().unwrap().len(), 1, "{everything}");
-    assert_eq!(export, StatusCode::FORBIDDEN, "the provisioner gate allows GET /audit only");
+    assert_eq!(
+        everything["entries"].as_array().unwrap().len(),
+        1,
+        "{everything}"
+    );
+    assert_eq!(
+        export,
+        StatusCode::FORBIDDEN,
+        "the provisioner gate allows GET /audit only"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_export_is_json_lines_with_the_same_filters() {
     let test = app().await;
     let root = every_catalog_admin(&test).await;
-    send(&test, "POST", "/api/v1/users", Some(&root), Some(json!({"name": "alice"}))).await;
+    send(
+        &test,
+        "POST",
+        "/api/v1/users",
+        Some(&root),
+        Some(json!({"name": "alice"})),
+    )
+    .await;
     let request = axum::http::Request::builder()
         .uri("/api/v1/audit/export?action=user.created")
         .header("authorization", format!("Bearer {root}"))
@@ -198,7 +315,9 @@ async fn the_export_is_json_lines_with_the_same_filters() {
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["content-type"], "application/x-ndjson");
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let records = lines(std::str::from_utf8(&bytes).unwrap());
     // The fixture user's own `user.created` entry is the older one
     // (corrected, issue #396, 2026-11-14: `test_db` records it).
@@ -216,9 +335,19 @@ async fn me_lists_the_teams_the_user_owns() {
     let mut owner = Browser::session_for(&test, TEST_USER).await;
     let mut member = Browser::session_for(&test, "bob").await;
 
-    let (_, mine) = owner.send(&test, "GET", "/api/v1/me", Payload::Empty).await.parts();
-    let (_, bobs) = member.send(&test, "GET", "/api/v1/me", Payload::Empty).await.parts();
+    let (_, mine) = owner
+        .send(&test, "GET", "/api/v1/me", Payload::Empty)
+        .await
+        .parts();
+    let (_, bobs) = member
+        .send(&test, "GET", "/api/v1/me", Payload::Empty)
+        .await
+        .parts();
 
     assert_eq!(mine["owned_teams"], json!(["family", TEST_USER]));
-    assert_eq!(bobs["owned_teams"], json!(["bob", "other"]), "not family, where bob is a member");
+    assert_eq!(
+        bobs["owned_teams"],
+        json!(["bob", "other"]),
+        "not family, where bob is a member"
+    );
 }
