@@ -23,7 +23,8 @@
 # every other exit too (pass, failure, a killed gate, or INT/TERM to gate.sh),
 # whatever is left of the group is stopped the same way. gate.sh returns only once the group is empty,
 # so nothing it started (a test that ignores TERM, a stray background job)
-# outlives it or keeps holding the lock it inherited.
+# outlives it. gate.sh holds the lock until then, and the gate's children
+# never inherit it, so a daemon that leaves the group (setsid) cannot keep it.
 #
 # Exit codes:
 #   the gate's own, when it exits by itself; if it left processes behind they
@@ -68,18 +69,38 @@ number=${limit%[smh]}
 [[ "$number" =~ ^[0-9]+$ ]] || { echo "gate.sh: bad limit '$limit'" >&2; exit 2; }
 limit_s=$((number * unit))
 
-if [ "$locked" = 1 ]; then
-    # A lock wait that runs out exits 124 too: it is stuck behind a hang.
-    cmd=(flock -E 124 -w "$limit_s" "$lock" "${cmd[@]}")
-fi
-
 # lib.sh's agentic_run_bounded runs the gate in its own process group and
 # empties that group on every exit; the grace period here is the gate's.
 agentic_kill_after=$kill_after
 status=0
-agentic_run_bounded "$limit_s" "${cmd[@]}" || status=$?
+agentic_timed_out=0
+lock_timed_out=0
+if [ "$locked" = 1 ]; then
+    # gate.sh holds the lock itself, on fd 9, from before the gate starts until
+    # its process group is empty, cleanup included. The gate never inherits
+    # it: `9>&-` below closes fd 9 for everything agentic_run_bounded starts
+    # (bash keeps its own copy close-on-exec), so a daemon the gate starts,
+    # which leaves the group with setsid and escapes the cleanup (sccache's
+    # server), cannot keep the lock after gate.sh returns.
+    exec 9>>"$lock"
+    waited_from=$SECONDS
+    # A lock wait that runs out is a hang too: the holder is stuck.
+    if flock -w "$limit_s" 9; then
+        # The limit counts the wait.
+        limit_s=$((limit_s - (SECONDS - waited_from)))
+        [ "$limit_s" -ge 1 ] || limit_s=1
+        agentic_run_bounded "$limit_s" "${cmd[@]}" 9>&- || status=$?
+    else
+        lock_timed_out=1
+        status=124
+    fi
+else
+    agentic_run_bounded "$limit_s" "${cmd[@]}" || status=$?
+fi
 if [ "$status" = 124 ] || [ "$status" = 137 ]; then
-    if [ "$agentic_timed_out" = 1 ]; then
+    if [ "$lock_timed_out" = 1 ]; then
+        reason="waited its ${limit} limit for the gate lock (another gate is stuck holding it)"
+    elif [ "$agentic_timed_out" = 1 ]; then
         reason="hit its ${limit} limit"
     else
         reason="was killed or timed out (exit $status)"
