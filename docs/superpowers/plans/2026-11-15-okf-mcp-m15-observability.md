@@ -637,14 +637,22 @@ pub const LOCAL_ONLY: &str = "okf_mcp::local_only";
 const RMCP_CAP: Level = Level::INFO;
 
 /// What every layer ANDs with its own filter.
+///
+/// stderr takes every target, `rmcp` capped. The OTLP layers take **only
+/// this crate's own targets** (an allow-list, not a deny-list): dependency
+/// events are out of the privacy rules' reach. `sqlx` logs statement text
+/// at `debug` (and slow queries at `warn`), and `apalis`, `openidconnect`,
+/// the AWS SDK and the export stack (`EXPORT_STACK`) have their own
+/// (review of PR #459, round 3). `Targets` picks the most specific matching
+/// target, so `LOCAL_ONLY` (a sub-target of `okf_mcp`) stays off.
 fn cap(otlp: bool) -> Targets {
-    let mut targets = Targets::new().with_default(LevelFilter::TRACE).with_target("rmcp", RMCP_CAP);
     if otlp {
-        for target in EXPORT_STACK.iter().chain(std::iter::once(&LOCAL_ONLY)) {
-            targets = targets.with_target(*target, LevelFilter::OFF);
-        }
+        return Targets::new()
+            .with_default(LevelFilter::OFF)
+            .with_target("okf_mcp", LevelFilter::TRACE)
+            .with_target(LOCAL_ONLY, LevelFilter::OFF);
     }
-    targets
+    Targets::new().with_default(LevelFilter::TRACE).with_target("rmcp", RMCP_CAP)
 }
 
 /// The filters and format the layers use, already resolved (`RUST_LOG`
@@ -699,6 +707,8 @@ Tests check the filters through `Filter::callsite_enabled`/`would_enable`, not `
 - `rmcp_debug_never_reaches_any_layer`: every filter at `trace`. An `rmcp`-target `debug` event reaches neither the log exporter nor stderr.
 - `export_stack_events_reach_stderr_only`: an event with target `opentelemetry-otlp` at `error` reaches stderr and not the log exporter.
 - `local_only_events_reach_stderr_only`: the same for target `LOCAL_ONLY`, at every level, on both OTLP layers (a `LOCAL_ONLY` event inside a span also adds no span event).
+- `dependency_events_never_reach_otlp`: with both OTLP filters at `trace`, events and spans with targets `sqlx::query`, `apalis`, `openidconnect`, `aws_config`, `tower_http` and `rmcp` reach neither OTLP exporter, while an `okf_mcp::store` event does. Check first that `Targets`' most-specific-match rule holds for `okf_mcp::local_only` against `okf_mcp`, and if it does not, AND a second `Targets` that turns `LOCAL_ONLY` off.
+- **Note:** `tower_http`'s per-response `info` line is not exported. The request span carries the same status and latency. `EXPORT_STACK` stays only as documentation of why the export stack must never be allow-listed.
 - `error_event_marks_span_error`: an `error!` inside a span exports the span with `Status::Error`.
 
 Each test builds the subscriber with in-memory exporters and `with_simple_exporter`, and runs under `tracing::subscriber::with_default`. Keep each provider alive until the end of its test, then `shutdown()`. Dropping a provider inside the dispatcher's lock has deadlocked other projects' tests.
@@ -999,6 +1009,7 @@ In `src/http/mod.rs`, using a test subscriber with an in-memory span exporter:
   - the span's trace id is **not** `0af7..`;
   - its parent is none;
   - it has one link to that trace.
+- **Every test above runs at two span filters, `info` and `trace`**, through one helper that takes the filter, so Task 10 can re-run them over the swept tree. At `trace` it must still hold that the request span is a root and an unmatched path exports nothing.
 - **`an_authenticated_request_records_principal_ids`.** A keyed request records `enduser.id` (the key's user id) and `okf.key.id`, and never the bearer value.
 
 In `src/mcp/mod.rs`:
@@ -1017,7 +1028,13 @@ fn request_span<B>(request: &axum::http::Request<B>) -> tracing::Span {
         return tracing::Span::none();
     };
     let method = semconv_method(request.method());   // GET..PATCH as is; anything else "_OTHER"
+    // `parent: None`: the request is always a root, never the child of
+    // whatever span is current (review of PR #459, round 3). This function
+    // is exempt from `uninstrumented_fn` for the same reason: an
+    // `#[instrument]` here would make its own span the parent of every
+    // request, and export a span even for an unmatched path.
     let span = tracing::info_span!(
+        parent: None,
         "request",
         otel.name = %format_args!("{method} {route}"),
         otel.kind = "server",
@@ -1297,7 +1314,8 @@ Then establish that everything was exported before inspecting anything (review o
    - metric points for `http.server.request.duration`, `okf.mcp.tool.duration` and `okf.publish.duration`.
 
    If any is missing, the test fails as "not exported", never as passed.
-4. Only then assert that no decoded span name, attribute value, event, link attribute, log body or log attribute, and no metric attribute, contains `zq-sentinel-7f3a`, and that the scraped `/metrics` body does not either.
+4. Assert that no log record or span came from a dependency target (`sqlx`, `apalis`, `rmcp`, `tower_http`, ...), and that no log body or attribute contains SQL keywords followed by a table name from `migrations/` (`SELECT`, `INSERT INTO`, `UPDATE`, `DELETE FROM`, case-insensitive).
+5. Only then assert that no decoded span name, attribute value, event, link attribute, log body or log attribute, and no metric attribute, contains `zq-sentinel-7f3a`, and that the scraped `/metrics` body does not either.
 
 **Revert check:** temporarily record `url.full` in `request_span`. The test must fail. Say so in the PR.
 
@@ -1386,7 +1404,7 @@ Each sub-task is its own PR and covers only its module group (the File map). The
    - one-line delegations;
    - code that runs before the subscriber exists;
    - `src/telemetry/` trait impls;
-   - code that captures the enclosing span (`capture_request_span`, Task 3), whose own span would be captured instead.
+   - span makers and code that captures the enclosing span: `request_span` and the `on_response` hook (Task 3), and `capture_request_span`. Their own span would become the request's parent, or be captured instead.
 
    Anything else goes in the PR description for review.
 4. **Benchmark-sensitive paths** (`okf` parsing and analysis, `rayon` loops): a `trace`-level disabled span is one atomic load. Exempt only an inner per-element function, and say which in the PR.
@@ -1413,6 +1431,7 @@ Commit: `chore(tracing): instrument <group> (M15 Task 9x)`.
 
 - [ ] **Step 1:** Merge `main` and run `gate.sh dylint` with `-D uninstrumented_fn`. Fix any stragglers (functions added since the sweep), in their files.
 - [ ] **Step 2:** Run `gate.sh dylint` with `-D` and see it pass. Then add a function without `#[instrument]` and see it fail, and remove it again. Say so in the PR.
+- [ ] **Step 2a:** Re-run Task 3's root-span tests with the span filter at `trace` over the swept tree: `a_forged_traceparent_is_a_link_not_the_parent` (parent none), `an_unmatched_path_makes_no_span` (nothing exported at all), `principal_ids_land_on_the_request_span_under_helper_spans` and `error_kind_lands_on_the_tool_span_under_helper_spans`. Task 3 already writes them to take the filter as a parameter and run at both `info` and `trace`.
 - [ ] **Step 2b:** Run the sentinel test over the swept tree, `tools/agentic/gate.sh narrow --test telemetry_privacy`, with `traces_filter` and `logs_filter` at `trace` (the test's own config), so every `trace`-level span the sweep added is exported and checked. Fix any field it catches in the file that added it.
 - [ ] **Step 3: Commit** `chore(lint): uninstrumented_fn at deny (M15 Task 10)`
 

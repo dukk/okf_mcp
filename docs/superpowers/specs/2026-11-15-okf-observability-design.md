@@ -119,8 +119,12 @@ for `serve` alone.
 | OTLP spans (`tracing-opentelemetry`) | `[telemetry.otlp] traces_filter`, default `info` | Spans, plus `ERROR` events as span events (so the span's status is Error); other events go to the log layer only |
 | OTLP logs (`opentelemetry-appender-tracing`) | `[telemetry.otlp] logs_filter`, default `info` | |
 
-Every layer's filter also caps `rmcp` at `info` (at `debug` it logs whole
-JSON-RPC bodies, credentials among them), and the OTLP layers turn off the
+The OTLP layers take only this crate's own targets (`okf_mcp`, minus
+`okf_mcp::local_only`): dependency events (sqlx's statement text, rmcp's
+JSON-RPC bodies, apalis, openidconnect, the AWS SDK) are never exported.
+*(Corrected, review of PR #459, round 3, 2026-11-15: was a deny-list.)*
+stderr caps `rmcp` at `info` (at `debug` it logs whole
+JSON-RPC bodies, credentials among them). The allow-list also excludes the
 export stack's own targets (`opentelemetry`, `hyper`, `hyper_util`,
 `reqwest`, `h2`), which reach stderr only. Without that, an export failure
 becomes a log record that is exported, fails, and so on.
