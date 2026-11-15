@@ -116,9 +116,9 @@ pub(crate) async fn list_changesets(
 
     let principal = ctx.principal();
     let catalog_ids: Vec<i64> = match params.catalog.as_deref() {
-        // `target` refuses a catalog the key does not reach; it admits
-        // nothing, since a list of changesets reads no catalog's contents.
-        Some(name) => vec![ctx.target(Some(name))?.id()],
+        // `one` refuses a catalog the key does not reach; it admits
+        // nothing, and a list of changesets reads no catalog's contents.
+        Some(name) => vec![ctx.one(Some(name))?.id()],
         None => {
             // A list naming a bad catalog fails here as it does elsewhere.
             ctx.check_connection()?;
@@ -235,7 +235,7 @@ pub(crate) async fn open_changeset(
 
     // Opening reads no contents: nothing is admitted (the writes are
     // recorded as publishes).
-    let state = ctx.target(params.catalog.as_deref())?;
+    let state = ctx.one(params.catalog.as_deref())?;
     let principal = ctx.principal();
     // `changesets.key_id` references `api_keys`. MCP takes only bearer
     // credentials, so this guards any later `/api/v1` caller.

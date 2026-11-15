@@ -266,8 +266,12 @@ impl ToolContext {
         self.states(argument.as_ref().map(std::slice::from_ref))
     }
 
-    /// The one catalog a report runs on: `catalog`, else the first selected.
-    /// Notes its read for the audit log, as [`ToolContext::select`] does.
+    /// The one catalog a call acts on: `catalog`, else the first selected.
+    /// Admits nothing, like [`ToolContext::select`]: a tool that reads the
+    /// catalog's contents calls `ToolContext::admit` after its own access
+    /// checks, right before the read, and one that only mutates or
+    /// authorizes against it (a maintenance claim, opening a changeset)
+    /// records nothing (plan Decision 23).
     ///
     /// # Arguments
     /// * `catalog` - the call's `catalog` argument.
@@ -278,24 +282,6 @@ impl ToolContext {
     /// # Errors
     /// As [`ToolContext::select`].
     pub fn one(&self, catalog: Option<&str>) -> Result<Arc<CatalogState>, OkfError> {
-        let state = self.target(catalog)?;
-        self.admit(&state, AccessKind::Read)?;
-        Ok(state)
-    }
-
-    /// The one catalog a call acts on without reading its contents
-    /// (opening a changeset, listing changesets): as [`ToolContext::one`],
-    /// but admits nothing (plan Decision 23).
-    ///
-    /// # Arguments
-    /// * `catalog` - the call's `catalog` argument.
-    ///
-    /// # Returns
-    /// That catalog's state.
-    ///
-    /// # Errors
-    /// As [`ToolContext::select`].
-    pub fn target(&self, catalog: Option<&str>) -> Result<Arc<CatalogState>, OkfError> {
         let argument = catalog.map(str::to_string);
         let selection = self.select(argument.as_ref().map(std::slice::from_ref))?;
         // `write_target` is the first selected catalog.

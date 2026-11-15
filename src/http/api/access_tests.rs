@@ -328,7 +328,8 @@ async fn a_read_of_an_old_catalog_map_under_newer_gates_is_refused_not_misrecord
     );
     assert_eq!(ctx.catalogs()["main"].id(), original, "the old map");
 
-    let refused = ctx.one(Some("main")).map(drop);
+    let state = ctx.one(Some("main")).unwrap();
+    let refused = ctx.admit(&state, audit::AccessKind::Read);
     settle_access(&test).await;
 
     assert!(
@@ -349,7 +350,8 @@ async fn an_old_principal_reading_a_new_catalog_map_is_admitted_as_the_new_catal
     test.app.poll().await.unwrap();
     let ctx = crate::mcp::testing::context(&test, old_principal, None);
 
-    ctx.one(Some("main")).unwrap();
+    let state = ctx.one(Some("main")).unwrap();
+    ctx.admit(&state, audit::AccessKind::Read).unwrap();
     settle_access(&test).await;
 
     let reads = admin_reads(&test).await;
@@ -492,5 +494,63 @@ async fn a_search_refused_after_one_catalog_passes_queues_no_read() {
     assert!(
         admin_reads(&test).await.is_empty(),
         "nothing queued for `main`"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_maintenance_mutation_records_no_read_and_a_revision_read_records_one() {
+    use crate::mcp::maintenance::work::{
+        maintenance_claim, maintenance_read_revision, MaintenanceClaimParams,
+        MaintenanceReadRevisionParams,
+    };
+    let test = app().await;
+    // An admin key with reporting off: its claim is refused, after the
+    // target catalog is resolved.
+    let staff = staff_root(&test).await;
+    let claim_ctx = crate::mcp::testing::context(
+        &test,
+        crate::mcp::testing::cached_principal(&test, &staff),
+        None,
+    );
+    let read_ctx = crate::mcp::testing::context(
+        &test,
+        crate::mcp::testing::cached_principal(&test, &staff),
+        None,
+    );
+
+    let claimed = maintenance_claim(
+        &claim_ctx,
+        MaintenanceClaimParams {
+            catalog: "main".to_string(),
+            idempotency_key: "claim-1".to_string(),
+            batch_size: None,
+        },
+    )
+    .await
+    .map(drop);
+    settle_access(&test).await;
+    let after_claim = admin_reads(&test).await.len();
+    let read = maintenance_read_revision(
+        &read_ctx,
+        MaintenanceReadRevisionParams {
+            catalog: "main".to_string(),
+            path: "systems/alpha.md".to_string(),
+            revision: 1,
+        },
+    )
+    .await
+    .map(drop);
+    settle_access(&test).await;
+
+    assert!(
+        matches!(claimed, Err(crate::error::OkfError::Forbidden { .. })),
+        "{claimed:?}"
+    );
+    assert_eq!(after_claim, 0, "a refused claim reads nothing");
+    assert!(read.is_ok(), "{read:?}");
+    assert_eq!(
+        admin_reads(&test).await.len(),
+        1,
+        "the document text was read"
     );
 }
