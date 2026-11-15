@@ -328,6 +328,12 @@ series stop at the next collection.
   response bodies, document or concept text, concept paths, SQL, bind
   values, error messages (only the error's kind, a closed enum),
   passwords, tokens, codes, cookies.
+- **Existing events.** `skip_all` protects only arguments. An event that
+  carries caller-supplied text, an error's full text or content (the `log`
+  mail provider's message) logs it with target `okf_mcp::local_only`,
+  which both OTLP layers turn off, so it reaches stderr only. The exported
+  event keeps a closed value (`kind`). *(Corrected, review of PR #459,
+  2026-11-15; plan Task 1b.)*
 - **`#[instrument]`** always has `skip_all`; values are recorded only
   through `fields(...)`. `err` and `ret` are never used: `err` logs every
   `Err` at ERROR, which is wrong for validation failures, and records the
