@@ -764,11 +764,13 @@ Tests:
 - [ ] **Step 9: Wire `serve` and the other commands**
 
 `src/main.rs` drops its subscriber (`DEFAULT_LOG_FILTER` moves to `telemetry::config::DEFAULT_STDERR_FILTER`). `cli::run` installs one:
-- **Before `Config::load`**, set a temporary stderr subscriber for the load: `tracing::subscriber::set_default(subscriber::fallback())`, keeping the guard. `fallback()` is stderr text at `DEFAULT_STDERR_FILTER` (or `RUST_LOG`).
+- **Before `Config::load`**, set a temporary stderr subscriber, **scoped to start-up only**: `fallback()` is stderr text at `DEFAULT_STDERR_FILTER` (or `RUST_LOG`). Install it with `tracing::subscriber::set_default` inside a block that covers `Config::load` and, for `serve`, `Telemetry::start`, and **drop its guard before installing the global subscriber**. `set_global_default` does not override a thread-local default that is still active, so a kept guard would leave the startup thread (and every future polled on it) on the fallback, without OTLP (review of PR #459). For example: `let (config, telemetry) = { let _startup = tracing::subscriber::set_default(subscriber::fallback()); ...; (config, telemetry) };`. The block's end drops `_startup`.
 - **For every non-serve command**, after `Config::load`: `tracing::subscriber::set_global_default(subscriber::build(settings(&config.telemetry, rust_log)?, None, None))`.
 - **For `Command::Serve`**, after `Config::load`: `let telemetry = Telemetry::start(&config.telemetry, &|name| std::env::var(name).ok())?;` then set the global default to `telemetry.subscriber(settings)`. Then the existing steps. After `http::serve(..).await` returns, `telemetry.shutdown().await`, then return `served`. The fatal error, if any, is logged inside the subscriber first, so it is exported too.
 
 If `set_global_default` fails (already set), return `OkfError::Config` ("a tracing subscriber is already installed"). Tests that call `cli::run` must not hit this; check `grep -rn "cli::run(" tests src`.
+
+Put the install sequence in one function, `telemetry::install(config, telemetry) -> Result<(), OkfError>`, called by `cli::run`. Regression test (its own integration-test binary, `tests/telemetry_install.rs`, since it sets the process's global subscriber): run the start-up sequence with a capturing writer, then emit an event **on the same thread** after `install`, and assert that the configured subscriber got it (the JSON format, so the line is distinguishable from the fallback's text) and the fallback did not.
 
 - [ ] **Step 10: Gates and commit**
 
