@@ -49,3 +49,17 @@ Issue #405, part of epic #390. Implements Task 9a of
   refusal note now says 422 for an unlock over `unlock_max_hours`.
 - Nothing calls the unlocks yet: Task 9b checks them at the content choke
   points, Task 9d adds REST and the CLI, Task 9e the console.
+
+## Review round 1 (PR #428)
+
+- `audit::record_for_person` and `audit::FixedPerson`: record an entry whose
+  person is an audit person fixed earlier, with its operator marking, instead
+  of the user resolved now. `record` keeps its behaviour for every caller.
+- Both unlock entries name `unlocks.person_id` as operator staff
+  (`unlocks::staff_person`). Before, `end` passed the user's live id, so an
+  unlock ended after its admin was demoted recorded `target_operator =
+  false`, and one ended after the user's deletion had no person. `end` no
+  longer locks the unlocked user.
+- Tests `an_unlock_ended_after_its_staff_is_demoted_still_hides_who_it_was`
+  and `an_unlock_ended_after_its_staff_is_deleted_keeps_the_person_and_marking`
+  fail on the previous `end` and pass now.
