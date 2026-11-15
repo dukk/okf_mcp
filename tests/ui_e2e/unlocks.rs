@@ -122,6 +122,7 @@ async fn an_owner_switches_maintenance_off_for_its_catalog() {
         ui.open("/catalogs");
         ui.click("[data-catalog=main]");
         ui.wait_visible("#catalog-maintenance:checked");
+        ui.wait_text("#catalog-maintenance-state", "on");
         ui.click("#catalog-maintenance");
         ui.wait_text("#toasts", "Maintenance is off for main");
         ui.wait_visible("#catalog-maintenance:not(:checked)");
@@ -145,7 +146,9 @@ async fn the_maintenance_switch_sends_one_write_and_keeps_a_refusal() {
         ui.sign_in_password(&owner_email, PASSWORD);
         ui.open("/catalogs");
         ui.click("[data-catalog=main]");
-        ui.wait_visible("#catalog-maintenance:checked");
+        // The drawer's own read has answered (the switch is usable).
+        ui.wait_text("#catalog-maintenance-state", "on");
+        ui.wait_visible("#catalog-maintenance:checked:not([disabled])");
         // Refused, and the read after it fails too: the reason stays, the
         // switch shows the last value, marked out of date, and is usable.
         ui.fail_next("PUT", "/maintenance", 403, "refused by the test");
@@ -164,6 +167,8 @@ async fn the_maintenance_switch_sends_one_write_and_keeps_a_refusal() {
         );
         ui.click("#drawer-close");
         ui.click("[data-catalog=main]");
+        // Read, and still disabled: the write runs.
+        ui.wait_text("#catalog-maintenance-state", "on");
         ui.wait_visible("#catalog-maintenance[disabled]");
         assert_eq!(ui.held_matches(), 1, "a double click sent two writes");
         ui.release_held();
@@ -178,6 +183,46 @@ async fn the_maintenance_switch_sends_one_write_and_keeps_a_refusal() {
         return;
     }
     assert!(!maintenance_on(&server, "main").await);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_drawer_opened_after_the_switch_settles_shows_the_saved_value() {
+    let server = login_server().await;
+    let owner_email = server.owner_with_password(PASSWORD).await;
+    let ran = drive(console_base(&server), move |ui| {
+        ui.sign_in_password(&owner_email, PASSWORD);
+        ui.open("/catalogs");
+        ui.click("[data-catalog=main]");
+        ui.wait_text("#catalog-maintenance-state", "on");
+        ui.click("#catalog-maintenance");
+        ui.wait_text("#toasts", "Maintenance is off for main");
+        // The write and the read after it have settled.
+        ui.wait_text("#catalog-maintenance-state", "off");
+        ui.wait_visible("#catalog-maintenance:not(:checked):not([disabled])");
+        // Opened again from the same table row (not reloaded): it shows
+        // the saved value, not the row's first one.
+        ui.mark("#catalog-maintenance");
+        ui.click("#drawer-close");
+        ui.click("[data-catalog=main]");
+        ui.wait_redrawn("#catalog-maintenance");
+        ui.wait_text("#catalog-maintenance-state", "off");
+        ui.wait_visible("#catalog-maintenance:not(:checked):not([disabled])");
+        // So the next click turns it back on, in one request.
+        ui.hold_next("PUT", "/api/v1/catalogs/main/maintenance");
+        ui.click("#catalog-maintenance");
+        assert_eq!(ui.held_matches(), 1, "one click sent two writes");
+        ui.release_held();
+        ui.wait_text("#toasts", "Maintenance is on for main");
+        ui.wait_visible("#catalog-maintenance:checked:not([disabled])");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    assert!(
+        maintenance_on(&server, "main").await,
+        "the click after reopening did not turn maintenance back on"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

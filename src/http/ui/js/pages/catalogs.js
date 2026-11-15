@@ -139,12 +139,12 @@ export async function render(main) {
             edit,
             owner,
             members.section,
-            switcher,
+            switcher.section,
             h('section', { class: 'danger-zone' },
                 h('h3', {}, 'Delete'),
                 h('label', {}, force, ' Also discard unpublished changes (force)'),
                 remove));
-        await members.refresh();
+        await Promise.all([members.refresh(), switcher.refresh()]);
     }
 
     // Someone who administers no catalog: the drawer holds the maintenance
@@ -153,7 +153,9 @@ export async function render(main) {
         const ticket = drawerTicket(main);
         const allowed = await maySwitchMaintenance(row);
         if (!ticket.current()) return;
-        ticket.open(row.name, subtitle(row), maintenance(row, allowed, ticket));
+        const switcher = maintenance(row, allowed, ticket);
+        ticket.open(row.name, subtitle(row), switcher.section);
+        await switcher.refresh();
     }
 
     // fill(), not native append: the note may be null (issue #302).
@@ -289,8 +291,11 @@ async function maySwitchMaintenance(row) {
 let shownMaintenance = null;
 
 // The drawer's "Maintenance" section: the switch that lets the maintenance
-// runner check this catalog (`on`) or keeps it out (`off`), from the row
-// the drawer opened with. Toggling it is a pending write keyed
+// runner check this catalog (`on`) or keeps it out (`off`). It is read
+// again from GET /catalogs when the drawer opens (the caller runs
+// `refresh()`), and the switch stays disabled until that read settles: the
+// table's row may be older than a write that settled since (the table is
+// not reloaded after one). Toggling it is a pending write keyed
 // `catalog:<name>:maintenance` (core/pending.js), so a drawer opened again
 // while it runs draws the switch disabled. A settled write draws its answer
 // in the section the drawer shows now if it is this catalog's (through
@@ -299,19 +304,30 @@ let shownMaintenance = null;
 // again (GET /catalogs). Reads are numbered, and a write takes the next
 // number as it settles, so an older read never draws over it. A read that
 // fails keeps the last value, marked as possibly out of date, with the
-// switch usable. Returns the section.
+// switch usable. Returns the section and `refresh()`.
 function maintenance(row, allowed, ticket) {
     const name = row.name;
     const key = `catalog:${name}:maintenance`;
     let value = row.maintenance;
     let stale = false;
+    // Whether a read or a write has answered since the drawer opened.
+    let loaded = false;
     const toggle = guard(h('input', { type: 'checkbox', role: 'switch', id: 'catalog-maintenance',
-                                      'aria-label': `Maintenance for ${name}` }), key, allowed);
+                                      'aria-label': `Maintenance for ${name}` }), key, () => allowed && loaded);
     const state = h('span', { id: 'catalog-maintenance-state', class: 'mono' });
     const refusal = h('p', { id: 'catalog-maintenance-error', class: 'error small', role: 'alert', hidden: true });
     const draw = () => {
         toggle.checked = value === 'on';
-        state.textContent = `${value}${stale ? ' (could not be read again, may be out of date)' : ''}`;
+        state.textContent = loaded
+            ? `${value}${stale ? ' (could not be read again, may be out of date)' : ''}`
+            : '...';
+        recheck(toggle);
+    };
+    // Draws a server answer (null: the last value again).
+    const settle = answer => {
+        loaded = true;
+        if (answer !== null) value = answer;
+        draw();
     };
     draw();
 
@@ -323,19 +339,15 @@ function maintenance(row, allowed, ticket) {
         if (mine !== reads || !ticket.current()) return;
         const found = listing?.catalogs.find(catalog => catalog.name === name);
         stale = !found;
-        if (found) value = found.maintenance;
-        draw();
+        settle(found?.maintenance ?? null);
     }
     // Draws a settled write's answer (null for a refusal: the last value
     // again, so the switch shows the server's state) and cancels any read
     // that started before it.
     const take = answer => {
         reads++;
-        if (answer !== null) {
-            value = answer;
-            stale = false;
-        }
-        draw();
+        if (answer !== null) stale = false;
+        settle(answer);
     };
     const report = reason => {
         refusal.textContent = reason ?? '';
@@ -363,7 +375,7 @@ function maintenance(row, allowed, ticket) {
         });
     });
 
-    return h('section', { id: 'catalog-maintenance-section' },
+    const section = h('section', { id: 'catalog-maintenance-section' },
         h('h3', {}, 'Maintenance'),
         h('label', {}, toggle, ' Maintenance runner: ', state),
         h('p', { class: 'muted small' },
@@ -371,4 +383,5 @@ function maintenance(row, allowed, ticket) {
         refusal,
         allowed ? null : h('p', { class: 'muted small' },
             `Changing it needs an admin that reaches every catalog, or an owner of ${row.owner_team ?? 'its owner team'}.`));
+    return { section, refresh };
 }

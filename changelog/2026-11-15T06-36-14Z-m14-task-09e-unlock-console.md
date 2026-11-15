@@ -22,13 +22,17 @@ Issue #409, part of epic #390.
   Unlock button for an admin with a user.
 - The catalog drawer has a Maintenance section: `#catalog-maintenance`
   (`role=switch`) runs `PUT /catalogs/{c}/maintenance` as a pending write
-  keyed `catalog:<name>:maintenance`. It keeps a refusal in
+  keyed `catalog:<name>:maintenance`. The section reads the flag again when the
+  drawer opens, and the switch stays disabled until that read answers, because
+  the table's row is not reloaded after a write (PR #445 review). It keeps a refusal in
   `#catalog-maintenance-error` and redraws the drawer that shows that
   catalog now.
 - A "Your teams" nav group with Catalogs, for account users who are not
   admins. For them the catalog drawer holds only the Maintenance section.
 - `TestServer::owner_with_password`, and four journeys in
-  `tests/ui_e2e/unlocks.rs`. The smoke journey also visits Unlocks.
+  `tests/ui_e2e/unlocks.rs`, plus
+  `a_drawer_opened_after_the_switch_settles_shows_the_saved_value`. The smoke
+  journey also visits Unlocks.
 
 ## Changed
 
@@ -39,6 +43,8 @@ Issue #409, part of epic #390.
   `require_unlock`, `unlock_notify_owners`) replaces the `password_sign_in`
   special case. The three unlock settings get descriptions.
 - The plan's Task 9e has a dated `Corrected (issue #409)` note.
+- `tools/agentic/lessons.md`: a drawer opened from a table row reads settled
+  state, not the row as first loaded.
 
 ## Notes
 
