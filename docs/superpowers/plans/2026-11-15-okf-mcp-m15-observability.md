@@ -353,7 +353,7 @@ wave 1:  1 ()                8 ()
 wave 2:  2 (1)   1b (1)       9b (8)      9e (8)
 wave 3:  3 (2)  4 (2)  5 (2)  6 (2)
 wave 4:  7 (1b, 3, 4, 5, 6)         9a (8, 4, 6)   9c (8, 3, 5, 6)   9d (8, 3, 4, 5)
-wave 5:  10 (9a, 9b, 9c, 9d, 9e)
+wave 5:  10 (7, 9a, 9b, 9c, 9d, 9e)
 wave 6:  11 (all)
 ```
 
@@ -364,7 +364,7 @@ Why each edge, and the shared files to merge with care:
 - **7 needs 1b, 3, 4, 5 and 6.** Its sentinel test goes through the existing events (1b), the request span (3), publish (4), sign-in (5) and the archive routes (6).
 - **9b and 9e need only 8.** Their modules are untouched by 3-6.
 - **9a needs 4 and 6** (`store/publish.rs`, and the pool spans in `store/` from 6). **9c needs 3, 5 and 6** (`http/`, `oauth/`, `oidc.rs`). **9d needs 3, 4 and 5** (`mcp/`, `auth.rs`, `app.rs`, `mail/`). This keeps the sweep from conflicting with the hand-written instrumentation.
-- **10 needs every sweep task.** **11 is last.**
+- **10 needs every sweep task and 7.** It runs the sentinel test over the fully swept tree, because a sweep PR can merge before Task 7 exists (review of PR #459). **11 is last.**
 
 ---
 
@@ -1373,7 +1373,7 @@ Each sub-task is its own PR and covers only its module group (the File map). The
    Anything else goes in the PR description for review.
 4. **Benchmark-sensitive paths** (`okf` parsing and analysis, `rayon` loops): a `trace`-level disabled span is one atomic load. Exempt only an inner per-element function, and say which in the PR.
 5. **No behaviour changes.** `fmt`, `lint`, `test` and `dylint` pass. The `dylint` warnings for your paths are zero.
-6. **Run the sentinel test** (`tools/agentic/gate.sh narrow --test telemetry_privacy`) after the sweep: a careless `fields(...)` is what it catches.
+6. **Run the sentinel test if it exists on `main`** (`tools/agentic/gate.sh narrow --test telemetry_privacy`; Task 7 creates it). 9b and 9e may start before Task 7 merges. A sweep PR that merges first says "sentinel not yet available" in its report, and Task 10 runs the sentinel over the whole swept tree. A careless `fields(...)` is what it catches.
 
 | Task | Paths | Needs |
 |---|---|---|
@@ -1395,6 +1395,7 @@ Commit: `chore(tracing): instrument <group> (M15 Task 9x)`.
 
 - [ ] **Step 1:** Merge `main` and run `gate.sh dylint` with `-D uninstrumented_fn`. Fix any stragglers (functions added since the sweep), in their files.
 - [ ] **Step 2:** Run `gate.sh dylint` with `-D` and see it pass. Then add a function without `#[instrument]` and see it fail, and remove it again. Say so in the PR.
+- [ ] **Step 2b:** Run the sentinel test over the swept tree, `tools/agentic/gate.sh narrow --test telemetry_privacy`, with `traces_filter` and `logs_filter` at `trace` (the test's own config), so every `trace`-level span the sweep added is exported and checked. Fix any field it catches in the file that added it.
 - [ ] **Step 3: Commit** `chore(lint): uninstrumented_fn at deny (M15 Task 10)`
 
 ---
