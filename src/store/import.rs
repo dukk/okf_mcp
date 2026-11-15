@@ -35,7 +35,8 @@ pub enum ImportScope {
 // instead of copying it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImportOptions<'a> {
-    /// Replace a non-empty catalog's contents (write the differences).
+    /// Replace a non-empty catalog's contents (write the differences); a
+    /// catalog at generation 0 is replaced without it.
     pub replace: bool,
     /// The paths replaced.
     pub scope: ImportScope,

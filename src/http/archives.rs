@@ -129,12 +129,13 @@ async fn export_catalog(
 /// axum's 400.
 #[derive(Debug, Default, Deserialize)]
 struct ImportQuery {
-    /// Replace a non-empty catalog's documents.
+    /// Replace a non-empty catalog's documents (not needed at generation 0).
     #[serde(default)]
     replace: bool,
     /// Replace only repository machinery ([`ImportScope::Machinery`]); the
     /// archive's other files are ignored and the catalog's concepts are
-    /// kept. A non-empty catalog also needs `replace`, as with the CLI.
+    /// kept. A non-empty catalog past generation 0 also needs `replace`, as
+    /// with the CLI.
     #[serde(default)]
     only_machinery: bool,
     /// Refuse (409) unless the catalog is still at this generation, the one
@@ -169,8 +170,8 @@ struct ImportQuery {
 /// 404 for a catalog that does not exist or that the key does not reach;
 /// 403 ([`OkfError::Forbidden`]) for a key below `admin`; 400
 /// ([`OkfError::ImportRefused`]) for an unreadable or rule-breaking archive;
-/// 409 ([`OkfError::Refused`]) for a non-empty catalog without
-/// `?replace=true`, or one no longer at `expect_generation`; 500 for a
+/// 409 ([`OkfError::Refused`]) for a non-empty catalog past generation 0
+/// without `?replace=true`, or one no longer at `expect_generation`; 500 for a
 /// database failure. A refresh that fails after the import committed is
 /// logged, not returned.
 async fn import_catalog(

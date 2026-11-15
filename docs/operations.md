@@ -2278,7 +2278,8 @@ change (which reach every catalog).
 - Catalog rows record no actor, as with `okf-mcp catalog`; the server's log
   line for each change names the key id and its actor.
 - `only_machinery=true` is `--only-machinery`: only the archive's machinery
-  is compared and written. On a non-empty catalog it needs `replace=true`,
+  is compared and written. On a non-empty catalog past generation 0 (one
+  that has had a publish or import) it needs `replace=true`,
   as on the command line.
 - A stale `expect_generation` is 409, with a message that says to export
   again; nothing is imported. Both import paths take these options.

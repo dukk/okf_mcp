@@ -1568,6 +1568,22 @@ mod repair_tests {
         create_concept(&ctx, concept("/infra/hosts/web", "Web", "A host.", &handle))
             .await
             .unwrap();
+        // Created unlisted, then listed with the `index` tool.
+        let mut later = concept("/later", "Later", "unused", &handle);
+        later.index_summary = None;
+        create_concept(&ctx, later).await.unwrap();
+        let indexed = index(
+            &ctx,
+            IndexParams {
+                path: "/later".to_string(),
+                summary: "Listed afterwards.".to_string(),
+                section: None,
+                title: None,
+                changeset: handle.clone(),
+            },
+        )
+        .await
+        .unwrap();
         let logged = log(
             &ctx,
             LogParams {
@@ -1587,6 +1603,11 @@ mod repair_tests {
             root.contains("* [Hello](hello.md) - The first note."),
             "{root}"
         );
+        assert_eq!(indexed.touched, ["/index.md"]);
+        assert!(
+            root.contains("* [Later](later.md) - Listed afterwards."),
+            "{root}"
+        );
         // The nested indexes are created and linked from their parents.
         assert!(root.contains("* [Infra](infra/) - "), "{root}");
         let infra = published_text(&test, "infra/index.md").unwrap();
@@ -1596,6 +1617,52 @@ mod repair_tests {
         assert!(published_text(&test, "log.md")
             .unwrap()
             .contains("* **Update:** Added the first notes."));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_changeset_based_on_a_starter_file_conflicts_after_the_first_import() {
+        let test = app_with_new(&["pg"], Config::default()).await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        // A free edit of the starter index.md (revision 1), not yet published.
+        edit_document(
+            &ctx,
+            EditDocumentParams {
+                path: "/index.md".to_string(),
+                old_str: "TODO: say what this catalog holds.".to_string(),
+                new_str: "Stale words.".to_string(),
+                replace_all: false,
+                changeset: handle.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        // The first import replaces the starter files without `replace`.
+        let options = crate::store::import::ImportOptions {
+            replace: false,
+            scope: crate::store::import::ImportScope::Everything,
+            expect_generation: None,
+            actor: "tester",
+            audit: &crate::store::audit::AuditActor::cli(),
+            now: chrono::Utc::now(),
+        };
+        let imported = "---\nokf_version: \"0.2\"\n---\n# Imported\n";
+        crate::store::import::import(
+            test.app.pool(),
+            "pg",
+            crate::mcp::testing::files(&[("index.md", imported), ("log.md", "# Log\n")]),
+            &options,
+        )
+        .await
+        .unwrap();
+        test.app.poll().await.unwrap();
+
+        let refused = publish_as(&ctx, &handle).await.unwrap_err();
+
+        // The import's index.md is revision 2, so the edit based on
+        // revision 1 conflicts instead of overwriting it.
+        assert!(matches!(refused, OkfError::Conflict { .. }), "{refused:?}");
+        assert_eq!(published_text(&test, "index.md").unwrap(), imported);
     }
 
     #[tokio::test(flavor = "multi_thread")]

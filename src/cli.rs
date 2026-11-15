@@ -100,7 +100,8 @@ pub enum Command {
         catalog: String,
         /// A directory, a .tar.gz file, or `-` for a .tar.gz on stdin.
         source: PathBuf,
-        /// Replace a non-empty catalog's contents (write the differences).
+        /// Replace a non-empty catalog's contents (write the differences); a
+        /// new catalog, at generation 0, needs no `--replace`.
         #[arg(long)]
         replace: bool,
         /// Replace only repository machinery (AGENTS.md, tools/, install/,
