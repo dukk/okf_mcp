@@ -57,6 +57,7 @@ pub struct Collector {
 
 impl Collector {
     /// Starts offline from an existing lease, without retaining its token.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn new(lease: &Lease) -> Result<Self, RunnerError> {
         normalized_path(&lease.pin.path, lease.pin.revision)?;
         clean(&lease.work_id)?;
@@ -84,6 +85,7 @@ impl Collector {
     /// Yields exactly one read; calling again before `accept` is a contract error.
     // This protocol requires accept between steps; it is not an Iterator.
     #[allow(clippy::should_implement_trait)]
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn next(&mut self) -> Result<CollectStep, RunnerError> {
         if self.pending.is_some() {
             return Err(RunnerError::Contract);
@@ -135,6 +137,7 @@ impl Collector {
     }
 
     /// Validates only the outstanding reply. Malformed replies poison collection.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn accept(&mut self, response: Value) -> Result<(), RunnerError> {
         let request = self.pending.take().ok_or(RunnerError::Contract)?;
         let stage = std::mem::replace(&mut self.stage, Stage::Failed);
@@ -226,6 +229,7 @@ impl Collector {
         Ok(())
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn advance_neighbor(&mut self) {
         self.stage = if self.packet.sources.len() > MAX_NEIGHBORS {
             Stage::Done
@@ -234,6 +238,7 @@ impl Collector {
         };
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn add_path(&mut self, path: &str, linked: bool) {
         let Ok(path) = normalized_path(path, 1) else {
             return;
@@ -255,6 +260,7 @@ impl Collector {
         }
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn discover(&mut self, concept: &Value) -> Result<(), RunnerError> {
         for link in concept["links"].as_array().ok_or(RunnerError::Contract)? {
             if link["broken"] == false {
@@ -302,18 +308,21 @@ impl Collector {
     }
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn string<'a>(value: &'a Value, key: &str) -> Result<&'a str, RunnerError> {
     value
         .get(key)
         .and_then(Value::as_str)
         .ok_or(RunnerError::Contract)
 }
+#[tracing::instrument(level = "trace", skip_all)]
 fn same_path(value: &Value, path: &str) -> Result<(), RunnerError> {
     if normalized_path(string(value, "path")?, 1)? != normalized_path(path, 1)? {
         return Err(RunnerError::InvalidEvidence);
     }
     Ok(())
 }
+#[tracing::instrument(level = "trace", skip_all)]
 fn pinned(
     value: &Value,
     pin: &RevisionPin,
@@ -333,18 +342,21 @@ fn pinned(
     source_text(raw, limit)?;
     Ok(raw.to_owned())
 }
+#[tracing::instrument(level = "trace", skip_all)]
 fn source_text(text: &str, limit: usize) -> Result<(), RunnerError> {
     if text.len() > limit || text.contains('\0') {
         return Err(RunnerError::InvalidEvidence);
     }
     clean(text)
 }
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn clean(text: &str) -> Result<(), RunnerError> {
     if !scan_secrets("investigator/input.md", text).is_empty() {
         return Err(RunnerError::InvalidEvidence);
     }
     Ok(())
 }
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn normalized_path(path: &str, revision: i32) -> Result<String, RunnerError> {
     validate::pin(&RevisionPin {
         path: path.to_owned(),
@@ -354,12 +366,14 @@ pub(crate) fn normalized_path(path: &str, revision: i32) -> Result<String, Runne
     .map_err(|_| RunnerError::InvalidEvidence)
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn encode_prompt(packet: &Packet) -> Result<String, RunnerError> {
     let json = serde_json::to_string(packet).map_err(|_| RunnerError::InvalidEvidence)?;
     Ok(format!("{INSTRUCTIONS}\nEVIDENCE_JSON\n{json}"))
 }
 
 // Shared by rendering and conversion: only IDs actually uploaded remain usable.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn bounded_packet(packet: &Packet) -> Result<Packet, RunnerError> {
     clean(&packet.work_id)?;
     clean(&packet.primary_id)?;
@@ -400,6 +414,7 @@ pub(crate) fn bounded_packet(packet: &Packet) -> Result<Packet, RunnerError> {
 
 /// Quotes exact source bytes as JSON; drops only lowest-ranked neighbors to fit.
 /// Secret scans precede escaping and include every uploaded text/path field.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn render_prompt(packet: &Packet) -> Result<String, RunnerError> {
     encode_prompt(&bounded_packet(packet)?)
 }

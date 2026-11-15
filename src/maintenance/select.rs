@@ -46,6 +46,7 @@ pub struct Selection {
 ///
 /// # Errors
 /// Refuses batch sizes outside 1..=50.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn select(
     candidates: &[Candidate],
     cursors: &Cursors,
@@ -214,6 +215,7 @@ pub fn select(
     })
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn rotate_equal_rank(
     rows: &mut [&Candidate],
     cursor: &str,
@@ -235,6 +237,7 @@ fn rotate_equal_rank(
     }
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn next_aging<'a>(
     expiry: &[&'a Candidate],
     verification: &[&'a Candidate],
@@ -262,6 +265,7 @@ fn next_aging<'a>(
     }
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn insert(
     items: &mut Vec<Selected>,
     candidate: &Candidate,

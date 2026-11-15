@@ -67,11 +67,13 @@ pub struct McpClient {
 /// Connect using explicit credentials and preflight all nine tool contracts.
 /// Both live-consent flags are required before network access. Successful offline
 /// configuration checks alone never imply network readiness.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn connect(config: &RunnerConfig, secrets: &Secrets) -> Result<McpClient, RunnerError> {
     config.validate_consent()?;
     McpClient::open(&config.endpoint, &config.catalog, secrets.token()).await
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn http_client() -> Result<reqwest::Client, RunnerError> {
     // reqwest 0.13's rustls backend uses builder_with_provider and explicitly
     // selects aws-lc when no process provider exists. Unlike ClientConfig::builder,
@@ -90,6 +92,7 @@ fn http_client() -> Result<reqwest::Client, RunnerError> {
 
 impl McpClient {
     // Only connect and the cfg(test) loopback gate call this private constructor.
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn open(endpoint: &str, catalog: &str, token: &str) -> Result<Self, RunnerError> {
         if catalog.trim().is_empty() || token.trim().is_empty() {
             return Err(RunnerError::Config);
@@ -124,10 +127,12 @@ impl McpClient {
         Ok(client)
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn ready(&self) -> Result<(), RunnerError> {
         fatal_error(&self.fatal).map_or(Ok(()), Err)
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn failure(&self, error: rmcp::ServiceError) -> RunnerError {
         fatal_error(&self.fatal).unwrap_or(match error {
             // rmcp collapses an oversized/invalid SSE response into TransportClosed.
@@ -139,6 +144,7 @@ impl McpClient {
         })
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn remember(&self, error: RunnerError) -> RunnerError {
         let code = match error {
             RunnerError::Permission => 1,
@@ -155,6 +161,7 @@ impl McpClient {
 }
 
 impl CatalogClient for McpClient {
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn list_tools(&mut self) -> Result<Vec<Tool>, RunnerError> {
         self.ready()?;
         let mut tools = Vec::new();
@@ -187,6 +194,7 @@ impl CatalogClient for McpClient {
         Err(self.remember(RunnerError::Contract))
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn call(&mut self, request: ToolRequest) -> Result<Value, RunnerError> {
         self.ready()?;
         let tool = request.tool;
@@ -204,6 +212,7 @@ impl CatalogClient for McpClient {
     }
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn initialization_failure(error: &ClientInitializeError) -> RunnerError {
     match error {
         ClientInitializeError::TransportError { error, .. } => {
@@ -224,6 +233,7 @@ fn initialization_failure(error: &ClientInitializeError) -> RunnerError {
     }
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn fatal_error(fatal: &AtomicU8) -> Option<RunnerError> {
     match fatal.load(Ordering::SeqCst) {
         1 => Some(RunnerError::Permission),
@@ -241,6 +251,7 @@ struct RedactedHttp {
     fatal: Arc<AtomicU8>,
 }
 impl RedactedHttp {
+    #[tracing::instrument(level = "trace", skip_all)]
     fn redact(
         &self,
         error: StreamableHttpError<reqwest::Error>,
@@ -289,6 +300,7 @@ impl RedactedHttp {
 impl StreamableHttpClient for RedactedHttp {
     type Error = RunnerError;
 
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn post_message(
         &self,
         uri: Arc<str>,
@@ -313,6 +325,7 @@ impl StreamableHttpClient for RedactedHttp {
             .map_err(|e| self.redact(e))
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn delete_session(
         &self,
         uri: Arc<str>,
@@ -326,6 +339,7 @@ impl StreamableHttpClient for RedactedHttp {
             .map_err(|e| self.redact(e))
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn get_stream(
         &self,
         uri: Arc<str>,

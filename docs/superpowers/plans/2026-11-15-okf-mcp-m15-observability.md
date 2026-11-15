@@ -1433,6 +1433,8 @@ Each sub-task is its own PR and covers only its module group (the File map). The
 
 **9e note:** `okf-maintenance`'s `quiet_logging` filter passes only the rejection target, so these spans are recorded nowhere. Instrument for the lint, with the same `skip_all` rule. Evidence and tokens flow through these functions, and a future OTLP export (the deferred follow-up) must not need another privacy pass.
 
+> **Corrected (issue #474, 2026-11-15).** A `#[schemars(schema_with = "...")]` field makes the `JsonSchema` derive emit a wrapper function that no attribute on the struct or the field reaches (the lint flags the attribute's string). Exempt it by putting the type in a small inline module that carries the `allow`, and re-export the type (`maintenance::types::Submission` does this). 9c and 9d may meet the same pattern in `http/` and `mcp/` types.
+
 Commit: `chore(tracing): instrument <group> (M15 Task 9x)`.
 
 ---

@@ -31,6 +31,7 @@ static CONTRACTS: LazyLock<Vec<Tool>> = LazyLock::new(|| {
 /// Require each allowed tool exactly once and compare structural input/output contracts.
 /// Descriptions, schema annotations and local definition names are not identities.
 /// Extra server tools are ignored and never become dispatchable.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn validate_tools(tools: &[Tool]) -> Result<(), RunnerError> {
     bounded(tools)?;
     for allowed in ALLOWED {
@@ -66,6 +67,7 @@ pub fn validate_tools(tools: &[Tool]) -> Result<(), RunnerError> {
     Ok(())
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn expected(tool: AllowedTool) -> &'static Tool {
     CONTRACTS
         .iter()
@@ -74,6 +76,7 @@ fn expected(tool: AllowedTool) -> &'static Tool {
 }
 
 /// This is a decoded/serialized size check, not a preallocation memory bound.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn bounded(value: &(impl serde::Serialize + ?Sized)) -> Result<(), RunnerError> {
     if serde_json::to_vec(value)
         .map_err(|_| RunnerError::Contract)?
@@ -87,11 +90,13 @@ pub(crate) fn bounded(value: &(impl serde::Serialize + ?Sized)) -> Result<(), Ru
 
 // Only the finite schema dialect emitted by slice 1 is supported. Unknown
 // constraints fail closed. Property names are data, not schema keywords.
+#[tracing::instrument(level = "trace", skip_all)]
 fn normalize(schema: &Value, root: &Value, depth: usize) -> Result<Value, RunnerError> {
     let mut remaining = PAYLOAD_CAP;
     expand(schema, root, depth, &mut remaining)
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn expand(
     schema: &Value,
     root: &Value,
@@ -163,6 +168,7 @@ fn expand(
     Ok(Value::Object(result))
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn arguments(
     request: ToolRequest,
     catalog: &str,
@@ -202,6 +208,7 @@ pub(crate) fn arguments(
     Ok(args)
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn result(
     tool: AllowedTool,
     response: CallToolResult,
@@ -237,6 +244,7 @@ pub(crate) fn result(
 
 // The step-driven collector also accepts offline/fake replies. Validate those
 // against the same server DTO schemas as the authenticated transport.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn collection_result(
     tool: AllowedTool,
     value: &Value,
@@ -262,6 +270,13 @@ pub(crate) fn collection_result(
     check(value, &normalize(&root, &root, 0)?, catalog)
 }
 
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate: a pure check called per item"
+    )
+)]
 fn matches_type(value: &Value, kind: &str) -> bool {
     match kind {
         "null" => value.is_null(),
@@ -277,6 +292,7 @@ fn matches_type(value: &Value, kind: &str) -> bool {
 
 // Traverse protocol fields only. An unconstrained Value (frontmatter/error data)
 // and quoted text are not protocol envelopes, even if they contain "catalog".
+#[tracing::instrument(level = "trace", skip_all)]
 fn check(value: &Value, schema: &Value, catalog: &str) -> Result<(), RunnerError> {
     let bad = || RunnerError::Contract;
     if schema == &Value::Bool(true) {
