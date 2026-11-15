@@ -29,6 +29,13 @@ pub enum AllowedTool {
 
 impl AllowedTool {
     /// Only these nine server tools may be requested by the runner.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn name(&self) -> &'static str {
         match self {
             Self::Search => "search",
@@ -108,6 +115,13 @@ pub struct RunSummary {
 
 impl RunSummary {
     /// Operational status, distinct from preflight error classification.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn exit_code(&self) -> u8 {
         if self.accounting_known
             && self.failed == 0

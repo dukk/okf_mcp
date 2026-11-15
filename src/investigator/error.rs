@@ -39,6 +39,13 @@ pub enum RunnerError {
 
 impl RunnerError {
     /// Preflight/configuration failures are 2, lock contention 3, runtime failures 4.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn exit_code(&self) -> u8 {
         match self {
             Self::Config | Self::Contract => 2,

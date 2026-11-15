@@ -19,6 +19,7 @@ use serde_json::{json, Value};
 /// Decode only a proposal, never a provider envelope or accounting fields.
 /// Shape inspection rejects Serde's positional struct arrays; the second decode
 /// uses the original bytes so duplicate fields cannot disappear through Value.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn decode_proposal(bytes: &[u8]) -> Result<Proposal, RunnerError> {
     let invalid = RunnerError::InvalidProposal;
     let shape: Value = serde_json::from_slice(bytes).map_err(|_| invalid)?;
@@ -48,6 +49,7 @@ pub(crate) fn decode_proposal(bytes: &[u8]) -> Result<Proposal, RunnerError> {
 }
 
 /// Closed model output shape. Byte and contextual limits are enforced after mapping.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn proposal_schema() -> Value {
     json!({
         "type":"object", "additionalProperties":false,
@@ -95,6 +97,13 @@ pub enum RejectionSite {
 }
 
 impl fmt::Display for RejectionSite {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display/Debug impl: runs while the subscriber formats an event"
+        )
+    )]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Packet => f.write_str("packet"),
@@ -123,6 +132,13 @@ pub struct ProposalRejection {
 }
 
 impl ProposalRejection {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn new(site: RejectionSite, check: impl Into<Cow<'static, str>>) -> Self {
         Self {
             site,
@@ -131,17 +147,38 @@ impl ProposalRejection {
     }
 
     /// Where the proposal failed.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn site(&self) -> RejectionSite {
         self.site
     }
 
     /// The failed check, e.g. `excerpt is not a substring of s1`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn check(&self) -> &str {
         &self.check
     }
 }
 
 impl From<ProposalRejection> for RunnerError {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn from(_: ProposalRejection) -> Self {
         Self::InvalidProposal
     }
@@ -149,6 +186,13 @@ impl From<ProposalRejection> for RunnerError {
 
 /// A source id is echoed only when it has the packet's own `s<digits>` form;
 /// anything else is model text and stays unquoted.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate: a pure check called per item"
+    )
+)]
 fn is_source_label(id: &str) -> bool {
     id.strip_prefix('s').is_some_and(|digits| {
         (1..=3).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit())
@@ -156,6 +200,7 @@ fn is_source_label(id: &str) -> bool {
 }
 
 /// Fixed check text for an S1 validation error; secret text is never echoed.
+#[tracing::instrument(level = "trace", skip_all)]
 fn report_check(error: OkfError) -> Cow<'static, str> {
     match error {
         // Every `Refused` reason in `maintenance::validate` is a fixed literal.
@@ -167,6 +212,7 @@ fn report_check(error: OkfError) -> Cow<'static, str> {
 
 /// Attributes an S1 failure to the first finding that fails on its own, so a
 /// rejection names the finding rather than the whole report.
+#[tracing::instrument(level = "trace", skip_all)]
 fn locate(submission: &Submission, error: OkfError) -> ProposalRejection {
     submission
         .findings
@@ -191,6 +237,7 @@ fn locate(submission: &Submission, error: OkfError) -> ProposalRejection {
 /// Yields `(byte offset, char)` for `text` with every run of ASCII whitespace
 /// folded to one `' '` at the run's first byte. Nothing else changes: no case
 /// folding and no Unicode normalization.
+#[tracing::instrument(level = "trace", skip_all)]
 fn fold_whitespace(text: &str) -> impl Iterator<Item = (usize, char)> + '_ {
     // `move` hands `previous_was_space` to the closure, which mutates it as
     // state between calls (like a generator's local in Python).
@@ -215,6 +262,7 @@ struct FoldedSource {
 
 impl FoldedSource {
     /// Folds `text` once, in time and memory linear in its length.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn new(text: &str) -> Self {
         let mut folded = String::with_capacity(text.len());
         let mut starts = Vec::with_capacity(text.len() + 1);
@@ -245,6 +293,7 @@ impl FoldedSource {
 ///
 /// # Returns
 /// `Some(span)` where `span` is a slice of `text`, or `None` if no match.
+#[tracing::instrument(level = "trace", skip_all)]
 fn source_span<'a>(
     text: &'a str,
     excerpt: &str,
@@ -268,6 +317,7 @@ fn source_span<'a>(
 /// # Errors
 /// [`ProposalRejection`] naming the first failed check and where it failed.
 /// It converts into [`RunnerError::InvalidProposal`] with `?`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn to_submission(
     packet: &Packet,
     proposal: &Proposal,

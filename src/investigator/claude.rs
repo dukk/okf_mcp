@@ -69,6 +69,7 @@ pub struct ClaudeAdapter {
 impl ClaudeAdapter {
     /// Requires both live-consent flags and a dedicated key; never uses OAuth.
     /// The caller must also run `preflight_cli` before starting live work.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn new(config: &RunnerConfig, secrets: &Secrets) -> Result<Self, RunnerError> {
         config.validate_consent()?;
         let key = secrets.anthropic_api_key();
@@ -85,6 +86,7 @@ impl ClaudeAdapter {
 }
 
 impl Inference for ClaudeAdapter {
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn infer(
         &self,
         request: ModelRequest,
@@ -140,6 +142,7 @@ impl Inference for ClaudeAdapter {
     }
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn resolve_binary(config: &RunnerConfig) -> Result<PathBuf, RunnerError> {
     config.validate()?;
     let binary = std::fs::canonicalize(&config.claude_binary).map_err(|_| RunnerError::Config)?;
@@ -150,6 +153,7 @@ fn resolve_binary(config: &RunnerConfig) -> Result<PathBuf, RunnerError> {
 }
 
 /// Inspect only the configured binary's version/help, without a key or inference.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn preflight_cli(config: &RunnerConfig) -> Result<(), RunnerError> {
     preflight_cli_with_cancel(config, CancellationToken::new()).await
 }
@@ -157,6 +161,7 @@ pub async fn preflight_cli(config: &RunnerConfig) -> Result<(), RunnerError> {
 /// Cancel readiness by signalling this token and awaiting this future to completion.
 /// Completion joins the process worker after kill/wait and pipe cleanup. Dropping
 /// the future requests cleanup but cannot await it or guarantee reaping at exit.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn preflight_cli_with_cancel(
     config: &RunnerConfig,
     cancel: CancellationToken,
@@ -215,6 +220,7 @@ pub async fn preflight_cli_with_cancel(
     Ok(())
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 async fn read_bounded(
     mut pipe: impl AsyncRead + Unpin,
     cap: usize,
@@ -244,6 +250,7 @@ async fn read_bounded(
 }
 
 #[cfg(unix)]
+#[tracing::instrument(level = "trace", skip_all)]
 fn private_directory() -> Result<tempfile::TempDir, RunnerError> {
     tempfile::Builder::new()
         .permissions(std::fs::Permissions::from_mode(0o700))
@@ -257,6 +264,7 @@ fn private_directory() -> Result<tempfile::TempDir, RunnerError> {
     Err(RunnerError::Config)
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 async fn run_process(
     binary: PathBuf,
     args: Vec<String>,
@@ -351,6 +359,7 @@ struct Usage {
 
 // Derived struct deserializers also accept positional sequences. Require the JSON
 // object token before decoding, preserving RawValue lexemes and duplicate checks.
+#[tracing::instrument(level = "trace", skip_all)]
 fn parse_object<T: serde::de::DeserializeOwned>(
     bytes: &[u8],
     error: RunnerError,
@@ -362,6 +371,7 @@ fn parse_object<T: serde::de::DeserializeOwned>(
 }
 
 /// Parse only the target success envelope; never fall back to text or zero usage.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn parse_envelope(bytes: &[u8]) -> Result<ModelResult, RunnerError> {
     if bytes.len() > STDOUT_CAP {
         return Err(RunnerError::Child);
@@ -407,6 +417,7 @@ pub fn parse_envelope(bytes: &[u8]) -> Result<ModelResult, RunnerError> {
 // Work on the original JSON number lexeme, never serde_json::Value/f64. Bound
 // significand and exponent to 128; excessive precision is unknown, not rounded away.
 // The bool reports a fractional microUSD so reservations can require exact equality.
+#[tracing::instrument(level = "trace", skip_all)]
 fn decimal_microusd(text: &str) -> Result<(u64, bool), RunnerError> {
     let unknown = RunnerError::UnknownAccounting;
     if text.is_empty() || text.len() > 140 || !text.as_bytes()[0].is_ascii_digit() {

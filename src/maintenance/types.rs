@@ -115,16 +115,36 @@ pub struct FindingInput {
     pub external: Vec<ExternalObservation>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Submission {
-    #[schemars(schema_with = "submission_outcome_schema")]
-    pub outcome: WorkOutcome,
-    pub assessment: Assessment,
-    pub summary: String,
-    pub evidence: Vec<Evidence>,
-    pub findings: Vec<FindingInput>,
-    pub reported_tokens: Option<u64>,
+pub use submission::Submission;
+
+// The `schema_with` hook makes the `JsonSchema` derive emit a wrapper function
+// of its own that cannot carry an attribute. An exemption on the struct or the
+// field does not reach it (it is a sibling item), so the struct lives in its
+// own module and the exemption covers exactly that module.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "constant trait plumbing: the derive's schema_with hook returns a fixed schema"
+    )
+)]
+mod submission {
+    use schemars::JsonSchema;
+    use serde::{Deserialize, Serialize};
+
+    use super::{submission_outcome_schema, Assessment, Evidence, FindingInput, WorkOutcome};
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct Submission {
+        #[schemars(schema_with = "submission_outcome_schema")]
+        pub outcome: WorkOutcome,
+        pub assessment: Assessment,
+        pub summary: String,
+        pub evidence: Vec<Evidence>,
+        pub findings: Vec<FindingInput>,
+        pub reported_tokens: Option<u64>,
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -139,6 +159,13 @@ pub struct Lease {
 }
 
 impl std::fmt::Debug for Lease {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display/Debug impl: runs while the subscriber formats an event"
+        )
+    )]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Lease")
             .field("run_id", &self.run_id)
@@ -168,6 +195,13 @@ pub struct Receipt {
     pub outdated: bool,
 }
 
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "constant trait plumbing: returns a fixed value for a trait"
+    )
+)]
 fn submission_outcome_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({"type": "string", "enum": ["completed", "inconclusive", "failed"]})
 }
@@ -176,6 +210,7 @@ fn submission_outcome_schema(_: &mut schemars::SchemaGenerator) -> schemars::Sch
 ///
 /// # Errors
 /// [`OkfError::Io`] if the OS random source fails.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn new_id() -> Result<String, OkfError> {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).map_err(|error| OkfError::Io {

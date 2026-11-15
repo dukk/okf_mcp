@@ -94,6 +94,7 @@ struct Annotation {
 }
 type Key = (String, Vec<String>);
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn key(relation: &Relation) -> Result<Key, RunnerError> {
     if relation.paths.is_empty() || relation.paths.len() > 20 {
         return Err(RunnerError::Config);
@@ -112,13 +113,22 @@ fn key(relation: &Relation) -> Result<Key, RunnerError> {
 }
 // Visit original field occurrences, including ones a duplicate would overwrite.
 // This is diagnostic only; acceptance always uses decode_proposal.
+#[tracing::instrument(level = "trace", skip_all)]
 fn verification_attempt(raw: &RawValue) -> Result<bool, RunnerError> {
     struct Fields;
     impl<'de> serde::de::Visitor<'de> for Fields {
         type Value = bool;
+        #[cfg_attr(
+            dylint_lib = "hyp_tracing",
+            allow(
+                uninstrumented_fn,
+                reason = "constant trait plumbing: returns a fixed value for a trait"
+            )
+        )]
         fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
             formatter.write_str("an object")
         }
+        #[tracing::instrument(level = "trace", skip_all)]
         fn visit_map<M: serde::de::MapAccess<'de>>(self, mut map: M) -> Result<bool, M::Error> {
             let mut found = false;
             while let Some((key, value)) = map.next_entry::<String, Box<RawValue>>()? {
@@ -149,10 +159,25 @@ fn verification_attempt(raw: &RawValue) -> Result<bool, RunnerError> {
 // DTO shape inspection is separate from decoding the original bytes: the latter
 // rejects duplicate/unknown fields. Enum unit variants also need string checks:
 // serde otherwise accepts externally tagged objects outside our JSON contract.
+#[tracing::instrument(level = "trace", skip_all)]
 fn corpus_objects(value: &Value) -> Result<(), RunnerError> {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line adapter that only delegates to an instrumented function"
+        )
+    )]
     fn object(value: &Value) -> Result<(), RunnerError> {
         value.as_object().map(|_| ()).ok_or(RunnerError::Config)
     }
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line adapter that only delegates to an instrumented function"
+        )
+    )]
     fn array(value: &Value) -> Result<&[Value], RunnerError> {
         value
             .as_array()
@@ -195,6 +220,7 @@ fn corpus_objects(value: &Value) -> Result<(), RunnerError> {
 
 /// Evaluate a bounded JSON corpus. Undefined precision/recall serialize as null.
 /// Malformed corpus/configuration errors contain no input text or source bodies.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn run(cases: &Path) -> Result<EvaluationSummary, RunnerError> {
     const CAP: u64 = 16 * 1024 * 1024;
     let mut bytes = Vec::new();
