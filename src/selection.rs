@@ -47,11 +47,25 @@ pub struct Selection {
 
 impl Selection {
     /// The read set, in order.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn catalogs(&self) -> &[String] {
         &self.catalogs
     }
 
     /// The default write target: the first catalog.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial field accessor: returns a field or a borrow of one"
+        )
+    )]
     pub fn write_target(&self) -> &str {
         // `resolve` never builds an empty selection.
         &self.catalogs[0]
@@ -76,6 +90,7 @@ pub struct Sources<'a> {
 /// Splits a comma-separated list, trimming names and dropping empty ones.
 // `impl Iterator<...> + '_`: a lazy sequence (like a Python generator) that
 // borrows `list`, so nothing is copied until a caller collects it.
+#[tracing::instrument(level = "trace", skip_all)]
 fn split_names(list: &str) -> impl Iterator<Item = String> + '_ {
     list.split(',')
         .map(str::trim)
@@ -84,6 +99,7 @@ fn split_names(list: &str) -> impl Iterator<Item = String> + '_ {
 }
 
 /// `None` for an empty list, so an empty source counts as unset.
+#[tracing::instrument(level = "trace", skip_all)]
 fn non_empty(names: Vec<String>) -> Option<Vec<String>> {
     // `then_some(x)`: `Some(x)` if the condition holds, else `None`.
     (!names.is_empty()).then_some(names)
@@ -111,6 +127,7 @@ fn non_empty(names: Vec<String>) -> Option<Vec<String>> {
 ///
 /// # Returns
 /// The names, or `None` if neither source names a catalog.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn connection_catalogs(parts: &Parts) -> Option<Vec<String>> {
     let mut from_header: Vec<String> = Vec::new();
     let values = [CATALOGS_HEADER, CATALOG_HEADER_ALIAS]
@@ -145,12 +162,14 @@ pub fn connection_catalogs(parts: &Parts) -> Option<Vec<String>> {
 /// # Returns
 /// `true` if a call on this connection may use `name` (the key's reach is
 /// checked separately).
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn in_scope(connection: Option<&[String]>, name: &str) -> bool {
     // `is_none_or(f)`: `true` for `None`, else `f(value)`.
     connection.is_none_or(|list| list.is_empty() || list.iter().any(|listed| listed == name))
 }
 
 /// `list` as a selection: in order, without duplicates, every name allowed.
+#[tracing::instrument(level = "trace", skip_all)]
 fn checked<'a>(
     list: impl IntoIterator<Item = &'a str>,
     allowed: impl Fn(&str) -> bool,
@@ -188,6 +207,7 @@ fn checked<'a>(
 /// # Errors
 /// The first closed catalog's refusal: [`OkfError::Suspended`],
 /// [`OkfError::UnlockRequired`] or [`OkfError::MaintenanceOff`].
+#[tracing::instrument(level = "trace", skip_all)]
 fn refuse_closed(
     principal: &Principal,
     selection: Selection,
@@ -215,6 +235,7 @@ fn refuse_closed(
 /// # Errors
 /// The first catalog's refusal, as [`refuse_closed`], when every one is
 /// closed (a selection is never empty).
+#[tracing::instrument(level = "trace", skip_all)]
 fn without_closed(
     principal: &Principal,
     selection: Selection,
@@ -268,6 +289,7 @@ fn without_closed(
 /// always checked first.
 // `impl Fn(&str) -> bool`: any function or closure taking a name, like a
 // Python callable argument.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn resolve(
     principal: &Principal,
     sources: Sources<'_>,
@@ -276,6 +298,7 @@ pub fn resolve(
     let available = |name: &str| exists(name) && principal.reaches(name);
     // An empty list (`catalogs: []`) counts as unset, so the selection is
     // never empty.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn set(list: Option<&[String]>) -> Option<&[String]> {
         list.filter(|list| !list.is_empty())
     }

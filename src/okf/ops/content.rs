@@ -50,6 +50,7 @@ pub struct NewConcept<'a> {
 /// A JSON value as frontmatter. Every scalar is a string in `okf.py`'s
 /// model, so numbers and booleans are stored as their JSON text (and come
 /// back quoted where YAML would read them as something else).
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn yaml_value(json: &Json) -> Value {
     match json {
         Json::Null => Value::Null,
@@ -69,6 +70,7 @@ pub(crate) fn yaml_value(json: &Json) -> Value {
 /// mapping, or a list of scalars, is one flow line (`{ by: x, at: y }`,
 /// `[a, b]`, as stamps and tags are written); a list holding collections is
 /// a block list of [`block_item`]s.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn key_lines(key: &str, value: &Value) -> Vec<String> {
     match value {
         Value::Null => vec![format!("{key}:")],
@@ -91,6 +93,7 @@ pub(crate) fn key_lines(key: &str, value: &Value) -> Vec<String> {
 ///
 /// # Returns
 /// The string, or `None` for a missing, non-string or blank value.
+#[tracing::instrument(level = "trace", skip_all)]
 fn non_blank(value: Option<&Json>) -> Option<&str> {
     // `and_then` chains two `Option` steps, like `x and f(x)` in Python.
     value
@@ -99,6 +102,7 @@ fn non_blank(value: Option<&Json>) -> Option<&str> {
 }
 
 /// Refuses a key `Doc` could not find again.
+#[tracing::instrument(level = "trace", skip_all)]
 fn checked_key(key: &str) -> Result<(), OkfError> {
     if is_top_key(key) {
         Ok(())
@@ -139,6 +143,7 @@ fn checked_key(key: &str) -> Result<(), OkfError> {
 /// past that point leaves files written; as for [`ensure_index`], run the
 /// op on a scratch copy, as the write path does, and drop the copy on
 /// error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn create_concept(
     workspace: &dyn Workspace,
     ctx: &OpContext<'_>,
@@ -231,6 +236,7 @@ const ROOT_MISSING: &str =
 /// index is missing (`ensure_index` creates every other folder index, but
 /// needs the root's to list them in), or a `section` that is not a heading
 /// of the index.
+#[tracing::instrument(level = "trace", skip_all)]
 fn check_listing(
     workspace: &dyn Workspace,
     concept: &str,
@@ -270,6 +276,7 @@ fn check_listing(
 /// [`OkfError::Refused`]: `okf.py`'s "has no frontmatter; add it with your
 /// editor first" when the document had none, else a pointer to
 /// `set_frontmatter` and the bookkeeping tools.
+#[tracing::instrument(level = "trace", skip_all)]
 fn keeps_frontmatter(before: &Doc, after: &str) -> Result<(), OkfError> {
     let edited = Doc::from_text(before.path(), after);
     // Comparing slices compares every line, like `==` on Python lists.
@@ -290,6 +297,7 @@ fn keeps_frontmatter(before: &Doc, after: &str) -> Result<(), OkfError> {
 }
 
 /// An `InvalidPath` refusal of `path`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn invalid(path: &str, reason: &str) -> OkfError {
     OkfError::InvalidPath {
         path: path.to_string(),
@@ -302,6 +310,7 @@ fn invalid(path: &str, reason: &str) -> OkfError {
 /// [`check_path`] refuses a path outside the catalog and machinery (with
 /// [`crate::okf::rules::is_machinery`]); `log.md` and every other file are
 /// refused here.
+#[tracing::instrument(level = "trace", skip_all)]
 fn editable_path(path: &str) -> Result<String, OkfError> {
     let normalized = check_path(path)?;
     let name = basename(&normalized);
@@ -338,6 +347,7 @@ fn editable_path(path: &str) -> Result<String, OkfError> {
 /// frontmatter, or a result whose frontmatter differs (one added to a
 /// document without it, say); [`OkfError::EditMismatch`] unless `old` occurs exactly once
 /// (at least once with `replace_all`).
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn edit_document(
     workspace: &dyn Workspace,
     path: &str,
@@ -404,6 +414,7 @@ pub fn edit_document(
 /// As [`resolve_concept`]; [`OkfError::Refused`] when the new text would
 /// change the frontmatter (a body starting with a `---` block on a document
 /// without frontmatter); the workspace's read or write error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn replace_body(
     workspace: &dyn Workspace,
     concept: &str,
@@ -451,6 +462,7 @@ pub fn replace_body(
 /// key, and for a document without frontmatter;
 /// [`OkfError::FrontmatterParse`] when the frontmatter does not parse, before
 /// or after the edit; as [`resolve_concept`] otherwise.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn set_frontmatter(
     workspace: &dyn Workspace,
     concept: &str,

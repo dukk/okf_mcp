@@ -26,6 +26,8 @@ use std::sync::LazyLock;
 use chrono::{DateTime, FixedOffset, Utc};
 use indexmap::IndexMap;
 use rayon::prelude::*;
+
+use crate::okf::caller::Caller;
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -75,6 +77,13 @@ pub struct OldestQuery {
 
 impl Default for OldestQuery {
     /// `okf.py`'s defaults: `-n 5`, no `--open-questions`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial constructor: builds a value from its arguments"
+        )
+    )]
     fn default() -> Self {
         Self {
             n: 5,
@@ -93,15 +102,18 @@ impl Default for OldestQuery {
 ///
 /// # Returns
 /// The rows `okf.py oldest --json` prints, in its order.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn oldest(snapshot: &Snapshot, now: DateTime<Utc>, query: OldestQuery) -> Vec<OldestRow> {
     let now = now.fixed_offset();
     // `par_iter` describes the concepts on a thread pool. The input order does
     // not matter: paths are unique, so the sort below fixes the final order.
+    // `map_init` re-enters the caller's span on each worker (see `okf::caller`).
+    let caller = Caller::capture();
     let mut rows: Vec<OldestRow> = snapshot
         .docs()
         .par_iter()
         .filter(|doc| doc.kind() == DocKind::Concept)
-        .map(|doc| describe(doc, now))
+        .map_init(|| caller.enter(), |_entered, doc| describe(doc, now))
         .filter(|row| row.status != "deprecated" && wanted(row, query))
         .collect();
     // `(fresh, path)` is a total order with no equal rows (paths are unique),
@@ -121,6 +133,13 @@ pub fn oldest(snapshot: &Snapshot, now: DateTime<Utc>, query: OldestQuery) -> Ve
 
 /// `--open-questions` keeps only rows with questions (filtering before the
 /// sort gives the same rows as `okf.py` filtering after it).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+    )
+)]
 fn wanted(row: &OldestRow, query: OldestQuery) -> bool {
     !query.open_questions_only || !row.open_questions.is_empty()
 }
@@ -140,6 +159,7 @@ static AT: LazyLock<Regex> = LazyLock::new(|| {
 ///
 /// `DateTime`'s ordering compares instants, so `10:00Z` and `12:00+02:00`
 /// tie, as aware datetimes do in Python.
+#[tracing::instrument(level = "trace", skip_all)]
 fn first_max<T: Copy>(
     values: impl Iterator<Item = T>,
     key: impl Fn(T) -> DateTime<FixedOffset>,
@@ -152,6 +172,7 @@ fn first_max<T: Copy>(
 ///
 /// Returns `impl Iterator`, a lazily evaluated sequence like a Python
 /// generator; `'_` says it borrows from `value`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn ats(value: Option<&Value>) -> impl Iterator<Item = DateTime<FixedOffset>> + '_ {
     let items: &[Value] = match value {
         Some(Value::Seq(items)) => items,
@@ -177,6 +198,7 @@ struct Described {
 }
 
 /// `describe` for parsed (or absent, `None`) frontmatter.
+#[tracing::instrument(level = "trace", skip_all)]
 fn from_data(data: Option<&IndexMap<String, Value>>) -> Described {
     let value = |key: &str| data.and_then(|d| d.get(key));
     // The str-only `get` of `okf.py`: a non-string value counts as missing.
@@ -198,6 +220,7 @@ fn from_data(data: Option<&IndexMap<String, Value>>) -> Described {
 }
 
 /// `describe`'s regex fallback for frontmatter that does not parse.
+#[tracing::instrument(level = "trace", skip_all)]
 fn from_fallback(doc: &SnapshotDoc) -> Described {
     let lines = doc.doc().frontmatter();
     let raw = lines.join("\n");
@@ -222,6 +245,7 @@ fn from_fallback(doc: &SnapshotDoc) -> Described {
 }
 
 /// `describe`: one concept's row.
+#[tracing::instrument(level = "trace", skip_all)]
 fn describe(doc: &SnapshotDoc, now: DateTime<FixedOffset>) -> OldestRow {
     let described = match doc.frontmatter() {
         Frontmatter::Parsed(data) => from_data(Some(data)),
@@ -255,6 +279,7 @@ fn describe(doc: &SnapshotDoc, now: DateTime<FixedOffset>) -> OldestRow {
 }
 
 /// `round((now - fresh).total_seconds() / 86400, 1)`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn age_days(now: DateTime<FixedOffset>, fresh: DateTime<FixedOffset>) -> f64 {
     // `num_microseconds` is `None` only past about 292,000 years, which two
     // dates in years 1..=9999 cannot reach.
@@ -273,6 +298,7 @@ fn age_days(now: DateTime<FixedOffset>, fresh: DateTime<FixedOffset>) -> f64 {
 ///
 /// # Returns
 /// `value` rounded to one decimal place (`value` itself if not finite).
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn round_one(value: f64) -> f64 {
     format!("{value:.1}").parse().unwrap_or(value)
 }
