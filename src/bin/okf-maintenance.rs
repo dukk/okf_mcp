@@ -73,6 +73,13 @@ struct Production;
 impl Backend for Production {
     type Client = McpClient;
     type Model = ClaudeAdapter;
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line adapter that only delegates to an instrumented function"
+        )
+    )]
     async fn connect(
         &mut self,
         config: &RunnerConfig,
@@ -80,6 +87,13 @@ impl Backend for Production {
     ) -> Result<McpClient, RunnerError> {
         client::connect(config, secrets).await
     }
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line adapter that only delegates to an instrumented function"
+        )
+    )]
     fn model(
         &mut self,
         config: &RunnerConfig,
@@ -89,16 +103,25 @@ impl Backend for Production {
     }
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn write_json(value: &impl serde::Serialize, output: &mut impl Write) -> Result<(), RunnerError> {
     let mut bytes = serde_json::to_vec(value).map_err(|_| RunnerError::Contract)?;
     bytes.push(b'\n');
     output.write_all(&bytes).map_err(|_| RunnerError::Io)
 }
 
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "one-line adapter that only delegates to an instrumented function"
+    )
+)]
 async fn dispatch(cli: Cli) -> Result<i32, RunnerError> {
     dispatch_with(cli, &mut Production, &mut std::io::stdout()).await
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 async fn dispatch_with(
     cli: Cli,
     backend: &mut impl Backend,
@@ -184,6 +207,7 @@ async fn dispatch_with(
 
 // Only network-only setup belongs here: dropping an owned process future would
 // bypass its cancellation-and-reap completion boundary.
+#[tracing::instrument(level = "trace", skip_all)]
 async fn network_until<T>(
     future: impl Future<Output = Result<T, RunnerError>>,
     cancel: &CancellationToken,
@@ -204,6 +228,7 @@ struct Signals {
     terminate: tokio::signal::unix::Signal,
 }
 impl Signals {
+    #[tracing::instrument(level = "trace", skip_all)]
     fn new() -> Result<Self, RunnerError> {
         #[cfg(unix)]
         {
@@ -216,6 +241,7 @@ impl Signals {
         #[cfg(not(unix))]
         Ok(Self {})
     }
+    #[tracing::instrument(level = "trace", skip_all)]
     async fn receive(&mut self) {
         #[cfg(unix)]
         tokio::select! {
@@ -227,6 +253,7 @@ impl Signals {
     }
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 async fn until_signal<T>(
     run: impl Future<Output = T>,
     cancel: &CancellationToken,
@@ -244,6 +271,13 @@ async fn until_signal<T>(
     }
 }
 
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists, so a span would be recorded nowhere"
+    )
+)]
 fn quiet_logging() -> Result<(), RunnerError> {
     // rmcp can trace complete protocol messages, including evidence and tokens.
     // Never use EnvFilter/RUST_LOG or offer a dependency-verbose override here.
@@ -258,6 +292,13 @@ fn quiet_logging() -> Result<(), RunnerError> {
         .map_err(|_| RunnerError::Config)
 }
 
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists, so a span would be recorded nowhere"
+    )
+)]
 fn entry() -> Result<i32, RunnerError> {
     quiet_logging()?;
     let cli = match Cli::try_parse() {
@@ -280,6 +321,13 @@ fn entry() -> Result<i32, RunnerError> {
         .block_on(dispatch(cli))
 }
 
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists, so a span would be recorded nowhere"
+    )
+)]
 fn main() -> ExitCode {
     match entry() {
         Ok(status) => ExitCode::from(status as u8),

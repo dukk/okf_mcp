@@ -8,12 +8,14 @@ use crate::okf::analysis::secrets::scan_secrets;
 use crate::okf::paths::is_concept;
 use crate::okf::rules::check_path;
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn refused(reason: &str) -> OkfError {
     OkfError::Refused {
         reason: reason.into(),
     }
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn scan(value: &str) -> Result<(), OkfError> {
     if let Some(hit) = scan_secrets("maintenance/report.md", value)
         .into_iter()
@@ -29,6 +31,7 @@ fn scan(value: &str) -> Result<(), OkfError> {
     Ok(())
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn pin(input: &RevisionPin) -> Result<RevisionPin, OkfError> {
     scan(&input.path)?;
     if input.revision <= 0
@@ -49,6 +52,7 @@ pub(crate) fn pin(input: &RevisionPin) -> Result<RevisionPin, OkfError> {
     })
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn excerpt(value: &str) -> Result<(), OkfError> {
     if value.is_empty() || value.len() > 2048 {
         return Err(refused("maintenance excerpts must be 1..=2048 UTF-8 bytes"));
@@ -56,6 +60,7 @@ fn excerpt(value: &str) -> Result<(), OkfError> {
     scan(value)
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn evidence(input: &[Evidence]) -> Result<(), OkfError> {
     if input.len() > 20 {
         return Err(refused("maintenance evidence is limited to 20 entries"));
@@ -67,6 +72,7 @@ pub(crate) fn evidence(input: &[Evidence]) -> Result<(), OkfError> {
     Ok(())
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn resource(value: &str) -> Result<(), OkfError> {
     scan(value)?;
     let rest = value
@@ -99,6 +105,7 @@ fn resource(value: &str) -> Result<(), OkfError> {
 /// # Errors
 /// [`OkfError::Refused`] for invalid shapes or byte limits; masked
 /// [`OkfError::SecretDetected`] for secret-bearing report text.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn submission(input: &Submission) -> Result<(), OkfError> {
     let size = serde_json::to_vec(input)
         .map_err(|_| refused("maintenance report cannot be serialized"))?
@@ -177,6 +184,7 @@ pub fn submission(input: &Submission) -> Result<(), OkfError> {
 /// # Errors
 /// [`OkfError::Refused`] for invalid reports or missing work evidence;
 /// masked [`OkfError::SecretDetected`] for secret-bearing text.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn submission_for_work(
     input: &Submission,
     primary: &RevisionPin,
@@ -221,6 +229,7 @@ pub fn submission_for_work(
 /// # Errors
 /// [`OkfError::Refused`] for excessive length; masked
 /// [`OkfError::SecretDetected`] for the first scanner finding.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn text(value: &str) -> Result<(), OkfError> {
     if value.len() > 4096 {
         return Err(refused("maintenance rationale exceeds 4096 UTF-8 bytes"));
