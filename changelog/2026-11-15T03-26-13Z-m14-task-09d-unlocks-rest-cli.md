@@ -42,6 +42,9 @@ Issue #408, part of epic #390. Implements Task 9d of
   (every catalog) could then open, and read every unlock's free-text reason,
   which the audit log shows only to every-catalog admins. Both routes now
   check the catalog.
+- A credential with no user is refused before any target is chosen, so an
+  unassigned every-catalog admin key cannot unlock for another user by
+  naming one either (PR #437 review, round 1).
 - Owners' redaction is structural: `OwnerUnlockView::of` takes the record
   by value and has no field for the reason or the person. The test checks
   the owner's whole unlock list, audit view and audit export contain neither

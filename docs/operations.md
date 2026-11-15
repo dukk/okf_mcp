@@ -2319,7 +2319,8 @@ access](#unlock-before-access)). Who may do what:
   scoped admin naming a catalog it does not administer gets 404, as for
   an unknown one). The unlock is for the caller's own user; naming another
   `user` needs an admin that reaches every catalog. A key with no user gets
-  403 ("give it a user"); a user who is not an admin, 409.
+  403 ("give it a user") whether or not it names a `user`: it may not
+  unlock for anyone. A user who is not an admin gets 409.
 - **Listing**: an admin reads full records (a scoped admin only those of
   the catalogs it administers). A team's owner, through a signed-in console
   session only and naming the team (`?team=NAME`), reads the unlocks of the

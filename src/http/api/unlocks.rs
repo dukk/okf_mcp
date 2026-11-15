@@ -211,8 +211,8 @@ fn administers(principal: &Principal, catalog: &str) -> bool {
 /// 201 with the [`UnlockView`].
 ///
 /// # Errors
-/// 403 below admin, for a credential with no user, or naming another user
-/// without reaching every catalog; 404 for a catalog the caller does not
+/// 403 below admin, for a credential with no user (whether or not the body
+/// names a user), or naming another user without reaching every catalog; 404 for a catalog the caller does not
 /// administer or that does not exist, or an unknown user; 409 for a user
 /// who is not an admin; 422 for hours over `unlock_max_hours` (or 0), a
 /// blank or over-long reason, or a bad body; 500 for a database failure.
@@ -231,18 +231,21 @@ async fn create_unlock(
         }
         .into());
     }
-    let user = match (body.user.as_deref(), principal.user.as_deref()) {
-        (Some(named), own) if Some(named) != own => {
+    // A caller with no user is refused before any target is chosen: an
+    // unlock is made by an admin user (spec Part 6), so an unassigned key
+    // may not act for anyone, itself or another user.
+    let Some(own) = principal.user.as_deref() else {
+        return Err(OkfError::Forbidden {
+            reason: "a key with no user cannot be unlocked; give it a user".to_string(),
+        }
+        .into());
+    };
+    let user = match body.user.as_deref() {
+        Some(named) if named != own => {
             require_every_catalog(&principal)?;
             named
         }
-        (_, Some(own)) => own,
-        (_, None) => {
-            return Err(OkfError::Forbidden {
-                reason: "a key with no user cannot be unlocked; give it a user".to_string(),
-            }
-            .into())
-        }
+        _ => own,
     };
     let settings = app.settings();
     let policy = UnlockPolicy {

@@ -6713,6 +6713,7 @@ pub(crate) struct UnlockView {
 > - **The owner's scope** is the team that owns the catalog now: after `teams::owned_by` confirms the session's user owns the named team, `UnlockFilter { team }` matches the catalogs' current owner team by name (unique at any moment), so an unlock made before a transfer shows to the new owner, redacted. An owner's key, a non-owner, a missing `team` and a malformed name get 403.
 > - **The test.** `staff_root` is defined in `src/http/api/unlocks/tests.rs` (admin user `staff`, every-catalog admin key `staff-root`), since Task 9b had not merged. The test also checks `catalog.unlock_ended` is in the owner's log and a second `DELETE` is 409. An unknown query parameter is 400 (axum's `Query` rejection), not 422.
 > - **The CLI** reads the policy with `settings::load(pool, &config.auth)`; `unlock list`'s user cell is the record's `person` (`deleted user #N` for a deleted user), and its `until` is `ends()`.
+> - **No user, no unlock, for anyone.** A caller with no user is refused 403 before the target is chosen, also when the body names another `user` (spec Part 6: an unlock is made by an admin user); the first draft refused it only when `user` was omitted (PR #437 review). Test `a_key_with_no_user_cannot_unlock_for_itself_or_anyone_else` (both bodies 403, no unlock row, no `catalog.unlocked` entry).
 > - **Docs.** `docs/operations.md` had no "Unlock before access" section yet; this task added it (after "Audit log") with the commands, and Task 10 owns the rest of it.
 
 `src/cli.rs`:

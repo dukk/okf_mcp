@@ -478,7 +478,7 @@ async fn only_an_owners_session_naming_its_team_reads_the_redacted_list() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_key_with_no_user_cannot_be_unlocked() {
+async fn a_key_with_no_user_cannot_unlock_for_itself_or_anyone_else() {
     let test = app().await;
     let root = every_catalog_admin(&test).await;
     // A pre-M12 key with no user; the generation bump makes the poll
@@ -494,20 +494,41 @@ async fn a_key_with_no_user_cannot_be_unlocked() {
     }
     test.app.poll().await.unwrap();
 
-    let (status, answer) = send(
-        &test,
-        "POST",
-        "/api/v1/unlocks",
-        Some(&root),
-        Some(body(json!({}))),
-    )
-    .await;
+    // Admin user `staff` exists, so naming it is a valid target for any
+    // caller with a user.
+    staff_root(&test).await;
 
-    assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
-    assert!(
-        answer["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("give it a user")),
-        "{answer}"
-    );
+    let mut answers = Vec::new();
+    for extra in [json!({}), json!({"user": "staff"})] {
+        answers.push(
+            send(
+                &test,
+                "POST",
+                "/api/v1/unlocks",
+                Some(&root),
+                Some(body(extra)),
+            )
+            .await,
+        );
+    }
+    let unlocks: i64 = sqlx::query_scalar("SELECT count(*) FROM unlocks")
+        .fetch_one(test.app.pool())
+        .await
+        .unwrap();
+    let entries: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_entries WHERE action = 'catalog.unlocked'")
+            .fetch_one(test.app.pool())
+            .await
+            .unwrap();
+
+    for (status, answer) in &answers {
+        assert_eq!(*status, StatusCode::FORBIDDEN, "{answer}");
+        assert!(
+            answer["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("give it a user")),
+            "{answer}"
+        );
+    }
+    assert_eq!((unlocks, entries), (0, 0));
 }
