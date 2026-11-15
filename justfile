@@ -23,6 +23,14 @@ test:
 test-ui:
     scripts/test-pg.sh run cargo test --test ui_e2e -- --test-threads=2
 
+# The dylint policy lints (docs/contributing/policy-lints.md). Needs
+# `cargo install --locked cargo-dylint dylint-link`; the first run builds the
+# lint library on its own pinned nightly (minutes). `--all-targets` compiles
+# test code too, so it is excluded properly. The level is warn until the
+# instrument sweep finishes (M15 Task 10 makes it `-D`).
+dylint:
+    DYLINT_RUSTFLAGS="-W uninstrumented_fn" cargo dylint --all -- --all-targets
+
 # Shell tests for tools/agentic (stub gh, fake clock; no Docker or network).
 test-agentic:
     timeout 120 tools/agentic/tests/run.sh

@@ -27,9 +27,11 @@ tools/agentic/gate.sh fmt
 tools/agentic/gate.sh lint
 tools/agentic/gate.sh test
 tools/agentic/gate.sh test-ui              # if you touch the console or tests/ui_e2e/
+tools/agentic/gate.sh dylint               # from M15 Task 8 on, for every task that adds functions
 tools/agentic/gate.sh narrow --lib -- <filter>   # while iterating
 ```
 
+- **`dylint`** runs the `uninstrumented_fn` policy lint (`docs/contributing/policy-lints.md`). It warns until M15 Task 10 and must not gain a warning in your code; after Task 10 it must be clean. The first run builds the lint library (minutes).
 - **Exit 124 means a test hung.** It is neither a pass nor an ordinary failure, so find the stuck test before anything else (the script prints how).
 - **Bound every wait.** Never run tests outside `gate.sh`, and never wait on a background job without a bound.
 - **Tests you write that hold a lock or wait on another task** wrap the wait in `tokio::time::timeout`.
