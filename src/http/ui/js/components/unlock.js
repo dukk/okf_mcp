@@ -2,7 +2,7 @@
 // for themselves, with a category, a reason and a time limit, before they
 // may open it (spec Part 6, "An unlock"). It posts /unlocks without `user`,
 // so the unlock is the caller's own; the server refuses a credential with
-// no user (403), a user who is not an admin (409 `Refused`), hours over
+// no user, or whose user is not an admin user (403; issue #447), hours over
 // `unlock_max_hours` or 0 (422 `LimitExceeded`), and a catalog a scoped
 // admin does not administer (404).
 //
@@ -37,11 +37,12 @@ export const CATEGORY_LABEL = Object.fromEntries(CATEGORIES);
 // The hour limit when the setting cannot be read (its default).
 const DEFAULT_MAX_HOURS = 4;
 
-// Whether this credential may ask for an unlock: an admin with a user. The
-// server is the judge (a user who is not an admin is refused, and the form
-// shows why); this only decides whether to offer the button.
+// Whether this credential may ask for an unlock: an admin credential whose
+// user is an admin user (whoami's `user_admin`; only operator staff make
+// unlocks, issue #447). The server is the judge (it refuses anyone else, and
+// the form shows why); this only decides whether to offer the button.
 export function canUnlock() {
-    return store.whoami?.access === 'admin' && !!store.whoami?.user;
+    return store.whoami?.access === 'admin' && !!store.whoami?.user && store.whoami?.user_admin === true;
 }
 
 // The pending-write key of an unlock of `catalog`.

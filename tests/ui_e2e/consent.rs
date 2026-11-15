@@ -1,11 +1,13 @@
 //! The OAuth consent page in a real browser, with no console errors or CSP
 //! violations: the sign-in code path (step 1, step 2, Approve), and a
 //! person who signs in on the way and approves catalogs from their
-//! ceiling. Both end with the redirect to the client. The client's redirect
-//! URI is on another port, so the CSP's `form-action` must name its origin
-//! for the hand-off to work.
+//! ceiling. Both end with the hand-off to the client, on another port. A
+//! third journey's redirect URI redirects again, to yet another origin (as
+//! `www.` to the bare domain does): Approve must still get there, which a
+//! 303 under the consent page's `form-action` could not (issue #435).
 
-use axum::response::Html;
+use axum::extract::RawQuery;
+use axum::response::{Html, Redirect};
 use axum::routing::get;
 use axum::Router;
 use chrono::{TimeDelta, Utc};
@@ -44,16 +46,48 @@ async fn callback_host() -> String {
     base
 }
 
+/// Serves `/callback` on its own port as a 308 to `to`, query kept: a
+/// redirect URI that redirects again, to another origin.
+///
+/// # Returns
+/// Its base URL, `http://127.0.0.1:<port>`.
+async fn hop_host(to: String) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let base = format!("http://{}", listener.local_addr().expect("address"));
+    let router = Router::new().route(
+        "/callback",
+        // `move` hands the closure its own copy of `to`; each request clones
+        // it again for its `async` block.
+        get(move |RawQuery(query): RawQuery| {
+            let to = to.clone();
+            async move { Redirect::permanent(&format!("{to}?{}", query.unwrap_or_default())) }
+        }),
+    );
+    tokio::spawn(async move { axum::serve(listener, router).await });
+    base
+}
+
 /// A server whose `public_url` is its own address, a registered DCR client
-/// whose redirect URI is [`callback_host`]'s, and the authorize URL for it.
+/// whose redirect URI is [`callback_host`]'s (or a [`hop_host`]'s in front
+/// of it), and the authorize URL for it.
 struct Journey {
     server: TestServer,
     client_id: String,
     redirect_uri: String,
+    /// The client page the browser lands on: `redirect_uri`, or where its
+    /// hop sends it.
+    landing: String,
 }
 
 impl Journey {
     async fn start() -> Self {
+        Self::start_via(false).await
+    }
+
+    /// [`Journey::start`], with the redirect URI a [`hop_host`] when `hop`.
+    async fn start_via(hop: bool) -> Self {
         let server = TestServer::start_with(
             vec![
                 ("main", files(&[("index.md", "# Main\n")])),
@@ -65,7 +99,12 @@ impl Journey {
             },
         )
         .await;
-        let redirect_uri = format!("{}/callback", callback_host().await);
+        let landing = format!("{}/callback", callback_host().await);
+        let redirect_uri = if hop {
+            format!("{}/callback", hop_host(landing.clone()).await)
+        } else {
+            landing.clone()
+        };
         // `insert_dcr` takes the cap of unbound clients and returns the stored
         // client (whose id Postgres picks), or `None` at the cap.
         let redirect_uris = [redirect_uri.clone()];
@@ -87,6 +126,7 @@ impl Journey {
             server,
             client_id: client.client_id,
             redirect_uri,
+            landing,
         }
     }
 
@@ -123,20 +163,31 @@ impl Journey {
     }
 }
 
-/// Waits for the client's page and checks the redirect carried a code and
-/// the state.
-fn assert_back_at_the_client(ui: &Ui, redirect_uri: &str) {
+/// Waits for the client's page, `landing`, and checks the hand-off carried
+/// a code and the state.
+fn assert_back_at_the_client(ui: &Ui, landing: &str) {
     ui.wait_visible("#done");
     let href = ui.eval("() => location.href", serde_json::json!(null));
     let href = href.as_str().unwrap_or_default();
-    assert!(href.starts_with(redirect_uri), "back at the client: {href}");
+    assert!(href.starts_with(landing), "back at the client: {href}");
     assert!(href.contains("code=okfac_"), "with a code: {href}");
     assert!(href.contains("state=xyz"), "with the state: {href}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_person_enters_a_code_approves_and_lands_back_at_the_client() {
-    let journey = Journey::start().await;
+    approve_with_a_code(Journey::start().await).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn approve_reaches_a_client_whose_redirect_uri_redirects_to_another_origin() {
+    let journey = Journey::start_via(true).await;
+    assert_ne!(journey.redirect_uri, journey.landing, "a hop in between");
+    approve_with_a_code(journey).await;
+}
+
+/// The sign-in code path through Approve, then the grant it made.
+async fn approve_with_a_code(journey: Journey) {
     let catalogs = ["main".to_string()];
     let code = code_rows::create(
         &journey.server.db.pool,
@@ -157,7 +208,7 @@ async fn a_person_enters_a_code_approves_and_lands_back_at_the_client() {
     .code;
     // The admin-minted sign-in code path, with no session.
     let authorize = journey.authorize(&[("signin", "code")]);
-    let redirect_uri = journey.redirect_uri.clone();
+    let landing = journey.landing.clone();
 
     let ran = drive(journey.server.base.clone(), move |ui| {
         ui.page
@@ -169,7 +220,7 @@ async fn a_person_enters_a_code_approves_and_lands_back_at_the_client() {
         ui.wait_text("#consent-summary", "write");
         assert!(ui.text("#consent-summary").contains("example-actor"));
         ui.click("#consent-approve");
-        assert_back_at_the_client(ui, &redirect_uri);
+        assert_back_at_the_client(ui, &landing);
     })
     .await;
     if !ran {
@@ -215,7 +266,7 @@ async fn a_person_signs_in_on_the_way_and_approves_from_their_ceiling() {
     }
     journey.server.app.poll().await.expect("poll");
     let authorize = journey.authorize(&[]);
-    let redirect_uri = journey.redirect_uri.clone();
+    let landing = journey.landing.clone();
 
     let ran = drive(journey.server.base.clone(), move |ui| {
         ui.page
@@ -234,7 +285,7 @@ async fn a_person_signs_in_on_the_way_and_approves_from_their_ceiling() {
         ui.select("#consent-level-main", "write");
         ui.select("#consent-default", "main");
         ui.click("#consent-approve");
-        assert_back_at_the_client(ui, &redirect_uri);
+        assert_back_at_the_client(ui, &landing);
     })
     .await;
     if !ran {

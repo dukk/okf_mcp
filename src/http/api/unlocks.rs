@@ -3,11 +3,11 @@
 //! functions.
 //!
 //! Access:
-//! - creating needs an admin credential at `admin` on the catalog. The
-//!   unlock is for the caller's own user unless the body names another,
-//!   which needs an admin that reaches every catalog. A credential with no
-//!   user cannot be unlocked (403). The store refuses a user who is not an
-//!   admin (409);
+//! - creating needs an admin credential at `admin` on the catalog whose
+//!   own user is an admin user (403 otherwise, and for a credential with no
+//!   user; issue #447). The unlock is for the caller's own user unless the
+//!   body names another, which needs an admin that reaches every catalog.
+//!   The store refuses a target user who is not an admin (409);
 //! - an admin reads full records (the reason and the unlocked staff
 //!   member), a scoped admin only those of the catalogs it administers;
 //! - a team's owner, through a console session only and naming the team
@@ -15,7 +15,9 @@
 //!   Decisions 14 and 18): the category, the times, the state and the
 //!   tallies, by "an operator", never the reason or who it was;
 //! - ending needs an admin; a scoped admin ends only the unlocks of the
-//!   catalogs it administers (any other id is 404, like an unknown one);
+//!   catalogs it administers (any other id is 404, like an unknown one).
+//!   Ending needs no admin user (issue #447): it only takes access away,
+//!   so any admin credential that administers the catalog may close it;
 //! - a provisioner is refused by the provisioner gate, and anyone else 403.
 
 use std::sync::Arc;
@@ -211,10 +213,11 @@ fn administers(principal: &Principal, catalog: &str) -> bool {
 /// 201 with the [`UnlockView`].
 ///
 /// # Errors
-/// 403 below admin, for a credential with no user (whether or not the body
-/// names a user), or naming another user without reaching every catalog; 404 for a catalog the caller does not
-/// administer or that does not exist, or an unknown user; 409 for a user
-/// who is not an admin; 422 for hours over `unlock_max_hours` (or 0), a
+/// 403 below admin, for a credential with no user or whose user is not an
+/// admin user (whether or not the body names a user), or naming another
+/// user without reaching every catalog; 404 for a catalog the caller does
+/// not administer or that does not exist, or an unknown user; 409 for a
+/// target user who is not an admin; 422 for hours over `unlock_max_hours` (or 0), a
 /// blank or over-long reason, or a bad body; 500 for a database failure.
 async fn create_unlock(
     State(app): State<Arc<App>>,
@@ -240,6 +243,22 @@ async fn create_unlock(
         }
         .into());
     };
+    // Only operator staff make unlocks (spec Part 6, decided 2026-11-15,
+    // issue #447): the credential's own user must be an admin user, so the
+    // audit log's granting person is always staff. Refused here, from the
+    // key cache, before any target is chosen; `unlocks::create` checks it
+    // again under the user's lock, so a demotion committed meanwhile is
+    // refused too.
+    let staff = principal
+        .user_id
+        .as_deref()
+        .is_some_and(|id| principal.gates.admins.contains(id));
+    if !staff {
+        return Err(OkfError::Forbidden {
+            reason: format!("{own:?} is not an admin user; only operator staff make unlocks"),
+        }
+        .into());
+    }
     let user = match body.user.as_deref() {
         Some(named) if named != own => {
             require_every_catalog(&principal)?;
