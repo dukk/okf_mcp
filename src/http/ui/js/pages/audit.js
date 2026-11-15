@@ -12,11 +12,12 @@
 // drawn, marked as possibly out of date, with its reason on screen and
 // every control usable.
 import { h, fill } from '../core/dom.js';
-import { api, enc } from '../core/api.js';
+import { api } from '../core/api.js';
 import { store } from '../core/store.js';
 import { ago, when, count } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
 import { canAdministerPeople, freshAccount } from '../core/shell.js';
+import { userHash } from '../core/router.js';
 
 // The filters, by query parameter, in the order they are sent. Empty values
 // are left out, so the query names only what the reader chose.
@@ -50,7 +51,7 @@ function targetCell(entry, admin) {
         if (!person) return 'user an operator';
         const linked = admin && !person.startsWith('deleted user');
         return h('span', {}, 'user ',
-            linked ? h('a', { href: `#/users/${enc(person)}` }, person) : person);
+            linked ? h('a', { href: userHash(person) }, person) : person);
     }
     const label = name ?? person ?? 'an operator';
     return h('span', {}, `${kind} `, h('code', {}, label),

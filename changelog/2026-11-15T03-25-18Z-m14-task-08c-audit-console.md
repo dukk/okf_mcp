@@ -20,7 +20,9 @@ Issue #404, part of epic #390. Plan:
   cookie), through `request(..., { raw: true })`.
 - An `Audit` nav link in its own "Records" group, shown to every-catalog
   admins and to every account session (`shell.js`' `shows("audit")`).
-- `#/users/<name>` opens that user's drawer on the Users page.
+- `#/users/detail/<name>` (`core/router.js`' `userHash`) opens that user's
+  drawer on the Users page; a route of its own, so a user named
+  `unassigned` is not taken for the unassigned view.
 - `tests/ui_e2e/audit.rs`: `an_admin_filters_the_log_by_action_and_exports_it`,
   `an_owner_reads_its_team_and_sees_an_operator`,
   `a_late_table_load_never_draws_over_a_newer_filter` and
@@ -28,6 +30,12 @@ Issue #404, part of epic #390. Plan:
   `the_rows_drawn_keep_their_load_more_through_failed_and_overtaken_reads`.
 - `tools/agentic/lessons.md`: a paged list's committed cursor survives a
   failed or overtaken read.
+- `a_user_named_unassigned_opens_its_own_drawer_from_the_log`.
+- `Ui::download` in `tests/ui_e2e/harness.rs`: clicks a control and returns
+  the file Chromium saved (its suggested name and text), through the
+  harness's own DevTools connection (`DevTools`, formerly
+  `VirtualAuthenticator`), since rustwright 0.3 enables downloads only from
+  its Python binding. The export journeys parse the downloaded JSON Lines.
 
 ## Changed
 

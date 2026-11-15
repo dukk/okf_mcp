@@ -39,6 +39,16 @@ async fn call(server: &TestServer, key: &str, method: &str, path: &str, body: Va
     );
 }
 
+/// The records of a JSON Lines download, one per line.
+fn json_lines(text: &str) -> Vec<Value> {
+    let entries: Vec<Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("each line is JSON"))
+        .collect();
+    assert!(!entries.is_empty(), "the export is empty");
+    entries
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_admin_filters_the_log_by_action_and_exports_it() {
     let server = server().await;
@@ -56,20 +66,65 @@ async fn an_admin_filters_the_log_by_action_and_exports_it() {
         ui.wait_text("#audit-table", "alice");
         ui.wait_text_gone("#audit-table", "catalog.created");
         // The user links to its drawer, which lists its sign-ins.
-        ui.click("#audit-table a[href='#/users/alice']");
+        ui.click("#audit-table a[href='#/users/detail/alice']");
         ui.wait_visible("#drawer");
         ui.wait_text("#drawer", "alice");
         ui.click("#drawer-close");
         ui.open("/audit");
         ui.select("#audit-action", "user.created");
         ui.wait_text_gone("#audit-table", "catalog.created");
-        // The export asks with the filters shown, through the console's own
-        // fetch (and so its credential), not a plain link.
-        ui.hold_next("GET", "/api/v1/audit/export?action=user.created");
-        ui.click("#audit-export");
-        assert_eq!(ui.held_matches(), 1);
-        ui.release_held();
+        // The export downloads `audit.jsonl`, from a blob the page made of
+        // its own fetch (and so with its credential), holding the entries
+        // the filter selects.
+        let (name, text) = ui.download("#audit-export");
+        assert_eq!(name, "audit.jsonl");
+        let entries = json_lines(&text);
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry["action"] == "user.created"),
+            "the export ignored the action filter: {text}"
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry["target"]["person"] == "alice"),
+            "alice's user.created is not in the export: {text}"
+        );
         ui.wait_hidden("#audit-error");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_user_named_unassigned_opens_its_own_drawer_from_the_log() {
+    let server = server().await;
+    let admin = server.key("console-admin", Access::Admin, &[], None).await;
+    call(
+        &server,
+        &admin,
+        "POST",
+        "/api/v1/users",
+        json!({"name": "unassigned"}),
+    )
+    .await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/audit");
+        ui.select("#audit-action", "user.created");
+        ui.wait_text("#audit-table", "user unassigned");
+        // The link by its text, whatever route it names.
+        let clicked = ui.eval(
+            "() => { const link = [...document.querySelectorAll('#audit-table a')] \
+             .find(a => a.textContent === 'unassigned'); link?.click(); return !!link; }",
+            Value::Null,
+        );
+        assert_eq!(clicked, json!(true), "no link to the user unassigned");
+        ui.wait_visible("#drawer");
+        ui.wait_text("#drawer", "unassigned");
+        ui.wait_visible("#users-table");
+        // Not the view of what has no user or owner.
+        assert_eq!(ui.text("#unassigned"), "");
     })
     .await;
 }
@@ -106,11 +161,27 @@ async fn an_owner_reads_its_team_and_sees_an_operator() {
         ui.wait_text("#audit-table", "team.member_added");
         ui.wait_text("#audit-table", "an operator");
         ui.wait_text_gone("#audit-table", "console-admin");
-        // The export carries the owner's team.
-        ui.hold_next("GET", "/api/v1/audit/export?team=family");
-        ui.click("#audit-export");
-        assert_eq!(ui.held_matches(), 1);
-        ui.release_held();
+        // The export downloads the owner's team's entries, as the owner
+        // sees them.
+        let (name, text) = ui.download("#audit-export");
+        assert_eq!(name, "audit.jsonl");
+        let entries = json_lines(&text);
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry["action"] == "team.member_added"),
+            "the export misses the member added: {text}"
+        );
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry["teams"] == json!(["family"])),
+            "the export holds another team's entries: {text}"
+        );
+        assert!(
+            !text.contains("console-admin"),
+            "the export names staff: {text}"
+        );
         ui.wait_hidden("#audit-error");
     })
     .await;
