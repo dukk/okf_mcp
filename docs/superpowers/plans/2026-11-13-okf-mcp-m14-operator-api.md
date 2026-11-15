@@ -3343,6 +3343,14 @@ git commit -m "feat(audit): record team, membership, suspension, catalog and imp
 > unchanged. The provisioner every-use audit design gap is tracked by #423,
 > not implemented or claimed complete here.
 
+> **Corrected (issue #398, 2026-11-15).** `grant_by_id` and `ungrant_by_id`
+> take an exact id, so they reach an OAuth grant too: like revoke and
+> assignment, their entries target `Grant` for kind `oauth` (one helper,
+> `keys::key_target`, picks `Key` or `Grant` for every key and grant
+> entry). A credential deleted with its owner while
+> `lock_credential_people` waited is left to the caller's usual unknown
+> answer, not refused for retry. No later task assumes `Key` here.
+
 **Files:** `src/store/keys.rs`, `src/store/oauth/codes.rs`, `src/store/oauth/grants.rs`, `src/cli.rs` (`run_key`, `run_oauth`), `src/http/api/keys.rs`, `src/http/api/oauth.rs`, `src/http/api/me.rs`, the consent and token handlers that call `grants::create_self_issued` and `codes::redeem` (`grep -rn "create_self_issued\|codes::redeem" src`), every test caller, `docs/operations.md`
 
 | Function (new signature; `audit: &AuditActor` before `now`) | Action | Target, person | Teams | Details |
@@ -3350,8 +3358,8 @@ git commit -m "feat(audit): record team, membership, suspension, catalog and imp
 | `keys::create_with_id`, `keys::create` | `key.created` | `Key(id)`, person = user | `key_teams` (after the grants are inserted) | `{"access", "all_catalogs", "catalogs": n, "maintenance_report", "self_issued": false, "expires": bool}` |
 | `keys::create_self_issued(pool, new, max_live, audit, now)` | `key.created` | `Key`, person = user | `key_teams` | as above with `"self_issued": true` |
 | `keys::revoke_target`, `keys::revoke_by_id` | `key.revoked`, or `oauth.grant_revoked` for an OAuth grant | `Key` or `Grant` | `key_teams` | `{}` |
-| `keys::grant_target`, `grant_by_id` | `key.catalog_granted` | `Key` | `catalog_teams` of the catalog | `{"catalog"}` |
-| `keys::ungrant_target`, `ungrant_by_id` | `key.catalog_ungranted` | `Key` | `catalog_teams` | `{"catalog"}` |
+| `keys::grant_target`, `grant_by_id` | `key.catalog_granted` | `Key` or `Grant` | `catalog_teams` of the catalog | `{"catalog"}` |
+| `keys::ungrant_target`, `ungrant_by_id` | `key.catalog_ungranted` | `Key` or `Grant` | `catalog_teams` | `{"catalog"}` |
 | `keys::assign_user_by_id`, `assign_user_target` | `key.user_assigned` | `Key` or `Grant`, person = new user | `key_teams` | `{}` |
 | `codes::assign_user(pool, id, user, audit, now)` | `key.user_assigned` | `Code`, person = new user | none | `{}` |
 | `keys::set_maintenance_report_target`, `_by_id` (when changed) | `key.report_flag_changed` | `Key` | `key_teams` | `{"from", "to"}` |

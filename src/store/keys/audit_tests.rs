@@ -542,6 +542,51 @@ async fn owner_deleted_while_assign_locks_answers_not_found() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn grant_and_ungrant_by_id_name_an_oauth_grant_as_a_grant() {
+    use crate::store::oauth::testing::{insert_client, insert_grant};
+    let db = test_db().await;
+    let now = Utc::now();
+    let actor = AuditActor::system("grant-target-test");
+    for name in ["main", "other"] {
+        catalogs::create(
+            &db.pool,
+            &catalogs::NewCatalog {
+                name,
+                description: "",
+                owner_team: TEST_TEAM,
+            },
+            &actor,
+            now,
+        )
+        .await
+        .unwrap();
+    }
+    let client = insert_client(
+        &db.pool,
+        "https://client.example.com/client.json",
+        "Example",
+        now,
+    )
+    .await;
+    let grant = insert_grant(&db.pool, &client, Access::Read, &["main"], now).await;
+    grant_by_id(&db.pool, &grant, "other", &actor, now)
+        .await
+        .unwrap();
+    ungrant_by_id(&db.pool, &grant, "other", &actor, now)
+        .await
+        .unwrap();
+    for action in ["key.catalog_granted", "key.catalog_ungranted"] {
+        let recorded = entries(&db.pool, action).await;
+        assert_eq!(recorded.len(), 1, "one {action} entry");
+        assert_eq!(
+            recorded[0].target_kind, "grant",
+            "{action} names an OAuth grant as a grant"
+        );
+        assert_eq!(recorded[0].target.as_deref(), Some(grant.as_str()));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn an_absent_legacy_reference_first_resolution_can_wait() {
     let db = test_db().await;
     sqlx::query("INSERT INTO api_keys (id, name, sha256, access, all_catalogs, actor, created_at) VALUES ('legacy', 'legacy', sha256('legacy'::bytea), 'read', true, 'example-agent', now())")

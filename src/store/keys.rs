@@ -1034,7 +1034,7 @@ async fn set_maintenance_report_with(
         record_change(
             &mut tx,
             &id,
-            Action::KeyReportFlagChanged,
+            |_| Action::KeyReportFlagChanged,
             audit,
             serde_json::json!({"from": !enabled, "to": enabled}),
             now,
@@ -1117,14 +1117,14 @@ async fn revoke_with(
             reason: format!("no active key {id:?}"),
         });
     }
-    let kind: String = sqlx::query_scalar("SELECT kind FROM api_keys WHERE id = $1")
-        .bind(&id)
-        .fetch_one(&mut *tx)
-        .await?;
-    let action = if kind == "oauth" {
-        Action::OauthGrantRevoked
-    } else {
-        Action::KeyRevoked
+    // `|target| ...` is a closure (Python's `lambda target: ...`): the
+    // action follows the target `record_change` reads once.
+    let action = |target: &Target<'_>| {
+        if matches!(target, Target::Grant(_)) {
+            Action::OauthGrantRevoked
+        } else {
+            Action::KeyRevoked
+        }
     };
     record_change(&mut tx, &id, action, audit, serde_json::json!({}), now).await?;
     bump_admin_generation(&mut tx).await?;
@@ -1228,12 +1228,13 @@ async fn grant_with(
         return Ok(id);
     }
     let teams = audit::catalog_teams(&mut tx, catalog.id).await?;
+    let target = key_target(&mut tx, &id).await?;
     audit::record(
         &mut tx,
         audit,
         &Entry {
             action: Action::KeyCatalogGranted,
-            target: Target::Key(&id),
+            target,
             person: None,
             teams: &teams,
             details: serde_json::json!({"catalog": catalog.name}),
@@ -1344,12 +1345,13 @@ async fn ungrant_with(
         return Ok(id);
     }
     let teams = audit::catalog_teams(&mut tx, catalog.id).await?;
+    let target = key_target(&mut tx, &id).await?;
     audit::record(
         &mut tx,
         audit,
         &Entry {
             action: Action::KeyCatalogUngranted,
-            target: Target::Key(&id),
+            target,
             person: None,
             teams: &teams,
             details: serde_json::json!({"catalog": catalog.name}),
@@ -1488,20 +1490,13 @@ async fn set_user(
         .execute(&mut *conn)
         .await?;
     let teams = audit::key_teams(conn, id).await?;
-    let kind: String = sqlx::query_scalar("SELECT kind FROM api_keys WHERE id = $1")
-        .bind(id)
-        .fetch_one(&mut *conn)
-        .await?;
+    let target = key_target(conn, id).await?;
     audit::record(
         conn,
         audit,
         &Entry {
             action: Action::KeyUserAssigned,
-            target: if kind == "oauth" {
-                Target::Grant(id)
-            } else {
-                Target::Key(id)
-            },
+            target,
             person: Some(&user_id),
             teams: &teams,
             details: serde_json::json!({}),
@@ -1513,25 +1508,57 @@ async fn set_user(
     Ok(Some(name))
 }
 
+/// How entries name the `api_keys` row `id`: [`Target::Grant`] for an OAuth
+/// grant (kind `oauth`), else [`Target::Key`]. Every key and grant change
+/// records through this, so a grant is never logged as a key.
+///
+/// # Arguments
+/// * `conn` - the change's transaction.
+/// * `id` - the row's immutable id; the target borrows it (lifetime `'a`).
+///
+/// # Returns
+/// The target.
+///
+/// # Errors
+/// [`OkfError::Database`], including when no row has this id (callers have
+/// just locked or changed it).
+async fn key_target<'a>(conn: &mut PgConnection, id: &'a str) -> Result<Target<'a>, OkfError> {
+    let kind: String = sqlx::query_scalar("SELECT kind FROM api_keys WHERE id = $1")
+        .bind(id)
+        .fetch_one(&mut *conn)
+        .await?;
+    Ok(if kind == KeyKind::OAuth.as_str() {
+        Target::Grant(id)
+    } else {
+        Target::Key(id)
+    })
+}
+
 /// Records a key or grant change with its current grant scope.
+///
+/// # Arguments
+/// * `conn` - the change's transaction.
+/// * `id` - the key's or grant's id.
+/// * `action` - picks the action from the row's target ([`key_target`]), so
+///   a change whose action differs for a grant reads the kind only once.
+///   `impl FnOnce(..)` accepts any closure called at most once.
+/// * `actor` - who makes the change.
+/// * `details` - the entry's details.
+/// * `now` - the change time.
+///
+/// # Errors
+/// [`OkfError::Database`] and the errors of [`audit::record`].
 async fn record_change(
     conn: &mut PgConnection,
     id: &str,
-    action: Action,
+    action: impl FnOnce(&Target<'_>) -> Action,
     actor: &AuditActor,
     details: serde_json::Value,
     now: DateTime<Utc>,
 ) -> Result<(), OkfError> {
     let teams = audit::key_teams(conn, id).await?;
-    let kind: String = sqlx::query_scalar("SELECT kind FROM api_keys WHERE id = $1")
-        .bind(id)
-        .fetch_one(&mut *conn)
-        .await?;
-    let target = if kind == "oauth" {
-        Target::Grant(id)
-    } else {
-        Target::Key(id)
-    };
+    let target = key_target(conn, id).await?;
+    let action = action(&target);
     audit::record(
         conn,
         actor,
