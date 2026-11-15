@@ -39,7 +39,12 @@ const MEANING = {
     product_name: 'Product name in email, the sign-in and consent pages and this console',
     support_contact: 'Email address or https:// URL shown as "Questions? Contact ..." ("none": no line)',
     audit_retention_days: 'Days audit entries are kept before the daily prune deletes them (30 to 3650)',
+    require_unlock: 'Make operator staff unlock a customer\'s catalog, with a reason and a time limit, before opening it',
+    unlock_max_hours: 'Longest unlock, in hours (1 to 72)',
+    unlock_notify_owners: 'Email a catalog\'s owners when operator staff unlock it',
 };
+// The settings that are on or off, chosen from true and false.
+const BOOLEAN_SETTINGS = new Set(['password_sign_in', 'require_unlock', 'unlock_notify_owners']);
 // The settings whose change shows in this console's own shell.
 const BRANDING = new Set(['product_name']);
 // GET /mail/queue's statuses, as pill kinds.
@@ -89,7 +94,7 @@ export async function render(main) {
     const valueControl = row => {
         const attrs = { class: 'settings-input', 'aria-label': row.key, disabled: !manager,
                         dataset: { test: `setting-input-${row.key}` } };
-        const input = row.key === 'password_sign_in'
+        const input = BOOLEAN_SETTINGS.has(row.key)
             ? h('select', attrs, ['true', 'false'].map(value => h('option', { value, selected: value === row.value }, value)))
             : h('input', { ...attrs, value: row.value, autocomplete: 'off' });
         const save = guard(h('button', {

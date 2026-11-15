@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::OkfError;
 use crate::maintenance::types::Disposition;
 use crate::mcp::context::ToolContext;
+use crate::store::audit::AccessKind;
 use crate::store::keys::Access;
 use crate::store::maintenance::{reports, runs};
 
@@ -89,7 +90,12 @@ pub(crate) async fn maintenance_get_run(
     params: MaintenanceGetRunParams,
 ) -> Result<MaintenanceResult<runs::RunReport>, OkfError> {
     let state = ctx.one(Some(&params.catalog))?;
-    ctx.principal().require(Access::Read, state.name())?;
+    // The whole content check, before `admit`, which ignores refusals.
+    ctx.principal()
+        .require_contents(Access::Read, state.name(), ctx.app().clock().now())?;
+    // Its work, findings and evidence describe the documents: a read of
+    // the contents (a run list or a count is not).
+    ctx.admit(&state, AccessKind::Read)?;
     let mut result = runs::get_run(ctx.app().pool(), state.id(), &params.run_id).await?;
     for work in &mut result.work {
         pin_path(&mut work.pin);
@@ -125,7 +131,12 @@ pub(crate) async fn maintenance_list_findings_by(
     disposition: Option<Disposition>,
 ) -> Result<MaintenanceResult<runs::Page<reports::FindingRecord>>, OkfError> {
     let state = ctx.one(Some(&params.catalog))?;
-    ctx.principal().require(Access::Read, state.name())?;
+    // The whole content check, before `admit`, which ignores refusals.
+    ctx.principal()
+        .require_contents(Access::Read, state.name(), ctx.app().clock().now())?;
+    // Its work, findings and evidence describe the documents: a read of
+    // the contents (a run list or a count is not).
+    ctx.admit(&state, AccessKind::Read)?;
     let mut result = reports::list_findings_with(
         ctx.app().pool(),
         state.id(),
@@ -145,7 +156,12 @@ pub(crate) async fn maintenance_get_finding(
     params: MaintenanceGetFindingParams,
 ) -> Result<MaintenanceResult<reports::FindingRecord>, OkfError> {
     let state = ctx.one(Some(&params.catalog))?;
-    ctx.principal().require(Access::Read, state.name())?;
+    // The whole content check, before `admit`, which ignores refusals.
+    ctx.principal()
+        .require_contents(Access::Read, state.name(), ctx.app().clock().now())?;
+    // Its work, findings and evidence describe the documents: a read of
+    // the contents (a run list or a count is not).
+    ctx.admit(&state, AccessKind::Read)?;
     let mut result = reports::get_finding(ctx.app().pool(), state.id(), &params.finding_id).await?;
     finding_paths(&mut result);
     Ok(MaintenanceResult::new(state.name(), result))

@@ -361,6 +361,58 @@ impl Ui {
         });
     }
 
+    /// Clicks `selector` and waits for the file it downloads, as Chromium
+    /// saves it. rustwright reports a download's name but cannot enable
+    /// downloads from Rust (only its Python binding can), so this opens its
+    /// own DevTools connection: `Browser.setDownloadBehavior` (with events)
+    /// for the page's browser context into a fresh directory, then
+    /// `Browser.downloadWillBegin` and `Browser.downloadProgress` until the
+    /// file is complete.
+    ///
+    /// # Arguments
+    /// * `selector` - the control that starts the download.
+    ///
+    /// # Returns
+    /// The suggested file name and the file's text.
+    ///
+    /// # Panics
+    /// When no download starts or completes within [`WAIT`], or a DevTools
+    /// call fails.
+    pub fn download(&self, selector: &str) -> (String, String) {
+        let mut devtools = DevTools::connect(&self.browser);
+        let target = devtools.call(
+            None,
+            "Target.getTargetInfo",
+            serde_json::json!({ "targetId": self.page.target_id() }),
+        );
+        let directory = tempfile::tempdir().expect("a download directory");
+        let mut behavior = serde_json::json!({
+            "behavior": "allowAndName",
+            "downloadPath": directory.path(),
+            "eventsEnabled": true,
+        });
+        if let Some(context) = target["targetInfo"]["browserContextId"].as_str() {
+            behavior["browserContextId"] = serde_json::json!(context);
+        }
+        devtools.call(None, "Browser.setDownloadBehavior", behavior);
+        self.click(selector);
+        let deadline = Instant::now() + WAIT;
+        let begun = devtools.event("Browser.downloadWillBegin", deadline, |_| true);
+        let guid = begun["guid"].as_str().expect("a download guid").to_string();
+        let name = begun["suggestedFilename"]
+            .as_str()
+            .expect("a suggested name")
+            .to_string();
+        let done = devtools.event("Browser.downloadProgress", deadline, |params| {
+            params["guid"] == guid.as_str() && params["state"] != "inProgress"
+        });
+        assert_eq!(done["state"], "completed", "the download did not complete");
+        // `allowAndName` saves the file under its guid.
+        let text = std::fs::read_to_string(directory.path().join(&guid))
+            .expect("read the downloaded file");
+        (name, text)
+    }
+
     /// Gives the page a virtual WebAuthn authenticator (Chromium DevTools'
     /// `WebAuthn` domain): a platform authenticator that keeps discoverable
     /// credentials, verifies the user and needs no touch. It lives while the
@@ -368,10 +420,8 @@ impl Ui {
     ///
     /// # Panics
     /// If Chromium refuses a DevTools call.
-    pub fn virtual_authenticator(&self) -> VirtualAuthenticator {
-        let (socket, _) =
-            tungstenite::connect(self.browser.ws_endpoint()).expect("connect to DevTools");
-        let mut devtools = VirtualAuthenticator { socket, next_id: 0 };
+    pub fn virtual_authenticator(&self) -> DevTools {
+        let mut devtools = DevTools::connect(&self.browser);
         let attached = devtools.call(
             None,
             "Target.attachToTarget",
@@ -421,15 +471,79 @@ impl Ui {
     }
 }
 
-/// A DevTools connection holding a virtual authenticator
-/// ([`Ui::virtual_authenticator`]); dropping it closes the connection,
-/// which removes the authenticator.
-pub struct VirtualAuthenticator {
+/// A DevTools connection of the harness's own, beside rustwright's: it holds
+/// a virtual authenticator ([`Ui::virtual_authenticator`]) or a download
+/// directory's behaviour ([`Ui::download`]); dropping it closes the
+/// connection, which removes what it set.
+pub struct DevTools {
     socket: tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
     next_id: u64,
 }
 
-impl VirtualAuthenticator {
+impl DevTools {
+    /// Opens a connection to `browser`'s DevTools endpoint.
+    ///
+    /// # Panics
+    /// If the connection fails.
+    fn connect(browser: &Browser) -> Self {
+        let (socket, _) = tungstenite::connect(browser.ws_endpoint()).expect("connect to DevTools");
+        // A read timeout lets `event` give up at its deadline instead of
+        // blocking forever on a quiet socket.
+        if let tungstenite::stream::MaybeTlsStream::Plain(stream) = socket.get_ref() {
+            stream
+                .set_read_timeout(Some(Duration::from_millis(200)))
+                .expect("set a read timeout");
+        }
+        Self { socket, next_id: 0 }
+    }
+
+    /// The next JSON message, or `None` when the read timed out or the
+    /// message is not JSON text.
+    ///
+    /// # Panics
+    /// If the connection fails.
+    fn read_json(&mut self) -> Option<serde_json::Value> {
+        let message = match self.socket.read() {
+            Ok(message) => message,
+            // The read timeout: the caller looks at its clock and reads again.
+            Err(tungstenite::Error::Io(error))
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                return None
+            }
+            Err(error) => panic!("read from DevTools: {error}"),
+        };
+        serde_json::from_str(message.to_text().ok()?).ok()
+    }
+
+    /// Waits for the next `method` event whose params satisfy `wanted`,
+    /// skipping every other message.
+    ///
+    /// # Returns
+    /// The event's params.
+    ///
+    /// # Panics
+    /// When none arrives before `deadline`, or the connection fails.
+    fn event(
+        &mut self,
+        method: &str,
+        deadline: Instant,
+        wanted: impl Fn(&serde_json::Value) -> bool,
+    ) -> serde_json::Value {
+        loop {
+            assert!(Instant::now() < deadline, "no {method} event in time");
+            let Some(event) = self.read_json() else {
+                continue;
+            };
+            if event["method"] == method && wanted(&event["params"]) {
+                return event["params"].clone();
+            }
+        }
+    }
+
     /// Sends one DevTools command and waits for its answer, skipping the
     /// events that arrive meanwhile.
     ///
@@ -450,12 +564,10 @@ impl VirtualAuthenticator {
         self.socket
             .send(tungstenite::Message::text(command.to_string()))
             .expect("send a DevTools command");
+        let deadline = Instant::now() + WAIT;
         loop {
-            let message = self.socket.read().expect("read from DevTools");
-            let Ok(text) = message.to_text() else {
-                continue;
-            };
-            let Ok(reply) = serde_json::from_str::<serde_json::Value>(text) else {
+            assert!(Instant::now() < deadline, "no answer to {method} in time");
+            let Some(reply) = self.read_json() else {
                 continue;
             };
             if reply["id"] == self.next_id {

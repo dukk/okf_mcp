@@ -177,7 +177,13 @@ pub async fn run_once_with_deadline<C: CatalogClient, I: Inference + 'static>(
         Err(error) => {
             // Persist the run-level cause before cleanup can acknowledge valid
             // proposals or record a cancelled child as a separate work failure.
-            let stop_saved = if persistence(error) {
+            // A claim refused because the catalog opted out of maintenance
+            // is a skip: nothing was claimed, so no stop is recorded and the
+            // pending claim stays to be replayed, exactly, by the next run
+            // (the journal never discards it unacknowledged).
+            let skipped =
+                error == RunnerError::MaintenanceOff && controller.journal.run_id.is_none();
+            let stop_saved = if persistence(error) || skipped {
                 Ok(())
             } else {
                 controller.stop(error)
@@ -1035,6 +1041,7 @@ fn failure_kind(value: &str) -> Option<RunnerError> {
     [
         RunnerError::Config,
         RunnerError::Permission,
+        RunnerError::MaintenanceOff,
         RunnerError::Contract,
         RunnerError::Transport,
         RunnerError::LeaseLost,
@@ -1055,6 +1062,7 @@ fn kind(error: RunnerError) -> &'static str {
         RunnerError::Config => "config",
         RunnerError::Busy => "journal",
         RunnerError::Permission => "permission",
+        RunnerError::MaintenanceOff => "maintenance_off",
         RunnerError::Contract => "contract",
         RunnerError::Transport => "transport",
         RunnerError::LeaseLost => "lease_lost",

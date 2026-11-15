@@ -9,6 +9,7 @@ mod support;
 use okf_mcp::config::OidcProviderConfig;
 
 mod account;
+mod audit;
 mod browse;
 mod catalogs;
 mod changesets;
@@ -29,4 +30,5 @@ mod settings;
 mod signin;
 mod smoke;
 mod teams;
+mod unlocks;
 mod users;

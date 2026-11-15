@@ -113,6 +113,7 @@ fn valid_failure(value: &str) -> bool {
         value,
         "config"
             | "permission"
+            | "maintenance_off"
             | "contract"
             | "transport"
             | "lease_lost"

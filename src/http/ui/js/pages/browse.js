@@ -8,12 +8,13 @@
 import { $, h, clear, pill } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
-import { go, browseHash } from '../core/router.js';
+import { go, browseHash, route } from '../core/router.js';
 import { openDrawer } from '../core/drawer.js';
 import { ago, when, count } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
 import { segments } from '../components/segments.js';
 import { tree } from '../components/tree.js';
+import { canUnlock, openUnlock } from '../components/unlock.js';
 
 // Read through /documents; everything else is a concept.
 const DOCUMENTS = new Set(['index.md', 'log.md', 'AGENTS.md']);
@@ -60,6 +61,8 @@ export async function render(main, rest) {
         // A catalog whose owner team is suspended: say so, and point at
         // export, which still works.
         if (error?.body?.error === 'Suspended') showSuspended(view, where.catalog, error.body);
+        // A catalog operator staff must unlock first: say so, with Unlock.
+        else if (error?.body?.error === 'UnlockRequired') showLocked(view, where.catalog, error.body);
         return;
     }
     clear(side).append(tree(listing.documents, { catalog: where.catalog, selected: `/${where.path}` }));
@@ -85,6 +88,21 @@ function showSuspended(view, catalog, body) {
         h('p', {}, `Its team ${body.team} is suspended.`),
         body.notice ? h('p', {}, body.notice) : h('p', { class: 'muted' }, 'Ask the server operator for details.'),
         h('p', {}, h('a', { href: `#/transfer/${enc(catalog)}` }, 'Export a copy'))));
+}
+
+// A catalog an operator must unlock first (`body` is the 403's error body):
+// the reason, and the Unlock button for a credential that may ask for one.
+// Once unlocked, the page renders again, while it is still shown. As
+// showSuspended, every child goes through h() (core/dom.js, issue #302).
+function showLocked(view, catalog, body) {
+    clear(view).append(h('div', { id: 'browse-locked', class: 'notice', role: 'status' },
+        h('h2', {}, `${catalog} is locked`),
+        h('p', {}, body.message),
+        canUnlock()
+            ? h('button', { type: 'button', id: 'browse-unlock',
+                            onclick: () => openUnlock(catalog, { view, onDone: () => { if (view.isConnected) route(); } }) },
+                'Unlock')
+            : null));
 }
 
 // A folder without index.md: its documents, as links.

@@ -80,6 +80,7 @@ pub(crate) async fn app_at(
             replace: false,
             scope: ImportScope::Everything,
             expect_generation: None,
+            expect_catalog_id: None,
             actor: "tester",
             audit: &AuditActor::cli(),
             now: imported,
@@ -184,6 +185,7 @@ pub(crate) fn principal_with_reporting(
         kind: CredentialKind::ApiKey,
         user: None,
         user_id: None,
+        gates: Default::default(),
         suspended: Default::default(),
     })
 }
@@ -496,4 +498,117 @@ pub(crate) async fn stored_secret(
 /// If the cache does not know the key.
 pub(crate) fn cached_principal(test: &TestApp, secret: &str) -> Arc<Principal> {
     test.app.keys().find(secret).expect("the key is cached")
+}
+
+/// Creates user `staff` (display name "Staff Member", outside every test
+/// catalog's owner team) and an every-catalog admin key of it, and polls
+/// it in: an operator whose reads of the test catalogs are admin reads.
+///
+/// # Arguments
+/// * `test` - the app (once per test: the names cannot be taken twice).
+///
+/// # Returns
+/// The key's secret.
+///
+/// # Panics
+/// If the store refuses the user or the key, or the poll fails.
+pub(crate) async fn staff_root(test: &TestApp) -> String {
+    let pool = test.app.pool();
+    let new_user = crate::store::users::NewUser {
+        name: "staff",
+        display_name: "Staff Member",
+    };
+    crate::store::users::create(pool, &new_user, &AuditActor::cli(), Utc::now())
+        .await
+        .expect("create user staff");
+    let new_key = crate::store::keys::NewKey {
+        name: "staff-root",
+        access: Access::Admin,
+        maintenance_report: false,
+        grants: crate::store::keys::Grants::All,
+        default_catalog: None,
+        actor: "staff-root",
+        user: "staff",
+        self_issued: false,
+        expires_at: None,
+        levels: &[],
+    };
+    let secret = crate::store::keys::create_with_id(pool, &new_key, &AuditActor::cli(), Utc::now())
+        .await
+        .expect("create the staff key")
+        .key;
+    test.app.poll().await.expect("poll the staff key in");
+    secret
+}
+
+/// A key of user `staff` (made by [`staff_root`] first), reaching every
+/// catalog: an operator credential outside every test catalog's owner
+/// team, at any level, with or without the reporting flag (the
+/// maintenance runner is a non-admin reporting key).
+///
+/// # Arguments
+/// * `test` - the app.
+/// * `name` - the key's name and actor (once per test).
+/// * `access` - its level.
+/// * `maintenance_report` - whether it may report.
+///
+/// # Returns
+/// The key's secret, polled in.
+///
+/// # Panics
+/// If the store refuses the key or the poll fails.
+pub(crate) async fn staff_key(
+    test: &TestApp,
+    name: &str,
+    access: Access,
+    maintenance_report: bool,
+) -> String {
+    let new = crate::store::keys::NewKey {
+        name,
+        access,
+        maintenance_report,
+        grants: crate::store::keys::Grants::All,
+        default_catalog: None,
+        actor: name,
+        user: "staff",
+        self_issued: false,
+        expires_at: None,
+        levels: &[],
+    };
+    let secret =
+        crate::store::keys::create_with_id(test.app.pool(), &new, &AuditActor::cli(), Utc::now())
+            .await
+            .expect("create the staff key")
+            .key;
+    test.app.poll().await.expect("poll the staff key in");
+    secret
+}
+
+/// Turns the `require_unlock` setting on and polls it in (M14 Task 9b).
+///
+/// # Panics
+/// If the setting cannot be stored or the poll fails.
+pub(crate) async fn require_unlock(test: &TestApp) {
+    use crate::store::settings::{self, SettingKey};
+    settings::set(
+        test.app.pool(),
+        SettingKey::RequireUnlock,
+        "on",
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("turn require_unlock on");
+    test.app.poll().await.expect("poll the setting in");
+}
+
+/// Waits, at most 30 seconds, for every background access write the app has
+/// started ([`App::settle_access`]).
+///
+/// # Panics
+/// If the writes do not finish in time (a held lock, or a hung write).
+pub(crate) async fn settle_access(test: &TestApp) {
+    tokio::time::timeout(std::time::Duration::from_secs(30), test.app.settle_access())
+        .await
+        .expect("the background access writes finish within 30 seconds");
 }

@@ -32,6 +32,7 @@ use crate::okf::outline::Outline;
 use crate::okf::pystr::universal_newlines;
 use crate::okf::snapshot::DocKind;
 use crate::render::{to_html, Page};
+use crate::store::audit::AccessKind;
 use crate::store::history::content_at;
 use crate::store::keys::Access;
 
@@ -170,6 +171,8 @@ async fn tree(
 ) -> Result<Json<Tree>, AppError> {
     let ctx = context(&app, principal, requester);
     let state = ctx.one(Some(&catalog))?;
+    // The tree lists the catalog's documents: a read of its contents.
+    ctx.admit(&state, AccessKind::Read)?;
     let loaded = state.current();
     let documents = loaded
         .snapshot()
@@ -329,9 +332,9 @@ async fn revision(
     requester: Requester,
     Path((catalog, revision, path)): Path<(String, i32, String)>,
 ) -> Result<Json<RevisionView>, AppError> {
-    // This reads the store directly, so it checks access itself (before the
-    // principal moves into the context).
-    principal.require(Access::Read, &catalog)?;
+    // This reads the store directly, so it checks access itself, the unlock
+    // included (before the principal moves into the context).
+    principal.require_contents(Access::Read, &catalog, app.clock().now())?;
     let ctx = context(&app, principal, requester);
     // `history` resolves the path as the History tab spelled it (`.md`
     // optional) and answers 404 for a path that never existed.
@@ -627,6 +630,7 @@ mod tests {
             replace: true,
             scope: ImportScope::Everything,
             expect_generation: None,
+            expect_catalog_id: None,
             actor: "editor",
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),

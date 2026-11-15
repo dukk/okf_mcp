@@ -292,6 +292,7 @@ mod tests {
             replace: false,
             scope: ImportScope::Everything,
             expect_generation: None,
+            expect_catalog_id: None,
             actor: "test/import",
             audit: &AuditActor::cli(),
             now: at(1),

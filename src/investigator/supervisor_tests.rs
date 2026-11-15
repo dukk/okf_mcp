@@ -648,6 +648,102 @@ async fn investigator_supervisor_unknown_stop_closes_completed_server_run() {
         .any(|(_, r)| r.tool == AllowedTool::Close && r.args["state"] == "completed"));
 }
 #[tokio::test]
+async fn investigator_supervisor_skips_a_catalog_with_maintenance_off() {
+    let f = Fixture::new();
+    let mut c = f.client(1);
+    c.fail = Some((AllowedTool::Claim, RunnerError::MaintenanceOff));
+    let s = run(&f, &mut c, FakeInference::new(80)).await.unwrap();
+    assert_eq!(s.reason, "maintenance_off");
+    assert_eq!(
+        s.exit_code(),
+        0,
+        "a catalog that opted out is skipped, not failed"
+    );
+    assert_eq!(s.invocations, 0);
+    assert!(s.run_id.is_none(), "nothing was claimed");
+    let saved = f.store.load().unwrap().unwrap();
+    assert!(saved.stop_reason.is_none(), "a skip is not a stop");
+    let refused = saved.pending.expect("the claim stays for an exact replay");
+
+    // The owners turn it back on: the next run replays that claim, with its
+    // idempotency key, and works normally.
+    c.fail = None;
+    // A fresh process: real time for its readiness check, then paused again.
+    tokio::time::resume();
+    c.pause = true;
+    let s = run(&f, &mut c, FakeInference::new(80)).await.unwrap();
+    assert_eq!(s.reason, "completed");
+    assert_eq!(s.exit_code(), 0);
+    assert_eq!(s.reported, 1);
+    let claims: Vec<_> = c
+        .calls
+        .iter()
+        .filter(|(_, r)| r.tool == AllowedTool::Claim)
+        .map(|(_, r)| r.args["idempotency_key"].clone())
+        .collect();
+    assert_eq!(claims.len(), 2);
+    assert!(claims
+        .iter()
+        .all(|key| *key == refused.request.args["idempotency_key"]));
+}
+
+#[tokio::test]
+async fn investigator_supervisor_maintenance_off_mid_run_is_a_stop_not_a_skip() {
+    let f = Fixture::new();
+    let mut c = f.client(2);
+    c.fail = Some((AllowedTool::Renew, RunnerError::MaintenanceOff));
+    let s = run(&f, &mut c, FakeInference::new(80)).await.unwrap();
+    assert_eq!(s.reason, "maintenance_off");
+    assert_eq!(s.exit_code(), 4, "claimed work was left unfinished");
+    assert_eq!(
+        f.store.load().unwrap().unwrap().stop_reason.as_deref(),
+        Some("maintenance_off")
+    );
+}
+
+#[tokio::test]
+async fn investigator_supervisor_maintenance_off_at_close_is_a_stop_after_every_receipt() {
+    let f = Fixture::new();
+    let mut c = f.client(1);
+    // Every submission is acknowledged; the owners turn maintenance off
+    // before the close.
+    c.fail = Some((AllowedTool::Close, RunnerError::MaintenanceOff));
+    let s = run(&f, &mut c, FakeInference::new(80)).await.unwrap();
+    assert_eq!(s.reason, "maintenance_off");
+    assert_eq!((s.failed, s.skipped), (0, 0), "the work counters are clean");
+    assert!(s.run_id.is_some());
+    assert_eq!(
+        s.exit_code(),
+        4,
+        "a claimed run that did not close is no skip"
+    );
+    let saved = f.store.load().unwrap().unwrap();
+    assert!(!saved.terminal, "the run is not closed yet");
+    let close = saved.pending.expect("the close stays for an exact replay");
+    assert_eq!(close.request.tool, AllowedTool::Close);
+
+    // Once maintenance is on again, the next run replays that close and the
+    // journal ends; the first stop stays its reported reason.
+    c.fail = None;
+    tokio::time::resume();
+    c.pause = true;
+    let s = run(&f, &mut c, FakeInference::new(80)).await.unwrap();
+    assert_eq!(s.reason, "maintenance_off");
+    assert_eq!(s.exit_code(), 4);
+    assert!(f.store.load().unwrap().unwrap().terminal);
+    let closes: Vec<_> = c
+        .calls
+        .iter()
+        .filter(|(_, r)| r.tool == AllowedTool::Close)
+        .map(|(_, r)| r.args["idempotency_key"].clone())
+        .collect();
+    assert_eq!(closes.len(), 2);
+    assert!(closes
+        .iter()
+        .all(|key| *key == close.request.args["idempotency_key"]));
+}
+
+#[tokio::test]
 async fn investigator_supervisor_revocation_during_inference_does_not_cleanup_remotely() {
     let f = Fixture::new();
     let mut c = f.client(2);

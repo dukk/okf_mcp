@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{require_every_catalog, settle};
 use crate::app::App;
-use crate::auth::Principal;
+use crate::auth::{CredentialKind, Principal};
 use crate::catalog::CatalogState;
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
@@ -22,7 +22,7 @@ use crate::http::{archives, AppError};
 use crate::mcp::catalogs::SuspensionInfo;
 use crate::okf::ops::STARTER_FILE_COUNT;
 use crate::store::audit::AuditActor;
-use crate::store::catalogs as catalog_rows;
+use crate::store::catalogs::{self as catalog_rows, MaintenanceChange, Switch};
 use crate::store::ceiling::{self, MemberAccess};
 use crate::store::keys::Access;
 
@@ -43,6 +43,7 @@ pub(crate) fn routes(app: &App) -> Router<Arc<App>> {
             patch(update_catalog).delete(delete_catalog),
         )
         .route("/catalogs/{catalog}/owner", put(set_owner))
+        .route("/catalogs/{catalog}/maintenance", put(set_maintenance))
         .route(
             "/catalogs/{catalog}/member-access",
             get(member_access).put(set_member_access),
@@ -73,6 +74,9 @@ pub(crate) struct CatalogSummary {
     /// Set when its owner team is suspended (M13): `{"team", "notice"}`;
     /// null for an active catalog.
     pub suspended: Option<SuspensionInfo>,
+    /// Whether the maintenance runner may check it (`on`, the default) or
+    /// is kept out (`off`), as the key cache holds it.
+    pub maintenance: Switch,
 }
 
 impl CatalogSummary {
@@ -97,6 +101,7 @@ impl CatalogSummary {
             generation: loaded.generation(),
             last_change: loaded.last_change().map(format_timestamp),
             suspended: principal.suspension(name).map(SuspensionInfo::from),
+            maintenance: Switch::from(!principal.gates.maintenance_off.contains(name)),
         }
     }
 }
@@ -250,6 +255,8 @@ async fn create_catalog(
         generation: row.generation,
         last_change: Some(format_timestamp(row.created_at)),
         suspended,
+        // `catalogs.maintenance` defaults to true and `create` never sets it.
+        maintenance: Switch::On,
     };
     Ok((StatusCode::CREATED, Json(summary)))
 }
@@ -317,6 +324,71 @@ async fn set_owner(
         name: catalog,
         previous,
         owner_team: change.team,
+    }))
+}
+
+/// `PUT /catalogs/{catalog}/maintenance`'s body.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MaintenanceBody {
+    /// `on` or `off`.
+    maintenance: Switch,
+}
+
+/// `PUT /catalogs/{catalog}/maintenance`'s answer, as `okf-mcp catalog
+/// set-maintenance` prints it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct MaintenanceChanged {
+    /// The catalog.
+    pub name: String,
+    /// The flag before.
+    pub previous: Switch,
+    /// The flag now.
+    pub maintenance: Switch,
+}
+
+/// `PUT /catalogs/{catalog}/maintenance`: lets the maintenance runner in, or
+/// keeps it out (spec Part 6), then polls so the key cache refuses or admits
+/// the runner at once. An admin that reaches every catalog, or an owner of
+/// the catalog's owner team signed in to the console: the one
+/// owner-managed control of this milestone. The store checks the owner
+/// under its locks.
+///
+/// # Errors
+/// 403 for anyone else (a non-owner's session, an unknown catalog included,
+/// and every other key); 404 for an unknown catalog asked by an admin; 422
+/// without `maintenance`, with another value or an unknown field; 500 for a
+/// database failure.
+async fn set_maintenance(
+    State(app): State<Arc<App>>,
+    Extension(principal): Extension<Arc<Principal>>,
+    actor: AuditActor,
+    Path(catalog): Path<String>,
+    Json(body): Json<MaintenanceBody>,
+) -> Result<Json<MaintenanceChanged>, AppError> {
+    // Matching on a tuple decides on both at once. Anything but a console
+    // session gets the admin refusal; a session may still be an owner.
+    let owner = match (require_every_catalog(&principal), &principal.kind) {
+        (Ok(()), _) => None,
+        (Err(_), CredentialKind::Session { user_id }) => Some(user_id.as_str()),
+        (Err(refusal), CredentialKind::ApiKey | CredentialKind::OAuth { .. }) => {
+            return Err(refusal.into())
+        }
+    };
+    let change = MaintenanceChange {
+        catalog: &catalog,
+        to: body.maintenance,
+        owner,
+    };
+    let previous =
+        catalog_rows::set_maintenance(app.pool(), &change, &actor, app.clock().now()).await?;
+    tracing::info!(%catalog, previous = previous.as_str(), maintenance = body.maintenance.as_str(),
+                   key = %principal.key_id, actor = %principal.actor, "catalog maintenance set");
+    settle(&app).await;
+    Ok(Json(MaintenanceChanged {
+        name: catalog,
+        previous,
+        maintenance: body.maintenance,
     }))
 }
 
@@ -1131,5 +1203,131 @@ mod tests {
             Some(crate::db::TEST_USER)
         );
         assert_eq!(changed[0].target.as_deref(), Some("main"));
+    }
+
+    // ---- The maintenance flag (M14 Task 9c) ----
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_owner_or_an_admin_switches_maintenance_and_a_member_cannot() {
+        let test = app().await;
+        let root = every_catalog_admin(&test).await;
+        let keys = keys(&test).await;
+        send(
+            &test,
+            "POST",
+            "/api/v1/users",
+            Some(&root),
+            Some(json!({"name": "bob"})),
+        )
+        .await;
+        send(
+            &test,
+            "PUT",
+            &format!("/api/v1/teams/{TEST_TEAM}/members/bob"),
+            Some(&root),
+            Some(json!({"role": "member"})),
+        )
+        .await;
+        let mut owner = Browser::session_for(&test, crate::db::TEST_USER).await;
+        let mut member = Browser::session_for(&test, "bob").await;
+        let uri = "/api/v1/catalogs/main/maintenance";
+        let body = |flag: &str| Some(json!({ "maintenance": flag }));
+
+        let off = owner
+            .send(
+                &test,
+                "PUT",
+                uri,
+                Payload::Json(json!({"maintenance": "off"})),
+            )
+            .await;
+        let (listed_off, listing_off) =
+            send(&test, "GET", "/api/v1/catalogs", Some(&root), None).await;
+        let refused = member
+            .send(
+                &test,
+                "PUT",
+                uri,
+                Payload::Json(json!({"maintenance": "on"})),
+            )
+            .await;
+        // A catalog-admin key that does not reach every catalog is no owner.
+        let (scoped, _) = send(&test, "PUT", uri, Some(&keys.admin), body("on")).await;
+        let (unknown, _) = send(
+            &test,
+            "PUT",
+            "/api/v1/catalogs/nowhere/maintenance",
+            Some(&root),
+            body("on"),
+        )
+        .await;
+        let (invalid, _) = send(&test, "PUT", uri, Some(&root), body("maybe")).await;
+        let (on, answer) = send(&test, "PUT", uri, Some(&root), body("on")).await;
+        let (_, listing) = send(&test, "GET", "/api/v1/catalogs", Some(&root), None).await;
+
+        assert_eq!(off.status, StatusCode::OK);
+        assert_eq!(
+            off.json(),
+            json!({"name": "main", "previous": "on", "maintenance": "off"})
+        );
+        assert_eq!(listed_off, StatusCode::OK);
+        assert_eq!(
+            listing_off["catalogs"][0]["maintenance"], "off",
+            "polled at once"
+        );
+        assert_eq!(refused.status, StatusCode::FORBIDDEN);
+        assert_eq!(refused.json()["error"], "Forbidden");
+        assert_eq!(scoped, StatusCode::FORBIDDEN);
+        assert_eq!(unknown, StatusCode::NOT_FOUND);
+        assert_eq!(invalid, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(on, StatusCode::OK);
+        assert_eq!(answer["previous"], "off");
+        assert_eq!(listing["catalogs"][0]["name"], "main");
+        assert_eq!(listing["catalogs"][0]["maintenance"], "on");
+        let changes =
+            crate::store::audit::testing::entries(test.app.pool(), "catalog.maintenance_changed")
+                .await;
+        assert_eq!(changes.len(), 2, "{changes:?}");
+        assert_eq!(changes[0].source, "console");
+        assert_eq!(
+            changes[0].actor_person.as_deref(),
+            Some(crate::db::TEST_USER)
+        );
+        assert_eq!(changes[0].details, json!({"from": "on", "to": "off"}));
+        assert_eq!(changes[1].details, json!({"from": "off", "to": "on"}));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_runner_is_refused_a_catalog_whose_owners_turned_maintenance_off() {
+        use crate::mcp::testing::{require_unlock, staff_key, staff_root};
+        let test = app().await;
+        staff_root(&test).await;
+        // A reporting key of `staff`, outside main's owner team: the
+        // maintenance exemption lets it in, not membership.
+        let runner = staff_key(&test, "runner", Access::Read, true).await;
+        require_unlock(&test).await;
+        let mut owner = Browser::session_for(&test, crate::db::TEST_USER).await;
+        let tree = "/api/v1/catalogs/main/tree";
+        let (before, _) = send(&test, "GET", tree, Some(&runner), None).await;
+
+        let off = owner
+            .send(
+                &test,
+                "PUT",
+                "/api/v1/catalogs/main/maintenance",
+                Payload::Json(json!({"maintenance": "off"})),
+            )
+            .await;
+        let (status, body) = send(&test, "GET", tree, Some(&runner), None).await;
+
+        assert_eq!(
+            before,
+            StatusCode::OK,
+            "with the flag on, no unlock or membership is needed"
+        );
+        assert_eq!(off.status, StatusCode::OK);
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body["error"], "Forbidden");
+        assert_eq!(body["maintenance"], "off");
     }
 }

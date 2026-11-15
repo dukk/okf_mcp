@@ -16,7 +16,7 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-use super::{labelled, tab_row, TeamCommand, UserCommand};
+use super::{comma_list, labelled, tab_row, TeamCommand, UserCommand};
 use crate::clock::format_timestamp;
 use crate::config::Config;
 use crate::mail::invite;
@@ -320,6 +320,39 @@ pub(super) async fn set_member_access(
     ))
 }
 
+/// Runs `okf-mcp catalog set-maintenance`.
+///
+/// # Arguments
+/// * `pool` - the migrated database.
+/// * `catalog` - the catalog's name.
+/// * `state` - whether the maintenance runner may check it from now on.
+/// * `now` - the audit entry's time (server clock).
+///
+/// # Returns
+/// `catalog C: maintenance OLD -> NEW`.
+///
+/// # Errors
+/// An unknown catalog, or a database error.
+pub(super) async fn set_maintenance(
+    pool: &PgPool,
+    catalog: &str,
+    state: catalogs::Switch,
+    now: DateTime<Utc>,
+) -> anyhow::Result<String> {
+    let change = catalogs::MaintenanceChange {
+        catalog,
+        to: state,
+        // The CLI has operator access.
+        owner: None,
+    };
+    let previous = catalogs::set_maintenance(pool, &change, &AuditActor::cli(), now).await?;
+    Ok(format!(
+        "catalog {catalog}: maintenance {} -> {}\n",
+        previous.as_str(),
+        state.as_str()
+    ))
+}
+
 /// Runs `okf-mcp key assign`: gives a key or OAuth grant a user.
 ///
 /// # Arguments
@@ -505,18 +538,6 @@ fn format_team(team: &TeamRecord) -> String {
     ])
 }
 
-/// Comma-joins `items`, or `None` when there are none (a `-` cell).
-///
-/// # Arguments
-/// * `items` - the names.
-///
-/// # Returns
-/// `"a,b"`, or `None` for an empty slice.
-fn comma_list(items: &[String]) -> Option<String> {
-    // `then` runs the closure only when the condition holds: `x if c else None`.
-    (!items.is_empty()).then(|| items.join(","))
-}
-
 /// Joins listing lines, each followed by a newline (nothing for no lines).
 ///
 /// # Arguments
@@ -569,6 +590,9 @@ mod tests {
             }
             Command::Catalog(CatalogCommand::SetMemberAccess { name, access }) => {
                 set_member_access(pool, &name, access, now).await
+            }
+            Command::Catalog(CatalogCommand::SetMaintenance { name, state }) => {
+                set_maintenance(pool, &name, state, now).await
             }
             Command::Key(KeyCommand::Assign { id, actor, user }) => {
                 assign_key(pool, &id, actor.as_deref(), &user, Utc::now()).await
@@ -1204,6 +1228,32 @@ mod tests {
         assert_eq!(none, "catalog notes: member access read -> none\n");
         assert!(unknown.is_err());
         assert_eq!(stored, MemberAccess::None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_maintenance_reports_the_previous_flag_and_records_the_cli() {
+        let db = test_db().await;
+        okf(&db, &["catalog", "create", "notes", "--owner", TEST_USER])
+            .await
+            .unwrap();
+
+        let off = okf(&db, &["catalog", "set-maintenance", "notes", "off"])
+            .await
+            .unwrap();
+        let same = okf(&db, &["catalog", "set-maintenance", "notes", "off"])
+            .await
+            .unwrap();
+        let unknown = okf(&db, &["catalog", "set-maintenance", "nowhere", "on"]).await;
+        let invalid = okf(&db, &["catalog", "set-maintenance", "notes", "maybe"]).await;
+
+        assert_eq!(off, "catalog notes: maintenance on -> off\n");
+        assert_eq!(same, "catalog notes: maintenance off -> off\n");
+        assert!(unknown.is_err());
+        assert!(invalid.is_err(), "clap refuses anything but on or off");
+        let changed =
+            crate::store::audit::testing::entries(&db.pool, "catalog.maintenance_changed").await;
+        assert_eq!(changed.len(), 1, "{changed:?}");
+        assert_eq!(changed[0].source, "cli");
     }
 
     #[tokio::test(flavor = "multi_thread")]

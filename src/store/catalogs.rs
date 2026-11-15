@@ -382,6 +382,193 @@ pub async fn update_description(
     Ok(previous)
 }
 
+/// A catalog's maintenance flag, `on` or `off`, as the CLI, the REST body
+/// and the listing spell it (spec Part 6).
+// `clap::ValueEnum` parses `on|off` on the command line; serde's
+// `rename_all = "lowercase"` reads and writes `"on"`/`"off"` in JSON.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Deserialize, serde::Serialize,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Switch {
+    /// The maintenance runner may check the catalog (the default).
+    On,
+    /// The maintenance runner is kept out.
+    Off,
+}
+
+impl Switch {
+    /// The spelling the CLI and the audit log use.
+    ///
+    /// # Returns
+    /// `"on"` or `"off"`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Switch::On => "on",
+            Switch::Off => "off",
+        }
+    }
+
+    /// The flag as `catalogs.maintenance` stores it.
+    ///
+    /// # Returns
+    /// `true` for [`Switch::On`].
+    pub fn is_on(self) -> bool {
+        self == Switch::On
+    }
+}
+
+// `From<bool>` lets `Switch::from(flag)` (or `flag.into()`) turn the stored
+// column back into the enum.
+impl From<bool> for Switch {
+    fn from(on: bool) -> Self {
+        if on {
+            Switch::On
+        } else {
+            Switch::Off
+        }
+    }
+}
+
+/// A change of a catalog's maintenance flag: [`set_maintenance`]'s input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MaintenanceChange<'a> {
+    /// The catalog's name.
+    pub catalog: &'a str,
+    /// The flag it should have.
+    pub to: Switch,
+    /// `Some(users.id)` when the caller may make the change only as an
+    /// owner of the catalog's owner team (a console session that is not an
+    /// every-catalog admin): checked under the locks, so an owner removed
+    /// or a catalog moved to another team meanwhile is refused. `None` when
+    /// the caller is already allowed (an every-catalog admin, the CLI).
+    pub owner: Option<&'a str>,
+}
+
+/// Lets the maintenance runner into a catalog, or keeps it out (spec Part
+/// 6), records `catalog.maintenance_changed` in the same transaction, and
+/// bumps the administrative generation (the key cache holds the flag). The
+/// flag it already has changes and records nothing.
+///
+/// Lock order (`tools/agentic/lessons.md`): the users the entry resolves
+/// ([`audit::lock_people`]), then, for an owner, its membership row, then
+/// the catalog row, then `server_state`.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `change` - the catalog, the new flag, and the owner to check, if any.
+/// * `actor` - who, for the audit log.
+/// * `now` - the server clock.
+///
+/// # Returns
+/// The flag before.
+///
+/// # Errors
+/// [`OkfError::CatalogNotSelected`] for an unknown or malformed catalog
+/// without an owner check; [`OkfError::Forbidden`] when the owner check
+/// fails (an unknown catalog included, so it reveals nothing);
+/// [`OkfError::Database`] otherwise, a failed audit write included.
+pub async fn set_maintenance(
+    pool: &PgPool,
+    change: &MaintenanceChange<'_>,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<Switch, OkfError> {
+    let MaintenanceChange {
+        catalog: name,
+        to,
+        owner,
+    } = *change;
+    let not_owner = || OkfError::Forbidden {
+        reason: format!(
+            "this needs an admin that reaches every catalog, or an owner of catalog {name:?}'s \
+             team signed in to the console"
+        ),
+    };
+    if !is_valid_name(name) {
+        // A NUL would be a database error if it were bound.
+        return Err(match owner {
+            Some(_) => not_owner(),
+            None => OkfError::CatalogNotSelected {
+                catalog: name.to_string(),
+            },
+        });
+    }
+    let mut tx = pool.begin().await?;
+    audit::lock_people(
+        &mut tx,
+        actor,
+        &People {
+            catalogs: &[name],
+            ..People::default()
+        },
+    )
+    .await?;
+    // `FOR SHARE OF m` holds the owner's membership row, so a concurrent
+    // removal or demotion waits for this change rather than racing it.
+    let owner_team = match owner {
+        Some(user_id) => Some(
+            sqlx::query_scalar::<_, String>(
+                "SELECT m.team_id FROM catalogs c \
+                 JOIN team_members m ON m.team_id = c.owner_team_id \
+                 WHERE c.name = $1 AND m.user_id = $2 AND m.role = 'owner' FOR SHARE OF m",
+            )
+            .bind(name)
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or_else(not_owner)?,
+        ),
+        None => None,
+    };
+    // The subquery reads the row before the `UPDATE`, so this returns the
+    // old flag. `FOR NO KEY UPDATE`: the column is no key, so foreign-key
+    // checks (`FOR KEY SHARE`) on the catalog need not wait for it.
+    let row: Option<(i64, bool, Option<String>)> = sqlx::query_as(
+        "UPDATE catalogs c SET maintenance = $2 \
+         FROM (SELECT id, maintenance, owner_team_id FROM catalogs WHERE name = $1 \
+               FOR NO KEY UPDATE) old \
+         WHERE c.id = old.id RETURNING c.id, old.maintenance, old.owner_team_id",
+    )
+    .bind(name)
+    .bind(to.is_on())
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((catalog_id, previous, team)) = row else {
+        return Err(match owner {
+            Some(_) => not_owner(),
+            None => OkfError::CatalogNotSelected {
+                catalog: name.to_string(),
+            },
+        });
+    };
+    // Under the row lock the owner team is fixed: a catalog moved to
+    // another team after the membership was read is refused.
+    if owner_team.is_some() && owner_team != team {
+        return Err(not_owner());
+    }
+    let previous = Switch::from(previous);
+    if previous == to {
+        // Dropping `tx` rolls back the `UPDATE`, which wrote the same flag.
+        return Ok(previous);
+    }
+    record_catalog(
+        &mut tx,
+        actor,
+        CatalogEvent {
+            action: Action::CatalogMaintenanceChanged,
+            catalog_id,
+            catalog: name,
+            details: serde_json::json!({"from": previous.as_str(), "to": to.as_str()}),
+        },
+        now,
+    )
+    .await?;
+    bump_admin_generation(&mut tx).await?;
+    tx.commit().await?;
+    Ok(previous)
+}
+
 /// Every catalog, by name.
 ///
 /// # Arguments
@@ -643,6 +830,30 @@ pub(crate) async fn lock_by_name(conn: &mut PgConnection, name: &str) -> Result<
     Ok(locked)
 }
 
+/// Refuses a catalog that is no longer the incarnation a caller was
+/// admitted to: the access gates are loaded by name, so after a catalog is
+/// deleted and created again under its name, a request admitted from gates
+/// that predate the replacement (an unlock, a membership) must not reach
+/// the replacement. Shared by export and import, which look the catalog up
+/// by name in their own transaction.
+///
+/// # Arguments
+/// * `catalog` - the catalog's name, for the message.
+/// * `found` - the `catalogs.id` the transaction found.
+/// * `expected` - the id the caller was admitted to; `None` checks nothing.
+///
+/// # Errors
+/// [`OkfError::Busy`] on a mismatch: retryable, since a retry is admitted
+/// against fresh gates (and then refused or let in on its own terms).
+pub fn check_incarnation(catalog: &str, found: i64, expected: Option<i64>) -> Result<(), OkfError> {
+    match expected {
+        Some(expected) if expected != found => Err(OkfError::Busy {
+            reason: format!("catalog {catalog:?} was replaced since this request was admitted"),
+        }),
+        Some(_) | None => Ok(()),
+    }
+}
+
 /// Bumps `server_state.admin_generation` inside the caller's transaction.
 ///
 /// # Arguments
@@ -692,6 +903,19 @@ pub(crate) fn is_unique_violation(error: &sqlx::Error) -> bool {
 // `pub(crate)` so other store modules' tests share the lock helper below.
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn check_incarnation_refuses_only_another_catalog_id() {
+        assert!(
+            check_incarnation("main", 7, None).is_ok(),
+            "nothing to check"
+        );
+        assert!(check_incarnation("main", 7, Some(7)).is_ok());
+        assert!(matches!(
+            check_incarnation("main", 8, Some(7)),
+            Err(OkfError::Busy { .. })
+        ));
+    }
     use crate::db::{test_db, TEST_TEAM};
     use crate::store::audit::AuditActor;
     use chrono::TimeZone;
@@ -1655,5 +1879,229 @@ pub(crate) mod tests {
                 "{outcome:?}"
             );
         }
+    }
+
+    // ---- The maintenance flag (M14 Task 9c) ----
+
+    /// Creates user `name` and adds it to [`TEST_TEAM`] with `role`.
+    async fn join_test_team(pool: &PgPool, name: &str, role: crate::store::teams::Role) -> String {
+        let user = crate::store::users::NewUser {
+            name,
+            display_name: "",
+        };
+        crate::store::users::create(pool, &user, &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        let membership = crate::store::teams::Membership {
+            team: TEST_TEAM,
+            user: name,
+            role,
+        };
+        crate::store::teams::set_member(pool, &membership, &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        sqlx::query_scalar("SELECT id FROM users WHERE name = $1")
+            .bind(name)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// A catalog's stored flag.
+    async fn maintenance_of(pool: &PgPool, name: &str) -> bool {
+        sqlx::query_scalar("SELECT maintenance FROM catalogs WHERE name = $1")
+            .bind(name)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_maintenance_records_a_change_bumps_and_nothing_for_the_same_flag() {
+        let db = test_db().await;
+        seed(&db.pool, "pg").await;
+        let change = |to| MaintenanceChange {
+            catalog: "pg",
+            to,
+            owner: None,
+        };
+        let actor = AuditActor::cli();
+        let before = admin_generation(&db.pool).await.unwrap();
+
+        let first = set_maintenance(&db.pool, &change(Switch::Off), &actor, now()).await;
+        let after_change = admin_generation(&db.pool).await.unwrap();
+        let again = set_maintenance(&db.pool, &change(Switch::Off), &actor, now()).await;
+        let after_noop = admin_generation(&db.pool).await.unwrap();
+        let unknown = set_maintenance(
+            &db.pool,
+            &MaintenanceChange {
+                catalog: "nowhere",
+                ..change(Switch::On)
+            },
+            &actor,
+            now(),
+        )
+        .await;
+        let malformed = set_maintenance(
+            &db.pool,
+            &MaintenanceChange {
+                catalog: "p\0g",
+                ..change(Switch::On)
+            },
+            &actor,
+            now(),
+        )
+        .await;
+
+        assert_eq!(first.unwrap(), Switch::On, "on by default");
+        assert_eq!(again.unwrap(), Switch::Off);
+        assert!(!maintenance_of(&db.pool, "pg").await);
+        assert_eq!(after_change, before + 1);
+        assert_eq!(after_noop, after_change, "a no-op bumps nothing");
+        for outcome in [unknown, malformed] {
+            assert!(
+                matches!(outcome, Err(OkfError::CatalogNotSelected { .. })),
+                "{outcome:?}"
+            );
+        }
+        let changed = entries(&db.pool, "catalog.maintenance_changed").await;
+        assert_eq!(changed.len(), 1, "a no-op records nothing: {changed:?}");
+        assert_eq!(changed[0].target.as_deref(), Some("pg"));
+        assert_eq!(changed[0].teams, [crate::db::TEST_USER]);
+        assert_eq!(changed[0].details, json!({"from": "on", "to": "off"}));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn only_an_owner_of_the_owner_team_passes_the_owner_check() {
+        use crate::store::teams::Role;
+        let db = test_db().await;
+        seed(&db.pool, "pg").await;
+        family(&db.pool).await;
+        seed(&db.pool, "elsewhere").await;
+        set_owner(&db.pool, "elsewhere", "family", &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        let owner = join_test_team(&db.pool, "olive", Role::Owner).await;
+        let member = join_test_team(&db.pool, "max", Role::Member).await;
+        let as_user = |user_id: &str| AuditActor {
+            user_id: Some(user_id.to_string()),
+            ..AuditActor::cli()
+        };
+        let off = |catalog| MaintenanceChange {
+            catalog,
+            to: Switch::Off,
+            owner: None,
+        };
+
+        let by_member = set_maintenance(
+            &db.pool,
+            &MaintenanceChange {
+                owner: Some(&member),
+                ..off("pg")
+            },
+            &as_user(&member),
+            now(),
+        )
+        .await;
+        let elsewhere = set_maintenance(
+            &db.pool,
+            &MaintenanceChange {
+                owner: Some(&owner),
+                ..off("elsewhere")
+            },
+            &as_user(&owner),
+            now(),
+        )
+        .await;
+        let unknown = set_maintenance(
+            &db.pool,
+            &MaintenanceChange {
+                owner: Some(&owner),
+                ..off("nowhere")
+            },
+            &as_user(&owner),
+            now(),
+        )
+        .await;
+        let by_owner = set_maintenance(
+            &db.pool,
+            &MaintenanceChange {
+                owner: Some(&owner),
+                ..off("pg")
+            },
+            &as_user(&owner),
+            now(),
+        )
+        .await;
+
+        for outcome in [by_member, elsewhere, unknown] {
+            assert!(
+                matches!(outcome, Err(OkfError::Forbidden { .. })),
+                "{outcome:?}"
+            );
+        }
+        assert_eq!(by_owner.unwrap(), Switch::On);
+        assert!(!maintenance_of(&db.pool, "pg").await);
+        assert!(maintenance_of(&db.pool, "elsewhere").await, "unchanged");
+        assert_eq!(
+            entries(&db.pool, "catalog.maintenance_changed").await.len(),
+            1
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_owners_switch_and_their_demotion_at_once_both_finish() {
+        use crate::store::teams::{self, Membership, Role};
+        let db = test_db().await;
+        seed(&db.pool, "pg").await;
+        let owner = join_test_team(&db.pool, "olive", Role::Owner).await;
+        // Hold the catalog row: the switch takes the owner's membership row,
+        // then waits here.
+        let mut holder = db.pool.begin().await.unwrap();
+        sqlx::query("SELECT id FROM catalogs WHERE name = 'pg' FOR UPDATE")
+            .execute(&mut *holder)
+            .await
+            .unwrap();
+        let pool = db.pool.clone();
+        let owner_id = owner.clone();
+        let switch = tokio::spawn(async move {
+            let actor = AuditActor {
+                user_id: Some(owner_id.clone()),
+                ..AuditActor::cli()
+            };
+            let change = MaintenanceChange {
+                catalog: "pg",
+                to: Switch::Off,
+                owner: Some(&owner_id),
+            };
+            set_maintenance(&pool, &change, &actor, now()).await
+        });
+        until_locks_are_awaited(&db.pool, 1).await;
+        let pool = db.pool.clone();
+        let demotion = tokio::spawn(async move {
+            let membership = Membership {
+                team: TEST_TEAM,
+                user: "olive",
+                role: Role::Member,
+            };
+            teams::set_member(&pool, &membership, &AuditActor::cli(), now()).await
+        });
+        until_locks_are_awaited(&db.pool, 2).await;
+
+        holder.rollback().await.unwrap();
+        let limit = std::time::Duration::from_secs(30);
+        let switched = tokio::time::timeout(limit, switch)
+            .await
+            .expect("the switch finishes within 30 seconds")
+            .unwrap();
+        let demoted = tokio::time::timeout(limit, demotion)
+            .await
+            .expect("the demotion finishes within 30 seconds")
+            .unwrap();
+
+        // The demotion waited for the switch's hold on the membership.
+        assert_eq!(switched.unwrap(), Switch::On);
+        assert!(demoted.is_ok(), "{demoted:?}");
+        assert!(!maintenance_of(&db.pool, "pg").await);
     }
 }

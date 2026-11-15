@@ -21,13 +21,15 @@
 //! user never shows owners who it was.
 
 use chrono::{DateTime, TimeDelta, Utc};
-use sqlx::{PgConnection, PgPool};
+use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
 use crate::mail::queue;
 use crate::mail::templates::Template;
-use crate::store::audit::{self, Action, AuditActor, Entry, FixedPerson, People, RowLock, Target};
+use crate::store::audit::{
+    self, AccessKind, Action, AuditActor, Entry, FixedPerson, People, RowLock, Target,
+};
 use crate::store::catalogs::{self, bump_admin_generation, is_valid_name};
 
 /// `unlock_max_hours` with no override.
@@ -176,6 +178,62 @@ pub struct UnlockRecord {
     pub writes: i64,
     /// Exports made under it.
     pub exports: i64,
+}
+
+/// Where an unlock stands at a moment. serde spells each as `as_str` does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnlockState {
+    /// Neither ended nor expired: its admin's credentials may open the
+    /// catalog.
+    Live,
+    /// Past its expiry without being ended.
+    Expired,
+    /// Ended early by an admin.
+    Ended,
+}
+
+impl UnlockState {
+    /// The state's name.
+    ///
+    /// # Returns
+    /// `"live"`, `"expired"` or `"ended"`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            UnlockState::Live => "live",
+            UnlockState::Expired => "expired",
+            UnlockState::Ended => "ended",
+        }
+    }
+}
+
+impl UnlockRecord {
+    /// Where the unlock stands at `now`. An unlock ended early reads
+    /// `ended` even after its expiry has passed too.
+    ///
+    /// # Arguments
+    /// * `now` - the server clock.
+    ///
+    /// # Returns
+    /// Its state.
+    pub fn state(&self, now: DateTime<Utc>) -> UnlockState {
+        if self.ended_at.is_some() {
+            UnlockState::Ended
+        } else if self.expires_at <= now {
+            UnlockState::Expired
+        } else {
+            UnlockState::Live
+        }
+    }
+
+    /// When the unlock stops (or stopped) applying: its early end, else
+    /// its expiry.
+    ///
+    /// # Returns
+    /// The time.
+    pub fn ends(&self) -> DateTime<Utc> {
+        self.ended_at.unwrap_or(self.expires_at)
+    }
 }
 
 /// One `unlocks` row as [`find_in`] and [`list`] read it; the category
@@ -595,7 +653,8 @@ pub async fn list(pool: &PgPool, filter: &UnlockFilter<'_>) -> Result<Vec<Unlock
 /// expired, and of a user that still exists.
 ///
 /// # Arguments
-/// * `pool` - the database.
+/// * `executor` - the database: the pool, or the key cache's snapshot
+///   transaction (`impl PgExecutor<'_>` takes either).
 /// * `now` - the server clock.
 ///
 /// # Returns
@@ -603,7 +662,10 @@ pub async fn list(pool: &PgPool, filter: &UnlockFilter<'_>) -> Result<Vec<Unlock
 ///
 /// # Errors
 /// [`OkfError::Database`].
-pub async fn live(pool: &PgPool, now: DateTime<Utc>) -> Result<Vec<LiveUnlock>, OkfError> {
+pub async fn live(
+    executor: impl PgExecutor<'_>,
+    now: DateTime<Utc>,
+) -> Result<Vec<LiveUnlock>, OkfError> {
     Ok(sqlx::query_as::<_, LiveUnlock>(
         "SELECT u.id, u.user_id, c.name AS catalog, u.expires_at \
          FROM unlocks u JOIN catalogs c ON c.id = u.catalog_id \
@@ -611,8 +673,33 @@ pub async fn live(pool: &PgPool, now: DateTime<Utc>) -> Result<Vec<LiveUnlock>, 
          ORDER BY u.id",
     )
     .bind(now)
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await?)
+}
+
+/// Counts one request admitted under an unlock (spec Part 6: "reads,
+/// writes and exports are counted on the unlock"). Run in the background
+/// ([`crate::app::App::note_access`]); the unlock id was fixed at admission,
+/// so an unlock deleted with its catalog meanwhile is simply not found and
+/// nothing is updated.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `id` - the unlock's id.
+/// * `kind` - which count to add one to.
+///
+/// # Errors
+/// [`OkfError::Database`].
+pub async fn tally(pool: &PgPool, id: i64, kind: AccessKind) -> Result<(), OkfError> {
+    // One fixed statement per column: a column name cannot be a bind
+    // parameter. Every variant is named, so a new kind must pick a column.
+    let sql = match kind {
+        AccessKind::Read => "UPDATE unlocks SET reads = reads + 1 WHERE id = $1",
+        AccessKind::Write => "UPDATE unlocks SET writes = writes + 1 WHERE id = $1",
+        AccessKind::Export => "UPDATE unlocks SET exports = exports + 1 WHERE id = $1",
+    };
+    sqlx::query(sql).bind(id).execute(pool).await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -680,6 +767,43 @@ mod tests {
             reason: "ticket 12",
             hours,
         }
+    }
+
+    #[test]
+    fn an_unlock_is_live_until_it_expires_or_ends_and_ends_at_the_earlier() {
+        let record = |ended_at: Option<DateTime<Utc>>| UnlockRecord {
+            id: 1,
+            catalog: "main".to_string(),
+            owner_team: None,
+            user: Some("staff".to_string()),
+            person: "staff".to_string(),
+            category: Category::Support,
+            reason: "ticket 12".to_string(),
+            created_at: now(),
+            expires_at: now() + TimeDelta::hours(2),
+            ended_at,
+            reads: 0,
+            writes: 0,
+            exports: 0,
+        };
+        let open = record(None);
+        let ended = record(Some(now() + TimeDelta::minutes(5)));
+        let expiry = now() + TimeDelta::hours(2);
+
+        assert_eq!(open.state(now()), UnlockState::Live);
+        assert_eq!(open.state(expiry), UnlockState::Expired);
+        assert_eq!(
+            ended.state(now() + TimeDelta::minutes(10)),
+            UnlockState::Ended
+        );
+        assert_eq!(ended.state(expiry), UnlockState::Ended);
+        assert_eq!(open.ends(), expiry);
+        assert_eq!(ended.ends(), now() + TimeDelta::minutes(5));
+        assert_eq!(
+            serde_json::to_value(UnlockState::Expired).unwrap(),
+            "expired"
+        );
+        assert_eq!(UnlockState::Ended.as_str(), "ended");
     }
 
     #[test]

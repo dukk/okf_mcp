@@ -1642,6 +1642,7 @@ mod repair_tests {
             replace: false,
             scope: crate::store::import::ImportScope::Everything,
             expect_generation: None,
+            expect_catalog_id: None,
             actor: "tester",
             audit: &crate::store::audit::AuditActor::cli(),
             now: chrono::Utc::now(),

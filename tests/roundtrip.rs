@@ -42,18 +42,31 @@ async fn round_trip(files: &Files) -> (Files, ImportReport) {
         replace: false,
         scope: ImportScope::Everything,
         expect_generation: None,
+        expect_catalog_id: None,
         actor: "test/roundtrip",
         audit: &okf_mcp::store::audit::AuditActor::cli(),
         now: Utc::now(),
     };
     import(&db.pool, "rt", files.clone(), &first).await.unwrap();
 
-    let (tarball, _generation) = export::export(&db.pool, "rt", Vec::new()).await.unwrap();
+    let (tarball, _generation) = export::export(
+        &db.pool,
+        "rt",
+        Vec::new(),
+        &export::ExportOptions {
+            audit: &okf_mcp::store::audit::AuditActor::cli(),
+            now: chrono::Utc::now(),
+            expect_catalog_id: None,
+        },
+    )
+    .await
+    .unwrap();
     let exported = archive::read_tarball(tarball.as_slice(), u64::MAX).unwrap();
     let again = ImportOptions {
         replace: true,
         scope: ImportScope::Everything,
         expect_generation: None,
+        expect_catalog_id: None,
         actor: "test/roundtrip",
         audit: &okf_mcp::store::audit::AuditActor::cli(),
         now: Utc::now(),

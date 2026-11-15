@@ -27,6 +27,13 @@ export function browseHash(catalog, path = '', section = null) {
     return '#/browse/' + parts.map(encodeURIComponent).join('/');
 }
 
+// '#/users/detail/<name>': the Users page with that user's drawer open. A
+// route of its own, so no name ("unassigned") is taken for another view;
+// the name is one encoded segment.
+export function userHash(name) {
+    return `#/users/detail/${encodeURIComponent(name)}`;
+}
+
 export function go(hash) {
     if (location.hash === hash) route();
     else location.hash = hash;

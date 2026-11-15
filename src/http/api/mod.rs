@@ -22,6 +22,8 @@ use crate::http::requester::Requester;
 use crate::mcp::context::ToolContext;
 use crate::store::keys::Access;
 
+#[cfg(test)]
+mod access_tests;
 mod audit;
 mod browse;
 mod catalogs;
@@ -40,6 +42,7 @@ mod search;
 mod settings;
 #[cfg(test)]
 pub(crate) mod testing;
+mod unlocks;
 
 /// Every API route, for nesting at `/api/v1`, behind `require_principal`
 /// (a bearer key or grant, or a console session cookie).
@@ -67,6 +70,7 @@ pub(crate) fn routes(app: &Arc<App>) -> Router<Arc<App>> {
         .merge(mail::routes())
         .merge(me::routes())
         .merge(audit::routes())
+        .merge(unlocks::routes())
         .merge(crate::http::passkeys::api_routes())
         // `POST /me/identities/{provider}/link` (Task 9); it answers 404
         // itself without providers.

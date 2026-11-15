@@ -116,18 +116,24 @@ pub(crate) async fn list_changesets(
 
     let principal = ctx.principal();
     let catalog_ids: Vec<i64> = match params.catalog.as_deref() {
-        // `one` refuses a catalog the key does not reach.
+        // `one` refuses a catalog the key does not reach; it admits
+        // nothing, and a list of changesets reads no catalog's contents.
+        // `one` checks the name and the incarnation whose changesets are
+        // listed; it admits nothing.
         Some(name) => vec![ctx.one(Some(name))?.id()],
         None => {
             // A list naming a bad catalog fails here as it does elsewhere.
             ctx.check_connection()?;
             ctx.catalogs()
                 .values()
-                // A suspended team's catalog shows no changesets (M13): its
-                // handles and paths are part of what suspension withholds.
-                // `offers` (reach) is checked first.
+                // A closed catalog shows no changesets: its handles and paths
+                // are part of what suspension (M13) and a lock (M14) withhold.
+                // `offers` (reach) is checked first; the lock is checked
+                // against the incarnation listed, not only its name.
                 .filter(|state| {
-                    ctx.offers(state.name()) && principal.check_not_suspended(state.name()).is_ok()
+                    ctx.offers(state.name())
+                        && principal.check_not_suspended(state.name()).is_ok()
+                        && ctx.check_contents(state, Access::Read).is_ok()
                 })
                 .map(|state| state.id())
                 .collect()
@@ -232,6 +238,8 @@ pub(crate) async fn open_changeset(
     use crate::auth::CredentialKind;
     use crate::store::changesets;
 
+    // Opening reads no contents: nothing is admitted (the writes are
+    // recorded as publishes).
     let state = ctx.one(params.catalog.as_deref())?;
     let principal = ctx.principal();
     // `changesets.key_id` references `api_keys`. MCP takes only bearer
@@ -241,8 +249,14 @@ pub(crate) async fn open_changeset(
             reason: "a console session cannot open a changeset; use an API key".to_string(),
         });
     }
-    principal.require(Access::Write, state.name())?;
     let now = ctx.app().clock().now();
+    // The changeset's writes go to the catalog's contents, so they need
+    // what any write does, the unlock included (M14 Task 9b).
+    principal.require_contents(Access::Write, state.name(), now)?;
+    // An unlock is of one catalog incarnation: one let in by gates that
+    // predate this call's catalog map (the catalog was created again under
+    // its name) must not open a changeset in the replacement (PR #442).
+    ctx.check_contents(&state, Access::Write)?;
     // The lock order of every changeset write: the catalog row first, so a
     // concurrent `catalog delete` either waits for this or is seen here.
     let mut tx = ctx.app().pool().begin().await?;
@@ -920,8 +934,12 @@ mod open_tests {
             is_admin: true,
         };
         // An admin session: it passes every level check.
-        let session =
-            crate::auth::Principal::for_session(&user, Default::default(), Default::default());
+        let session = crate::auth::Principal::for_session(
+            &user,
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        );
         let ctx = crate::mcp::testing::context(&test, std::sync::Arc::new(session), None);
 
         let refused = open_changeset(
@@ -934,6 +952,62 @@ mod open_tests {
         .unwrap_err();
 
         assert_eq!(refused.kind(), "Forbidden", "{refused}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_changeset_call_on_a_multi_catalog_connection_records_one_admin_read() {
+        use crate::mcp::testing::{cached_principal, context, settle_access, staff_root};
+        let test = app_with(
+            &[
+                ("main", &[("index.md", "# Main\n")]),
+                ("other", &[("index.md", "# Other\n")]),
+            ],
+            Config::default(),
+        )
+        .await;
+        // An every-catalog admin key of `staff`, outside both catalogs' owner team.
+        let secret = staff_root(&test).await;
+        let ctx = context(
+            &test,
+            cached_principal(&test, &secret),
+            Some(&["main", "other"]),
+        );
+        let named = |name: &str| ListParams {
+            catalog: Some(name.to_string()),
+        };
+
+        // Opening, listing and the connection checks they run read no
+        // catalog's contents; the changeset read reads `main`'s.
+        let opened = open_changeset(
+            &ctx,
+            OpenParams {
+                catalog: Some("main".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+        ctx.changeset(&opened.changeset, Access::Read)
+            .await
+            .unwrap();
+        list_changesets(&ctx, ListParams { catalog: None })
+            .await
+            .unwrap();
+        list_changesets(&ctx, named("other")).await.unwrap();
+        settle_access(&test).await;
+
+        let reads =
+            crate::store::audit::testing::entries(test.app.pool(), "catalog.admin_read").await;
+        assert_eq!(
+            reads.len(),
+            1,
+            "only the changeset's own catalog: {reads:?}"
+        );
+        assert_eq!(reads[0].target.as_deref(), Some("main"));
+        assert_eq!(
+            reads[0].requests,
+            Some(1),
+            "the connection check and the lists record nothing"
+        );
     }
 
     #[test]
@@ -1515,6 +1589,7 @@ mod publish_tests {
             replace: true,
             scope: ImportScope::Everything,
             expect_generation: None,
+            expect_catalog_id: None,
             actor: "t",
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),
@@ -1707,6 +1782,7 @@ mod publish_tests {
             replace: true,
             scope: ImportScope::Everything,
             expect_generation: None,
+            expect_catalog_id: None,
             actor: "cli",
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),
@@ -1986,6 +2062,7 @@ mod changes_tests {
             replace: true,
             scope: ImportScope::Everything,
             expect_generation: None,
+            expect_catalog_id: None,
             actor: "tester",
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),

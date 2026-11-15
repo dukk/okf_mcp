@@ -13,7 +13,7 @@ use sqlx::PgPool;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
-use crate::auth::Keys;
+use crate::auth::{Admission, Keys};
 use crate::catalog::CatalogState;
 use crate::clock::Clock;
 use crate::clock_check::{self, ClockStatus};
@@ -26,12 +26,12 @@ use crate::keyed_lock::KeyedLocks;
 use crate::oauth::OAuth;
 use crate::oidc::OidcProviders;
 use crate::overlay::Overlays;
-use crate::store::audit;
+use crate::store::audit::{self, AccessKind, AccessRecord};
 use crate::store::oauth::{
     clients as oauth_clients, codes as sign_in_codes, tokens as oauth_tokens,
 };
 use crate::store::settings::{self, Settings};
-use crate::store::{catalogs, changesets, email_tokens, sign_in_events, user_sessions};
+use crate::store::{catalogs, changesets, email_tokens, sign_in_events, unlocks, user_sessions};
 
 /// Every loaded catalog, by name (a `BTreeMap`, so iteration is in name
 /// order, like `catalog list`).
@@ -120,6 +120,16 @@ pub struct App {
     passkeys: Option<Passkeys>,
     // The configured OIDC providers; `None` without `public_url` or providers.
     oidc: Option<OidcProviders>,
+    // Background writes of recorded accesses (admin reads). A `JoinSet`
+    // (a set of spawned tasks that can be awaited together), so tests and
+    // shutdown can wait for them; a `std` mutex, held only to spawn into it
+    // or to take it out.
+    access_writes: std::sync::Mutex<tokio::task::JoinSet<()>>,
+    // Test hook: a background access write waits for this lock first, so a
+    // test can hold it to run a deletion or a transfer between admission
+    // and persistence.
+    #[cfg(test)]
+    pub(crate) access_hold: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl App {
@@ -201,7 +211,66 @@ impl App {
             mailer,
             passkeys,
             oidc,
+            access_writes: std::sync::Mutex::new(tokio::task::JoinSet::new()),
+            #[cfg(test)]
+            access_hold: Arc::default(),
         }))
+    }
+
+    /// Records one operator access in the background, off the request path
+    /// (plan Decision 5): an admin read's hourly bucket, or an unlock's
+    /// read, write or export tally. A failure is
+    /// logged; [`App::settle_access`] waits for every write.
+    ///
+    /// # Arguments
+    /// * `record` - the access, with identities and scope fixed at admission.
+    /// * `kind` - read, write or export.
+    /// * `admission` - how it was let in.
+    pub fn note_access(&self, record: AccessRecord, kind: AccessKind, admission: Admission) {
+        let pool = self.pool.clone();
+        #[cfg(test)]
+        let hold = Arc::clone(&self.access_hold);
+        let mut writes = self
+            .access_writes
+            .lock()
+            .expect("access writes lock poisoned");
+        // Reap the finished ones, so the set holds only running writes.
+        while writes.try_join_next().is_some() {}
+        // `async move` hands `pool` and `record` to the task, which outlives
+        // this call.
+        writes.spawn(async move {
+            #[cfg(test)]
+            let _held = hold.lock().await;
+            let written = match admission {
+                Admission::AdminRead => audit::record_admin_read(&pool, &record).await,
+                // The unlock id was fixed at admission; the record is not
+                // needed for a tally.
+                Admission::Unlocked { unlock_id } => unlocks::tally(&pool, unlock_id, kind).await,
+                Admission::Customer | Admission::Untracked | Admission::Maintenance => Ok(()),
+            };
+            if let Err(error) = written {
+                tracing::error!(
+                    %error,
+                    catalog = %record.catalog,
+                    ?kind,
+                    "recording an operator access failed"
+                );
+            }
+        });
+    }
+
+    /// Waits for every background access write started so far (tests, and
+    /// shutdown, so a stopping server loses no count).
+    pub async fn settle_access(&self) {
+        // Take the set out under the lock, then wait without holding it
+        // (`mem::take` leaves an empty set in its place).
+        let mut writes = std::mem::take(
+            &mut *self
+                .access_writes
+                .lock()
+                .expect("access writes lock poisoned"),
+        );
+        while writes.join_next().await.is_some() {}
     }
 
     /// The database.
@@ -721,6 +790,7 @@ mod tests {
             replace,
             scope: ImportScope::Everything,
             expect_generation: None,
+            expect_catalog_id: None,
             actor: "tester",
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),

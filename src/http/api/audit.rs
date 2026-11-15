@@ -142,9 +142,10 @@ async fn list_audit(
 }
 
 /// `GET /audit/export`: every entry the filters select, as JSON Lines (one
-/// record per line, newest first), for a compliance request. `limit` and
-/// `after` are honoured as a starting cursor and ignored as a size: the
-/// export pages through to the end. Retention bounds the total.
+/// record per line, newest first), for a compliance request, built by
+/// [`audit::export_lines`] (which `okf-mcp audit export` prints): `after`
+/// is a starting cursor and `limit` is ignored, since the export pages
+/// through to the end. Retention bounds the total.
 ///
 /// # Errors
 /// As [`list_audit`].
@@ -153,22 +154,9 @@ async fn export_audit(
     Extension(principal): Extension<Arc<Principal>>,
     Query(params): Query<AuditParams>,
 ) -> Result<Response, AppError> {
-    let mut query = params.query()?;
+    let query = params.query()?;
     let viewer = viewer(&app, &principal, query.team).await?;
-    query.limit = audit::MAX_PAGE;
-    let mut body = Vec::new();
-    loop {
-        let page = audit::list(app.pool(), &viewer, &query).await?;
-        for record in &page {
-            // Writing plain strings and JSON values into a `Vec` cannot fail.
-            serde_json::to_writer(&mut body, record).expect("an audit record serializes");
-            body.push(b'\n');
-        }
-        match page.last() {
-            Some(last) if page.len() as i64 == audit::MAX_PAGE => query.after = Some(last.id),
-            _ => break,
-        }
-    }
+    let body = audit::export_lines(app.pool(), &viewer, &query).await?;
     let headers = [
         (header::CONTENT_TYPE, "application/x-ndjson"),
         (

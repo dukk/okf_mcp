@@ -61,7 +61,8 @@ async fn an_admin_visits_every_page_without_a_console_error() {
         ui.click("a[data-nav=changesets]");
         ui.wait_text("#changesets-table", "No open changesets.");
 
-        ui.click("a[data-nav=catalogs]");
+        // The Administer group's; "Your teams" has one for owners too.
+        ui.click("[data-need=admin] a[data-nav=catalogs]");
         ui.wait_visible("[data-catalog=main]");
 
         ui.click("a[data-nav=transfer]");
@@ -74,6 +75,9 @@ async fn an_admin_visits_every_page_without_a_console_error() {
         ui.click("a[data-nav=settings]");
         ui.wait_visible("#settings-table");
         ui.wait_visible("#mail-queue-table");
+
+        ui.click("a[data-nav=unlocks]");
+        ui.wait_text("#unlocks-table", "No unlocks.");
     })
     .await;
 }
