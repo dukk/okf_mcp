@@ -2,10 +2,12 @@
 
 use std::io::Write;
 
+use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
 use crate::archive::{self, ExportFile};
 use crate::error::OkfError;
+use crate::store::audit::{self, Action, AuditActor, Entry, People, Target};
 use crate::store::{catalogs, documents};
 
 /// Writes a catalog's live documents to `out` as a `.tar.gz`: no top-level
@@ -18,10 +20,17 @@ use crate::store::{catalogs, documents};
 /// first) or exported whole as it was, never exported empty or half-deleted.
 /// Compressing is CPU work and runs on a blocking thread.
 ///
+/// Every export is recorded (`catalog.exported`, spec Part 5), whoever asks,
+/// in a short transaction of its own once the read has ended and before
+/// compressing: a failed record fails the export, so no archive leaves
+/// without its entry.
+///
 /// # Arguments
 /// * `pool` - the database.
 /// * `catalog` - the catalog's name.
 /// * `out` - where to write (a `Vec<u8>`, a file, an HTTP body buffer).
+/// * `audit` - who exports, for the entry.
+/// * `now` - when (server clock).
 ///
 /// # Returns
 /// `out`, with the archive finished, and the catalog generation the archive
@@ -33,7 +42,13 @@ use crate::store::{catalogs, documents};
 // `W: Write + Send + 'static`: `out` moves to a blocking thread, so it must
 // be safe to send there (`Send`) and must not borrow anything that thread
 // could outlive (`'static`). `Vec<u8>` and `File` both qualify.
-pub async fn export<W>(pool: &PgPool, catalog: &str, out: W) -> Result<(W, i64), OkfError>
+pub async fn export<W>(
+    pool: &PgPool,
+    catalog: &str,
+    out: W,
+    audit: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<(W, i64), OkfError>
 where
     W: Write + Send + 'static,
 {
@@ -43,11 +58,20 @@ where
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         .execute(&mut *tx)
         .await?;
-    let catalog = catalogs::find(&mut *tx, catalog).await?;
-    let rows = documents::published(&mut *tx, catalog.id).await?;
+    let found = catalogs::find(&mut *tx, catalog).await?;
+    let rows = documents::published(&mut *tx, found.id).await?;
     // Nothing was written; ending the transaction now frees its connection
     // before the (possibly long) compression.
     tx.commit().await?;
+    record_export(
+        pool,
+        catalog,
+        found.id,
+        (found.generation, rows.len()),
+        audit,
+        now,
+    )
+    .await?;
     // `move` hands `rows` and `out` to the closure; `ExportFile`s borrow from
     // `rows` inside it, so nothing is copied.
     let archive = tokio::task::spawn_blocking(move || {
@@ -66,7 +90,53 @@ where
     // A panic in the blocking task is re-raised here, as if it ran inline
     // (as `import` does).
     .unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic()))?;
-    Ok((archive, catalog.generation))
+    Ok((archive, found.generation))
+}
+
+/// Records `catalog.exported` in a transaction of its own, taking the lock
+/// order every recorder takes (`audit::lock_people` first: the actor, its
+/// credential's owner and the person of a personal owner team).
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `catalog` - the catalog's name.
+/// * `catalog_id` - its id, as the export read it.
+/// * `(generation, files)` - the generation and file count exported.
+/// * `audit` - who exports.
+/// * `now` - when.
+///
+/// # Errors
+/// [`OkfError::Database`].
+async fn record_export(
+    pool: &PgPool,
+    catalog: &str,
+    catalog_id: i64,
+    (generation, files): (i64, usize),
+    audit: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<(), OkfError> {
+    let mut tx = pool.begin().await?;
+    let named = [catalog];
+    audit::lock_people(
+        &mut tx,
+        audit,
+        &People {
+            catalogs: &named,
+            ..People::default()
+        },
+    )
+    .await?;
+    let teams = audit::catalog_teams(&mut tx, catalog_id).await?;
+    let entry = Entry {
+        action: Action::CatalogExported,
+        target: Target::Catalog(catalog),
+        person: None,
+        teams: &teams,
+        details: serde_json::json!({ "generation": generation, "files": files }),
+    };
+    audit::record(&mut tx, audit, &entry, now).await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -133,7 +203,10 @@ mod tests {
             .await
             .unwrap();
 
-        let (tarball, generation) = export(&db.pool, "pg", Vec::new()).await.unwrap();
+        let (tarball, generation) =
+            export(&db.pool, "pg", Vec::new(), &AuditActor::cli(), Utc::now())
+                .await
+                .unwrap();
 
         // Two imports wrote, so the archive holds generation 2.
         assert_eq!(generation, 2);
@@ -164,6 +237,38 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn the_cli_export_is_recorded_as_the_cli() {
+        let db = test_db().await;
+        let now = Utc.with_ymd_and_hms(2026, 11, 13, 12, 0, 0).unwrap();
+        catalogs::create(
+            &db.pool,
+            &catalogs::NewCatalog {
+                name: "pg",
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            },
+            &AuditActor::cli(),
+            now,
+        )
+        .await
+        .unwrap();
+
+        let (_, generation) = export(&db.pool, "pg", Vec::new(), &AuditActor::cli(), now)
+            .await
+            .unwrap();
+
+        let entries = crate::store::audit::testing::entries(&db.pool, "catalog.exported").await;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].source, "cli");
+        assert_eq!(entries[0].target.as_deref(), Some("pg"));
+        assert_eq!(entries[0].teams, [crate::db::TEST_USER]);
+        assert_eq!(
+            entries[0].details,
+            serde_json::json!({"generation": generation, "files": 0})
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn an_empty_catalog_exports_an_empty_archive_and_unknown_ones_fail() {
         let db = test_db().await;
         catalogs::create(
@@ -179,8 +284,11 @@ mod tests {
         .await
         .unwrap();
 
-        let (tarball, generation) = export(&db.pool, "pg", Vec::new()).await.unwrap();
-        let unknown = export(&db.pool, "nope", Vec::new()).await;
+        let (tarball, generation) =
+            export(&db.pool, "pg", Vec::new(), &AuditActor::cli(), Utc::now())
+                .await
+                .unwrap();
+        let unknown = export(&db.pool, "nope", Vec::new(), &AuditActor::cli(), Utc::now()).await;
 
         assert!(archive::read_tarball(tarball.as_slice(), u64::MAX)
             .unwrap()

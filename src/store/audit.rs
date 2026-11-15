@@ -9,10 +9,10 @@
 
 use std::net::IpAddr;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use sqlx::{PgConnection, PgPool};
 
-use crate::auth::{CredentialKind, Principal};
+use crate::auth::{CatalogScope, CredentialKind, Principal};
 use crate::error::OkfError;
 use crate::http::requester::Requester;
 use crate::store::keys::Access;
@@ -799,6 +799,131 @@ pub async fn prune(pool: &PgPool, before: DateTime<Utc>) -> Result<u64, OkfError
         .rows_affected())
 }
 
+/// What a recorded access did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AccessKind {
+    /// Read contents.
+    Read,
+    /// Wrote to a changeset.
+    Write,
+    /// Exported.
+    Export,
+}
+
+/// One operator access, as admission saw it: every identity and scope is
+/// fixed here (audit ids from the key cache), so the background write needs
+/// no lookup by name and creates no person or credential row (plan
+/// Decisions 21 and 22).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccessRecord {
+    /// Where the request came from.
+    pub source: Source,
+    /// The actor's `audit_credentials` id (a key or grant).
+    pub actor_credential: Option<i64>,
+    /// The actor's `audit_people` id.
+    pub actor_person: Option<i64>,
+    /// [`AuditActor::stored_label`]: never a person's name.
+    pub actor_label: String,
+    /// An admin credential or a provisioner.
+    pub operator: bool,
+    /// The client address.
+    pub ip: Option<IpAddr>,
+    /// The catalog's name at admission (a display snapshot).
+    pub catalog: String,
+    /// The catalog's immutable id and owner team at admission.
+    pub scope: CatalogScope,
+    /// When it was admitted (server clock).
+    pub at: DateTime<Utc>,
+}
+
+/// Counts one admin read in its `catalog.admin_read` entry: one entry per
+/// actor, catalog identity (`catalogs.id`), owning team and clock hour, all
+/// as admission recorded them (plan Decision 20), created on the bucket's
+/// first read. Exact under concurrency: the counter row is upserted, so a
+/// second first read waits for the first to commit and then increments.
+/// It only references audit rows that already exist: a write that runs
+/// after the actor's user was deleted (and forgotten) adds nothing that
+/// identifies them, and a catalog moved or deleted meanwhile keeps the read
+/// in the scope it was admitted in.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `record` - the access, as admitted.
+///
+/// # Errors
+/// [`OkfError::Database`].
+pub async fn record_admin_read(pool: &PgPool, record: &AccessRecord) -> Result<(), OkfError> {
+    // `DurationRound::duration_trunc`: the start of the clock hour. It
+    // fails only for a time chrono cannot represent, which a clock never
+    // gives; the time itself then stands in.
+    let hour = record
+        .at
+        .duration_trunc(TimeDelta::hours(1))
+        .unwrap_or(record.at);
+    // Audit ids only: a deletion leaves no name in the bucket key either.
+    let who = match (record.actor_credential, record.actor_person) {
+        (Some(credential), _) => format!("c{credential}"),
+        (None, Some(person)) => format!("p{person}"),
+        (None, None) => format!("l{}", record.actor_label),
+    };
+    // `0` stands for "no owner team" (audit ids start at 1). U+001F (unit
+    // separator) cannot occur in the parts.
+    let bucket = format!(
+        "{who}\u{1f}{}\u{1f}{}\u{1f}{}",
+        record.scope.id,
+        record.scope.team.unwrap_or(0),
+        hour.timestamp()
+    );
+    let mut tx = pool.begin().await?;
+    // The first read of the bucket inserts the row with no entry yet; a
+    // concurrent first read waits on that row, then increments it.
+    let entry_id: Option<i64> = sqlx::query_scalar(
+        "INSERT INTO audit_access_counts (bucket, requests) VALUES ($1, 1) \
+         ON CONFLICT (bucket) DO UPDATE SET requests = audit_access_counts.requests + 1 \
+         RETURNING entry_id",
+    )
+    .bind(&bucket)
+    .fetch_one(&mut *tx)
+    .await?;
+    if entry_id.is_none() {
+        // The ids as admission fixed them; no `audit_person` or
+        // `audit_credential` call, so nothing is created for a deleted user.
+        // `into_iter().collect()` turns the `Option` into a zero- or
+        // one-item Vec.
+        let teams: Vec<i64> = record.scope.team.into_iter().collect();
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO audit_entries (at, action, source, actor_credential_ref, \
+                 actor_person_id, actor_label, actor_operator, client_ip, target_kind, \
+                 target_name, teams, details) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8::inet, 'catalog', $9, $10, $11) \
+             RETURNING id",
+        )
+        .bind(record.at)
+        .bind(Action::CatalogAdminRead.as_str())
+        .bind(record.source.as_str())
+        .bind(record.actor_credential)
+        .bind(record.actor_person)
+        .bind(&record.actor_label)
+        .bind(record.operator)
+        .bind(record.ip.map(|ip| ip.to_string()))
+        .bind(&record.catalog)
+        .bind(&teams)
+        .bind(serde_json::json!({
+            "hour": crate::clock::format_timestamp(hour),
+            "catalog_id": record.scope.id,
+        }))
+        .fetch_one(&mut *tx)
+        .await?;
+        sqlx::query("UPDATE audit_access_counts SET entry_id = $2 WHERE bucket = $1")
+            .bind(&bucket)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Refuses a provisioner acting on an admin user (spec Part 4). Store
 /// functions call it after reading the target's admin flag under a lock
 /// that `users::set_admin` conflicts with, so the check cannot race.
@@ -843,6 +968,40 @@ pub(crate) mod testing {
         pub details: serde_json::Value,
         /// A `catalog.admin_read` entry's request count.
         pub requests: Option<i64>,
+    }
+
+    /// The [`super::AccessRecord`] admission would build for `actor` on
+    /// `catalog`, its ids resolved with SQL as the key cache resolves them.
+    pub(crate) async fn access_record(
+        pool: &PgPool,
+        actor: &super::AuditActor,
+        catalog: &str,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> super::AccessRecord {
+        let (credential, person, id, team): (Option<i64>, Option<i64>, i64, Option<i64>) =
+            sqlx::query_as(
+                "SELECT audit_credential($1, NULL, $2), audit_person($3), c.id, \
+                        audit_team_ref(c.owner_team_id) \
+                 FROM catalogs c WHERE c.name = $4",
+            )
+            .bind(&actor.credential)
+            .bind(&actor.label)
+            .bind(&actor.user_id)
+            .bind(catalog)
+            .fetch_one(pool)
+            .await
+            .expect("resolve the access");
+        super::AccessRecord {
+            source: actor.source,
+            actor_credential: credential,
+            actor_person: person,
+            actor_label: actor.stored_label(),
+            operator: actor.operator,
+            ip: actor.ip,
+            catalog: catalog.to_string(),
+            scope: crate::auth::CatalogScope { id, team },
+            at,
+        }
     }
 
     /// Every entry with this action, oldest first.
@@ -1092,7 +1251,12 @@ mod tests {
         // A real console-session principal: its `actor` is the user's name.
         // (M13's three arguments; Task 7b adds the gates: pass
         // `Default::default()` once more.)
-        let principal = Principal::for_session(&alice, Default::default(), Default::default());
+        let principal = Principal::for_session(
+            &alice,
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        );
         let requester = Requester {
             ip: None,
             source: Source::Console,
@@ -1770,5 +1934,125 @@ mod tests {
         .await
         .unwrap();
         assert!(names.iter().any(|name| name == "renamed"), "{names:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn admin_reads_are_one_entry_per_credential_catalog_and_hour_with_an_exact_count() {
+        let db = test_db().await;
+        crate::store::catalogs::create(
+            &db.pool,
+            &crate::store::catalogs::NewCatalog {
+                name: "main",
+                description: "",
+                owner_team: TEST_TEAM,
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        let actor = admin_actor(&user_id(&db.pool, TEST_USER).await);
+
+        // Ten at once in one hour, then one in the next. `JoinSet` runs the
+        // ten as concurrent tasks (the crate has no `futures` dependency).
+        let mut reads = tokio::task::JoinSet::new();
+        for _ in 0..10 {
+            let (pool, actor) = (db.pool.clone(), actor.clone());
+            reads.spawn(async move {
+                let record = testing::access_record(&pool, &actor, "main", now()).await;
+                record_admin_read(&pool, &record).await
+            });
+        }
+        let joined = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while let Some(read) = reads.join_next().await {
+                read.unwrap().unwrap();
+            }
+        });
+        joined.await.expect("ten concurrent admin reads finish");
+        let next_hour = now() + TimeDelta::hours(1);
+        let record = testing::access_record(&db.pool, &actor, "main", next_hour).await;
+        record_admin_read(&db.pool, &record).await.unwrap();
+
+        let counts: Vec<i64> = sqlx::query_scalar(
+            "SELECT c.requests FROM audit_entries e \
+             JOIN audit_access_counts c ON c.entry_id = e.id \
+             WHERE e.action = 'catalog.admin_read' ORDER BY e.id",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(counts, [10, 1]);
+        let entries = testing::entries(&db.pool, "catalog.admin_read").await;
+        assert_eq!(entries[0].target.as_deref(), Some("main"));
+        assert_eq!(entries[0].actor_label, "api key");
+        assert_eq!(entries[0].details["hour"], "2026-11-13T12:00:00Z");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_catalog_moved_or_created_again_within_the_hour_starts_a_new_admin_read_entry() {
+        use crate::store::catalogs::{self, NewCatalog};
+        let db = test_db().await;
+        let actor = admin_actor(&user_id(&db.pool, TEST_USER).await);
+        let cli = AuditActor::cli();
+        teams::create(
+            &db.pool,
+            &NewTeam {
+                name: "family",
+                display_name: "",
+                owner: TEST_USER,
+            },
+            &cli,
+            now(),
+        )
+        .await
+        .unwrap();
+        let main = |owner_team| NewCatalog {
+            name: "main",
+            description: "",
+            owner_team,
+        };
+        // One admin read at `minutes` past the hour.
+        let read = |minutes: i64| {
+            let (pool, actor) = (db.pool.clone(), actor.clone());
+            async move {
+                let at = now() + TimeDelta::minutes(minutes);
+                let record = testing::access_record(&pool, &actor, "main", at).await;
+                record_admin_read(&pool, &record).await.unwrap();
+            }
+        };
+        catalogs::create(&db.pool, &main(TEST_TEAM), &cli, now())
+            .await
+            .unwrap();
+
+        read(0).await;
+        catalogs::set_owner(&db.pool, "main", "family", &cli, now())
+            .await
+            .unwrap();
+        read(1).await;
+        read(2).await;
+        catalogs::delete(&db.pool, "main", true, &cli, now())
+            .await
+            .unwrap();
+        catalogs::create(&db.pool, &main(TEST_TEAM), &cli, now())
+            .await
+            .unwrap();
+        read(3).await;
+
+        let reads: Vec<(Vec<i64>, i64)> = sqlx::query_as(
+            "SELECT e.teams, c.requests FROM audit_entries e \
+             JOIN audit_access_counts c ON c.entry_id = e.id \
+             WHERE e.action = 'catalog.admin_read' ORDER BY e.id",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        let mut conn = db.pool.acquire().await.unwrap();
+        let personal = team_ref(&mut conn, TEST_TEAM).await.unwrap();
+        let family = team_ref(&mut conn, "family").await.unwrap();
+        // Same hour throughout: one entry per (catalog identity, owner team).
+        assert_eq!(
+            reads,
+            [(vec![personal], 1), (vec![family], 2), (vec![personal], 1)]
+        );
     }
 }

@@ -48,7 +48,15 @@ async fn round_trip(files: &Files) -> (Files, ImportReport) {
     };
     import(&db.pool, "rt", files.clone(), &first).await.unwrap();
 
-    let (tarball, _generation) = export::export(&db.pool, "rt", Vec::new()).await.unwrap();
+    let (tarball, _generation) = export::export(
+        &db.pool,
+        "rt",
+        Vec::new(),
+        &okf_mcp::store::audit::AuditActor::cli(),
+        chrono::Utc::now(),
+    )
+    .await
+    .unwrap();
     let exported = archive::read_tarball(tarball.as_slice(), u64::MAX).unwrap();
     let again = ImportOptions {
         replace: true,

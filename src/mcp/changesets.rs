@@ -116,8 +116,9 @@ pub(crate) async fn list_changesets(
 
     let principal = ctx.principal();
     let catalog_ids: Vec<i64> = match params.catalog.as_deref() {
-        // `one` refuses a catalog the key does not reach.
-        Some(name) => vec![ctx.one(Some(name))?.id()],
+        // `target` refuses a catalog the key does not reach; it admits
+        // nothing, since a list of changesets reads no catalog's contents.
+        Some(name) => vec![ctx.target(Some(name))?.id()],
         None => {
             // A list naming a bad catalog fails here as it does elsewhere.
             ctx.check_connection()?;
@@ -232,7 +233,9 @@ pub(crate) async fn open_changeset(
     use crate::auth::CredentialKind;
     use crate::store::changesets;
 
-    let state = ctx.one(params.catalog.as_deref())?;
+    // Opening reads no contents: nothing is admitted (the writes are
+    // recorded as publishes).
+    let state = ctx.target(params.catalog.as_deref())?;
     let principal = ctx.principal();
     // `changesets.key_id` references `api_keys`. MCP takes only bearer
     // credentials, so this guards any later `/api/v1` caller.
@@ -920,8 +923,12 @@ mod open_tests {
             is_admin: true,
         };
         // An admin session: it passes every level check.
-        let session =
-            crate::auth::Principal::for_session(&user, Default::default(), Default::default());
+        let session = crate::auth::Principal::for_session(
+            &user,
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        );
         let ctx = crate::mcp::testing::context(&test, std::sync::Arc::new(session), None);
 
         let refused = open_changeset(
@@ -934,6 +941,62 @@ mod open_tests {
         .unwrap_err();
 
         assert_eq!(refused.kind(), "Forbidden", "{refused}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_changeset_call_on_a_multi_catalog_connection_records_one_admin_read() {
+        use crate::mcp::testing::{cached_principal, context, settle_access, staff_root};
+        let test = app_with(
+            &[
+                ("main", &[("index.md", "# Main\n")]),
+                ("other", &[("index.md", "# Other\n")]),
+            ],
+            Config::default(),
+        )
+        .await;
+        // An every-catalog admin key of `staff`, outside both catalogs' owner team.
+        let secret = staff_root(&test).await;
+        let ctx = context(
+            &test,
+            cached_principal(&test, &secret),
+            Some(&["main", "other"]),
+        );
+        let named = |name: &str| ListParams {
+            catalog: Some(name.to_string()),
+        };
+
+        // Opening, listing and the connection checks they run read no
+        // catalog's contents; the changeset read reads `main`'s.
+        let opened = open_changeset(
+            &ctx,
+            OpenParams {
+                catalog: Some("main".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+        ctx.changeset(&opened.changeset, Access::Read)
+            .await
+            .unwrap();
+        list_changesets(&ctx, ListParams { catalog: None })
+            .await
+            .unwrap();
+        list_changesets(&ctx, named("other")).await.unwrap();
+        settle_access(&test).await;
+
+        let reads =
+            crate::store::audit::testing::entries(test.app.pool(), "catalog.admin_read").await;
+        assert_eq!(
+            reads.len(),
+            1,
+            "only the changeset's own catalog: {reads:?}"
+        );
+        assert_eq!(reads[0].target.as_deref(), Some("main"));
+        assert_eq!(
+            reads[0].requests,
+            Some(1),
+            "the connection check and the lists record nothing"
+        );
     }
 
     #[test]

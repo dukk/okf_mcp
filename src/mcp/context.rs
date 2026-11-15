@@ -2,7 +2,8 @@
 //! catalogs, one view of the catalog map, and the changeset a handle names
 //! ([`Pinned`]).
 
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 
 use axum::http::request::Parts;
 
@@ -13,7 +14,7 @@ use crate::error::OkfError;
 use crate::http::requester::Requester;
 use crate::overlay::View;
 use crate::selection::{connection_catalogs, in_scope, resolve, Selection, Sources};
-use crate::store::audit::{AuditActor, Source};
+use crate::store::audit::{AccessKind, AuditActor, Source};
 use crate::store::changesets::{self, ChangesetRow, ChangesetState};
 use crate::store::keys::Access;
 
@@ -59,6 +60,10 @@ pub struct ToolContext {
     catalogs: Arc<Catalogs>,
     // The request's address and source, for the audit log.
     requester: Requester,
+    // The accesses this call has noted for the audit log, so each catalog
+    // and kind counts once per call (plan Decision 5). A `std` mutex: held
+    // only to insert, never across an `.await`.
+    noted: Mutex<HashSet<(String, AccessKind)>>,
 }
 
 impl ToolContext {
@@ -85,6 +90,7 @@ impl ToolContext {
                 ip: None,
                 source: Source::Api,
             },
+            noted: Mutex::default(),
         }
     }
 
@@ -190,12 +196,14 @@ impl ToolContext {
         match self.connection.as_deref() {
             // With a list, `select(None)` resolves to exactly that list.
             // `map(drop)` discards the selection, keeping only `Ok(())`.
-            Some(list) if !list.is_empty() => self.select(None).map(drop),
+            Some(list) if !list.is_empty() => self.resolve_call(None).map(drop),
             _ => Ok(()),
         }
     }
 
-    /// Resolves the call's catalogs (design "Catalog selection").
+    /// Resolves the call's catalogs (design "Catalog selection") for a tool
+    /// that reads their contents, and notes each selected catalog's read for
+    /// the audit log (`ToolContext::admit`).
     ///
     /// # Arguments
     /// * `argument` - the call's `catalogs` (or `catalog` as one name).
@@ -206,6 +214,27 @@ impl ToolContext {
     /// # Errors
     /// As [`resolve`].
     pub fn select(&self, argument: Option<&[String]>) -> Result<Selection, OkfError> {
+        let selection = self.resolve_call(argument)?;
+        for name in selection.catalogs() {
+            self.admit(name, AccessKind::Read);
+        }
+        Ok(selection)
+    }
+
+    /// Resolves the call's catalogs as [`ToolContext::select`] does, but
+    /// admits nothing: for a path that reads no catalog's contents (the
+    /// connection check, the catalog list, opening or listing changesets),
+    /// so only the catalog actually read is recorded (plan Decision 23).
+    ///
+    /// # Arguments
+    /// * `argument` - the call's `catalogs` (or `catalog` as one name).
+    ///
+    /// # Returns
+    /// The selection, every name in this call's catalog map.
+    ///
+    /// # Errors
+    /// As [`resolve`].
+    pub fn resolve_call(&self, argument: Option<&[String]>) -> Result<Selection, OkfError> {
         let sources = Sources {
             argument,
             connection: self.connection.as_deref(),
@@ -257,6 +286,7 @@ impl ToolContext {
     }
 
     /// The one catalog a report runs on: `catalog`, else the first selected.
+    /// Notes its read for the audit log, as [`ToolContext::select`] does.
     ///
     /// # Arguments
     /// * `catalog` - the call's `catalog` argument.
@@ -267,10 +297,64 @@ impl ToolContext {
     /// # Errors
     /// As [`ToolContext::select`].
     pub fn one(&self, catalog: Option<&str>) -> Result<Arc<CatalogState>, OkfError> {
+        let state = self.target(catalog)?;
+        self.admit(state.name(), AccessKind::Read);
+        Ok(state)
+    }
+
+    /// The one catalog a call acts on without reading its contents
+    /// (opening a changeset, listing changesets): as [`ToolContext::one`],
+    /// but admits nothing (plan Decision 23).
+    ///
+    /// # Arguments
+    /// * `catalog` - the call's `catalog` argument.
+    ///
+    /// # Returns
+    /// That catalog's state.
+    ///
+    /// # Errors
+    /// As [`ToolContext::select`].
+    pub fn target(&self, catalog: Option<&str>) -> Result<Arc<CatalogState>, OkfError> {
         let argument = catalog.map(str::to_string);
-        let selection = self.select(argument.as_ref().map(std::slice::from_ref))?;
+        let selection = self.resolve_call(argument.as_ref().map(std::slice::from_ref))?;
         // `write_target` is the first selected catalog.
         Ok(self.state(selection.write_target()))
+    }
+
+    /// Notes one access to `catalog`'s contents for the audit log: at most
+    /// once per call, catalog and kind (one request, one count), and only
+    /// for an admission that is recorded. The identities and scope are fixed
+    /// now, at admission ([`Principal::access_record`]); the write runs in
+    /// the background ([`App::note_access`]), off the request path.
+    ///
+    /// # Arguments
+    /// * `catalog` - a catalog this call reaches at the level `kind` needs.
+    /// * `kind` - what the call does with its contents.
+    pub(crate) fn admit(&self, catalog: &str, kind: AccessKind) {
+        let access = match kind {
+            AccessKind::Write => Access::Write,
+            AccessKind::Read | AccessKind::Export => Access::Read,
+        };
+        let now = self.app.clock().now();
+        // `let ... else`: leave early for a refusal (Task 9b checks those
+        // before this runs) or an admission that records nothing.
+        let Ok(admission) = self.principal.admission(catalog, access, now) else {
+            return;
+        };
+        if !admission.is_recorded() {
+            return;
+        }
+        let fresh = self
+            .noted
+            .lock()
+            .expect("noted lock poisoned")
+            .insert((catalog.to_string(), kind));
+        if !fresh {
+            return;
+        }
+        if let Some(record) = self.principal.access_record(&self.requester, catalog, now) {
+            self.app.note_access(record, kind, admission);
+        }
     }
 
     /// The call's changeset, if it named one: what a read tool passes to
@@ -418,7 +502,18 @@ impl ToolContext {
         // Only a discarded changeset gets the 24-hour hint: the prune is one
         // way to be discarded, and a published one was never pruned.
         let hint = match row.state {
-            ChangesetState::Open => return Ok(Pinned { state, row }),
+            ChangesetState::Open => {
+                // The changeset's own catalog only, never the connection's
+                // others (plan Decision 23). `if` is an expression, like
+                // Python's conditional expression.
+                let kind = if access == Access::Write {
+                    AccessKind::Write
+                } else {
+                    AccessKind::Read
+                };
+                self.admit(state.name(), kind);
+                return Ok(Pinned { state, row });
+            }
             ChangesetState::Published => "",
             ChangesetState::Discarded => " (a changeset with no edits is discarded after 24 hours)",
         };

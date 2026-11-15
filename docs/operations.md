@@ -1043,6 +1043,8 @@ the setting and belongs to no team.
 | `oauth.grant_created` | A sign-in code is redeemed (system actor `oauth`), or a signed-in user approves consent (their console-session actor) | `client` (host only), plus `code` (the immutable code id, not its secret) for redemption |
 | `setting.changed` | `settings set` or `PUT /api/v1/settings/{key}` changes a setting ([Settings](#settings)). Setting the value already stored records nothing | `from` (the stored value before, `null` without an override) and `to`; for `support_contact` only `set` (whether a contact is set now), never the address |
 | `setting.cleared` | `settings reset` or `DELETE /api/v1/settings/{key}` removes an override (with none, nothing is recorded) | `from`; nothing for `support_contact` |
+| `catalog.exported` | Every export, whoever asks: `okf-mcp export` (source `cli`), `GET /catalogs/{name}/export` and its `/api/v1` twin, the console. Written before the archive is compressed; an export whose entry cannot be written fails. A refused export records nothing | `generation` (the one the archive holds), `files` |
+| `catalog.admin_read` | An admin credential reads a catalog's contents (MCP read tools, a changeset read, the console's and the API's browse, history and search routes) and its user is not in the catalog's owner team; a key with no user always counts. One entry per credential (or session user), catalog identity, owning team and clock hour, with an exact request count; members' reads, writes (recorded as publishes) and paths that read no contents (listing catalogs or changesets, opening a changeset, the connection's catalog list) record nothing | `hour` (its start), `catalog_id` (the catalog's immutable id), and the request count |
 
 Credential events belong to the owner teams of their granted catalogs
 (all-catalogs credentials belong to no team); a code assignment belongs to
@@ -1053,6 +1055,16 @@ transaction. An older credential's first reference resolution can wait on
 another first resolver; existing-reference refreshes skip locked rows.
 These credential-change entries do not claim to record every provisioner
 request (the separate every-use design work remains outstanding).
+
+Admin reads are counted off the request path: the server notes each
+catalog at most once per request and writes the count in the background,
+and a stopping server waits (up to 30 seconds) for the counts in flight.
+Who read and which catalog and team the read belongs to are fixed when the
+request is let in, so a count written after the reader's user was deleted
+names nobody, a read before a catalog's transfer stays in the old owner
+team's log, and a read of a catalog deleted or replaced under the same
+name keeps the original catalog's id. A server that crashes between a
+request and its write can lose that one count.
 
 The log is append-only: the database refuses any change to an entry, and
 any delete of one younger than `audit_retention_days` (at least 30 days,

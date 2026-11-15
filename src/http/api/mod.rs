@@ -22,6 +22,8 @@ use crate::http::requester::Requester;
 use crate::mcp::context::ToolContext;
 use crate::store::keys::Access;
 
+#[cfg(test)]
+mod access_tests;
 mod browse;
 mod catalogs;
 mod changesets;
