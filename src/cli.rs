@@ -36,7 +36,7 @@ use crate::store::repair;
 use crate::store::settings::SettingKey;
 use crate::store::teams::Role;
 use crate::store::unlocks::Category;
-use crate::telemetry::{self, StartUp};
+use crate::telemetry::{self, StartUp, Telemetry};
 
 // `src/cli/admin.rs`: the `settings` and `mail` handlers.
 mod admin;
@@ -752,6 +752,18 @@ async fn serve(
     Ok(())
 }
 
+/// [`run`] without the subscriber install, which a process may do once: the
+/// unit tests run many commands in one process. Loads the configuration and
+/// dispatches the command.
+///
+/// # Errors
+/// As [`run`].
+#[cfg(test)]
+pub(crate) async fn run_in_tests(cli: Cli, clock: Arc<dyn Clock>) -> anyhow::Result<()> {
+    let config = Config::load(cli.config.as_deref())?;
+    dispatch(cli, config, None, clock).await
+}
+
 /// Runs one command line.
 ///
 /// # Arguments
@@ -775,6 +787,27 @@ pub async fn run(cli: Cli, clock: Arc<dyn Clock>) -> anyhow::Result<()> {
         telemetry.as_ref(),
         env("RUST_LOG").as_deref(),
     )?;
+    dispatch(cli, config, telemetry, clock).await
+}
+
+/// Runs the parsed command with the configuration loaded and the subscriber
+/// installed. Split from [`run`] so the unit tests, which run many commands
+/// in one process, skip the once-per-process subscriber install.
+///
+/// # Arguments
+/// * `cli` - the parsed command line.
+/// * `config` - the loaded configuration.
+/// * `telemetry` - `serve`'s running telemetry (`None` for other commands).
+/// * `clock` - the source of every timestamp written.
+///
+/// # Errors
+/// Any failure, with context, for `main` to print.
+async fn dispatch(
+    cli: Cli,
+    config: Config,
+    telemetry: Option<Telemetry>,
+    clock: Arc<dyn Clock>,
+) -> anyhow::Result<()> {
     // `unwrap_or_else` builds the default only when no subcommand was given.
     match cli
         .command
@@ -1550,6 +1583,8 @@ async fn connect(url: Option<&str>, config: &Config) -> anyhow::Result<PgPool> {
 mod tests {
     use super::*;
     use crate::clock::FixedClock;
+
+    use super::run_in_tests as run;
 
     /// A fixed clock at the current instant, as `run` takes it.
     fn fixed_now() -> Arc<dyn Clock> {
