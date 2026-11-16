@@ -1066,10 +1066,25 @@ pub async fn delete(
         .await?;
     // First, so it wins over every other refusal: a client that asked for
     // this precondition always gets this answer (issue #535).
-    if options.unless_shared_member && !shared.is_empty() {
-        return Err(OkfError::Refused {
-            reason: format!("{SHARED_MEMBER_REFUSAL}: {}", quoted(&shared)),
-        });
+    if options.unless_shared_member {
+        // Another user's personal team can have members too
+        // (`teams::set_member`): only the user's own is not "shared". No
+        // lock on those rows: a membership added concurrently needs this
+        // user row `FOR KEY SHARE`, which we hold off.
+        let in_others: Vec<String> = sqlx::query_scalar(
+            "SELECT t.name FROM teams t JOIN team_members m ON m.team_id = t.id \
+             WHERE m.user_id = $1 AND t.personal_of IS NOT NULL AND t.personal_of <> $1 \
+             ORDER BY t.id",
+        )
+        .bind(&user_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        let teams: Vec<String> = shared.iter().chain(&in_others).cloned().collect();
+        if !teams.is_empty() {
+            return Err(OkfError::Refused {
+                reason: format!("{SHARED_MEMBER_REFUSAL}: {}", quoted(&teams)),
+            });
+        }
     }
     let blocker = if !owned.is_empty() {
         Some(format!(
@@ -2511,6 +2526,43 @@ pub(crate) mod tests {
         assert!(guarded.starts_with(SHARED_MEMBER_REFUSAL), "{guarded}");
         assert!(!guarded.contains("last owner"), "{guarded}");
         assert!(find(&db.pool, "alice").await.is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unless_shared_member_counts_another_users_personal_team() {
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", None).await;
+        seed_user(&db.pool, "bob", None).await;
+        teams::set_member(
+            &db.pool,
+            &crate::store::teams::Membership {
+                team: "alice",
+                user: "bob",
+                role: teams::Role::Member,
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+
+        let refused = delete(&db.pool, "bob", UNLESS_SHARED, &AuditActor::cli(), now()).await;
+
+        assert_eq!(
+            reason(refused),
+            "the user is a member of shared team(s): \"alice\""
+        );
+        assert!(find(&db.pool, "bob").await.is_ok(), "the user stays");
+        assert_eq!(
+            teams::find(&db.pool, "alice").await.unwrap().members.len(),
+            2,
+            "the membership stays"
+        );
+        let own_only = delete(&db.pool, "alice", UNLESS_SHARED, &AuditActor::cli(), now()).await;
+        assert!(
+            own_only.is_ok(),
+            "an own personal team alone is not shared: {own_only:?}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

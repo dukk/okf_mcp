@@ -9,6 +9,7 @@
 - The shared-team lookup in `users::delete` now returns the team names, still under `FOR UPDATE`.
 
 ## Notes
+- Another user's personal team counts as shared (its members are not its owner alone); only the user's own personal team does not. That lookup takes no lock: a membership insert needs the user row `FOR KEY SHARE`, which the delete holds off.
 - The check is atomic: a membership insert needs the user row `FOR KEY SHARE`, which the delete's `FOR UPDATE` on the user holds off, so a membership either commits first (and is seen, so 409) or waits and then fails its foreign key.
 - The refusal is checked before the owned-catalog, last-owner and last-admin refusals, so it wins.
 - `docs/operations.md` documents the parameter and what a client matches on.
