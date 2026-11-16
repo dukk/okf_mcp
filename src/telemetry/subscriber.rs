@@ -363,10 +363,6 @@ pub(crate) mod capture {
             let exporter = InMemorySpanExporter::default();
             let provider = SdkTracerProvider::builder()
                 .with_simple_exporter(exporter.clone())
-                // Not the default `ParentBased`: a span parented on another
-                // test's unsampled context (the thread-local one a migrating
-                // task leaves behind) would be dropped.
-                .with_sampler(opentelemetry_sdk::trace::Sampler::AlwaysOn)
                 .build();
             let layer = tracing_opentelemetry::layer().with_tracer(provider.tracer("okf-mcp"));
             let dispatch = tracing::Dispatch::new(tracing_subscriber::registry().with(layer));

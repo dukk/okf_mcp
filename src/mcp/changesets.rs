@@ -1224,6 +1224,7 @@ mod publish_tests {
     use crate::write::{apply, WriteReport};
     use opentelemetry_sdk::trace::SpanData;
     use tracing::instrument::WithSubscriber;
+    use tracing::Instrument;
 
     const NOTE: &str = "---\ntype: Note\ntitle: A\ndescription: A note.\n---\n# A\n";
     const X: &str = "---\ntype: Note\ntitle: X\ndescription: X.\n---\n# X\n";
@@ -1338,10 +1339,16 @@ mod publish_tests {
         let recorder = SpanRecorder::new();
 
         // Each pass runs inside a caller span: the pass must still be a root.
+        // The caller span is attached with `instrument`, so no entered guard
+        // is held across an await.
+        // The span is made inside the subscribed future, so it is a real one.
         async {
-            let _outer = tracing::info_span!("caller").entered();
-            test.app.poll().await.unwrap();
-            test.app.poll().await.unwrap();
+            async {
+                test.app.poll().await.unwrap();
+                test.app.poll().await.unwrap();
+            }
+            .instrument(tracing::info_span!("caller"))
+            .await;
         }
         .with_subscriber(recorder.dispatch())
         .await;
