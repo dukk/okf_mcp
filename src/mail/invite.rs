@@ -45,6 +45,7 @@ use crate::telemetry::subscriber::split_event;
 /// [`OkfError::Refused`] without `public_url` or without an email;
 /// [`OkfError::Forbidden`] for a provisioner and an admin user;
 /// [`OkfError::UnknownName`] for an unknown user; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn send_setup(
     pool: &PgPool,
     config: &Config,

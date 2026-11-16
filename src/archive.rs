@@ -91,6 +91,7 @@ pub struct ExportFile<'a> {
 /// # Errors
 /// [`OkfError::ImportRefused`] listing every rule violation, or saying the
 /// input is not a readable `.tar.gz` or expands past `max_bytes`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn read_tarball(input: impl Read, max_bytes: u64) -> Result<Files, OkfError> {
     let mut archive = Archive::new(Capped {
         inner: GzDecoder::new(input),
@@ -107,6 +108,7 @@ pub fn read_tarball(input: impl Read, max_bytes: u64) -> Result<Files, OkfError>
 }
 
 /// Reads every entry, collecting rule violations instead of stopping at the first.
+#[tracing::instrument(level = "trace", skip_all)]
 fn read_entries<R: Read>(archive: &mut Archive<R>) -> Result<Files, OkfError> {
     let mut files = Files::new();
     let mut problems = Vec::new();
@@ -168,6 +170,13 @@ fn read_entries<R: Read>(archive: &mut Archive<R>) -> Result<Files, OkfError> {
 
 /// A raw entry name for a message: lossy UTF-8 (bad bytes become U+FFFD),
 /// with control characters escaped (`\0`, `\n`) so one problem stays one line.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn shown(raw: &[u8]) -> String {
     // `escape_debug` is lazy (an iterator of chars); `to_string` collects it.
     String::from_utf8_lossy(raw).escape_debug().to_string()
@@ -175,6 +184,7 @@ fn shown(raw: &[u8]) -> String {
 
 /// A tar entry name as a catalog path, or the problem line saying why it
 /// can't be one.
+#[tracing::instrument(level = "trace", skip_all)]
 fn checked_path(raw: &[u8]) -> Result<String, String> {
     let reason = match std::str::from_utf8(raw) {
         Err(_) => "the name is not UTF-8",
@@ -207,6 +217,7 @@ fn checked_path(raw: &[u8]) -> Result<String, String> {
 /// # Errors
 /// [`OkfError::Io`] if the directory or a file can't be read;
 /// [`OkfError::ImportRefused`] past `max_bytes`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn read_directory(root: &Path, max_bytes: u64) -> Result<Files, OkfError> {
     let workspace = DiskWorkspace::new(root)?;
     let mut files = Files::new();
@@ -234,6 +245,7 @@ pub fn read_directory(root: &Path, max_bytes: u64) -> Result<Files, OkfError> {
 ///
 /// # Returns
 /// The file; `None` if it is longer than `limit`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn read_capped(path: &Path, limit: u64) -> io::Result<Option<StoredFile>> {
     let file = File::open(path)?;
     // The mode comes from the open handle, so it describes the file read.
@@ -254,6 +266,7 @@ fn read_capped(path: &Path, limit: u64) -> io::Result<Option<StoredFile>> {
 
 /// Does the file have any execute bit set?
 #[cfg(unix)]
+#[tracing::instrument(level = "trace", skip_all)]
 fn is_executable(metadata: &std::fs::Metadata) -> bool {
     // `PermissionsExt` is the Unix-only extension that exposes the mode bits.
     use std::os::unix::fs::PermissionsExt;
@@ -278,6 +291,7 @@ fn is_executable(_metadata: &std::fs::Metadata) -> bool {
 ///
 /// # Errors
 /// [`OkfError::Io`] if writing fails.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn write_tarball<W: Write>(out: W, files: &[ExportFile<'_>]) -> Result<W, OkfError> {
     let mut builder = Builder::new(GzEncoder::new(out, Compression::default()));
     for file in files {
@@ -310,6 +324,13 @@ struct Capped<R> {
 }
 
 impl<R: Read> Read for Capped<R> {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "per-read adapter in the tarball read loop: a span per chunk is hot-loop cost"
+        )
+    )]
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let read = self.inner.read(buf)?;
         match self.remaining.checked_sub(read as u64) {
@@ -326,6 +347,7 @@ impl<R: Read> Read for Capped<R> {
 }
 
 /// The refusal for an import (tarball or directory) past `max_bytes`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn too_large(max_bytes: u64) -> OkfError {
     OkfError::ImportRefused {
         problems: vec![format!(
@@ -335,6 +357,7 @@ fn too_large(max_bytes: u64) -> OkfError {
 }
 
 /// The refusal for input that is not a `.tar.gz` (or is a corrupt one).
+#[tracing::instrument(level = "trace", skip_all)]
 fn not_an_archive(error: io::Error) -> OkfError {
     OkfError::ImportRefused {
         problems: vec![format!("not a readable .tar.gz: {error}")],
@@ -342,6 +365,7 @@ fn not_an_archive(error: io::Error) -> OkfError {
 }
 
 /// An export write failure, naming the entry being written.
+#[tracing::instrument(level = "trace", skip_all)]
 fn export_error(path: &str, source: io::Error) -> OkfError {
     OkfError::Io {
         path: path.to_string(),

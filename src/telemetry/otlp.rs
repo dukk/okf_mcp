@@ -46,6 +46,13 @@ impl Signal {
     pub const ALL: [Signal; 3] = [Signal::Traces, Signal::Logs, Signal::Metrics];
 
     /// The URL path segment OTLP/HTTP uses for this signal.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     pub fn path(self) -> &'static str {
         match self {
             Signal::Traces => "traces",
@@ -55,11 +62,25 @@ impl Signal {
     }
 
     /// The closed label value for this signal.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     pub fn label(self) -> &'static str {
         self.path()
     }
 
     /// This signal's position in [`Signal::ALL`].
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     fn index(self) -> usize {
         match self {
             Signal::Traces => 0,
@@ -92,6 +113,13 @@ impl FailureReason {
     ];
 
     /// The closed label value for this reason.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     pub fn label(self) -> &'static str {
         match self {
             FailureReason::Timeout => "timeout",
@@ -102,6 +130,13 @@ impl FailureReason {
     }
 
     /// This reason's position in [`FailureReason::ALL`].
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     fn index(self) -> usize {
         match self {
             FailureReason::Timeout => 0,
@@ -117,6 +152,13 @@ impl FailureReason {
     /// starting `HTTP export failed`; a message that also mentions `network`
     /// or `connect` never reached the receiver, any other one was answered
     /// with a status.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     pub fn classify(error: &OTelSdkError) -> Self {
         match error {
             OTelSdkError::Timeout(_) => FailureReason::Timeout,
@@ -143,16 +185,37 @@ pub struct ExportFailures {
 
 impl ExportFailures {
     /// Counts one failed export.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     pub fn record(&self, signal: Signal, reason: FailureReason) {
         self.counts[signal.index()][reason.index()].fetch_add(1, Ordering::Relaxed);
     }
 
     /// How many exports of `signal` failed for `reason`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     pub fn count(&self, signal: Signal, reason: FailureReason) -> u64 {
         self.counts[signal.index()][reason.index()].load(Ordering::Relaxed)
     }
 
     /// How many exports of `signal` failed for any reason.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     pub fn total(&self, signal: Signal) -> u64 {
         FailureReason::ALL
             .iter()
@@ -161,6 +224,13 @@ impl ExportFailures {
     }
 
     /// Counts the failure in `result`, if any, and returns it unchanged.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     fn observe(&self, signal: Signal, result: OTelSdkResult) -> OTelSdkResult {
         if let Err(error) = &result {
             self.record(signal, FailureReason::classify(error));
@@ -185,6 +255,13 @@ impl ExportFailures {
 /// # Errors
 /// A message that names the entry's position and never its text: the values
 /// are credentials.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+    )
+)]
 pub fn parse_headers(text: &str) -> Result<HashMap<String, String>, String> {
     let text = text.trim();
     let mut headers = HashMap::new();
@@ -223,6 +300,13 @@ pub struct OtlpTarget {
 }
 
 impl std::fmt::Debug for OtlpTarget {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Only the header names; validation already refused a base URL with
         // userinfo, query or fragment.
@@ -236,6 +320,13 @@ impl std::fmt::Debug for OtlpTarget {
 }
 
 /// A `[telemetry.otlp]` problem found at start-up.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+    )
+)]
 fn config_error(message: String) -> OkfError {
     OkfError::Config {
         path: CONFIG_PATH.to_string(),
@@ -245,6 +336,13 @@ fn config_error(message: String) -> OkfError {
 
 /// Reads the variable a config key names; unset or blank is an error that
 /// names the variable and never a value.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+    )
+)]
 fn read_env(
     env: &dyn Fn(&str) -> Option<String>,
     name: &str,
@@ -271,6 +369,13 @@ impl OtlpTarget {
     /// # Errors
     /// [`OkfError::Config`] when the variable `headers_env` or
     /// `sentry_dsn_env` names is unset or blank, or its value does not parse.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     pub fn resolve(
         config: &OtlpConfig,
         env: &dyn Fn(&str) -> Option<String>,
@@ -314,6 +419,13 @@ impl OtlpTarget {
     /// # Errors
     /// A message that never contains the key: not a URL, an unusable scheme
     /// or host, an empty key, or a project id that is not digits.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     pub fn from_sentry_dsn(dsn: &str) -> Result<Self, String> {
         let url = url::Url::parse(dsn).map_err(|_| "it is not a URL".to_string())?;
         if !matches!(url.scheme(), "http" | "https") {
@@ -345,11 +457,25 @@ impl OtlpTarget {
     }
 
     /// The URL one signal is posted to.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     pub fn signal_url(&self, signal: Signal) -> String {
         format!("{}/v1/{}", self.base, signal.path())
     }
 
     /// The headers every request carries.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     pub fn headers(&self) -> &HashMap<String, String> {
         &self.headers
     }
@@ -360,6 +486,13 @@ impl OtlpTarget {
 ///
 /// # Errors
 /// [`OkfError::Config`] when the client cannot be built.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+    )
+)]
 pub(crate) fn http_client() -> Result<reqwest::Client, OkfError> {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -381,6 +514,13 @@ pub struct CountingSpanExporter<E> {
 
 impl<E> CountingSpanExporter<E> {
     /// Wraps `inner`, counting its failures in `failures`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     pub fn new(inner: E, failures: Arc<ExportFailures>) -> Self {
         Self { inner, failures }
     }
@@ -389,19 +529,47 @@ impl<E> CountingSpanExporter<E> {
 impl<E: SpanExporter> SpanExporter for CountingSpanExporter<E> {
     // `async fn` in a trait impl: the trait declares `-> impl Future + Send`,
     // which an `async fn` whose body is `Send` satisfies.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     async fn export(&self, batch: Vec<SpanData>) -> OTelSdkResult {
         let result = self.inner.export(batch).await;
         self.failures.observe(Signal::Traces, result)
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
         self.inner.shutdown_with_timeout(timeout)
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     fn force_flush(&self) -> OTelSdkResult {
         self.inner.force_flush()
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     fn set_resource(&mut self, resource: &Resource) {
         self.inner.set_resource(resource);
     }
@@ -416,21 +584,49 @@ pub struct CountingLogExporter<E> {
 
 impl<E> CountingLogExporter<E> {
     /// Wraps `inner`, counting its failures in `failures`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     pub fn new(inner: E, failures: Arc<ExportFailures>) -> Self {
         Self { inner, failures }
     }
 }
 
 impl<E: LogExporter> LogExporter for CountingLogExporter<E> {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     async fn export(&self, batch: LogBatch<'_>) -> OTelSdkResult {
         let result = self.inner.export(batch).await;
         self.failures.observe(Signal::Logs, result)
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
         self.inner.shutdown_with_timeout(timeout)
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     fn event_enabled(
         &self,
         level: opentelemetry::logs::Severity,
@@ -440,6 +636,13 @@ impl<E: LogExporter> LogExporter for CountingLogExporter<E> {
         self.inner.event_enabled(level, target, name)
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     fn set_resource(&mut self, resource: &Resource) {
         self.inner.set_resource(resource);
     }
@@ -514,6 +717,13 @@ impl<E: PushMetricExporter> PushMetricExporter for CountingMetricExporter<E> {
 ///
 /// # Errors
 /// [`OkfError::Config`] when the HTTP client or the exporter cannot be built.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+    )
+)]
 pub(crate) fn span_exporter(
     target: &OtlpTarget,
     failures: &Arc<ExportFailures>,
@@ -537,6 +747,13 @@ pub(crate) fn span_exporter(
 ///
 /// # Errors
 /// [`OkfError::Config`] when the HTTP client or the exporter cannot be built.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+    )
+)]
 pub(crate) fn log_exporter(
     target: &OtlpTarget,
     failures: &Arc<ExportFailures>,

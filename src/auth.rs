@@ -149,6 +149,7 @@ impl Admission {
     ///
     /// # Returns
     /// `true` for [`Admission::AdminRead`] and [`Admission::Unlocked`].
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn is_recorded(self) -> bool {
         // Every variant is named, so a new one must decide.
         match self {
@@ -208,6 +209,7 @@ impl Principal {
     ///
     /// # Returns
     /// Its level there, or `None` when it does not reach the catalog.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn level(&self, catalog: &str) -> Option<Access> {
         match &self.reach {
             Reach::All => Some(self.access),
@@ -224,6 +226,13 @@ impl Principal {
     ///
     /// # Returns
     /// `true` for a key granted every catalog, or this one.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn reaches(&self, catalog: &str) -> bool {
         self.level(catalog).is_some()
     }
@@ -240,6 +249,7 @@ impl Principal {
     /// catalog (worded like an unknown catalog, so a key cannot probe which
     /// catalogs exist); [`OkfError::Forbidden`] if it does but its level
     /// there is lower than `access`.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn require_level(&self, access: Access, catalog: &str) -> Result<(), OkfError> {
         // `let ... else`: bind the level, or leave early when there is none.
         let Some(level) = self.level(catalog) else {
@@ -271,6 +281,13 @@ impl Principal {
     ///
     /// # Returns
     /// The owner team and its notice, or `None` for an active catalog.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn suspension(&self, catalog: &str) -> Option<&SuspendedCatalog> {
         self.suspended.get(catalog)
     }
@@ -284,6 +301,7 @@ impl Principal {
     /// # Errors
     /// [`OkfError::Suspended`] when the catalog's owner team is suspended and
     /// the principal is not an admin.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn check_not_suspended(&self, catalog: &str) -> Result<(), OkfError> {
         if self.access == Access::Admin {
             return Ok(());
@@ -312,6 +330,13 @@ impl Principal {
     /// catalogs exist); [`OkfError::Forbidden`] if it does but its level
     /// there is lower than `access`; then [`OkfError::Suspended`] (see
     /// [`Self::check_not_suspended`]).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn require(&self, access: Access, catalog: &str) -> Result<(), OkfError> {
         self.require_level(access, catalog)?;
         self.check_not_suspended(catalog)
@@ -326,6 +351,13 @@ impl Principal {
     /// # Errors
     /// As [`Self::require`] with [`Access::Read`], but never
     /// [`OkfError::Suspended`].
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn require_export(&self, catalog: &str) -> Result<(), OkfError> {
         self.require_level(Access::Read, catalog)
     }
@@ -348,6 +380,7 @@ impl Principal {
     /// # Returns
     /// The principal; its `access` is the highest level it holds, for
     /// display and the admin checks (which a non-admin never passes).
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn for_session(
         user: &UserAuth,
         ceiling: Ceiling,
@@ -405,6 +438,7 @@ impl Principal {
     /// [`OkfError::MaintenanceOff`] for the runner on a catalog that opted
     /// out; [`OkfError::UnlockRequired`] when `require_unlock` is on and
     /// nothing above lets the principal in.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn admission(
         &self,
         catalog: &str,
@@ -468,6 +502,7 @@ impl Principal {
     /// # Errors
     /// [`OkfError::Suspended`] (see [`Self::check_not_suspended`]); then as
     /// [`Self::admission`].
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn check_open(
         &self,
         catalog: &str,
@@ -493,6 +528,7 @@ impl Principal {
     ///
     /// # Errors
     /// As [`Self::require`]; then as [`Self::admission`].
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn require_contents(
         &self,
         access: Access,
@@ -505,6 +541,7 @@ impl Principal {
 
     /// Whether the credential's user holds `catalog` in `map` (one of the
     /// gates' by-user catalog maps).
+    #[tracing::instrument(level = "trace", skip_all)]
     fn holds(&self, map: &HashMap<String, HashSet<String>>, catalog: &str) -> bool {
         self.user_id
             .as_deref()
@@ -513,6 +550,13 @@ impl Principal {
     }
 
     /// Whether the credential's user is in the catalog's owner team.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn is_member_of_owner(&self, catalog: &str) -> bool {
         self.holds(&self.gates.members, catalog)
     }
@@ -532,6 +576,7 @@ impl Principal {
     /// # Returns
     /// Its id and owner team, or `None` when the gates do not know that
     /// incarnation.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn scope_of(&self, catalog: &str, catalog_id: i64) -> Option<CatalogScope> {
         self.gates
             .catalogs
@@ -553,6 +598,7 @@ impl Principal {
     ///
     /// # Returns
     /// The record.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn access_record(
         &self,
         requester: &Requester,
@@ -592,6 +638,7 @@ impl Principal {
     ///
     /// # Errors
     /// As [`Self::require`], or [`OkfError::Forbidden`] when reporting is disabled.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn require_maintenance_report(&self, catalog: &str) -> Result<(), OkfError> {
         self.require(Access::Read, catalog)?;
         if !self.maintenance_report {
@@ -606,6 +653,7 @@ impl Principal {
 // `From` is Rust's conversion trait: `Principal::from(record)` (or
 // `record.into()`) builds a principal from a stored key.
 impl From<KeyRecord> for Principal {
+    #[tracing::instrument(level = "trace", skip_all)]
     fn from(record: KeyRecord) -> Self {
         let reach = if record.all_catalogs {
             Reach::All
@@ -648,6 +696,13 @@ impl From<KeyRecord> for Principal {
 ///
 /// # Returns
 /// `true` before the expiry (or with none).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn unexpired(expires_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
     // `is_none_or`: true for `None`, else the test's answer.
     expires_at.is_none_or(|at| at > now)
@@ -663,6 +718,13 @@ struct Cached {
 impl Cached {
     /// The principal, unless the credential has expired since the cache
     /// was built (it can be up to one `poll_interval` old).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn live_at(&self, now: DateTime<Utc>) -> Option<Arc<Principal>> {
         // `then` runs the closure only when the test is true.
         unexpired(self.expires_at, now).then(|| Arc::clone(&self.principal))
@@ -703,6 +765,7 @@ static NO_CEILING: Ceiling = BTreeMap::new();
 ///
 /// # Returns
 /// The principal.
+#[tracing::instrument(level = "trace", skip_all)]
 fn principal_of(
     record: KeyRecord,
     ceilings: &HashMap<String, Ceiling>,
@@ -754,6 +817,7 @@ impl KeyCache {
     ///
     /// # Returns
     /// The cache.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn from_records(
         records: Vec<KeyRecord>,
         ceilings: HashMap<String, Ceiling>,
@@ -826,6 +890,13 @@ impl KeyCache {
     ///
     /// # Returns
     /// The cache with them.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn with_users(mut self, users: HashMap<String, UserAuth>) -> Self {
         self.users = users;
         self
@@ -838,6 +909,13 @@ impl KeyCache {
     ///
     /// # Returns
     /// The user, or `None` for one not loaded (deleted, or created since).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn user(&self, user_id: &str) -> Option<&UserAuth> {
         self.users.get(user_id)
     }
@@ -847,6 +925,7 @@ impl KeyCache {
     ///
     /// # Errors
     /// [`OkfError::Database`].
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn read(pool: &PgPool, now: DateTime<Utc>) -> Result<Self, OkfError> {
         // All four at once, on four pooled connections (`try_join!` is
         // `asyncio.gather` that stops at the first error). A change committed
@@ -877,6 +956,7 @@ impl KeyCache {
     ///
     /// # Returns
     /// Its principal, or `None` for an unknown, revoked or expired key.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn find(&self, presented: &str, now: DateTime<Utc>) -> Option<Arc<Principal>> {
         self.by_hash
             .get(&keys::hash(presented))
@@ -891,6 +971,7 @@ impl KeyCache {
     ///
     /// # Returns
     /// Its principal, or `None` for an unknown, revoked or expired grant.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn find_grant(&self, grant_id: &str, now: DateTime<Utc>) -> Option<Arc<Principal>> {
         self.by_id
             .get(grant_id)
@@ -910,6 +991,13 @@ pub struct Keys {
 // By hand: `dyn Clock` has no `Debug`. `finish_non_exhaustive` prints `..`
 // for the field left out.
 impl fmt::Debug for Keys {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Debug impl: runs while an event is formatted, and a span there re-enters the subscriber"
+        )
+    )]
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Keys")
@@ -927,6 +1015,7 @@ impl Keys {
     ///
     /// # Returns
     /// The shared cache.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn new(cache: KeyCache, clock: Arc<dyn Clock>) -> Self {
         Self {
             cache: RwLock::new(Arc::new(cache)),
@@ -945,6 +1034,7 @@ impl Keys {
     ///
     /// # Errors
     /// [`OkfError::Database`].
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn load(pool: &PgPool, clock: Arc<dyn Clock>) -> Result<Self, OkfError> {
         let cache = KeyCache::read(pool, clock.now()).await?;
         Ok(Self::new(cache, clock))
@@ -957,6 +1047,7 @@ impl Keys {
     ///
     /// # Errors
     /// [`OkfError::Database`]; the old cache stays in place.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn reload(&self, pool: &PgPool) -> Result<(), OkfError> {
         let cache = Arc::new(KeyCache::read(pool, self.clock.now()).await?);
         *self.cache.write().expect("key cache lock poisoned") = cache;
@@ -971,6 +1062,7 @@ impl Keys {
     /// # Returns
     /// A copy of the ceiling; empty for an unknown user or one who reaches
     /// nothing.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn ceiling_of(&self, user_id: &str) -> Ceiling {
         self.cache
             .read()
@@ -988,6 +1080,7 @@ impl Keys {
     ///
     /// # Returns
     /// A copy of the user, or `None` when the cache does not know it.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn user_admin(&self, user_id: &str) -> Option<UserAuth> {
         self.cache
             .read()
@@ -1001,6 +1094,7 @@ impl Keys {
     ///
     /// # Returns
     /// The shared map (a pointer copy, not a copy of the map).
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn suspensions(&self) -> Arc<Suspensions> {
         Arc::clone(
             &self
@@ -1016,6 +1110,13 @@ impl Keys {
     ///
     /// # Returns
     /// The shared gates (a pointer copy).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn gates(&self) -> Arc<AccessGates> {
         Arc::clone(&self.cache.read().expect("key cache lock poisoned").gates)
     }
@@ -1027,6 +1128,7 @@ impl Keys {
     ///
     /// # Returns
     /// Its principal, or `None` for an unknown, revoked or expired key.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn find(&self, presented: &str) -> Option<Arc<Principal>> {
         // The clock is read before the lock is taken.
         let now = self.clock.now();
@@ -1045,6 +1147,7 @@ impl Keys {
     /// Its principal, or `None` for an unknown, revoked or expired grant (a
     /// revoke takes effect at the next reload, within `poll_interval`; an
     /// expiry at once).
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn find_grant(&self, grant_id: &str) -> Option<Arc<Principal>> {
         let now = self.clock.now();
         self.cache
@@ -1079,6 +1182,7 @@ pub trait BearerVerifier {
 }
 
 impl BearerVerifier for Keys {
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn verify(&self, token: &str) -> Result<Option<Arc<Principal>>, OkfError> {
         Ok(self.find(token))
     }
@@ -1099,6 +1203,7 @@ impl BearerVerifier for Keys {
 ///
 /// # Errors
 /// [`OkfError::Database`] from an access-token lookup.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn authenticate(app: &App, token: &str) -> Result<Option<Arc<Principal>>, OkfError> {
     if token.starts_with(keys::ACCESS_TOKEN_PREFIX) {
         return match app.oauth() {
@@ -1118,6 +1223,7 @@ pub async fn authenticate(app: &App, token: &str) -> Result<Option<Arc<Principal
 ///
 /// # Returns
 /// `Bearer`, or `Bearer resource_metadata="<public_url>/.well-known/oauth-protected-resource"`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn challenge(app: &App) -> HeaderValue {
     app.oauth().map_or_else(
         || HeaderValue::from_static("Bearer"),
@@ -1134,6 +1240,7 @@ pub fn challenge(app: &App) -> HeaderValue {
 /// The token (trimmed), or `None` without a header, with another scheme
 /// (the scheme is matched case-insensitively, as RFC 6750 allows) or with an
 /// empty token.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn bearer(headers: &HeaderMap) -> Option<&str> {
     let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     let (scheme, token) = value.split_once(' ')?;
@@ -1149,6 +1256,7 @@ pub fn bearer(headers: &HeaderMap) -> Option<&str> {
 ///
 /// # Returns
 /// The response.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn unauthorized(app: &App) -> Response {
     (
         StatusCode::UNAUTHORIZED,
@@ -1224,6 +1332,7 @@ pub(crate) fn record_on_request_span(extensions: &axum::http::Extensions, princi
 /// lookup fails (logged).
 // Used as `axum::middleware::from_fn_with_state(app, require_key)`; axum
 // fills each argument from the request (the extractor pattern).
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn require_key(
     State(app): State<Arc<App>>,
     mut request: Request,

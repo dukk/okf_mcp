@@ -36,6 +36,13 @@ use crate::store::keys::Access;
 ///
 /// # Returns
 /// `true` for an overlay that does not apply.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub fn is_broken_overlay(error: &OkfError) -> bool {
     matches!(error, OkfError::InvalidPath { .. })
 }
@@ -81,6 +88,7 @@ impl ToolContext {
     /// The context, over the catalog map as of now, for a request with no
     /// known address from an API credential; [`ToolContext::with_requester`]
     /// sets the request's own.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn new(app: Arc<App>, principal: Arc<Principal>, connection: Option<Vec<String>>) -> Self {
         let catalogs = app.catalogs();
         Self {
@@ -105,6 +113,13 @@ impl ToolContext {
     /// The context.
     // `mut self` takes the context by value and changes it before handing it
     // back, so calls chain: `ToolContext::new(..).with_requester(..)`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn with_requester(mut self, requester: Requester) -> Self {
         self.requester = requester;
         self
@@ -114,6 +129,13 @@ impl ToolContext {
     ///
     /// # Returns
     /// The principal with the request's address and source.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn audit_actor(&self) -> AuditActor {
         AuditActor::of(&self.principal, &self.requester)
     }
@@ -131,6 +153,7 @@ impl ToolContext {
     /// # Errors
     /// [`OkfError::Forbidden`] if the request carries no principal, which
     /// only a router without the auth layer would allow.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn from_parts(app: &Arc<App>, parts: &Parts) -> Result<Self, OkfError> {
         // Extensions are a map keyed by type: `get::<Arc<Principal>>()`
         // finds the value the auth middleware inserted, if any.
@@ -151,6 +174,13 @@ impl ToolContext {
     ///
     /// # Returns
     /// The app this call runs in.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn app(&self) -> &App {
         &self.app
     }
@@ -159,6 +189,13 @@ impl ToolContext {
     ///
     /// # Returns
     /// Its principal.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn principal(&self) -> &Principal {
         &self.principal
     }
@@ -167,6 +204,13 @@ impl ToolContext {
     ///
     /// # Returns
     /// Every loaded catalog, by name, as of the context's creation.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn catalogs(&self) -> &Catalogs {
         &self.catalogs
     }
@@ -180,6 +224,13 @@ impl ToolContext {
     ///
     /// # Returns
     /// `true` if the call may see the catalog.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn offers(&self, name: &str) -> bool {
         self.principal.reaches(name) && in_scope(self.connection.as_deref(), name)
     }
@@ -194,6 +245,7 @@ impl ToolContext {
     /// does not exist or that the key does not reach; then
     /// [`OkfError::Suspended`] when every listed catalog is suspended (and
     /// the key is not admin), as [`resolve`] refuses such a list.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn check_connection(&self) -> Result<(), OkfError> {
         match self.connection.as_deref() {
             // With a list, `select(None)` resolves to exactly that list.
@@ -216,6 +268,7 @@ impl ToolContext {
     ///
     /// # Errors
     /// As [`resolve`].
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn select(&self, argument: Option<&[String]>) -> Result<Selection, OkfError> {
         let sources = Sources {
             argument,
@@ -240,6 +293,7 @@ impl ToolContext {
     ///
     /// # Errors
     /// As [`ToolContext::select`].
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn states(&self, argument: Option<&[String]>) -> Result<Vec<Arc<CatalogState>>, OkfError> {
         let selection = self.select(argument)?;
         Ok(selection
@@ -260,6 +314,7 @@ impl ToolContext {
     ///
     /// # Errors
     /// As [`ToolContext::select`].
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn read_set(&self, catalog: Option<&str>) -> Result<Vec<Arc<CatalogState>>, OkfError> {
         // `select` takes a slice of `String`s, so the name is copied into one
         // `String` (a small allocation); `std::slice::from_ref` then views it
@@ -284,6 +339,7 @@ impl ToolContext {
     /// # Errors
     /// As [`ToolContext::select`]; then as `ToolContext::check_contents`
     /// for the state's incarnation.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn one(&self, catalog: Option<&str>) -> Result<Arc<CatalogState>, OkfError> {
         let argument = catalog.map(str::to_string);
         let selection = self.select(argument.as_ref().map(std::slice::from_ref))?;
@@ -320,6 +376,7 @@ impl ToolContext {
     /// were being reloaded): its access may be recorded, and is neither
     /// recorded under the wrong catalog or team nor left out. A retry sees
     /// a settled cache. See [`ToolContext::admission_to`].
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn admit(&self, state: &CatalogState, kind: AccessKind) -> Result<(), OkfError> {
         if let Some(admitted) = self.admission_of(state, kind)? {
             self.note(admitted, kind);
@@ -338,6 +395,7 @@ impl ToolContext {
     ///
     /// # Errors
     /// [`OkfError::Busy`] as `ToolContext::admit`, for any of them.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn admit_all(
         &self,
         states: &[Arc<CatalogState>],
@@ -362,6 +420,7 @@ impl ToolContext {
     ///
     /// # Errors
     /// As `ToolContext::admit`.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn admission_of(
         &self,
         state: &CatalogState,
@@ -398,6 +457,7 @@ impl ToolContext {
     ///
     /// # Errors
     /// As [`ToolContext::admission_to`].
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn check_contents(
         &self,
         state: &CatalogState,
@@ -430,6 +490,7 @@ impl ToolContext {
     /// recorded (an admin credential, or one admitted under an unlock): its
     /// access is neither recorded under the wrong catalog nor let through.
     /// A retry sees a settled cache.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn admission_to(
         &self,
         state: &CatalogState,
@@ -469,6 +530,7 @@ impl ToolContext {
     }
 
     /// Notes an admitted access, once per call, catalog and kind.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn note(&self, (record, admission): (AccessRecord, Admission), kind: AccessKind) {
         let fresh = self
             .noted
@@ -492,6 +554,7 @@ impl ToolContext {
     ///
     /// # Errors
     /// As [`ToolContext::changeset`].
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn pin(&self, handle: Option<&str>) -> Result<Option<Pinned>, OkfError> {
         match handle {
             None => Ok(None),
@@ -525,6 +588,7 @@ impl ToolContext {
     /// # Errors
     /// [`OkfError::Busy`] as `ToolContext::admit`; an overlay build error
     /// ([`crate::overlay::build_overlay`]); [`OkfError::Database`].
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn view(
         &self,
         state: &CatalogState,
@@ -565,6 +629,7 @@ impl ToolContext {
     /// As [`ToolContext::one`] for an explicit `catalog` (or, without a
     /// changeset, the connection's selection); as [`require_selected`] for an
     /// explicit `catalog` that is not the changeset's.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn report_catalog(
         &self,
         catalog: Option<&str>,
@@ -603,6 +668,7 @@ impl ToolContext {
     ///   discarded after 24 hours);
     /// - [`OkfError::Busy`] as `ToolContext::admit`;
     /// - [`OkfError::Database`].
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn changeset(&self, handle: &str, access: Access) -> Result<Pinned, OkfError> {
         let pinned = self.resolve_changeset(handle, access).await?;
         // The changeset's own catalog only, never the connection's others
@@ -623,6 +689,7 @@ impl ToolContext {
     /// # Errors
     /// As [`ToolContext::changeset`], but never [`OkfError::Busy`] from the
     /// admission.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn resolve_changeset(&self, handle: &str, access: Access) -> Result<Pinned, OkfError> {
         self.check_connection()?;
         // A closure, so each refusal below builds its own error value.
@@ -670,6 +737,7 @@ impl ToolContext {
     }
 
     /// The state of a catalog `select` returned.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn state(&self, name: &str) -> Arc<CatalogState> {
         let state = self
             .catalogs
@@ -700,6 +768,7 @@ struct BoundAdmission<'a> {
 ///
 /// # Errors
 /// [`OkfError::Refused`] naming the changeset's catalog.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn require_selected(
     pinned: Option<&Pinned>,
     states: &[Arc<CatalogState>],

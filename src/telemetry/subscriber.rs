@@ -85,6 +85,13 @@ const RMCP_CAP: Level = Level::INFO;
 /// `okf_mcp`, or a module path under it (`okf_mcp::`), never a longer name
 /// that merely starts with it (`okf_mcp_other`), and never [`LOCAL_ONLY`] or
 /// anything under it.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 fn is_exportable_target(target: &str) -> bool {
     let own = target == "okf_mcp" || target.starts_with("okf_mcp::");
     let local_only = target == LOCAL_ONLY
@@ -103,6 +110,13 @@ fn is_exportable_target(target: &str) -> bool {
 ///
 /// A `filter_fn` rather than `Targets`, whose directives match by string
 /// prefix (`okf_mcp` would take `okf_mcp_other`).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 fn otlp_cap<S>() -> impl tracing_subscriber::layer::Filter<S>
 where
     S: tracing::Subscriber,
@@ -112,6 +126,13 @@ where
 }
 
 /// What stderr ANDs with its own filter: every target, `rmcp` capped.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 fn stderr_cap() -> Targets {
     Targets::new()
         .with_default(LevelFilter::TRACE)
@@ -149,6 +170,13 @@ pub struct LayerSettings {
 ///
 /// # Errors
 /// A configured filter that does not parse (validation refuses these first).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 pub fn settings(config: &TelemetryConfig, rust_log: Option<&str>) -> Result<LayerSettings, String> {
     let from_env = rust_log
         .filter(|text| !text.trim().is_empty())
@@ -194,6 +222,13 @@ pub fn settings(config: &TelemetryConfig, rust_log: Option<&str>) -> Result<Laye
 ///
 /// # Returns
 /// A subscriber writing to stderr.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 pub fn build(
     settings: LayerSettings,
     tracer: Option<&SdkTracerProvider>,
@@ -210,6 +245,13 @@ pub fn build(
 /// * `writer` - where the text or JSON lines go (`std::io::stderr` in
 ///   production). A `MakeWriter` is anything that hands out a `Write` per
 ///   event; a bare function returning a writer is one.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 pub fn build_with_writer<W>(
     settings: LayerSettings,
     tracer: Option<&SdkTracerProvider>,
@@ -282,6 +324,13 @@ where
 /// # Arguments
 /// * `rust_log` - the value of `RUST_LOG`, if set.
 /// * `writer` - where the lines go.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 pub fn fallback<W>(rust_log: Option<&str>, writer: W) -> impl tracing::Subscriber + Send + Sync
 where
     W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,

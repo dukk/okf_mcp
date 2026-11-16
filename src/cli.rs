@@ -712,6 +712,13 @@ pub struct CodeCreateArgs {
 ///
 /// # Errors
 /// `humantime`'s message, for clap to print.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn parse_expiry(text: &str) -> Result<Duration, String> {
     humantime_serde::re::humantime::parse_duration(text).map_err(|error| error.to_string())
 }
@@ -729,6 +736,13 @@ fn parse_expiry(text: &str) -> Result<Duration, String> {
 /// # Errors
 /// Any failure to connect, load, bind or serve, with context; a `--listen`
 /// that overlaps `[telemetry.prometheus] listen`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "long-lived loop: its span would never close and would stay open as the parent of every later span"
+    )
+)]
 async fn serve(
     database_url: Option<&str>,
     mut config: Config,
@@ -813,6 +827,13 @@ pub(crate) async fn run_in_tests(cli: Cli, clock: Arc<dyn Clock>) -> anyhow::Res
 ///
 /// # Errors
 /// Any failure, with context, for `main` to print.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists: it installs the subscriber"
+    )
+)]
 pub async fn run(cli: Cli, clock: Arc<dyn Clock>) -> anyhow::Result<()> {
     // `serve` is also what no subcommand means.
     let serving = matches!(cli.command, None | Some(Command::Serve(_)));
@@ -842,6 +863,13 @@ pub async fn run(cli: Cli, clock: Arc<dyn Clock>) -> anyhow::Result<()> {
 ///
 /// # Errors
 /// Any failure, with context, for `main` to print.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "wraps the serve loop: its span would never close"
+    )
+)]
 async fn dispatch(
     cli: Cli,
     config: Config,
@@ -988,6 +1016,13 @@ async fn dispatch(
 ///
 /// # Arguments
 /// * `shutdown` - the server's token.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "long-lived loop: its span would never close and would stay open as the parent of every later span"
+    )
+)]
 async fn cancel_on_signal(shutdown: CancellationToken) {
     // `ctrl_c()` resolves at once with an error if the handler cannot be
     // registered; waiting forever then keeps that from reading as a signal.
@@ -1040,6 +1075,7 @@ async fn cancel_on_signal(shutdown: CancellationToken) {
 ///
 /// # Errors
 /// The archive's refusal, or the file failing to open.
+#[tracing::instrument(level = "trace", skip_all)]
 fn read_source(source: &Path, limit: u64) -> anyhow::Result<Files> {
     let files = if source.as_os_str() == "-" {
         archive::read_tarball(std::io::stdin().lock(), limit)?
@@ -1060,6 +1096,7 @@ fn read_source(source: &Path, limit: u64) -> anyhow::Result<Files> {
 ///
 /// # Errors
 /// The file failing to be created or written, or stdout failing.
+#[tracing::instrument(level = "trace", skip_all)]
 fn write_output(output: &Path, tarball: &[u8]) -> anyhow::Result<()> {
     if output.as_os_str() == "-" {
         let mut stdout = std::io::stdout().lock();
@@ -1084,6 +1121,7 @@ fn write_output(output: &Path, tarball: &[u8]) -> anyhow::Result<()> {
 ///
 /// # Errors
 /// The temp file failing to be created, written, synced or renamed.
+#[tracing::instrument(level = "trace", skip_all)]
 fn write_file_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     // `parent()` of a bare file name is `Some("")`: the current directory.
     let parent = match path.parent() {
@@ -1115,6 +1153,7 @@ fn write_file_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 ///
 /// # Errors
 /// The store's refusal or database error.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn run_catalog(
     pool: &PgPool,
     command: CatalogCommand,
@@ -1211,6 +1250,7 @@ async fn run_catalog(
 ///
 /// # Errors
 /// Neither a name nor `--missing-only`; a database error.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn repair_targets(
     pool: &PgPool,
     names: Vec<String>,
@@ -1247,6 +1287,7 @@ async fn repair_targets(
 /// # Errors
 /// When any catalog fails, after every other one was tried: the error holds
 /// the whole report, then each failed catalog and why.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn repair_catalogs(
     pool: &PgPool,
     targets: &[String],
@@ -1305,6 +1346,7 @@ async fn repair_catalogs(
 ///
 /// # Errors
 /// The store's refusal or database error.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn run_key(pool: &PgPool, command: KeyCommand, clock: &dyn Clock) -> anyhow::Result<()> {
     match command {
         KeyCommand::Create(args) => {
@@ -1424,6 +1466,13 @@ async fn run_key(pool: &PgPool, command: KeyCommand, clock: &dyn Clock) -> anyho
 ///
 /// # Returns
 /// The line, without a newline.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn tab_row(cells: &[&str]) -> String {
     cells.join("\t")
 }
@@ -1437,6 +1486,13 @@ fn tab_row(cells: &[&str]) -> String {
 ///
 /// # Returns
 /// The cell.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn labelled(label: &str, value: Option<&str>) -> String {
     format!("{label} {}", value.unwrap_or("-"))
 }
@@ -1448,6 +1504,13 @@ fn labelled(label: &str, value: Option<&str>) -> String {
 ///
 /// # Returns
 /// `"a,b"`, or `None` for an empty slice.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn comma_list(items: &[String]) -> Option<String> {
     // `then` runs the closure only when the condition holds: `x if c else None`.
     (!items.is_empty()).then(|| items.join(","))
@@ -1462,6 +1525,7 @@ fn comma_list(items: &[String]) -> Option<String> {
 ///
 /// # Returns
 /// The line, without a newline.
+#[tracing::instrument(level = "trace", skip_all)]
 fn format_catalog(catalog: &catalogs::Catalog) -> String {
     tab_row(&[
         &catalog.name,
@@ -1480,6 +1544,7 @@ fn format_catalog(catalog: &catalogs::Catalog) -> String {
 ///
 /// # Returns
 /// The line, without a newline.
+#[tracing::instrument(level = "trace", skip_all)]
 fn format_key_record(key: &keys::KeyRecord) -> String {
     let catalogs = if key.all_catalogs {
         "*".to_string()
@@ -1516,6 +1581,7 @@ fn format_key_record(key: &keys::KeyRecord) -> String {
 ///
 /// # Errors
 /// The store's refusal or database error; an id that is no OAuth grant.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn run_oauth(
     pool: &PgPool,
     command: OauthCommand,
@@ -1600,6 +1666,7 @@ async fn run_oauth(
 ///
 /// # Returns
 /// The line, without a newline.
+#[tracing::instrument(level = "trace", skip_all)]
 fn format_code_record(code: &SignInCodeRecord, now: chrono::DateTime<chrono::Utc>) -> String {
     let catalogs = if code.all_catalogs {
         "*".to_string()
@@ -1621,6 +1688,7 @@ fn format_code_record(code: &SignInCodeRecord, now: chrono::DateTime<chrono::Utc
 }
 
 /// Connects to the database and applies the migrations.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn connect(url: Option<&str>, config: &Config) -> anyhow::Result<PgPool> {
     let url = url.context("no database: set DATABASE_URL or pass --database-url")?;
     let pool = db::connect(url, config.database_max_connections)

@@ -40,32 +40,74 @@ pub struct Loaded {
 
 impl Loaded {
     /// The catalog generation this was built from.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn generation(&self) -> i64 {
         self.generation
     }
 
     /// The snapshot of the live documents.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn snapshot(&self) -> &Snapshot {
         &self.snapshot
     }
 
     /// Lint's commit times: each live document's last revision time (after a
     /// first import, the import time).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn commit_times(&self) -> &CommitTimes {
         &self.commit_times
     }
 
     /// How many files the catalog holds (every stored file, markdown or not).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn files(&self) -> usize {
         self.files
     }
 
     /// The newest document change (`updated_at`), or `None` for an empty catalog.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn last_change(&self) -> Option<DateTime<Utc>> {
         self.last_change
     }
 
     /// The published files, as the snapshot was built from them.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn workspace(&self) -> &MemWorkspace {
         &self.workspace
     }
@@ -77,6 +119,13 @@ impl Loaded {
     ///
     /// # Returns
     /// Its revision, or `None` if no live document has that path.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn revision(&self, path: &str) -> Option<i32> {
         self.revisions.get(path).copied()
     }
@@ -89,6 +138,13 @@ impl Loaded {
     ///
     /// # Returns
     /// The findings, as [`lint`] returns them.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn lint(&self, now: DateTime<Utc>) -> LintReport {
         lint(&self.snapshot, now, Some(&self.commit_times))
     }
@@ -140,6 +196,7 @@ impl CatalogState {
     /// [`OkfError::CatalogNotSelected`] if there is no such catalog;
     /// [`OkfError::InvalidPath`] or another workspace error if the stored
     /// rows cannot form a workspace; [`OkfError::Database`].
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn load(pool: &PgPool, name: &str) -> Result<Self, OkfError> {
         let catalog = catalogs::find(pool, name).await?;
         let loaded = build(pool, catalog.id, &catalog.name).await?;
@@ -157,11 +214,25 @@ impl CatalogState {
     }
 
     /// The catalog's database id.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn id(&self) -> i64 {
         self.id
     }
 
     /// The catalog's name.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -171,6 +242,13 @@ impl CatalogState {
     ///
     /// # Returns
     /// A shared handle to the text (cheap to clone; derefs to `&str`).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn description(&self) -> Arc<str> {
         Arc::clone(&self.description.read().expect("description lock poisoned"))
     }
@@ -180,6 +258,7 @@ impl CatalogState {
     ///
     /// # Arguments
     /// * `description` - the catalog row's description.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn set_description(&self, description: &str) {
         // The read lock first: on almost every pass nothing changed, and
         // then no write lock (and no allocation) is taken.
@@ -195,6 +274,7 @@ impl CatalogState {
     /// # Returns
     /// A shared handle to the name (cheap to clone; derefs to `&str`), or
     /// `None` for a catalog not yet assigned an owner.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn owner_team(&self) -> Option<Arc<str>> {
         // `.clone()` on an `Option<Arc<str>>` copies the pointer and bumps
         // the reference count; the name itself is not copied.
@@ -206,6 +286,7 @@ impl CatalogState {
     ///
     /// # Arguments
     /// * `owner_team` - the catalog row's owner.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn set_owner_team(&self, owner_team: Option<&str>) {
         // As in `set_description`: compare under the read lock first, so an
         // unchanged owner takes no write lock and allocates nothing.
@@ -217,6 +298,7 @@ impl CatalogState {
 
     /// The current loaded state. Cheap: it clones an `Arc` (bumps a
     /// reference count), and the caller may keep it as long as it likes.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn current(&self) -> Arc<Loaded> {
         // `read()` fails only if a thread panicked while holding the lock
         // ("poisoned"); nothing here can panic with it held.
@@ -228,6 +310,13 @@ impl CatalogState {
     ///
     /// # Returns
     /// The mutex; lock it with `.lock().await`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn publish_lock(&self) -> &tokio::sync::Mutex<()> {
         &self.publishing
     }
@@ -248,6 +337,7 @@ impl CatalogState {
     /// # Errors
     /// [`OkfError::CatalogNotSelected`] if the catalog was deleted;
     /// [`OkfError::Database`]; a workspace error as for [`CatalogState::load`].
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn refresh(&self, pool: &PgPool) -> Result<bool, OkfError> {
         let generation = self.generation_in(pool).await?;
         self.refresh_to(generation, || build(pool, self.id, &self.name))
@@ -268,6 +358,7 @@ impl CatalogState {
     ///
     /// # Errors
     /// As [`CatalogState::refresh`].
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn refresh_locked(&self, conn: &mut PgConnection) -> Result<bool, OkfError> {
         let generation = self.generation_in(&mut *conn).await?;
         let id = self.id;
@@ -283,6 +374,7 @@ impl CatalogState {
     /// # Errors
     /// [`OkfError::CatalogNotSelected`] if the catalog was deleted;
     /// [`OkfError::Database`].
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn generation_in(&self, executor: impl PgExecutor<'_>) -> Result<i64, OkfError> {
         let generation: Option<i64> = sqlx::query_scalar(GENERATION)
             .bind(self.id)
@@ -308,6 +400,7 @@ impl CatalogState {
     /// `load`'s error.
     // `F: FnOnce() -> Fut` with `Fut: Future`: `load` is an async closure,
     // like passing a coroutine function in Python, called only if needed.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn refresh_to<F, Fut>(&self, generation: i64, load: F) -> Result<bool, OkfError>
     where
         F: FnOnce() -> Fut,
@@ -340,6 +433,7 @@ impl CatalogState {
 /// # Errors
 /// [`OkfError::CatalogNotSelected`] (naming `name`) if the row is gone;
 /// [`OkfError::Database`]; a workspace or snapshot error.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn build(pool: &PgPool, catalog_id: i64, name: &str) -> Result<Loaded, OkfError> {
     // A repeatable-read transaction sees one moment of the database, so the
     // generation and the rows agree even if an import commits meanwhile.
@@ -368,6 +462,7 @@ async fn build(pool: &PgPool, catalog_id: i64, name: &str) -> Result<Loaded, Okf
 ///
 /// # Errors
 /// A workspace or snapshot error.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn assemble(generation: i64, rows: Vec<DocumentRow>) -> Result<Loaded, OkfError> {
     // Before `rows` moves into the closure below: it borrows the rows.
     let commit_times = documents::commit_times(&rows);

@@ -31,6 +31,13 @@ impl<T> SmtpMailer<T> {
     ///
     /// # Returns
     /// The mailer.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub(crate) fn new(transport: T, from: Mailbox) -> Self {
         Self { transport, from }
     }
@@ -50,6 +57,7 @@ impl SmtpMailer<AsyncSmtpTransport<Tokio1Executor>> {
     ///
     /// # Errors
     /// [`OkfError::Config`] for a From address or host lettre refuses.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn from_config(
         from: &str,
         config: &SmtpConfig,
@@ -84,12 +92,20 @@ impl SmtpMailer<AsyncSmtpTransport<Tokio1Executor>> {
 ///
 /// # Errors
 /// [`OkfError::Config`].
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub(crate) fn parse_from(from: &str) -> Result<Mailbox, OkfError> {
     from.parse()
         .map_err(|error| config_error(format!("mail.from {from:?} is not an address: {error}")))
 }
 
 /// Builds the MIME message: one recipient, text and HTML alternatives.
+#[tracing::instrument(level = "trace", skip_all)]
 fn message(from: &Mailbox, mail: &Mail) -> Result<Message, MailError> {
     let to: Mailbox = mail.to.parse().map_err(|error| {
         MailError::Permanent(format!(
@@ -110,6 +126,7 @@ fn message(from: &Mailbox, mail: &Mail) -> Result<Message, MailError> {
 
 /// Sorts a transport error: an SMTP 5xx reply is permanent; anything else
 /// (connection, TLS, timeout, 4xx, a stub's error) is worth retrying.
+#[tracing::instrument(level = "trace", skip_all)]
 fn classify(error: &(dyn std::error::Error + 'static)) -> MailError {
     // `downcast_ref` is Python's `isinstance` check plus the cast: `Some`
     // only when the error really is lettre's SMTP error.
@@ -126,6 +143,7 @@ where
     T::Ok: Send,
     T::Error: std::error::Error + Send + Sync + 'static,
 {
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn send(&self, mail: &Mail) -> Result<(), MailError> {
         let message = message(&self.from, mail)?;
         self.transport

@@ -94,6 +94,7 @@ pub struct SetFrontmatterParams {
 /// As [`apply`]; the op's [`OkfError::InvalidPath`] (taken, reserved,
 /// machinery) or [`OkfError::Refused`] (a missing `type`, a stamp key, a
 /// listing it cannot make).
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn create_concept(
     ctx: &ToolContext,
     params: CreateConceptParams,
@@ -136,6 +137,7 @@ pub(crate) async fn create_concept(
 /// (without `replace_all`) more than 1 times; [`OkfError::InvalidPath`] for
 /// `log.md`, machinery or a path without `.md`; [`OkfError::Refused`] for an
 /// edit that adds or changes frontmatter.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn edit_document(
     ctx: &ToolContext,
     params: EditDocumentParams,
@@ -165,6 +167,7 @@ pub(crate) async fn edit_document(
 /// # Errors
 /// As [`apply`]; the op's [`OkfError::NotFound`], [`OkfError::InvalidPath`]
 /// or [`OkfError::Refused`] (a body that adds frontmatter).
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn replace_body(
     ctx: &ToolContext,
     params: ReplaceBodyParams,
@@ -192,6 +195,7 @@ pub(crate) async fn replace_body(
 /// # Errors
 /// As [`apply`]; the op's refusal of a dedicated key, of deleting `type`
 /// or of a `type` that is not a non-blank string.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn set_frontmatter(
     ctx: &ToolContext,
     params: SetFrontmatterParams,
@@ -337,6 +341,7 @@ impl QuestionRef {
     ///
     /// # Returns
     /// The string the op parses (digits are a 1-based position).
+    #[tracing::instrument(level = "trace", skip_all)]
     fn into_argument(self) -> String {
         match self {
             QuestionRef::Number(number) => number.to_string(),
@@ -473,6 +478,7 @@ pub struct RepairIndexesParams {
 /// [`OkfError::InvalidPath`] for the reference, [`OkfError::Refused`] for a
 /// concept without frontmatter, [`OkfError::FrontmatterParse`] or
 /// [`OkfError::Shape`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn stamp(ctx: &ToolContext, params: StampParams) -> Result<WriteReport, OkfError> {
     let StampParams {
         path,
@@ -497,6 +503,7 @@ pub(crate) async fn stamp(ctx: &ToolContext, params: StampParams) -> Result<Writ
 ///
 /// # Errors
 /// As [`stamp`]; [`OkfError::Refused`] for an unknown outcome.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn review(
     ctx: &ToolContext,
     params: ReviewParams,
@@ -528,6 +535,7 @@ pub(crate) async fn review(
 ///
 /// # Errors
 /// As [`stamp`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn question(
     ctx: &ToolContext,
     params: QuestionParams,
@@ -555,6 +563,7 @@ pub(crate) async fn question(
 ///
 /// # Errors
 /// As [`stamp`]; [`OkfError::Refused`] when there is no such question.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn unquestion(
     ctx: &ToolContext,
     params: UnquestionParams,
@@ -582,6 +591,7 @@ pub(crate) async fn unquestion(
 ///
 /// # Errors
 /// As [`stamp`]; [`OkfError::Refused`] for a duplicate id.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn add_source(
     ctx: &ToolContext,
     params: AddSourceParams,
@@ -619,6 +629,7 @@ pub(crate) async fn add_source(
 /// # Errors
 /// As [`stamp`]; [`OkfError::Refused`] when no entry has the id, or a
 /// footnote in the body still cites it.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn remove_source(
     ctx: &ToolContext,
     params: RemoveSourceParams,
@@ -646,6 +657,7 @@ pub(crate) async fn remove_source(
 ///
 /// # Errors
 /// As [`apply`]; [`OkfError::NotFound`] for a catalog without `log.md`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn log(ctx: &ToolContext, params: LogParams) -> Result<WriteReport, OkfError> {
     let LogParams {
         text,
@@ -672,6 +684,7 @@ pub(crate) async fn log(ctx: &ToolContext, params: LogParams) -> Result<WriteRep
 /// # Errors
 /// As [`stamp`]; [`OkfError::Refused`] for a folder without `index.md`, a
 /// concept without a title or a missing `section` heading.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn index(ctx: &ToolContext, params: IndexParams) -> Result<WriteReport, OkfError> {
     let IndexParams {
         path,
@@ -707,6 +720,7 @@ pub(crate) async fn index(ctx: &ToolContext, params: IndexParams) -> Result<Writ
 ///
 /// # Errors
 /// As [`apply`] (below `write`, [`OkfError::Forbidden`]).
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn repair_indexes(
     ctx: &ToolContext,
     params: RepairIndexesParams,

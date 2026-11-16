@@ -66,6 +66,7 @@ impl PostmarkMailer {
     /// # Errors
     /// [`OkfError::Config`] for a token that cannot be a header value, or
     /// an HTTP client that cannot be built.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn new(
         endpoint: &str,
         token: &str,
@@ -92,6 +93,7 @@ impl PostmarkMailer {
 }
 
 /// Sorts a refusal by its HTTP status.
+#[tracing::instrument(level = "trace", skip_all)]
 fn classify(status: StatusCode, reply: &Reply) -> MailError {
     let detail = format!(
         "postmark answered {status} (ErrorCode {}): {}",
@@ -109,6 +111,13 @@ fn classify(status: StatusCode, reply: &Reply) -> MailError {
 
 #[async_trait::async_trait]
 impl Mailer for PostmarkMailer {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "calls telemetry::propagation::inject: the injected context must be that of the span the request is made under, not a span of its own"
+        )
+    )]
     async fn send(&self, mail: &Mail) -> Result<(), MailError> {
         let body = Body {
             from: &self.from,

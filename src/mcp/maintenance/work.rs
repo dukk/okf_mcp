@@ -64,26 +64,52 @@ pub struct MaintenanceSubmitParams {
     pub submission: Submission,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct MaintenanceCloseParams {
-    /// Required authorized catalog name; connection defaults do not apply.
-    pub catalog: String,
-    /// Opaque run ID belonging to the named catalog.
-    pub run_id: String,
-    /// Requested terminal state; completion requires all work to have ended.
-    #[schemars(schema_with = "close_state_schema")]
-    pub state: RunState,
-    /// Human-readable reason recorded with attribution; secrets and oversized text are refused.
-    pub rationale: String,
-    /// Caller-chosen retry key (1..=128 non-whitespace ASCII bytes); reuse only for identical input.
-    pub idempotency_key: String,
+// The `schema_with` hook makes the `JsonSchema` derive emit a wrapper function
+// of its own that cannot carry an attribute, and an exemption on the struct or
+// the field does not reach it. The struct lives in its own module so the
+// exemption covers exactly that module (as `maintenance::types::Submission`).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "constant trait plumbing: the derive's schema_with hook returns a fixed schema"
+    )
+)]
+mod close_params {
+    use super::{close_state_schema, JsonSchema, RunState};
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct MaintenanceCloseParams {
+        /// Required authorized catalog name; connection defaults do not apply.
+        pub catalog: String,
+        /// Opaque run ID belonging to the named catalog.
+        pub run_id: String,
+        /// Requested terminal state; completion requires all work to have ended.
+        #[schemars(schema_with = "close_state_schema")]
+        pub state: RunState,
+        /// Human-readable reason recorded with attribution; secrets and oversized text are refused.
+        pub rationale: String,
+        /// Caller-chosen retry key (1..=128 non-whitespace ASCII bytes); reuse only for identical input.
+        pub idempotency_key: String,
+    }
 }
 
+pub use close_params::MaintenanceCloseParams;
+
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn close_state_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({"type": "string", "enum": ["completed", "failed", "cancelled"]})
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn maintenance_claim(
     ctx: &ToolContext,
     params: MaintenanceClaimParams,
@@ -106,6 +132,7 @@ pub(crate) async fn maintenance_claim(
     Ok(MaintenanceResult::new(state.name(), result))
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn maintenance_renew(
     ctx: &ToolContext,
     params: MaintenanceRenewParams,
@@ -127,6 +154,7 @@ pub(crate) async fn maintenance_renew(
     Ok(MaintenanceResult::new(state.name(), result))
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn maintenance_read_revision(
     ctx: &ToolContext,
     params: MaintenanceReadRevisionParams,
@@ -150,6 +178,7 @@ pub(crate) async fn maintenance_read_revision(
     Ok(MaintenanceResult::new(state.name(), result))
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn maintenance_submit(
     ctx: &ToolContext,
     params: MaintenanceSubmitParams,
@@ -170,6 +199,7 @@ pub(crate) async fn maintenance_submit(
     Ok(MaintenanceResult::new(state.name(), result))
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn maintenance_close(
     ctx: &ToolContext,
     params: MaintenanceCloseParams,

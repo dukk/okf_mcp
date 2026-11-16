@@ -108,6 +108,7 @@ struct Reply {
 /// [`NtpError`]: the name doesn't resolve, no reply in time, or, when every
 /// address failed, the last address's error (a socket failure, or a reply
 /// that isn't a synchronized server's answer to this request).
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn query(
     server: &str,
     clock: &dyn Clock,
@@ -124,6 +125,7 @@ pub async fn query(
 }
 
 /// Resolves `server` and asks its addresses, without a deadline (see [`query`]).
+#[tracing::instrument(level = "debug", skip_all)]
 async fn exchange(server: &str, clock: &dyn Clock) -> Result<Reading, NtpError> {
     // A named binding: the returned iterator borrows the string, so a
     // temporary (freed at the end of the statement) would not live long enough.
@@ -141,6 +143,7 @@ async fn exchange(server: &str, clock: &dyn Clock) -> Result<Reading, NtpError> 
 ///
 /// # Errors
 /// [`NtpError::NoAddress`] for no addresses, else the last address's error.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn ask_each(
     server: &str,
     addresses: impl IntoIterator<Item = SocketAddr>,
@@ -159,6 +162,7 @@ async fn ask_each(
 }
 
 /// One request to `address` and its reply.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn ask(server: &str, address: SocketAddr, clock: &dyn Clock) -> Result<Reading, NtpError> {
     // Closures that wrap an error with the server's name. They borrow
     // `server` (a `&str`, which is `Copy`), so they can be used repeatedly.
@@ -198,6 +202,7 @@ async fn ask(server: &str, address: SocketAddr, clock: &dyn Clock) -> Result<Rea
 }
 
 /// `server` with the NTP port when it names none.
+#[tracing::instrument(level = "trace", skip_all)]
 fn with_port(server: &str) -> String {
     if server.parse::<SocketAddr>().is_ok() {
         return server.to_string();
@@ -212,6 +217,7 @@ fn with_port(server: &str) -> String {
 }
 
 /// A client request: leap 0, version 4, mode 3, our transmit time.
+#[tracing::instrument(level = "trace", skip_all)]
 fn request(transmit: u64) -> [u8; PACKET_LEN] {
     let mut packet = [0u8; PACKET_LEN];
     // Two bits of leap indicator, three of version, three of mode.
@@ -221,6 +227,7 @@ fn request(transmit: u64) -> [u8; PACKET_LEN] {
 }
 
 /// Checks a reply to the request that carried `sent`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn parse_reply(packet: &[u8], sent: u64) -> Result<Reply, &'static str> {
     if packet.len() < PACKET_LEN {
         return Err("shorter than 48 bytes");
@@ -262,6 +269,7 @@ fn parse_reply(packet: &[u8], sent: u64) -> Result<Reply, &'static str> {
 }
 
 /// RFC 4330 section 5: the offset and the round trip from the four times.
+#[tracing::instrument(level = "trace", skip_all)]
 fn offset_and_round_trip(
     sent: DateTime<Utc>,
     received_by_server: DateTime<Utc>,
@@ -274,6 +282,7 @@ fn offset_and_round_trip(
 }
 
 /// An instant as an NTP timestamp.
+#[tracing::instrument(level = "trace", skip_all)]
 fn to_ntp(instant: DateTime<Utc>) -> u64 {
     // `as u32` keeps the low 32 bits: NTP seconds wrap in 2036, and
     // `from_ntp` undoes the wrap.
@@ -289,6 +298,7 @@ fn to_ntp(instant: DateTime<Utc>) -> u64 {
 }
 
 /// An NTP timestamp as an instant (`None` if chrono can't hold it).
+#[tracing::instrument(level = "trace", skip_all)]
 fn from_ntp(stamp: u64) -> Option<DateTime<Utc>> {
     let mut seconds = (stamp >> 32) as i64;
     // RFC 4330 section 3: a clear top bit means era 1 (2036 to 2104).

@@ -36,6 +36,7 @@ use crate::store::unlocks::{self, NewUnlock, UnlockFilter, UnlockPolicy, UnlockR
 /// As `unlocks::create` (hours over the limit, a bad reason, an unknown
 /// catalog or user, a user who is not an admin) and `unlocks::end` (an
 /// unknown id, one already ended or expired), or a database error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn unlock(
     pool: &PgPool,
     defaults: &AuthConfig,
@@ -103,6 +104,7 @@ pub(super) async fn unlock(
 ///
 /// # Returns
 /// The line, without a newline.
+#[tracing::instrument(level = "trace", skip_all)]
 fn format_unlock(record: &UnlockRecord, now: DateTime<Utc>) -> String {
     tab_row(&[
         &record.id.to_string(),

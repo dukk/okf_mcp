@@ -317,6 +317,13 @@ impl OkfError {
     ///
     /// # Returns
     /// The name, e.g. `"NotFound"`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "error rendering and classification: pure code that also runs while spans and events are recorded, so a span would re-enter them"
+        )
+    )]
     pub fn kind(&self) -> &'static str {
         // `{ .. }` matches a variant whatever its fields hold. No `_` arm:
         // a new variant fails to compile here until it is given a name.
@@ -358,6 +365,13 @@ impl OkfError {
     /// # Returns
     /// `true` for database, migration, filesystem and configuration failures:
     /// the errors the HTTP routes answer with 500.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "error rendering and classification: pure code that also runs while spans and events are recorded, so a span would re-enter them"
+        )
+    )]
     pub fn is_internal(&self) -> bool {
         matches!(
             self,
@@ -382,6 +396,13 @@ impl OkfError {
     /// # Returns
     /// The JSON body. An internal error's message says only that the server
     /// log has the details, so a driver message never reaches a client.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "error rendering and classification: pure code that also runs while spans and events are recorded, so a span would re-enter them"
+        )
+    )]
     pub fn to_json(&self) -> serde_json::Value {
         let message = if self.is_internal() {
             "internal error; the server log has the details".to_string()
@@ -478,6 +499,13 @@ impl OkfError {
 /// # Returns
 /// The message, e.g. `catalog "shared" is unavailable: its team "family" is
 /// suspended. Contact the operator.`
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "error rendering and classification: pure code that also runs while spans and events are recorded, so a span would re-enter them"
+    )
+)]
 fn suspended_message(catalog: &str, team: &str, notice: Option<&str>) -> String {
     // `{catalog:?}` is the `Debug` form: the name in double quotes, escaped.
     let mut message = format!("catalog {catalog:?} is unavailable: its team {team:?} is suspended");
@@ -497,6 +525,13 @@ fn suspended_message(catalog: &str, team: &str, notice: Option<&str>) -> String 
 ///
 /// # Returns
 /// The message.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "error rendering and classification: pure code that also runs while spans and events are recorded, so a span would re-enter them"
+    )
+)]
 fn unlock_message(catalog: &str, has_user: bool) -> String {
     if has_user {
         format!(
@@ -520,6 +555,13 @@ fn unlock_message(catalog: &str, has_user: bool) -> String {
 ///
 /// # Returns
 /// The path with exactly one leading `/` added when it had none.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "error rendering and classification: pure code that also runs while spans and events are recorded, so a span would re-enter them"
+    )
+)]
 fn client_path(path: &str) -> String {
     if path.starts_with('/') {
         path.to_string()
@@ -535,6 +577,13 @@ fn client_path(path: &str) -> String {
 ///
 /// # Returns
 /// The JSON list, in the same order.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "error rendering and classification: pure code that also runs while spans and events are recorded, so a span would re-enter them"
+    )
+)]
 fn findings_json(findings: &[Finding]) -> serde_json::Value {
     let findings: Vec<Finding> = findings
         .iter()
@@ -551,6 +600,13 @@ fn findings_json(findings: &[Finding]) -> serde_json::Value {
 /// A list as JSON, for an error body. `Finding`, `ConflictFile` and
 /// `LinkSource` are plain records that always serialize; the `Null` fallback
 /// only keeps this free of `unwrap`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "error rendering and classification: pure code that also runs while spans and events are recorded, so a span would re-enter them"
+    )
+)]
 fn json_list<T: serde::Serialize>(items: &[T]) -> serde_json::Value {
     serde_json::to_value(items).unwrap_or_default()
 }
@@ -564,6 +620,13 @@ const RETRYABLE_SQLSTATES: [&str; 2] = ["40P01", "40001"];
 // `Busy`, anything else `Database`. (Before M5, `#[from]` generated this
 // impl without the check.)
 impl From<sqlx::Error> for OkfError {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "error rendering and classification: pure code that also runs while spans and events are recorded, so a span would re-enter them"
+        )
+    )]
     fn from(source: sqlx::Error) -> Self {
         // `code()` borrows `source`, so the check finishes before `source`
         // moves into the variant below. It returns `Option<Cow<str>>`, and

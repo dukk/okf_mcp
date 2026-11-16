@@ -81,6 +81,7 @@ pub struct Listed {
 /// # Returns
 /// `now - idle`, or the earliest representable time if that would overflow
 /// (an absurdly long timeout: nothing is idle).
+#[tracing::instrument(level = "trace", skip_all)]
 fn idle_cutoff(now: DateTime<Utc>, idle: Duration) -> DateTime<Utc> {
     // `TimeDelta::from_std` fails for a duration beyond chrono's range, and
     // `checked_sub_signed` for a result before its earliest date; both `ok()`
@@ -107,6 +108,7 @@ fn idle_cutoff(now: DateTime<Utc>, idle: Duration) -> DateTime<Utc> {
 /// A selection error for `catalog` (including [`OkfError::Suspended`]), or
 /// for a connection list ([`ToolContext::check_connection`]: one whose
 /// every catalog is suspended is refused); [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn list_changesets(
     ctx: &ToolContext,
     params: ListParams,
@@ -230,6 +232,7 @@ pub struct Opened {
 /// or for a console session (it has no key row to own the changeset; M12
 /// Decision 5); [`OkfError::Refused`] if the catalog was deleted meanwhile;
 /// [`OkfError::Busy`] on a deadlock; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn open_changeset(
     ctx: &ToolContext,
     params: OpenParams,
@@ -344,6 +347,7 @@ pub struct Published {
 /// # Errors
 /// [`OkfError::Refused`] for a blank message; as [`ToolContext::changeset`]
 /// (with `write`); as [`crate::store::publish::publish`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn publish(
     ctx: &ToolContext,
     params: PublishParams,
@@ -488,6 +492,7 @@ pub struct PendingChanges {
 ///
 /// # Errors
 /// [`OkfError::InvalidPath`] for a path outside the catalog or the root.
+#[tracing::instrument(level = "trace", skip_all)]
 fn stored_path(reference: &str) -> Result<String, OkfError> {
     let path = normpath(reference.trim_start_matches('/'));
     if escapes_root(&path) || path == "." {
@@ -525,6 +530,7 @@ fn stored_path(reference: &str) -> Result<String, OkfError> {
 /// [`ToolContext::changeset`] (with `write`); [`OkfError::Refused`] if a
 /// publish or another discard closed the changeset meanwhile;
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn discard(
     ctx: &ToolContext,
     params: DiscardParams,
@@ -628,6 +634,7 @@ pub(crate) async fn discard(
 /// revision the path never had; [`OkfError::Refused`] for content that is
 /// not UTF-8, or a deletion of a path this changeset's view does not hold;
 /// as [`apply_audited`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn revert(
     ctx: &ToolContext,
     params: RevertParams,
@@ -710,6 +717,7 @@ pub(crate) async fn revert(
 /// # Errors
 /// As [`ToolContext::changeset`] with `read`: the key that owns it or an
 /// admin may ask; a `read` key owns none.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn pending_changes(
     ctx: &ToolContext,
     params: PendingParams,
@@ -735,6 +743,7 @@ pub(crate) async fn pending_changes(
 ///
 /// # Returns
 /// One [`PendingFile`] per entry, in the same order.
+#[tracing::instrument(level = "trace", skip_all)]
 fn pending_files(
     loaded: &Loaded,
     entries: &[crate::store::changesets::EntryRow],
@@ -778,6 +787,7 @@ fn pending_files(
 /// not UTF-8; a one-line note for a deletion of a path that is not
 /// published now (deleted by someone else since the entry was made), or for
 /// pending bytes equal to the published ones.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn unified_diff(path: &str, published: Option<&[u8]>, pending: Option<&[u8]>) -> String {
     if published.is_none() && pending.is_none() {
         return format!(
@@ -792,6 +802,13 @@ pub(crate) fn unified_diff(path: &str, published: Option<&[u8]>, pending: Option
     // A missing side diffs as empty text. A nested `fn`, not a closure:
     // its signature ties the `&str` it returns to the bytes it borrows,
     // which closure inference cannot express.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn as_text(bytes: Option<&[u8]>) -> Result<&str, std::str::Utf8Error> {
         bytes.map_or(Ok(""), std::str::from_utf8)
     }

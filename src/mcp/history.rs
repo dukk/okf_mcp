@@ -74,6 +74,7 @@ pub struct History {
 /// # Returns
 /// The normalized candidates, in order, leaving out any that leave the
 /// catalog.
+#[tracing::instrument(level = "trace", skip_all)]
 fn candidates(reference: &str) -> Vec<String> {
     let bare = reference.trim_start_matches('/');
     [normpath(bare), normpath(&format!("{bare}.md"))]
@@ -91,6 +92,7 @@ fn candidates(reference: &str) -> Vec<String> {
 /// [`DEFAULT_LIMIT`] when none was given, else `requested` clamped to
 /// 1..=[`MAX_LIMIT`]. Never 0: with 0 every path would look as if it had no
 /// history.
+#[tracing::instrument(level = "trace", skip_all)]
 fn revision_limit(requested: Option<u32>) -> i64 {
     // `map_or(default, f)` is Python's `default if x is None else f(x)`;
     // `clamp(lo, hi)` is `min(max(x, lo), hi)`.
@@ -111,6 +113,7 @@ fn revision_limit(requested: Option<u32>) -> i64 {
 /// A selection error ([`ToolContext::read_set`]); [`OkfError::NotFound`] if
 /// no catalog in the read set has any revision of the path;
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn history(ctx: &ToolContext, params: HistoryParams) -> Result<History, OkfError> {
     let limit = revision_limit(params.limit);
     let paths = candidates(&params.path);

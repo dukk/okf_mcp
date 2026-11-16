@@ -98,6 +98,7 @@ pub struct SkippedCatalog {
 /// does not apply ([`is_broken_overlay`]) is not an error: it is left out
 /// and listed in [`SearchResult::skipped`], so one broken changeset does not
 /// fail a search across every catalog.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn run(ctx: &ToolContext, params: SearchParams) -> Result<SearchResult, OkfError> {
     let states = ctx.states(params.catalogs.as_deref())?;
     let pinned = ctx.pin(params.changeset.as_deref()).await?;
@@ -157,6 +158,13 @@ pub(crate) async fn run(ctx: &ToolContext, params: SearchParams) -> Result<Searc
 /// # Returns
 /// [`DEFAULT_LIMIT`] when none was given, else `requested` capped at
 /// [`MAX_LIMIT`].
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn hit_limit(requested: Option<usize>) -> usize {
     // `map_or(default, f)` is Python's `default if x is None else f(x)`.
     requested.map_or(DEFAULT_LIMIT, |limit| limit.min(MAX_LIMIT))

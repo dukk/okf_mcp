@@ -34,6 +34,13 @@ pub const AUTHORIZATION_CODE_PREFIX: &str = "okfac_";
 ///
 /// # Errors
 /// [`OkfError::Io`] if the OS random source fails.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub fn generate() -> Result<String, OkfError> {
     generate_with(KEY_PREFIX)
 }
@@ -49,6 +56,7 @@ pub fn generate() -> Result<String, OkfError> {
 ///
 /// # Errors
 /// [`OkfError::Io`] if the OS random source fails.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn generate_with(prefix: &str) -> Result<String, OkfError> {
     // A fixed-size array on the stack, filled in place (`&mut` lends it out
     // for writing), like `bytearray(32)` passed to `os.urandom`'s C side.
@@ -67,6 +75,7 @@ pub fn generate_with(prefix: &str) -> Result<String, OkfError> {
 ///
 /// # Returns
 /// The 32-byte digest.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn hash(key: &str) -> [u8; 32] {
     // `digest` returns a fixed-size array type of its own; `.into()` turns it
     // into a plain `[u8; 32]`.
@@ -83,6 +92,7 @@ pub fn hash(key: &str) -> [u8; 32] {
 /// # Returns
 /// `true` only if `stored` is exactly the SHA-256 of `presented`; a stored
 /// value of the wrong length is `false`, not a panic.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn matches(stored: &[u8], presented: &str) -> bool {
     // `ct_eq` returns a `Choice` (a constant-time boolean); `.into()` makes
     // it a `bool` once the comparison is done.

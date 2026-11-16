@@ -50,6 +50,13 @@ pub struct ClockStatus {
 /// # Returns
 /// The status: an offset and stratum, or `ok: false`. A failure is a status,
 /// not an error, so the function has no `Result`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "root span maker: makes the okf.clock.check root span itself, so a wrapping span would become its parent"
+    )
+)]
 pub async fn check_once(server: &str, clock: &dyn Clock, timeout: Duration) -> ClockStatus {
     let checked_at = format_timestamp(clock.now());
     match ntp::query(server, clock, timeout).await {

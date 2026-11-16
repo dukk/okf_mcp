@@ -34,6 +34,13 @@ impl<S: Subscriber> Layer<S> for CaptureDispatch {
     // Called once, when the `Dispatch` wrapping the finished subscriber is
     // created. A weak handle does not keep the subscriber alive, so there is
     // no reference cycle (the subscriber owns this layer).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "formatter or layer impl: runs inside the subscriber while an event is formatted, so a span would re-enter it"
+        )
+    )]
     fn on_register_dispatch(&self, subscriber: &Dispatch) {
         // A second registration (the subscriber wrapped twice) keeps the
         // first; both are the same subscriber.
@@ -51,28 +58,70 @@ pub struct JsonWithTrace(pub DispatchSlot);
 struct FieldCollector<'a>(&'a mut Map<String, Value>);
 
 impl Visit for FieldCollector<'_> {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "formatter or layer impl: runs inside the subscriber while an event is formatted, so a span would re-enter it"
+        )
+    )]
     fn record_i64(&mut self, field: &Field, value: i64) {
         self.0.insert(field.name().to_string(), Value::from(value));
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "formatter or layer impl: runs inside the subscriber while an event is formatted, so a span would re-enter it"
+        )
+    )]
     fn record_u64(&mut self, field: &Field, value: u64) {
         self.0.insert(field.name().to_string(), Value::from(value));
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "formatter or layer impl: runs inside the subscriber while an event is formatted, so a span would re-enter it"
+        )
+    )]
     fn record_bool(&mut self, field: &Field, value: bool) {
         self.0.insert(field.name().to_string(), Value::from(value));
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "formatter or layer impl: runs inside the subscriber while an event is formatted, so a span would re-enter it"
+        )
+    )]
     fn record_f64(&mut self, field: &Field, value: f64) {
         // `Value::from(f64)` is `Null` for NaN and infinities, which JSON
         // cannot hold.
         self.0.insert(field.name().to_string(), Value::from(value));
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "formatter or layer impl: runs inside the subscriber while an event is formatted, so a span would re-enter it"
+        )
+    )]
     fn record_str(&mut self, field: &Field, value: &str) {
         self.0.insert(field.name().to_string(), Value::from(value));
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "formatter or layer impl: runs inside the subscriber while an event is formatted, so a span would re-enter it"
+        )
+    )]
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         self.0
             .insert(field.name().to_string(), Value::from(format!("{value:?}")));
@@ -84,6 +133,13 @@ where
     S: Subscriber + for<'lookup> LookupSpan<'lookup>,
     N: for<'writer> FormatFields<'writer> + 'static,
 {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "formatter or layer impl: runs inside the subscriber while an event is formatted, so a span would re-enter it"
+        )
+    )]
     fn format_event(
         &self,
         _ctx: &FmtContext<'_, S, N>,
@@ -122,6 +178,13 @@ impl JsonWithTrace {
     /// inside it would lose its ids (or take an ancestor's). The captured
     /// `Dispatch` answers `current_span` for every span the registry tracks,
     /// and its `Registry` walks the ancestors.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "formatter or layer impl: runs inside the subscriber while an event is formatted, so a span would re-enter it"
+        )
+    )]
     fn current_ids(&self, event: &Event<'_>) -> Option<(String, String)> {
         use opentelemetry::trace::TraceContextExt;
         use tracing_subscriber::registry::LookupSpan;

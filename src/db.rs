@@ -27,6 +27,7 @@ pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 ///
 /// # Errors
 /// [`OkfError::Database`] if the URL is malformed or the server is unreachable.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn connect(url: &str, max_connections: u32) -> Result<PgPool, OkfError> {
     let pool = PgPoolOptions::new()
         .max_connections(max_connections)
@@ -48,6 +49,7 @@ pub async fn connect(url: &str, max_connections: u32) -> Result<PgPool, OkfError
 /// [`OkfError::Migrate`] if a migration fails, or the database has a
 /// migration this binary does not know (it is older than the schema);
 /// [`OkfError::Database`] if apalis' setup cannot reach the database.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn migrate(pool: &PgPool) -> Result<(), OkfError> {
     MIGRATOR.run(pool).await?;
     // `::<()>`: `setup` is defined on `PostgresStorage<()>`; the job type
@@ -67,6 +69,7 @@ pub async fn migrate(pool: &PgPool) -> Result<(), OkfError> {
 /// [`OkfError::Migrate`] for a migration failure (including apalis' own
 /// "upgrade required" refusal), [`OkfError::Database`] (or `Busy`) for a
 /// driver error.
+#[tracing::instrument(level = "trace", skip_all)]
 fn apalis_error(error: apalis_postgres::Error) -> OkfError {
     match error {
         // apalis wraps its migrator's error in a driver error; unwrap it.
