@@ -177,9 +177,15 @@ async fn a_pre_m14_key_that_only_ever_is_a_target_is_forgotten_with_its_user() {
     revoke_by_id(&db.pool, "alice-legacy", &AuditActor::cli(), Utc::now())
         .await
         .unwrap();
-    users::delete(&db.pool, "alice", false, &AuditActor::cli(), Utc::now())
-        .await
-        .unwrap();
+    users::delete(
+        &db.pool,
+        "alice",
+        users::DeleteOptions::default(),
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
     let stored: String = sqlx::query_scalar("SELECT string_agg(row_to_json(e)::text || coalesce(row_to_json(tc)::text, '') || coalesce(row_to_json(tp)::text, ''), '') FROM audit_entries e LEFT JOIN audit_credentials tc ON tc.id = e.target_credential_ref LEFT JOIN audit_people tp ON tp.id = e.target_person_id")
         .fetch_one(&db.pool).await.unwrap();
     let credentials: String = sqlx::query_scalar(

@@ -129,6 +129,17 @@ struct UserQuery {
     email: Option<String>,
 }
 
+/// `DELETE /users/{name}`'s query.
+#[derive(Debug, Default, Deserialize)]
+// An unknown parameter (a typo of the precondition) is a 400, never a
+// deletion that skipped the check.
+#[serde(deny_unknown_fields)]
+struct DeleteUserQuery {
+    /// Refuses (409) while the user is a member of any shared team.
+    #[serde(default)]
+    unless_shared_member: bool,
+}
+
 /// `GET /users`' answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct UserList {
@@ -842,25 +853,35 @@ async fn list_sign_ins(
 
 /// `DELETE /users/{name}`: deletes a user with its keys, grants, sign-in
 /// codes, sessions, memberships and personal team; its open changesets are
-/// discarded. Catalogs and their history stay (`users::delete`).
+/// discarded. Catalogs and their history stay (`users::delete`). With
+/// `?unless_shared_member=true` it deletes nothing while the user is a member
+/// of a shared team, decided under the delete's own locks (issue #535).
 ///
 /// # Returns
 /// 204.
 ///
 /// # Errors
-/// 403 unless the key is an admin reaching every catalog; 404 for an unknown
-/// user; 409 for a personal team that owns catalogs, the last owner of a
-/// shared team, or the last admin user; 500 for a database failure.
+/// 400 for an unknown query parameter or a non-boolean value; 403 unless
+/// the key is an admin reaching every catalog; 404 for an unknown user; 409
+/// for a shared-team membership (with the parameter), a personal team that
+/// owns catalogs, the last owner of a shared team, or the last admin user;
+/// 500 for a database failure.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn delete_user(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
     actor: AuditActor,
     Path(name): Path<String>,
+    Query(query): Query<DeleteUserQuery>,
 ) -> Result<StatusCode, AppError> {
     require_manager(&principal)?;
-    // `false`: the API never deletes the last admin user (the CLI may).
-    users::delete(app.pool(), &name, false, &actor, app.clock().now()).await?;
+    // `allow_last_admin` stays off: the API never deletes the last admin
+    // user (the CLI may).
+    let options = users::DeleteOptions {
+        unless_shared_member: query.unless_shared_member,
+        ..users::DeleteOptions::default()
+    };
+    users::delete(app.pool(), &name, options, &actor, app.clock().now()).await?;
     settle(&app).await;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -2117,6 +2138,79 @@ mod tests {
                 row.uri
             );
         }
+    }
+
+    #[tokio::test]
+    async fn deleting_a_user_unless_a_shared_team_member_refuses_a_member() {
+        let test = app().await;
+        let root = every_catalog_admin(&test).await;
+        let admin = Some(root.as_str());
+        user(&test, &root, "alice").await;
+        user(&test, &root, "bob").await;
+        user(&test, &root, "carol").await;
+        send(
+            &test,
+            "POST",
+            "/api/v1/teams",
+            admin,
+            Some(json!({"name": "family", "owner": "alice"})),
+        )
+        .await;
+        send(
+            &test,
+            "PUT",
+            "/api/v1/teams/family/members/bob",
+            admin,
+            Some(json!({"role": "member"})),
+        )
+        .await;
+
+        let (refused, error) = send(
+            &test,
+            "DELETE",
+            "/api/v1/users/bob?unless_shared_member=true",
+            admin,
+            None,
+        )
+        .await;
+        let (still, _) = send(&test, "GET", "/api/v1/users/bob", admin, None).await;
+        let (typo, _) = send(
+            &test,
+            "DELETE",
+            "/api/v1/users/bob?unless_shared_memberr=true",
+            admin,
+            None,
+        )
+        .await;
+        let (off, _) = send(
+            &test,
+            "DELETE",
+            "/api/v1/users/bob?unless_shared_member=false",
+            admin,
+            None,
+        )
+        .await;
+        let (unshared, _) = send(
+            &test,
+            "DELETE",
+            "/api/v1/users/carol?unless_shared_member=true",
+            admin,
+            None,
+        )
+        .await;
+
+        assert_eq!(refused.as_u16(), 409, "{error}");
+        assert_eq!(error["error"], "Refused");
+        assert!(
+            error["message"]
+                .as_str()
+                .is_some_and(|m| m == "the user is a member of shared team(s): \"family\""),
+            "{error}"
+        );
+        assert_eq!(still.as_u16(), 200, "the user stays");
+        assert_eq!(typo.as_u16(), 400, "a misspelled parameter deletes nothing");
+        assert_eq!(off.as_u16(), 204, "false is the unchanged behaviour");
+        assert_eq!(unshared.as_u16(), 204, "no shared team: deleted as before");
     }
 
     #[tokio::test]

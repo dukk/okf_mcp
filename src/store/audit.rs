@@ -1964,9 +1964,15 @@ mod tests {
             .await
             .unwrap();
         }
-        users::delete(&db.pool, "alice", false, &AuditActor::cli(), now())
-            .await
-            .unwrap();
+        users::delete(
+            &db.pool,
+            "alice",
+            users::DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             audit_credentials(&mut db.pool.acquire().await.unwrap()).await,
@@ -3020,9 +3026,15 @@ mod tests {
             .await
             .unwrap();
 
-        users::delete(&db.pool, "alice", false, &AuditActor::cli(), now())
-            .await
-            .unwrap();
+        users::delete(
+            &db.pool,
+            "alice",
+            users::DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
 
         let admin = list(&db.pool, &Viewer::Admin, &AuditQuery::default())
             .await

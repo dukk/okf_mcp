@@ -122,7 +122,7 @@ async fn a_write_delayed_past_the_users_deletion_stores_nothing_that_identifies_
     crate::store::users::delete(
         test.app.pool(),
         "staff",
-        true,
+        crate::store::users::DeleteOptions::OPERATOR,
         &AuditActor::cli(),
         Utc::now(),
     )

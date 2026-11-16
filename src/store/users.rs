@@ -920,6 +920,35 @@ const SOLE_OWNED_TEAMS: &str = "\
                       WHERE o.team_id = t.id AND o.role = 'owner' AND o.user_id <> $1) \
     ORDER BY t.name";
 
+/// The start of the refusal [`DeleteOptions::unless_shared_member`] gives:
+/// the reason is this text, `: ` and the quoted team names, in id order. No
+/// other deletion refusal starts with it (they start `user "<name>" cannot
+/// be deleted`), so a client matches on this prefix.
+pub const SHARED_MEMBER_REFUSAL: &str = "the user is a member of shared team(s)";
+
+/// What [`delete`] allows and requires of the user it deletes.
+///
+/// The `Default` is the API's: the last admin user stays, and shared-team
+/// memberships go with the user.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DeleteOptions {
+    /// Lets the last admin user go (the CLI, with operator access; never
+    /// the API).
+    pub allow_last_admin: bool,
+    /// Refuses the deletion while the user is a member of any team but its
+    /// own personal one, in any role and suspended or not, checked under the same locks as the delete (an external system's
+    /// "delete only if unshared", with no read-then-delete race).
+    pub unless_shared_member: bool,
+}
+
+impl DeleteOptions {
+    /// The command line's: it may delete the last admin user.
+    pub const OPERATOR: Self = Self {
+        allow_last_admin: true,
+        unless_shared_member: false,
+    };
+}
+
 /// Deletes a user and everything that is only theirs, in one transaction
 /// (spec Part 3): its keys, grants and sign-in codes (revoked ones too),
 /// sessions, sign-in methods, emailed links, entitlements, memberships and
@@ -944,8 +973,7 @@ const SOLE_OWNED_TEAMS: &str = "\
 /// # Arguments
 /// * `pool` - the database.
 /// * `name` - the user's name.
-/// * `allow_last_admin` - lets the last admin user go (the CLI, with
-///   operator access; never the API).
+/// * `options` - what the deletion allows and requires ([`DeleteOptions`]).
 /// * `actor` - who, for the audit log; a provisioner is refused an admin.
 /// * `now` - the server clock.
 ///
@@ -955,14 +983,15 @@ const SOLE_OWNED_TEAMS: &str = "\
 /// # Errors
 /// [`OkfError::UnknownName`] (a malformed name included);
 /// [`OkfError::Forbidden`] for a provisioner and an admin user;
-/// [`OkfError::Refused`] naming the catalogs its personal team owns, the
-/// shared teams it is the only owner of, or that it is the last admin user;
-/// [`OkfError::Database`].
+/// [`OkfError::Refused`] naming the shared team the user is a member of
+/// (with [`DeleteOptions::unless_shared_member`]), the catalogs its personal
+/// team owns, the shared teams it is the only owner of, or that it is the
+/// last admin user; [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.delete"))]
 pub async fn delete(
     pool: &PgPool,
     name: &str,
-    allow_last_admin: bool,
+    options: DeleteOptions,
     actor: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<DeletedUser, OkfError> {
@@ -1014,13 +1043,16 @@ pub async fn delete(
             .bind(&user_id)
             .fetch_optional(&mut *tx)
             .await?;
-    // Its shared teams, so no owner is added or removed while we count.
-    sqlx::query(
-        "SELECT t.id FROM teams t JOIN team_members m ON m.team_id = t.id \
+    // Its shared teams, so no owner is added or removed while we count. A
+    // membership added concurrently needs this user row `FOR KEY SHARE`
+    // (its foreign key), which the lock above holds off until we finish, so
+    // the names read here are the memberships the delete removes.
+    let shared: Vec<String> = sqlx::query_scalar(
+        "SELECT t.name FROM teams t JOIN team_members m ON m.team_id = t.id \
          WHERE m.user_id = $1 AND t.personal_of IS NULL ORDER BY t.id FOR UPDATE OF t",
     )
     .bind(&user_id)
-    .execute(&mut *tx)
+    .fetch_all(&mut *tx)
     .await?;
     let owned: Vec<String> =
         sqlx::query_scalar("SELECT name FROM catalogs WHERE owner_team_id = $1 ORDER BY name")
@@ -1031,6 +1063,13 @@ pub async fn delete(
         .bind(&user_id)
         .fetch_all(&mut *tx)
         .await?;
+    // First, so it wins over every other refusal: a client that asked for
+    // this precondition always gets this answer (issue #535).
+    if options.unless_shared_member && !shared.is_empty() {
+        return Err(OkfError::Refused {
+            reason: format!("{SHARED_MEMBER_REFUSAL}: {}", quoted(&shared)),
+        });
+    }
     let blocker = if !owned.is_empty() {
         Some(format!(
             "its personal team owns catalog(s) {}; delete them or move them to another team \
@@ -1042,7 +1081,7 @@ pub async fn delete(
             "it is the last owner of team(s) {}; add another owner first",
             quoted(&sole)
         ))
-    } else if is_admin && !allow_last_admin && admins.len() <= 1 {
+    } else if is_admin && !options.allow_last_admin && admins.len() <= 1 {
         Some("it is the last admin user; make another user an admin first".to_string())
     } else {
         None
@@ -2083,9 +2122,15 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        let deleted = delete(&db.pool, "alice", false, &AuditActor::cli(), now())
-            .await
-            .unwrap();
+        let deleted = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(deleted, DeletedUser::default());
         assert!(matches!(
@@ -2155,9 +2200,15 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        let deleted = delete(&db.pool, "alice", false, &AuditActor::cli(), now())
-            .await
-            .unwrap();
+        let deleted = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             deleted,
@@ -2241,9 +2292,15 @@ pub(crate) mod tests {
             .unwrap();
         tx.commit().await.unwrap();
 
-        let deleted = delete(&db.pool, "alice", false, &AuditActor::cli(), now())
-            .await
-            .unwrap();
+        let deleted = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(deleted.discarded, 1);
         let state: String = sqlx::query_scalar("SELECT state FROM changesets WHERE id = $1")
@@ -2272,7 +2329,14 @@ pub(crate) mod tests {
         let db = test_db().await;
         seed_user(&db.pool, "alice", None).await;
         seed_catalog_owned_by(&db.pool, "alice").await;
-        let owns = delete(&db.pool, "alice", false, &AuditActor::cli(), now()).await;
+        let owns = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await;
         catalogs::delete(&db.pool, "shared", true, &AuditActor::cli(), Utc::now())
             .await
             .unwrap();
@@ -2284,7 +2348,14 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        let sole = delete(&db.pool, "alice", false, &AuditActor::cli(), now()).await;
+        let sole = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await;
         teams::set_member(
             &db.pool,
             &crate::store::teams::Membership {
@@ -2309,8 +2380,22 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        let last_admin = delete(&db.pool, "alice", false, &AuditActor::cli(), now()).await;
-        let by_the_cli = delete(&db.pool, "alice", true, &AuditActor::cli(), now()).await;
+        let last_admin = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await;
+        let by_the_cli = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::OPERATOR,
+            &AuditActor::cli(),
+            now(),
+        )
+        .await;
 
         assert!(reason(owns).contains("catalog(s) \"shared\""));
         assert!(reason(sole).contains("last owner of team(s) \"family\""));
@@ -2320,6 +2405,171 @@ pub(crate) mod tests {
             teams::find(&db.pool, "family").await.unwrap().members.len(),
             1,
             "the other owner stays"
+        );
+    }
+
+    /// Makes `alice` an ordinary member of a new shared team, `family`.
+    async fn alice_joins_family(pool: &PgPool) {
+        teams::create(
+            pool,
+            &family_owned_by_test_user(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        teams::set_member(
+            pool,
+            &crate::store::teams::Membership {
+                team: "family",
+                user: "alice",
+                role: teams::Role::Member,
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+    }
+
+    fn family_owned_by_test_user() -> teams::NewTeam<'static> {
+        teams::NewTeam {
+            name: "family",
+            display_name: "",
+            owner: crate::db::TEST_USER,
+        }
+    }
+
+    const UNLESS_SHARED: DeleteOptions = DeleteOptions {
+        allow_last_admin: false,
+        unless_shared_member: true,
+    };
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unless_shared_member_refuses_a_plain_member_and_deletes_nothing() {
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", None).await;
+        seed_catalog_owned_by(&db.pool, crate::db::TEST_TEAM).await;
+        key_for(&db.pool, "alice", "alice-laptop", false).await;
+        alice_joins_family(&db.pool).await;
+
+        let refused = delete(&db.pool, "alice", UNLESS_SHARED, &AuditActor::cli(), now()).await;
+
+        let reason = reason(refused);
+        assert!(
+            reason == "the user is a member of shared team(s): \"family\"",
+            "{reason}"
+        );
+        assert!(find(&db.pool, "alice").await.is_ok(), "the user stays");
+        assert_eq!(count(&db.pool, "SELECT count(*) FROM api_keys").await, 1);
+        assert_eq!(
+            teams::find(&db.pool, "family").await.unwrap().members.len(),
+            2,
+            "the memberships stay"
+        );
+        // Without the option the same user is deleted, as before.
+        let deleted = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await;
+        assert!(deleted.is_ok(), "{deleted:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unless_shared_member_wins_over_the_last_owner_refusal_and_counts_suspended_teams() {
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", None).await;
+        let family = teams::NewTeam {
+            name: "family",
+            display_name: "",
+            owner: "alice",
+        };
+        teams::create(&db.pool, &family, &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        teams::suspend(&db.pool, "family", None, &AuditActor::cli(), now())
+            .await
+            .unwrap();
+
+        let plain = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await;
+        let guarded = delete(&db.pool, "alice", UNLESS_SHARED, &AuditActor::cli(), now()).await;
+
+        assert!(reason(plain).contains("last owner of team(s) \"family\""));
+        let guarded = reason(guarded);
+        assert!(guarded.starts_with(SHARED_MEMBER_REFUSAL), "{guarded}");
+        assert!(!guarded.contains("last owner"), "{guarded}");
+        assert!(find(&db.pool, "alice").await.is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unless_shared_member_deletes_a_user_with_no_shared_team() {
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", None).await;
+
+        let deleted = delete(&db.pool, "alice", UNLESS_SHARED, &AuditActor::cli(), now()).await;
+
+        assert!(deleted.is_ok(), "{deleted:?}");
+        assert!(matches!(
+            find(&db.pool, "alice").await,
+            Err(OkfError::UnknownName { .. })
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_membership_committed_just_before_the_check_is_never_removed_silently() {
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", None).await;
+        teams::create(
+            &db.pool,
+            &family_owned_by_test_user(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        // A membership insert in flight holds alice `FOR KEY SHARE` (its
+        // foreign key), so the delete's `FOR UPDATE` waits behind it.
+        let mut joining = db.pool.begin().await.unwrap();
+        sqlx::query(
+            "INSERT INTO team_members (team_id, user_id, role, created_at) \
+             SELECT t.id, u.id, 'member', $1 FROM teams t, users u \
+             WHERE t.name = 'family' AND u.name = 'alice'",
+        )
+        .bind(now())
+        .execute(&mut *joining)
+        .await
+        .unwrap();
+        let pool = db.pool.clone();
+        let deleting = tokio::spawn(async move {
+            delete(&pool, "alice", UNLESS_SHARED, &AuditActor::cli(), now()).await
+        });
+        tokio::time::timeout(LOCK_WAIT, until_a_lock_is_awaited(&db.pool))
+            .await
+            .expect("the delete never reached the user's lock");
+
+        joining.commit().await.unwrap();
+        let outcome = tokio::time::timeout(LOCK_WAIT, deleting)
+            .await
+            .expect("the delete waited for the membership for too long")
+            .unwrap();
+
+        assert!(reason(outcome).starts_with(SHARED_MEMBER_REFUSAL));
+        assert!(find(&db.pool, "alice").await.is_ok(), "the user stays");
+        assert_eq!(
+            teams::find(&db.pool, "family").await.unwrap().members.len(),
+            2,
+            "the membership stays"
         );
     }
 
@@ -2344,7 +2594,14 @@ pub(crate) mod tests {
             ..AuditActor::cli()
         };
 
-        let refused = delete(&db.pool, "alice", true, &provisioner, now()).await;
+        let refused = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::OPERATOR,
+            &provisioner,
+            now(),
+        )
+        .await;
 
         assert!(
             matches!(refused, Err(OkfError::Forbidden { .. })),
@@ -2357,7 +2614,14 @@ pub(crate) mod tests {
     async fn deleting_an_unknown_or_malformed_user_is_unknown_name() {
         let db = test_db().await;
         for name in ["nobody", "a\0b"] {
-            let missing = delete(&db.pool, name, false, &AuditActor::cli(), now()).await;
+            let missing = delete(
+                &db.pool,
+                name,
+                DeleteOptions::default(),
+                &AuditActor::cli(),
+                now(),
+            )
+            .await;
             assert!(
                 matches!(missing, Err(OkfError::UnknownName { noun: "user", .. })),
                 "{name:?}: {missing:?}"
@@ -2377,7 +2641,14 @@ pub(crate) mod tests {
         let entries = "SELECT count(*) FROM audit_entries";
         let recorded = count(&db.pool, entries).await;
 
-        let refused = delete(&db.pool, "alice", false, &AuditActor::cli(), now()).await;
+        let refused = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await;
 
         assert!(reason(refused).contains("catalog"));
         assert_unchanged(&db.pool, 1, generation).await;
@@ -2416,10 +2687,16 @@ pub(crate) mod tests {
         // blocks on the personal team's row, which the assignment's
         // foreign-key check holds `FOR KEY SHARE`.
         let pool = db.pool.clone();
-        let deleting =
-            tokio::spawn(
-                async move { delete(&pool, "alice", false, &AuditActor::cli(), now()).await },
-            );
+        let deleting = tokio::spawn(async move {
+            delete(
+                &pool,
+                "alice",
+                DeleteOptions::default(),
+                &AuditActor::cli(),
+                now(),
+            )
+            .await
+        });
         until_a_lock_is_awaited(&db.pool).await;
 
         assigning.commit().await.unwrap();
@@ -2443,10 +2720,16 @@ pub(crate) mod tests {
         let mut creating = db.pool.begin().await.unwrap();
         id_of(&mut creating, "alice").await.unwrap();
         let pool = db.pool.clone();
-        let deletion =
-            tokio::spawn(
-                async move { delete(&pool, "alice", false, &AuditActor::cli(), now()).await },
-            );
+        let deletion = tokio::spawn(async move {
+            delete(
+                &pool,
+                "alice",
+                DeleteOptions::default(),
+                &AuditActor::cli(),
+                now(),
+            )
+            .await
+        });
         until_a_lock_is_awaited(&db.pool).await;
         sqlx::query(
             "INSERT INTO api_keys (id, name, sha256, access, all_catalogs, actor, created_at, \
@@ -2490,10 +2773,16 @@ pub(crate) mod tests {
             .await
             .unwrap();
         let pool = db.pool.clone();
-        let deletion =
-            tokio::spawn(
-                async move { delete(&pool, "alice", false, &AuditActor::cli(), now()).await },
-            );
+        let deletion = tokio::spawn(async move {
+            delete(
+                &pool,
+                "alice",
+                DeleteOptions::default(),
+                &AuditActor::cli(),
+                now(),
+            )
+            .await
+        });
         until_a_lock_is_awaited(&db.pool).await;
         opening.commit().await.unwrap();
 
@@ -2571,8 +2860,9 @@ pub(crate) mod tests {
             .unwrap();
         let pool = db.pool.clone();
         let target_name = target.name.clone();
-        let deleting =
-            tokio::spawn(async move { delete(&pool, &target_name, false, &actor, now()).await });
+        let deleting = tokio::spawn(async move {
+            delete(&pool, &target_name, DeleteOptions::default(), &actor, now()).await
+        });
         until_a_lock_is_awaited(&db.pool).await;
 
         // Act: the writer's next lock, then its commit.

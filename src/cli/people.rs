@@ -85,7 +85,14 @@ pub(super) async fn user(
         UserCommand::Delete { name } => {
             // `allow_last_admin: true`: operator access may delete the last
             // admin user, as it may clear the last admin flag.
-            let deleted = users::delete(pool, &name, true, &AuditActor::cli(), now).await?;
+            let deleted = users::delete(
+                pool,
+                &name,
+                users::DeleteOptions::OPERATOR,
+                &AuditActor::cli(),
+                now,
+            )
+            .await?;
             format!(
                 "deleted user {name} ({} key(s) and grant(s), {} sign-in code(s), \
                  {} open changeset(s) discarded)\n",
