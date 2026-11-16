@@ -636,7 +636,7 @@ OKF_OTLP_HEADERS='authorization=Bearer <token>'   # from a Secret, never the fil
   `okf_mcp::local_only` target (below).
 - **Metrics over OTLP** use the same endpoint, every `export_interval`
   (default 60 seconds), and are independent of the `/metrics` listener.
-- **A failing receiver never blocks the server.** Failed exports are counted
+- **A failing receiver does not stop the server serving.** Failed exports are counted
   in `okf_telemetry_export_failures_total`, by signal and reason, and the
   server carries on.
 - **Shutdown:** on SIGTERM the server drains requests, then flushes the last
@@ -764,16 +764,26 @@ Nothing below reaches an OTLP span, event, log record or metric, or
 - Error messages. An error is exported as its kind, a closed set of words.
 - Passwords, tokens, codes, cookies, setup and reset links, and email
   addresses.
-- Names: users, teams, keys and display names. Spans carry ids only, as
-  `enduser.id` (the user's id) and `okf.key.id` (the key's id). For a console
-  session, `okf.key.id` is the word `session`, not the session's id and not the
-  user's name; the user is identified by `enduser.id` alone.
+- Names: users, teams, keys and display names. For the principal, spans carry
+  ids only: `enduser.id` (the user's id) and `okf.key.id` (the key's id). For a
+  console session, `okf.key.id` is the word `session`, not the session's id and
+  not the user's name; the user is identified by `enduser.id` alone.
 - Dependency events (sqlx statements, rmcp's JSON-RPC, the AWS SDK).
+
+**What is exported is not anonymous.** The ids above are stable and can be
+resolved to a user or key by whoever can read your database or the audit log,
+so choose a receiver you trust with them. Catalog names are exported too, as
+the `okf.catalog` span attribute and the `catalog` metric label.
 
 Metric labels come from closed sets only: route templates, registered tool
 names (anything else is `other`), catalog names, and fixed outcome, method,
-rule, reason and status words. A deleted catalog's series disappear at the next
-collection.
+rule, reason and status words. Only the gauges that enumerate loaded catalogs
+(`okf_catalog_concepts`, `okf_catalog_generation`, `okf_changesets_open`) drop
+a deleted catalog's series at the next collection. The counters and histograms
+(`okf_catalog_refreshes_total`, `okf_publish_duration_seconds`, the tool and
+archive series) keep the series they recorded for that catalog until the
+process restarts, so a catalog created and deleted under many names leaves
+that many series behind.
 
 **stderr is the one exception, and it is sensitive.** Events with the target
 `okf_mcp::local_only` reach stderr only (both OTLP layers turn them off), and
