@@ -61,7 +61,18 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 /// # Returns
 /// The layer, for `Router::layer`.
 pub fn timeout_layer() -> TimeoutLayer {
-    TimeoutLayer::with_status_code(StatusCode::SERVICE_UNAVAILABLE, REQUEST_TIMEOUT)
+    timeout_layer_after(REQUEST_TIMEOUT)
+}
+
+/// [`timeout_layer`] with the deadline given (tests pass a short one).
+///
+/// # Arguments
+/// * `timeout` - how long a request may take before the 503.
+///
+/// # Returns
+/// The layer, for `Router::layer`.
+pub fn timeout_layer_after(timeout: Duration) -> TimeoutLayer {
+    TimeoutLayer::with_status_code(StatusCode::SERVICE_UNAVAILABLE, timeout)
 }
 
 /// How long `/healthz` waits for the database (a pool connection included)

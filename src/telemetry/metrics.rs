@@ -6,13 +6,14 @@
 //! with what a client sends (spec "The `Metrics` handle").
 
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use opentelemetry::metrics::{Counter, Histogram, Meter, UpDownCounter};
+use opentelemetry::metrics::{Counter, Gauge, Histogram, Meter, UpDownCounter};
 use opentelemetry::KeyValue;
 
 use super::otlp::{ExportFailures, FailureReason, Signal};
+use crate::app::App;
 use crate::config::MailProvider;
 use crate::mcp::annotations::{DESTRUCTIVE, READS, STAGED};
 use crate::store::sign_in_events::{Method, Outcome as SignInOutcome};
@@ -51,6 +52,8 @@ pub struct Metrics {
     // Tasks 3-6 add one field per instrument to `Instruments`, and the typed
     // methods that read them.
     inner: Arc<Instruments>,
+    // Observable gauges are registered after the `App` exists, on this meter.
+    meter: Meter,
 }
 
 /// Every instrument, built once from a [`Meter`].
@@ -67,6 +70,11 @@ struct Instruments {
     ratelimit_rejections: Counter<u64>,
     mail_jobs: Counter<u64>,
     mail_queue_depth: Arc<MailQueueDepth>,
+    // Clock checks and archives (Task 6).
+    clock_checks: Counter<u64>,
+    clock_offset: Gauge<f64>,
+    archive_size: Counter<u64>,
+    archive_duration: Histogram<f64>,
 }
 
 impl Metrics {
@@ -79,6 +87,8 @@ impl Metrics {
         "okf_telemetry_export_failures_total",
         "okf_mail_queue_depth",
     ];
+    // The pool gauge joins them once `App::load_with_metrics` registers it
+    // (`observe_pool`).
 
     /// Builds every instrument on `meter` and records `okf.build.info`: a
     /// gauge fixed at 1 whose `version` label is the crate version.
@@ -129,7 +139,24 @@ impl Metrics {
                     "Mail jobs, by provider and outcome.",
                 ),
                 mail_queue_depth: MailQueueDepth::observe(meter),
+                clock_checks: counter(meter, "okf.clock.checks", "Clock checks, by outcome."),
+                clock_offset: meter
+                    .f64_gauge("okf.clock.offset")
+                    .with_unit("s")
+                    .with_description("The time server's clock minus ours, at the last check.")
+                    .build(),
+                archive_size: meter
+                    .u64_counter("okf.archive.size")
+                    .with_unit("By")
+                    .with_description("Archive bytes moved, by direction and catalog.")
+                    .build(),
+                archive_duration: seconds_histogram(
+                    meter,
+                    "okf.archive.duration",
+                    "Archive exports and imports, by direction and outcome.",
+                ),
             }),
+            meter: meter.clone(),
         }
     }
 
@@ -350,6 +377,26 @@ impl MailOutcome {
     }
 }
 
+/// Which way an archive moved: the `direction` label of the archive
+/// instruments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    /// A catalog exported as a tarball.
+    Export,
+    /// A tarball imported into a catalog.
+    Import,
+}
+
+impl Direction {
+    /// The label value.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Export => "export",
+            Self::Import => "import",
+        }
+    }
+}
+
 /// The states a queued mail is shown in (`mail queue`): the `status` label
 /// of `okf.mail.queue.depth`. Done jobs are not counted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -501,6 +548,95 @@ impl Metrics {
     }
 }
 
+/// Task 6: pool, clock and archive instruments.
+impl Metrics {
+    /// Registers `db.client.connection.count`: the pool's connections, one
+    /// series per `state` (`idle` and `used`, which sum to the pool's size).
+    /// The callback holds only a [`Weak`] handle and reads the pool's own
+    /// counters, so a scrape never queries Postgres.
+    ///
+    /// # Arguments
+    /// * `app` - the app whose pool to read; a callback finding it dropped
+    ///   reports nothing.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn observe_pool(&self, app: Weak<App>) {
+        // The gauge handle may be dropped: the callback stays registered
+        // with the provider (see `observe_export_failures`).
+        self.meter
+            .i64_observable_gauge("db.client.connection.count")
+            .with_description("Postgres pool connections, by state.")
+            .with_callback(move |observer| {
+                let Some(app) = app.upgrade() else {
+                    return;
+                };
+                let pool = app.pool();
+                let size = i64::from(pool.size());
+                // `size` and `num_idle` are read a moment apart, so idle can
+                // briefly exceed size; clamp, so used is never negative and
+                // the two always sum to `size`.
+                let idle = i64::try_from(pool.num_idle()).unwrap_or(i64::MAX).min(size);
+                observer.observe(idle, &[KeyValue::new("state", "idle")]);
+                observer.observe(size - idle, &[KeyValue::new("state", "used")]);
+            })
+            .build();
+    }
+
+    /// Records one clock check.
+    ///
+    /// # Arguments
+    /// * `outcome` - `Ok` when the time server gave a usable reply.
+    /// * `offset_ms` - the server's clock minus ours; `None` on failure,
+    ///   which leaves the offset gauge at its last value.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn clock_check(&self, outcome: Outcome, offset_ms: Option<i64>) {
+        self.inner
+            .clock_checks
+            .add(1, &[KeyValue::new("outcome", outcome.as_str())]);
+        if let Some(offset_ms) = offset_ms {
+            // An offset is milliseconds well under 2^53: exact as an `f64`.
+            #[allow(clippy::cast_precision_loss)]
+            self.inner
+                .clock_offset
+                .record(offset_ms as f64 / 1000.0, &[]);
+        }
+    }
+
+    /// Records a finished archive export or import of a catalog that exists.
+    ///
+    /// # Arguments
+    /// * `direction` - export or import.
+    /// * `catalog` - a loaded catalog's name (never a raw path segment).
+    /// * `outcome` - how it ended.
+    /// * `elapsed` - how long it took.
+    /// * `bytes` - the archive's size when it succeeded; `None` adds no bytes.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn archive(
+        &self,
+        direction: Direction,
+        catalog: &str,
+        outcome: Outcome,
+        elapsed: Duration,
+        bytes: Option<u64>,
+    ) {
+        self.inner.archive_duration.record(
+            elapsed.as_secs_f64(),
+            &[
+                KeyValue::new("direction", direction.as_str()),
+                KeyValue::new("outcome", outcome.as_str()),
+            ],
+        );
+        if let Some(bytes) = bytes {
+            self.inner.archive_size.add(
+                bytes,
+                &[
+                    KeyValue::new("direction", direction.as_str()),
+                    KeyValue::new("catalog", catalog.to_owned()),
+                ],
+            );
+        }
+    }
+}
+
 /// Registers `okf.telemetry.export.failures` (rendered as
 /// `okf_telemetry_export_failures_total`): an observable counter reading
 /// `failures` at each collection, one series per `(signal, reason)`, every
@@ -628,5 +764,31 @@ mod tests {
         assert!(SECONDS_BUCKETS.windows(2).all(|pair| pair[0] < pair[1]));
         assert_eq!(SECONDS_BUCKETS.first(), Some(&0.001));
         assert_eq!(SECONDS_BUCKETS.last(), Some(&60.0));
+    }
+
+    #[test]
+    fn a_failed_clock_check_counts_as_an_error_and_keeps_the_last_offset() {
+        use crate::mcp::testing::{local_metrics, render, sample_of};
+        let (_provider, metrics, registry) = local_metrics();
+
+        metrics.clock_check(Outcome::Ok, Some(250));
+        metrics.clock_check(Outcome::Error, None);
+
+        let text = render(&registry);
+        assert_eq!(
+            sample_of(&text, r#"okf_clock_checks_total{outcome="ok"}"#),
+            Some(1.0),
+            "{text}"
+        );
+        assert_eq!(
+            sample_of(&text, r#"okf_clock_checks_total{outcome="error"}"#),
+            Some(1.0),
+            "{text}"
+        );
+        assert_eq!(
+            sample_of(&text, "okf_clock_offset_seconds"),
+            Some(0.25),
+            "{text}"
+        );
     }
 }

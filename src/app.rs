@@ -12,6 +12,7 @@ use chrono::TimeDelta;
 use sqlx::PgPool;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 use crate::auth::{Admission, Keys};
 use crate::catalog::CatalogState;
@@ -32,7 +33,7 @@ use crate::store::oauth::{
 };
 use crate::store::settings::{self, Settings};
 use crate::store::{catalogs, changesets, email_tokens, sign_in_events, unlocks, user_sessions};
-use crate::telemetry::metrics::Metrics;
+use crate::telemetry::metrics::{Metrics, Outcome};
 use crate::telemetry::subscriber::{split_event, LOCAL_ONLY};
 
 /// Every loaded catalog, by name (a `BTreeMap`, so iteration is in name
@@ -220,7 +221,7 @@ impl App {
         let passkeys = Passkeys::new(&config)?;
         // A provider whose secret variable is unset fails start-up here.
         let oidc = OidcProviders::new(&config, |name| std::env::var(name).ok())?;
-        Ok(Arc::new(Self {
+        let app = Arc::new(Self {
             pool,
             config,
             clock,
@@ -244,7 +245,11 @@ impl App {
             metrics,
             #[cfg(test)]
             access_hold: Arc::default(),
-        }))
+        });
+        // `Arc::downgrade`: the gauges' callbacks live in the meter provider,
+        // which outlives the app, so they hold a weak handle (no cycle).
+        app.metrics.observe_pool(Arc::downgrade(&app));
+        Ok(app)
     }
 
     /// Records one operator access in the background, off the request path
@@ -750,12 +755,40 @@ impl App {
             }
             // An async call does nothing until awaited: `check` is the
             // query, not yet started, for the `select!` below to drive.
-            let check = clock_check::check_once(&server, self.clock(), clock_check::QUERY_TIMEOUT);
+            // Each check is the root of its own trace, whatever started the
+            // loop (spec "Background roots").
+            // Kept as a handle: the result is recorded on this span, not on
+            // whatever span is current when the check finishes.
+            let root = tracing::info_span!(
+                parent: None,
+                "okf.clock.check",
+                okf.outcome = tracing::field::Empty,
+                okf.clock.offset = tracing::field::Empty,
+                otel.status_code = tracing::field::Empty,
+            );
+            let check = clock_check::check_once(&server, self.clock(), clock_check::QUERY_TIMEOUT)
+                .instrument(root.clone());
             // A stop during a query ends it at once instead of waiting up to
             // `QUERY_TIMEOUT` (Brooke's review of PR #138).
             tokio::select! {
                 () = shutdown.cancelled() => return,
-                status = check => self.set_clock_status(status),
+                status = check => {
+                    let outcome = if status.ok { Outcome::Ok } else { Outcome::Error };
+                    self.metrics.clock_check(outcome, status.offset_ms);
+                    root.record("okf.outcome", outcome.as_str());
+                    match status.offset_ms {
+                        // Seconds, as an `f64`, like the gauge.
+                        Some(offset_ms) => {
+                            root.record("okf.clock.offset", offset_ms as f64 / 1000.0);
+                        }
+                        // A failed check is a failed trace: the WARN event
+                        // alone does not set the span's status.
+                        None => {
+                            root.record("otel.status_code", "error");
+                        }
+                    }
+                    self.set_clock_status(status);
+                }
             }
         }
     }
@@ -1848,5 +1881,190 @@ mod tests {
             .await
             .unwrap();
         assert_eq!((tokens, events), (1, 1));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pool_gauges() {
+        let (test, registry) =
+            crate::mcp::testing::app_with_metrics(&[("pg", &[])], Config::default()).await;
+        // One connection held out of the pool, so `used` is not zero.
+        let _held = test.app.pool().acquire().await.expect("a connection");
+
+        let text = crate::mcp::testing::render(&registry);
+
+        let sample = |state: &str| {
+            crate::mcp::testing::sample_of(
+                &text,
+                &format!(r#"db_client_connection_count{{state="{state}"}}"#),
+            )
+            .unwrap_or_else(|| panic!("no {state} series: {text}"))
+        };
+        let (idle, used) = (sample("idle"), sample("used"));
+        assert!(used >= 1.0, "{text}");
+        assert_eq!(idle + used, f64::from(test.app.pool().size()), "{text}");
+    }
+
+    #[tokio::test]
+    async fn each_clock_check_is_its_own_trace() {
+        use crate::telemetry::config::LogFormat;
+        use crate::telemetry::subscriber::capture::Observer;
+        for filter in ["info", "trace"] {
+            // The fake server answers once, so each filter gets its own.
+            let server = crate::ntp::testing::fake_server(None, 1).await;
+            let config = Config {
+                time_server: Some(server.to_string()),
+                ..Config::default()
+            };
+            let (test, registry) =
+                crate::mcp::testing::app_with_metrics(&[("pg", &[])], config).await;
+            let observer = Observer::start("off", filter, "off", LogFormat::Text);
+            let shutdown = CancellationToken::new();
+            let running = Arc::clone(&test.app)
+                .check_clock_until(shutdown.clone())
+                .instrument(tracing::info_span!("caller"));
+            // Stop the loop once its startup check has answered.
+            let stop = async {
+                // `checked_at` has one-second resolution, so count the
+                // checks the metric saw instead.
+                let counted = || {
+                    crate::mcp::testing::sample_of(
+                        &crate::mcp::testing::render(&registry),
+                        r#"okf_clock_checks_total{outcome="ok"}"#,
+                    )
+                    .unwrap_or(0.0)
+                };
+                let before = counted();
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    while counted() <= before {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                })
+                .await
+                .expect("a clock check within 10 s");
+                shutdown.cancel();
+            };
+            tokio::time::timeout(Duration::from_secs(15), async {
+                tokio::join!(running, stop)
+            })
+            .await
+            .expect("the loop stops when cancelled");
+            let observed = observer.finish();
+
+            let caller = &observed.spans_named("caller")[0];
+            let checks = observed.spans_named("okf.clock.check");
+            assert_eq!(checks.len(), 1, "{filter}");
+            assert_eq!(
+                checks[0].parent_span_id,
+                opentelemetry::trace::SpanId::INVALID
+            );
+            assert_ne!(
+                checks[0].span_context.trace_id(),
+                caller.span_context.trace_id(),
+                "{filter}"
+            );
+            // The result is on the root: a closed outcome and the offset in
+            // seconds as a number, never a string; a success is not an error.
+            let attribute = |key| crate::telemetry::subscriber::capture::attribute(checks[0], key);
+            assert_eq!(
+                attribute("okf.outcome").map(ToString::to_string).as_deref(),
+                Some("ok"),
+                "{filter}"
+            );
+            assert!(
+                matches!(attribute("okf.clock.offset"), Some(opentelemetry::Value::F64(offset)) if offset.abs() < 1.0),
+                "{filter}: {:?}",
+                checks[0].attributes
+            );
+            assert_eq!(
+                checks[0].status,
+                opentelemetry::trace::Status::Unset,
+                "{filter}"
+            );
+            let text = crate::mcp::testing::render(&registry);
+            assert_eq!(
+                crate::mcp::testing::sample_of(&text, r#"okf_clock_checks_total{outcome="ok"}"#),
+                Some(1.0),
+                "{text}"
+            );
+            let offset = crate::mcp::testing::sample_of(&text, "okf_clock_offset_seconds")
+                .unwrap_or_else(|| panic!("no offset gauge: {text}"));
+            assert!(offset.abs() < 1.0, "{text}");
+        }
+    }
+
+    /// A UDP server that answers one request with a packet too short to be
+    /// an NTP reply.
+    async fn garbage_time_server() -> std::net::SocketAddr {
+        let socket = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let address = socket.local_addr().expect("address");
+        tokio::spawn(async move {
+            let mut request = [0u8; 48];
+            if let Ok((_, client)) = socket.recv_from(&mut request).await {
+                let _ = socket.send_to(&[0u8; 4], client).await;
+            }
+        });
+        address
+    }
+
+    #[tokio::test]
+    async fn a_failed_clock_check_marks_its_root_span_as_an_error() {
+        use crate::telemetry::config::LogFormat;
+        use crate::telemetry::subscriber::capture::{attribute, Observer};
+        for filter in ["info", "trace"] {
+            let server = garbage_time_server().await;
+            let config = Config {
+                time_server: Some(server.to_string()),
+                ..Config::default()
+            };
+            let (test, registry) =
+                crate::mcp::testing::app_with_metrics(&[("pg", &[])], config).await;
+            let observer = Observer::start("off", filter, "off", LogFormat::Text);
+            let shutdown = CancellationToken::new();
+            let running = Arc::clone(&test.app).check_clock_until(shutdown.clone());
+            let stop = async {
+                let app = &test.app;
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    while app.clock_status().is_none() {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                })
+                .await
+                .expect("a clock check within 10 s");
+                shutdown.cancel();
+            };
+            tokio::time::timeout(Duration::from_secs(15), async {
+                tokio::join!(running, stop)
+            })
+            .await
+            .expect("the loop stops when cancelled");
+            let observed = observer.finish();
+
+            let checks = observed.spans_named("okf.clock.check");
+            assert_eq!(checks.len(), 1, "{filter}");
+            assert_eq!(
+                attribute(checks[0], "okf.outcome")
+                    .map(ToString::to_string)
+                    .as_deref(),
+                Some("error"),
+                "{filter}"
+            );
+            assert!(
+                attribute(checks[0], "okf.clock.offset").is_none(),
+                "{filter}"
+            );
+            assert!(
+                matches!(checks[0].status, opentelemetry::trace::Status::Error { .. }),
+                "{filter}: {:?}",
+                checks[0].status
+            );
+            let text = crate::mcp::testing::render(&registry);
+            assert_eq!(
+                crate::mcp::testing::sample_of(&text, r#"okf_clock_checks_total{outcome="error"}"#),
+                Some(1.0),
+                "{filter}: {text}"
+            );
+        }
     }
 }

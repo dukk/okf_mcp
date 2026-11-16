@@ -1,12 +1,14 @@
-//! W3C trace context at the edges. Task 3 reads an inbound `traceparent` as
-//! a span link ([`link_from`]); Task 6 adds the outbound injection.
+//! W3C trace context at the edges. An inbound `traceparent` becomes a span
+//! link ([`link_from`]); an outbound request carries the span it is made
+//! under ([`inject`]).
 
 use axum::http::HeaderMap;
 use opentelemetry::propagation::TextMapPropagator;
 use opentelemetry::trace::{SpanContext, TraceContextExt, TraceState};
 use opentelemetry::Context;
-use opentelemetry_http::HeaderExtractor;
+use opentelemetry_http::{HeaderExtractor, HeaderInjector};
 use opentelemetry_sdk::propagation::TraceContextPropagator;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 /// The caller's trace context from a request's `traceparent`, for a span
 /// link. The request span stays a root: a client (or anyone, since the
@@ -41,6 +43,106 @@ pub fn link_from(headers: &HeaderMap) -> Option<SpanContext> {
             TraceState::default(),
         )
     })
+}
+
+/// Adds a `traceparent` for the span the request is made under to an
+/// outbound request's headers, so the callee can join the trace. Nothing is
+/// added when that span is not exported (no trace layer, or filtered out).
+///
+/// The context is the current *tracing span's*, never a bare
+/// `Context::current()`: the active OpenTelemetry context is not where
+/// `tracing` keeps the caller. This function is deliberately not
+/// instrumented: a span of its own would become the current one, and the
+/// header would name the helper instead of the caller.
+///
+/// # Arguments
+/// * `headers` - the outbound request's headers (reqwest 0.13 and axum share
+///   http 1.x's `HeaderMap`).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "a span of its own would replace the caller's in the header"
+    )
+)]
+pub fn inject(headers: &mut HeaderMap) {
+    let context = tracing::Span::current().context();
+    TraceContextPropagator::new().inject_context(&context, &mut HeaderInjector(headers));
+}
+
+/// A local server that records the `traceparent` of every request, for the
+/// outbound clients' tests.
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::sync::{Arc, Mutex};
+
+    use axum::http::HeaderMap;
+    use axum::routing::any;
+    use axum::{Json, Router};
+
+    use crate::telemetry::config::LogFormat;
+    use crate::telemetry::subscriber::capture::{Observed, Observer};
+
+    /// The `traceparent` values (or `None` for a request without one) the
+    /// stub saw, oldest first.
+    pub(crate) type Seen = Arc<Mutex<Vec<Option<String>>>>;
+
+    /// Serves `{}` to any request on a free port and records each request's
+    /// `traceparent`.
+    ///
+    /// # Returns
+    /// The base URL (`http://127.0.0.1:<port>`) and what the stub saw.
+    pub(crate) async fn echo_stub() -> (String, Seen) {
+        let seen = Seen::default();
+        let record = Arc::clone(&seen);
+        let router = Router::new().fallback(any(move |headers: HeaderMap| async move {
+            let value = headers
+                .get("traceparent")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
+            record.lock().expect("stub lock").push(value);
+            Json(serde_json::json!({}))
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let url = format!("http://{}", listener.local_addr().expect("address"));
+        tokio::spawn(async move { axum::serve(listener, router).await });
+        (url, seen)
+    }
+
+    /// Runs `request` (one outbound call to `stub`) inside a span called
+    /// `caller` at each span filter, and checks the stub received a
+    /// `traceparent` carrying that span's trace id.
+    ///
+    /// # Arguments
+    /// * `seen` - what [`echo_stub`] returned.
+    /// * `request` - makes the call; run once per filter.
+    pub(crate) async fn assert_joins_the_callers_trace<F, Fut>(seen: &Seen, request: F)
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        use tracing::Instrument;
+        for filter in ["info", "trace"] {
+            seen.lock().expect("stub lock").clear();
+            let observer = Observer::start("off", filter, "off", LogFormat::Text);
+            request().instrument(tracing::info_span!("caller")).await;
+            let observed: Observed = observer.finish();
+            let span = &observed.spans_named("caller")[0];
+            let seen = seen.lock().expect("stub lock").clone();
+            let header = seen
+                .last()
+                .cloned()
+                .flatten()
+                .unwrap_or_else(|| panic!("{filter}: no traceparent sent: {seen:?}"));
+            let trace_id = span.span_context.trace_id().to_string();
+            assert!(
+                header.starts_with(&format!("00-{trace_id}-")),
+                "{filter}: {header} is not in trace {trace_id}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -136,5 +238,72 @@ mod tests {
                 .expect("value"),
         );
         assert!(link_from(&headers).is_none());
+    }
+
+    /// The `(trace id, span id)` of a `traceparent` header.
+    fn ids_of(headers: &HeaderMap) -> (String, String) {
+        let value = headers
+            .get("traceparent")
+            .expect("a traceparent")
+            .to_str()
+            .expect("ascii");
+        let parts: Vec<&str> = value.split('-').collect();
+        assert_eq!(parts.len(), 4, "{value}");
+        (parts[1].to_string(), parts[2].to_string())
+    }
+
+    #[test]
+    fn inject_names_the_span_the_request_is_made_under_at_both_filters() {
+        use crate::telemetry::config::LogFormat;
+        use crate::telemetry::subscriber::capture::observe;
+        for filter in ["info", "trace"] {
+            let mut headers = HeaderMap::new();
+            let observed = observe("off", filter, "off", LogFormat::Text, || {
+                let ambient = tracing::info_span!("ambient");
+                let _entered = ambient.enter();
+                inject(&mut headers);
+            });
+            let span = &observed.spans_named("ambient")[0];
+            let (trace, parent) = ids_of(&headers);
+            assert_eq!(trace, span.span_context.trace_id().to_string(), "{filter}");
+            assert_eq!(parent, span.span_context.span_id().to_string(), "{filter}");
+        }
+    }
+
+    #[test]
+    fn inject_ignores_an_unrelated_active_opentelemetry_context() {
+        use crate::telemetry::config::LogFormat;
+        use crate::telemetry::subscriber::capture::observe;
+        use opentelemetry::trace::{SpanId, TraceFlags, TraceId};
+        let mut headers = HeaderMap::new();
+        let observed = observe("off", "info", "off", LogFormat::Text, || {
+            let ambient = tracing::info_span!("ambient");
+            let _entered = ambient.enter();
+            // Another library's context is active; the caller is still the
+            // tracing span.
+            let other = SpanContext::new(
+                TraceId::from(7_u128),
+                SpanId::from(9_u64),
+                TraceFlags::SAMPLED,
+                true,
+                TraceState::default(),
+            );
+            let _attached = Context::new().with_remote_span_context(other).attach();
+            inject(&mut headers);
+        });
+        let span = &observed.spans_named("ambient")[0];
+        let (trace, parent) = ids_of(&headers);
+        assert_eq!(trace, span.span_context.trace_id().to_string());
+        assert_eq!(parent, span.span_context.span_id().to_string());
+    }
+
+    #[test]
+    fn inject_adds_nothing_without_an_exported_span() {
+        let mut headers = HeaderMap::new();
+
+        inject(&mut headers);
+
+        assert!(headers.get("traceparent").is_none());
+        assert!(headers.get("tracestate").is_none());
     }
 }
