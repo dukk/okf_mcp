@@ -109,6 +109,7 @@ unknown keys are ignored, so one file serves every version.
 | `telemetry.stderr.filter` | `"warn,okf_mcp=info,tower_http=info"` | stderr's filter, a `tracing` directive string. `RUST_LOG` overrides it |
 | `telemetry.otlp.endpoint`, `telemetry.otlp.headers_env` | none | The receiver's base URL (`/v1/traces`, `/v1/logs` and `/v1/metrics` are appended; HTTP with protobuf, not gRPC) and the environment variable holding its headers as `name=value,name=value`, or `none`. Set together. OTLP is off without the `[telemetry.otlp]` table |
 | `telemetry.otlp.sentry_dsn_env` | none | The environment variable holding a Sentry DSN, instead of `endpoint` and `headers_env` |
+| `telemetry.otlp.signals` | all three with `endpoint`; `["traces", "logs"]` with `sentry_dsn_env` | Which signals are pushed: any non-empty subset of `"traces"`, `"logs"` and `"metrics"`. A signal that is off gets no exporter, layer or reader; its filter and interval keys still parse, and its `okf_telemetry_export_failures_total` series stay at 0. `"metrics"` is refused with `sentry_dsn_env` |
 | `telemetry.otlp.traces_filter`, `telemetry.otlp.logs_filter` | `"info"`, `"info"` | What the span and log exporters take (this crate's own targets only) |
 | `telemetry.otlp.sample_ratio` | none | The share of new traces kept, `0.0` to `1.0`. Unset: `OTEL_TRACES_SAMPLER` decides, else every trace |
 | `telemetry.otlp.export_interval` | `"60s"` | How often metrics are pushed over OTLP |
@@ -150,6 +151,7 @@ also refuse an `[telemetry.otlp]` table with none of `endpoint` with
 `headers_env`, or `sentry_dsn_env`; one with both forms, or with only one of
 `endpoint` and `headers_env`; an `endpoint` that is not an `http` or `https`
 URL with a host, or that has a user name, password, query or fragment; a
+`signals` list that is empty, repeats a name, names an unknown signal, or has `metrics` with `sentry_dsn_env`; a
 `sample_ratio` outside `0` to `1`; a zero `export_interval`; a filter that does
 not parse; and a `telemetry.prometheus.listen` that overlaps `listen`.
 `serve` also refuses to start when a variable named by `headers_env` or
@@ -664,12 +666,21 @@ name it instead of `endpoint` and `headers_env`:
 sentry_dsn_env = "OKF_SENTRY_DSN"
 ```
 
-The server derives the three signal URLs from the DSN
+The server derives the signal URLs from the DSN
 (`https://<host>/api/<project>/integration/otlp/v1/<signal>`, keeping any path
 prefix) and sends the public key as the `x-sentry-auth` header. `sentry_dsn_env`
 cannot be combined with `endpoint` or `headers_env`. The DSN is read at start-up,
 never logged, and an invalid one is refused with a message that does not repeat it.
 The Sentry SDK itself is not used.
+
+Sentry's OTLP intake takes traces and logs only; it has no metrics endpoint
+([docs.sentry.io/concepts/otlp](https://docs.sentry.io/concepts/otlp/)), so a
+metrics push would be answered with a 404 every `export_interval`. With
+`sentry_dsn_env`, `signals` therefore defaults to `["traces", "logs"]`, and
+`"metrics"` is refused at start-up. Metrics are served by
+the Prometheus `/metrics` listener (`[telemetry.prometheus]`) instead. The same
+key turns off any signal a receiver does not take. At start-up the server logs
+`OTLP export is on` with the `signals` it exports.
 
 ### Through a collector
 
