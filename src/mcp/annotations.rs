@@ -255,7 +255,6 @@ fn no_tool_text_names_okf_py_or_carries_a_contributor_note() {
 /// PR as its fix, and it must be empty when epic #507 closes.
 #[cfg(test)]
 const KNOWN_UNTYPED_PARAMETERS: &[(&str, &str)] = &[
-    ("maintenance_dispose", "disposition"),
     ("maintenance_submit", "submission"),
     ("unquestion", "question"),
     ("set_frontmatter", "value"),
