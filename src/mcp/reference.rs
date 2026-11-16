@@ -37,9 +37,13 @@ How a session usually goes:
   edit, `publish`, `discard`, `revert` and `pending_changes`. Reads take it too, to see the
   drafts. Nothing is visible to others until `publish`.
 
-A tool is read-only, staged (it changes a changeset or a maintenance run, and `discard` undoes
-it) or destructive (it deletes, or cannot be undone from inside the server).
+A tool is one of four kinds:
 
+- read-only: it changes nothing.
+- staged: it adds an entry to a changeset, which `discard` drops and `publish` applies.
+- maintenance: a step in a maintenance run (claim, renew, submit, dispose). It takes no
+  changeset and is saved at once, so `discard` does not undo it; it never touches a concept.
+- destructive: it deletes, or cannot be undone from inside the server.
 ";
 
 /// The tool's description without the trailing reference link `OkfServer::tools` adds.
@@ -135,13 +139,16 @@ fn cell(text: &str) -> String {
 /// * `tool` - a tool from the router.
 ///
 /// # Returns
-/// `read-only`, `staged` or `destructive`.
+/// `read-only`, `staged`, `maintenance` or `destructive`.
 fn class(tool: &Tool) -> &'static str {
     let hints = tool.annotations.as_ref();
     if hints.and_then(|h| h.read_only_hint) == Some(true) {
         "read-only"
     } else if hints.and_then(|h| h.destructive_hint) == Some(true) {
         "destructive"
+    } else if tool.name.starts_with("maintenance_") {
+        // Run steps persist at once and take no changeset handle, so they are not "staged".
+        "maintenance"
     } else {
         "staged"
     }

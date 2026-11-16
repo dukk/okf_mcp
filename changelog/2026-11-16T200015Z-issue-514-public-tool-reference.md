@@ -6,7 +6,7 @@ description" suggestion, addressed once for every tool.
 ## Added
 
 - `docs/reference/tools.md`, the public tool reference: every tool (42), its title, kind
-  (read-only, staged or destructive), description and parameters. A `## \`name\`` heading
+  (read-only, staged, maintenance or destructive), description and parameters. A `## \`name\`` heading
   per tool makes `#name` a stable anchor on GitHub.
 - `src/mcp/reference.rs` (test-only) renders that page from `OkfServer::tools().list_all()`.
   `the_checked_in_tool_reference_matches_the_tool_list` fails when the file differs; refresh

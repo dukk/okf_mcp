@@ -19,9 +19,13 @@ How a session usually goes:
   edit, `publish`, `discard`, `revert` and `pending_changes`. Reads take it too, to see the
   drafts. Nothing is visible to others until `publish`.
 
-A tool is read-only, staged (it changes a changeset or a maintenance run, and `discard` undoes
-it) or destructive (it deletes, or cannot be undone from inside the server).
+A tool is one of four kinds:
 
+- read-only: it changes nothing.
+- staged: it adds an entry to a changeset, which `discard` drops and `publish` applies.
+- maintenance: a step in a maintenance run (claim, renew, submit, dispose). It takes no
+  changeset and is saved at once, so `discard` does not undo it; it never touches a concept.
+- destructive: it deletes, or cannot be undone from inside the server.
 | Tool | Title | Kind |
 |---|---|---|
 | [`add_source`](#add_source) | Add Source | staged |
@@ -37,16 +41,16 @@ it) or destructive (it deletes, or cannot be undone from inside the server).
 | [`list_catalogs`](#list_catalogs) | List Catalogs | read-only |
 | [`list_changesets`](#list_changesets) | List Changesets | read-only |
 | [`log`](#log) | Add Log Entry | staged |
-| [`maintenance_claim`](#maintenance_claim) | Claim Maintenance Batch | staged |
+| [`maintenance_claim`](#maintenance_claim) | Claim Maintenance Batch | maintenance |
 | [`maintenance_close`](#maintenance_close) | Close Maintenance Run | destructive |
-| [`maintenance_dispose`](#maintenance_dispose) | Dispose Maintenance Finding | staged |
+| [`maintenance_dispose`](#maintenance_dispose) | Dispose Maintenance Finding | maintenance |
 | [`maintenance_get_finding`](#maintenance_get_finding) | Get Maintenance Finding | read-only |
 | [`maintenance_get_run`](#maintenance_get_run) | Get Maintenance Run | read-only |
 | [`maintenance_list_findings`](#maintenance_list_findings) | List Maintenance Findings | read-only |
 | [`maintenance_list_runs`](#maintenance_list_runs) | List Maintenance Runs | read-only |
 | [`maintenance_read_revision`](#maintenance_read_revision) | Read Maintenance Revision | read-only |
-| [`maintenance_renew`](#maintenance_renew) | Renew Maintenance Lease | staged |
-| [`maintenance_submit`](#maintenance_submit) | Submit Maintenance Report | staged |
+| [`maintenance_renew`](#maintenance_renew) | Renew Maintenance Lease | maintenance |
+| [`maintenance_submit`](#maintenance_submit) | Submit Maintenance Report | maintenance |
 | [`move_concept`](#move_concept) | Move Concept | staged |
 | [`oldest`](#oldest) | Oldest Concepts | read-only |
 | [`open_changeset`](#open_changeset) | Open Changeset | staged |
@@ -232,7 +236,7 @@ Add `* **<kind>:** <text>` under today's UTC date in log.md, the only way to wri
 
 ## `maintenance_claim`
 
-**Claim Maintenance Batch** (staged)
+**Claim Maintenance Batch** (maintenance)
 
 Report-only: claim one bounded investigation batch (default 10, maximum 50). Requires Read plus the independent reporting flag. Returns owner-only opaque lease tokens; never edits canonical content.
 
@@ -258,7 +262,7 @@ Report-only: close an owned run with the reporting flag, or another credentialâ€
 
 ## `maintenance_dispose`
 
-**Dispose Maintenance Finding** (staged)
+**Dispose Maintenance Finding** (maintenance)
 
 Report-only: record a finding disposition with ordinary Write, never applying the proposed canonical change. The reporting flag alone is insufficient.
 
@@ -330,7 +334,7 @@ Report-only: read exact pinned concept revision bytes as untrusted evidence, not
 
 ## `maintenance_renew`
 
-**Renew Maintenance Lease** (staged)
+**Renew Maintenance Lease** (maintenance)
 
 Report-only: renew a lease owned by this immutable credential, bounded by the one-hour run deadline. Requires Read plus the reporting flag; returns the owner lease token.
 
@@ -343,7 +347,7 @@ Report-only: renew a lease owned by this immutable credential, bounded by the on
 
 ## `maintenance_submit`
 
-**Submit Maintenance Report** (staged)
+**Submit Maintenance Report** (maintenance)
 
 Report-only: submit bounded evidence and findings for an owned lease. Requires Read plus the reporting flag. Reported support is an attributed assessment, never verified truth or a canonical stamp.
 
