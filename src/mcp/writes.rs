@@ -437,6 +437,7 @@ pub struct LogParams {
     /// The entry; runs of whitespace become single spaces.
     pub text: String,
     /// Update, Creation, Change or Import (default Update).
+    #[schemars(extend("type" = ["string", "null"]))]
     pub kind: Option<LogKind>,
     /// The changeset to write to: the handle `open_changeset` returned.
     pub changeset: String,
@@ -1468,6 +1469,46 @@ mod bookkeeping_tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn log_kind_takes_each_kind_null_or_nothing_and_refuses_the_rest() {
+        let parse = |kind: Option<serde_json::Value>| {
+            let mut args = serde_json::json!({"text": "x", "changeset": "h"});
+            if let Some(kind) = kind {
+                args["kind"] = kind;
+            }
+            serde_json::from_value::<LogParams>(args)
+        };
+
+        for (name, kind) in [
+            ("Update", LogKind::Update),
+            ("Creation", LogKind::Creation),
+            ("Change", LogKind::Change),
+            ("Import", LogKind::Import),
+        ] {
+            assert_eq!(parse(Some(name.into())).unwrap().kind, Some(kind));
+        }
+        assert_eq!(parse(Some(serde_json::Value::Null)).unwrap().kind, None);
+        assert_eq!(parse(None).unwrap().kind, None);
+        assert!(parse(Some("Delete".into())).is_err());
+    }
+
+    #[test]
+    fn the_log_kind_schema_has_a_direct_type_and_the_four_kinds() {
+        let schema = serde_json::to_value(schemars::schema_for!(LogParams)).unwrap();
+        let kind = &schema["properties"]["kind"];
+
+        assert_eq!(kind["type"], serde_json::json!(["string", "null"]));
+        let kinds = &schema["$defs"]["LogKind"];
+        let mut names: Vec<&str> = kinds["oneOf"]
+            .as_array()
+            .map_or(&[][..], Vec::as_slice)
+            .iter()
+            .filter_map(|variant| variant["const"].as_str())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, ["Change", "Creation", "Import", "Update"]);
     }
 
     #[test]
