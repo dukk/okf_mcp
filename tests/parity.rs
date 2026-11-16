@@ -556,6 +556,60 @@ fn assert_json_equal(rust: &Json, python: &Json, what: &str) {
     }
 }
 
+/// One intentional wording change between okf.py and the server.
+struct Translation {
+    /// The text okf.py prints (a substring, so a path after it may vary).
+    python: &'static str,
+    /// The text the server prints instead.
+    telekin: &'static str,
+    /// The golden that carries `telekin`, or `None` when the ops script never reaches it.
+    golden: Option<&'static str>,
+}
+
+/// Every intentional divergence from okf.py's text, in one place (issues #515 and #532).
+/// The hand-edited golden lines and the live comparisons both come from this list.
+const INTENTIONAL_TRANSLATIONS: &[Translation] = &[
+    Translation {
+        python: "(okf.py sprawl ",
+        telekin: "(the sprawl tool on ",
+        golden: Some("analysis.json"),
+    },
+    Translation {
+        python: "no --description given",
+        telekin: "no description given",
+        golden: Some("ops.json"),
+    },
+    Translation {
+        python: "named with --source",
+        telekin: "named with sources",
+        golden: Some("ops.json"),
+    },
+    Translation {
+        python: "; pass --title",
+        telekin: "; pass title",
+        golden: None,
+    },
+];
+
+/// Rewrites okf.py's output into the server's intentional wording: every string value (nested
+/// at any depth) has each known Python text replaced. Object keys and other values are kept.
+fn translate_python(python: &Json) -> Json {
+    match python {
+        Json::String(text) => Json::String(
+            INTENTIONAL_TRANSLATIONS
+                .iter()
+                .fold(text.clone(), |acc, t| acc.replace(t.python, t.telekin)),
+        ),
+        Json::Array(items) => Json::Array(items.iter().map(translate_python).collect()),
+        Json::Object(map) => Json::Object(
+            map.iter()
+                .map(|(key, value)| (key.clone(), translate_python(value)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
 /// Compares two lists entry by entry so a failure names the file at fault.
 fn assert_entries_equal(rust: &Json, python: &Json, what: &str) {
     let (rust, python) = (
@@ -640,13 +694,11 @@ fn markdown_matches_golden() {
     );
 }
 
-// `ops.json` was edited by hand (issue #532): the split notes and output say `no description given`
-// and `named with sources` where okf.py says `no --description given` and `named with --source`,
-// because a client sends tool parameters, not CLI flags. Regenerating the goldens from okf.py
-// restores the old text; reapply those lines.
-// `analysis.json` was edited by hand (issue #515): the sprawl lint warning no longer says
-// `okf.py sprawl <path>`, it says `the sprawl tool on <path>`. Regenerating the goldens from
-// okf.py restores the old text; reapply that one line.
+// `analysis.json` and `ops.json` were edited by hand where the milestone changed text on purpose
+// (issues #515 and #532). Every such change is one row of [`INTENTIONAL_TRANSLATIONS`], which
+// explains the golden lines (`goldens_carry_the_telekin_wording`) and normalizes okf.py's output
+// in the live tests and in golden regeneration, so regenerating needs no hand edits. Record a new
+// intentional wording change there, not in the golden.
 #[test]
 fn analysis_matches_golden() {
     let commits = commit_times_from_file(COMMIT_TIMES);
@@ -821,6 +873,89 @@ fn source_record(sha256: &str) -> String {
 }
 
 #[test]
+fn translation_maps_each_python_text_to_the_telekin_wording() {
+    for t in INTENTIONAL_TRANSLATIONS {
+        let input = json!(format!("before {} after", t.python));
+        assert_eq!(
+            translate_python(&input),
+            json!(format!("before {} after", t.telekin)),
+            "{}",
+            t.python
+        );
+    }
+}
+
+#[test]
+fn translation_covers_the_exact_okf_py_lines() {
+    let sprawl = "sprawl score 22.2 > 16 (112 lines, 5 sections, 4 volatile); consider splitting \
+                  (okf.py sprawl analysis/lead.md, okf-reorganize skill)";
+    let note =
+        "note: no --description given; write a real one in the new concept and its index listing";
+    let output = "sources copied: s2 (named with --source)\nfootnotes carried: s1";
+    let refusal = "infra/untitled.md has no title; pass --title";
+    assert_eq!(
+        translate_python(&json!([sprawl, note, output, refusal])),
+        json!([
+            "sprawl score 22.2 > 16 (112 lines, 5 sections, 4 volatile); consider splitting \
+             (the sprawl tool on analysis/lead.md, okf-reorganize skill)",
+            "note: no description given; write a real one in the new concept and its index listing",
+            "sources copied: s2 (named with sources)\nfootnotes carried: s1",
+            "infra/untitled.md has no title; pass title",
+        ])
+    );
+}
+
+#[test]
+fn translation_reaches_nested_values_and_leaves_the_rest_alone() {
+    let input = json!({
+        "okf.py sprawl": "kept as a key",
+        "steps": [{"notes": ["no --description given", "unrelated --description text"]}],
+        "count": 3,
+        "flag": true,
+        "none": null,
+        "plain": "okf.py sprawl without the paren",
+    });
+    let expected = json!({
+        "okf.py sprawl": "kept as a key",
+        "steps": [{"notes": ["no description given", "unrelated --description text"]}],
+        "count": 3,
+        "flag": true,
+        "none": null,
+        "plain": "okf.py sprawl without the paren",
+    });
+    assert_eq!(translate_python(&input), expected);
+    let keys: Vec<_> = translate_python(&input)
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    assert_eq!(
+        keys,
+        input
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn goldens_carry_the_telekin_wording() {
+    for t in INTENTIONAL_TRANSLATIONS {
+        let Some(golden) = t.golden else { continue };
+        let text = std::fs::read_to_string(golden_path(golden)).expect("golden exists");
+        assert!(text.contains(t.telekin), "{golden} lacks {:?}", t.telekin);
+        assert!(
+            !text.contains(t.python),
+            "{golden} still has {:?}",
+            t.python
+        );
+    }
+}
+
+#[test]
 #[ignore = "needs python3 and okf.py; run with --ignored"]
 fn live_goldens_come_from_this_okf_py() {
     if updating_goldens() {
@@ -876,13 +1011,13 @@ fn live_analysis_parity() {
     let commits = commit_times_from_file(COMMIT_TIMES);
     assert_json_equal(
         &rust_analysis(fixtures, instant(FIXED_NOW), Some(&commits)),
-        &python_analysis(fixtures, FIXED_NOW, COMMIT_TIMES),
+        &translate_python(&python_analysis(fixtures, FIXED_NOW, COMMIT_TIMES)),
         "analysis of the synthetic corpus",
     );
     let corpus = secrets_corpus();
     assert_json_equal(
         &rust_analysis(corpus.path(), instant(FIXED_NOW), None)["lint"],
-        &python_analysis(corpus.path(), FIXED_NOW, "none")["lint"],
+        &translate_python(&python_analysis(corpus.path(), FIXED_NOW, "none")["lint"]),
         "lint of the secrets corpus",
     );
     // `let ... else`: bind the value or leave the function (the real
@@ -901,7 +1036,7 @@ fn live_analysis_parity() {
         started.elapsed()
     );
     let started = std::time::Instant::now();
-    let python = python_analysis(&real, &now_text, "git");
+    let python = translate_python(&python_analysis(&real, &now_text, "git"));
     eprintln!(
         "okf.py analysis of {} took {:?}",
         real.display(),
@@ -924,7 +1059,7 @@ fn live_ops_parity() {
     let script = ops_script();
     assert_json_equal(
         &rust_ops(fixtures, instant(FIXED_NOW), &script),
-        &python_ops(fixtures, FIXED_NOW, &script),
+        &translate_python(&python_ops(fixtures, FIXED_NOW, &script)),
         "ops on the synthetic corpus",
     );
 }
@@ -963,7 +1098,11 @@ fn regenerate_goldens() {
         ("render.json", pretty(&python_render(&render_inputs()))),
         (
             "analysis.json",
-            pretty(&python_analysis(root, FIXED_NOW, COMMIT_TIMES)),
+            pretty(&translate_python(&python_analysis(
+                root,
+                FIXED_NOW,
+                COMMIT_TIMES,
+            ))),
         ),
         (
             "secrets.json",
@@ -971,7 +1110,11 @@ fn regenerate_goldens() {
         ),
         (
             "ops.json",
-            pretty(&python_ops(root, FIXED_NOW, &ops_script())),
+            pretty(&translate_python(&python_ops(
+                root,
+                FIXED_NOW,
+                &ops_script(),
+            ))),
         ),
         ("SOURCE", source_record(&python_sha256())),
     ];
