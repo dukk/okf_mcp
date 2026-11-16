@@ -16,17 +16,17 @@ pub mod oldest;
 pub mod secrets;
 pub mod sprawl;
 
-/// One lint-style finding: `{"file", "line", "rule", "message"}` in `okf.py`.
+/// One lint-style finding: `{"file", "line", "rule", "message"}`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 pub struct Finding {
-    /// Catalog-relative path, without a leading `/` (as `okf.py` writes it).
+    /// Catalog-relative path, without a leading `/`.
     /// An error payload (`LintFailed`) adds the `/`.
     pub file: String,
     /// 1-based line number.
     pub line: usize,
     /// Rule id, e.g. `broken-link` or `secret:github-token`.
     pub rule: String,
-    /// Human-readable explanation, exactly as `okf.py` words it.
+    /// Human-readable explanation.
     pub message: String,
 }
 
