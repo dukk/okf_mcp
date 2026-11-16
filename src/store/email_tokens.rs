@@ -91,7 +91,7 @@ fn gone() -> OkfError {
 /// [`OkfError::UnknownName`] for an unknown user; [`OkfError::LimitExceeded`]
 /// for an absurd `ttl`; [`OkfError::Io`] if the OS random source fails;
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "email_tokens.issue"))]
 pub async fn issue(
     pool: &PgPool,
     user_id: &str,
@@ -184,7 +184,7 @@ struct Holder {
 ///
 /// # Errors
 /// As [`issue`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "email_tokens.issue_for_email"))]
 pub async fn issue_for_email(
     pool: &PgPool,
     email: &str,
@@ -246,7 +246,7 @@ pub async fn issue_for_email(
 /// # Errors
 /// [`OkfError::UnknownName`] for an unknown or malformed name; otherwise
 /// as [`issue`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "email_tokens.issue_for_user_in"))]
 pub async fn issue_for_user_in(
     conn: &mut PgConnection,
     name: &str,
@@ -280,7 +280,7 @@ pub async fn issue_for_user_in(
 
 /// Deletes a user's tokens of `purpose` and stores the new one, inside the
 /// caller's transaction (which holds the user's row lock).
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "email_tokens.replace_token"))]
 async fn replace_token(
     conn: &mut PgConnection,
     user_id: &str,
@@ -324,7 +324,7 @@ async fn replace_token(
 /// # Errors
 /// [`OkfError::Gone`] for an unknown, used, expired or wrong-purpose token;
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "email_tokens.redeem"))]
 pub async fn redeem(
     pool: &PgPool,
     token: &str,
@@ -359,7 +359,7 @@ pub async fn redeem(
 ///
 /// # Errors
 /// As [`redeem`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "email_tokens.redeem_in"))]
 pub async fn redeem_in(
     conn: &mut PgConnection,
     token: &str,
@@ -418,7 +418,7 @@ pub async fn redeem_in(
 ///
 /// # Errors
 /// As [`redeem`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "email_tokens.peek"))]
 pub async fn peek(
     pool: &PgPool,
     token: &str,
@@ -451,7 +451,7 @@ pub async fn peek(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "email_tokens.prune"))]
 pub async fn prune(pool: &PgPool, before: DateTime<Utc>) -> Result<u64, OkfError> {
     Ok(
         sqlx::query("DELETE FROM email_tokens WHERE expires_at < $1")

@@ -242,6 +242,44 @@ fn check_endpoint(endpoint: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The path endings that mean an endpoint is already a signal URL, not the
+/// base the exporters append `/v1/<signal>` to.
+const SIGNAL_PATH_ENDINGS: [&str; 4] = ["/v1/traces", "/v1/metrics", "/v1/logs", "/v1"];
+
+/// The endpoint without userinfo, query or fragment, when its path already
+/// ends in `/v1/traces`, `/v1/metrics`, `/v1/logs` or `/v1` (the design's
+/// warning: the exporters would append a second `/v1/<signal>`).
+///
+/// # Arguments
+/// * `endpoint` - `telemetry.otlp.endpoint`.
+///
+/// # Returns
+/// `Some("scheme://host[:port]/path")` to warn about, or `None` for a plain
+/// base or text that is not a URL (validation refuses that separately).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
+pub(crate) fn endpoint_with_signal_path(endpoint: &str) -> Option<String> {
+    let url = reqwest::Url::parse(endpoint).ok()?;
+    let path = url.path().trim_end_matches('/');
+    if !SIGNAL_PATH_ENDINGS
+        .iter()
+        .any(|ending| path.ends_with(ending))
+    {
+        return None;
+    }
+    let host = url.host_str()?;
+    let port = url
+        .port()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
+    Some(format!("{}://{host}{port}{path}", url.scheme()))
+}
+
 /// Parses `directives` as an `EnvFilter`, naming `key` in the error.
 #[cfg_attr(
     dylint_lib = "hyp_tracing",

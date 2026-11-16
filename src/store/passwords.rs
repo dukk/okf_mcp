@@ -254,7 +254,7 @@ macro_rules! candidate_columns {
 ///
 /// # Errors
 /// [`OkfError::Database`]; [`OkfError::Io`] if the hasher task fails.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "passwords.verify"))]
 pub async fn verify(
     pool: &PgPool,
     email: &str,
@@ -289,7 +289,7 @@ pub async fn verify(
 ///
 /// # Errors
 /// [`OkfError::Database`]; [`OkfError::Io`] if the hasher task fails.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "passwords.verify_user"))]
 pub async fn verify_user(
     pool: &PgPool,
     user_id: &str,
@@ -310,7 +310,7 @@ pub async fn verify_user(
 /// The row may be stale by the time the hash is checked (argon2 takes tens
 /// of milliseconds), so both writes re-check the lock in SQL rather than
 /// trusting `candidate.locked_until`.
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "passwords.check_candidate"))]
 async fn check_candidate(
     pool: &PgPool,
     candidate: Option<Candidate>,
@@ -344,7 +344,7 @@ async fn check_candidate(
 /// # Returns
 /// [`SignInOutcome::Ok`]; [`SignInOutcome::Locked`] if a lock appeared;
 /// [`SignInOutcome::Failed`] if the password changed or the user is gone.
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "passwords.record_success"))]
 async fn record_success(
     pool: &PgPool,
     user: UserAuth,
@@ -382,7 +382,7 @@ async fn record_success(
 /// # Returns
 /// [`SignInOutcome::Locked`] when the account is locked after this failure
 /// (by it, or concurrently); [`SignInOutcome::Failed`] otherwise.
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "passwords.record_failure"))]
 async fn record_failure(
     pool: &PgPool,
     user_id: &str,
@@ -433,7 +433,7 @@ async fn record_failure(
 /// # Errors
 /// [`OkfError::LimitExceeded`] from [`check_policy`]; [`OkfError::UnknownName`]
 /// for an unknown id; [`OkfError::Io`] if hashing fails; [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "passwords.set"))]
 pub async fn set(
     pool: &PgPool,
     user_id: &str,
@@ -459,7 +459,7 @@ pub async fn set(
 ///
 /// # Errors
 /// As [`set`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "passwords.reset"))]
 pub async fn reset(
     pool: &PgPool,
     user_id: &str,
@@ -555,7 +555,7 @@ impl std::fmt::Debug for NewPassword {
 ///
 /// # Errors
 /// [`OkfError::UnknownName`] for an unknown id; [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "passwords.set_in"))]
 pub async fn set_in(
     conn: &mut PgConnection,
     user_id: &str,
@@ -603,7 +603,7 @@ pub async fn set_in(
 ///
 /// # Errors
 /// As [`set_in`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "passwords.reset_in"))]
 pub async fn reset_in(
     conn: &mut PgConnection,
     user_id: &str,
@@ -677,7 +677,7 @@ impl std::fmt::Debug for SessionChange<'_> {
 /// [`OkfError::Unauthenticated`] once the session or the user is gone;
 /// [`OkfError::Forbidden`] when the password changed since it was checked;
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "passwords.change_from_session_in"))]
 pub async fn change_from_session_in(
     conn: &mut PgConnection,
     change: &SessionChange<'_>,

@@ -52,7 +52,10 @@ fn load_profile(user: &User, name: &str) -> Result<Profile, OkfError> { ... }
 ```
 
 - **Level.** Public entry points into a module use `debug`; private helpers use `trace`.
-  MCP tools, HTTP handlers, publish and the background roots use `info`. With the OTLP span
+  The HTTP request span, `mcp <tool>`, publish and the background roots use `info`; HTTP
+  handlers and other public or async functions use `debug`, beneath those roots (corrected,
+  issue #497, 2026-11-16: handlers were listed as `info`, but the sweeps made them `debug`).
+  With the OTLP span
   filter at `info`, the helper spans are disabled callsites (one atomic load each) and cost
   nothing. Raising `traces_filter` to `debug` or `trace` gives the full call tree.
 - **`skip_all`, always.** `#[instrument]` records every argument with `Debug` unless told

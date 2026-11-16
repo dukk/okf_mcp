@@ -241,7 +241,7 @@ fn assemble(rows: Vec<TeamRow>, member_rows: Vec<MemberRow>) -> Vec<TeamRecord> 
 /// [`OkfError::UnknownName`] for an unknown (or malformed) owner;
 /// [`OkfError::Forbidden`] for a provisioner and an admin owner;
 /// [`OkfError::Database`], a failed audit write included.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.create"))]
 pub async fn create(
     pool: &PgPool,
     new: &NewTeam<'_>,
@@ -308,7 +308,7 @@ pub async fn create(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.list"))]
 pub async fn list(pool: &PgPool) -> Result<Vec<TeamRecord>, OkfError> {
     let rows = sqlx::query_as::<_, TeamRow>(concat!(select_teams!(), " ORDER BY t.name"))
         .fetch_all(pool)
@@ -332,7 +332,7 @@ pub async fn list(pool: &PgPool) -> Result<Vec<TeamRecord>, OkfError> {
 /// # Errors
 /// [`OkfError::UnknownName`] if there is none (a malformed name included);
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.find"))]
 pub async fn find(pool: &PgPool, name: &str) -> Result<TeamRecord, OkfError> {
     // A malformed name (a NUL, which Postgres refuses) names no team: the
     // same 404 as an unknown one, never a database error (issue #339).
@@ -371,7 +371,7 @@ pub async fn find(pool: &PgPool, name: &str) -> Result<TeamRecord, OkfError> {
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.owned_by"))]
 pub async fn owned_by(
     pool: &PgPool,
     user_id: &str,
@@ -408,7 +408,7 @@ pub async fn owned_by(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.owned_names"))]
 pub async fn owned_names(pool: &PgPool, user_id: &str) -> Result<Vec<String>, OkfError> {
     Ok(sqlx::query_scalar(
         "SELECT t.name FROM teams t JOIN team_members m ON m.team_id = t.id \
@@ -437,7 +437,7 @@ pub async fn owned_names(pool: &PgPool, user_id: &str) -> Result<Vec<String>, Ok
 /// included); [`OkfError::Forbidden`] for a provisioner and an admin user;
 /// [`OkfError::Refused`] for demoting the team's last owner;
 /// [`OkfError::Database`], a failed audit write included.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.set_member"))]
 pub async fn set_member(
     pool: &PgPool,
     membership: &Membership<'_>,
@@ -514,7 +514,7 @@ pub async fn set_member(
 /// [`OkfError::Refused`] when the user is not a member, is the team's last
 /// owner, or is the user whose personal team this is;
 /// [`OkfError::Database`], a failed audit write included.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.remove_member"))]
 pub async fn remove_member(
     pool: &PgPool,
     team: &str,
@@ -583,7 +583,7 @@ pub async fn remove_member(
 /// [`OkfError::Refused`] for a personal team (it goes with its user) or one
 /// that owns a catalog; [`OkfError::Database`], a failed audit write
 /// included.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.delete"))]
 pub async fn delete(
     pool: &PgPool,
     name: &str,
@@ -690,7 +690,7 @@ fn clean_notice(notice: Option<&str>) -> Result<Option<&str>, OkfError> {
 /// [`OkfError::UnknownName`] (a malformed name included);
 /// [`OkfError::Refused`] for a notice over [`MAX_NOTICE_CHARS`] or holding
 /// a NUL; [`OkfError::Database`], a failed audit write included.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.suspend"))]
 pub async fn suspend(
     pool: &PgPool,
     name: &str,
@@ -765,7 +765,7 @@ pub async fn suspend(
 /// # Errors
 /// [`OkfError::UnknownName`] (a malformed name included);
 /// [`OkfError::Database`], a failed audit write included.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.unsuspend"))]
 pub async fn unsuspend(
     pool: &PgPool,
     name: &str,
@@ -821,7 +821,7 @@ pub async fn unsuspend(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.suspended_catalogs"))]
 pub async fn suspended_catalogs(
     pool: &PgPool,
 ) -> Result<HashMap<String, SuspendedCatalog>, OkfError> {
@@ -856,7 +856,7 @@ struct LockedTeam {
 ///
 /// # Errors
 /// [`OkfError::UnknownName`]; [`OkfError::Database`].
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.lock_team"))]
 async fn lock_team(conn: &mut PgConnection, name: &str) -> Result<LockedTeam, OkfError> {
     // As in `find`: a malformed name names no team (issue #339).
     if !is_valid_name(name) {
@@ -876,7 +876,7 @@ async fn lock_team(conn: &mut PgConnection, name: &str) -> Result<LockedTeam, Ok
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.current_role"))]
 async fn current_role(
     conn: &mut PgConnection,
     team_id: &str,
@@ -896,7 +896,7 @@ async fn current_role(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.insert_member"))]
 async fn insert_member(
     conn: &mut PgConnection,
     team_id: &str,
@@ -921,7 +921,7 @@ async fn insert_member(
 ///
 /// # Errors
 /// [`OkfError::Refused`] for the last owner; [`OkfError::Database`].
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.refuse_last_owner"))]
 async fn refuse_last_owner(
     conn: &mut PgConnection,
     team_id: &str,
@@ -959,7 +959,7 @@ async fn refuse_last_owner(
 ///
 /// # Errors
 /// [`OkfError::UnknownName`]; [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.id_of"))]
 pub(crate) async fn id_of(conn: &mut PgConnection, name: &str) -> Result<String, OkfError> {
     // As in `find`: a malformed name names no team (issue #339).
     if !is_valid_name(name) {
@@ -979,7 +979,7 @@ pub(crate) async fn id_of(conn: &mut PgConnection, name: &str) -> Result<String,
 /// # Errors
 /// [`OkfError::UnknownName`] for an unknown or malformed user;
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.lock_user"))]
 async fn lock_user(
     conn: &mut PgConnection,
     actor: &AuditActor,
@@ -1009,7 +1009,7 @@ struct TeamEvent<'a> {
 ///
 /// # Errors
 /// [`OkfError::Database`] (which fails the change).
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.record_team"))]
 async fn record_team(
     conn: &mut PgConnection,
     actor: &AuditActor,

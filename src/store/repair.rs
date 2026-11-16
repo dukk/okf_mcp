@@ -81,7 +81,7 @@ pub struct RepairReport {
 /// content rules (only text the catalog already held can trigger them, in a
 /// listing's title or summary); [`OkfError::Database`], a failed audit write
 /// included. Every error rolls back, leaving the catalog as it was.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "repair.repair"))]
 pub async fn repair(
     pool: &PgPool,
     catalog: &str,
@@ -212,7 +212,7 @@ fn compute(
 /// Writes each repaired file as the next revision of its path (1 for a new
 /// path; a tombstone's numbers continue), with a `create` or `update`
 /// revision carrying [`REPAIR_MESSAGE`].
-#[tracing::instrument(level = "trace", skip_all, fields(catalog_id = catalog_id))]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "repair.write_files", catalog_id = catalog_id))]
 async fn write_files(
     conn: &mut sqlx::PgConnection,
     catalog_id: i64,
@@ -256,7 +256,7 @@ async fn write_files(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "repair.missing_root_index"))]
 pub async fn missing_root_index(pool: &PgPool) -> Result<Vec<String>, OkfError> {
     let names = sqlx::query_scalar(
         "SELECT c.name FROM catalogs c WHERE NOT EXISTS ( \

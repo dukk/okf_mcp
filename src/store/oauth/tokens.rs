@@ -104,7 +104,7 @@ pub struct RevokedToken {
 ///
 /// # Errors
 /// [`OkfError::Database`], including a hash collision (a duplicate primary key).
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "tokens.insert"))]
 pub async fn insert(
     conn: &mut PgConnection,
     new: &NewToken<'_>,
@@ -140,7 +140,7 @@ pub async fn insert(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "tokens.find_access"))]
 pub async fn find_access(
     pool: &PgPool,
     sha256: &[u8; 32],
@@ -175,7 +175,7 @@ pub async fn find_access(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "tokens.revoke"))]
 pub async fn revoke(
     pool: &PgPool,
     sha256: &[u8; 32],
@@ -223,7 +223,7 @@ const FAMILY_LOCK_NAMESPACE: i32 = 0x6f6b_6666;
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "tokens.lock_family"))]
 pub async fn lock_family(conn: &mut PgConnection, family_id: &str) -> Result<(), OkfError> {
     // `hashtext` maps the text id onto the lock's `int4` second key.
     // `pg_advisory_xact_lock` returns `void`, so run it with `execute`.
@@ -288,7 +288,7 @@ type RefreshRow = (
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "tokens.use_refresh"))]
 pub async fn use_refresh(
     tx: &mut PgConnection,
     sha256: &[u8; 32],
@@ -358,7 +358,7 @@ pub async fn use_refresh(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "tokens.revoke_family"))]
 pub async fn revoke_family(
     pool: &PgPool,
     family_id: &str,
@@ -397,7 +397,7 @@ pub async fn revoke_family(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "tokens.prune"))]
 pub async fn prune(pool: &PgPool, expired_before: DateTime<Utc>) -> Result<u64, OkfError> {
     let deleted = sqlx::query("DELETE FROM oauth_tokens WHERE expires_at < $1")
         .bind(expired_before)

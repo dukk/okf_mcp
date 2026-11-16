@@ -216,7 +216,7 @@ pub struct SessionStart<'a> {
 ///
 /// # Errors
 /// As [`start`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "user_sessions.create"))]
 pub async fn create(
     pool: &PgPool,
     user_id: &str,
@@ -261,7 +261,7 @@ pub async fn create(
 /// sign-in) their password changed since it was checked;
 /// [`OkfError::LimitExceeded`] for an absurd `absolute`; [`OkfError::Io`]
 /// if the OS random source fails; [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "user_sessions.start"))]
 pub async fn start(
     executor: impl PgExecutor<'_>,
     request: &SessionStart<'_>,
@@ -369,7 +369,7 @@ impl Stored {
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "user_sessions.touch"))]
 pub async fn touch(
     pool: &PgPool,
     id: &str,
@@ -443,7 +443,7 @@ pub async fn touch(
 ///
 /// # Errors
 /// [`OkfError::Database`]. An unknown id is not an error.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "user_sessions.revoke"))]
 pub async fn revoke(executor: impl PgExecutor<'_>, id: &str) -> Result<(), OkfError> {
     sqlx::query("DELETE FROM user_sessions WHERE id_hash = $1")
         .bind(keys::hash(id).as_slice())
@@ -470,7 +470,7 @@ pub async fn revoke(executor: impl PgExecutor<'_>, id: &str) -> Result<(), OkfEr
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "user_sessions.hold_live"))]
 pub async fn hold_live(
     executor: impl PgExecutor<'_>,
     id: &str,
@@ -504,7 +504,7 @@ pub async fn hold_live(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "user_sessions.revoke_all"))]
 pub async fn revoke_all(
     executor: impl PgExecutor<'_>,
     user_id: &str,
@@ -546,7 +546,7 @@ struct Listed {
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "user_sessions.list"))]
 pub async fn list(
     pool: &PgPool,
     user_id: &str,
@@ -593,7 +593,7 @@ pub async fn list(
 /// [`OkfError::UnknownName`] with `noun: "session"` for a malformed prefix
 /// or one that matches none of the user's sessions; [`OkfError::Refused`]
 /// for one that matches several; [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "user_sessions.revoke_by_prefix"))]
 pub async fn revoke_by_prefix(
     pool: &PgPool,
     user_id: &str,
@@ -618,7 +618,7 @@ pub async fn revoke_by_prefix(
 ///
 /// # Errors
 /// As [`revoke_by_prefix`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "user_sessions.revoke_by_prefix_in"))]
 pub(crate) async fn revoke_by_prefix_in(
     conn: &mut PgConnection,
     user_id: &str,
@@ -680,7 +680,7 @@ pub(crate) async fn revoke_by_prefix_in(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "user_sessions.prune"))]
 pub async fn prune(pool: &PgPool, now: DateTime<Utc>) -> Result<u64, OkfError> {
     Ok(
         sqlx::query("DELETE FROM user_sessions WHERE expires_at <= $1")

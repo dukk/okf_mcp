@@ -136,7 +136,12 @@ struct Publication<'a> {
     level = "info",
     name = "okf.publish",
     skip_all,
-    fields(okf.catalog = %state.name(), okf.changeset.entries = tracing::field::Empty)
+    fields(
+        db.system.name = "postgresql",
+        db.operation.name = "publish.publish",
+        okf.catalog = %state.name(),
+        okf.changeset.entries = tracing::field::Empty
+    )
 )]
 pub async fn publish(
     app: &App,
@@ -311,7 +316,7 @@ async fn publish_locked(
 /// # Errors
 /// As [`CatalogState::refresh`]; [`OkfError::Busy`] if the snapshot still
 /// does not match (only a refresh failing silently could cause it).
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "publish.current_base"))]
 async fn current_base(
     state: &CatalogState,
     conn: &mut PgConnection,
@@ -343,7 +348,7 @@ async fn current_base(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "trace", skip_all, fields(catalog_id = catalog_id))]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "publish.current_rows", catalog_id = catalog_id))]
 async fn current_rows(
     conn: &mut PgConnection,
     catalog_id: i64,
@@ -579,7 +584,7 @@ fn links_into_deleted(
 /// # Errors
 /// [`OkfError::Database`]; a unique violation (two writers of one revision,
 /// which the lock rules out) as [`OkfError::Conflict`].
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "publish.write_all"))]
 async fn write_all(
     conn: &mut PgConnection,
     publication: &Publication<'_>,
@@ -668,7 +673,7 @@ fn as_conflict(error: OkfError, path: &str, expected: Option<i32>) -> OkfError {
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "trace", skip_all, fields(catalog_id = catalog_id))]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "publish.with_current_revisions", catalog_id = catalog_id))]
 async fn with_current_revisions(
     pool: &PgPool,
     catalog_id: i64,

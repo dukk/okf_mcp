@@ -43,7 +43,7 @@ pub struct PasskeyInfo {
 ///
 /// # Errors
 /// As [`add_in`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "passkeys.add"))]
 pub async fn add(
     pool: &PgPool,
     user_id: &str,
@@ -69,7 +69,7 @@ pub async fn add(
 /// # Errors
 /// [`OkfError::Refused`] if the credential is already registered;
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "passkeys.add_in"))]
 pub async fn add_in(
     conn: &mut PgConnection,
     user_id: &str,
@@ -134,7 +134,7 @@ pub struct SessionRegistration<'a> {
 /// [`OkfError::Unauthenticated`] once the session or the user is gone;
 /// [`OkfError::Refused`] for a credential already registered;
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "passkeys.add_from_session_in"))]
 pub async fn add_from_session_in(
     conn: &mut PgConnection,
     registration: &SessionRegistration<'_>,
@@ -192,7 +192,7 @@ pub async fn add_from_session_in(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "passkeys.for_user"))]
 pub async fn for_user(pool: &PgPool, user_id: &str) -> Result<Vec<(String, Passkey)>, OkfError> {
     let rows: Vec<(String, Json<Passkey>)> = sqlx::query_as(
         "SELECT name, passkey FROM user_passkeys WHERE user_id = $1 ORDER BY created_at",
@@ -218,7 +218,7 @@ pub async fn for_user(pool: &PgPool, user_id: &str) -> Result<Vec<(String, Passk
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "passkeys.find"))]
 pub async fn find(
     pool: &PgPool,
     credential_id: &[u8],
@@ -259,7 +259,7 @@ pub async fn find(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "passkeys.lock_for_sign_in"))]
 pub async fn lock_for_sign_in(
     conn: &mut PgConnection,
     credential_id: &[u8],
@@ -309,7 +309,7 @@ pub async fn lock_for_sign_in(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "passkeys.update_in"))]
 pub async fn update_in(
     conn: &mut PgConnection,
     credential_id: &[u8],
@@ -338,7 +338,7 @@ pub async fn update_in(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "passkeys.list"))]
 pub async fn list(pool: &PgPool, user_id: &str) -> Result<Vec<PasskeyInfo>, OkfError> {
     let rows: Vec<Listed> = sqlx::query_as(
         "SELECT credential_id, name, created_at, last_used_at \
@@ -397,7 +397,7 @@ fn not_found(id: &str) -> OkfError {
 ///
 /// # Errors
 /// [`OkfError::NotFound`] unless the user owns it; [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "passkeys.rename"))]
 pub async fn rename(pool: &PgPool, user_id: &str, id: &str, name: &str) -> Result<(), OkfError> {
     let renamed =
         sqlx::query("UPDATE user_passkeys SET name = $3 WHERE credential_id = $1 AND user_id = $2")
@@ -424,7 +424,7 @@ pub async fn rename(pool: &PgPool, user_id: &str, id: &str, name: &str) -> Resul
 /// [`OkfError::NotFound`] unless the user owns it (an unknown user
 /// included); [`OkfError::Refused`] for the last sign-in method;
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "passkeys.remove"))]
 pub async fn remove(pool: &PgPool, user_id: &str, id: &str) -> Result<(), OkfError> {
     let credential_id = credential_id(id)?;
     let mut tx = pool.begin().await?;

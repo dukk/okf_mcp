@@ -401,7 +401,7 @@ pub struct Entry<'a> {
 /// [`OkfError::Database`], which fails the caller's change with it
 /// (including a [`Target::Team`] that names no team, which the table's
 /// target-shape check refuses).
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.record"))]
 pub async fn record(
     conn: &mut PgConnection,
     actor: &AuditActor,
@@ -442,7 +442,7 @@ pub struct FixedPerson {
 /// # Errors
 /// [`OkfError::Refused`] for a user, key, grant or code target, before any
 /// SQL; otherwise as [`record`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.record_for_person"))]
 pub async fn record_for_person(
     conn: &mut PgConnection,
     actor: &AuditActor,
@@ -466,7 +466,7 @@ pub async fn record_for_person(
 }
 
 /// The one `INSERT` behind [`record`] and [`record_for_person`].
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.insert"))]
 async fn insert(
     conn: &mut PgConnection,
     actor: &AuditActor,
@@ -589,7 +589,7 @@ pub struct People<'a> {
 /// # Errors
 /// [`OkfError::UnknownName`] for a malformed or unknown target;
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.lock_people"))]
 pub async fn lock_people(
     conn: &mut PgConnection,
     actor: &AuditActor,
@@ -680,7 +680,7 @@ pub async fn lock_people(
 /// # Errors
 /// [`OkfError::Refused`] if ownership or grants changed while locking;
 /// [`OkfError::Database`] or [`OkfError::UnknownName`] from locking people.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.lock_credential_people"))]
 pub async fn lock_credential_people(
     conn: &mut PgConnection,
     actor: &AuditActor,
@@ -761,7 +761,7 @@ pub async fn lock_credential_people(
 ///
 /// # Errors
 /// [`OkfError::UnknownName`] (a malformed name included); [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.team_ref"))]
 pub async fn team_ref(conn: &mut PgConnection, team: &str) -> Result<i64, OkfError> {
     let unknown = || OkfError::UnknownName {
         noun: "team",
@@ -792,7 +792,7 @@ pub async fn team_ref(conn: &mut PgConnection, team: &str) -> Result<i64, OkfErr
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.catalog_teams", catalog_id = catalog_id))]
 pub async fn catalog_teams(conn: &mut PgConnection, catalog_id: i64) -> Result<Vec<i64>, OkfError> {
     let team: Option<i64> = sqlx::query_scalar(
         "SELECT audit_team_ref(owner_team_id) FROM catalogs \
@@ -818,7 +818,7 @@ pub async fn catalog_teams(conn: &mut PgConnection, catalog_id: i64) -> Result<V
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.key_teams"))]
 pub async fn key_teams(conn: &mut PgConnection, key_id: &str) -> Result<Vec<i64>, OkfError> {
     Ok(sqlx::query_scalar(
         "SELECT audit_team_ref(t.owner_team_id) FROM \
@@ -843,7 +843,7 @@ pub async fn key_teams(conn: &mut PgConnection, key_id: &str) -> Result<Vec<i64>
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.code_teams"))]
 pub async fn code_teams(conn: &mut PgConnection, code_id: &str) -> Result<Vec<i64>, OkfError> {
     Ok(sqlx::query_scalar(
         "SELECT audit_team_ref(t.owner_team_id) FROM \
@@ -869,7 +869,7 @@ pub async fn code_teams(conn: &mut PgConnection, code_id: &str) -> Result<Vec<i6
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.forget_person"))]
 pub async fn forget_person(conn: &mut PgConnection, user_id: &str) -> Result<(), OkfError> {
     // Credentials first, found two ways: linked to the person, or (a row
     // whose person was never resolved) still named by the user's keys,
@@ -908,7 +908,7 @@ pub async fn forget_person(conn: &mut PgConnection, user_id: &str) -> Result<(),
 ///
 /// # Errors
 /// [`OkfError::Database`], which deletes nothing.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.prune"))]
 pub async fn prune(pool: &PgPool, before: DateTime<Utc>) -> Result<u64, OkfError> {
     Ok(sqlx::query("DELETE FROM audit_entries WHERE at < $1")
         .bind(before)
@@ -970,7 +970,7 @@ pub struct AccessRecord {
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.record_admin_read"))]
 pub async fn record_admin_read(pool: &PgPool, record: &AccessRecord) -> Result<(), OkfError> {
     // `DurationRound::duration_trunc`: the start of the clock hour. It
     // fails only for a time chrono cannot represent, which a clock never
@@ -1287,7 +1287,7 @@ pub const OWNER_REDACTED: &[(&str, &[&str])] = &[("catalog.unlocked", &["reason"
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.list"))]
 pub async fn list(
     pool: &PgPool,
     viewer: &Viewer,
@@ -1351,7 +1351,7 @@ pub async fn list(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.export_lines"))]
 pub async fn export_lines(
     pool: &PgPool,
     viewer: &Viewer,

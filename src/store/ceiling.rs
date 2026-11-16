@@ -146,7 +146,7 @@ const CEILING_ROWS: &str = "\
 /// [`OkfError::Database`].
 // `impl PgExecutor<'_>` accepts either a pool or a connection, as
 // `user_sessions::revoke_all` does.
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.ceiling_rows"))]
 async fn ceiling_rows(
     executor: impl PgExecutor<'_>,
     user_id: Option<&str>,
@@ -228,7 +228,7 @@ fn check_names(user: Option<&str>, catalog: &str) -> Result<(), OkfError> {
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.ceilings"))]
 pub async fn ceilings(pool: &PgPool) -> Result<HashMap<String, Ceiling>, OkfError> {
     let mut by_user: HashMap<String, Ceiling> = HashMap::new();
     for row in ceiling_rows(pool, None).await? {
@@ -252,7 +252,7 @@ pub async fn ceilings(pool: &PgPool) -> Result<HashMap<String, Ceiling>, OkfErro
 ///
 /// # Errors
 /// [`OkfError::UnknownName`] for an unknown user; [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.ceiling_of"))]
 pub async fn ceiling_of(pool: &PgPool, user: &str) -> Result<Ceiling, OkfError> {
     let user_id = users::id_by_name(pool, user).await?;
     Ok(one_ceiling(ceiling_rows(pool, Some(&user_id)).await?))
@@ -271,7 +271,7 @@ pub async fn ceiling_of(pool: &PgPool, user: &str) -> Result<Ceiling, OkfError> 
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.ceiling_in"))]
 pub(crate) async fn ceiling_in(
     conn: &mut PgConnection,
     user_id: &str,
@@ -296,7 +296,7 @@ pub(crate) async fn ceiling_in(
 /// # Errors
 /// [`OkfError::CatalogNotSelected`] for an unknown (or malformed) catalog;
 /// [`OkfError::Database`], a failed audit write included.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.set_member_access"))]
 pub async fn set_member_access(
     pool: &PgPool,
     catalog: &str,
@@ -360,7 +360,7 @@ pub async fn set_member_access(
 /// # Errors
 /// [`OkfError::CatalogNotSelected`] for an unknown or malformed catalog
 /// name; [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.member_access"))]
 pub async fn member_access(pool: &PgPool, catalog: &str) -> Result<MemberAccess, OkfError> {
     check_names(None, catalog)?;
     let stored: Option<String> =
@@ -398,7 +398,7 @@ pub struct NewEntitlement<'a> {
 /// [`OkfError::Refused`] for `Admin`; [`OkfError::UnknownName`] for an
 /// unknown user; [`OkfError::CatalogNotSelected`] for an unknown catalog;
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.entitle"))]
 pub async fn entitle(
     pool: &PgPool,
     new: &NewEntitlement<'_>,
@@ -481,7 +481,7 @@ pub async fn entitle(
 /// [`OkfError::UnknownName`] for an unknown user;
 /// [`OkfError::CatalogNotSelected`] for an unknown catalog;
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.unentitle"))]
 pub async fn unentitle(
     pool: &PgPool,
     user: &str,
@@ -529,7 +529,7 @@ pub async fn unentitle(
 ///
 /// # Errors
 /// [`OkfError::UnknownName`]; [`OkfError::Database`].
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.lock_entitlement_users"))]
 async fn lock_entitlement_users(
     conn: &mut PgConnection,
     user: &str,
@@ -559,7 +559,7 @@ async fn lock_entitlement_users(
 ///
 /// # Errors
 /// [`OkfError::UnknownName`] for an unknown user; [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.entitlements"))]
 pub async fn entitlements(pool: &PgPool, user: &str) -> Result<Vec<Entitlement>, OkfError> {
     let mut conn = pool.acquire().await?;
     entitlements_in(&mut conn, user).await
@@ -570,7 +570,7 @@ pub async fn entitlements(pool: &PgPool, user: &str) -> Result<Vec<Entitlement>,
 ///
 /// # Errors
 /// As [`entitlements`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.entitlements_in"))]
 pub(crate) async fn entitlements_in(
     conn: &mut PgConnection,
     user: &str,

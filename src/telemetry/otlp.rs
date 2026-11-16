@@ -18,6 +18,7 @@ use opentelemetry_sdk::metrics::exporter::PushMetricExporter;
 use opentelemetry_sdk::metrics::Temporality;
 use opentelemetry_sdk::trace::{SpanData, SpanExporter};
 use opentelemetry_sdk::Resource;
+use secrecy::{ExposeSecret, SecretString};
 
 use super::config::OtlpConfig;
 use crate::error::OkfError;
@@ -288,15 +289,32 @@ pub fn parse_headers(text: &str) -> Result<HashMap<String, String>, String> {
     Ok(headers)
 }
 
+/// Puts each header value into a [`SecretString`].
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+    )
+)]
+fn secret_headers(headers: HashMap<String, String>) -> HashMap<String, SecretString> {
+    headers
+        .into_iter()
+        .map(|(name, value)| (name, SecretString::from(value)))
+        .collect()
+}
+
 /// Where OTLP goes and with which headers, resolved from the config and the
 /// environment at start-up.
 // A hand-written `Debug` (plan Decision 8): header values carry credentials.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct OtlpTarget {
     /// The base URL, without a trailing slash.
     base: String,
-    /// Header name to value.
-    headers: HashMap<String, String>,
+    /// Header name to value. Each value is a `SecretString` (its `Debug` is
+    /// `[REDACTED]` and its memory is wiped on drop) until
+    /// [`OtlpTarget::exposed_headers`] hands it to an exporter.
+    headers: HashMap<String, SecretString>,
 }
 
 impl std::fmt::Debug for OtlpTarget {
@@ -334,8 +352,8 @@ fn config_error(message: String) -> OkfError {
     }
 }
 
-/// Reads the variable a config key names; unset or blank is an error that
-/// names the variable and never a value.
+/// Reads the variable a config key names into a [`SecretString`]; unset or
+/// blank is an error that names the variable and never a value.
 #[cfg_attr(
     dylint_lib = "hyp_tracing",
     allow(
@@ -347,9 +365,11 @@ fn read_env(
     env: &dyn Fn(&str) -> Option<String>,
     name: &str,
     key: &str,
-) -> Result<String, OkfError> {
+) -> Result<SecretString, OkfError> {
     match env(name) {
-        Some(value) if !value.trim().is_empty() => Ok(value),
+        // The value goes into a `SecretString` at once: from here on it can
+        // be neither printed nor compared by accident.
+        Some(value) if !value.trim().is_empty() => Ok(SecretString::from(value)),
         _ => Err(config_error(format!(
             "{key} names {name}, which is not set or is empty"
         ))),
@@ -382,7 +402,7 @@ impl OtlpTarget {
     ) -> Result<Self, OkfError> {
         if let Some(name) = &config.sentry_dsn_env {
             let dsn = read_env(env, name, "telemetry.otlp.sentry_dsn_env")?;
-            return Self::from_sentry_dsn(&dsn).map_err(|message| {
+            return Self::from_sentry_dsn(dsn.expose_secret()).map_err(|message| {
                 config_error(format!("the DSN in {name} is not usable: {message}"))
             });
         }
@@ -397,9 +417,11 @@ impl OtlpTarget {
             HashMap::new()
         } else {
             let text = read_env(env, name, "telemetry.otlp.headers_env")?;
-            parse_headers(&text).map_err(|message| {
-                config_error(format!("{name} is not name=value,name=value: {message}"))
-            })?
+            parse_headers(text.expose_secret())
+                .map_err(|message| {
+                    config_error(format!("{name} is not name=value,name=value: {message}"))
+                })
+                .map(secret_headers)?
         };
         Ok(Self {
             base: endpoint.trim_end_matches('/').to_string(),
@@ -449,10 +471,10 @@ impl OtlpTarget {
             "{}://{host}{port}{prefix}/api/{project}/integration/otlp",
             url.scheme()
         );
-        let headers = HashMap::from([(
+        let headers = secret_headers(HashMap::from([(
             "x-sentry-auth".to_string(),
             format!("sentry sentry_key={key}"),
-        )]);
+        )]));
         Ok(Self { base, headers })
     }
 
@@ -468,7 +490,7 @@ impl OtlpTarget {
         format!("{}/v1/{}", self.base, signal.path())
     }
 
-    /// The headers every request carries.
+    /// The headers every request carries, values still secret.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -476,8 +498,25 @@ impl OtlpTarget {
             reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
         )
     )]
-    pub fn headers(&self) -> &HashMap<String, String> {
+    pub fn headers(&self) -> &HashMap<String, SecretString> {
         &self.headers
+    }
+
+    /// The headers as plain text, for the exporter builders: the one place
+    /// a value leaves its `SecretString`. The exporter keeps them for the
+    /// life of the process.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
+    fn exposed_headers(&self) -> HashMap<String, String> {
+        self.headers
+            .iter()
+            .map(|(name, value)| (name.clone(), value.expose_secret().to_string()))
+            .collect()
     }
 }
 
@@ -735,7 +774,7 @@ pub(crate) fn span_exporter(
         .with_http()
         .with_protocol(Protocol::HttpBinary)
         .with_endpoint(target.signal_url(Signal::Traces))
-        .with_headers(target.headers.clone())
+        .with_headers(target.exposed_headers())
         .with_http_client(http_client()?)
         .with_timeout(EXPORT_TIMEOUT)
         .build()
@@ -762,7 +801,7 @@ pub(crate) fn log_exporter(
         .with_http()
         .with_protocol(Protocol::HttpBinary)
         .with_endpoint(target.signal_url(Signal::Logs))
-        .with_headers(target.headers.clone())
+        .with_headers(target.exposed_headers())
         .with_http_client(http_client()?)
         .with_timeout(EXPORT_TIMEOUT)
         .build()
@@ -784,7 +823,7 @@ pub(crate) fn metric_exporter(
         .with_http()
         .with_protocol(Protocol::HttpBinary)
         .with_endpoint(target.signal_url(Signal::Metrics))
-        .with_headers(target.headers.clone())
+        .with_headers(target.exposed_headers())
         .with_http_client(http_client()?)
         .with_timeout(EXPORT_TIMEOUT)
         .with_temporality(Temporality::Cumulative)
@@ -810,7 +849,10 @@ mod tests {
             "https://sentry.example.com/api/42/integration/otlp/v1/traces"
         );
         assert_eq!(
-            target.headers().get("x-sentry-auth").map(String::as_str),
+            target
+                .headers()
+                .get("x-sentry-auth")
+                .map(|value| value.expose_secret()),
             Some("sentry sentry_key=public")
         );
     }
@@ -856,7 +898,10 @@ mod tests {
             "https://otlp.example.com/v1/metrics"
         );
         assert_eq!(target.headers().len(), 2);
-        assert_eq!(target.headers()["authorization"], "Bearer abc");
+        assert_eq!(
+            target.headers()["authorization"].expose_secret(),
+            "Bearer abc"
+        );
     }
 
     #[test]
@@ -913,6 +958,31 @@ mod tests {
             .expect_err("bad");
         assert!(bad.to_string().contains("OTLP_HEADERS"), "{bad}");
         assert!(!bad.to_string().contains("token-value"), "{bad}");
+    }
+
+    /// Design, config validation: the headers read from `headers_env` are
+    /// held as secrets, so neither `Debug` of the target nor of its header
+    /// map shows a value, and the exporters still get the real ones.
+    #[test]
+    fn headers_from_the_environment_are_secret_until_the_exporter_takes_them() {
+        const VALUE: &str = "Bearer zq-sentinel-9c2e";
+        let config = OtlpConfig {
+            endpoint: Some("https://otlp.example.com".to_string()),
+            headers_env: Some("OTLP_HEADERS".to_string()),
+            ..OtlpConfig::default()
+        };
+        let target =
+            OtlpTarget::resolve(&config, &|_| Some(format!("authorization={VALUE}"))).expect("ok");
+
+        for text in [
+            format!("{target:?}"),
+            format!("{:?}", target.headers()),
+            format!("{config:?}"),
+        ] {
+            assert!(!text.contains("zq-sentinel-9c2e"), "{text}");
+        }
+        assert!(format!("{target:?}").contains("authorization"));
+        assert_eq!(target.exposed_headers()["authorization"], VALUE);
     }
 
     #[test]

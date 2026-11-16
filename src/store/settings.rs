@@ -623,7 +623,7 @@ fn overlay(defaults: &AuthConfig, rows: &[StoredSetting]) -> Settings {
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "settings.brand_in"))]
 pub async fn brand_in(conn: &mut PgConnection) -> Result<Brand, OkfError> {
     let rows = sqlx::query_as::<_, StoredSetting>(
         "SELECT key, value, updated_at, updated_by FROM server_settings \
@@ -638,7 +638,7 @@ pub async fn brand_in(conn: &mut PgConnection) -> Result<Brand, OkfError> {
 /// Every stored override.
 // `impl PgExecutor<'_>` takes a `&PgPool` or a `&mut PgConnection` (a
 // transaction), like a Python function typed against a protocol.
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "settings.stored"))]
 async fn stored(executor: impl PgExecutor<'_>) -> Result<Vec<StoredSetting>, OkfError> {
     Ok(sqlx::query_as::<_, StoredSetting>(
         "SELECT key, value, updated_at, updated_by FROM server_settings",
@@ -660,7 +660,7 @@ async fn stored(executor: impl PgExecutor<'_>) -> Result<Vec<StoredSetting>, Okf
 ///
 /// # Errors
 /// [`OkfError::Database`]. An unreadable stored value is not an error.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "settings.load"))]
 pub async fn load(
     executor: impl PgExecutor<'_>,
     defaults: &AuthConfig,
@@ -728,7 +728,7 @@ fn audited_value(key: SettingKey, value: &Value) -> Option<&Value> {
 /// [`OkfError::LimitExceeded`] with `limit: "setting"` for a value the
 /// setting cannot take (nothing is written); [`OkfError::Database`],
 /// including a failed audit write, which stores nothing.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "settings.set"))]
 pub async fn set(
     pool: &PgPool,
     key: SettingKey,
@@ -812,7 +812,7 @@ pub async fn set(
 /// # Errors
 /// [`OkfError::Database`], including a failed audit write, which keeps
 /// the override.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "settings.reset"))]
 pub async fn reset(
     pool: &PgPool,
     key: SettingKey,
@@ -871,7 +871,7 @@ pub async fn reset(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "settings.list"))]
 pub async fn list(pool: &PgPool, defaults: &AuthConfig) -> Result<Vec<SettingRow>, OkfError> {
     let rows = stored(pool).await?;
     let settings = overlay(defaults, &rows);

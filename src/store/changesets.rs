@@ -233,7 +233,7 @@ fn no_longer_open(changeset_id: i64) -> OkfError {
 /// # Errors
 /// [`OkfError::Refused`] with [`CATALOG_GONE`] if the row is gone (a delete
 /// committed while this waited); [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.lock_catalog", catalog_id = catalog_id))]
 pub async fn lock_catalog(conn: &mut PgConnection, catalog_id: i64) -> Result<(), OkfError> {
     let locked: Option<i64> =
         sqlx::query_scalar("SELECT id FROM catalogs WHERE id = $1 FOR KEY SHARE")
@@ -259,7 +259,7 @@ pub async fn lock_catalog(conn: &mut PgConnection, catalog_id: i64) -> Result<()
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.by_id"))]
 pub async fn by_id<'e>(
     executor: impl PgExecutor<'e>,
     id: i64,
@@ -291,7 +291,7 @@ pub async fn by_id<'e>(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.open", catalog_id = catalog_id))]
 pub async fn open(
     conn: &mut PgConnection,
     catalog_id: i64,
@@ -328,7 +328,7 @@ pub async fn open(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.by_handle"))]
 pub async fn by_handle<'e>(
     executor: impl PgExecutor<'e>,
     handle: &str,
@@ -365,7 +365,7 @@ pub async fn by_handle<'e>(
 /// # Errors
 /// [`OkfError::Database`] (a deadlock maps to [`OkfError::Busy`], as for
 /// every query here).
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.lock"))]
 pub async fn lock(conn: &mut PgConnection, id: i64) -> Result<Option<ChangesetRow>, OkfError> {
     // `fetch_optional` gives `None` when no row matched, so a vanished
     // changeset is not an error here; the caller decides.
@@ -392,7 +392,7 @@ pub async fn lock(conn: &mut PgConnection, id: i64) -> Result<Option<ChangesetRo
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(changeset_id = changeset_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.entries", changeset_id = changeset_id))]
 pub async fn entries<'e>(
     executor: impl PgExecutor<'e>,
     changeset_id: i64,
@@ -412,7 +412,7 @@ pub async fn entries<'e>(
 ///
 /// # Errors
 /// [`OkfError::Busy`] if it is not open (any more); [`OkfError::Database`].
-#[tracing::instrument(level = "trace", skip_all, fields(changeset_id = changeset_id))]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.touch", changeset_id = changeset_id))]
 async fn touch(
     conn: &mut PgConnection,
     changeset_id: i64,
@@ -446,7 +446,7 @@ async fn touch(
 /// [`OkfError::Busy`] if the changeset is no longer open (callers take
 /// [`lock`] first and refuse a closed one, so this is a backstop);
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(changeset_id = changeset_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.upsert_entry", changeset_id = changeset_id))]
 pub async fn upsert_entry(
     conn: &mut PgConnection,
     changeset_id: i64,
@@ -488,7 +488,7 @@ pub async fn upsert_entry(
 /// # Errors
 /// [`OkfError::Busy`] if the changeset is no longer open;
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(changeset_id = changeset_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.remove_entries", changeset_id = changeset_id))]
 pub async fn remove_entries(
     conn: &mut PgConnection,
     changeset_id: i64,
@@ -519,7 +519,7 @@ pub async fn remove_entries(
 ///
 /// # Errors
 /// [`OkfError::Refused`] if it is not open; [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(changeset_id = changeset_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.set_state", changeset_id = changeset_id))]
 pub async fn set_state(
     conn: &mut PgConnection,
     changeset_id: i64,
@@ -559,7 +559,7 @@ pub async fn set_state(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.list_open"))]
 pub async fn list_open(
     pool: &PgPool,
     catalog_ids: &[i64],
@@ -624,7 +624,7 @@ pub async fn list_open(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.prune_empty"))]
 pub async fn prune_empty(
     pool: &PgPool,
     older_than: DateTime<Utc>,
@@ -656,7 +656,7 @@ const OPEN_COUNTS_SQL: &str = "SELECT c.name, count(*) FROM changesets s \
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.open_counts"))]
 pub async fn open_counts(pool: &PgPool) -> Result<BTreeMap<String, i64>, OkfError> {
     let rows: Vec<(String, i64)> = sqlx::query_as(OPEN_COUNTS_SQL).fetch_all(pool).await?;
     Ok(rows.into_iter().collect())

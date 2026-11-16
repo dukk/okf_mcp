@@ -140,7 +140,7 @@ impl From<ClientRow> for ClientRecord {
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "clients.find"))]
 pub async fn find(pool: &PgPool, client_id: &str) -> Result<Option<ClientRecord>, OkfError> {
     let row = sqlx::query_as::<_, ClientRow>(concat!(
         "SELECT ",
@@ -167,7 +167,7 @@ pub async fn find(pool: &PgPool, client_id: &str) -> Result<Option<ClientRecord>
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "clients.prune_unbound_dcr"))]
 pub async fn prune_unbound_dcr(
     pool: &PgPool,
     created_before: DateTime<Utc>,
@@ -229,7 +229,7 @@ macro_rules! unbound_dcr_count {
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "clients.insert_dcr"))]
 pub async fn insert_dcr(
     pool: &PgPool,
     new: &NewDcrClient<'_>,
@@ -279,7 +279,7 @@ pub async fn insert_dcr(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "clients.upsert_cimd"))]
 pub async fn upsert_cimd(pool: &PgPool, client: &ClientRecord) -> Result<(), OkfError> {
     sqlx::query(
         "INSERT INTO oauth_clients \
@@ -315,7 +315,7 @@ pub async fn upsert_cimd(pool: &PgPool, client: &ClientRecord) -> Result<(), Okf
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "clients.count_unbound_dcr"))]
 pub async fn count_unbound_dcr(pool: &PgPool) -> Result<i64, OkfError> {
     Ok(
         sqlx::query_scalar::<_, i64>(concat!("SELECT ", unbound_dcr_count!()))

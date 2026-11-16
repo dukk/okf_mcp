@@ -157,6 +157,8 @@ tracing-subscriber = { version = "0.3.19", features = ["fmt", "env-filter", "reg
 # (`src/oauth/clients.rs`). Already in the tree through reqwest; pinned to
 # the same version so there is one copy.
 url = "2.5.8"
+# `SecretString` holds the OTLP header values and the Sentry DSN until the exporters take them.
+secrecy = "0.10.3"
 # Passkeys (Task 8), pure RustCrypto. `conditional-ui` enables
 # discoverable (username-less) sign-in. Ceremony state stays typed in
 # memory (Decision 13), so no state-serialisation feature is needed.

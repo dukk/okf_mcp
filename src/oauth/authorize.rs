@@ -48,6 +48,7 @@ use crate::store::oauth::clients::{ClientKind, ClientRecord};
 use crate::store::oauth::codes::{self as code_rows, SignInCodeRecord};
 use crate::store::oauth::grants::{self as grant_rows, NewSelfIssuedGrant};
 use crate::store::settings::Brand;
+use crate::store::sign_in_events::Outcome;
 use crate::store::users::UserAuth;
 use crate::telemetry::metrics::Limiter;
 use crate::telemetry::subscriber::split_event;
@@ -836,9 +837,70 @@ fn failed_attempt(
     }
 }
 
+/// Writes the `outcome` of the span that was current when it was made
+/// (`check_code` or `finish`, which declare `method = "oauth_authorize"` and
+/// an empty `outcome`) when it is dropped: `failed` on every early return,
+/// `ok` only after [`Decision::accept`]. The values are the spellings of
+/// `okf_auth_attempts_total`; nothing from the request (a code, a client id,
+/// a redirect) is recorded.
+struct Decision {
+    /// The span to write to.
+    span: tracing::Span,
+    /// What the decision came to so far.
+    outcome: Outcome,
+}
+
+impl Decision {
+    /// Starts as a failure, on the current span.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "captures the caller's span; a span of its own would be captured instead"
+        )
+    )]
+    fn start() -> Self {
+        Self {
+            span: tracing::Span::current(),
+            outcome: Outcome::Failed,
+        }
+    }
+
+    /// Marks the decision as accepted.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: sets one field, a span would record nothing new"
+        )
+    )]
+    fn accept(&mut self) {
+        self.outcome = Outcome::Ok;
+    }
+}
+
+// `Drop` runs when the value goes out of scope, like a Python context
+// manager's `__exit__`, and on every early `return`.
+impl Drop for Decision {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "a drop hook that only records one field on the captured span"
+        )
+    )]
+    fn drop(&mut self) {
+        self.span.record("outcome", self.outcome.as_str());
+    }
+}
+
 /// `action=code`: checks the code without consuming it, and shows step 2
 /// with a fresh summary token that replaces any earlier summary's.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(
+    level = "debug",
+    skip_all,
+    fields(method = "oauth_authorize", outcome = tracing::field::Empty)
+)]
 async fn check_code(
     app: &App,
     oauth: &OAuth,
@@ -846,6 +908,7 @@ async fn check_code(
     pending: &PendingAuthorization,
     presented: &str,
 ) -> Response {
+    let mut decision = Decision::start();
     let brand = app.settings().brand();
     match code_rows::find_live(app.pool(), presented, app.clock().now()).await {
         Ok(Some(record)) => {
@@ -863,6 +926,7 @@ async fn check_code(
             if stored.is_none() {
                 return consent::error_page(StatusCode::BAD_REQUEST, EXPIRED, &brand);
             }
+            decision.accept();
             consent::summary_page(
                 &view(pending_id, pending),
                 &summary(&record),
@@ -908,7 +972,11 @@ async fn approve(
 ///
 /// # Returns
 /// The forwarding page to the client with `code`, or an error page.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(
+    level = "debug",
+    skip_all,
+    fields(method = "oauth_authorize", outcome = tracing::field::Empty)
+)]
 async fn finish(
     app: &App,
     oauth: &OAuth,
@@ -916,6 +984,7 @@ async fn finish(
     pending: &PendingAuthorization,
     grant_id: String,
 ) -> Response {
+    let mut decision = Decision::start();
     // The request is spent once the grant exists, whatever happens next.
     oauth.pending.remove(pending_id);
     let brand = app.settings().brand();
@@ -959,6 +1028,7 @@ async fn finish(
             &brand,
         );
     }
+    decision.accept();
     back_to_client(
         &brand,
         &pending.redirect_uri,
@@ -1372,6 +1442,74 @@ mod tests {
             );
             assert_eq!(param(&target, "state").as_deref(), Some("xyz"));
             assert_eq!(param(&target, "iss").as_deref(), Some(PUBLIC_URL));
+        }
+    }
+
+    /// Design, Auth row: the authorize decision spans carry `method` and
+    /// `outcome`, and none of what the person typed or was given.
+    #[tokio::test]
+    async fn the_authorize_spans_carry_method_and_outcome_and_no_code() {
+        use crate::telemetry::config::LogFormat;
+        use crate::telemetry::subscriber::capture::{attribute, Observer};
+
+        let test = oauth_app().await;
+        let code = sign_in_code(&test, Access::Write).await;
+        let (pending, csrf) = start(&test).await;
+        let observer = Observer::start("off", "debug", "off", LogFormat::Text);
+
+        // A wrong code, then the right one, then the approval.
+        let (_, _, _) = post(
+            &test,
+            &[
+                ("pending", &pending),
+                ("csrf", &csrf),
+                ("action", "code"),
+                ("sign_in_code", "zq-wrong-code"),
+            ],
+        )
+        .await;
+        let (_, _, summary) = post(
+            &test,
+            &[
+                ("pending", &pending),
+                ("csrf", &csrf),
+                ("action", "code"),
+                ("sign_in_code", &code),
+            ],
+        )
+        .await;
+        let (status, headers, body) = approve_from(&test, &summary).await;
+        let target = forwarded(status, &headers, &body);
+        let issued = param(&target, "code").expect("a code");
+        let observed = observer.finish();
+
+        let outcomes = |name: &str| -> Vec<String> {
+            observed
+                .spans_named(name)
+                .iter()
+                .map(|span| {
+                    assert_eq!(
+                        attribute(span, "method")
+                            .map(ToString::to_string)
+                            .as_deref(),
+                        Some("oauth_authorize"),
+                        "{name}"
+                    );
+                    let all: Vec<_> = span
+                        .attributes
+                        .iter()
+                        .filter(|attribute| attribute.key.as_str() == "outcome")
+                        .collect();
+                    assert_eq!(all.len(), 1, "one outcome on {name}: {all:?}");
+                    all[0].value.to_string()
+                })
+                .collect()
+        };
+        assert_eq!(outcomes("check_code"), ["failed", "ok"]);
+        assert_eq!(outcomes("finish"), ["ok"]);
+        let exported = observed.exported_text();
+        for secret in [code.as_str(), "zq-wrong-code", issued.as_str()] {
+            assert!(!exported.contains(secret), "{secret} in {exported}");
         }
     }
 
