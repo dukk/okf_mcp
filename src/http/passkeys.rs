@@ -97,6 +97,7 @@ impl Passkeys {
     /// # Errors
     /// [`OkfError::Config`] if `public_url` does not parse or webauthn-rs
     /// refuses it.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn new(config: &Config) -> Result<Option<Self>, OkfError> {
         let Some(public_url) = config.public_url.as_deref() else {
             return Ok(None);
@@ -166,6 +167,13 @@ enum RegisterVia {
 ///
 /// # Returns
 /// The router; every response is `no-store` and `nosniff`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/auth/passkey/setup/start", post(setup_start))
@@ -182,6 +190,13 @@ pub(crate) fn routes() -> Router<Arc<App>> {
 ///
 /// # Returns
 /// The router.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn api_routes() -> Router<Arc<App>> {
     Router::new()
         .route("/me/passkeys/register/start", post(register_start))
@@ -189,6 +204,13 @@ pub(crate) fn api_routes() -> Router<Arc<App>> {
 }
 
 /// The passkey state, or 404 while passkeys are off.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn enabled(app: &App) -> Result<&Passkeys, OkfError> {
     app.passkeys().ok_or_else(|| OkfError::NotFound {
         path: "passkeys".to_string(),
@@ -196,6 +218,13 @@ fn enabled(app: &App) -> Result<&Passkeys, OkfError> {
 }
 
 /// The 410 for a missing, expired, used or mismatched ceremony.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn expired() -> OkfError {
     OkfError::Gone {
         reason: CEREMONY_EXPIRED.to_string(),
@@ -207,6 +236,7 @@ fn expired() -> OkfError {
 /// bad input about the credential, not a failed sign-in: from a console
 /// session a 401 would read as "signed out", and the session is still live
 /// (issue #325).
+#[tracing::instrument(level = "trace", skip_all)]
 fn registration_refused(error: &WebauthnError) -> OkfError {
     split_event!(
         debug,
@@ -221,6 +251,7 @@ fn registration_refused(error: &WebauthnError) -> OkfError {
 }
 
 /// Logs why webauthn-rs refused, and answers with one message.
+#[tracing::instrument(level = "trace", skip_all)]
 fn refused(error: &WebauthnError, message: &str) -> OkfError {
     split_event!(
         debug,
@@ -245,6 +276,7 @@ fn refused(error: &WebauthnError, message: &str) -> OkfError {
 ///
 /// # Errors
 /// [`OkfError::LimitExceeded`] with `limit: "passkey_name"`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn passkey_name(raw: &str) -> Result<String, OkfError> {
     let name = raw.trim();
     let length = name.chars().count();
@@ -261,6 +293,13 @@ pub(crate) fn passkey_name(raw: &str) -> Result<String, OkfError> {
 
 /// The WebAuthn user handle: the user's UUID (`users.id` is
 /// `gen_random_uuid()::text`).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn user_handle(user_id: &str) -> Result<Uuid, OkfError> {
     Uuid::parse_str(user_id).map_err(|_| OkfError::Refused {
         reason: "this user's id is not a UUID, which a passkey needs".to_string(),
@@ -268,6 +307,7 @@ fn user_handle(user_id: &str) -> Result<Uuid, OkfError> {
 }
 
 /// 429 for the per-address limit, as JSON.
+#[tracing::instrument(level = "trace", skip_all)]
 fn too_many() -> Response {
     (
         StatusCode::TOO_MANY_REQUESTS,
@@ -285,6 +325,7 @@ fn too_many() -> Response {
 ///
 /// # Returns
 /// The refusal to send, if any.
+#[tracing::instrument(level = "trace", skip_all)]
 fn screen(app: &App, parts: &Parts, limited: bool) -> Option<Response> {
     if cross_site(&parts.headers) {
         let error = OkfError::Forbidden {
@@ -305,6 +346,13 @@ fn screen(app: &App, parts: &Parts, limited: bool) -> Option<Response> {
 }
 
 /// The 503 for a full ceremony map.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn busy() -> OkfError {
     OkfError::Busy {
         reason: "too many passkey requests in progress; try again shortly".to_string(),
@@ -313,6 +361,7 @@ fn busy() -> OkfError {
 
 /// The console session a registration ceremony belongs to, as the key of
 /// `Passkeys::by_session` (the hash, not the raw id).
+#[tracing::instrument(level = "trace", skip_all)]
 fn session_key(ceremony: &Ceremony) -> Option<String> {
     let Ceremony::Register(registration) = ceremony else {
         return None;
@@ -343,6 +392,7 @@ fn session_key(ceremony: &Ceremony) -> Option<String> {
 /// # Errors
 /// [`OkfError::Busy`] when [`MAX_CEREMONIES`] are in progress;
 /// [`OkfError::Io`] from the random source.
+#[tracing::instrument(level = "trace", skip_all)]
 fn remember(
     app: &App,
     passkeys: &Passkeys,
@@ -401,6 +451,7 @@ fn remember(
 ///
 /// # Errors
 /// [`OkfError::Gone`] without a cookie or a live ceremony.
+#[tracing::instrument(level = "trace", skip_all)]
 fn take_ceremony(
     app: &App,
     passkeys: &Passkeys,
@@ -425,6 +476,7 @@ fn take_ceremony(
 
 /// Starts a registration for `user`: the challenge (asking for a
 /// discoverable credential) and the ceremony cookie.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn begin_registration(
     app: &App,
     passkeys: &Passkeys,
@@ -477,6 +529,7 @@ struct Registered {
 /// # Errors
 /// [`OkfError::Gone`] without a live registration ceremony;
 /// [`OkfError::LimitExceeded`] (422) for a credential that does not verify.
+#[tracing::instrument(level = "trace", skip_all)]
 fn finish_registration(
     app: &App,
     passkeys: &Passkeys,
@@ -521,6 +574,7 @@ struct SetupStart {
 /// # Errors
 /// 403 from another site; 404 with passkeys off; 410 for a bad link; 422
 /// for a bad name; 429 past the per-address limit.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn setup_start(
     State(app): State<Arc<App>>,
     parts: Parts,
@@ -550,6 +604,7 @@ async fn setup_start(
 /// 403 from another site; 410 for an expired ceremony or a used link; 422
 /// for a credential that does not verify; 409 for a passkey already
 /// registered.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn setup_finish(
     State(app): State<Arc<App>>,
     parts: Parts,
@@ -610,6 +665,7 @@ struct SetUp<'a> {
 /// [`OkfError::Gone`] for a link used, expired or now naming another user;
 /// [`OkfError::Refused`] for a passkey already registered;
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 async fn use_setup_link(
     app: &App,
     parts: &Parts,
@@ -648,6 +704,7 @@ struct SignInStart {
 /// # Errors
 /// 403 from another site; 404 with passkeys off; 429 past the per-address
 /// limit; 503 when too many ceremonies are in progress.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn sign_in_start(
     State(app): State<Arc<App>>,
     parts: Parts,
@@ -686,6 +743,7 @@ enum Verdict {
 ///
 /// # Errors
 /// [`OkfError::Database`]; [`OkfError::Io`] from the random source.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn verify_and_start(
     app: &App,
     passkeys: &Passkeys,
@@ -763,6 +821,7 @@ async fn verify_and_start(
 /// 403 from another site; 410 for an expired or used ceremony; 401 for an
 /// assertion that does not verify (recorded as a failed sign-in); 429 past
 /// the per-address limit.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn sign_in_finish(
     State(app): State<Arc<App>>,
     parts: Parts,
@@ -803,6 +862,7 @@ async fn sign_in_finish(
 }
 
 /// The calling session's user id and session, or 403 for a key or grant.
+#[tracing::instrument(level = "trace", skip_all)]
 fn signed_in(
     principal: &Principal,
     session: Option<Extension<ConsoleSession>>,
@@ -831,6 +891,7 @@ struct RegisterStart {
 ///
 /// # Errors
 /// 403 for a key or grant; 404 with passkeys off; 422 for a bad name.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn register_start(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -866,6 +927,7 @@ async fn register_start(
 /// 403 for a key, a grant or another session's ceremony; 410 for an expired
 /// ceremony; 422 for a credential that does not verify; 401 only for a
 /// session that ended meanwhile; 409 for a passkey already registered.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn register_finish(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -921,6 +983,7 @@ async fn register_finish(
 /// # Errors
 /// As `passkey_rows::add_from_session_in`; [`OkfError::Unauthenticated`]
 /// once the user is gone.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn store_registration(
     app: &App,
     registration: &SessionRegistration<'_>,

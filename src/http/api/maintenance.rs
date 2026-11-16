@@ -59,6 +59,13 @@ struct DisposeBody {
 }
 
 /// This area's routes.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/catalogs/{catalog}/maintenance/runs", get(list_runs))
@@ -82,6 +89,7 @@ pub(crate) fn routes() -> Router<Arc<App>> {
 ///
 /// # Errors
 /// As `maintenance_list_runs`: 404 unreached catalog or unknown cursor, 409 bad limit.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn list_runs(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -102,6 +110,7 @@ async fn list_runs(
 ///
 /// # Errors
 /// As `maintenance_get_run`: 404 unreached catalog or unknown run.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn get_run(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -118,6 +127,7 @@ async fn get_run(
 ///
 /// # Errors
 /// As `maintenance_list_findings`; 400 for an unknown disposition.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn list_findings(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -140,6 +150,7 @@ async fn list_findings(
 ///
 /// # Errors
 /// As `maintenance_get_finding`: 404 unreached catalog or unknown finding.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn get_finding(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -160,6 +171,7 @@ async fn get_finding(
 /// As `maintenance_dispose`: 403 below write; 404 unreached catalog or
 /// unknown finding; 409 for a reused key with a different body; 400 for a
 /// secret in the rationale; 422 for a malformed body.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn dispose(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -183,6 +195,7 @@ async fn dispose(
 ///
 /// # Errors
 /// 404 for an unreached catalog.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn counts(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,

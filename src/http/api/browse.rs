@@ -37,6 +37,13 @@ use crate::store::history::content_at;
 use crate::store::keys::Access;
 
 /// This area's routes.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/catalogs/{catalog}/tree", get(tree))
@@ -149,6 +156,7 @@ struct LimitQuery {
 /// # Arguments
 /// * `kind` - the document's kind.
 /// * `path` - its catalog-relative path.
+#[tracing::instrument(level = "trace", skip_all)]
 fn kind_name(kind: DocKind, path: &str) -> Option<&'static str> {
     match kind {
         DocKind::Concept => Some("concept"),
@@ -163,6 +171,7 @@ fn kind_name(kind: DocKind, path: &str) -> Option<&'static str> {
 ///
 /// # Errors
 /// 404 for a catalog the key does not reach.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn tree(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -199,6 +208,7 @@ async fn tree(
 /// # Errors
 /// As `get_concept`: 404 for an unreached catalog or a missing concept, 400
 /// for a path that is not a concept.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn concept(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -236,6 +246,7 @@ async fn concept(
 /// The view. `raw` is present exactly when the body is (within the limit, or
 /// `full`), so a concept without `raw` keeps `get_concept`'s outline and gets
 /// no `body_html`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn with_html(mut concept: Concept, loaded: &Loaded) -> ConceptView {
     // `let ... else`: bind the `Some` value or return early.
     let Some(raw) = concept.raw.as_deref() else {
@@ -266,6 +277,7 @@ fn with_html(mut concept: Concept, loaded: &Loaded) -> ConceptView {
 ///
 /// # Errors
 /// As `get_concept`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn links(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -300,6 +312,7 @@ async fn links(
 ///
 /// # Errors
 /// As `history`: 404 for an unreached catalog or a path without revisions.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn revisions(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -326,6 +339,7 @@ async fn revisions(
 /// # Errors
 /// 404 for an unreached catalog, a path without revisions, or a revision
 /// the path never had; 400 for a revision that is not a number.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn revision(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -383,6 +397,7 @@ async fn revision(
 /// # Errors
 /// As `read_document`: 400 for any other path, 404 for an unreached catalog
 /// or a missing file.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn document(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,

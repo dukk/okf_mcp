@@ -88,6 +88,13 @@ pub enum OidcError {
 }
 
 impl From<OidcError> for OkfError {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn from(error: OidcError) -> Self {
         let message = error.to_string();
         match error {
@@ -110,6 +117,13 @@ pub struct HttpError(String);
 /// The adapter: sends one openidconnect request with reqwest 0.13. A
 /// closure calling it is an `AsyncHttpClient` (oauth2's blanket impl for
 /// any `Fn(HttpRequest) -> impl Future<Output = Result<HttpResponse, E>>`).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "it injects the caller's trace context: its own span would replace the span the request is made under"
+    )
+)]
 async fn send(client: reqwest::Client, request: HttpRequest) -> Result<HttpResponse, HttpError> {
     // The annotation names the conversion's error type for `map_err`.
     let mut request: reqwest::Request = request
@@ -148,6 +162,13 @@ pub struct FlowSecrets {
 // Written by hand, not derived (Python's `__repr__`), so a stray `{:?}`
 // prints no secret.
 impl std::fmt::Debug for FlowSecrets {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display/Debug impl: runs while the subscriber formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("FlowSecrets(<redacted>)")
     }
@@ -166,6 +187,13 @@ pub struct LinkRequest {
 
 // Hand-written: the session id is a credential.
 impl std::fmt::Debug for LinkRequest {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display/Debug impl: runs while the subscriber formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("LinkRequest")
@@ -205,6 +233,13 @@ pub struct Identity {
 /// Whether a `sub` may be stored and looked up: non-empty, at most 255
 /// bytes, and free of control characters (Postgres refuses a NUL in text,
 /// which would turn a hostile token into a database error).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn valid_subject(subject: &str) -> bool {
     (1..=MAX_SUBJECT_LENGTH).contains(&subject.len()) && !subject.chars().any(char::is_control)
 }
@@ -243,6 +278,13 @@ pub struct OidcProviders {
 
 // Hand-written: the providers hold client secrets, and the flows theirs.
 impl std::fmt::Debug for OidcProviders {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display/Debug impl: runs while the subscriber formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("OidcProviders")
@@ -265,6 +307,7 @@ impl OidcProviders {
     /// # Errors
     /// [`OkfError::Config`] when a provider's secret variable is unset or
     /// empty, or the HTTP client cannot be built.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn new(
         config: &Config,
         secret_of: impl Fn(&str) -> Option<String>,
@@ -344,6 +387,7 @@ impl OidcProviders {
     ///
     /// # Returns
     /// `false`, storing nothing, when the map is full.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn store_flow(&self, id: &str, flow: Flow, previous: Option<&str>, now: Instant) -> bool {
         // The session the link belongs to, as the key of its index entry
         // (a hash: the raw session id is a credential).
@@ -387,6 +431,13 @@ impl OidcProviders {
     /// # Returns
     /// `false` once the user's bucket is empty: a burst of
     /// [`LINK_STARTS_PER_USER`] starts, then one more per minute.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn may_start_link(&self, user_id: &str, now: Instant) -> bool {
         self.link_starts.try_take(user_id, now)
     }
@@ -396,6 +447,13 @@ impl OidcProviders {
     /// # Returns
     /// `(id, label)` pairs.
     // `+ '_`: the iterator borrows `self`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn labels(&self) -> impl Iterator<Item = (&str, &str)> + '_ {
         self.providers
             .values()
@@ -409,6 +467,13 @@ impl OidcProviders {
     ///
     /// # Returns
     /// Its label, or `None` for an unknown id.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn label(&self, id: &str) -> Option<&str> {
         self.providers
             .get(id)
@@ -416,6 +481,13 @@ impl OidcProviders {
     }
 
     /// The provider called `id`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn provider(&self, id: &str) -> Result<&Provider, OidcError> {
         self.providers
             .get(id)
@@ -423,6 +495,7 @@ impl OidcProviders {
     }
 
     /// Fetches the discovery document and configures a client from it.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn discover(&self, provider: &Provider) -> Result<ConfiguredClient, OidcError> {
         let failed = |message: String| OidcError::Discovery {
             provider: provider.config.id.clone(),
@@ -457,6 +530,7 @@ impl OidcProviders {
     /// # Errors
     /// [`OidcError::UnknownProvider`]; [`OidcError::Discovery`] when
     /// nothing is cached and discovery fails.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn client(&self, id: &str, now: Instant) -> Result<ConfiguredClient, OidcError> {
         let provider = self.provider(id)?;
         let mut cached = provider.cached.lock().await;
@@ -498,6 +572,7 @@ impl OidcProviders {
     ///
     /// # Errors
     /// As [`Self::client`].
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn authorize_url(
         &self,
         id: &str,
@@ -548,6 +623,7 @@ impl OidcProviders {
     /// [`OidcError::Exchange`] or [`OidcError::IdToken`] (also for a `sub`
     /// that is empty, too long or holds a control character); as
     /// [`Self::client`].
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn identify(
         &self,
         id: &str,

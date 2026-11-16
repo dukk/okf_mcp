@@ -35,6 +35,13 @@ use crate::telemetry::subscriber::split_event;
 /// A router over `Arc<App>` state: the export behind the request timeout,
 /// the import with its body cap (and its own deadline, see
 /// [`import_catalog`]).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn routes(app: &App) -> Router<Arc<App>> {
     Router::new()
         .route("/catalogs/{name}/export", export_route())
@@ -48,6 +55,13 @@ pub(crate) fn routes(app: &App) -> Router<Arc<App>> {
 ///
 /// # Returns
 /// The `GET` method router.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub(crate) fn export_route() -> MethodRouter<Arc<App>> {
     export_route_within(REQUEST_TIMEOUT)
 }
@@ -59,6 +73,13 @@ pub(crate) fn export_route() -> MethodRouter<Arc<App>> {
 ///
 /// # Returns
 /// The `GET` method router.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub(crate) fn export_route_within(timeout: Duration) -> MethodRouter<Arc<App>> {
     // A layer on one method router applies to that route only.
     get(export_catalog).layer(timeout_layer_after(timeout))
@@ -76,6 +97,13 @@ pub(crate) fn export_route_within(timeout: Duration) -> MethodRouter<Arc<App>> {
 ///
 /// # Returns
 /// The `POST` method router.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub(crate) fn import_route(app: &App) -> MethodRouter<Arc<App>> {
     let limit = body_limit(app.config().max_import_bytes.as_u64());
     post(import_catalog).layer(DefaultBodyLimit::max(limit))
@@ -93,6 +121,13 @@ pub(crate) fn import_route(app: &App) -> MethodRouter<Arc<App>> {
 ///
 /// # Returns
 /// The body cap, saturating at `usize::MAX`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn body_limit(max_import_bytes: u64) -> usize {
     let slack = max_import_bytes / 1000 + 64 * 1024;
     // `try_from` fails only for a `u64` that does not fit a `usize` (a
@@ -113,6 +148,13 @@ fn body_limit(max_import_bytes: u64) -> usize {
 ///
 /// # Returns
 /// The id the store must still find, if any.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn admitted_id(principal: &Principal, name: &str) -> Option<i64> {
     principal.gates.catalogs.get(name).map(|scope| scope.id)
 }
@@ -128,6 +170,7 @@ fn admitted_id(principal: &Principal, name: &str) -> Option<i64> {
 /// * `name` - the catalog.
 /// * `admission` - how the caller was let in.
 /// * `kind` - [`AccessKind::Export`] or [`AccessKind::Write`].
+#[tracing::instrument(level = "trace", skip_all)]
 fn note_unlocked(
     app: &App,
     principal: &Principal,
@@ -559,6 +602,7 @@ async fn import_catalog(
 ///
 /// # Returns
 /// The response.
+#[tracing::instrument(level = "trace", skip_all)]
 fn upload_timed_out() -> Response {
     let body = serde_json::json!({
         "error": "Timeout",

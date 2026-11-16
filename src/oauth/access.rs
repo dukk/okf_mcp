@@ -48,10 +48,24 @@ impl AccessTokens {
     ///
     /// # Returns
     /// The cache.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial constructor: builds a value from its arguments"
+        )
+    )]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn lock(&self) -> MutexGuard<'_, Cache> {
         self.cache.lock().expect("access token cache lock poisoned")
     }
@@ -61,6 +75,13 @@ impl AccessTokens {
     ///
     /// # Returns
     /// How many times [`Self::forget`] has run.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn generation(&self) -> u64 {
         self.lock().generation
     }
@@ -75,6 +96,7 @@ impl AccessTokens {
     /// * `now` - the current time, to prune expired entries when full.
     /// * `seen_generation` - [`Self::generation`], read before the token was
     ///   looked up or minted.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn remember(
         &self,
         sha256: [u8; 32],
@@ -103,6 +125,7 @@ impl AccessTokens {
     ///
     /// # Arguments
     /// * `hashes` - the revoked tokens' hashes.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn forget(&self, hashes: &[[u8; 32]]) {
         let mut cache = self.lock();
         // `wrapping_add`: a u64 that never realistically wraps, but if it
@@ -126,6 +149,7 @@ impl AccessTokens {
     ///
     /// # Errors
     /// [`OkfError::Database`] from the lookup on a cache miss.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn verify(
         &self,
         app: &App,
@@ -176,6 +200,13 @@ pub struct OAuthVerifier<'a> {
 }
 
 impl BearerVerifier for OAuthVerifier<'_> {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line delegation to an instrumented function"
+        )
+    )]
     async fn verify(&self, token: &str) -> Result<Option<Arc<Principal>>, OkfError> {
         self.oauth
             .access

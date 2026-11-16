@@ -70,6 +70,13 @@ pub(crate) struct KeyView {
 }
 
 impl From<KeyRecord> for KeyView {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn from(record: KeyRecord) -> Self {
         // Destructuring names every field: `sha256: _` drops the hash on
         // purpose, and a field added to `KeyRecord` later fails to compile
@@ -144,6 +151,13 @@ pub(crate) struct CreatedKeyView {
 }
 
 impl std::fmt::Debug for CreatedKeyView {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display/Debug impl: runs while the subscriber formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("CreatedKeyView")
@@ -200,6 +214,13 @@ pub(crate) struct AssignUserBody {
 }
 
 /// This area's routes.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/keys", get(list_keys).post(create_key))
@@ -223,6 +244,7 @@ pub(crate) fn routes() -> Router<Arc<App>> {
 /// # Returns
 /// `true` for a caller reaching every catalog; otherwise `true` only for a
 /// credential that is not all-catalogs and whose every catalog the caller reaches.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn manages_grants(
     principal: &Principal,
     all_catalogs: bool,
@@ -244,6 +266,13 @@ pub(crate) fn manages_grants(
 ///
 /// # Returns
 /// As [`manages_grants`] for the record's grants.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub(crate) fn manages(principal: &Principal, record: &KeyRecord) -> bool {
     (!record.provisioner || matches!(principal.reach, Reach::All))
         && manages_grants(principal, record.all_catalogs, &record.catalogs)
@@ -266,6 +295,7 @@ pub(crate) fn manages(principal: &Principal, record: &KeyRecord) -> bool {
 /// [`OkfError::Forbidden`] for `all` from a caller that does not reach every
 /// catalog; [`OkfError::CatalogNotSelected`] for a catalog or default the
 /// caller does not reach.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn requested_grants<'a>(
     principal: &Principal,
     all: bool,
@@ -306,6 +336,13 @@ pub(crate) fn requested_grants<'a>(
 ///
 /// # Errors
 /// [`OkfError::InvalidPath`] (400) naming the `access` field.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub(crate) fn parse_access(text: &str) -> Result<Access, OkfError> {
     Access::parse(text).ok_or_else(|| OkfError::InvalidPath {
         path: "access".to_string(),
@@ -319,6 +356,7 @@ pub(crate) fn parse_access(text: &str) -> Result<Access, OkfError> {
 /// [`OkfError::Forbidden`] below admin; [`OkfError::NotFound`] for an
 /// unknown id or a key the caller does not manage (worded alike);
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 async fn managed(app: &App, principal: &Principal, id: &str) -> Result<KeyRecord, OkfError> {
     require_admin(principal)?;
     key_rows::list(app.pool())
@@ -336,6 +374,7 @@ async fn managed(app: &App, principal: &Principal, id: &str) -> Result<KeyRecord
 ///
 /// # Errors
 /// As [`managed`].
+#[tracing::instrument(level = "debug", skip_all)]
 async fn changed(app: &App, principal: &Principal, id: &str) -> Result<Json<KeyView>, AppError> {
     settle(app).await;
     Ok(Json(managed(app, principal, id).await?.into()))
@@ -345,6 +384,7 @@ async fn changed(app: &App, principal: &Principal, id: &str) -> Result<Json<KeyV
 ///
 /// # Errors
 /// 403 below admin; 500 if the keys cannot be read.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn list_keys(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -367,6 +407,7 @@ async fn list_keys(
 /// exist) or an unknown user; 400 for an unknown `access`; 409 for a bad or
 /// taken name, no catalogs, `all` together with `catalogs`, or an ungranted
 /// default; 422 for a body without `user`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn create_key(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -462,6 +503,7 @@ async fn create_key(
 /// # Errors
 /// 403 below admin; 404 for a key the caller does not manage; 409 for a
 /// revoked key, or for enabling reporting on an OAuth grant.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn update_key(
     State(app): State<Arc<App>>,
     audit: crate::store::audit::AuditActor,
@@ -488,6 +530,7 @@ async fn update_key(
 /// # Errors
 /// 403 below admin; 404 for a key the caller does not manage, or an unknown
 /// user; 422 for a body without `user`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn assign_user(
     State(app): State<Arc<App>>,
     audit: crate::store::audit::AuditActor,
@@ -513,6 +556,7 @@ async fn assign_user(
 /// # Errors
 /// 403 below admin; 404 for a key the caller does not manage; 409 if it is
 /// already revoked.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn revoke_key(
     State(app): State<Arc<App>>,
     audit: crate::store::audit::AuditActor,
@@ -530,6 +574,7 @@ async fn revoke_key(
 /// # Errors
 /// 403 below admin; 404 for a catalog the caller does not reach or a key it
 /// does not manage; 409 for a revoked or all-catalogs key.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn grant_catalog(
     State(app): State<Arc<App>>,
     audit: crate::store::audit::AuditActor,
@@ -549,6 +594,7 @@ async fn grant_catalog(
 ///
 /// # Errors
 /// As [`grant_catalog`].
+#[tracing::instrument(level = "debug", skip_all)]
 async fn ungrant_catalog(
     State(app): State<Arc<App>>,
     audit: crate::store::audit::AuditActor,

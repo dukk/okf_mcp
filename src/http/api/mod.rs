@@ -55,6 +55,13 @@ mod unlocks;
 /// # Returns
 /// A router whose responses all carry `Cache-Control: no-store` and
 /// `nosniff`, the 401 for a missing or unknown credential included.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn routes(app: &Arc<App>) -> Router<Arc<App>> {
     Router::new()
         .merge(identity::routes())
@@ -101,6 +108,7 @@ pub(crate) fn routes(app: &Arc<App>) -> Router<Arc<App>> {
 ///
 /// # Returns
 /// The response with the two headers.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn api_headers(mut response: Response) -> Response {
     let headers = response.headers_mut();
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -122,6 +130,7 @@ pub(crate) async fn api_headers(mut response: Response) -> Response {
 ///
 /// # Returns
 /// A context acting as `principal`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn context(
     app: &Arc<App>,
     principal: Arc<Principal>,
@@ -138,6 +147,7 @@ pub(crate) fn context(
 ///
 /// # Errors
 /// [`OkfError::Forbidden`] for a read or write key.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn require_admin(principal: &Principal) -> Result<(), OkfError> {
     if principal.access >= Access::Admin {
         Ok(())
@@ -157,6 +167,7 @@ pub(crate) fn require_admin(principal: &Principal) -> Result<(), OkfError> {
 ///
 /// # Errors
 /// [`OkfError::Forbidden`] below `admin`, or for a key granted named catalogs.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn require_every_catalog(principal: &Principal) -> Result<(), OkfError> {
     require_admin(principal)?;
     match &principal.reach {
@@ -200,6 +211,13 @@ pub(crate) const PROVISIONER_ROUTES: &[(&str, &str)] = &[
 ///
 /// # Returns
 /// `true` for an allow-listed pair.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub(crate) fn provisioner_may(method: &Method, template: &str) -> bool {
     PROVISIONER_ROUTES
         .iter()
@@ -211,6 +229,7 @@ pub(crate) fn provisioner_may(method: &Method, template: &str) -> bool {
 ///
 /// # Returns
 /// The route's response, or 403.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn provisioner_gate(request: Request, next: Next) -> Response {
     let provisioner = request
         .extensions()
@@ -237,6 +256,13 @@ async fn provisioner_gate(request: Request, next: Next) -> Response {
 ///
 /// # Errors
 /// As [`require_every_catalog`].
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub(crate) fn require_manager(principal: &Principal) -> Result<(), OkfError> {
     if principal.provisioner {
         return Ok(());
@@ -249,6 +275,13 @@ pub(crate) fn require_manager(principal: &Principal) -> Result<(), OkfError> {
 ///
 /// # Errors
 /// As [`require_admin`].
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub(crate) fn require_reader(principal: &Principal) -> Result<(), OkfError> {
     if principal.provisioner {
         return Ok(());
@@ -263,6 +296,7 @@ pub(crate) fn require_reader(principal: &Principal) -> Result<(), OkfError> {
 /// # Arguments
 /// * `app` - the application. An `&Arc<App>` argument coerces to `&App`
 ///   automatically (deref coercion).
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn settle(app: &App) {
     if let Err(error) = app.poll().await {
         split_event!(
