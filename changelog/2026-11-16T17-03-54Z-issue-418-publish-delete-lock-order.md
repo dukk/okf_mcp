@@ -7,7 +7,8 @@
 
 ## Added
 - `store::publish::lock_people(conn, actor, catalog)`: `audit::lock_people` with one catalog, shared by publish, discard and the audited edit.
-- Tests in `mcp::changesets::lock_order_tests`: three forced interleavings (publish, admin discard and revert, each held after its changeset lock while the deletion queues) and a repeated unforced publish/deletion race (20 rounds). All four failed with `Busy` before the fix.
+- Tests in `mcp::changesets::lock_order_tests`: three forced interleavings (publish, admin discard and revert, each held after its changeset lock while the deletion queues) and a repeated unforced publish/deletion race (20 rounds). All four failed with `Busy` before the fix. The race requires a losing publish to be refused (`Refused` "no longer open", or `UnknownChangeset`).
+- Tests in `store::users::tests` (review round 1): a deletion whose actor is a non-admin user (by user id, by its key alone, or by another user's id with its key) against a writer holding that user and then needing the target. The user-id and key cases failed with `Busy` before the fix.
 
 ## Notes
 - The users are locked after the in-process mutex, not before it: a publish waiting on the mutex while holding a user row could form a cycle through the mutex that Postgres cannot detect, and would hang instead of failing.
