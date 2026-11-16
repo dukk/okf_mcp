@@ -2,7 +2,11 @@
 
 The OTLP log bridge exports every `okf_mcp` event that passes its filter, so
 the events the crate already emitted had to be checked against the spec's
-"never exported" list. About 110 non-test sites were classified.
+"never exported" list. A grep-based scan of all of `src/` (including
+`src/telemetry/**`, `src/bin/**`, and files with an early `#[cfg(test)]` module)
+found 76 `split_event!` calls and 47 direct event calls in production code; each
+was classified. The first pass missed `settle` (`src/http/api/mod.rs`, a
+scanner gap) and three events in `src/telemetry/mod.rs` (found in review).
 
 ## What changed
 
@@ -21,6 +25,10 @@ the events the crate already emitted had to be checked against the spec's
 - Left alone: events under a target outside `okf_mcp`
   (`okf_maintenance::rejection`, the `okf-maintenance` binary), and values
   from operator config (listen address, NTP server, default catalog).
+- `src/telemetry/mod.rs`: the shutdown-thread error is split (`warn_thread_not_started`)
+  and the two `OTLP ... are off: {error}` startup warnings now export only the
+  signal name, with the error on stderr (`warn_provider_off`). The shutdown
+  thread case cannot be forced in a test, so both helpers are tested directly.
 - `LogMailer` was already moved by Task 1 (issue #461).
 
 ## Why
@@ -32,8 +40,10 @@ error messages that can name paths, and user names.
 ## Tests
 
 Per-site tests with the in-memory exporters: a refused OAuth client id, an
-internal request error, an internal tool error, and the macro itself. Each
-fails when its site is put back (checked for the first and the tool error).
+internal request error, an internal tool error, the telemetry startup and
+shutdown helpers, and the macro itself. The revert check was run for the
+refused client, the tool error and the telemetry helper; each test failed.
+The request-error and macro tests were not revert-checked.
 
 ## Plan and docs
 

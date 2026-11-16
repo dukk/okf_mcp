@@ -31,7 +31,41 @@ use crate::config::Config;
 use crate::error::OkfError;
 use config::TelemetryConfig;
 use otlp::{ExportFailures, OtlpTarget};
-use subscriber::LayerSettings;
+use subscriber::{split_event, LayerSettings, LOCAL_ONLY};
+
+/// Logs that a signal's exporter could not be built, so that signal is off.
+/// The error's text can carry the endpoint, so only stderr gets it (the
+/// exported event keeps the signal's name).
+///
+/// # Arguments
+/// * `signal` - `"traces"` or `"logs"`.
+/// * `error` - what the exporter builder said.
+#[tracing::instrument(level = "trace", skip_all)]
+fn warn_provider_off(signal: &'static str, error: &dyn std::fmt::Display) {
+    tracing::warn!(provider = signal, "OTLP export is off for this signal");
+    tracing::warn!(
+        target: LOCAL_ONLY,
+        provider = signal,
+        %error,
+        "OTLP export is off for this signal (detail)"
+    );
+}
+
+/// Logs that a shutdown thread did not start. The I/O error's text stays on
+/// stderr; the exported event keeps the provider's name.
+///
+/// # Arguments
+/// * `provider` - `"traces"` or `"logs"`.
+/// * `error` - why the thread did not start.
+#[tracing::instrument(level = "trace", skip_all)]
+fn warn_thread_not_started(provider: &'static str, error: &std::io::Error) {
+    split_event!(
+        warn,
+        { provider, },
+        { %error, },
+        "telemetry shutdown thread did not start"
+    );
+}
 
 /// How long shutdown waits for the last flushes (inside Kubernetes' default
 /// 30 s grace, after the HTTP drain).
@@ -157,7 +191,7 @@ impl Telemetry {
                 Some(builder.build())
             }
             Err(error) => {
-                tracing::warn!("OTLP traces are off: {error}");
+                warn_provider_off("traces", &error);
                 None
             }
         };
@@ -172,7 +206,7 @@ impl Telemetry {
                 )
             }
             Err(error) => {
-                tracing::warn!("OTLP logs are off: {error}");
+                warn_provider_off("logs", &error);
                 None
             }
         };
@@ -281,9 +315,7 @@ fn shutdown_blocking(
                 });
             match started {
                 Ok(_) => pending.push((which, name)),
-                Err(error) => {
-                    tracing::warn!(provider = name, %error, "telemetry shutdown thread did not start")
-                }
+                Err(error) => warn_thread_not_started(name, &error),
             }
         };
     if let Some(provider) = tracer {
@@ -587,6 +619,31 @@ mod tests {
             }
         });
         (port, heads)
+    }
+
+    /// Task 1b: error text of these events reaches stderr only.
+    #[test]
+    fn startup_and_shutdown_errors_export_no_error_text() {
+        use crate::telemetry::config::LogFormat;
+        use crate::telemetry::subscriber::capture::observe;
+
+        let observed = observe("trace", "trace", "trace", LogFormat::Text, || {
+            warn_provider_off(
+                "traces",
+                &"bad endpoint http://zq-sentinel-7f3a.example.invalid",
+            );
+            warn_thread_not_started("logs", &std::io::Error::other("zq-sentinel-7f3a-io"));
+        });
+        let exported = observed.exported_text();
+        assert!(exported.contains("OTLP export is off"), "{exported}");
+        assert!(exported.contains("did not start"), "{exported}");
+        assert!(
+            exported.contains("traces") && exported.contains("logs"),
+            "{exported}"
+        );
+        assert!(!exported.contains("zq-sentinel-7f3a"), "{exported}");
+        assert!(observed.stderr.contains("zq-sentinel-7f3a.example.invalid"));
+        assert!(observed.stderr.contains("zq-sentinel-7f3a-io"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
