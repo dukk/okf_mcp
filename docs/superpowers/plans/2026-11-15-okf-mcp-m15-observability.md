@@ -1503,6 +1503,8 @@ Each sub-task is its own PR and covers only its module group (the File map). The
 
 > **Corrected (issue #474, 2026-11-15).** A `#[schemars(schema_with = "...")]` field makes the `JsonSchema` derive emit a wrapper function that no attribute on the struct or the field reaches (the lint flags the attribute's string). Exempt it by putting the type in a small inline module that carries the `allow`, and re-export the type (`maintenance::types::Submission` does this). 9c and 9d may meet the same pattern in `http/` and `mcp/` types.
 
+> **Corrected (issue #472, 2026-11-16).** A function that calls `telemetry::propagation::inject` (`oidc::send`, `oauth::clients::CimdFetcher::fetch`) is exempt like the span makers: the injected context must stay that of the span the request is made under. Router builders (`routes`, `api_routes`, `router`, `mcp_service`) are exempt too: they run once at startup, and Task 3's `an_unmatched_path_makes_no_span` builds the router under the observer and requires that nothing at all is exported. Two more cases are outside the accepted list and need a stated reason: a function that only returns a boxed future (`GuardedResolver::resolve`: a span would cover building it, not the lookup) and the server's own lifetime (`http::serve`: a span open until shutdown). Handlers and async functions take `level = "debug"`, private synchronous helpers `trace`; none records a field.
+
 Commit: `chore(tracing): instrument <group> (M15 Task 9x)`.
 
 ---

@@ -36,6 +36,13 @@ pub struct PageView {
 }
 
 impl std::fmt::Debug for PageView {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display/Debug impl: runs while the subscriber formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("PageView")
@@ -77,11 +84,19 @@ pub(crate) const CONTENT_SECURITY_POLICY: &str =
 
 /// A consent page: [`pages::page`] with [`CONTENT_SECURITY_POLICY`],
 /// branded with `brand`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn page(status: StatusCode, title: &str, body: &str, brand: &Brand) -> Response {
     pages::page(status, title, body, CONTENT_SECURITY_POLICY, brand)
 }
 
 /// The client block shared by both steps.
+#[tracing::instrument(level = "trace", skip_all)]
 fn client_block(view: &PageView) -> String {
     let badge = if view.verified {
         ""
@@ -97,6 +112,7 @@ fn client_block(view: &PageView) -> String {
 }
 
 /// The hidden fields every form carries.
+#[tracing::instrument(level = "trace", skip_all)]
 fn hidden_fields(view: &PageView) -> String {
     format!(
         r#"<input type="hidden" name="pending" value="{pending}">
@@ -107,6 +123,7 @@ fn hidden_fields(view: &PageView) -> String {
 }
 
 /// A refusal's line above a form, or nothing.
+#[tracing::instrument(level = "trace", skip_all)]
 fn error_line(error: Option<&str>) -> String {
     error.map_or_else(String::new, |message| {
         format!(
@@ -125,6 +142,7 @@ fn error_line(error: Option<&str>) -> String {
 ///
 /// # Returns
 /// The page body.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn code_page_html(view: &PageView, error: Option<&str>) -> String {
     let error = error_line(error);
     format!(
@@ -155,6 +173,7 @@ pub(crate) fn code_page_html(view: &PageView, error: Option<&str>) -> String {
 ///
 /// # Returns
 /// 200 with the page.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn code_page(view: &PageView, error: Option<&str>, brand: &Brand) -> Response {
     page(
         StatusCode::OK,
@@ -174,6 +193,7 @@ pub fn code_page(view: &PageView, error: Option<&str>, brand: &Brand) -> Respons
 ///
 /// # Returns
 /// The page body.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn summary_page_html(
     view: &PageView,
     grant: &GrantSummary,
@@ -228,6 +248,7 @@ pub(crate) fn summary_page_html(
 ///
 /// # Returns
 /// 200 with the page.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn summary_page(
     view: &PageView,
     grant: &GrantSummary,
@@ -257,6 +278,13 @@ pub struct UserPage<'a> {
 }
 
 impl std::fmt::Debug for UserPage<'_> {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display/Debug impl: runs while the subscriber formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("UserPage")
@@ -280,6 +308,7 @@ impl std::fmt::Debug for UserPage<'_> {
 ///
 /// # Returns
 /// The page body.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn user_page_html(view: &PageView, user: &UserPage<'_>, error: Option<&str>) -> String {
     let link = format!(
         r#"        <p class="muted"><a href="{}" id="consent-use-code">Use a sign-in code instead</a></p>"#,
@@ -376,6 +405,7 @@ pub(crate) fn user_page_html(view: &PageView, user: &UserPage<'_>, error: Option
 ///
 /// # Returns
 /// 200 with the page.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn user_page(
     view: &PageView,
     user: &UserPage<'_>,
@@ -397,6 +427,7 @@ pub fn user_page(
 ///
 /// # Returns
 /// The page body (no form).
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn error_page_html(message: &str) -> String {
     format!(
         r#"        <h1>Cannot connect</h1>
@@ -415,6 +446,13 @@ pub(crate) fn error_page_html(message: &str) -> String {
 ///
 /// # Returns
 /// The page with `status`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub fn error_page(status: StatusCode, message: &str, brand: &Brand) -> Response {
     page(status, "Cannot connect", &error_page_html(message), brand)
 }
@@ -427,6 +465,7 @@ pub fn error_page(status: StatusCode, message: &str, brand: &Brand) -> Response 
 ///
 /// # Returns
 /// The page body (no form).
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn forward_page_html(target: &str) -> String {
     // A `<meta>` in the body is still processed: the HTML parser applies a
     // refresh wherever the element appears. The URL is unquoted after
@@ -455,6 +494,7 @@ pub(crate) fn forward_page_html(target: &str) -> String {
 ///
 /// # Returns
 /// A 200 page.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn forward_page(target: &str, brand: &Brand) -> Response {
     page(
         StatusCode::OK,

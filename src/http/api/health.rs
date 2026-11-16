@@ -79,6 +79,13 @@ struct ReportQuery {
 }
 
 /// This area's routes.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/catalogs/{catalog}/health", get(health))
@@ -89,6 +96,7 @@ pub(crate) fn routes() -> Router<Arc<App>> {
 ///
 /// # Errors
 /// 404 for a catalog that does not exist or that the key does not reach.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn health(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -161,6 +169,7 @@ async fn health(
 /// # Errors
 /// 404 for an unknown report name (checked first), or for a catalog that
 /// does not exist or that the key does not reach; 400 for a malformed query.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn report(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,

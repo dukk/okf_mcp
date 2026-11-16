@@ -77,6 +77,13 @@ pub(crate) struct SessionView {
 
 // By hand, not derived, so a stray `{:?}` never prints the CSRF token.
 impl std::fmt::Debug for SessionView {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display/Debug impl: runs while the subscriber formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("SessionView")
@@ -90,6 +97,13 @@ impl std::fmt::Debug for SessionView {
 }
 
 /// This area's routes.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/whoami", get(whoami))
@@ -110,6 +124,7 @@ pub(crate) fn routes() -> Router<Arc<App>> {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 async fn teams_of(pool: &PgPool, name: &str) -> Result<(Vec<String>, bool), OkfError> {
     match users::find(pool, name).await {
         Ok(record) => Ok((record.teams, record.is_admin)),
@@ -122,6 +137,7 @@ async fn teams_of(pool: &PgPool, name: &str) -> Result<(Vec<String>, bool), OkfE
 ///
 /// # Errors
 /// 500 if the key list or the user cannot be read.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn whoami(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -182,6 +198,7 @@ async fn whoami(
 ///
 /// # Errors
 /// [`OkfError::Forbidden`] when the request is not a console session.
+#[tracing::instrument(level = "trace", skip_all)]
 fn console(
     principal: &Principal,
     session: Option<Extension<ConsoleSession>>,
@@ -204,6 +221,7 @@ fn console(
 ///
 /// # Errors
 /// 403 for a key or grant; 401 once the user is gone; 500 on a lookup failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn session(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -240,6 +258,7 @@ async fn session(
 ///
 /// # Errors
 /// 403 for a key or grant; 500 if the delete fails.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn sign_out(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,

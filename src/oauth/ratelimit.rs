@@ -25,6 +25,13 @@ impl TokenBucket {
     ///
     /// # Returns
     /// The bucket.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial constructor: builds a value from its arguments"
+        )
+    )]
     pub fn new(capacity: u32, refill_per_sec: f64) -> Self {
         Self {
             capacity: f64::from(capacity),
@@ -40,6 +47,7 @@ impl TokenBucket {
     ///
     /// # Returns
     /// `true` if the request may go ahead.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn try_take(&self, now: Instant) -> bool {
         let mut state = self.state.lock().expect("token bucket lock poisoned");
         // `unwrap_or` on an `Option` of a `Copy` tuple: a full bucket the

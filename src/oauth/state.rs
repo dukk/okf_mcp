@@ -54,6 +54,13 @@ pub struct PendingAuthorization {
 
 // Written by hand, not derived, so a stray `{:?}` never prints the CSRF token.
 impl std::fmt::Debug for PendingAuthorization {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display/Debug impl: runs while the subscriber formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("PendingAuthorization")
@@ -82,6 +89,13 @@ pub struct AcceptedCode {
 
 // Written by hand, not derived, so a stray `{:?}` never prints the nonce.
 impl std::fmt::Debug for AcceptedCode {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display/Debug impl: runs while the subscriber formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("AcceptedCode")
@@ -110,6 +124,13 @@ pub struct UserConsent {
 
 // Written by hand, not derived, so a stray `{:?}` never prints the nonce.
 impl std::fmt::Debug for UserConsent {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display/Debug impl: runs while the subscriber formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("UserConsent")
@@ -154,6 +175,7 @@ pub struct AuthorizationCode {
 ///
 /// # Returns
 /// 64 lowercase hex characters.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn code_key(code: &str) -> String {
     // `fold` with `write!` appends each byte's two hex digits to one
     // preallocated `String` (Python: `hashlib.sha256(...).hexdigest()`),

@@ -37,6 +37,13 @@ impl Requester {
     ///
     /// # Returns
     /// Its address (from [`ClientIp`]; `None` without one) and source.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn of(parts: &Parts) -> Self {
         Self {
             // `and_then` flattens the two layers of `Option`: no extension,
@@ -57,6 +64,7 @@ impl FromRequestParts<Arc<App>> for Requester {
     // `Infallible`: this extractor never refuses a request.
     type Rejection = std::convert::Infallible;
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn from_request_parts(parts: &mut Parts, _: &Arc<App>) -> Result<Self, Self::Rejection> {
         Ok(Self::of(parts))
     }
@@ -68,6 +76,7 @@ impl FromRequestParts<Arc<App>> for AuditActor {
     // never recorded as nobody.
     type Rejection = AppError;
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn from_request_parts(parts: &mut Parts, _: &Arc<App>) -> Result<Self, Self::Rejection> {
         let principal = parts.extensions.get::<Arc<Principal>>().ok_or_else(|| {
             AppError(OkfError::Forbidden {

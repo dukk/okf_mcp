@@ -60,6 +60,13 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 ///
 /// # Returns
 /// The layer, for `Router::layer`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub fn timeout_layer() -> TimeoutLayer {
     timeout_layer_after(REQUEST_TIMEOUT)
 }
@@ -71,6 +78,13 @@ pub fn timeout_layer() -> TimeoutLayer {
 ///
 /// # Returns
 /// The layer, for `Router::layer`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub fn timeout_layer_after(timeout: Duration) -> TimeoutLayer {
     TimeoutLayer::with_status_code(StatusCode::SERVICE_UNAVAILABLE, timeout)
 }
@@ -89,6 +103,13 @@ pub struct AppError(pub OkfError);
 
 // `From` lets `?` turn an `OkfError` into an `AppError` in handlers.
 impl From<OkfError> for AppError {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn from(error: OkfError) -> Self {
         Self(error)
     }
@@ -106,6 +127,13 @@ impl AppError {
     /// whose result fails lint or a self-service request past a limit, 400 for
     /// a bad input, 500 for the server's own failures, 503 for a request the
     /// database aborted (retry it).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn status(&self) -> StatusCode {
         // No `_` arm: a new variant fails to compile here until it has a status.
         match &self.0 {
@@ -141,6 +169,7 @@ impl AppError {
 }
 
 impl IntoResponse for AppError {
+    #[tracing::instrument(level = "trace", skip_all)]
     fn into_response(self) -> Response {
         // As for tool errors: internal ones (every 500) are logged with their
         // details; the others at debug level, by kind only (a message can
@@ -180,6 +209,7 @@ struct Health {
 ///
 /// # Returns
 /// The status and a [`Health`] body.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn healthz(State(app): State<Arc<App>>) -> Response {
     let probe = sqlx::query("SELECT 1").execute(app.pool());
     // `timeout` gives `Err` if the deadline passes first (waiting for a pool
@@ -209,6 +239,7 @@ async fn healthz(State(app): State<Arc<App>>) -> Response {
 ///
 /// # Returns
 /// The branding settings as JSON.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn brand(State(app): State<Arc<App>>) -> Response {
     (
         [(axum::http::header::CACHE_CONTROL, "no-cache")],
@@ -227,6 +258,13 @@ async fn brand(State(app): State<Arc<App>>) -> Response {
 ///
 /// # Returns
 /// The service, for `Router::route_service`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 fn mcp_service(
     app: &Arc<App>,
     shutdown: &CancellationToken,
@@ -256,6 +294,13 @@ fn mcp_service(
 ///
 /// # Returns
 /// The router, ready for [`axum::serve()`] (which [`serve`] calls).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub fn router(app: Arc<App>, shutdown: &CancellationToken) -> Router {
     // Layers wrap what is added before them, so a layer added later runs
     // first on the way in: `require_key` (on `keyed`) runs before
@@ -518,6 +563,13 @@ const ACCESS_SETTLE_LIMIT: std::time::Duration = std::time::Duration::from_secs(
 /// # Errors
 /// The listener's I/O error, after the loops and the sessions are
 /// stopped (`shutdown` is cancelled on every return).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "long-lived server loop: its span would stay open until shutdown and be exported only then"
+    )
+)]
 pub async fn serve(
     app: Arc<App>,
     listener: TcpListener,

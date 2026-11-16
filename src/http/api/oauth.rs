@@ -72,6 +72,7 @@ impl SignInCodeView {
     ///
     /// # Returns
     /// The view, timestamps formatted.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn new(record: SignInCodeRecord, now: DateTime<Utc>) -> Self {
         let state = record.state(now).as_str();
         // Destructuring names every field: a field added to the record later
@@ -128,6 +129,13 @@ pub(crate) struct CreatedSignInCodeView {
 }
 
 impl std::fmt::Debug for CreatedSignInCodeView {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display/Debug impl: runs while the subscriber formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("CreatedSignInCodeView")
@@ -164,6 +172,13 @@ struct CreateCodeBody {
 }
 
 /// This area's routes.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/oauth/codes", get(list_codes).post(create_code))
@@ -184,6 +199,7 @@ pub(crate) fn routes() -> Router<Arc<App>> {
 /// # Errors
 /// [`OkfError::Forbidden`] below admin; [`OkfError::NotFound`] for an unknown
 /// id or a code the caller does not manage (worded alike); [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 async fn managed_code(
     app: &App,
     principal: &Principal,
@@ -203,6 +219,7 @@ async fn managed_code(
 ///
 /// # Errors
 /// 403 below admin; 500 if the codes cannot be read.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn list_codes(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -226,6 +243,7 @@ async fn list_codes(
 /// an unparsable `expires_in`; 409 for `admin` access, a bad name, no
 /// catalogs, `all` with `catalogs`, an ungranted default, or an expiry past
 /// `oauth.code_max_expiry`; 422 for an unknown or missing field.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn create_code(
     State(app): State<Arc<App>>,
     audit: crate::store::audit::AuditActor,
@@ -280,6 +298,7 @@ async fn create_code(
 /// # Errors
 /// 403 below admin; 404 for a code the caller does not manage; 409 if it is
 /// redeemed or already revoked.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn revoke_code(
     State(app): State<Arc<App>>,
     audit: crate::store::audit::AuditActor,
@@ -301,6 +320,7 @@ async fn revoke_code(
 /// # Errors
 /// 403 below admin; 404 for a code the caller does not manage, or an
 /// unknown user; 422 for a body without `user`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn assign_code_user(
     State(app): State<Arc<App>>,
     audit: crate::store::audit::AuditActor,
