@@ -30,6 +30,15 @@ async fn post_initialize(
     request.send().await.unwrap().status()
 }
 
+/// The first SSE event's `data` field of a response body, if any.
+fn first_event_data(body: &str) -> &str {
+    body.split("\n\n")
+        .next()
+        .and_then(|event| event.lines().find_map(|line| line.strip_prefix("data:")))
+        .unwrap_or("")
+        .trim()
+}
+
 /// The connection's selection, as `list_catalogs` reports it.
 async fn selection(client: Client) -> serde_json::Value {
     let result = call(&client, "list_catalogs", serde_json::json!({})).await;
@@ -66,6 +75,29 @@ async fn mcp_refuses_a_missing_or_unknown_key() {
     assert_eq!(post_initialize(&server, Some("not-a-key"), None).await, 401);
     assert_eq!(post_initialize(&server, Some(&key), None).await, 200);
     assert!(server.client("not-a-key", None).await.is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_legacy_initialize_reply_has_no_empty_priming_event() {
+    let server = TestServer::start(pg(), Config::default()).await;
+    let key = server.key("reader", Access::Read, &[], None).await;
+
+    let response = reqwest::Client::new()
+        .post(server.mcp_url())
+        .bearer_auth(&key)
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .body(INITIALIZE)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+    let body = response.text().await.unwrap();
+    let first: serde_json::Value = serde_json::from_str(first_event_data(&body))
+        .unwrap_or_else(|error| panic!("first event is not JSON ({error}): {body:?}"));
+    assert_eq!(first["id"], 1);
+    assert_eq!(first["result"]["protocolVersion"], "2025-11-25");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -429,6 +461,33 @@ async fn stream_on(server: &TestServer, key: &str, session: &str) -> reqwest::St
         .await
         .unwrap()
         .status()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_legacy_session_request_reply_has_no_empty_priming_event() {
+    let server = TestServer::start(pg(), Config::default()).await;
+    let key = server.key("reader", Access::Read, &[], None).await;
+    let session = open_session(&server, &key).await;
+    assert_eq!(notify_on(&server, &key, &session).await, 202);
+
+    let response = reqwest::Client::new()
+        .post(server.mcp_url())
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .header("mcp-session-id", &session)
+        .header("mcp-protocol-version", "2025-11-25")
+        .bearer_auth(&key)
+        .body(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+    let body = response.text().await.unwrap();
+    let first: serde_json::Value = serde_json::from_str(first_event_data(&body))
+        .unwrap_or_else(|error| panic!("first event is not JSON ({error}): {body:?}"));
+    assert_eq!(first["id"], 2);
+    assert!(first["result"]["tools"].is_array());
 }
 
 #[tokio::test(flavor = "multi_thread")]
