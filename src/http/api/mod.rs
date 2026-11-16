@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use crate::http::AppError;
+use crate::telemetry::subscriber::split_event;
 use axum::extract::{MatchedPath, Request};
 use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::middleware;
@@ -264,6 +265,11 @@ pub(crate) fn require_reader(principal: &Principal) -> Result<(), OkfError> {
 ///   automatically (deref coercion).
 pub(crate) async fn settle(app: &App) {
     if let Err(error) = app.poll().await {
-        tracing::error!(%error, "poll after an administrative change failed; the poll loop retries");
+        split_event!(
+            error,
+            { kind = error.kind(), },
+            { %error, },
+            "poll after an administrative change failed; the poll loop retries"
+        );
     }
 }
