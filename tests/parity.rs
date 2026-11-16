@@ -640,6 +640,10 @@ fn markdown_matches_golden() {
     );
 }
 
+// `ops.json` was edited by hand (issue #532): the split notes and output say `no description given`
+// and `named with sources` where okf.py says `no --description given` and `named with --source`,
+// because a client sends tool parameters, not CLI flags. Regenerating the goldens from okf.py
+// restores the old text; reapply those lines.
 // `analysis.json` was edited by hand (issue #515): the sprawl lint warning no longer says
 // `okf.py sprawl <path>`, it says `the sprawl tool on <path>`. Regenerating the goldens from
 // okf.py restores the old text; reapply that one line.
@@ -675,6 +679,36 @@ fn ops_match_golden() {
         &rust_ops(Path::new(FIXTURES), instant(FIXED_NOW), &ops_script()),
         &read_golden("ops.json"),
         "ops",
+    );
+}
+
+/// Every string in `value`, appended to `strings`.
+fn collect_strings<'a>(value: &'a Json, strings: &mut Vec<&'a str>) {
+    match value {
+        Json::String(text) => strings.push(text),
+        Json::Array(items) => items.iter().for_each(|item| collect_strings(item, strings)),
+        Json::Object(map) => map.values().for_each(|item| collect_strings(item, strings)),
+        _ => {}
+    }
+}
+
+/// A client sends tool parameters, not CLI flags (issue #532): no output, note or error the ops
+/// script produces may tell it to pass `--something`.
+#[test]
+fn ops_output_never_names_a_cli_flag() {
+    let produced = rust_ops(Path::new(FIXTURES), instant(FIXED_NOW), &ops_script());
+    let mut strings = Vec::new();
+    collect_strings(&produced, &mut strings);
+    let flag = regex::Regex::new(r"(^|\s)--[a-z]").expect("the pattern is valid");
+
+    let offenders: Vec<&str> = strings
+        .into_iter()
+        .filter(|text| flag.is_match(text))
+        .collect();
+
+    assert!(
+        offenders.is_empty(),
+        "ops text names a CLI flag: {offenders:#?}"
     );
 }
 
