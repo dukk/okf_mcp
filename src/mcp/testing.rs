@@ -705,3 +705,120 @@ mod tests {
         let _ = test_app.app.metrics();
     }
 }
+
+/// A minimal MCP client over HTTP, for tests that need a real session
+/// through the real router (`http::serve` on a loopback socket): one
+/// `initialize`, then any number of tool calls.
+pub(crate) struct McpProbe {
+    client: reqwest::Client,
+    endpoint: String,
+    key: String,
+    session: String,
+}
+
+impl McpProbe {
+    /// Opens a session: `initialize`, then the `initialized` notification.
+    ///
+    /// # Arguments
+    /// * `endpoint` - the `/mcp` URL.
+    /// * `key` - the bearer key.
+    ///
+    /// # Panics
+    /// If the server refuses: a broken test setup.
+    pub(crate) async fn open(endpoint: &str, key: &str) -> Self {
+        let client = reqwest::Client::new();
+        let init = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "probe", "version": "1"}
+            }
+        });
+        let response = Self::post(&client, endpoint, key, None, &init).await;
+        let session = response
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|value| value.to_str().ok())
+            .expect("a session id")
+            .to_string();
+        let _ = response.text().await.expect("the initialize answer");
+        let probe = Self {
+            client,
+            endpoint: endpoint.to_string(),
+            key: key.to_string(),
+            session,
+        };
+        let initialized = serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
+        let accepted = Self::post(
+            &probe.client,
+            endpoint,
+            key,
+            Some(&probe.session),
+            &initialized,
+        )
+        .await;
+        assert!(accepted.status().is_success(), "{}", accepted.status());
+        probe
+    }
+
+    async fn post(
+        client: &reqwest::Client,
+        endpoint: &str,
+        key: &str,
+        session: Option<&str>,
+        body: &serde_json::Value,
+    ) -> reqwest::Response {
+        let mut request = client
+            .post(endpoint)
+            .bearer_auth(key)
+            .header("accept", "application/json, text/event-stream")
+            .json(body);
+        if let Some(session) = session {
+            request = request.header("mcp-session-id", session);
+        }
+        request.send().await.expect("the server answers")
+    }
+
+    /// Calls a tool.
+    ///
+    /// # Arguments
+    /// * `tool` - its name (any text: an unknown one is a protocol error).
+    /// * `arguments` - its arguments.
+    ///
+    /// # Returns
+    /// The JSON-RPC answer (`result` or `error`).
+    ///
+    /// # Panics
+    /// If the answer is not a JSON-RPC message: a broken test setup.
+    pub(crate) async fn call(&self, tool: &str, arguments: serde_json::Value) -> serde_json::Value {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": tool, "arguments": arguments}
+        });
+        let text = Self::post(&self.client, &self.endpoint, &self.key, Some(&self.session), &body)
+            .await
+            .text()
+            .await
+            .expect("the answer's body");
+        // A JSON answer, or an event stream whose `data:` lines carry it.
+        std::iter::once(text.as_str())
+            .chain(text.lines().filter_map(|line| line.strip_prefix("data:")))
+            .filter_map(|candidate| serde_json::from_str::<serde_json::Value>(candidate.trim()).ok())
+            .find(|message| message.get("id") == Some(&serde_json::json!(2)))
+            .unwrap_or_else(|| panic!("no JSON-RPC answer in {text}"))
+    }
+
+    /// Ends the session (`DELETE /mcp`).
+    pub(crate) async fn close(self) {
+        let response = self
+            .client
+            .delete(&self.endpoint)
+            .bearer_auth(&self.key)
+            .header("mcp-session-id", &self.session)
+            .send()
+            .await
+            .expect("the server answers");
+        assert!(response.status().is_success(), "{}", response.status());
+    }
+}
