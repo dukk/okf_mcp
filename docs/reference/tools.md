@@ -227,7 +227,7 @@ Add `* **<kind>:** <text>` under today's UTC date in log.md, the only way to wri
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `text` | string | yes | The entry; runs of whitespace become single spaces. |
-| `kind` | LogKind or any | no | Update, Creation, Change or Import (default Update). |
+| `kind` | LogKind | no | Update, Creation, Change or Import (default Update). |
 | `changeset` | string | yes | The changeset to write to: the handle `open_changeset` returned. |
 
 ## `maintenance_claim`
