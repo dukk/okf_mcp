@@ -182,6 +182,28 @@ async fn a_forged_traceparent_is_a_link_not_the_parent() {
 }
 
 #[tokio::test]
+async fn a_request_without_traceparent_has_no_link_at_either_filter() {
+    let test = app().await;
+    for filter in FILTERS {
+        let observed = observed(filter, async {
+            // Under an ambient span too: that span must never become a link.
+            async {
+                fetch(&test, "/healthz", None, &[]).await;
+                fetch(&test, "/healthz", None, &[("traceparent", "garbage")]).await;
+            }
+            .instrument(tracing::info_span!("ambient"))
+            .await;
+        })
+        .await;
+        let spans = observed.spans_named("GET /healthz");
+        assert_eq!(spans.len(), 2, "{filter}");
+        for span in spans {
+            assert!(span.links.links.is_empty(), "{filter}: a fabricated link");
+        }
+    }
+}
+
+#[tokio::test]
 async fn a_request_span_is_a_root_even_inside_another_span() {
     let test = app().await;
     for filter in FILTERS {
