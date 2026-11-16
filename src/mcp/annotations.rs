@@ -254,9 +254,7 @@ fn no_tool_text_names_okf_py_or_carries_a_contributor_note() {
 /// This list only shrinks: each of #509 to #513 deletes its entry in the same
 /// PR as its fix, and it must be empty when epic #507 closes.
 #[cfg(test)]
-const KNOWN_UNTYPED_PARAMETERS: &[(&str, &str)] = &[
-    ("set_frontmatter", "value"),
-];
+const KNOWN_UNTYPED_PARAMETERS: &[(&str, &str)] = &[("set_frontmatter", "value")];
 
 /// Does this property schema carry a direct `type` keyword?
 ///

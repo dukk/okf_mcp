@@ -11,4 +11,4 @@ null, with no `type`, which the connector directory's check rejects.
 - Removed `("log", "kind")` from `KNOWN_UNTYPED_PARAMETERS`.
 - Added tests: deserialization of each kind, null, omitted and an unknown kind;
   the schema's `type` and the four kinds.
-- Regenerated `docs/reference/tools.md`.
+- `docs/reference/tools.md` and `src/investigator/contract_tools.json` needed no change (the drift test passes).
