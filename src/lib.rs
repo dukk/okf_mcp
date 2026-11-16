@@ -14,6 +14,11 @@
 //! command line (`cli`), errors, and the clock.
 //! `main.rs` only starts it.
 
+// The async bodies that `#[instrument]` wraps nest deeply enough that the nightly
+// toolchain `cargo dylint` builds with overflows its default query depth (128)
+// when it computes the layout of `app::load`'s future.
+#![recursion_limit = "256"]
+
 pub mod app;
 pub mod archive;
 pub mod auth;

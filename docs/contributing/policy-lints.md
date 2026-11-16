@@ -14,10 +14,13 @@ pinned by tag in `[workspace.metadata.dylint]` in the root `Cargo.toml`. Only it
 `const fn`, closures and code compiled only for tests are out of scope for
 `uninstrumented_fn`.
 
-**Level.** The lint is wired at warn level while the `#[instrument]` sweep of milestone 15
-runs (`just dylint` passes `-W uninstrumented_fn`). The last sweep step makes it deny.
-Until then, `tools/agentic/gate.sh dylint` passes with warnings, and every task that adds
-functions must add no new warning in its own code.
+**Level.** The lint is at deny (`just dylint` passes `-D uninstrumented_fn`). A new
+function needs `#[tracing::instrument]` or a reason-bearing exemption, and
+`tools/agentic/gate.sh dylint` is a required gate before every push. Changing the level
+in the `justfile` needs `touch src/lib.rs src/main.rs src/bin/okf-maintenance.rs`
+afterwards: the flag is not part of cargo's fingerprint, so a cached run replays the old
+level's diagnostics. The library sets `#![recursion_limit = "256"]` because the nightly
+`dylint` builds with overflows the default query depth on `app::load`'s future.
 
 ## Running
 

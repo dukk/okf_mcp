@@ -1530,6 +1530,8 @@ Commit: `chore(tracing): instrument <group> (M15 Task 9x)`.
 - [ ] **Step 2b:** Run the sentinel test over the swept tree, `tools/agentic/gate.sh narrow --test telemetry_privacy`, with `traces_filter` and `logs_filter` at `trace` (the test's own config), so every `trace`-level span the sweep added is exported and checked. Fix any field it catches in the file that added it.
 - [ ] **Step 3: Commit** `chore(lint): uninstrumented_fn at deny (M15 Task 10)`
 
+> **Corrected (issue #475, 2026-11-16).** Shipped: `-D` in the `justfile`, plus `#![recursion_limit = "256"]` in `src/lib.rs`. Once the touch forced a cold nightly check, `app::load`'s future overflowed the default query depth (128) and dylint failed with "queries overflow the depth limit". Deny was proven with a probe function (exit 1, then 0 after removal). Steps 2a and 2b needed no code change: the root-span tests already run at `info` and `trace`, and `telemetry_privacy` already uses `trace` for both filters.
+
 ---
 
 ### Task 11: Operations docs, examples, close-out

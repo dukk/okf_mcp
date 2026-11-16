@@ -26,10 +26,10 @@ test-ui:
 # The dylint policy lints (docs/contributing/policy-lints.md). Needs
 # `cargo install --locked cargo-dylint dylint-link`; the first run builds the
 # lint library on its own pinned nightly (minutes). `--all-targets` compiles
-# test code too, so it is excluded properly. The level is warn until the
-# instrument sweep finishes (M15 Task 10 makes it `-D`).
+# test code too, so it is excluded properly. The lint is at deny (`-D`);
+# changing the level needs a touch of the crate roots, see the policy doc.
 dylint:
-    DYLINT_RUSTFLAGS="-W uninstrumented_fn" cargo dylint --all -- --all-targets
+    DYLINT_RUSTFLAGS="-D uninstrumented_fn" cargo dylint --all -- --all-targets
 
 # Shell tests for tools/agentic (stub gh, fake clock; no Docker or network).
 test-agentic:
