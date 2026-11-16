@@ -135,12 +135,11 @@ impl OpOutcome {
     }
 }
 
-/// Which stamp `stamp` writes.
-///
-/// `Copy` makes it a plain value (passing it copies it, like a Python int).
-/// `Deserialize` reads `"generated"` / `"verified"`, `okf.py`'s spellings,
-/// and `JsonSchema` describes them in the `stamp` tool's input schema (the
-/// variants' doc comments become the choices' descriptions).
+/// Which stamp `stamp` writes: `"generated"` or `"verified"`.
+// Contributor note: `Copy` makes it a plain value (passing it copies it, like a
+// Python int). `Deserialize` reads the lowercase spellings, and `JsonSchema`
+// describes them in the `stamp` tool's input schema (the variants' doc comments
+// become the choices' descriptions).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum StampField {
@@ -151,7 +150,7 @@ pub enum StampField {
 }
 
 impl StampField {
-    /// The key's name, as `okf.py` prints it.
+    /// The key's name.
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -175,14 +174,13 @@ pub struct SourceEntry<'a> {
     pub author: Option<&'a str>,
 }
 
-/// The kind of a `log.md` entry (`okf.py`'s `LOG_KINDS`).
-///
-/// No `rename_all`: the JSON spellings are `okf.py`'s capitalized ones
-/// (`"Update"` etc.). `#[default]` marks the variant `Default::default()`
-/// returns, `okf.py log`'s `--kind` default.
+/// The kind of a `log.md` entry: `Update` (the default), `Creation`, `Change` or `Import`.
+// Contributor note: there is no `rename_all`; the JSON spellings are the
+// capitalized ones (`"Update"` etc.). `#[default]` marks the variant
+// `Default::default()` returns, the `kind` default.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
 pub enum LogKind {
-    /// `Update` (the default in `okf.py`).
+    /// `Update` (the default).
     #[default]
     Update,
     /// `Creation`.

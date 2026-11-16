@@ -640,6 +640,9 @@ fn markdown_matches_golden() {
     );
 }
 
+// `analysis.json` was edited by hand (issue #515): the sprawl lint warning no longer says
+// `okf.py sprawl <path>`, it says `the sprawl tool on <path>`. Regenerating the goldens from
+// okf.py restores the old text; reapply that one line.
 #[test]
 fn analysis_matches_golden() {
     let commits = commit_times_from_file(COMMIT_TIMES);

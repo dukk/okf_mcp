@@ -47,7 +47,7 @@ pub struct CatalogParam {
 pub struct Question {
     /// Its 1-based position (what `unquestion` takes).
     pub number: usize,
-    /// The question, as Python's `str()` of the entry.
+    /// The question's text.
     pub text: String,
 }
 
@@ -93,7 +93,7 @@ pub struct OldestParams {
 pub struct Oldest {
     /// The catalog.
     pub catalog: String,
-    /// `okf.py oldest --json`'s rows, stalest first.
+    /// The `oldest` report's rows, stalest first.
     pub rows: Vec<OldestRow>,
 }
 
@@ -116,7 +116,7 @@ pub struct SprawlParams {
 pub struct Sprawl {
     /// The catalog.
     pub catalog: String,
-    /// `okf.py sprawl --json`'s reports, worst first.
+    /// The `sprawl` report's concepts, worst first.
     pub reports: Vec<SprawlReport>,
 }
 
@@ -383,7 +383,7 @@ impl OkfServer {
     /// The `oldest` tool.
     #[tool(
         title = "Oldest Concepts",
-        description = "The stalest concepts (okf.py oldest --json): last stamp, by whom, \
+        description = "The stalest concepts: last stamp, by whom, \
                           age in days, stale flag and queued questions.",
         annotations(
             title = "Oldest Concepts",
@@ -405,7 +405,7 @@ impl OkfServer {
     /// The `sprawl` tool.
     #[tool(
         title = "Sprawl Report",
-        description = "Sprawl scores (okf.py sprawl --json): which concepts have grown too \
+        description = "Sprawl scores: which concepts have grown too \
                           long or volatile, with sections and split candidates.",
         annotations(
             title = "Sprawl Report",
@@ -427,7 +427,7 @@ impl OkfServer {
     /// The `links_report` tool.
     #[tool(
         title = "Links Report",
-        description = "The link report (okf.py links --json): broken links and anchors, \
+        description = "The link report: broken links and anchors, \
                           relative links, orphans, dead ends, index drift and (unless \
                           `mentions` is false) unlinked mentions.",
         annotations(
@@ -450,7 +450,7 @@ impl OkfServer {
     /// The `lint` tool.
     #[tool(
         title = "Lint Catalog",
-        description = "Lint a catalog (okf.py lint --json): errors and warnings with file, \
+        description = "Lint a catalog: errors and warnings with file, \
                           line, rule and message. Without `changeset`, the published catalog; \
                           with `changeset` (a handle from open_changeset), that changeset's \
                           drafts applied to it, the changed paths counted as uncommitted.",
