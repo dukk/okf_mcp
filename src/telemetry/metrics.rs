@@ -765,4 +765,30 @@ mod tests {
         assert_eq!(SECONDS_BUCKETS.first(), Some(&0.001));
         assert_eq!(SECONDS_BUCKETS.last(), Some(&60.0));
     }
+
+    #[test]
+    fn a_failed_clock_check_counts_as_an_error_and_keeps_the_last_offset() {
+        use crate::mcp::testing::{local_metrics, render, sample_of};
+        let (_provider, metrics, registry) = local_metrics();
+
+        metrics.clock_check(Outcome::Ok, Some(250));
+        metrics.clock_check(Outcome::Error, None);
+
+        let text = render(&registry);
+        assert_eq!(
+            sample_of(&text, r#"okf_clock_checks_total{outcome="ok"}"#),
+            Some(1.0),
+            "{text}"
+        );
+        assert_eq!(
+            sample_of(&text, r#"okf_clock_checks_total{outcome="error"}"#),
+            Some(1.0),
+            "{text}"
+        );
+        assert_eq!(
+            sample_of(&text, "okf_clock_offset_seconds"),
+            Some(0.25),
+            "{text}"
+        );
+    }
 }
