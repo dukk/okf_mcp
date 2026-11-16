@@ -1183,7 +1183,7 @@ every use to be recorded; #423 tracks that gap). Team and catalog
 management remains server-wide, as the allow-list specifies; the admin-target
 refusal applies to named user operations and membership/initial-owner targets.
 
-The explicit allow-list has these 16 method/template pairs (adding a new route
+The explicit allow-list has these 17 method/template pairs (adding a new route
 does not add permission):
 
 | Method | Route |
@@ -1194,6 +1194,7 @@ does not add permission):
 | PUT | `/api/v1/users/{name}/email` |
 | POST | `/api/v1/users/{name}/invite` |
 | DELETE | `/api/v1/users/{name}` |
+| GET | `/api/v1/teams` (every team, as an admin sees it; for reconciling its records) |
 | GET | `/api/v1/teams/{name}` |
 | POST | `/api/v1/teams` |
 | PUT | `/api/v1/teams/{name}/members/{user}` |
@@ -1205,7 +1206,7 @@ does not add permission):
 | PUT | `/api/v1/catalogs/{catalog}/member-access` |
 | GET | `/api/v1/audit` (only the entries it wrote; not the export) |
 
-Every other API route is refused, including listing all users or teams, managing
+Every other API route is refused, including listing all users, managing
 keys or grants, changing settings or admin flags, entitlements and session
 revocation. It reaches no catalog contents: no reads, writes, imports or exports.
 It is not an MCP or archive credential, nor a console sign-in credential.
@@ -2837,7 +2838,7 @@ admin). Every change takes effect at once. A refusal under the
 | `DELETE /api/v1/users/{name}/sessions` | admin, every catalog | Signs the user out of every console session (keys and grants keep working); answers `{name, revoked}` |
 | `DELETE /api/v1/users/{name}/sessions/{id_prefix}` | admin, every catalog | Signs one session out; 204. 404 for a malformed prefix or one that matches none of the user's sessions, 409 for one that matches several (none is ended) |
 | `GET /api/v1/users/{name}/sign-ins` | admin | `{sign_ins}`, newest first (at most 50): `method`, `outcome`, `ip`, `at` |
-| `GET /api/v1/teams` | admin | `{teams}`, by name: `name`, `display_name`, `personal_of` (the user whose personal team it is, or `null`), `created_at`, `members` (`[{user, role}]`, by user), `catalogs` (the names it owns), `suspended_at` (when it was suspended, `null` while active) and `suspension_notice` (`null` when there is none; see [Suspending a team](#suspending-a-team)) |
+| `GET /api/v1/teams` | admin; a provisioner | `{teams}`, by name: `name`, `display_name`, `personal_of` (the user whose personal team it is, or `null`), `created_at`, `members` (`[{user, role}]`, by user), `catalogs` (the names it owns), `suspended_at` (when it was suspended, `null` while active) and `suspension_notice` (`null` when there is none; see [Suspending a team](#suspending-a-team)) |
 | `POST /api/v1/teams` | admin, every catalog | Body `{name, display_name, owner}` (`owner` required: the first owner's user name). 201 with the team. 404 for an unknown owner, 409 for an invalid or taken name, 422 without `owner` |
 | `GET /api/v1/teams/{name}` | admin | The team, as in the list |
 | `DELETE /api/v1/teams/{name}` | admin, every catalog | Deletes a shared team that owns no catalog; 204. 409 for a personal team or one that owns a catalog |

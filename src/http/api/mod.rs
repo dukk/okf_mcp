@@ -191,6 +191,7 @@ pub(crate) const PROVISIONER_ROUTES: &[(&str, &str)] = &[
     ("PUT", "/api/v1/users/{name}/email"),
     ("POST", "/api/v1/users/{name}/invite"),
     ("DELETE", "/api/v1/users/{name}"),
+    ("GET", "/api/v1/teams"),
     ("GET", "/api/v1/teams/{name}"),
     ("POST", "/api/v1/teams"),
     ("PUT", "/api/v1/teams/{name}/members/{user}"),
