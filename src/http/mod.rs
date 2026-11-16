@@ -273,6 +273,12 @@ fn mcp_service(
     sessions.session_config.keep_alive = Some(app.config().session_idle_timeout);
     let config = StreamableHttpServerConfig::default()
         .with_allowed_hosts(app.config().allowed_hosts.iter().cloned())
+        // No SSE priming event. For protocol versions before 2026-07-28 rmcp
+        // streams every POST reply and, when `sse_retry` is set, prepends an
+        // empty-data event that strict clients (Google Gemini's connector)
+        // reject. It only aids resumption, which `LocalSessionManager` does
+        // not support for POST streams anyway.
+        .with_sse_retry(None)
         // A child token: cancelling `shutdown` cancels it too, and rmcp
         // cancelling its own copy never reaches `shutdown`.
         .with_cancellation_token(shutdown.child_token());
