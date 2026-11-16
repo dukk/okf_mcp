@@ -35,6 +35,7 @@ use crate::keyed_lock::KeyedLocks;
 use crate::oauth::error::OAuthError;
 use crate::oauth::OAuth;
 use crate::store::oauth::clients::{self as client_rows, ClientKind, ClientRecord, NewDcrClient};
+use crate::telemetry::metrics::Limiter;
 use crate::telemetry::subscriber::split_event;
 
 /// The whole-request deadline of a CIMD fetch, body included.
@@ -880,6 +881,7 @@ async fn register(State(app): State<Arc<App>>, body: Bytes) -> Result<Response, 
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
     if !oauth.register_limit.try_take(Instant::now()) {
+        app.metrics().rate_limited(Limiter::OauthRegister);
         return Err(OAuthError::SlowDown);
     }
     let document: Value = serde_json::from_slice(&body).map_err(|_| {

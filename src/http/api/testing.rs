@@ -17,7 +17,7 @@ use tower::ServiceExt;
 use crate::config::Config;
 use crate::http::console_session::{start_session, COOKIE, CSRF_HEADER};
 use crate::http::router;
-use crate::mcp::testing::{app_with, TestApp};
+use crate::mcp::testing::{app_with, app_with_metrics, TestApp};
 use crate::store::audit::AuditActor;
 use crate::store::keys::{self as key_rows, Access, Grants, NewKey};
 use crate::store::passwords;
@@ -282,6 +282,16 @@ pub(crate) fn login_config() -> Config {
 /// [`app`], with [`login_config`].
 pub(crate) async fn login_app() -> TestApp {
     app_with(
+        &[("main", MAIN), ("other", &[("index.md", "# Other\n")])],
+        login_config(),
+    )
+    .await
+}
+
+/// [`login_app`] recording on a local meter provider, and the registry it
+/// renders into.
+pub(crate) async fn login_app_with_metrics() -> (TestApp, prometheus::Registry) {
+    app_with_metrics(
         &[("main", MAIN), ("other", &[("index.md", "# Other\n")])],
         login_config(),
     )

@@ -35,9 +35,11 @@ use tokio_util::sync::CancellationToken;
 use super::{render, Mail, MailError, Mailer, Template};
 use crate::app::App;
 use crate::clock::Clock;
+use crate::config::MailProvider;
 use crate::error::OkfError;
 use crate::store::settings;
 use crate::store::users::check_email;
+use crate::telemetry::metrics::{MailOutcome, MailStatus, Metrics};
 use crate::telemetry::subscriber::split_event;
 
 /// The apalis queue (`apalis.jobs.job_type`). Set explicitly: apalis's
@@ -123,6 +125,21 @@ pub struct QueuedMail {
     pub last_error: Option<String>,
     /// When it is (or was) due.
     pub run_at: DateTime<Utc>,
+}
+
+/// The SQL expression for a job's state as `mail queue` and the depth
+/// gauge name it: `failed`, `retrying`, `sending` or `pending`.
+///
+/// A macro, not a `const`, so `concat!` can build the query at compile
+/// time: sqlx takes only literal SQL.
+macro_rules! status_sql {
+    () => {
+        "CASE WHEN status = 'Killed' \
+                OR (status = 'Failed' AND attempts >= max_attempts) THEN 'failed' \
+             WHEN status = 'Failed' THEN 'retrying' \
+             WHEN status IN ('Queued', 'Running') THEN 'sending' \
+             ELSE 'pending' END"
+    };
 }
 
 /// The error for a queue operation apalis refused (its own error type).
@@ -215,22 +232,58 @@ pub async fn list(pool: &PgPool) -> Result<Vec<QueuedMail>, OkfError> {
     // `job` is the JSON payload as bytes; `convert_from(..)::jsonb` reads
     // it, and only the recipient and the template's name leave the
     // database. `"to"` is quoted: TO is an SQL keyword.
-    Ok(sqlx::query_as::<_, QueuedMail>(
+    Ok(sqlx::query_as::<_, QueuedMail>(concat!(
         "SELECT id, \
-                convert_from(job, 'UTF8')::jsonb -> 'mail' ->> 'to' AS \"to\", \
-                convert_from(job, 'UTF8')::jsonb ->> 'template' AS template, \
-                CASE WHEN status = 'Killed' \
-                       OR (status = 'Failed' AND attempts >= max_attempts) THEN 'failed' \
-                     WHEN status = 'Failed' THEN 'retrying' \
-                     WHEN status IN ('Queued', 'Running') THEN 'sending' \
-                     ELSE 'pending' END AS status, \
-                attempts, last_result ->> 'Err' AS last_error, run_at \
-         FROM apalis.jobs WHERE job_type = $1 AND status <> 'Done' \
-         ORDER BY run_at, id",
-    )
+                    convert_from(job, 'UTF8')::jsonb -> 'mail' ->> 'to' AS \"to\", \
+                    convert_from(job, 'UTF8')::jsonb ->> 'template' AS template, ",
+        status_sql!(),
+        " AS status, \
+                    attempts, last_result ->> 'Err' AS last_error, run_at \
+             FROM apalis.jobs WHERE job_type = $1 AND status <> 'Done' \
+             ORDER BY run_at, id"
+    ))
     .bind(QUEUE)
     .fetch_all(pool)
     .await?)
+}
+
+/// Counts the jobs not yet sent, by status, and hands the counts to the
+/// depth gauge. A scrape then reads these numbers and never queries
+/// Postgres. The poll calls it each tick. A failure is logged and leaves
+/// the last counts in place.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `metrics` - the instruments holding the gauge's numbers.
+#[tracing::instrument(level = "debug", skip_all)]
+pub async fn record_depth(pool: &PgPool, metrics: &Metrics) {
+    let counted = sqlx::query_as::<_, (String, i64)>(concat!(
+        "SELECT ",
+        status_sql!(),
+        " AS status, count(*) FROM apalis.jobs \
+         WHERE job_type = $1 AND status <> 'Done' GROUP BY 1"
+    ))
+    .bind(QUEUE)
+    .fetch_all(pool)
+    .await;
+    match counted {
+        Ok(rows) => {
+            let counts: Vec<(MailStatus, i64)> = rows
+                .iter()
+                .filter_map(|(status, jobs)| MailStatus::parse(status).map(|known| (known, *jobs)))
+                .collect();
+            metrics.set_mail_queue_depth(&counts);
+        }
+        Err(error) => {
+            let error = OkfError::from(error);
+            split_event!(
+                warn,
+                { kind = error.kind(), },
+                { %error, },
+                "counting the mail queue failed"
+            );
+        }
+    }
 }
 
 /// Whether `id` can be a job id (a ULID: ASCII letters and digits). Text
@@ -370,6 +423,10 @@ pub(crate) struct MailContext {
     pub mailer: Arc<dyn Mailer>,
     /// The server clock (for the retry window).
     pub clock: Arc<dyn Clock>,
+    /// The instruments each job counts on.
+    pub metrics: Metrics,
+    /// The configured provider, for the job's span and counter.
+    pub provider: MailProvider,
 }
 
 /// Moves a job's `run_at` to now plus its backoff: 30 s doubling per
@@ -396,16 +453,47 @@ async fn reschedule(pool: &PgPool, id: &str) -> Result<(), OkfError> {
 /// The job handler: one send, then Decision 11's outcome (see the module
 /// doc). apalis fills each argument from the job: the payload, the worker
 /// data and the job id.
+///
+/// Each job is a root `okf.mail.job` span (`parent = None`: a job started
+/// by the worker has no request to belong to) carrying the template's
+/// name, the provider and the outcome; never the address.
+#[tracing::instrument(
+    level = "info",
+    name = "okf.mail.job",
+    parent = None,
+    skip_all,
+    fields(
+        okf.mail.template = %job.template,
+        okf.mail.provider = context.provider.as_str(),
+        okf.outcome = tracing::field::Empty,
+    )
+)]
 async fn send_mail(
     job: SendMail,
     context: Data<MailContext>,
     id: TaskId,
 ) -> Result<(), BoxDynError> {
+    let (result, outcome) = deliver(&job, &context, &id.to_string()).await;
+    tracing::Span::current().record("okf.outcome", outcome.as_str());
+    context.metrics.mail_job(context.provider, outcome);
+    result
+}
+
+/// One try at `job`: the send, and what to tell apalis.
+///
+/// # Returns
+/// The handler's answer, and how the try ended for the span and counter.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn deliver(
+    job: &SendMail,
+    context: &MailContext,
+    id: &str,
+) -> (Result<(), BoxDynError>, MailOutcome) {
     let id = id.to_string();
     let error = match context.mailer.send(&job.mail).await {
         Ok(()) => {
             tracing::info!(job = %id, template = %job.template, "mail sent");
-            return Ok(());
+            return (Ok(()), MailOutcome::Sent);
         }
         Err(error) => error,
     };
@@ -419,7 +507,7 @@ async fn send_mail(
                 { %error, },
                 "mail refused for good"
             );
-            Err(Box::new(AbortError::new(error)))
+            (Err(Box::new(AbortError::new(error))), MailOutcome::Failed)
         }
         MailError::Retryable(reason) => {
             let age = context.clock.now().timestamp() - job.queued_at;
@@ -430,9 +518,10 @@ async fn send_mail(
                     { %reason, },
                     "mail given up"
                 );
-                return Err(Box::new(AbortError::new(MailError::Retryable(format!(
+                let abort = AbortError::new(MailError::Retryable(format!(
                     "gave up after {RETRY_WINDOW_HOURS} hours: {reason}"
-                )))));
+                )));
+                return (Err(Box::new(abort)), MailOutcome::Failed);
             }
             if let Err(error) = reschedule(&context.pool, &id).await {
                 // Still a plain error: apalis fetches it again, just sooner.
@@ -449,7 +538,10 @@ async fn send_mail(
                 { %reason, },
                 "mail failed; will retry"
             );
-            Err(Box::new(MailError::Retryable(reason)))
+            (
+                Err(Box::new(MailError::Retryable(reason))),
+                MailOutcome::Retry,
+            )
         }
     }
 }
@@ -527,6 +619,8 @@ pub fn spawn_worker(app: Arc<App>, shutdown: CancellationToken) -> JoinHandle<()
         pool: worker_pool(app.pool()),
         mailer: Arc::clone(app.mailer()),
         clock: app.clock_handle(),
+        metrics: app.metrics().clone(),
+        provider: app.config().mail.provider,
     };
     run_worker(context, worker_name(), WorkerTiming::SERVE, shutdown)
 }
@@ -668,11 +762,26 @@ mod tests {
         mailer: Arc<Scripted>,
         name: &str,
     ) -> (CancellationToken, JoinHandle<()>) {
-        let context = MailContext {
-            pool: own_pool,
+        let context = context_with(own_pool, mailer, Metrics::global(), MailProvider::Log);
+        start_context(context, name)
+    }
+
+    fn context_with(
+        pool: PgPool,
+        mailer: Arc<Scripted>,
+        metrics: Metrics,
+        provider: MailProvider,
+    ) -> MailContext {
+        MailContext {
+            pool,
             mailer,
             clock: Arc::new(FixedClock(now())),
-        };
+            metrics,
+            provider,
+        }
+    }
+
+    fn start_context(context: MailContext, name: &str) -> (CancellationToken, JoinHandle<()>) {
         let shutdown = CancellationToken::new();
         let worker = run_worker(context, name.to_string(), FAST, shutdown.clone());
         (shutdown, worker)
@@ -924,6 +1033,199 @@ mod tests {
         assert!(sent[0].text.contains(&link), "the link survives the queue");
         assert!(sent[0].html.contains(&link));
         assert!(listed.is_empty(), "done jobs are not listed");
+    }
+
+    /// Waits (up to 10 s) until `series` renders as `want`.
+    async fn wait_for_series(registry: &prometheus::Registry, series: &str, want: f64) {
+        use crate::mcp::testing::{render, sample_of};
+        for _ in 0..100 {
+            if sample_of(&render(registry), series) == Some(want) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("{series} never reached {want}:\n{}", render(registry));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mail_jobs_count_by_provider_and_outcome() {
+        use crate::mcp::testing::{local_metrics, render, sample_of};
+        let (_provider, metrics, registry) = local_metrics();
+        let db = test_db().await;
+        let mailer = Scripted::with(vec![
+            Err(MailError::Retryable("connection reset".to_string())),
+            Ok(()),
+            Err(MailError::Permanent("no such mailbox".to_string())),
+        ]);
+        let context = context_with(
+            worker_pool(&db.pool),
+            Arc::clone(&mailer),
+            metrics,
+            MailProvider::Smtp,
+        );
+        let (shutdown, worker) = start_context(context, &worker_name());
+
+        enqueue(&db.pool, "alice@example.com", &Template::Test, now())
+            .await
+            .unwrap();
+        wait_for_series(
+            &registry,
+            "okf_mail_jobs_total{outcome=\"retry\",provider=\"smtp\"}",
+            1.0,
+        )
+        .await;
+        make_due(&db.pool).await;
+        wait_for_series(
+            &registry,
+            "okf_mail_jobs_total{outcome=\"sent\",provider=\"smtp\"}",
+            1.0,
+        )
+        .await;
+        enqueue(&db.pool, "bob@example.com", &Template::Test, now())
+            .await
+            .unwrap();
+        wait_for_series(
+            &registry,
+            "okf_mail_jobs_total{outcome=\"failed\",provider=\"smtp\"}",
+            1.0,
+        )
+        .await;
+        stop(shutdown, worker).await;
+
+        let text = render(&registry);
+        assert_eq!(
+            sample_of(
+                &text,
+                "okf_mail_jobs_total{outcome=\"retry\",provider=\"smtp\"}"
+            ),
+            Some(1.0),
+            "one try per outcome, none of them under another provider:\n{text}"
+        );
+        for secret in ["alice", "bob", "example.com"] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn each_mail_job_is_its_own_trace() {
+        use crate::telemetry::config::LogFormat;
+        use crate::telemetry::subscriber::capture::observe;
+        use opentelemetry::trace::SpanId;
+
+        let db = test_db().await;
+        let mailer = Scripted::with(vec![]);
+        let context = context_with(
+            db.pool.clone(),
+            mailer,
+            Metrics::global(),
+            MailProvider::Postmark,
+        );
+        let job = || SendMail {
+            mail: Mail {
+                to: "alice@example.com".to_string(),
+                subject: "subject".to_string(),
+                text: "body".to_string(),
+                html: "<p>body</p>".to_string(),
+            },
+            template: "test".to_string(),
+            queued_at: now().timestamp(),
+        };
+
+        // Both jobs run inside a caller's span: a job must not join it.
+        let observed = tokio::task::block_in_place(|| {
+            observe("trace", "trace", "trace", LogFormat::Text, || {
+                let caller = tracing::info_span!("caller");
+                let _entered = caller.enter();
+                for number in 1..=2 {
+                    let answered = tokio::runtime::Handle::current().block_on(send_mail(
+                        job(),
+                        Data::new(context.clone()),
+                        TaskId::from_int(number),
+                    ));
+                    assert!(answered.is_ok());
+                }
+            })
+        });
+
+        let jobs: Vec<_> = observed
+            .spans
+            .iter()
+            .filter(|span| span.name == "okf.mail.job")
+            .collect();
+        assert_eq!(jobs.len(), 2, "{:?}", observed.spans);
+        let caller = observed
+            .spans
+            .iter()
+            .find(|span| span.name == "caller")
+            .expect("the caller's span");
+        for job in &jobs {
+            assert_eq!(job.parent_span_id, SpanId::INVALID, "a root span");
+            assert_ne!(job.span_context.trace_id(), caller.span_context.trace_id());
+            let attribute = |name: &str| {
+                job.attributes
+                    .iter()
+                    .find(|attribute| attribute.key.as_str() == name)
+                    .map(|attribute| attribute.value.to_string())
+            };
+            assert_eq!(attribute("okf.mail.template").as_deref(), Some("test"));
+            assert_eq!(attribute("okf.mail.provider").as_deref(), Some("postmark"));
+            assert_eq!(attribute("okf.outcome").as_deref(), Some("sent"));
+        }
+        assert_ne!(
+            jobs[0].span_context.trace_id(),
+            jobs[1].span_context.trace_id()
+        );
+        let exported = observed.exported_text();
+        for secret in ["alice", "example.com"] {
+            assert!(!exported.contains(secret), "{secret} in {exported}");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mail_queue_depth_gauge() {
+        use crate::mcp::testing::{app_with_metrics, local_metrics, render, sample_of};
+        let depth = |text: &str, status: &str| {
+            sample_of(
+                text,
+                &format!("okf_mail_queue_depth{{status=\"{status}\"}}"),
+            )
+        };
+        let (_provider, metrics, registry) = local_metrics();
+        let db = test_db().await;
+        let before = render(&registry);
+        for to in ["a@example.com", "b@example.com", "c@example.com"] {
+            enqueue(&db.pool, to, &Template::Test, now()).await.unwrap();
+        }
+        sqlx::query(
+            "UPDATE apalis.jobs SET status = 'Killed' \
+             WHERE id = (SELECT id FROM apalis.jobs WHERE job_type = $1 ORDER BY id LIMIT 1)",
+        )
+        .bind(QUEUE)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let unread = render(&registry);
+
+        record_depth(&db.pool, &metrics).await;
+        let counted = render(&registry);
+
+        // Every status is a series from the first scrape, zero until a count.
+        for status in ["pending", "sending", "retrying", "failed"] {
+            assert_eq!(depth(&before, status), Some(0.0), "{before}");
+            assert_eq!(depth(&unread, status), Some(0.0), "a scrape reads no rows");
+        }
+        assert_eq!(depth(&counted, "pending"), Some(2.0), "{counted}");
+        assert_eq!(depth(&counted, "failed"), Some(1.0), "{counted}");
+        assert_eq!(depth(&counted, "sending"), Some(0.0), "{counted}");
+
+        // The poll fills it.
+        let (test, app_registry) = app_with_metrics(&[], crate::config::Config::default()).await;
+        enqueue(test.app.pool(), "d@example.com", &Template::Test, now())
+            .await
+            .unwrap();
+        test.app.poll().await.unwrap();
+        let polled = render(&app_registry);
+        assert_eq!(depth(&polled, "pending"), Some(1.0), "{polled}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

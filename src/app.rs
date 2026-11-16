@@ -532,6 +532,7 @@ impl App {
         self.prune_oauth().await;
         self.prune_audit().await;
         self.count_open_changesets().await;
+        crate::mail::queue::record_depth(&self.pool, &self.metrics).await;
         let current = self.catalogs();
         let mut next = Catalogs::new();
         // Rebuilt each pass, so a deleted catalog's entry goes with it.

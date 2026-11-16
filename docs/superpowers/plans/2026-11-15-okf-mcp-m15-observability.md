@@ -1269,6 +1269,15 @@ Each uses `app_with_metrics` plus the in-memory span exporter:
 
 `feat(telemetry): sign-in, OAuth, rate-limit and mail instrumentation (M15 Task 5)`
 
+> **Corrected (issue #466, 2026-11-15).** What shipped differs from the sketches above in these ways; read `src/telemetry/metrics.rs` and the sites for the code.
+> - **The closed enums live in `telemetry::metrics`**: `Limiter`, `Grant`, `MailOutcome` and `MailStatus`, each with an `as_str`. `Metrics::auth_attempt(method, outcome)` takes the store's own `sign_in_events::{Method, Outcome}` (their `as_str` has no `_` arm), not `&'static str`. `Metrics::mail_job` takes the config's `MailProvider`; `Metrics::oauth_token_issued(Grant)` and `Metrics::rate_limited(Limiter)` are as sketched.
+> - **`auth_attempt` for `Ok` is recorded at the end of `signin::start_in`**, after the session and event rows are written (a failure before then is the caller's refusal, which `audit` counts); refusals are counted in `signin::audit`.
+> - **The token span is `#[instrument(name = "okf.oauth.token")]` on `token`**, with `okf.oauth.grant` recorded once the grant is read (an unsupported grant type stays empty). Tokens are counted at the end of `exchange_code` (after the replay check) and `refresh` (after the commit). The `/oauth/revoke` refusal also counts as `oauth_token`: it shares the bucket.
+> - **`Limiter::SignInPerIp` is recorded at all three sites that take `sign_in_per_ip`**: `/signin`, the passkey routes (`passkeys::screen`) and the OIDC start (`http/oidc.rs`); `LinkStarts` is the signed-in link start (`http/oidc.rs`, `may_start_link`).
+> - **`send_mail` is `#[instrument(name = "okf.mail.job", parent = None, ...)]`**, not an `info_span!` plus `.instrument`; the body moved to `deliver`, which returns the handler's answer and a `MailOutcome`. The span carries `okf.mail.template` (the stored template name, from `Template::name`, so `label()` was not added), `okf.mail.provider` and `okf.outcome`. `MailContext` gained `metrics` and `provider`.
+> - **The mail queue gauge is held by `Metrics`**, not by `App`: `okf.mail.queue.depth` (`okf_mail_queue_depth`, an `i64` observable gauge, one series per `MailStatus` from the first scrape, so it is in `Metrics::FAMILIES`). `mail::queue::record_depth(pool, metrics)` does one grouped count of `apalis.jobs` (the same status `CASE` as `queue::list`, now shared as `status_sql!`) and `App::poll` calls it. Done jobs are not counted. Task 4's changeset gauge is independent of it.
+> - **Test helpers:** `mcp::testing::{local_metrics, sample_of}`, `http::api::testing::login_app_with_metrics` and `oauth::testing::oauth_app_with_metrics`.
+
 ---
 
 ### Task 6: Postgres pool, clock check, archives and outbound propagation
