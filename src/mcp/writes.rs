@@ -413,7 +413,7 @@ pub struct AddSourceParams {
     pub resource: String,
     /// Its title.
     pub title: Option<String>,
-    /// Its author, e.g. `human:pgrace`.
+    /// Its author, e.g. `human:alice`.
     pub author: Option<String>,
     /// The changeset to write to: the handle `open_changeset` returned.
     pub changeset: String,
