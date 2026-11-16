@@ -338,3 +338,67 @@ async fn an_open_session_counts_until_it_closes() {
     .expect("the session gauge returns to 0");
     served.stop().await;
 }
+
+/// The `mcp <tool>` span is a child of the `POST /mcp` request span in the
+/// same trace, and at `trace` the tool's own spans nest under it (issue #523).
+#[tokio::test]
+async fn the_tool_span_is_a_child_of_the_request_span() {
+    let served = Served::start().await;
+    for filter in FILTERS {
+        let observer = Observer::start("off", filter, "off", LogFormat::Text);
+        let probe = McpProbe::open(&served.endpoint, &served.key).await;
+        let answer = probe
+            .call(
+                "get_concept",
+                serde_json::json!({"path": "/a.md", "catalog": "pg"}),
+            )
+            .await;
+        assert_eq!(answer["result"]["isError"], false, "{answer}");
+        probe.close().await;
+        let observed = observer.finish();
+
+        let tool = &observed.spans_named("mcp get_concept")[0];
+        let parent = observed
+            .spans
+            .iter()
+            .find(|span| span.span_context.span_id() == tool.parent_span_id)
+            .unwrap_or_else(|| panic!("{filter}: the tool span has no exported parent"));
+        assert_eq!(parent.name, "POST /mcp", "{filter}");
+        assert_eq!(
+            parent.span_context.trace_id(),
+            tool.span_context.trace_id(),
+            "{filter}: the tool span is in another trace"
+        );
+        if filter == "trace" {
+            let children = observed
+                .spans
+                .iter()
+                .filter(|span| span.parent_span_id == tool.span_context.span_id())
+                .count();
+            assert!(children > 0, "trace: no span under the tool span");
+        }
+    }
+    served.stop().await;
+}
+
+/// Without a request span in the extensions the parent is the current span,
+/// and with none of those the tool span is a root; with one it is the request
+/// span even when another span is current.
+#[tokio::test]
+async fn the_tool_span_parent_falls_back_to_current_then_root() {
+    let _observer = Observer::start("off", "info", "off", LogFormat::Text);
+    let request = tracing::info_span!("request");
+    let mut parts = axum::http::Request::new(()).into_parts().0;
+    parts
+        .extensions
+        .insert(crate::http::RequestSpan(request.clone()));
+    let mut with_request = rmcp::model::Extensions::new();
+    with_request.insert(parts);
+    let without = rmcp::model::Extensions::new();
+
+    assert_eq!(tool_span_parent(&without), None);
+    let current = tracing::info_span!("current");
+    let _entered = current.enter();
+    assert_eq!(tool_span_parent(&without), current.id());
+    assert_eq!(tool_span_parent(&with_request), request.id());
+}
