@@ -21,6 +21,9 @@
 ## Review round 2 (PR #480)
 - The JSON line's `trace_id`/`span_id` come from the whole subscriber (the captured `Dispatch`'s current span and the `Registry`'s ancestors), not the fmt layer's filtered context, so a warning inside an exported debug span carries its ids when stderr is at `warn` and traces at `debug`. If the span is not exported, the nearest exported ancestor's ids are used.
 
+## Review round 3 (PR #480)
+- `headers_env = "none"` (the documented no-auth setting) now resolves to no headers without reading the environment; it used to fail start-up asking for a variable named `none`. The Sentry DSN path needs a DSN variable and has no such sentinel.
+
 ## Notes
 - Span-layer error-to-exception options are off so error text never becomes an attribute or status description.
 - No metrics, request spans or privacy audit yet: Tasks 1b, 2 and 3.

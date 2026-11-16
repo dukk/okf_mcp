@@ -283,10 +283,16 @@ impl OtlpTarget {
                 "needs endpoint and headers_env, or sentry_dsn_env".to_string(),
             ));
         };
-        let text = read_env(env, name, "telemetry.otlp.headers_env")?;
-        let headers = parse_headers(&text).map_err(|message| {
-            config_error(format!("{name} is not name=value,name=value: {message}"))
-        })?;
+        // `headers_env = "none"` is the documented no-auth setting: it names
+        // no variable, so the environment is not read at all.
+        let headers = if name.trim().eq_ignore_ascii_case("none") {
+            HashMap::new()
+        } else {
+            let text = read_env(env, name, "telemetry.otlp.headers_env")?;
+            parse_headers(&text).map_err(|message| {
+                config_error(format!("{name} is not name=value,name=value: {message}"))
+            })?
+        };
         Ok(Self {
             base: endpoint.trim_end_matches('/').to_string(),
             headers,
@@ -543,6 +549,45 @@ mod tests {
         );
         assert_eq!(target.headers().len(), 2);
         assert_eq!(target.headers()["authorization"], "Bearer abc");
+    }
+
+    #[test]
+    fn headers_env_none_sends_no_headers_and_reads_no_variable() {
+        use crate::config::Config;
+
+        // From the config file to the target, with no variable set at all.
+        let config = Config::from_toml(
+            "[telemetry.otlp]\nendpoint = \"https://otlp.example.com\"\nheaders_env = \"none\"\n",
+        )
+        .expect("parses");
+        config.validate().expect("valid");
+        let otlp = config.telemetry.otlp.expect("otlp table");
+        let target = OtlpTarget::resolve(&otlp, &|name| panic!("read {name}")).expect("resolves");
+        assert!(target.headers().is_empty());
+        assert_eq!(
+            target.signal_url(Signal::Traces),
+            "https://otlp.example.com/v1/traces"
+        );
+        // The sentinel is case-insensitive, as in `parse_headers`.
+        let upper = OtlpConfig {
+            headers_env: Some("None".to_string()),
+            ..otlp
+        };
+        assert!(OtlpTarget::resolve(&upper, &no_env)
+            .expect("resolves")
+            .headers()
+            .is_empty());
+    }
+
+    #[test]
+    fn the_sentry_dsn_path_has_no_sentinel_and_needs_its_variable() {
+        // `sentry_dsn_env` is always a variable name: a DSN is required.
+        let config = OtlpConfig {
+            sentry_dsn_env: Some("none".to_string()),
+            ..OtlpConfig::default()
+        };
+        let error = OtlpTarget::resolve(&config, &no_env).expect_err("needs a DSN");
+        assert!(error.to_string().contains("none"), "{error}");
     }
 
     #[test]
