@@ -44,6 +44,13 @@ impl Purpose {
     ///
     /// # Returns
     /// `"setup"` or `"reset"`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn as_str(self) -> &'static str {
         match self {
             Purpose::Setup => "setup",
@@ -54,6 +61,13 @@ impl Purpose {
 
 /// The answer for every link that does not work, whatever the reason, so
 /// the page never says whether a token ever existed.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial constructor: builds an error value, no I/O"
+    )
+)]
 fn gone() -> OkfError {
     OkfError::Gone {
         reason: "This link has expired. Ask for a new one.".to_string(),
@@ -77,6 +91,7 @@ fn gone() -> OkfError {
 /// [`OkfError::UnknownName`] for an unknown user; [`OkfError::LimitExceeded`]
 /// for an absurd `ttl`; [`OkfError::Io`] if the OS random source fails;
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn issue(
     pool: &PgPool,
     user_id: &str,
@@ -120,6 +135,13 @@ pub struct IssuedLink {
 
 // Hand-written (Python's `__repr__`), so `{:?}` never prints the token.
 impl std::fmt::Debug for IssuedLink {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display or Debug impl: runs inside the subscriber while it formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("IssuedLink")
@@ -162,6 +184,7 @@ struct Holder {
 ///
 /// # Errors
 /// As [`issue`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn issue_for_email(
     pool: &PgPool,
     email: &str,
@@ -223,6 +246,7 @@ pub async fn issue_for_email(
 /// # Errors
 /// [`OkfError::UnknownName`] for an unknown or malformed name; otherwise
 /// as [`issue`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn issue_for_user_in(
     conn: &mut PgConnection,
     name: &str,
@@ -256,6 +280,7 @@ pub async fn issue_for_user_in(
 
 /// Deletes a user's tokens of `purpose` and stores the new one, inside the
 /// caller's transaction (which holds the user's row lock).
+#[tracing::instrument(level = "trace", skip_all)]
 async fn replace_token(
     conn: &mut PgConnection,
     user_id: &str,
@@ -299,6 +324,7 @@ async fn replace_token(
 /// # Errors
 /// [`OkfError::Gone`] for an unknown, used, expired or wrong-purpose token;
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn redeem(
     pool: &PgPool,
     token: &str,
@@ -333,6 +359,7 @@ pub async fn redeem(
 ///
 /// # Errors
 /// As [`redeem`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn redeem_in(
     conn: &mut PgConnection,
     token: &str,
@@ -391,6 +418,7 @@ pub async fn redeem_in(
 ///
 /// # Errors
 /// As [`redeem`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn peek(
     pool: &PgPool,
     token: &str,
@@ -423,6 +451,7 @@ pub async fn peek(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn prune(pool: &PgPool, before: DateTime<Utc>) -> Result<u64, OkfError> {
     Ok(
         sqlx::query("DELETE FROM email_tokens WHERE expires_at < $1")

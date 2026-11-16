@@ -57,6 +57,7 @@ macro_rules! select_catalogs {
 ///
 /// # Returns
 /// `true` if the schema's `CHECK (name ~ '^[a-z0-9-]+$')` would accept it.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn is_valid_name(name: &str) -> bool {
     !name.is_empty()
         && name
@@ -95,6 +96,7 @@ pub struct NewCatalog<'a> {
 /// [`OkfError::Refused`] for an invalid or taken name;
 /// [`OkfError::UnknownName`] for an unknown team; [`OkfError::Database`]
 /// otherwise, a failed audit write included.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn create(
     pool: &PgPool,
     new: &NewCatalog<'_>,
@@ -178,6 +180,7 @@ pub async fn create(
 ///
 /// # Errors
 /// [`OkfError::Database`]; the starter files themselves always parse.
+#[tracing::instrument(level = "trace", skip_all)]
 async fn write_starter_files(
     conn: &mut PgConnection,
     catalog: &Catalog,
@@ -234,6 +237,7 @@ async fn write_starter_files(
 /// [`OkfError::CatalogNotSelected`] for an unknown (or malformed) catalog;
 /// [`OkfError::UnknownName`] for an unknown team; [`OkfError::Database`],
 /// a failed audit write included.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn set_owner(
     pool: &PgPool,
     name: &str,
@@ -327,6 +331,7 @@ pub async fn set_owner(
 /// [`OkfError::CatalogNotSelected`] if there is no such catalog (a
 /// malformed name included); [`OkfError::Database`] otherwise, a failed
 /// audit write included.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn update_description(
     pool: &PgPool,
     name: &str,
@@ -402,6 +407,13 @@ impl Switch {
     ///
     /// # Returns
     /// `"on"` or `"off"`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn as_str(self) -> &'static str {
         match self {
             Switch::On => "on",
@@ -413,6 +425,13 @@ impl Switch {
     ///
     /// # Returns
     /// `true` for [`Switch::On`].
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn is_on(self) -> bool {
         self == Switch::On
     }
@@ -421,6 +440,13 @@ impl Switch {
 // `From<bool>` lets `Switch::from(flag)` (or `flag.into()`) turn the stored
 // column back into the enum.
 impl From<bool> for Switch {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     fn from(on: bool) -> Self {
         if on {
             Switch::On
@@ -468,6 +494,7 @@ pub struct MaintenanceChange<'a> {
 /// without an owner check; [`OkfError::Forbidden`] when the owner check
 /// fails (an unknown catalog included, so it reveals nothing);
 /// [`OkfError::Database`] otherwise, a failed audit write included.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn set_maintenance(
     pool: &PgPool,
     change: &MaintenanceChange<'_>,
@@ -579,6 +606,7 @@ pub async fn set_maintenance(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn list(pool: &PgPool) -> Result<Vec<Catalog>, OkfError> {
     let catalogs = sqlx::query_as::<_, Catalog>(concat!(select_catalogs!(), " ORDER BY c.name"))
         .fetch_all(pool)
@@ -599,6 +627,7 @@ pub async fn list(pool: &PgPool) -> Result<Vec<Catalog>, OkfError> {
 /// [`OkfError::CatalogNotSelected`] if there is none (a malformed name
 /// included); [`OkfError::Database`].
 // `'e` is a lifetime parameter: the executor is borrowed for the query only.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn find<'e>(executor: impl PgExecutor<'e>, name: &str) -> Result<Catalog, OkfError> {
     check_name(name)?;
     sqlx::query_as::<_, Catalog>(concat!(select_catalogs!(), " WHERE c.name = $1"))
@@ -640,6 +669,7 @@ pub async fn find<'e>(executor: impl PgExecutor<'e>, name: &str) -> Result<Catal
 /// malformed name included); [`OkfError::Refused`] if it has unpublished
 /// changes and `force` is false; [`OkfError::Database`] otherwise, a failed
 /// audit write included.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn delete(
     pool: &PgPool,
     name: &str,
@@ -724,6 +754,7 @@ pub async fn delete(
 ///
 /// # Errors
 /// [`OkfError::CatalogNotSelected`] for a name [`is_valid_name`] refuses.
+#[tracing::instrument(level = "trace", skip_all)]
 fn check_name(name: &str) -> Result<(), OkfError> {
     if is_valid_name(name) {
         Ok(())
@@ -757,6 +788,7 @@ pub(crate) struct CatalogEvent<'a> {
 ///
 /// # Errors
 /// [`OkfError::Database`] (which fails the change).
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn record_catalog(
     conn: &mut PgConnection,
     actor: &AuditActor,
@@ -791,6 +823,7 @@ pub(crate) async fn record_catalog(
 /// [`OkfError::Database`], including for an id above `i32::MAX` (the
 /// two-key form takes `int4` keys; the server's cast reports "integer out of
 /// range" rather than this process panicking).
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id))]
 pub(crate) async fn lock(conn: &mut PgConnection, catalog_id: i64) -> Result<(), OkfError> {
     // The two-key form, under this crate's namespace, so the lock cannot
     // collide with another application's advisory locks on a shared database.
@@ -818,6 +851,7 @@ pub(crate) async fn lock(conn: &mut PgConnection, catalog_id: i64) -> Result<(),
 /// # Errors
 /// [`OkfError::CatalogNotSelected`] for an unknown (or malformed) catalog,
 /// or one deleted or replaced while this waited; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn lock_by_name(conn: &mut PgConnection, name: &str) -> Result<Catalog, OkfError> {
     let found = find(&mut *conn, name).await?;
     lock(conn, found.id).await?;
@@ -845,6 +879,7 @@ pub(crate) async fn lock_by_name(conn: &mut PgConnection, name: &str) -> Result<
 /// # Errors
 /// [`OkfError::Busy`] on a mismatch: retryable, since a retry is admitted
 /// against fresh gates (and then refused or let in on its own terms).
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn check_incarnation(catalog: &str, found: i64, expected: Option<i64>) -> Result<(), OkfError> {
     match expected {
         Some(expected) if expected != found => Err(OkfError::Busy {
@@ -861,6 +896,7 @@ pub fn check_incarnation(catalog: &str, found: i64, expected: Option<i64>) -> Re
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn bump_admin_generation(conn: &mut PgConnection) -> Result<(), OkfError> {
     sqlx::query("UPDATE server_state SET admin_generation = admin_generation + 1")
         .execute(&mut *conn)
@@ -879,6 +915,7 @@ pub(crate) async fn bump_admin_generation(conn: &mut PgConnection) -> Result<(),
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn admin_generation<'e>(executor: impl PgExecutor<'e>) -> Result<i64, OkfError> {
     let generation = sqlx::query_scalar("SELECT admin_generation FROM server_state")
         .fetch_one(executor)
@@ -893,6 +930,7 @@ pub async fn admin_generation<'e>(executor: impl PgExecutor<'e>) -> Result<i64, 
 ///
 /// # Returns
 /// `true` only for a database error with code 23505.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn is_unique_violation(error: &sqlx::Error) -> bool {
     error
         .as_database_error()

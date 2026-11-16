@@ -53,6 +53,13 @@ pub struct CreatedSignInCode {
 }
 
 impl std::fmt::Debug for CreatedSignInCode {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display or Debug impl: runs inside the subscriber while it formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("CreatedSignInCode")
@@ -80,6 +87,13 @@ impl CodeState {
     ///
     /// # Returns
     /// `"live"`, `"expired"`, `"redeemed"` or `"revoked"`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn as_str(self) -> &'static str {
         match self {
             CodeState::Live => "live",
@@ -131,6 +145,13 @@ impl SignInCodeRecord {
     /// # Returns
     /// Redeemed or revoked if it was, else expired once `expires_at` is
     /// reached, else live.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn state(&self, now: DateTime<Utc>) -> CodeState {
         if self.redeemed_at.is_some() {
             CodeState::Redeemed
@@ -164,6 +185,13 @@ struct CodeRow {
 }
 
 impl From<CodeRow> for SignInCodeRecord {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     fn from(row: CodeRow) -> Self {
         Self {
             id: row.id,
@@ -215,6 +243,7 @@ macro_rules! select_codes {
 /// # Errors
 /// [`OkfError::Refused`] for zero, more than `max`, or a time chrono cannot
 /// represent.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn expiry(
     now: DateTime<Utc>,
     requested: Duration,
@@ -258,6 +287,7 @@ pub fn expiry(
 /// [`OkfError::CatalogNotSelected`] for an unknown catalog;
 /// [`OkfError::UnknownName`] for an unknown user; [`OkfError::Io`] if the OS
 /// random source fails; [`OkfError::Database`] otherwise.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn create(
     pool: &PgPool,
     new: &NewSignInCode<'_>,
@@ -355,6 +385,7 @@ pub async fn create(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn list(pool: &PgPool) -> Result<Vec<SignInCodeRecord>, OkfError> {
     // Grouping by the primary key `s.id` lets the query select `s`'s other
     // columns ungrouped (Postgres knows they depend on it).
@@ -381,6 +412,7 @@ pub async fn list(pool: &PgPool) -> Result<Vec<SignInCodeRecord>, OkfError> {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn find_live(
     pool: &PgPool,
     presented: &str,
@@ -415,6 +447,7 @@ pub async fn find_live(
 /// # Errors
 /// [`OkfError::Refused`] for an unknown, redeemed or already revoked code;
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn revoke(
     pool: &PgPool,
     id: &str,
@@ -467,6 +500,7 @@ pub async fn revoke(
 /// # Errors
 /// [`OkfError::UnknownName`] for an unknown user; [`OkfError::NotFound`]
 /// (`oauth/codes/<id>`) for an unknown code; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn assign_user(
     pool: &PgPool,
     id: &str,
@@ -552,6 +586,7 @@ struct LockedCode {
 /// [`OkfError::Refused`] when the code is unknown, expired, redeemed or
 /// revoked (one message for all four), or its named catalogs are all gone;
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn redeem(
     pool: &PgPool,
     code_id: &str,
@@ -650,6 +685,7 @@ pub async fn redeem(
 ///
 /// # Returns
 /// A name that passes the `api_keys` name check.
+#[tracing::instrument(level = "trace", skip_all)]
 fn grant_name(code_name: &str, client: &ClientRecord, code_id: &str) -> String {
     // `get(..8)` is `None` for a shorter id instead of panicking.
     let suffix = code_id.get(..8).unwrap_or(code_id);
@@ -665,6 +701,7 @@ fn grant_name(code_name: &str, client: &ClientRecord, code_id: &str) -> String {
 ///
 /// # Returns
 /// A non-empty string in the key name charset.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn client_host(client: &ClientRecord) -> String {
     let source = match client.kind {
         ClientKind::Cimd => client.client_id.as_str(),
@@ -710,6 +747,7 @@ pub(crate) fn client_host(client: &ClientRecord) -> String {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn prune(pool: &PgPool, expired_before: DateTime<Utc>) -> Result<u64, OkfError> {
     let deleted =
         sqlx::query("DELETE FROM sign_in_codes WHERE redeemed_at IS NULL AND expires_at < $1")

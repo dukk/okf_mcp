@@ -20,6 +20,13 @@ impl TokenKind {
     ///
     /// # Returns
     /// `"access"` or `"refresh"`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn as_str(self) -> &'static str {
         match self {
             TokenKind::Access => "access",
@@ -34,6 +41,13 @@ impl TokenKind {
     ///
     /// # Returns
     /// The kind, or `None` for anything else.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn parse(text: &str) -> Option<Self> {
         match text {
             "access" => Some(TokenKind::Access),
@@ -90,6 +104,7 @@ pub struct RevokedToken {
 ///
 /// # Errors
 /// [`OkfError::Database`], including a hash collision (a duplicate primary key).
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn insert(
     conn: &mut PgConnection,
     new: &NewToken<'_>,
@@ -125,6 +140,7 @@ pub async fn insert(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn find_access(
     pool: &PgPool,
     sha256: &[u8; 32],
@@ -159,6 +175,7 @@ pub async fn find_access(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn revoke(
     pool: &PgPool,
     sha256: &[u8; 32],
@@ -206,6 +223,7 @@ const FAMILY_LOCK_NAMESPACE: i32 = 0x6f6b_6666;
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn lock_family(conn: &mut PgConnection, family_id: &str) -> Result<(), OkfError> {
     // `hashtext` maps the text id onto the lock's `int4` second key.
     // `pg_advisory_xact_lock` returns `void`, so run it with `execute`.
@@ -270,6 +288,7 @@ type RefreshRow = (
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn use_refresh(
     tx: &mut PgConnection,
     sha256: &[u8; 32],
@@ -339,6 +358,7 @@ pub async fn use_refresh(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn revoke_family(
     pool: &PgPool,
     family_id: &str,
@@ -377,6 +397,7 @@ pub async fn revoke_family(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn prune(pool: &PgPool, expired_before: DateTime<Utc>) -> Result<u64, OkfError> {
     let deleted = sqlx::query("DELETE FROM oauth_tokens WHERE expires_at < $1")
         .bind(expired_before)

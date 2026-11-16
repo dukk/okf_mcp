@@ -55,10 +55,12 @@ pub struct WorkReport {
     pub finding_ids: Vec<String>,
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) fn decode<T: serde::de::DeserializeOwned>(text: String) -> Result<T, OkfError> {
     serde_json::from_value(json!(text)).map_err(|_| refused("invalid stored maintenance enum"))
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) fn required_id(id: &str) -> Result<(), OkfError> {
     if id.trim().is_empty() {
         return Err(refused("maintenance ID must not be blank"));
@@ -66,12 +68,20 @@ pub(super) fn required_id(id: &str) -> Result<(), OkfError> {
     Ok(())
 }
 
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial constructor: builds an error value, no I/O"
+    )
+)]
 pub(super) fn not_found() -> OkfError {
     OkfError::NotFound {
         path: "maintenance/report".into(),
     }
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn snapshot(
     pool: &PgPool,
 ) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, OkfError> {
@@ -112,6 +122,7 @@ const FINDINGS_PAGE: &str = concat!(
 /// # Errors
 /// `Refused` for a limit outside 1..=200, `NotFound` for an unknown cursor,
 /// or a database error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn page_ids(
     conn: &mut sqlx::PgConnection,
     catalog: i64,
@@ -181,6 +192,7 @@ pub(super) async fn page_ids(
 /// # Errors
 /// `NotFound` for absent/foreign cursors, `Refused` for invalid limits,
 /// or a database error. An empty catalog returns an empty page.
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id))]
 pub async fn list_runs(
     pool: &PgPool,
     catalog_id: i64,
@@ -208,6 +220,7 @@ pub async fn list_runs(
 ///
 /// # Errors
 /// `Refused` for a blank ID, `NotFound` for an absent/foreign run, or a database error.
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id))]
 pub async fn get_run(pool: &PgPool, catalog_id: i64, run_id: &str) -> Result<RunReport, OkfError> {
     required_id(run_id)?;
     let mut tx = snapshot(pool).await?;
@@ -274,6 +287,7 @@ pub struct RunSummary {
     pub superseded_count: u32,
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn complete_if_terminal(
     conn: &mut sqlx::PgConnection,
     catalog: i64,
@@ -285,6 +299,7 @@ pub(super) async fn complete_if_terminal(
     Ok(())
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn expire_submission(
     conn: &mut sqlx::PgConnection,
     catalog: i64,
@@ -304,6 +319,13 @@ pub(super) async fn expire_submission(
     Ok(())
 }
 
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: maps a value, no I/O"
+    )
+)]
 fn state(text: &str) -> RunState {
     match text {
         "running" => RunState::Running,
@@ -314,6 +336,7 @@ fn state(text: &str) -> RunState {
     }
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 async fn summary(
     conn: &mut sqlx::PgConnection,
     catalog: i64,
@@ -361,6 +384,7 @@ async fn summary(
 ///
 /// # Errors
 /// Refuses invalid limits or conflicting idempotency; propagates database failures.
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id))]
 pub async fn claim(
     pool: &PgPool,
     catalog_id: i64,
@@ -459,6 +483,7 @@ pub async fn claim(
 ///
 /// # Errors
 /// Refuses expired, foreign, or terminal leases; propagates database failures.
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id))]
 pub async fn renew(
     pool: &PgPool,
     catalog_id: i64,
@@ -582,6 +607,7 @@ pub async fn renew(
 /// # Errors
 /// Refuses foreign runs without operator permission, incomplete completion, or invalid state.
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id))]
 pub async fn close(
     pool: &PgPool,
     catalog_id: i64,

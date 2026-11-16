@@ -45,6 +45,13 @@ impl MemberAccess {
     ///
     /// # Returns
     /// `"none"`, `"read"` or `"write"`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn as_str(self) -> &'static str {
         match self {
             MemberAccess::None => "none",
@@ -60,6 +67,13 @@ impl MemberAccess {
     ///
     /// # Returns
     /// The value, or `None` for anything else.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn parse(text: &str) -> Option<Self> {
         match text {
             "none" => Some(MemberAccess::None),
@@ -73,6 +87,13 @@ impl MemberAccess {
     ///
     /// # Returns
     /// `Read` or `Write`, or `None` for [`MemberAccess::None`].
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn level(self) -> Option<Access> {
         match self {
             MemberAccess::None => None,
@@ -125,6 +146,7 @@ const CEILING_ROWS: &str = "\
 /// [`OkfError::Database`].
 // `impl PgExecutor<'_>` accepts either a pool or a connection, as
 // `user_sessions::revoke_all` does.
+#[tracing::instrument(level = "trace", skip_all)]
 async fn ceiling_rows(
     executor: impl PgExecutor<'_>,
     user_id: Option<&str>,
@@ -136,6 +158,13 @@ async fn ceiling_rows(
 }
 
 /// The level a row stands for.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: maps a value, no I/O"
+    )
+)]
 fn row_level(write: bool) -> Access {
     if write {
         Access::Write
@@ -145,6 +174,13 @@ fn row_level(write: bool) -> Access {
 }
 
 /// One user's rows as a ceiling.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: maps a value, no I/O"
+    )
+)]
 fn one_ceiling(rows: Vec<CeilingRow>) -> Ceiling {
     rows.into_iter()
         .map(|row| (row.catalog, row_level(row.write)))
@@ -152,6 +188,13 @@ fn one_ceiling(rows: Vec<CeilingRow>) -> Ceiling {
 }
 
 /// The refusal for a catalog name that names no catalog.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial constructor: builds an error value, no I/O"
+    )
+)]
 fn unknown_catalog(catalog: &str) -> OkfError {
     OkfError::CatalogNotSelected {
         catalog: catalog.to_string(),
@@ -164,6 +207,7 @@ fn unknown_catalog(catalog: &str) -> OkfError {
 ///
 /// # Errors
 /// [`OkfError::UnknownName`] or [`OkfError::CatalogNotSelected`].
+#[tracing::instrument(level = "trace", skip_all)]
 fn check_names(user: Option<&str>, catalog: &str) -> Result<(), OkfError> {
     if let Some(user) = user.filter(|user| !catalogs::is_valid_name(user)) {
         return Err(users::unknown(user));
@@ -184,6 +228,7 @@ fn check_names(user: Option<&str>, catalog: &str) -> Result<(), OkfError> {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn ceilings(pool: &PgPool) -> Result<HashMap<String, Ceiling>, OkfError> {
     let mut by_user: HashMap<String, Ceiling> = HashMap::new();
     for row in ceiling_rows(pool, None).await? {
@@ -207,6 +252,7 @@ pub async fn ceilings(pool: &PgPool) -> Result<HashMap<String, Ceiling>, OkfErro
 ///
 /// # Errors
 /// [`OkfError::UnknownName`] for an unknown user; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn ceiling_of(pool: &PgPool, user: &str) -> Result<Ceiling, OkfError> {
     let user_id = users::id_by_name(pool, user).await?;
     Ok(one_ceiling(ceiling_rows(pool, Some(&user_id)).await?))
@@ -225,6 +271,7 @@ pub async fn ceiling_of(pool: &PgPool, user: &str) -> Result<Ceiling, OkfError> 
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn ceiling_in(
     conn: &mut PgConnection,
     user_id: &str,
@@ -249,6 +296,7 @@ pub(crate) async fn ceiling_in(
 /// # Errors
 /// [`OkfError::CatalogNotSelected`] for an unknown (or malformed) catalog;
 /// [`OkfError::Database`], a failed audit write included.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn set_member_access(
     pool: &PgPool,
     catalog: &str,
@@ -312,6 +360,7 @@ pub async fn set_member_access(
 /// # Errors
 /// [`OkfError::CatalogNotSelected`] for an unknown or malformed catalog
 /// name; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn member_access(pool: &PgPool, catalog: &str) -> Result<MemberAccess, OkfError> {
     check_names(None, catalog)?;
     let stored: Option<String> =
@@ -349,6 +398,7 @@ pub struct NewEntitlement<'a> {
 /// [`OkfError::Refused`] for `Admin`; [`OkfError::UnknownName`] for an
 /// unknown user; [`OkfError::CatalogNotSelected`] for an unknown catalog;
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn entitle(
     pool: &PgPool,
     new: &NewEntitlement<'_>,
@@ -431,6 +481,7 @@ pub async fn entitle(
 /// [`OkfError::UnknownName`] for an unknown user;
 /// [`OkfError::CatalogNotSelected`] for an unknown catalog;
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn unentitle(
     pool: &PgPool,
     user: &str,
@@ -478,6 +529,7 @@ pub async fn unentitle(
 ///
 /// # Errors
 /// [`OkfError::UnknownName`]; [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all)]
 async fn lock_entitlement_users(
     conn: &mut PgConnection,
     user: &str,
@@ -507,6 +559,7 @@ async fn lock_entitlement_users(
 ///
 /// # Errors
 /// [`OkfError::UnknownName`] for an unknown user; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn entitlements(pool: &PgPool, user: &str) -> Result<Vec<Entitlement>, OkfError> {
     let mut conn = pool.acquire().await?;
     entitlements_in(&mut conn, user).await
@@ -517,6 +570,7 @@ pub async fn entitlements(pool: &PgPool, user: &str) -> Result<Vec<Entitlement>,
 ///
 /// # Errors
 /// As [`entitlements`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn entitlements_in(
     conn: &mut PgConnection,
     user: &str,
@@ -550,6 +604,7 @@ pub(crate) async fn entitlements_in(
 /// # Returns
 /// `true` for a provisioner or an admin that reaches every catalog.
 /// Entitlement routes separately require an every-catalog admin.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn may_set_member_access(principal: &Principal, catalog: &str) -> bool {
     principal.provisioner
         || (matches!(principal.reach, Reach::All)
@@ -564,6 +619,7 @@ pub fn may_set_member_access(principal: &Principal, catalog: &str) -> bool {
 ///
 /// # Returns
 /// The catalogs in both, each at the lower of the two levels.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn cap(grant: &BTreeMap<String, Access>, ceiling: &Ceiling) -> BTreeMap<String, Access> {
     grant
         .iter()

@@ -46,6 +46,13 @@ impl Source {
     ///
     /// # Returns
     /// `"cli"`, `"api"`, `"console"` or `"system"`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn as_str(self) -> &'static str {
         match self {
             Source::Cli => "cli",
@@ -100,6 +107,13 @@ impl AuditActor {
     ///
     /// # Returns
     /// The actor; its label is `$USER` (else `$LOGNAME`, else `cli`).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn cli() -> Self {
         // `or_else` tries the next variable only if the first is missing.
         let label = std::env::var("USER")
@@ -126,6 +140,13 @@ impl AuditActor {
     ///
     /// # Returns
     /// The actor.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn system(label: &str) -> Self {
         Self {
             source: Source::System,
@@ -148,6 +169,13 @@ impl AuditActor {
     /// # Returns
     /// The actor. A console session has no credential id: `session:<name>`
     /// would name the person, which entries do only through `audit_people`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn of(principal: &Principal, requester: &Requester) -> Self {
         let (credential, via) = match principal.kind {
             CredentialKind::Session { .. } => (None, Via::Session),
@@ -178,6 +206,13 @@ impl AuditActor {
     ///
     /// # Returns
     /// The label to store.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn stored_label(&self) -> String {
         match self.via {
             Via::Session => "console session".to_string(),
@@ -208,6 +243,10 @@ macro_rules! actions {
             ///
             /// # Returns
             /// For example `"user.created"`.
+            #[cfg_attr(
+                dylint_lib = "hyp_tracing",
+                allow(uninstrumented_fn, reason = "trivial accessor or conversion: maps a value, no I/O")
+            )]
             pub fn as_str(self) -> &'static str {
                 match self { $(Action::$variant => $name),+ }
             }
@@ -219,6 +258,10 @@ macro_rules! actions {
             ///
             /// # Returns
             /// The action, or `None` for an unknown name.
+            #[cfg_attr(
+                dylint_lib = "hyp_tracing",
+                allow(uninstrumented_fn, reason = "trivial accessor or conversion: maps a value, no I/O")
+            )]
             pub fn parse(name: &str) -> Option<Self> {
                 Self::ALL.iter().copied().find(|action| action.as_str() == name)
             }
@@ -305,6 +348,13 @@ struct TargetParts<'a> {
 
 impl<'a> Target<'a> {
     /// The stored parts.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     fn parts(&self) -> TargetParts<'a> {
         let only = |kind| TargetParts {
             kind,
@@ -369,6 +419,7 @@ pub struct Entry<'a> {
 /// [`OkfError::Database`], which fails the caller's change with it
 /// (including a [`Target::Team`] that names no team, which the table's
 /// target-shape check refuses).
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn record(
     conn: &mut PgConnection,
     actor: &AuditActor,
@@ -409,6 +460,7 @@ pub struct FixedPerson {
 /// # Errors
 /// [`OkfError::Refused`] for a user, key, grant or code target, before any
 /// SQL; otherwise as [`record`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn record_for_person(
     conn: &mut PgConnection,
     actor: &AuditActor,
@@ -432,6 +484,7 @@ pub async fn record_for_person(
 }
 
 /// The one `INSERT` behind [`record`] and [`record_for_person`].
+#[tracing::instrument(level = "trace", skip_all)]
 async fn insert(
     conn: &mut PgConnection,
     actor: &AuditActor,
@@ -554,6 +607,7 @@ pub struct People<'a> {
 /// # Errors
 /// [`OkfError::UnknownName`] for a malformed or unknown target;
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn lock_people(
     conn: &mut PgConnection,
     actor: &AuditActor,
@@ -644,6 +698,7 @@ pub async fn lock_people(
 /// # Errors
 /// [`OkfError::Refused`] if ownership or grants changed while locking;
 /// [`OkfError::Database`] or [`OkfError::UnknownName`] from locking people.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn lock_credential_people(
     conn: &mut PgConnection,
     actor: &AuditActor,
@@ -724,6 +779,7 @@ pub async fn lock_credential_people(
 ///
 /// # Errors
 /// [`OkfError::UnknownName`] (a malformed name included); [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn team_ref(conn: &mut PgConnection, team: &str) -> Result<i64, OkfError> {
     let unknown = || OkfError::UnknownName {
         noun: "team",
@@ -754,6 +810,7 @@ pub async fn team_ref(conn: &mut PgConnection, team: &str) -> Result<i64, OkfErr
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id))]
 pub async fn catalog_teams(conn: &mut PgConnection, catalog_id: i64) -> Result<Vec<i64>, OkfError> {
     let team: Option<i64> = sqlx::query_scalar(
         "SELECT audit_team_ref(owner_team_id) FROM catalogs \
@@ -779,6 +836,7 @@ pub async fn catalog_teams(conn: &mut PgConnection, catalog_id: i64) -> Result<V
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn key_teams(conn: &mut PgConnection, key_id: &str) -> Result<Vec<i64>, OkfError> {
     Ok(sqlx::query_scalar(
         "SELECT audit_team_ref(t.owner_team_id) FROM \
@@ -803,6 +861,7 @@ pub async fn key_teams(conn: &mut PgConnection, key_id: &str) -> Result<Vec<i64>
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn code_teams(conn: &mut PgConnection, code_id: &str) -> Result<Vec<i64>, OkfError> {
     Ok(sqlx::query_scalar(
         "SELECT audit_team_ref(t.owner_team_id) FROM \
@@ -828,6 +887,7 @@ pub async fn code_teams(conn: &mut PgConnection, code_id: &str) -> Result<Vec<i6
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn forget_person(conn: &mut PgConnection, user_id: &str) -> Result<(), OkfError> {
     // Credentials first, found two ways: linked to the person, or (a row
     // whose person was never resolved) still named by the user's keys,
@@ -866,6 +926,7 @@ pub async fn forget_person(conn: &mut PgConnection, user_id: &str) -> Result<(),
 ///
 /// # Errors
 /// [`OkfError::Database`], which deletes nothing.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn prune(pool: &PgPool, before: DateTime<Utc>) -> Result<u64, OkfError> {
     Ok(sqlx::query("DELETE FROM audit_entries WHERE at < $1")
         .bind(before)
@@ -927,6 +988,7 @@ pub struct AccessRecord {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn record_admin_read(pool: &PgPool, record: &AccessRecord) -> Result<(), OkfError> {
     // `DurationRound::duration_trunc`: the start of the clock hour. It
     // fails only for a time chrono cannot represent, which a clock never
@@ -1010,6 +1072,7 @@ pub async fn record_admin_read(pool: &PgPool, record: &AccessRecord) -> Result<(
 ///
 /// # Errors
 /// [`OkfError::Forbidden`] for a provisioner and an admin target.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn refuse_admin_target(actor: &AuditActor, is_admin: bool, user: &str) -> Result<(), OkfError> {
     if actor.provisioner && is_admin {
         return Err(OkfError::Forbidden {
@@ -1074,6 +1137,13 @@ impl AuditQuery<'_> {
     ///
     /// # Returns
     /// A size from 1 to [`MAX_PAGE`].
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn page_size(&self) -> i64 {
         if self.limit <= 0 {
             DEFAULT_PAGE
@@ -1117,6 +1187,7 @@ pub struct FilterText<'a> {
 /// # Errors
 /// [`OkfError::InvalidPath`] (400) for an unknown action, or a time that is
 /// not RFC 3339, naming the filter.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn parse_filters<'a>(text: &FilterText<'a>) -> Result<AuditQuery<'a>, OkfError> {
     // `filter` turns `Some("")` into `None`: an empty form field filters nothing.
     let given = |value: Option<&'a str>| value.filter(|value| !value.is_empty());
@@ -1234,6 +1305,7 @@ pub const OWNER_REDACTED: &[(&str, &[&str])] = &[("catalog.unlocked", &["reason"
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn list(
     pool: &PgPool,
     viewer: &Viewer,
@@ -1297,6 +1369,7 @@ pub async fn list(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn export_lines(
     pool: &PgPool,
     viewer: &Viewer,
@@ -1405,6 +1478,13 @@ impl ListedRow {
     /// holds only the owner's team (the SQL drops the others, which may be
     /// another customer's or a staff member's personal team). The stored
     /// entry is never changed.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     fn into_record(self, owner: bool) -> AuditRecord {
         let actor = if owner && self.actor_operator {
             ActorView::Operator

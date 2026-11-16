@@ -63,6 +63,13 @@ pub struct SessionLink<'a> {
 
 // Hand-written (Python's `__repr__`): the session id is a credential.
 impl std::fmt::Debug for SessionLink<'_> {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display or Debug impl: runs inside the subscriber while it formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("SessionLink")
@@ -86,6 +93,7 @@ impl std::fmt::Debug for SessionLink<'_> {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn find(
     pool: &PgPool,
     provider: &str,
@@ -117,6 +125,7 @@ pub async fn find(
 /// [`OkfError::Refused`] if another user holds the identity, or this user
 /// already links another account at this provider; [`OkfError::NotFound`]
 /// for an unknown user; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn link(
     pool: &PgPool,
     user_id: &str,
@@ -149,6 +158,7 @@ pub async fn link(
 /// # Errors
 /// [`OkfError::Unauthenticated`] when the session has ended or is not the
 /// user's; as [`link`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn link_for_session_in(
     conn: &mut PgConnection,
     request: &SessionLink<'_>,
@@ -182,6 +192,7 @@ pub async fn link_for_session_in(
 ///
 /// # Errors
 /// [`OkfError::NotFound`] for an unknown user; [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all)]
 async fn lock_user(conn: &mut PgConnection, user_id: &str) -> Result<(), OkfError> {
     sqlx::query_scalar::<_, i32>("SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE")
         .bind(user_id)
@@ -198,6 +209,7 @@ async fn lock_user(conn: &mut PgConnection, user_id: &str) -> Result<(), OkfErro
 ///
 /// # Errors
 /// As [`link`].
+#[tracing::instrument(level = "trace", skip_all)]
 async fn link_in(
     conn: &mut PgConnection,
     user_id: &str,
@@ -248,6 +260,13 @@ async fn link_in(
 }
 
 /// The refusal for an identity another user holds.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial constructor: builds an error value, no I/O"
+    )
+)]
 fn taken(provider: &str) -> OkfError {
     OkfError::Refused {
         reason: format!("this {provider} account is already linked to another user"),
@@ -265,6 +284,7 @@ fn taken(provider: &str) -> OkfError {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn touch(
     executor: impl PgExecutor<'_>,
     provider: &str,
@@ -331,6 +351,7 @@ pub enum OidcOutcome {
 /// [`OkfError::Refused`] when the verified email's user already links
 /// another account at this provider (or another user took the identity
 /// meanwhile); [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn sign_in_in(
     conn: &mut PgConnection,
     request: &OidcSignIn<'_>,
@@ -388,6 +409,7 @@ pub async fn sign_in_in(
 }
 
 /// The user an identity is linked to, read without a lock.
+#[tracing::instrument(level = "trace", skip_all)]
 async fn holder_of(
     conn: &mut PgConnection,
     provider: &str,
@@ -403,6 +425,7 @@ async fn holder_of(
 }
 
 /// Locks a user's row and reads them, or `None` once deleted.
+#[tracing::instrument(level = "trace", skip_all)]
 async fn lock_user_auth(
     conn: &mut PgConnection,
     user_id: &str,
@@ -428,6 +451,7 @@ async fn lock_user_auth(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn list(pool: &PgPool, user_id: &str) -> Result<Vec<IdentityInfo>, OkfError> {
     Ok(sqlx::query_as::<_, IdentityInfo>(
         "SELECT provider, email_at_link::text AS email_at_link, created_at, last_used_at \
@@ -450,6 +474,7 @@ pub async fn list(pool: &PgPool, user_id: &str) -> Result<Vec<IdentityInfo>, Okf
 /// [`OkfError::NotFound`] when nothing is linked there (or the user is
 /// unknown); [`OkfError::Refused`] for the last sign-in method;
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn unlink(pool: &PgPool, user_id: &str, provider: &str) -> Result<(), OkfError> {
     let not_linked = || OkfError::NotFound {
         path: format!("me/identities/{provider}"),
