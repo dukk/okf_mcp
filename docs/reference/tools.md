@@ -266,7 +266,7 @@ Report-only: record a finding disposition with ordinary Write, never applying th
 |---|---|---|---|
 | `catalog` | string | yes | Required authorized catalog name; connection defaults do not apply. |
 | `finding_id` | string | yes | Opaque finding ID belonging to the named catalog. |
-| `disposition` | Disposition | yes | Human follow-up decision; acceptance does not apply the proposed change. |
+| `disposition` | one of: open, accepted_for_follow_up, dismissed, needs_input | yes | Human follow-up decision; acceptance does not apply the proposed change. |
 | `rationale` | string | yes | Human-readable reason recorded with attribution; secrets and oversized text are refused. |
 | `idempotency_key` | string | yes | Caller-chosen retry key (1..=128 non-whitespace ASCII bytes); reuse only for identical input. |
 
