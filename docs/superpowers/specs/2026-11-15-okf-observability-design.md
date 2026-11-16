@@ -255,6 +255,7 @@ Rules (checked at load, with the existing `Config::validate` style):
   `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_TRACES_SAMPLER` when `sample_ratio`
   is unset, `OTEL_BSP_*`, `OTEL_METRIC_EXPORT_INTERVAL`) still apply as the
   SDK defines them. `OTEL_SDK_DISABLED=true` turns OTLP off.
+  *(Corrected, issue #476, 2026-11-16: `OTEL_METRIC_EXPORT_INTERVAL` does not apply; `export_interval` is always passed to the reader and overrides it.)*
   `OTEL_EXPORTER_OTLP_HEADERS` is merged over the headers from
   `headers_env`, so a header named in both takes the environment's
   value (the SDK's behaviour). *(Corrected, M15 plan, 2026-11-15.)*

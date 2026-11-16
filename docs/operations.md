@@ -243,7 +243,7 @@ top-level key: a top-level key written below one would land inside it.
 | `OKF_OTLP_HEADERS` (any name) | The OTLP receiver's headers as `name=value,name=value`, or `none`, named by `telemetry.otlp.headers_env`. Keep it in a Secret |
 | `OKF_SENTRY_DSN` (any name) | A Sentry DSN, named by `telemetry.otlp.sentry_dsn_env` |
 | `OTEL_SDK_DISABLED` | `true` turns OTLP export off without editing the file |
-| `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_TRACES_SAMPLER`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_BSP_*`, `OTEL_METRIC_EXPORT_INTERVAL` | Read by the OpenTelemetry SDK as it defines them ([Telemetry](#telemetry)). `OTEL_EXPORTER_OTLP_HEADERS` is merged over `headers_env`'s value |
+| `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_TRACES_SAMPLER`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_BSP_*` | Read by the OpenTelemetry SDK as it defines them ([Telemetry](#telemetry)). `OTEL_EXPORTER_OTLP_HEADERS` is merged over `headers_env`'s value |
 | `OKF_OIDC_EXAMPLE_SECRET` (any name) | An OIDC client secret, named by its provider's `client_secret_env` |
 | `OKF_SMTP_PASSWORD` (any name) | The SMTP password, named by `mail.smtp.password_env` |
 | `OKF_POSTMARK_TOKEN` (any name) | The Postmark server token, named by `mail.postmark.token_env` |
@@ -647,8 +647,10 @@ OKF_OTLP_HEADERS='authorization=Bearer <token>'   # from a Secret, never the fil
   `k8s.namespace.name`), `OTEL_EXPORTER_OTLP_HEADERS` is merged over the
   headers from `headers_env` (a header in both takes the environment's
   value), `OTEL_TRACES_SAMPLER` applies when `sample_ratio` is unset, and the
-  batch settings `OTEL_BSP_*` and `OTEL_METRIC_EXPORT_INTERVAL` are read by
-  the SDK. `OTEL_SDK_DISABLED=true` turns OTLP off without editing the file;
+  batch settings `OTEL_BSP_*` are read by the SDK (the metric push interval
+  is `export_interval` alone: the file's value, default 60 seconds, always
+  wins over `OTEL_METRIC_EXPORT_INTERVAL`). `OTEL_SDK_DISABLED=true` turns OTLP
+  off without editing the file;
   the `/metrics` listener and stderr are not affected, and the variables named
   by `headers_env` and `sentry_dsn_env` are then not needed.
 
@@ -794,9 +796,12 @@ receiver, and `sign-in attempt (detail)` with the address stays on stderr).
 Names are as `/metrics` shows them. Dots become underscores in names and in
 label names (`http.route` is `http_route`), durations are in seconds, and a
 counter ends in `_total`. A histogram is three series (`_bucket`, `_sum`,
-`_count`) with buckets from 1 ms to 60 s. Families that record events (the
-counters and histograms) have no series until the first event, so a scrape of
-an idle server lists fewer families than this table. Over OTLP the names are
+`_count`) with buckets from 1 ms to 60 s. Every family except
+`okf_build_info`, `okf_telemetry_export_failures_total`, `okf_mail_queue_depth`
+and the gauges that read loaded state (`okf_catalog_concepts`,
+`okf_catalog_generation`, `okf_changesets_open`, `db_client_connection_count`)
+has no series until its first event, so a scrape of an idle server lists
+fewer families than this table. Over OTLP the names are
 the dotted originals.
 
 | Family | Type | Labels | Meaning |
@@ -829,9 +834,11 @@ the dotted originals.
 
 ### Span reference
 
-Spans are exported with `info` as the default filter. A request span and an
-MCP tool span are roots (a trace each); a poll pass, a clock check and a mail
-job are roots of their own too, since no request started them.
+Spans are exported with `info` as the default filter. A request span is a
+root, and a poll pass, a clock check and a mail job are roots too, since no
+request started them. A tool call's `mcp <tool>` span is not a child of its
+`POST /mcp` request span: it is seen as a trace of its own (rmcp runs the call
+on its own task), so find a call by its tool span, not by the request's trace.
 
 | Span | Attributes |
 |---|---|
