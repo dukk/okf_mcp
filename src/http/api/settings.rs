@@ -38,6 +38,13 @@ pub(crate) struct SettingView {
 }
 
 impl From<SettingRow> for SettingView {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn from(row: SettingRow) -> Self {
         let SettingRow {
             key,
@@ -96,6 +103,13 @@ struct SettingBody {
 }
 
 /// This area's routes.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/settings", get(list_settings))
@@ -106,6 +120,13 @@ pub(crate) fn routes() -> Router<Arc<App>> {
 ///
 /// # Errors
 /// [`OkfError::NotFound`] for an unknown key.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn key_of(text: &str) -> Result<SettingKey, OkfError> {
     SettingKey::parse(text).ok_or_else(|| OkfError::NotFound {
         path: format!("settings/{text}"),
@@ -117,6 +138,7 @@ fn key_of(text: &str) -> Result<SettingKey, OkfError> {
 /// # Errors
 /// [`OkfError::Database`]; [`OkfError::NotFound`] if the listing has no
 /// row for a key it defines (a bug).
+#[tracing::instrument(level = "debug", skip_all)]
 async fn current(app: &App, key: SettingKey) -> Result<SettingView, OkfError> {
     settings::list(app.pool(), &app.config().auth)
         .await?
@@ -132,6 +154,7 @@ async fn current(app: &App, key: SettingKey) -> Result<SettingView, OkfError> {
 ///
 /// # Errors
 /// 403 below admin; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn list_settings(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -166,6 +189,7 @@ async fn list_settings(
 /// # Errors
 /// 403 unless the caller is an admin reaching every catalog; 404 for an
 /// unknown key; 422 for a value the setting refuses, or without `value`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn set_setting(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -192,6 +216,7 @@ async fn set_setting(
 /// # Errors
 /// 403 unless the caller is an admin reaching every catalog; 404 for an
 /// unknown key.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn reset_setting(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,

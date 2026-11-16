@@ -75,6 +75,13 @@ const REGISTER_BODY_LIMIT: usize = 16 * 1024;
 ///
 /// # Returns
 /// `true` only for an address the fetcher may connect to.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub fn is_public_address(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => is_public_v4(v4),
@@ -84,6 +91,7 @@ pub fn is_public_address(ip: IpAddr) -> bool {
 
 /// [`is_public_address`] for IPv4. Core's `is_global` is unstable, so the
 /// special ranges are written out.
+#[tracing::instrument(level = "trace", skip_all)]
 fn is_public_v4(ip: Ipv4Addr) -> bool {
     // `octets()` is the address as four bytes; the array pattern names them.
     let [a, b, c, _] = ip.octets();
@@ -103,6 +111,7 @@ fn is_public_v4(ip: Ipv4Addr) -> bool {
 }
 
 /// [`is_public_address`] for IPv6.
+#[tracing::instrument(level = "trace", skip_all)]
 fn is_public_v6(ip: Ipv6Addr) -> bool {
     if let Some(v4) = ip.to_ipv4_mapped() {
         return is_public_v4(v4);
@@ -131,6 +140,7 @@ fn is_public_v6(ip: Ipv6Addr) -> bool {
 }
 
 /// Is this a loopback host, as written in a URL?
+#[tracing::instrument(level = "trace", skip_all)]
 fn is_loopback_host(host: &Host<&str>) -> bool {
     match host {
         Host::Domain(name) => name.eq_ignore_ascii_case("localhost"),
@@ -152,6 +162,7 @@ fn is_loopback_host(host: &Host<&str>) -> bool {
 ///
 /// # Errors
 /// [`OAuthError::InvalidRedirectUri`] naming what is wrong.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn validate_redirect_uri(uri: &str) -> Result<(), OAuthError> {
     let refuse = |why: &str| Err(OAuthError::InvalidRedirectUri(format!("{uri:?}: {why}")));
     if uri.chars().count() > MAX_URI_CHARS {
@@ -207,6 +218,7 @@ pub fn validate_redirect_uri(uri: &str) -> Result<(), OAuthError> {
 ///     "https://client.example.com:8443/callback",
 /// ));
 /// ```
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn redirect_uri_matches(registered: &str, requested: &str) -> bool {
     let (Ok(registered_url), Ok(requested_url)) = (Url::parse(registered), Url::parse(requested))
     else {
@@ -234,6 +246,7 @@ pub fn redirect_uri_matches(registered: &str, requested: &str) -> bool {
 /// loopback host, has no fragment, and is written exactly as the parser
 /// would write it apart from its port (so an upper-case host, a `..` path
 /// segment or other text the parser rewrites gets no leniency).
+#[tracing::instrument(level = "trace", skip_all)]
 fn loopback_parts<'url>(raw: &str, url: &'url Url) -> Option<(&'url str, &'url str)> {
     let loopback_http = url.scheme() == "http"
         && url.fragment().is_none()
@@ -305,6 +318,7 @@ const SUPPORTED_GRANT_TYPES: [&str; 2] = ["authorization_code", "refresh_token"]
 /// [`OAuthError::InvalidClientMetadata`] for anything but a JSON object, or a
 /// shape, auth method, grant or response type this server does not support;
 /// [`OAuthError::InvalidRedirectUri`] for a bad redirect URI.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn validate_metadata(
     document: &Value,
     max_redirect_uris: usize,
@@ -403,6 +417,7 @@ pub fn validate_metadata(
 ///
 /// # Errors
 /// [`OAuthError::InvalidClient`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn cimd_url(client_id: &str, allow_http: bool) -> Result<Url, OAuthError> {
     let refuse = |why: &str| {
         Err(OAuthError::InvalidClient(format!(
@@ -442,6 +457,7 @@ pub fn cimd_url(client_id: &str, allow_http: bool) -> Result<Url, OAuthError> {
 /// [`OAuthError::InvalidClient`] when its `client_id` is not exactly `url`,
 /// or for any metadata problem (the authorize request names the client, so
 /// a broken document is an invalid client, not a registration error).
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn validate_cimd_document(
     url: &str,
     document: &Value,
@@ -465,6 +481,7 @@ pub fn validate_cimd_document(
 ///
 /// # Returns
 /// The lifetime.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn cache_lifetime(headers: &HeaderMap) -> Duration {
     let mut max_age = None;
     // A response may carry several `Cache-Control` headers; directives are
@@ -537,6 +554,13 @@ type LookupFuture = Pin<Box<dyn Future<Output = std::io::Result<Vec<SocketAddr>>
 type Lookup = fn(String) -> LookupFuture;
 
 /// The system resolver (`getaddrinfo`, through tokio).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn system_lookup(host: String) -> LookupFuture {
     Box::pin(async move {
         // Port 0: reqwest substitutes the URL's port.
@@ -556,6 +580,13 @@ struct GuardedResolver {
 }
 
 impl Resolve for GuardedResolver {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "returns a boxed future: a span would cover only building it, not the lookup it runs"
+        )
+    )]
     fn resolve(&self, name: Name) -> Resolving {
         // Copied out of `self`: the future must own what it uses
         // (`'static`), since reqwest may poll it after this call returns.
@@ -600,6 +631,13 @@ pub struct CimdFetcher {
 // Written by hand: `reqwest::Client`'s own `Debug` is long and says nothing
 // about the guard settings.
 impl std::fmt::Debug for CimdFetcher {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display/Debug impl: runs while the subscriber formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("CimdFetcher")
@@ -623,12 +661,20 @@ impl CimdFetcher {
     ///
     /// # Errors
     /// [`OkfError::Config`] if the TLS backend cannot be initialized.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial constructor: builds a value from its arguments"
+        )
+    )]
     pub fn new(allow_private: bool, allow_http: bool) -> Result<Self, OkfError> {
         Self::with_lookup(allow_private, allow_http, system_lookup)
     }
 
     /// [`CimdFetcher::new`] with a chosen name lookup (tests pin names to
     /// fixed addresses with it).
+    #[tracing::instrument(level = "trace", skip_all)]
     fn with_lookup(
         allow_private: bool,
         allow_http: bool,
@@ -663,6 +709,13 @@ impl CimdFetcher {
     ///
     /// # Returns
     /// The `allow_http` it was built with.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn allows_http(&self) -> bool {
         self.allow_http
     }
@@ -677,6 +730,13 @@ impl CimdFetcher {
     ///
     /// # Errors
     /// A [`CimdError`] for each way the fetch can fail.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "it injects the caller's trace context: its own span would replace the span the request is made under"
+        )
+    )]
     pub async fn fetch(&self, url: &Url) -> Result<Fetched, CimdError> {
         // A literal IP host is connected to directly, never resolved, so the
         // guard in the resolver would not see it.
@@ -725,6 +785,7 @@ impl CimdFetcher {
 
 /// Maps a reqwest failure to a [`CimdError`], finding the resolver's own
 /// errors in the error's source chain.
+#[tracing::instrument(level = "trace", skip_all)]
 fn classify_transport(error: reqwest::Error) -> CimdError {
     if error.is_timeout() {
         return CimdError::Timeout;
@@ -748,6 +809,13 @@ fn classify_transport(error: reqwest::Error) -> CimdError {
 
 /// The single-flight key for a URL: the first 8 bytes of its SHA-256. A
 /// collision only makes two URLs take turns.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn flight_key(url: &str) -> i64 {
     let digest = crate::keys::hash(url);
     let mut first = [0u8; 8];
@@ -771,6 +839,7 @@ fn flight_key(url: &str) -> i64 {
 /// [`OAuthError::InvalidClient`] for an unknown DCR id, a bad CIMD URL, a
 /// failed fetch with no usable cached copy, or an invalid document;
 /// [`OAuthError::Server`] for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn resolve(
     app: &App,
     oauth: &OAuth,
@@ -790,12 +859,26 @@ pub async fn resolve(
 }
 
 /// Is a cached CIMD row still fresh at `now`?
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn is_fresh(client: &ClientRecord, now: DateTime<Utc>) -> bool {
     client.cache_expires_at.is_some_and(|expires| now < expires)
 }
 
 /// May a cached CIMD row stand in for a failed refetch at `now`? Up to
 /// [`CACHE_CEILING`] after it was fetched.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn is_usable_stale(client: &ClientRecord, now: DateTime<Utc>) -> bool {
     let ceiling = TimeDelta::from_std(CACHE_CEILING).unwrap_or(TimeDelta::MAX);
     client
@@ -804,6 +887,7 @@ fn is_usable_stale(client: &ClientRecord, now: DateTime<Utc>) -> bool {
 }
 
 /// The CIMD half of [`resolve`].
+#[tracing::instrument(level = "debug", skip_all)]
 async fn resolve_cimd(
     app: &App,
     oauth: &OAuth,
@@ -866,6 +950,13 @@ async fn resolve_cimd(
 ///
 /// # Returns
 /// `POST /oauth/register`, with a 16 KiB body limit.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub fn routes() -> Router<Arc<App>> {
     Router::new().route(
         "/oauth/register",
@@ -879,6 +970,7 @@ pub fn routes() -> Router<Arc<App>> {
 /// malformed body is an RFC 7591 `invalid_client_metadata` error, not
 /// axum's plain-text 400 or 422. `Cache-Control: no-store` comes from the
 /// layer in [`crate::oauth::routes`].
+#[tracing::instrument(level = "debug", skip_all)]
 async fn register(State(app): State<Arc<App>>, body: Bytes) -> Result<Response, OAuthError> {
     let Some(oauth) = app.oauth().filter(|oauth| oauth.settings.dcr_enabled) else {
         return Ok(StatusCode::NOT_FOUND.into_response());

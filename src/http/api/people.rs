@@ -86,6 +86,13 @@ pub(crate) struct UserView {
 }
 
 impl From<UserRecord> for UserView {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn from(record: UserRecord) -> Self {
         // Destructuring names every field, so one added to the record later
         // fails to compile here until someone decides whether to show it.
@@ -153,6 +160,13 @@ pub(crate) struct EntitlementView {
 }
 
 impl From<Entitlement> for EntitlementView {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn from(entitlement: Entitlement) -> Self {
         let Entitlement {
             catalog,
@@ -236,6 +250,13 @@ pub(crate) struct TeamView {
 }
 
 impl From<TeamRecord> for TeamView {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn from(record: TeamRecord) -> Self {
         let TeamRecord {
             name,
@@ -372,6 +393,13 @@ struct EntitlementBody {
 }
 
 /// This area's routes.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/users", get(list_users).post(create_user))
@@ -400,6 +428,7 @@ pub(crate) fn routes() -> Router<Arc<App>> {
 }
 
 /// The wire spelling of a [`MemberChange`].
+#[tracing::instrument(level = "trace", skip_all)]
 fn change_name(change: MemberChange) -> &'static str {
     match change {
         MemberChange::Added => "added",
@@ -417,6 +446,7 @@ fn change_name(change: MemberChange) -> &'static str {
 /// # Errors
 /// 400 for an unknown query parameter; 403 below admin; 500 for a database
 /// failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn list_users(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -454,6 +484,7 @@ async fn list_users(
 /// # Errors
 /// 403 unless the key is an admin reaching every catalog; 409 for an invalid
 /// or taken name; 422 for a body without `name`; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn create_user(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -475,6 +506,7 @@ async fn create_user(
 ///
 /// # Errors
 /// 403 below admin; 404 for an unknown user; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn user_detail(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -544,6 +576,7 @@ async fn user_detail(
 ///
 /// # Errors
 /// [`OkfError::UnknownName`]; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 async fn entitlement_views(app: &App, name: &str) -> Result<Vec<EntitlementView>, OkfError> {
     Ok(ceiling::entitlements(app.pool(), name)
         .await?
@@ -561,6 +594,7 @@ async fn entitlement_views(app: &App, name: &str) -> Result<Vec<EntitlementView>
 /// # Errors
 /// 403 unless the caller is an admin reaching every catalog; 404 for an
 /// unknown user; 409 for clearing the last admin; 422 without `admin`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn set_admin(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -594,6 +628,7 @@ async fn set_admin(
 /// 403 unless the caller is an admin reaching every catalog; 404 for an
 /// unknown user; 409 for an email another user has; 422 for an address
 /// that is not one, or without `email`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn set_email(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -623,6 +658,7 @@ async fn set_email(
 /// # Errors
 /// 403 unless the caller is an admin reaching every catalog; 404 for an
 /// unknown user; 409 without an email or without `public_url`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn invite_user(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -648,6 +684,7 @@ async fn invite_user(
 /// 403 unless the caller is an admin reaching every catalog; 400 for an
 /// access other than `read` or `write`; 404 for an unknown user or catalog;
 /// 422 without `access`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn entitle(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -687,6 +724,7 @@ async fn entitle(
 /// # Errors
 /// 403 unless the caller is an admin reaching every catalog; 404 for an
 /// unknown user or catalog.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn unentitle(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -712,6 +750,7 @@ async fn unentitle(
 ///
 /// # Errors
 /// 403 below admin; 404 for an unknown user.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn list_sessions(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -733,6 +772,7 @@ async fn list_sessions(
 /// # Errors
 /// 403 unless the caller is an admin reaching every catalog; 404 for an
 /// unknown user.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn revoke_sessions(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -760,6 +800,7 @@ async fn revoke_sessions(
 /// 403 unless the caller is an admin reaching every catalog; 404 for an
 /// unknown user, or a malformed prefix or one that matches none of the
 /// user's sessions; 409 for a prefix that matches several (none is ended).
+#[tracing::instrument(level = "debug", skip_all)]
 async fn revoke_session(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -783,6 +824,7 @@ async fn revoke_session(
 ///
 /// # Errors
 /// 403 below admin; 404 for an unknown user.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn list_sign_ins(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -808,6 +850,7 @@ async fn list_sign_ins(
 /// 403 unless the key is an admin reaching every catalog; 404 for an unknown
 /// user; 409 for a personal team that owns catalogs, the last owner of a
 /// shared team, or the last admin user; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn delete_user(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -825,6 +868,7 @@ async fn delete_user(
 ///
 /// # Errors
 /// 403 below admin; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn list_teams(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -847,6 +891,7 @@ async fn list_teams(
 /// 403 unless the key is an admin reaching every catalog; 404 for an unknown
 /// owner; 409 for an invalid or taken name; 422 for a body without `name` or
 /// `owner`; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn create_team(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -868,6 +913,7 @@ async fn create_team(
 ///
 /// # Errors
 /// 403 below admin; 404 for an unknown team; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn team_detail(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -886,6 +932,7 @@ async fn team_detail(
 /// 403 unless the key is an admin reaching every catalog; 404 for an unknown
 /// team; 409 for a personal team or one that owns a catalog; 500 for a
 /// database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn delete_team(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -905,6 +952,7 @@ async fn delete_team(
 /// 403 unless the key is an admin reaching every catalog; 404 for an unknown
 /// team or user; 409 for demoting the last owner; 422 for a missing or
 /// unknown `role`; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn set_member(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -936,6 +984,7 @@ async fn set_member(
 /// 403 unless the key is an admin reaching every catalog; 404 for an unknown
 /// team or user; 409 for a non-member, the last owner, or the user whose
 /// personal team this is; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn remove_member(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -963,6 +1012,7 @@ async fn remove_member(
 /// or malformed team name; 409 for a notice over 2000 characters or holding
 /// a NUL; 422 for a body without `suspended` or with an unknown field; 500
 /// for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn set_suspension(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -987,6 +1037,7 @@ async fn set_suspension(
 /// # Errors
 /// 403 unless the key is an admin reaching every catalog; 500 for a
 /// database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn list_unassigned(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,

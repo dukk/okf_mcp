@@ -44,6 +44,13 @@ impl<V> ExpiringMap<V> {
     ///
     /// # Returns
     /// The map.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial constructor: builds a value from its arguments"
+        )
+    )]
     pub fn new(ttl: Duration, capacity: usize) -> Self {
         Self {
             ttl,
@@ -55,6 +62,13 @@ impl<V> ExpiringMap<V> {
         }
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn lock(&self) -> MutexGuard<'_, Entries<V>> {
         self.entries.lock().expect("expiring map lock poisoned")
     }
@@ -69,6 +83,7 @@ impl<V> ExpiringMap<V> {
     ///
     /// # Returns
     /// `false`, storing nothing, when the map holds `capacity` live entries.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn insert(&self, key: String, value: V, now: Instant) -> bool {
         let mut entries = self.lock();
         if !self.has_room_for(&mut entries, &key, now) {
@@ -94,6 +109,7 @@ impl<V> ExpiringMap<V> {
     /// # Returns
     /// `change`'s result, or `None`, creating nothing, when the key has no
     /// live entry and the map holds `capacity` live entries.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn update_or_insert_sliding<R>(
         &self,
         key: &str,
@@ -125,6 +141,7 @@ impl<V> ExpiringMap<V> {
 
     /// Whether `key` may be stored now: it already has an entry, or the
     /// map has room once its expired entries are pruned.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn has_room_for(&self, entries: &mut Entries<V>, key: &str, now: Instant) -> bool {
         if entries.by_key.len() < self.capacity || entries.by_key.contains_key(key) {
             return true;
@@ -151,6 +168,7 @@ impl<V> ExpiringMap<V> {
     }
 
     /// Stores an entry until `now + ttl` and keeps the expiry bound.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn store(&self, entries: &mut Entries<V>, key: String, value: V, now: Instant) {
         let expires = now + self.ttl;
         entries.by_key.insert(key, Entry { expires, value });
@@ -169,6 +187,13 @@ impl<V> ExpiringMap<V> {
     ///
     /// # Returns
     /// The value, or `None` if absent or expired (an expired one is dropped).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn take(&self, key: &str, now: Instant) -> Option<V> {
         let entry = self.lock().by_key.remove(key)?;
         // `then_some` is `Some(value) if condition else None`.
@@ -187,6 +212,7 @@ impl<V> ExpiringMap<V> {
     /// expired one is dropped).
     // `impl FnOnce(&mut V) -> R`: any closure called once with a mutable
     // borrow of the value, like a Python callback that mutates its argument.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn update<R>(
         &self,
         key: &str,
@@ -209,6 +235,13 @@ impl<V> ExpiringMap<V> {
     ///
     /// # Arguments
     /// * `key` - its key.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn remove(&self, key: &str) {
         self.lock().by_key.remove(key);
     }

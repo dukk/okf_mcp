@@ -13,11 +13,25 @@ const CHALLENGE_LEN: usize = 43;
 const VERIFIER_LEN: std::ops::RangeInclusive<usize> = 43..=128;
 
 /// Is `byte` a base64url character (`A-Z a-z 0-9 - _`)?
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate: a pure check called per item"
+    )
+)]
 fn is_base64url(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
 }
 
 /// Is `byte` an RFC 7636 "unreserved" character (`A-Z a-z 0-9 - . _ ~`)?
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "per-element predicate: a pure check called per item"
+    )
+)]
 fn is_unreserved(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')
 }
@@ -29,6 +43,13 @@ fn is_unreserved(byte: u8) -> bool {
 ///
 /// # Returns
 /// `true` for exactly 43 base64url characters.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub fn is_valid_challenge(challenge: &str) -> bool {
     challenge.len() == CHALLENGE_LEN && challenge.bytes().all(is_base64url)
 }
@@ -42,6 +63,7 @@ pub fn is_valid_challenge(challenge: &str) -> bool {
 /// # Returns
 /// `true` only if `verifier` is 43 to 128 unreserved characters and
 /// `BASE64URL(SHA256(verifier))` equals `challenge`, compared in constant time.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn verify(challenge: &str, verifier: &str) -> bool {
     let well_formed = VERIFIER_LEN.contains(&verifier.len()) && verifier.bytes().all(is_unreserved);
     if !well_formed {

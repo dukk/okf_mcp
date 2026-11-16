@@ -21,6 +21,7 @@ pub(crate) const DEFAULT_RETURN_TO: &str = "/ui/";
 ///
 /// # Returns
 /// The text with `& < > " '` as entities.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn escape(text: &str) -> String {
     // Most text has nothing to escape; the capacity covers that case with
     // one allocation.
@@ -40,6 +41,7 @@ pub(crate) fn escape(text: &str) -> String {
 
 /// The closing support line of a page, or nothing without a contact. An
 /// `https://` URL is a link; an email address is plain text.
+#[tracing::instrument(level = "trace", skip_all)]
 fn contact_line(brand: &Brand) -> String {
     brand
         .support_contact
@@ -66,6 +68,7 @@ fn contact_line(brand: &Brand) -> String {
 ///
 /// # Returns
 /// The whole document.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn document(title: &str, body: &str, scripts: &[&str], brand: &Brand) -> String {
     // `map(...).collect::<String>()` concatenates one line per script.
     let scripts: String = scripts
@@ -117,6 +120,7 @@ pub(crate) fn document(title: &str, body: &str, scripts: &[&str], brand: &Brand)
 ///
 /// # Returns
 /// The response.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn page(
     status: StatusCode,
     title: &str,
@@ -141,6 +145,7 @@ pub(crate) fn page(
 /// The response, or a bare 500 (logged) if `csp` is not a header value,
 /// which would be a bug: the policies are built from constants and parsed
 /// URLs.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn respond(status: StatusCode, document: String, csp: &str) -> Response {
     // `let ... else`: bind the header value, or answer 500 and stop.
     let Ok(csp) = HeaderValue::from_str(csp) else {
@@ -178,6 +183,7 @@ pub(crate) fn respond(status: StatusCode, document: String, csp: &str) -> Respon
 ///
 /// # Returns
 /// `raw` when it is safe, else `/ui/`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn safe_return_to(raw: Option<&str>) -> String {
     match raw {
         Some(path) if is_safe_return_to(path) => path.to_string(),
@@ -187,6 +193,7 @@ pub(crate) fn safe_return_to(raw: Option<&str>) -> String {
 }
 
 /// Whether `path` is a same-origin console or authorize path.
+#[tracing::instrument(level = "trace", skip_all)]
 fn is_safe_return_to(path: &str) -> bool {
     // Visible ASCII only: no spaces, no control characters (a header
     // injection) and no `\`, which some browsers read as `/` (so `/\host`

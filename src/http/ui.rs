@@ -21,6 +21,13 @@ pub(crate) const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src
     form-action 'self'";
 
 /// The console's routes. They need no key: the files hold no catalog data.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn routes<S>() -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -38,6 +45,13 @@ where
 }
 
 /// The pages this build embeds (`js/pages/<name>.js`), by name.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn page_names() -> Vec<&'static str> {
     ASSETS
         .iter()
@@ -46,11 +60,13 @@ fn page_names() -> Vec<&'static str> {
 }
 
 /// `GET /ui/manifest.json`: `{"pages": [...]}`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn manifest() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "pages": page_names() }))
 }
 
 /// The media type for an embedded file, by extension.
+#[tracing::instrument(level = "trace", skip_all)]
 fn content_type(path: &str) -> &'static str {
     match path.rsplit_once('.').map(|(_, extension)| extension) {
         Some("html") => "text/html; charset=utf-8",
@@ -63,6 +79,7 @@ fn content_type(path: &str) -> &'static str {
 }
 
 /// One embedded file, revalidated on every load (`no-cache`), or 404.
+#[tracing::instrument(level = "trace", skip_all)]
 fn asset(path: &str) -> Response {
     match ASSETS.iter().find(|(name, _)| *name == path) {
         Some((name, body)) => (
@@ -78,6 +95,7 @@ fn asset(path: &str) -> Response {
 }
 
 /// Adds the CSP, `nosniff` and `no-referrer` to every console response.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn security_headers(mut response: Response) -> Response {
     let headers = response.headers_mut();
     headers.insert(

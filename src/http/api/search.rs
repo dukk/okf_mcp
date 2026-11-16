@@ -17,6 +17,13 @@ use crate::mcp::search::{run, SearchParams, SearchResult};
 use crate::store::keys::Access;
 
 /// This area's routes.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new().route("/search", get(search))
 }
@@ -41,6 +48,7 @@ struct SearchArgs {
 ///
 /// # Returns
 /// The names, trimmed, empty ones dropped, in order.
+#[tracing::instrument(level = "trace", skip_all)]
 fn catalog_names(listed: &str) -> Vec<String> {
     listed
         .split(',')
@@ -60,6 +68,7 @@ fn catalog_names(listed: &str) -> Vec<String> {
 /// # Errors
 /// As `search`: 404 for a named catalog the key does not reach or that does
 /// not exist; 403 `Suspended` for a named catalog whose team is suspended.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn search(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
