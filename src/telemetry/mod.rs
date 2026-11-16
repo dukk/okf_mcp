@@ -685,7 +685,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn spans_and_logs_reach_the_receiver_with_their_headers() {
+    async fn spans_logs_and_metrics_reach_the_receiver_with_their_headers() {
         let (port, mut heads) = receiver().await;
         let mut config = TelemetryConfig::default();
         config.otlp = Some(config::OtlpConfig {
@@ -715,13 +715,16 @@ mod tests {
                 "{head}"
             );
             paths.push(head.lines().next().unwrap_or_default().to_string());
-            if paths.len() == 2 {
+            if paths.len() == 3 {
                 break;
             }
         }
         paths.sort();
+        // The meter provider's final export is the third request.
+        assert_eq!(paths.len(), 3, "{paths:?}");
         assert!(paths[0].starts_with("POST /v1/logs "), "{paths:?}");
-        assert!(paths[1].starts_with("POST /v1/traces "), "{paths:?}");
+        assert!(paths[1].starts_with("POST /v1/metrics "), "{paths:?}");
+        assert!(paths[2].starts_with("POST /v1/traces "), "{paths:?}");
     }
 
     #[tokio::test]
