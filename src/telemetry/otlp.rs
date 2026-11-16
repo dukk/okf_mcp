@@ -13,6 +13,9 @@ use std::time::Duration;
 use opentelemetry_otlp::{Protocol, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::error::{OTelSdkError, OTelSdkResult};
 use opentelemetry_sdk::logs::{LogBatch, LogExporter};
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
+use opentelemetry_sdk::metrics::exporter::PushMetricExporter;
+use opentelemetry_sdk::metrics::Temporality;
 use opentelemetry_sdk::trace::{SpanData, SpanExporter};
 use opentelemetry_sdk::Resource;
 
@@ -442,6 +445,71 @@ impl<E: LogExporter> LogExporter for CountingLogExporter<E> {
     }
 }
 
+/// A metric exporter that counts its failures.
+#[derive(Debug)]
+pub struct CountingMetricExporter<E> {
+    inner: E,
+    failures: Arc<ExportFailures>,
+}
+
+impl<E> CountingMetricExporter<E> {
+    /// Wraps `inner`, counting its failures in `failures`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line constructor")
+    )]
+    pub fn new(inner: E, failures: Arc<ExportFailures>) -> Self {
+        Self { inner, failures }
+    }
+}
+
+impl<E: PushMetricExporter> PushMetricExporter for CountingMetricExporter<E> {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "delegates to the wrapped exporter and counts its result"
+        )
+    )]
+    async fn export(&self, metrics: &ResourceMetrics) -> OTelSdkResult {
+        let result = self.inner.export(metrics).await;
+        self.failures.observe(Signal::Metrics, result)
+    }
+
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "constant trait plumbing; counts only what `export` returns"
+        )
+    )]
+    fn force_flush(&self) -> OTelSdkResult {
+        self.inner.force_flush()
+    }
+
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "constant trait plumbing; counts only what `export` returns"
+        )
+    )]
+    fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
+        self.inner.shutdown_with_timeout(timeout)
+    }
+
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "constant trait plumbing; counts only what `export` returns"
+        )
+    )]
+    fn temporality(&self) -> Temporality {
+        self.inner.temporality()
+    }
+}
+
 /// Builds the OTLP/HTTP span exporter for `target`.
 ///
 /// # Errors
@@ -483,6 +551,29 @@ pub(crate) fn log_exporter(
         .build()
         .map_err(|error| config_error(format!("OTLP log exporter: {error}")))?;
     Ok(CountingLogExporter::new(exporter, Arc::clone(failures)))
+}
+
+/// Builds the OTLP/HTTP metric exporter for `target`, cumulative (the same
+/// temporality the Prometheus reader has).
+///
+/// # Errors
+/// [`OkfError::Config`] when the HTTP client or the exporter cannot be built.
+#[tracing::instrument(level = "trace", skip_all)]
+pub(crate) fn metric_exporter(
+    target: &OtlpTarget,
+    failures: &Arc<ExportFailures>,
+) -> Result<CountingMetricExporter<opentelemetry_otlp::MetricExporter>, OkfError> {
+    let exporter = opentelemetry_otlp::MetricExporter::builder()
+        .with_http()
+        .with_protocol(Protocol::HttpBinary)
+        .with_endpoint(target.signal_url(Signal::Metrics))
+        .with_headers(target.headers.clone())
+        .with_http_client(http_client()?)
+        .with_timeout(EXPORT_TIMEOUT)
+        .with_temporality(Temporality::Cumulative)
+        .build()
+        .map_err(|error| config_error(format!("OTLP metric exporter: {error}")))?;
+    Ok(CountingMetricExporter::new(exporter, Arc::clone(failures)))
 }
 
 #[cfg(test)]
@@ -721,5 +812,36 @@ mod tests {
         let result = exporter.export(Vec::new()).await;
         assert!(matches!(result, Err(OTelSdkError::Timeout(_))));
         assert_eq!(failures.count(Signal::Traces, FailureReason::Timeout), 1);
+    }
+
+    /// A metric exporter whose export always fails.
+    #[derive(Debug)]
+    struct FailingMetrics;
+
+    impl PushMetricExporter for FailingMetrics {
+        async fn export(&self, _metrics: &ResourceMetrics) -> OTelSdkResult {
+            Err(OTelSdkError::Timeout(Duration::from_secs(1)))
+        }
+
+        fn force_flush(&self) -> OTelSdkResult {
+            Ok(())
+        }
+
+        fn shutdown_with_timeout(&self, _timeout: Duration) -> OTelSdkResult {
+            Ok(())
+        }
+
+        fn temporality(&self) -> Temporality {
+            Temporality::Cumulative
+        }
+    }
+
+    #[tokio::test]
+    async fn the_counting_metric_exporter_counts_a_failed_export() {
+        let failures = Arc::new(ExportFailures::default());
+        let exporter = CountingMetricExporter::new(FailingMetrics, Arc::clone(&failures));
+        let result = exporter.export(&ResourceMetrics::default()).await;
+        assert!(matches!(result, Err(OTelSdkError::Timeout(_))));
+        assert_eq!(failures.count(Signal::Metrics, FailureReason::Timeout), 1);
     }
 }

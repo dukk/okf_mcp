@@ -700,8 +700,30 @@ impl Config {
         self.auth.validate()?;
         self.mail.validate()?;
         self.telemetry.validate()?;
+        self.validate_metrics_listen()?;
         self.validate_oidc()?;
         self.validate_public_url()
+    }
+
+    /// Checks that `[telemetry.prometheus] listen` does not claim the socket
+    /// `listen` does (`serve --listen` is checked again where it applies).
+    ///
+    /// # Errors
+    /// The two addresses overlap.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "config check run once at start-up, like `validate`"
+        )
+    )]
+    pub fn validate_metrics_listen(&self) -> Result<(), String> {
+        match &self.telemetry.prometheus {
+            Some(prometheus) if prometheus.overlaps(self.listen) => {
+                Err("telemetry.prometheus.listen overlaps listen".to_string())
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Checks `[[auth.oidc]]`: providers need `public_url` (the redirect

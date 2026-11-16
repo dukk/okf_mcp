@@ -2,6 +2,7 @@
 //! only the names of the environment variables that hold them, read when
 //! `serve` starts ([`super::otlp::OtlpTarget::resolve`]).
 
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -32,6 +33,8 @@ pub struct TelemetryConfig {
     pub stderr: StderrConfig,
     /// `[telemetry.otlp]`; OTLP is off without it.
     pub otlp: Option<OtlpConfig>,
+    /// `[telemetry.prometheus]`; no `/metrics` listener without it.
+    pub prometheus: Option<PrometheusConfig>,
 }
 
 impl Default for TelemetryConfig {
@@ -41,7 +44,39 @@ impl Default for TelemetryConfig {
             environment: None,
             stderr: StderrConfig::default(),
             otlp: None,
+            prometheus: None,
         }
+    }
+}
+
+/// `[telemetry.prometheus]`: the separate, unauthenticated `/metrics`
+/// listener (spec Decision 2).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrometheusConfig {
+    /// The address `/metrics` is served on. It must not overlap the main
+    /// `listen` address ([`PrometheusConfig::overlaps`]).
+    pub listen: SocketAddr,
+}
+
+impl PrometheusConfig {
+    /// Whether this listener and `main` would claim the same socket: the
+    /// same address, or the same port when either address is unspecified
+    /// (`0.0.0.0` or `::`, which accept on every interface).
+    ///
+    /// # Arguments
+    /// * `main` - the server's own `listen` address.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "pure address comparison, called once at start-up"
+        )
+    )]
+    pub fn overlaps(&self, main: SocketAddr) -> bool {
+        self.listen == main
+            || (self.listen.port() == main.port()
+                && (self.listen.ip().is_unspecified() || main.ip().is_unspecified()))
     }
 }
 
@@ -341,5 +376,51 @@ mod tests {
         // 0.3.23 when parsed untrimmed.
         assert!(parse_filter("warn, okf_mcp=info").is_ok());
         let _ = parse_filter("warn,\u{a0}\u{e9}=info");
+    }
+
+    #[test]
+    fn prometheus_listen_parses_and_a_distinct_port_validates() {
+        let config = Config::from_toml(
+            "listen = \"0.0.0.0:8080\"\n[telemetry.prometheus]\nlisten = \"0.0.0.0:9090\"\n",
+        )
+        .expect("parses");
+        config.validate().expect("valid");
+        assert_eq!(
+            config.telemetry.prometheus,
+            Some(PrometheusConfig {
+                listen: "0.0.0.0:9090".parse().expect("address"),
+            })
+        );
+        assert!(
+            Config::from_toml("[telemetry.prometheus]\nlisten = \"127.0.0.1:9090\"\n")
+                .expect("parses")
+                .validate()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn prometheus_listen_that_overlaps_listen_is_refused() {
+        // The same address; the same port with the main address unspecified;
+        // the same port with the metrics address unspecified.
+        for (main, metrics) in [
+            ("127.0.0.1:8080", "127.0.0.1:8080"),
+            ("0.0.0.0:8080", "127.0.0.1:8080"),
+            ("127.0.0.1:8080", "[::]:8080"),
+        ] {
+            let error = refused(&format!(
+                "listen = \"{main}\"\n[telemetry.prometheus]\nlisten = \"{metrics}\"\n"
+            ));
+            assert!(
+                error.contains("telemetry.prometheus.listen overlaps listen"),
+                "{main} vs {metrics}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn prometheus_table_rejects_unknown_keys_and_a_missing_listen() {
+        assert!(Config::from_toml("[telemetry.prometheus]\nlistn = \"127.0.0.1:9090\"\n").is_err());
+        assert!(Config::from_toml("[telemetry.prometheus]\n").is_err());
     }
 }
