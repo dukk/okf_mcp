@@ -1147,6 +1147,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn granting_a_catalog_to_an_every_catalog_key_is_refused_without_a_cli_flag() {
+        let test = app().await;
+        let root = stored(&test, "root", Access::Admin, Grants::All).await;
+        let uri = format!("/api/v1/keys/{}/catalogs/main", root.id);
+
+        let (status, body) = send(&test, "PUT", &uri, Some(&root.key), None).await;
+
+        assert_eq!(status.as_u16(), 409, "{body}");
+        let message = body["message"].as_str().expect("a message");
+        assert!(message.ends_with("is granted every catalog"), "{message}");
+        assert!(!message.contains("--"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn an_every_catalog_route_refuses_a_scoped_admin_without_a_cli_flag() {
+        let test = app().await;
+        let keys = keys(&test).await;
+
+        let (status, body) = send(
+            &test,
+            "PUT",
+            "/api/v1/settings/product_name",
+            Some(&keys.admin),
+            Some(json!({"value": "x"})),
+        )
+        .await;
+
+        assert_eq!(status.as_u16(), 403, "{body}");
+        let message = body["message"].as_str().expect("a message");
+        assert!(
+            message.contains("an admin key that reaches every catalog"),
+            "{message}"
+        );
+        assert!(
+            !message.contains("--") && !message.contains("okf-mcp"),
+            "{message}"
+        );
+    }
+
+    #[tokio::test]
     async fn a_grant_is_managed_by_id_but_never_given_maintenance_reporting() {
         use crate::store::oauth::testing::{insert_client, insert_grant};
 
