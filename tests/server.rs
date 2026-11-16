@@ -464,6 +464,33 @@ async fn stream_on(server: &TestServer, key: &str, session: &str) -> reqwest::St
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_legacy_session_request_reply_has_no_empty_priming_event() {
+    let server = TestServer::start(pg(), Config::default()).await;
+    let key = server.key("reader", Access::Read, &[], None).await;
+    let session = open_session(&server, &key).await;
+    assert_eq!(notify_on(&server, &key, &session).await, 202);
+
+    let response = reqwest::Client::new()
+        .post(server.mcp_url())
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .header("mcp-session-id", &session)
+        .header("mcp-protocol-version", "2025-11-25")
+        .bearer_auth(&key)
+        .body(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+    let body = response.text().await.unwrap();
+    let first: serde_json::Value = serde_json::from_str(first_event_data(&body))
+        .unwrap_or_else(|error| panic!("first event is not JSON ({error}): {body:?}"));
+    assert_eq!(first["id"], 2);
+    assert!(first["result"]["tools"].is_array());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_session_answers_only_the_key_that_opened_it() {
     let server = TestServer::start(pg(), Config::default()).await;
     let owner = server.key("owner", Access::Read, &[], Some("pg")).await;
