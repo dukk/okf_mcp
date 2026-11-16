@@ -19,12 +19,15 @@ use crate::store::catalogs;
 use crate::store::changesets::{self, ChangesetRow, EntryRow};
 use crate::store::import::{import, ImportOptions, ImportScope};
 use crate::store::keys::Access;
+use crate::telemetry::metrics::Metrics;
 
 /// An app and the database under it. Fields drop in declaration order: the
 /// app (and its pool) before the container.
 pub(crate) struct TestApp {
     /// The shared state, as a server would hold it.
     pub(crate) app: Arc<App>,
+    // Keeps a test's local meter provider alive (dropping it shuts it down).
+    _meter: Option<opentelemetry_sdk::metrics::SdkMeterProvider>,
     _db: TestDb,
 }
 
@@ -73,6 +76,16 @@ pub(crate) async fn app_at(
     imported: DateTime<Utc>,
     clock: Arc<dyn Clock>,
 ) -> TestApp {
+    let db = seed(catalogs_and_files, imported).await;
+    load(db, config, clock).await
+}
+
+/// Starts a database, creates each catalog and imports its files at
+/// `imported`.
+///
+/// # Panics
+/// If the database, a create or an import fails: a broken test setup.
+async fn seed(catalogs_and_files: &[(&str, &[(&str, &str)])], imported: DateTime<Utc>) -> TestDb {
     let db = crate::db::test_db().await;
     for (name, entries) in catalogs_and_files {
         create_catalog(&db, name, imported).await;
@@ -89,7 +102,7 @@ pub(crate) async fn app_at(
             .await
             .expect("import the test files");
     }
-    load(db, config, clock).await
+    db
 }
 
 /// Creates each catalog without importing anything, so each holds only its
@@ -113,6 +126,66 @@ pub(crate) async fn app_with_new(names: &[&str], config: Config) -> TestApp {
     load(db, config, Arc::new(SystemClock)).await
 }
 
+/// [`app_with`] with metric instruments built on a local meter provider
+/// whose only reader is Prometheus, so a test can assert what a real `App`
+/// recorded (Tasks 3-6 use it).
+///
+/// # Arguments
+/// * `catalogs_and_files` - `(catalog name, its files)` pairs, in creation order.
+/// * `config` - the server's settings.
+///
+/// # Returns
+/// The loaded app, and the registry its instruments render into; read it
+/// with [`render`].
+///
+/// # Panics
+/// As [`app_at`].
+pub(crate) async fn app_with_metrics(
+    catalogs_and_files: &[(&str, &[(&str, &str)])],
+    config: Config,
+) -> (TestApp, prometheus::Registry) {
+    let registry = prometheus::Registry::new();
+    let reader = opentelemetry_prometheus::exporter()
+        .with_registry(registry.clone())
+        .without_target_info()
+        .scope_info_enabled(false)
+        .build()
+        .expect("the Prometheus reader");
+    let provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+        .with_reader(reader)
+        .build();
+    let meter = opentelemetry::metrics::MeterProvider::meter(&provider, "okf-mcp");
+    let metrics = Metrics::new(&meter);
+    crate::telemetry::metrics::observe_export_failures(
+        &meter,
+        Arc::new(crate::telemetry::otlp::ExportFailures::default()),
+    );
+    let db = seed(catalogs_and_files, Utc::now()).await;
+    let mut config = config;
+    config.mail.worker = false;
+    let app = App::load_with_metrics(db.pool.clone(), config, Arc::new(SystemClock), metrics)
+        .await
+        .expect("load the app");
+    (
+        TestApp {
+            app,
+            _meter: Some(provider),
+            _db: db,
+        },
+        registry,
+    )
+}
+
+/// The Prometheus text a scrape of `registry` would return.
+///
+/// # Panics
+/// If the encoder fails: a broken test setup.
+pub(crate) fn render(registry: &prometheus::Registry) -> String {
+    prometheus::TextEncoder::new()
+        .encode_to_string(&registry.gather())
+        .expect("encode the metrics")
+}
+
 /// Creates catalog `name`, owned by the fixture team, at `at`.
 async fn create_catalog(db: &TestDb, name: &str, at: DateTime<Utc>) {
     let new = catalogs::NewCatalog {
@@ -133,7 +206,11 @@ async fn load(db: TestDb, config: Config, clock: Arc<dyn Clock>) -> TestApp {
     let app = App::load(db.pool.clone(), config, clock)
         .await
         .expect("load the app");
-    TestApp { app, _db: db }
+    TestApp {
+        app,
+        _meter: None,
+        _db: db,
+    }
 }
 
 /// A key with this id and access, reaching `reach` (every catalog when
@@ -611,4 +688,20 @@ pub(crate) async fn settle_access(test: &TestApp) {
     tokio::time::timeout(std::time::Duration::from_secs(30), test.app.settle_access())
         .await
         .expect("the background access writes finish within 30 seconds");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_app_with_metrics_renders_into_its_own_registry() {
+        let (test_app, registry) = app_with_metrics(&[], Config::default()).await;
+
+        let text = render(&registry);
+
+        assert!(text.contains("# TYPE okf_build_info gauge"), "{text}");
+        // The app holds the handle `app_with_metrics` built, not the global one.
+        let _ = test_app.app.metrics();
+    }
 }

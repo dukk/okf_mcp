@@ -92,6 +92,14 @@ opentelemetry-http = { version = "0.33.1", default-features = false }
 opentelemetry-appender-tracing = { version = "0.33.1", default-features = false }
 opentelemetry-otlp = { version = "0.33.1", default-features = false, features = ["http-proto", "reqwest-client", "trace", "logs", "metrics", "internal-logs"] }
 opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["trace", "logs", "metrics", "internal-logs", "rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime", "experimental_logs_batch_log_processor_with_async_runtime", "experimental_metrics_periodicreader_with_async_runtime"] }
+# Prometheus `/metrics` from the same SdkMeterProvider that pushes OTLP
+# (spec Decision 1): this reader renders into a `prometheus::Registry`. It
+# turns on opentelemetry_sdk's `experimental_metrics_custom_reader`, which is
+# what lets it mount as a reader, and it is why every opentelemetry* crate is
+# held at its release (0.33): a reader from another SDK major does not compile.
+opentelemetry-prometheus = "0.33.1"
+# The registry the reader renders into, and its text encoder. No protobuf.
+prometheus = { version = "0.14.0", default-features = false }
 # Markdown to HTML for the web console (src/render.rs), which escapes raw
 # HTML and filters link schemes itself. No default features: they only add
 # getopts for pulldown-cmark's own command-line tool.

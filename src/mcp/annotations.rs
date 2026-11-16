@@ -5,12 +5,14 @@
 //! The hints themselves live on each `#[tool(...)]` attribute; this module
 //! is the single list they are checked against.
 
+#[cfg(test)]
 use std::collections::BTreeSet;
 
+#[cfg(test)]
 use crate::mcp::OkfServer;
 
 /// Tools that only read: never change a catalog, a changeset or a run.
-const READS: &[&str] = &[
+pub(crate) const READS: &[&str] = &[
     "get_concept",
     "history",
     "links_report",
@@ -32,7 +34,7 @@ const READS: &[&str] = &[
 
 /// Tools whose effect stays unpublished (a changeset entry, a maintenance
 /// lease or report) and can be undone by `discard` or by letting it lapse.
-const STAGED: &[&str] = &[
+pub(crate) const STAGED: &[&str] = &[
     "add_source",
     "create_concept",
     "edit_document",
@@ -57,10 +59,12 @@ const STAGED: &[&str] = &[
 ];
 
 /// Tools that cannot be undone from inside the server, or that delete.
-const DESTRUCTIVE: &[&str] = &["delete_concept", "discard", "maintenance_close", "publish"];
+pub(crate) const DESTRUCTIVE: &[&str] =
+    &["delete_concept", "discard", "maintenance_close", "publish"];
 
 /// The hints a tool's class implies (`open_world` is always false: every
 /// tool acts only on this server's catalogs).
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Hints {
     read_only: bool,
@@ -69,6 +73,7 @@ struct Hints {
 }
 
 /// The hints for `name`'s class, or `None` for an unclassified tool.
+#[cfg(test)]
 fn expected(name: &str) -> Option<Hints> {
     // `contains(&name)`: the slices hold `&str`, so the needle is a `&&str`.
     if READS.contains(&name) {
@@ -95,6 +100,7 @@ fn expected(name: &str) -> Option<Hints> {
 }
 
 /// Is every word of `title` capitalized ("List Catalogs")?
+#[cfg(test)]
 fn is_title_case(title: &str) -> bool {
     !title.is_empty()
         && title

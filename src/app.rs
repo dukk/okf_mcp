@@ -32,6 +32,7 @@ use crate::store::oauth::{
 };
 use crate::store::settings::{self, Settings};
 use crate::store::{catalogs, changesets, email_tokens, sign_in_events, unlocks, user_sessions};
+use crate::telemetry::metrics::Metrics;
 
 /// Every loaded catalog, by name (a `BTreeMap`, so iteration is in name
 /// order, like `catalog list`).
@@ -125,6 +126,9 @@ pub struct App {
     // shutdown can wait for them; a `std` mutex, held only to spawn into it
     // or to take it out.
     access_writes: std::sync::Mutex<tokio::task::JoinSet<()>>,
+    // The metric instruments (M15 Task 2); built on the global meter provider
+    // unless a test supplies its own.
+    metrics: Metrics,
     // Test hook: a background access write waits for this lock first, so a
     // test can hold it to run a deletion or a transfer between admission
     // and persistence.
@@ -159,6 +163,30 @@ impl App {
         pool: PgPool,
         config: Config,
         clock: Arc<dyn Clock>,
+    ) -> Result<Arc<Self>, OkfError> {
+        Self::load_with_metrics(pool, config, clock, Metrics::global()).await
+    }
+
+    /// [`App::load`] with the metric instruments given: tests pass ones built
+    /// on a local provider, so they can read what a real `App` recorded.
+    ///
+    /// # Arguments
+    /// * `pool` - the database (migrated).
+    /// * `config` - the server's settings.
+    /// * `clock` - the source of every timestamp.
+    /// * `metrics` - the instruments the app records on.
+    ///
+    /// # Returns
+    /// The shared state.
+    ///
+    /// # Errors
+    /// As [`App::load`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn load_with_metrics(
+        pool: PgPool,
+        config: Config,
+        clock: Arc<dyn Clock>,
+        metrics: Metrics,
     ) -> Result<Arc<Self>, OkfError> {
         // Read the counter before the keys: a change committed between the
         // two moves it again, so the next poll reloads.
@@ -212,6 +240,7 @@ impl App {
             passkeys,
             oidc,
             access_writes: std::sync::Mutex::new(tokio::task::JoinSet::new()),
+            metrics,
             #[cfg(test)]
             access_hold: Arc::default(),
         }))
@@ -271,6 +300,15 @@ impl App {
                 .expect("access writes lock poisoned"),
         );
         while writes.join_next().await.is_some() {}
+    }
+
+    /// The metric instruments.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor")
+    )]
+    pub fn metrics(&self) -> &Metrics {
+        &self.metrics
     }
 
     /// The database.

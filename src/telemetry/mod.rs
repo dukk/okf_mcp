@@ -1,5 +1,6 @@
 //! Observability for `serve`: the OTLP span and log providers, the
-//! subscriber that feeds them and stderr, and shutdown.
+//! subscriber that feeds them and stderr, the meter provider behind both OTLP
+//! metrics and `/metrics`, and shutdown.
 //!
 //! Everything else in the crate uses `tracing` macros only. Telemetry starts
 //! for `serve` alone; the other subcommands get the stderr layer (see
@@ -7,7 +8,9 @@
 
 pub mod config;
 pub mod json;
+pub mod metrics;
 pub mod otlp;
+pub mod scrape;
 pub mod subscriber;
 
 use std::path::Path;
@@ -20,6 +23,8 @@ use opentelemetry::KeyValue;
 use opentelemetry_sdk::error::OTelSdkError;
 use opentelemetry_sdk::logs::log_processor_with_async_runtime::BatchLogProcessor;
 use opentelemetry_sdk::logs::SdkLoggerProvider;
+use opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicReader;
+use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::runtime;
 use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor;
@@ -58,17 +63,22 @@ pub struct ShutdownReport {
     pub traces: ProviderOutcome,
     /// The log provider.
     pub logs: ProviderOutcome,
+    /// The meter provider (the `/metrics` reader, and the OTLP metric reader
+    /// when OTLP is on).
+    pub metrics: ProviderOutcome,
 }
 
 impl ShutdownReport {
     /// `true` when every provider that was running flushed.
     pub fn all_flushed(&self) -> bool {
-        [&self.traces, &self.logs].iter().all(|outcome| {
-            matches!(
-                outcome,
-                ProviderOutcome::NotRunning | ProviderOutcome::Flushed
-            )
-        })
+        [&self.traces, &self.logs, &self.metrics]
+            .iter()
+            .all(|outcome| {
+                matches!(
+                    outcome,
+                    ProviderOutcome::NotRunning | ProviderOutcome::Flushed
+                )
+            })
     }
 }
 
@@ -77,6 +87,10 @@ impl ShutdownReport {
 pub struct Telemetry {
     tracer: Option<SdkTracerProvider>,
     logger: Option<SdkLoggerProvider>,
+    // Always present: `/metrics` needs it with or without OTLP.
+    meter: SdkMeterProvider,
+    // What the Prometheus reader renders into; `scrape::serve` reads it.
+    registry: prometheus::Registry,
     failures: Arc<ExportFailures>,
 }
 
@@ -113,7 +127,8 @@ impl Telemetry {
     ///
     /// # Returns
     /// The running telemetry; with no `[telemetry.otlp]` (or
-    /// `OTEL_SDK_DISABLED=true`) it holds no providers.
+    /// `OTEL_SDK_DISABLED=true`) it holds no tracer or logger, but always the
+    /// meter provider and the registry `/metrics` renders.
     ///
     /// # Errors
     /// [`OkfError::Config`] when a variable named by `headers_env` or
@@ -123,59 +138,66 @@ impl Telemetry {
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<Self, OkfError> {
         let failures = Arc::new(ExportFailures::default());
-        let Some(otlp) = &config.otlp else {
-            return Ok(Self {
-                tracer: None,
-                logger: None,
-                failures,
-            });
-        };
+        let resource = resource(config);
         // Before the target is resolved: a disabled SDK never needs the
         // credentials, so removing them must not stop the service starting.
-        if env("OTEL_SDK_DISABLED").is_some_and(|value| value.trim().eq_ignore_ascii_case("true")) {
-            tracing::info!("OTLP export is off: OTEL_SDK_DISABLED is true");
-            return Ok(Self {
-                tracer: None,
-                logger: None,
-                failures,
-            });
-        }
-        let target = OtlpTarget::resolve(otlp, env)?;
-        let resource = resource(config);
+        let sdk_disabled =
+            env("OTEL_SDK_DISABLED").is_some_and(|value| value.trim().eq_ignore_ascii_case("true"));
+        let otlp = match &config.otlp {
+            Some(_) if sdk_disabled => {
+                tracing::info!("OTLP export is off: OTEL_SDK_DISABLED is true");
+                None
+            }
+            Some(otlp) => Some((otlp, OtlpTarget::resolve(otlp, env)?)),
+            None => None,
+        };
 
-        let tracer = match otlp::span_exporter(&target, &failures) {
-            Ok(exporter) => {
-                let processor = BatchSpanProcessor::builder(exporter, runtime::Tokio).build();
-                let mut builder = SdkTracerProvider::builder()
-                    .with_resource(resource.clone())
-                    .with_span_processor(processor);
-                if let Some(ratio) = otlp.sample_ratio {
-                    builder = builder.with_sampler(Sampler::ParentBased(Box::new(
-                        Sampler::TraceIdRatioBased(ratio),
-                    )));
+        let mut tracer = None;
+        let mut logger = None;
+        if let Some((otlp, target)) = &otlp {
+            tracer = match otlp::span_exporter(target, &failures) {
+                Ok(exporter) => {
+                    let processor = BatchSpanProcessor::builder(exporter, runtime::Tokio).build();
+                    let mut builder = SdkTracerProvider::builder()
+                        .with_resource(resource.clone())
+                        .with_span_processor(processor);
+                    if let Some(ratio) = otlp.sample_ratio {
+                        builder = builder.with_sampler(Sampler::ParentBased(Box::new(
+                            Sampler::TraceIdRatioBased(ratio),
+                        )));
+                    }
+                    Some(builder.build())
                 }
-                Some(builder.build())
-            }
-            Err(error) => {
-                tracing::warn!("OTLP traces are off: {error}");
-                None
-            }
-        };
-        let logger = match otlp::log_exporter(&target, &failures) {
-            Ok(exporter) => {
-                let processor = BatchLogProcessor::builder(exporter, runtime::Tokio).build();
-                Some(
-                    SdkLoggerProvider::builder()
-                        .with_resource(resource)
-                        .with_log_processor(processor)
-                        .build(),
-                )
-            }
-            Err(error) => {
-                tracing::warn!("OTLP logs are off: {error}");
-                None
-            }
-        };
+                Err(error) => {
+                    tracing::warn!("OTLP traces are off: {error}");
+                    None
+                }
+            };
+            logger = match otlp::log_exporter(target, &failures) {
+                Ok(exporter) => {
+                    let processor = BatchLogProcessor::builder(exporter, runtime::Tokio).build();
+                    Some(
+                        SdkLoggerProvider::builder()
+                            .with_resource(resource.clone())
+                            .with_log_processor(processor)
+                            .build(),
+                    )
+                }
+                Err(error) => {
+                    tracing::warn!("OTLP logs are off: {error}");
+                    None
+                }
+            };
+        }
+
+        let registry = prometheus::Registry::new();
+        let meter = build_meter_provider(resource, &registry, otlp.as_ref(), &failures)?;
+        metrics::observe_export_failures(
+            &opentelemetry::metrics::MeterProvider::meter(&meter, "okf-mcp"),
+            Arc::clone(&failures),
+        );
+        // Before `App::load`: its instruments are built on the global meter.
+        global::set_meter_provider(meter.clone());
         if let Some(provider) = &tracer {
             global::set_tracer_provider(provider.clone());
             global::set_text_map_propagator(TraceContextPropagator::new());
@@ -183,6 +205,8 @@ impl Telemetry {
         Ok(Self {
             tracer,
             logger,
+            meter,
+            registry,
             failures,
         })
     }
@@ -197,6 +221,8 @@ impl Telemetry {
         Self {
             tracer,
             logger,
+            meter: SdkMeterProvider::builder().build(),
+            registry: prometheus::Registry::new(),
             failures: Arc::new(ExportFailures::default()),
         }
     }
@@ -209,6 +235,15 @@ impl Telemetry {
     /// Whether OTLP logs are being exported.
     pub fn logs_enabled(&self) -> bool {
         self.logger.is_some()
+    }
+
+    /// The registry `/metrics` renders: the Prometheus reader writes into it.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor")
+    )]
+    pub fn registry(&self) -> prometheus::Registry {
+        self.registry.clone()
     }
 
     /// The failed-export counts the exporters keep.
@@ -237,16 +272,69 @@ impl Telemetry {
 
     /// [`Telemetry::shutdown`] with the deadline as a parameter.
     async fn shutdown_within(self, deadline: Duration) -> ShutdownReport {
-        let Self { tracer, logger, .. } = self;
+        let Self {
+            tracer,
+            logger,
+            meter,
+            ..
+        } = self;
         // `spawn_blocking` moves the waiting off the async workers: it blocks
         // on a channel until the providers answer or the deadline passes.
-        tokio::task::spawn_blocking(move || shutdown_blocking(tracer, logger, deadline))
+        tokio::task::spawn_blocking(move || shutdown_blocking(tracer, logger, meter, deadline))
             .await
             .unwrap_or_else(|_| ShutdownReport {
                 traces: ProviderOutcome::Failed("the shutdown task failed".to_string()),
                 logs: ProviderOutcome::Failed("the shutdown task failed".to_string()),
+                metrics: ProviderOutcome::Failed("the shutdown task failed".to_string()),
             })
     }
+}
+
+/// Builds the meter provider: the Prometheus reader always, and the OTLP
+/// periodic reader when OTLP is on and its exporter builds.
+///
+/// # Arguments
+/// * `resource` - what OTLP metrics carry (`/metrics` renders no resource).
+/// * `registry` - what the Prometheus reader renders into.
+/// * `otlp` - the resolved OTLP settings, when OTLP is on.
+/// * `failures` - the counts the metric exporter adds to.
+///
+/// # Errors
+/// [`OkfError::Config`] when the Prometheus reader cannot be built.
+#[tracing::instrument(level = "trace", skip_all)]
+fn build_meter_provider(
+    resource: Resource,
+    registry: &prometheus::Registry,
+    otlp: Option<&(&config::OtlpConfig, OtlpTarget)>,
+    failures: &Arc<ExportFailures>,
+) -> Result<SdkMeterProvider, OkfError> {
+    let reader = opentelemetry_prometheus::exporter()
+        .with_registry(registry.clone())
+        // No `target_info` series and no `otel_scope_*` labels: every series
+        // carries only the labels the typed handle gives it.
+        .without_target_info()
+        .scope_info_enabled(false)
+        .build()
+        .map_err(|error| OkfError::Config {
+            path: "[telemetry.prometheus]".to_string(),
+            message: format!("the Prometheus reader: {error}"),
+        })?;
+    let mut builder = SdkMeterProvider::builder()
+        .with_resource(resource)
+        .with_reader(reader);
+    if let Some((otlp, target)) = otlp {
+        match otlp::metric_exporter(target, failures) {
+            Ok(exporter) => {
+                builder = builder.with_reader(
+                    PeriodicReader::builder(exporter, runtime::Tokio)
+                        .with_interval(otlp.export_interval)
+                        .build(),
+                );
+            }
+            Err(error) => tracing::warn!("OTLP metrics are off: {error}"),
+        }
+    }
+    Ok(builder.build())
 }
 
 /// Shuts the providers down, each on its own thread, and waits for them
@@ -258,6 +346,7 @@ impl Telemetry {
 fn shutdown_blocking(
     tracer: Option<SdkTracerProvider>,
     logger: Option<SdkLoggerProvider>,
+    meter: SdkMeterProvider,
     deadline: Duration,
 ) -> ShutdownReport {
     /// Which provider a finished thread was.
@@ -265,6 +354,7 @@ fn shutdown_blocking(
     enum Which {
         Traces,
         Logs,
+        Metrics,
     }
     let (sender, receiver) = mpsc::channel::<(Which, Result<(), OTelSdkError>)>();
     let mut pending = Vec::new();
@@ -296,6 +386,11 @@ fn shutdown_blocking(
     if let Some(provider) = logger {
         spawn(Which::Logs, "logs", Box::new(move || provider.shutdown()));
     }
+    spawn(
+        Which::Metrics,
+        "metrics",
+        Box::new(move || meter.shutdown()),
+    );
     drop(sender);
 
     let mut outcomes: Vec<(Which, ProviderOutcome)> = Vec::new();
@@ -328,6 +423,7 @@ fn shutdown_blocking(
     ShutdownReport {
         traces: outcome(Which::Traces, "traces", started_with(Which::Traces)),
         logs: outcome(Which::Logs, "logs", started_with(Which::Logs)),
+        metrics: outcome(Which::Metrics, "metrics", started_with(Which::Metrics)),
     }
 }
 
@@ -513,6 +609,43 @@ mod tests {
         assert!(!telemetry.traces_enabled() && !telemetry.logs_enabled());
     }
 
+    #[tokio::test]
+    async fn otel_sdk_disabled_still_populates_the_prometheus_exposition() {
+        let mut config = TelemetryConfig::default();
+        config.otlp = Some(config::OtlpConfig {
+            sentry_dsn_env: Some("DSN".to_string()),
+            ..config::OtlpConfig::default()
+        });
+        let telemetry = Telemetry::start(&config, &|name| {
+            (name == "OTEL_SDK_DISABLED").then(|| "true".to_string())
+        })
+        .expect("starts");
+        // What `App::load` does with the global provider, on this telemetry's
+        // own meter, so parallel tests cannot interfere.
+        let _metrics = metrics::Metrics::new(&opentelemetry::metrics::MeterProvider::meter(
+            &telemetry.meter,
+            "okf-mcp",
+        ));
+
+        let families = telemetry.registry().gather();
+
+        for expected in metrics::Metrics::FAMILIES {
+            assert!(
+                families.iter().any(|family| family.name() == *expected),
+                "{expected} missing from {:?}",
+                families
+                    .iter()
+                    .map(|family| family.name())
+                    .collect::<Vec<_>>()
+            );
+        }
+        let failures = families
+            .iter()
+            .find(|family| family.name() == "okf_telemetry_export_failures_total")
+            .expect("the failure family");
+        assert_eq!(failures.get_metric().len(), 12);
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn shutdown_returns_within_the_deadline_with_a_hung_exporter() {
         let processor = BatchSpanProcessor::builder(HangingSpanExporter, runtime::Tokio).build();
@@ -590,7 +723,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn spans_and_logs_reach_the_receiver_with_their_headers() {
+    async fn spans_logs_and_metrics_reach_the_receiver_with_their_headers() {
         let (port, mut heads) = receiver().await;
         let mut config = TelemetryConfig::default();
         config.otlp = Some(config::OtlpConfig {
@@ -620,13 +753,16 @@ mod tests {
                 "{head}"
             );
             paths.push(head.lines().next().unwrap_or_default().to_string());
-            if paths.len() == 2 {
+            if paths.len() == 3 {
                 break;
             }
         }
         paths.sort();
+        // The meter provider's final export is the third request.
+        assert_eq!(paths.len(), 3, "{paths:?}");
         assert!(paths[0].starts_with("POST /v1/logs "), "{paths:?}");
-        assert!(paths[1].starts_with("POST /v1/traces "), "{paths:?}");
+        assert!(paths[1].starts_with("POST /v1/metrics "), "{paths:?}");
+        assert!(paths[2].starts_with("POST /v1/traces "), "{paths:?}");
     }
 
     #[tokio::test]
@@ -635,5 +771,49 @@ mod tests {
         assert_eq!(report.traces, ProviderOutcome::NotRunning);
         assert_eq!(report.logs, ProviderOutcome::NotRunning);
         assert!(report.all_flushed());
+    }
+
+    #[tokio::test]
+    async fn start_without_otlp_still_serves_the_failure_counts_and_reports_metrics() {
+        let telemetry = Telemetry::start(&TelemetryConfig::default(), &|_| None).expect("starts");
+        // `okf_build_info` appears once `App::load` builds the handle; the
+        // failure counts are registered by `start` itself.
+        let families = telemetry.registry().gather();
+        let names: Vec<&str> = families.iter().map(|family| family.name()).collect();
+        assert_eq!(names, ["okf_telemetry_export_failures_total"]);
+        let report = telemetry.shutdown().await;
+        assert_eq!(report.traces, ProviderOutcome::NotRunning);
+        assert_eq!(report.metrics, ProviderOutcome::Flushed);
+        assert!(report.all_flushed());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn metrics_reach_the_receiver_when_the_provider_shuts_down() {
+        let (port, mut heads) = receiver().await;
+        let mut config = TelemetryConfig::default();
+        config.otlp = Some(config::OtlpConfig {
+            endpoint: Some(format!("http://127.0.0.1:{port}")),
+            headers_env: Some("H".to_string()),
+            // Far beyond the test: only the final flush at shutdown exports.
+            export_interval: Duration::from_secs(3600),
+            ..config::OtlpConfig::default()
+        });
+        let telemetry = Telemetry::start(&config, &|name| {
+            (name == "H").then(|| "x-test-auth=token-1".to_string())
+        })
+        .expect("starts");
+
+        let report = telemetry.shutdown().await;
+
+        assert!(report.all_flushed(), "{report:?}");
+        let head = tokio::time::timeout(Duration::from_secs(10), heads.recv())
+            .await
+            .expect("a metrics export arrives within 10 s")
+            .expect("receiver open");
+        assert!(head.starts_with("POST /v1/metrics "), "{head}");
+        assert!(
+            head.to_ascii_lowercase().contains("x-test-auth: token-1"),
+            "{head}"
+        );
     }
 }
