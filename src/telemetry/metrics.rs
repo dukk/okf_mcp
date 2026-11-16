@@ -176,6 +176,46 @@ impl Metrics {
     // them (`observe_catalogs`), and the pool gauge (`observe_pool`); the
     // catalog ones have a series only per loaded catalog.
 
+    /// Every Prometheus family the server can export, as `/metrics` names
+    /// it: the three in [`Metrics::FAMILIES`], plus each one that appears
+    /// only once its event has happened (a counter or histogram has no
+    /// series until the first record) or once a catalog is loaded (the
+    /// observable gauges [`Metrics::observe_catalogs`] and
+    /// [`Metrics::observe_pool`] register). The Grafana example's test
+    /// (`tests/grafana_dashboard.rs`) checks the dashboard against this
+    /// list, and the `all_families_...` unit test checks the list against
+    /// the instruments, so a renamed instrument fails a test.
+    pub const ALL_FAMILIES: &'static [&'static str] = &[
+        "okf_build_info",
+        "okf_telemetry_export_failures_total",
+        "okf_mail_queue_depth",
+        "http_server_request_duration_seconds",
+        "http_server_active_requests",
+        "okf_mcp_tool_duration_seconds",
+        "okf_mcp_sessions_active",
+        "okf_publish_duration_seconds",
+        "okf_publish_lock_wait_seconds",
+        "okf_lint_rejections_total",
+        "okf_poll_duration_seconds",
+        "okf_catalog_refreshes_total",
+        "okf_keycache_reloads_total",
+        "okf_auth_attempts_total",
+        "okf_oauth_tokens_issued_total",
+        "okf_ratelimit_rejections_total",
+        "okf_mail_jobs_total",
+        "okf_clock_checks_total",
+        "okf_clock_offset_seconds",
+        "okf_archive_size_bytes_total",
+        "okf_archive_duration_seconds",
+        // Registered by `observe_catalogs` and `observe_pool`: they need a
+        // loaded `App`, so their own tests (`app.rs`, `mcp/changesets.rs`)
+        // check the rendered names.
+        "okf_catalog_concepts",
+        "okf_catalog_generation",
+        "okf_changesets_open",
+        "db_client_connection_count",
+    ];
+
     /// Builds every instrument on `meter` and records `okf.build.info`: a
     /// gauge fixed at 1 whose `version` label is the crate version.
     ///
@@ -1013,6 +1053,55 @@ mod tests {
         assert_eq!(lint_rule_label("secret:github-token"), "secret");
         assert_eq!(lint_rule_label("secret:assignment"), "secret");
         assert_eq!(lint_rule_label("made up"), "other");
+    }
+
+    #[test]
+    fn all_families_names_every_family_the_instruments_render() {
+        use crate::mcp::testing::local_metrics;
+        // The four gauges that read a loaded `App`.
+        const NEEDS_APP: [&str; 4] = [
+            "okf_catalog_concepts",
+            "okf_catalog_generation",
+            "okf_changesets_open",
+            "db_client_connection_count",
+        ];
+        let (_provider, metrics, registry) = local_metrics();
+        let elapsed = Duration::from_millis(5);
+
+        metrics.publish("notes", Outcome::Ok, elapsed);
+        metrics.publish_lock_wait("notes", elapsed);
+        metrics.lint_rejection("notes", "orphan");
+        metrics.poll(Outcome::Ok, elapsed);
+        metrics.catalog_refresh("notes", RefreshResult::Reloaded);
+        metrics.keycache_reload(Outcome::Ok);
+        metrics.http_request("GET", "/health", 200, elapsed);
+        let _in_flight = metrics.http_in_flight("GET", "/health");
+        metrics.tool_call("get_concept", "notes", Outcome::Ok, elapsed);
+        let _session = metrics.mcp_session();
+        metrics.auth_attempt(Method::Password, SignInOutcome::Ok);
+        metrics.oauth_token_issued(Grant::RefreshToken);
+        metrics.rate_limited(Limiter::OauthToken);
+        metrics.mail_job(MailProvider::Log, MailOutcome::Sent);
+        metrics.clock_check(Outcome::Ok, Some(10));
+        metrics.archive(Direction::Export, "notes", Outcome::Ok, elapsed, Some(10));
+
+        let rendered: std::collections::BTreeSet<String> = registry
+            .gather()
+            .iter()
+            .map(|family| family.name().to_string())
+            .collect();
+        let listed: std::collections::BTreeSet<String> = Metrics::ALL_FAMILIES
+            .iter()
+            .filter(|name| !NEEDS_APP.contains(name))
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(rendered, listed);
+        for name in NEEDS_APP {
+            assert!(Metrics::ALL_FAMILIES.contains(&name), "{name}");
+        }
+        for name in Metrics::FAMILIES {
+            assert!(Metrics::ALL_FAMILIES.contains(name), "{name}");
+        }
     }
 
     #[test]

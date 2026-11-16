@@ -216,6 +216,21 @@ stops working at the next poll too):
 `key create` prints the key once (and its administration id on stderr). Keep it in an environment variable, here
 `OKF_MCP_KEY`, and never in a file you commit.
 
+### Observability
+
+`okf-mcp serve` can export spans, logs and metrics over OTLP (to a
+collector, or to Sentry), serve Prometheus metrics on a separate port, and
+write its stderr log as JSON with trace ids. It is all off until you add a
+`[telemetry]` table. No names, email addresses, document content or secrets are
+exported, but spans carry stable ids an operator can resolve (`enduser.id`
+is the user's id, `okf.key.id` the key's, or `session` for a console
+session) and catalog names appear as span attributes and metric labels, so
+this is not anonymous telemetry. stderr alone keeps caller text and full
+errors, so keep it inside the cluster. `docs/operations.md` has the "Telemetry" section (the
+settings, what is never exported, and every metric and span), and
+`examples/` has a Kubernetes Service and ServiceMonitor for the metrics port
+and a Grafana dashboard.
+
 ### Connecting a client
 
 An `mcp.json` entry (Claude Code expands the `${...}` variables):

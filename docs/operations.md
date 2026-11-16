@@ -103,6 +103,16 @@ unknown keys are ignored, so one file serves every version.
 | `mail.smtp.host`, `mail.smtp.port`, `mail.smtp.starttls`, `mail.smtp.username`, `mail.smtp.password_env` | none, `587`, `true`, none, none | The SMTP relay. `starttls = true` requires STARTTLS; `false` is TLS from the first byte (port 465); there is no plain-text mode. `username` and `password_env` (the environment variable holding the password) go together |
 | `mail.postmark.token_env`, `mail.postmark.message_stream` | none, `"outbound"` | Postmark's server token (by environment variable) and message stream |
 | `mail.ses.region` | none | The AWS region SES sends in. Unset, the AWS SDK's own resolution decides (`AWS_REGION`, then the profile, then instance metadata). The `[mail.ses]` table is optional; there is no credential key ([Mail](#mail)) |
+| `telemetry.service_name` | `"okf-mcp"` | The `service.name` that OTLP reports |
+| `telemetry.environment` | none | The `deployment.environment.name` that OTLP reports, such as `"production"` |
+| `telemetry.stderr.format` | `"text"` | stderr's line format: `"text"` (today's lines) or `"json"` (one object per line, with `trace_id` and `span_id`) |
+| `telemetry.stderr.filter` | `"warn,okf_mcp=info,tower_http=info"` | stderr's filter, a `tracing` directive string. `RUST_LOG` overrides it |
+| `telemetry.otlp.endpoint`, `telemetry.otlp.headers_env` | none | The receiver's base URL (`/v1/traces`, `/v1/logs` and `/v1/metrics` are appended; HTTP with protobuf, not gRPC) and the environment variable holding its headers as `name=value,name=value`, or `none`. Set together. OTLP is off without the `[telemetry.otlp]` table |
+| `telemetry.otlp.sentry_dsn_env` | none | The environment variable holding a Sentry DSN, instead of `endpoint` and `headers_env` |
+| `telemetry.otlp.traces_filter`, `telemetry.otlp.logs_filter` | `"info"`, `"info"` | What the span and log exporters take (this crate's own targets only) |
+| `telemetry.otlp.sample_ratio` | none | The share of new traces kept, `0.0` to `1.0`. Unset: `OTEL_TRACES_SAMPLER` decides, else every trace |
+| `telemetry.otlp.export_interval` | `"60s"` | How often metrics are pushed over OTLP |
+| `telemetry.prometheus.listen` | none | The address of the separate, unauthenticated `/metrics` listener, such as `"[::]:9464"`. No listener without it. It must not equal `listen` or share its port when either is unspecified |
 
 The server refuses to start (and every subcommand refuses to run) with a zero
 `poll_interval`, `session_idle_timeout`, `database_max_connections` or
@@ -134,6 +144,17 @@ and an `ses` provider with a blank `region`.
 a value), and when the `ses` provider finds no AWS region. The other
 subcommands never read those variables nor look for AWS credentials:
 `user invite` and `mail test` only queue mail, which a running server sends.
+
+Like `[auth]`, the `[telemetry]` tables refuse a key they do not know. They
+also refuse an `[telemetry.otlp]` table with none of `endpoint` with
+`headers_env`, or `sentry_dsn_env`; one with both forms, or with only one of
+`endpoint` and `headers_env`; an `endpoint` that is not an `http` or `https`
+URL with a host, or that has a user name, password, query or fragment; a
+`sample_ratio` outside `0` to `1`; a zero `export_interval`; a filter that does
+not parse; and a `telemetry.prometheus.listen` that overlaps `listen`.
+`serve` also refuses to start when a variable named by `headers_env` or
+`sentry_dsn_env` is unset or blank, naming the variable (never a value). See
+[Telemetry](#telemetry).
 
 ```toml
 listen = "[::]:8080"
@@ -181,9 +202,25 @@ port = 587
 starttls = true
 username = "okf"
 password_env = "OKF_SMTP_PASSWORD"
+
+[telemetry]
+service_name = "okf-mcp"
+environment = "production"
+
+[telemetry.stderr]
+format = "json"
+filter = "warn,okf_mcp=info"
+
+[telemetry.otlp]
+endpoint = "https://otlp.example.com"
+headers_env = "OKF_OTLP_HEADERS"
+export_interval = "60s"
+
+[telemetry.prometheus]
+listen = "[::]:9464"
 ```
 
-`[oauth]`, `[auth]` and `[mail]` are TOML tables, so they come after every
+`[oauth]`, `[auth]`, `[mail]` and `[telemetry]` are TOML tables, so they come after every
 top-level key: a top-level key written below one would land inside it.
 
 - **IPv6:** on an IPv6 or dual-stack cluster, listen on `[::]:8080`. Linux
@@ -202,7 +239,11 @@ top-level key: a top-level key written below one would land inside it.
 | `OKF_MCP_LISTEN` | Overrides `listen` (or `serve --listen`) |
 | `PGSSLMODE` | TLS to Postgres; `verify-full` in production (section 4) |
 | `PGSSLROOTCERT` | The CA certificate file that `verify-full` checks the database's certificate against |
-| `RUST_LOG` | The log filter. **Leave it unset:** the default is `warn,okf_mcp=info,tower_http=info`, which logs the server's own events and one line per request. Setting `info` everywhere adds noise from every dependency |
+| `RUST_LOG` | The stderr filter only, and it overrides `[telemetry.stderr] filter`; it does not change what is exported. **Leave it unset:** the default is `warn,okf_mcp=info,tower_http=info`, which logs the server's own events and one line per request. Setting `info` everywhere adds noise from every dependency |
+| `OKF_OTLP_HEADERS` (any name) | The OTLP receiver's headers as `name=value,name=value`, or `none`, named by `telemetry.otlp.headers_env`. Keep it in a Secret |
+| `OKF_SENTRY_DSN` (any name) | A Sentry DSN, named by `telemetry.otlp.sentry_dsn_env` |
+| `OTEL_SDK_DISABLED` | `true` turns OTLP export off without editing the file |
+| `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_TRACES_SAMPLER`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_BSP_*` | Read by the OpenTelemetry SDK as it defines them ([Telemetry](#telemetry)). `OTEL_EXPORTER_OTLP_HEADERS` is merged over `headers_env`'s value |
 | `OKF_OIDC_EXAMPLE_SECRET` (any name) | An OIDC client secret, named by its provider's `client_secret_env` |
 | `OKF_SMTP_PASSWORD` (any name) | The SMTP password, named by `mail.smtp.password_env` |
 | `OKF_POSTMARK_TOKEN` (any name) | The Postmark server token, named by `mail.postmark.token_env` |
@@ -214,7 +255,10 @@ link, or client secret. Each request's line names the method and the matched
 route (`/api/v1/users/{name}/sessions/{id_prefix}`), never the literal path
 or the query, so neither an id in a path nor an emailed link's token reaches
 the log. The `log` mail provider is the one exception: it logs whole
-messages, links included, which is why it is for development only.
+messages, links included, which is why it is for development only. What
+leaves the pod over OTLP is much narrower than stderr; see
+[Telemetry](#telemetry) for what is never exported and why stderr stays
+sensitive.
 
 Set `OKF_MCP_CONFIG` in the container's environment rather than passing
 `--config` as an argument: then `kubectl exec ... -- okf-mcp <subcommand>`
@@ -326,6 +370,16 @@ data:
     default_catalog = "notes"
     time_server = "time.example.com"
     public_url = "https://okf-mcp.example.com"
+
+    [telemetry]
+    environment = "production"
+
+    [telemetry.otlp]
+    endpoint = "http://otel-collector.observability.svc.cluster.local:4318"
+    headers_env = "OKF_OTLP_HEADERS"
+
+    [telemetry.prometheus]
+    listen = "[::]:9464"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -356,9 +410,28 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+            - name: metrics
+              containerPort: 9464
           env:
             - name: OKF_MCP_CONFIG
               value: /etc/okf-mcp/config.toml
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # Kubernetes expands $(POD_NAME) and $(POD_NAMESPACE) because
+            # they are defined above this entry.
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: k8s.pod.name=$(POD_NAME),k8s.namespace.name=$(POD_NAMESPACE)
+            - name: OKF_OTLP_HEADERS
+              valueFrom:
+                secretKeyRef:
+                  name: okf-mcp-otlp
+                  key: headers
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -477,6 +550,15 @@ The objects for backups (`ObjectStore`, `ScheduledBackup`) are in section 9.
   `/tmp` is where an archive copied into the pod for `okf-mcp import`, or
   written by `okf-mcp export`, goes (section 6).
 - **No `RUST_LOG`:** the binary's default is the intended level (section 3).
+- **Telemetry:** the `metrics` port (9464) is the unauthenticated `/metrics`
+  listener. The Service above does not expose it and the Ingress must not
+  route to it; scrape it through
+  [`examples/kubernetes/metrics-service.yaml`](../examples/kubernetes/metrics-service.yaml)
+  and [`examples/kubernetes/servicemonitor.yaml`](../examples/kubernetes/servicemonitor.yaml).
+  `OKF_OTLP_HEADERS` comes from a Secret (`okf-mcp-otlp`, key `headers`, value
+  `none` for a receiver without auth), and the downward API fills
+  `OTEL_RESOURCE_ATTRIBUTES` so every signal names its pod and namespace. Leave
+  all of it out, with the `[telemetry]` table, to run as before.
 - The `kubectl cp` in section 6 needs `tar` in the container, which the image
   has.
 
@@ -498,6 +580,297 @@ out of sync in a GitOps tool). Leaving the field out lets the cluster decide.
   import. The import route accepts up to `max_import_bytes` plus gzip slack
   (a little over 64 MiB with the default), so the ingress must allow more
   than that. Raise both together.
+
+## Telemetry
+
+The server reports what it is doing three ways: spans and log records pushed
+over OTLP to a receiver, metrics pushed over OTLP and served on a separate
+`/metrics` port for Prometheus, and the stderr log it has always written.
+All of it is off unless configured: with no `[telemetry]` table the server
+writes today's stderr lines and nothing else. It applies to `okf-mcp serve`
+only. The other subcommands keep plain stderr logging, and `okf-maintenance`
+exports nothing (OTLP for the runner is a follow-up).
+
+The design is `docs/superpowers/specs/2026-11-15-okf-observability-design.md`;
+the keys are in the table in section 3.
+
+### Sending to a receiver
+
+OTLP goes over HTTP with protobuf bodies (not gRPC), to `endpoint` with
+`/v1/traces`, `/v1/logs` and `/v1/metrics` appended, so point it at a
+receiver's HTTP port (4318 for an OpenTelemetry Collector). Each export times
+out after 10 seconds. `headers_env` names the variable that holds the request
+headers as `name=value,name=value`, so a token never appears in the file;
+set the variable to `none` for a receiver that takes no headers. A named
+variable that is unset or blank stops the server starting, and the message
+names the variable, never its value.
+
+```toml
+[telemetry]
+service_name = "okf-mcp"
+environment = "production"
+
+[telemetry.otlp]
+endpoint = "https://otlp.example.com"
+headers_env = "OKF_OTLP_HEADERS"
+sample_ratio = 0.25
+```
+
+```sh
+OKF_OTLP_HEADERS='authorization=Bearer <token>'   # from a Secret, never the file
+```
+
+- **Sampling:** `sample_ratio` keeps that share of new traces. Without it,
+  `OTEL_TRACES_SAMPLER` decides, and without that every trace is kept. An
+  incoming `traceparent` is attached to the request span as a link, never
+  adopted, so a caller cannot choose to have the server record (or skip) a
+  trace. The server does send a `traceparent` on the requests it makes to an
+  OIDC provider, to Postmark and to a client's metadata document, so those
+  services can join the trace.
+- **What is exported:** spans and log records from this crate's own code
+  (`okf_mcp` targets) at `info` or above, by default. `traces_filter` and
+  `logs_filter` take a tracing filter such as `info,okf_mcp::store=debug`.
+  Raising them adds the `debug` and `trace` spans of the store and the
+  handlers. Events from dependencies (sqlx, rmcp, hyper, the AWS SDK) are
+  never exported, whatever the filter says, and neither are events with the
+  `okf_mcp::local_only` target (below).
+- **Metrics over OTLP** use the same endpoint, every `export_interval`
+  (default 60 seconds), and are independent of the `/metrics` listener.
+- **A failing receiver does not stop the server serving.** Failed exports are counted
+  in `okf_telemetry_export_failures_total`, by signal and reason, and the
+  server carries on.
+- **Shutdown:** on SIGTERM the server drains requests, then flushes the last
+  batch of each signal, waiting at most 4 seconds. That fits inside
+  Kubernetes' default 30-second grace period.
+- **The standard `OTEL_*` variables still apply:** `OTEL_RESOURCE_ATTRIBUTES`
+  adds resource attributes (the Kubernetes example fills `k8s.pod.name` and
+  `k8s.namespace.name`), `OTEL_EXPORTER_OTLP_HEADERS` is merged over the
+  headers from `headers_env` (a header in both takes the environment's
+  value), `OTEL_TRACES_SAMPLER` applies when `sample_ratio` is unset, and the
+  batch settings `OTEL_BSP_*` are read by the SDK (the metric push interval
+  is `export_interval` alone: the file's value, default 60 seconds, always
+  wins over `OTEL_METRIC_EXPORT_INTERVAL`). `OTEL_SDK_DISABLED=true` turns OTLP
+  off without editing the file;
+  the `/metrics` listener and stderr are not affected, and the variables named
+  by `headers_env` and `sentry_dsn_env` are then not needed.
+
+### Sentry
+
+Sentry takes OTLP at its own endpoint. Put the project's DSN in a variable and
+name it instead of `endpoint` and `headers_env`:
+
+```toml
+[telemetry.otlp]
+sentry_dsn_env = "OKF_SENTRY_DSN"
+```
+
+The server derives the three signal URLs from the DSN
+(`https://<host>/api/<project>/integration/otlp/v1/<signal>`, keeping any path
+prefix) and sends the public key as the `x-sentry-auth` header. `sentry_dsn_env`
+cannot be combined with `endpoint` or `headers_env`. The DSN is read at start-up,
+never logged, and an invalid one is refused with a message that does not repeat it.
+The Sentry SDK itself is not used.
+
+### Through a collector
+
+A collector in the cluster keeps the vendor's credentials out of the okf-mcp
+pod and lets you fan out. Point `endpoint` at the collector's HTTP receiver
+and have it export onward:
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+exporters:
+  otlphttp:
+    endpoint: https://otlp.example.com
+service:
+  pipelines:
+    traces:  { receivers: [otlp], exporters: [otlphttp] }
+    logs:    { receivers: [otlp], exporters: [otlphttp] }
+    metrics: { receivers: [otlp], exporters: [otlphttp] }
+```
+
+```toml
+[telemetry.otlp]
+endpoint = "http://otel-collector.observability.svc.cluster.local:4318"
+headers_env = "OKF_OTLP_HEADERS"     # the variable may hold: none
+```
+
+For a quick look at what the server sends, give the collector a `debug`
+exporter with `verbosity: detailed`: it prints every span, log record and
+metric. The milestone changelog records such a run.
+
+### The metrics listener
+
+```toml
+[telemetry.prometheus]
+listen = "[::]:9464"
+```
+
+`GET /metrics` on this port returns the Prometheus text exposition. It is a
+separate listener on purpose: it has **no authentication**, so it must be
+reachable only through the cluster network. The Ingress must not route to it
+(the example in section 5 does not), and the main port never serves
+`/metrics`. Every other path on it is a 404. `listen` must not equal the main
+`listen` address, nor share its port when either is unspecified (`0.0.0.0`
+or `::`); the server refuses to start otherwise. A scrape reads state the
+server already holds (the snapshot cache, the pool's counters, the poll's
+last mail count), so it never queries Postgres.
+
+Add a port named `metrics` to the Deployment and scrape it with a
+ServiceMonitor. [`examples/kubernetes/metrics-service.yaml`](../examples/kubernetes/metrics-service.yaml)
+is a ClusterIP Service for the port and
+[`examples/kubernetes/servicemonitor.yaml`](../examples/kubernetes/servicemonitor.yaml)
+selects it (path `/metrics`, every 30 seconds; add the label your Prometheus
+selects ServiceMonitors by, often `release: <name>`). A NetworkPolicy that
+admits only the Prometheus pods to port 9464 is a sensible addition.
+[`examples/grafana/okf-mcp.json`](../examples/grafana/okf-mcp.json) is an
+example Grafana dashboard (import it, and pick the Prometheus data source).
+Every query is scoped with `{job=~"$job"}`, because names such as
+`http_server_request_duration_seconds` are standard and other services (or
+another okf-mcp installation) in the same Prometheus would otherwise be merged
+in. The `job` variable lists the values of the `job` label on `okf_build_info`,
+which the ServiceMonitor sets (by default to the Service's name,
+`okf-mcp-metrics`); choose your installation there. If you relabel `job`, the
+dashboard follows it.
+`tests/grafana_dashboard.rs` checks that it names only metrics the server
+exports. The server stays single-replica, so there is one target.
+
+### stderr
+
+stderr is unchanged by default: text lines, filtered by
+`warn,okf_mcp=info,tower_http=info`. Two things can change:
+
+- `[telemetry.stderr] format = "json"` writes one JSON object per line, with
+  `trace_id` and `span_id` on every line written inside a span. The ids are the
+  ones the receiver shows, so a line in `kubectl logs` leads to its trace.
+- `[telemetry.stderr] filter` sets the filter in the file. `RUST_LOG`
+  overrides it, and a blank or invalid `RUST_LOG` is ignored in favour of the
+  file's value. `RUST_LOG` now means stderr only: it has no effect on what is
+  exported, which `traces_filter` and `logs_filter` control. stderr always caps
+  `rmcp` at `info`, because at `debug` that crate logs whole JSON-RPC bodies.
+
+With a receiver reading the same events, stderr can be quieter, for example
+`filter = "warn"`, and you read the receiver instead. Keep `warn` and `error`
+on stderr either way: they are what `kubectl logs` shows when the receiver is
+down.
+
+### What is never exported
+
+Nothing below reaches an OTLP span, event, log record or metric, or
+`/metrics`:
+
+- URIs, query strings and headers. A request span carries the method and the
+  matched route template (`/api/v1/users/{name}/sessions/{id_prefix}`), never
+  the path or the query.
+- Request and response bodies, document and concept text, and concept paths.
+- SQL and bind values.
+- Error messages. An error is exported as its kind, a closed set of words.
+- Passwords, tokens, codes, cookies, setup and reset links, and email
+  addresses.
+- Names: users, teams, keys and display names. For the principal, spans carry
+  ids only: `enduser.id` (the user's id) and `okf.key.id` (the key's id). For a
+  console session, `okf.key.id` is the word `session`, not the session's id and
+  not the user's name; the user is identified by `enduser.id` alone.
+- Dependency events (sqlx statements, rmcp's JSON-RPC, the AWS SDK).
+
+**What is exported is not anonymous.** The ids above are stable and can be
+resolved to a user or key by whoever can read your database or the audit log,
+so choose a receiver you trust with them. Catalog names are exported too, as
+the `okf.catalog` span attribute and the `catalog` metric label.
+
+Metric labels come from closed sets only: route templates, registered tool
+names (anything else is `other`), catalog names, and fixed outcome, method,
+rule, reason and status words. Only the gauges that enumerate loaded catalogs
+(`okf_catalog_concepts`, `okf_catalog_generation`, `okf_changesets_open`) drop
+a deleted catalog's series at the next collection. The counters and histograms
+(`okf_catalog_refreshes_total`, `okf_publish_duration_seconds`, the tool and
+archive series) keep the series they recorded for that catalog until the
+process restarts, so a catalog created and deleted under many names leaves
+that many series behind.
+
+**stderr is the one exception, and it is sensitive.** Events with the target
+`okf_mcp::local_only` reach stderr only (both OTLP layers turn them off), and
+they may carry caller-supplied text, an error's full text and the client
+address. With the `log` mail provider they carry whole messages, setup and
+reset links included. That is the same as stderr's content before telemetry
+existed. So:
+
+- keep stderr inside the cluster, as you keep the server's own log;
+- if a log pipeline ships stderr to a third party, filter out
+  `okf_mcp::local_only` first (with the JSON format, the `target` field);
+- never use the `log` mail provider outside development.
+
+For each such event, stderr also gets an ordinary twin that is exported, with a
+closed value in place of the text (for example `sign-in attempt` goes to the
+receiver, and `sign-in attempt (detail)` with the address stays on stderr).
+
+### Metric reference
+
+Names are as `/metrics` shows them. Dots become underscores in names and in
+label names (`http.route` is `http_route`), durations are in seconds, and a
+counter ends in `_total`. A histogram is three series (`_bucket`, `_sum`,
+`_count`) with buckets from 1 ms to 60 s. Every family except
+`okf_build_info`, `okf_telemetry_export_failures_total`, `okf_mail_queue_depth`
+and the gauges that read loaded state (`okf_catalog_concepts`,
+`okf_catalog_generation`, `okf_changesets_open`, `db_client_connection_count`)
+has no series until its first event, so a scrape of an idle server lists
+fewer families than this table. Over OTLP the names are
+the dotted originals.
+
+| Family | Type | Labels | Meaning |
+|---|---|---|---|
+| `http_server_request_duration_seconds` | histogram | `http_request_method`, `http_route`, `http_response_status_code` | Every HTTP request on the main port |
+| `http_server_active_requests` | gauge | `http_request_method`, `http_route` | Requests being served |
+| `okf_mcp_tool_duration_seconds` | histogram | `tool`, `catalog`, `outcome` | MCP tool calls. `tool` is a registered tool or `other`; `catalog` is a loaded catalog or `none`; `outcome` is `ok` or `error` |
+| `okf_mcp_sessions_active` | gauge | none | Open MCP sessions |
+| `okf_publish_duration_seconds` | histogram | `catalog`, `outcome` | A publish, from the first lock to the refreshed snapshot |
+| `okf_publish_lock_wait_seconds` | histogram | `catalog` | Time a publish waited for the catalog's locks |
+| `okf_lint_rejections_total` | counter | `catalog`, `rule` | Lint errors that refused a publish. `rule` is the lint's rule id, `secret` for any secret rule, or `other` |
+| `okf_changesets_open` | gauge | `catalog` | Open changesets, as of the last poll |
+| `okf_poll_duration_seconds` | histogram | `outcome` | One pass of the poll loop |
+| `okf_catalog_refreshes_total` | counter | `catalog`, `result` | Each catalog's turn in a pass: `unchanged`, `reloaded`, `loaded` or `failed` |
+| `okf_catalog_concepts` | gauge | `catalog` | Concepts in the current snapshot |
+| `okf_catalog_generation` | gauge | `catalog` | The snapshot's generation |
+| `okf_keycache_reloads_total` | counter | `outcome` | Key cache and settings reloads |
+| `okf_auth_attempts_total` | counter | `method`, `outcome` | Sign-in attempts. `method` is `password`, `passkey`, `oidc` or `setup`; `outcome` is `ok`, `failed` or `locked` |
+| `okf_oauth_tokens_issued_total` | counter | `grant` | Token pairs issued: `authorization_code` or `refresh_token` |
+| `okf_ratelimit_rejections_total` | counter | `limiter` | Requests a limiter refused: `sign_in_per_ip`, `forgot_per_email`, `forgot_per_ip`, `link_starts`, `oauth_register`, `oauth_token` or `oauth_consent` |
+| `okf_mail_jobs_total` | counter | `provider`, `outcome` | Mail tries. `provider` is the configured one; `outcome` is `sent`, `retry` or `failed` |
+| `okf_mail_queue_depth` | gauge | `status` | Mail not yet sent, as of the last poll: `pending`, `sending`, `retrying` or `failed` |
+| `db_client_connection_count` | gauge | `state` | Postgres pool connections: `idle` and `used` sum to the pool's size |
+| `okf_clock_checks_total` | counter | `outcome` | Clock checks against `time_server` |
+| `okf_clock_offset_seconds` | gauge | none | The time server's clock minus the server's, at the last good check |
+| `okf_archive_size_bytes_total` | counter | `direction`, `catalog` | Archive bytes moved; `direction` is `export` or `import` |
+| `okf_archive_duration_seconds` | histogram | `direction`, `outcome` | Archive exports and imports |
+| `okf_telemetry_export_failures_total` | counter | `signal`, `reason` | Failed OTLP exports. `signal` is `traces`, `logs` or `metrics`; `reason` is `timeout`, `transport`, `rejected` or `other`. All twelve series exist from the first scrape |
+| `okf_build_info` | gauge | `version` | Always 1; the label is the running version |
+
+### Span reference
+
+Spans are exported with `info` as the default filter. A request span is a
+root, and a poll pass, a clock check and a mail job are roots too, since no
+request started them. A tool call's `mcp <tool>` span is not a child of its
+`POST /mcp` request span: it is seen as a trace of its own (rmcp runs the call
+on its own task), so find a call by its tool span, not by the request's trace.
+
+| Span | Attributes |
+|---|---|
+| `<METHOD> <route>`, such as `POST /signin` (server). No span for an unmatched route | `http.request.method` (`_OTHER` for an unknown method), `http.route`, `http.response.status_code`, `enduser.id`, `okf.key.id`. The status is `Error` for a 5xx only. The caller's `traceparent`, if any, is a link |
+| `mcp <tool>` (server): one per tool call; `other` for an unregistered name | `okf.tool`, `okf.catalog` (a loaded catalog, else `none`), `okf.outcome` (`ok` or `error`), `okf.error.kind` on failure, `enduser.id`, `okf.key.id` |
+| `okf.publish`, with children `okf.publish.lock`, `okf.publish.lint` and `okf.publish.write` | `okf.catalog`, `okf.changeset.entries` |
+| `okf.poll`, with children `okf.catalog.refresh` (one per catalog) and `okf.keycache.reload` | `okf.catalog` and `okf.refresh.result` on the refresh |
+| `okf.clock.check` | `okf.outcome`, `okf.clock.offset` (seconds) |
+| `okf.archive.export` and `okf.archive.import` | `okf.catalog` (only for a catalog that exists), `okf.archive.size` (bytes, on success), `okf.outcome` |
+| `okf.mail.job` | `okf.mail.template`, `okf.mail.provider`, `okf.outcome`. Never the address |
+| `okf.oauth.token` | `okf.oauth.grant` |
+| Everything else (store, handlers) | Function spans at `debug` and `trace`, off by default; they carry safe ids only |
+
+An event logged inside a span is exported as a log record carrying the span's
+`trace_id` and `span_id`, and also appears as an event on the span.
 
 ## 6. First run
 

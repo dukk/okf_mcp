@@ -1561,9 +1561,13 @@ Commit: `chore(tracing): instrument <group> (M15 Task 9x)`.
 - `examples/grafana/okf-mcp.json`: request rate and p95 by route; tool calls and p95 by tool; publish duration; poll duration and failures; auth attempts by outcome; mail jobs; export failures; clock offset.
 - `tests/grafana_dashboard.rs`: every metric name in the dashboard's `expr` fields is in `Metrics::FAMILIES` (or the full list Task 2 exposes), so a rename breaks the test, not the dashboard.
 
+> **Corrected (issue #476, 2026-11-16).** `Metrics::FAMILIES` lists only the families present before any traffic, so the test checks `Metrics::ALL_FAMILIES` instead, a new const with every family the server can export (25). A unit test in `src/telemetry/metrics.rs` records one event of every kind on a local provider and asserts the rendered families equal the list (apart from the four gauges that need a loaded `App`, whose own tests check their names), so a renamed instrument fails a test. `tests/grafana_dashboard.rs` reads each `expr`, removes label matchers, grouping, strings and ranges, and maps `_bucket`, `_sum` and `_count` to their histogram. The dashboard's labels are Prometheus's (`http_route`, `http_request_method`, `http_response_status_code`: dots become underscores), not the OTel attribute names.
+
 - [ ] **Step 3: Follow-up issue**
 
 File the deferred `okf-maintenance` OTLP export as an issue (`enhancement`, `milestone-15` follow-up), linking the spec's Non-goals.
+
+> **Corrected (issue #476, 2026-11-16).** Filed as #495.
 
 - [ ] **Step 4: Smoke test**
 
@@ -1574,6 +1578,8 @@ Build the image locally (or `cargo run -- serve`) with `[telemetry]` pointed at 
 - stop the server with SIGTERM and see the last batch flushed within 4 s.
 
 Record the commands and trimmed output in the milestone changelog.
+
+> **Corrected (issue #476, 2026-11-16).** Two results differ from the step's text. The `mcp <tool>` span is its own root trace, not a child of the `POST /mcp` request span (rmcp runs the call on its own task), so a tool call's `trace_id` on stderr is found on the tool span, and the request's on the request span; the changelog records both. Sign-in needs `public_url`, a user with an email, `okf-mcp user invite` and the `log` mail provider (the setup link is in the log), then `POST /account/setup` and `POST /signin` with `Sec-Fetch-Site: same-origin`. The run used `serve`, not an image.
 
 - [ ] **Step 5: README and changelog**
 
