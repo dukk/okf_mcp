@@ -570,8 +570,18 @@ pub(crate) async fn discard(
     // overlay is forgotten.
     let _closing = state.publish_lock().lock().await;
     let now = app.clock().now();
+    // Closing another key's changeset is an admin's administrative change;
+    // an owner closing its own is not recorded. Decided from the row read
+    // before the lock, so its users can be locked before the changeset.
+    let principal = ctx.principal();
+    let recorded =
+        paths.is_none() && changeset.key_id.as_deref() != Some(principal.key_id.as_str());
     // Dropping `tx` without `commit()` (any `?`) rolls back.
     let mut tx = app.pool().begin().await?;
+    if recorded {
+        // The entry's users before the changeset, as publish (issue #418).
+        crate::store::publish::lock_people(&mut tx, &ctx.audit_actor(), state.name()).await?;
+    }
     catalogs::lock(&mut tx, state.id()).await?;
     changesets::lock_catalog(&mut tx, state.id()).await?;
     changesets::lock(&mut tx, changeset.id)
@@ -588,10 +598,7 @@ pub(crate) async fn discard(
     discarded.closed = paths.is_none();
     if discarded.closed {
         changesets::set_state(&mut tx, changeset.id, ChangesetState::Discarded, now).await?;
-        // Closing another key's changeset is an admin's administrative
-        // change; an owner closing its own is not recorded.
-        let principal = ctx.principal();
-        if changeset.key_id.as_deref() != Some(principal.key_id.as_str()) {
+        if recorded {
             let teams = audit::catalog_teams(&mut tx, state.id()).await?;
             let entry = Entry {
                 action: Action::CatalogChangesetDiscarded,
@@ -3717,3 +3724,7 @@ mod suspension_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "changesets/lock_order_tests.rs"]
+mod lock_order_tests;
