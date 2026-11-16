@@ -257,7 +257,6 @@ fn no_tool_text_names_okf_py_or_carries_a_contributor_note() {
 const KNOWN_UNTYPED_PARAMETERS: &[(&str, &str)] = &[
     ("maintenance_dispose", "disposition"),
     ("maintenance_submit", "submission"),
-    ("stamp", "field"),
     ("unquestion", "question"),
     ("set_frontmatter", "value"),
     // Not in the directory's review, but the same shape (`anyOf` of a `$ref`
