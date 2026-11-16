@@ -739,7 +739,13 @@ selects it (path `/metrics`, every 30 seconds; add the label your Prometheus
 selects ServiceMonitors by, often `release: <name>`). A NetworkPolicy that
 admits only the Prometheus pods to port 9464 is a sensible addition.
 [`examples/grafana/okf-mcp.json`](../examples/grafana/okf-mcp.json) is an
-example Grafana dashboard (import it, and pick the Prometheus data source).
+example Grafana dashboard (import it, and pick the Prometheus data source;
+it needs Grafana 10.4 or later). It has a panel for every family the server
+exports, grouped in rows (overview, HTTP, MCP tools, publish, catalogs and
+polling, auth, mail, archives, platform), and shows each of the six duration
+histograms as a heatmap of the server's own buckets, next to p50/p95/p99
+lines. The `catalog` and `tool` variables narrow the panels that carry those
+labels; the tool-duration heatmap follows `tool`.
 Every query is scoped with `{job=~"$job"}`, because names such as
 `http_server_request_duration_seconds` are standard and other services (or
 another okf-mcp installation) in the same Prometheus would otherwise be merged
@@ -748,7 +754,8 @@ which the ServiceMonitor sets (by default to the Service's name,
 `okf-mcp-metrics`); choose your installation there. If you relabel `job`, the
 dashboard follows it.
 `tests/grafana_dashboard.rs` checks that it names only metrics the server
-exports. The server stays single-replica, so there is one target.
+exports, that it shows every one of them, and that each histogram's buckets
+are drawn as a heatmap. The server stays single-replica, so there is one target.
 
 ### stderr
 

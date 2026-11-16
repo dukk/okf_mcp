@@ -100,22 +100,73 @@ fn every_metric_in_the_dashboard_is_one_the_server_exports() {
             used.insert(family.to_string());
         }
     }
-    // The dashboard covers the areas the issue lists, not one family.
-    for expected in [
-        "http_server_request_duration_seconds",
-        "okf_mcp_tool_duration_seconds",
-        "okf_publish_duration_seconds",
-        "okf_poll_duration_seconds",
-        "okf_auth_attempts_total",
-        "okf_mail_jobs_total",
-        "okf_telemetry_export_failures_total",
-        "okf_clock_offset_seconds",
-    ] {
-        assert!(
-            used.contains(expected),
-            "{expected} is not on the dashboard"
-        );
+    // The dashboard shows every family the server exports, so a new
+    // instrument fails this test until it has a panel.
+    let missing: Vec<_> = Metrics::ALL_FAMILIES
+        .iter()
+        .filter(|family| !used.contains(**family))
+        .collect();
+    assert!(missing.is_empty(), "not on the dashboard: {missing:?}");
+}
+
+/// Every panel in the dashboard, rows' nested panels included.
+fn panels(dashboard: &Value) -> Vec<&Value> {
+    let top = dashboard["panels"].as_array().expect("panels");
+    top.iter()
+        .chain(
+            top.iter()
+                .filter_map(|panel| panel["panels"].as_array())
+                .flatten(),
+        )
+        .collect()
+}
+
+/// The histogram families a panel reads through raw `_bucket` series (not
+/// through `histogram_quantile`, which reduces them to a line).
+fn bucket_families(panel: &Value) -> BTreeSet<String> {
+    let mut found = Vec::new();
+    expressions(&panel["targets"], &mut found);
+    found
+        .iter()
+        .filter(|expression| !expression.contains("histogram_quantile"))
+        .flat_map(|expression| metric_names(expression))
+        .filter_map(|name| name.strip_suffix("_bucket").map(str::to_string))
+        .collect()
+}
+
+#[test]
+fn every_histogram_has_a_heatmap_of_its_buckets() {
+    let dashboard: Value = serde_json::from_str(DASHBOARD).expect("the dashboard is JSON");
+    let all = panels(&dashboard);
+
+    // A raw bucket query belongs only in a heatmap that reads Prometheus's
+    // buckets as they are (`format: heatmap`, no re-bucketing).
+    for panel in &all {
+        if bucket_families(panel).is_empty() {
+            continue;
+        }
+        assert_eq!(panel["type"], "heatmap", "{}", panel["title"]);
+        assert_eq!(panel["options"]["calculate"], false, "{}", panel["title"]);
+        for target in panel["targets"].as_array().expect("targets") {
+            assert_eq!(target["format"], "heatmap", "{}", panel["title"]);
+        }
     }
+
+    // Every histogram the server exports (a family the dashboard reads
+    // `_bucket` series of anywhere) has a heatmap.
+    let mut histograms = Vec::new();
+    expressions(&dashboard, &mut histograms);
+    let histograms: BTreeSet<String> = histograms
+        .iter()
+        .flat_map(|expression| metric_names(expression))
+        .filter_map(|name| name.strip_suffix("_bucket").map(str::to_string))
+        .collect();
+    let in_heatmaps: BTreeSet<String> = all
+        .iter()
+        .flat_map(|panel| bucket_families(panel))
+        .collect();
+    assert_eq!(histograms, in_heatmaps);
+    assert_eq!(in_heatmaps.len(), 6, "{in_heatmaps:?}");
 }
 
 /// Every selector of a metric in `expression`, matchers included
