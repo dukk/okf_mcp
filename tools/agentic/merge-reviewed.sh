@@ -72,6 +72,7 @@ if main_checkout=$(agentic_main_checkout) \
     && agentic_git -C "$main_checkout" fetch -q origin \
     && main=$(agentic_git -C "$main_checkout" rev-parse --short origin/main); then
     echo "MERGED PR $pr -> main $main"
+    echo "next: tools/agentic/remove-worktree.sh <worktree> --branch (frees its Cargo build output)"
 else
     echo "MERGED PR $pr; warning: could not fetch origin afterwards"
 fi

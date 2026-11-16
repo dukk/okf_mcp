@@ -134,6 +134,30 @@ agentic_main_checkout() {
     dirname "$common"
 }
 
+# agentic_path_inside <path> <dir...>: true when <path> is one of the
+# directories or below one, on a directory boundary (so /x/wt2 is not inside
+# /x/wt).
+agentic_path_inside() {
+    local dir
+    for dir in "${@:2}"; do
+        case "$1" in "$dir" | "$dir"/*) return 0 ;; esac
+    done
+    return 1
+}
+
+# agentic_procs_inside <dir...>: prints "<pid> <cwd> <command>" for every
+# process whose working directory is inside one of the directories. Reads
+# /proc, so a process of another user whose cwd can't be read is not listed.
+agentic_procs_inside() {
+    local entry pid cwd
+    for entry in /proc/[0-9]*; do
+        pid=${entry#/proc/}
+        cwd=$(readlink "$entry/cwd" 2>/dev/null) || continue
+        agentic_path_inside "$cwd" "$@" || continue
+        printf '%s %s %s\n' "$pid" "$cwd" "$(tr '\0' ' ' <"$entry/cmdline" 2>/dev/null | cut -c1-120)"
+    done
+}
+
 # Every item of a paginated GitHub REST list endpoint, as one JSON array.
 # `gh api --paginate` prints one array per page; `jq -s 'add'` joins them.
 # Fails when any page cannot be fetched.

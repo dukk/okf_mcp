@@ -10,10 +10,11 @@ bot before it merges.
 | `gate.sh` | implementation agents | Runs `fmt`, `lint`, `test`, `test-ui`, `dylint` (the policy lints, `docs/contributing/policy-lints.md`) or a narrow `cargo test`. Every gate has a hard timeout; the heavy gates also take a lock shared by all worktrees. Exit 124 means a test hung (a timeout, or a gate that was killed). Whatever the exit, `gate.sh` returns only once every process the gate started is gone and the lock is free. If a gate exits by itself but leaves processes behind, they are stopped, its own status is kept, and a warning says how many there were. |
 | `watch-review.sh <pr>` | coordinator | Waits until the bot has reviewed the PR's current head (exit 0). Re-triggers the bot once if it is silent, and gives up 30 min after it started, printing why (exit 2). Exits 4 at once when the round cap is reached instead of asking again. Never re-triggers while the PR is behind `main`. Every `gh` call is bounded by the time left, so a stalled call can't hold it past the deadline. |
 | `merge-reviewed.sh <pr>` | coordinator | Merges only if the bot reviewed the current head (or the round cap is reached), every bot thread has a reply, and the PR is `CLEAN`. The merge is pinned to the inspected head with `--match-head-commit`. |
+| `remove-worktree.sh <worktree> [--branch] [--force-branch]` | coordinator | Run after a merge. Refuses the main checkout, a path that isn't a registered worktree, and a worktree with any process whose working directory is inside it. Then runs `cargo clean` there (which also deletes a `build-dir` kept outside the checkout, tens of GiB per worktree; a failed or timed-out clean keeps the worktree), runs `git worktree remove` (never forced), and with `--branch` deletes the local branch once it is merged into `origin/main` (`--force-branch` skips that check). Prints one `REMOVED` line. |
 | `watchdog.sh [--once]` | coordinator | Runs in the background for the whole epic. Exits 3 when any test or gate process in the main checkout or any registered worktree (wherever it lives) runs past its limit, which catches agents stuck before they open a PR. `--once` checks a single time. |
 | `brief-common.md` | implementation agents | The shared rules every implementation agent follows. |
 | `lessons.md` | implementation agents | Rules learned from real review findings. Extend it whenever a review finds a new class of bug. |
-| `lib.sh` | the scripts | Repository, reviewer, review-round, paginated-API, clock and shared-state helpers. Also `agentic_run_bounded`, which every external command goes through: it runs the command in its own process group with a time limit, and always leaves that group empty. |
+| `lib.sh` | the scripts | Repository, working-directory (`agentic_procs_inside`), reviewer, review-round, paginated-API, clock and shared-state helpers. Also `agentic_run_bounded`, which every external command goes through: it runs the command in its own process group with a time limit, and always leaves that group empty. |
 | `tests/run.sh` | anyone changing these tools | Shell tests: a stub `gh` driven by fixture files, a fake clock and throwaway repositories. Run `just test-agentic`. |
 
 ## Coordinator loop
@@ -27,7 +28,7 @@ bot before it merges.
 4. **When the agent reports a PR,** run `tools/agentic/watch-review.sh <pr>` in the background.
    **Before any request for a (re-)review**, by hand or by the watcher, bring the PR up to date with `main`: `git merge origin/main`, push, and wait until GitHub no longer reports it `BEHIND`. The bot skips a PR that is out of date, so a request made before that wastes the request and the wait. `watch-review.sh` never re-triggers while the PR is behind `main`.
 5. **When the review lands,** send the same agent back with the comments. Repeat until a review leaves no new comments, or until the round cap (below) is reached.
-6. **Merge** with `tools/agentic/merge-reviewed.sh <pr>`. Then remove the worktree and branch, and tell agents with open PRs to `git merge origin/main`.
+6. **Merge** with `tools/agentic/merge-reviewed.sh <pr>`. Then run `tools/agentic/remove-worktree.sh .worktrees/okf-mcp-<N> --branch` (it cleans the Cargo build output first, so the disk is freed), and tell agents with open PRs to `git merge origin/main`.
 7. **If an agent goes quiet** for longer than its gates should take, check it directly. Use `ps` for its processes, and query `pg_stat_activity` in its test container. Don't wait for its report.
 
 ## Review rounds
@@ -54,6 +55,8 @@ A PR gets at most `AGENTIC_MAX_REVIEW_ROUNDS` (default 3) reviews from the bot, 
 | `AGENTIC_MAX_REVIEW_ROUNDS` | 3 | Most bot reviews a PR gets before it merges without another |
 | `AGENTIC_TIMEOUT_<GATE>` | 5m / 30m / 75m / 60m / 45m / 15m | Per-gate limits for `gate.sh`: fmt, lint, test, test-ui, dylint, narrow |
 | `AGENTIC_GATE_KILL_AFTER` | 60 (seconds) | How long what is left of a gate's process group gets between TERM and KILL, after a timeout or once the gate exits. `gate.sh` returns only once the group is empty, so the lock is free |
+| `AGENTIC_CLEAN_TIMEOUT` | 600 (seconds) | Most `remove-worktree.sh` gives `cargo clean`; a clean that runs out of time keeps the worktree |
+| `AGENTIC_BASE_REF` | `origin/main` | The ref `remove-worktree.sh --branch` requires the branch to be merged into |
 | `AGENTIC_WATCHDOG_TEST`, `_GATE`, `_INTERVAL` | 1200, 4800, 300 (seconds) | Watchdog limits and check interval |
 | `AGENTIC_NOW_CMD`, `AGENTIC_SLEEP_CMD` | `date +%s`, `sleep` | Clock and sleep for `watch-review.sh`; the tests replace them with a fake clock |
 

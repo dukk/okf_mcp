@@ -26,15 +26,8 @@ test_limit=${AGENTIC_WATCHDOG_TEST:-1200}
 gate_limit=${AGENTIC_WATCHDOG_GATE:-4800}
 interval=${AGENTIC_WATCHDOG_INTERVAL:-300}
 
-# True when $1 is one of the checkouts or below one, on a directory boundary
-# (so /x/wt2 is not inside /x/wt).
-in_checkout() {
-    local path
-    for path in "${checkouts[@]}"; do
-        case "$1" in "$path" | "$path"/*) return 0 ;; esac
-    done
-    return 1
-}
+# True when $1 is one of the checkouts or below one (lib.sh).
+in_checkout() { agentic_path_inside "$1" "${checkouts[@]}"; }
 
 while :; do
     # Re-read every round: worktrees come and go during an epic. The call is
