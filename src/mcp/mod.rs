@@ -15,6 +15,8 @@ pub(crate) mod documents;
 pub mod context;
 pub(crate) mod history;
 pub(crate) mod maintenance;
+#[cfg(test)]
+mod reference;
 pub(crate) mod reports;
 mod restructure;
 pub(crate) mod search;
@@ -59,6 +61,11 @@ pub const INSTRUCTIONS: &str = "Open Knowledge Format catalogs: concepts (markdo
     returns as `changeset` to every edit, `publish`, `discard`, `revert` and `pending_changes`; \
     reads take it too to see its drafts, and `list_changesets` finds a lost one. Nothing is \
     visible to others until `publish`.";
+
+/// The public tool reference (`docs/reference/tools.md`), generated from the tool list by a test.
+/// Each tool's description ends with a link to its heading here (the tool's name is the anchor).
+pub const TOOL_REFERENCE_URL: &str =
+    "https://github.com/hypotheosis/okf_mcp/blob/main/docs/reference/tools.md";
 
 /// The MCP handler: one per session (rmcp's factory makes it).
 pub struct OkfServer {
@@ -111,7 +118,7 @@ impl OkfServer {
     /// The router `#[tool_handler]` dispatches calls through.
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn tools() -> ToolRouter<Self> {
-        Self::catalogs_router()
+        let mut router = Self::catalogs_router()
             + Self::search_router()
             + Self::documents_router()
             + Self::history_router()
@@ -123,7 +130,15 @@ impl OkfServer {
             + Self::publish_router()
             + Self::changes_router()
             + Self::restructure_router()
-            + Self::maintenance_router()
+            + Self::maintenance_router();
+        // Point every description at the tool's heading in the public reference. `map` holds
+        // each tool as `{ call, attr }`; `attr` is the `Tool` that `tools/list` sends.
+        for (name, route) in router.map.iter_mut() {
+            let description = route.attr.description.as_deref().unwrap_or_default();
+            route.attr.description =
+                Some(format!("{description} Reference: {TOOL_REFERENCE_URL}#{name}").into());
+        }
+        router
     }
 
     /// The context of the request rmcp handed a tool. The error is already a

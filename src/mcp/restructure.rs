@@ -102,7 +102,7 @@ pub(crate) async fn move_concept(
 /// * `params` - the concept, the section and the new concept.
 ///
 /// # Returns
-/// The write's report, with `okf.py split`'s notes.
+/// The write's report, with notes on the split.
 ///
 /// # Errors
 /// As [`apply`]; the op's refusals ([`OkfError::Refused`] for a heading it
@@ -174,7 +174,7 @@ impl OkfServer {
     /// The `move_concept` tool.
     #[tool(
         title = "Move Concept",
-        description = "Move or rename a concept (port of `okf.py mv`) in the changeset \
+        description = "Move or rename a concept in the changeset \
                        `changeset` names (open one with open_changeset): its folder listing moves \
                        with it \
                        (creating folder indexes as needed) and every link to it is rewritten, \
@@ -203,12 +203,12 @@ impl OkfServer {
     #[tool(
         title = "Split Concept",
         description = "Carve a section (and its subsections) out of a concept into a new concept, \
-                       in the changeset `changeset` names (open one with open_changeset); a port \
-                       of `okf.py split`. The new concept gets type, title, description, the \
+                       in the changeset `changeset` names (open one with open_changeset); the \
+                       new concept gets type, title, description, the \
                        parent's status, generated, and the sources the section's footnotes cite \
                        (or `sources`); the parent keeps the heading with a stub linking to it; \
                        links to the section follow it; it is listed in its folder's index.md. \
-                       Returns okf.py's notes. Write access.",
+                       Returns notes on the write. Write access.",
         annotations(
             title = "Split Concept",
             read_only_hint = false,
@@ -359,7 +359,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_split_lists_the_new_concept_and_returns_okf_py_s_notes() {
+    async fn a_split_lists_the_new_concept_and_returns_notes() {
         let test = pg().await;
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
