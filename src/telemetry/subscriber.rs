@@ -316,6 +316,45 @@ pub(crate) mod capture {
     use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
     use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 
+    /// An in-memory span recorder for async tests: run a future under
+    /// [`SpanRecorder::dispatch`] with `tracing::instrument::WithSubscriber`
+    /// (a thread-local default would miss a multi-thread runtime's other
+    /// workers), then read [`SpanRecorder::finished`].
+    pub(crate) struct SpanRecorder {
+        dispatch: tracing::Dispatch,
+        exporter: InMemorySpanExporter,
+        _provider: SdkTracerProvider,
+    }
+
+    impl SpanRecorder {
+        /// A recorder over the same span layer the server uses.
+        pub(crate) fn new() -> Self {
+            use opentelemetry::trace::TracerProvider as _;
+            use tracing_subscriber::layer::SubscriberExt;
+
+            let exporter = InMemorySpanExporter::default();
+            let provider = SdkTracerProvider::builder()
+                .with_simple_exporter(exporter.clone())
+                .build();
+            let layer = tracing_opentelemetry::layer().with_tracer(provider.tracer("okf-mcp"));
+            Self {
+                dispatch: tracing::Dispatch::new(tracing_subscriber::registry().with(layer)),
+                exporter,
+                _provider: provider,
+            }
+        }
+
+        /// The dispatcher to run the future under.
+        pub(crate) fn dispatch(&self) -> tracing::Dispatch {
+            self.dispatch.clone()
+        }
+
+        /// The spans that have ended so far.
+        pub(crate) fn finished(&self) -> Vec<opentelemetry_sdk::trace::SpanData> {
+            self.exporter.get_finished_spans().expect("spans")
+        }
+    }
+
     /// Everything one run of a subscriber produced.
     pub(crate) struct Observed {
         pub stderr: String,

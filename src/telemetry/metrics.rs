@@ -5,12 +5,14 @@
 //! `as_str`, or [`tool_label`]'s allow-list), so a series count cannot grow
 //! with what a client sends (spec "The `Metrics` handle").
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
+use std::time::Duration;
 
-use opentelemetry::metrics::{Histogram, Meter};
+use opentelemetry::metrics::{Counter, Histogram, Meter};
 use opentelemetry::KeyValue;
 
 use super::otlp::{ExportFailures, FailureReason, Signal};
+use crate::app::App;
 use crate::mcp::annotations::{DESTRUCTIVE, READS, STAGED};
 
 /// Seconds-histogram boundaries: 1 ms to 60 s. The SDK's defaults are
@@ -38,24 +40,104 @@ impl Outcome {
     }
 }
 
+/// What one catalog's turn in a poll pass came to: a closed set for the
+/// `result` label of `okf.catalog.refreshes`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshResult {
+    /// Nothing to do: the snapshot is current, or a failed generation waits.
+    Unchanged,
+    /// The loaded catalog's snapshot was rebuilt in place.
+    Reloaded,
+    /// The catalog was loaded from scratch (new, or created again).
+    Loaded,
+    /// The refresh or load failed.
+    Failed,
+}
+
+impl RefreshResult {
+    /// The label value (also the `okf.refresh.result` span attribute).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unchanged => "unchanged",
+            Self::Reloaded => "reloaded",
+            Self::Loaded => "loaded",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// The `rule` label for a lint finding's rule id: the id itself when it is
+/// one of the lint's own fixed rules, `secret` for every `secret:<id>` rule
+/// (the token table is the lint's, and a label need not name which pattern
+/// matched), and `other` for anything else. A label never carries text.
+///
+/// # Arguments
+/// * `rule` - a finding's `rule`.
+///
+/// # Returns
+/// A name from a fixed list.
+#[tracing::instrument(level = "trace", skip_all)]
+pub fn lint_rule_label(rule: &str) -> &'static str {
+    if rule.starts_with("secret:") {
+        return "secret";
+    }
+    LINT_RULES
+        .iter()
+        .find(|known| **known == rule)
+        .copied()
+        .unwrap_or("other")
+}
+
+/// The lint's own rule ids (`okf::analysis::lint`, plus publish's
+/// `link-into-deleted`).
+const LINT_RULES: &[&str] = &[
+    "frontmatter-parse",
+    "index-frontmatter",
+    "no-frontmatter",
+    "no-type",
+    "okf-version",
+    "sprawl",
+    "status",
+    "generated-after-commit",
+    "generated-shape",
+    "verified-shape",
+    "reviewed-shape",
+    "reviewed-outcome",
+    "stale",
+    "timestamp",
+    "timestamp-utc",
+    "future-timestamp",
+    "broken-link",
+    "broken-anchor",
+    "relative-link",
+    "orphan",
+    "index-drift",
+    "link-into-deleted",
+];
+
 /// The server's instruments.
 ///
 /// Cheap to clone: the instruments sit behind an `Arc`, so [`crate::app::App`]
 /// and any callback share one set.
 #[derive(Debug, Clone)]
 pub struct Metrics {
-    // Tasks 3-6 add one field per instrument to `Instruments`, and the typed
-    // methods that read them; until then nothing reads it.
-    #[allow(
-        dead_code,
-        reason = "the instruments Tasks 3-6 add are read through it"
-    )]
+    // Tasks 3, 5 and 6 add one field per instrument to `Instruments`, and the
+    // typed methods that read them.
     inner: Arc<Instruments>,
+    // Observable gauges are registered after the `App` exists, on this meter.
+    meter: Meter,
 }
 
 /// Every instrument, built once from a [`Meter`].
 #[derive(Debug)]
-struct Instruments {}
+struct Instruments {
+    publish_duration: Histogram<f64>,
+    publish_lock_wait: Histogram<f64>,
+    lint_rejections: Counter<u64>,
+    poll_duration: Histogram<f64>,
+    catalog_refreshes: Counter<u64>,
+    keycache_reloads: Counter<u64>,
+}
 
 impl Metrics {
     /// The Prometheus family names that exist before any traffic: the
@@ -64,6 +146,8 @@ impl Metrics {
     /// add the catalog, changeset, mail-queue, pool and clock gauges.
     pub const FAMILIES: &'static [&'static str] =
         &["okf_build_info", "okf_telemetry_export_failures_total"];
+    // The catalog gauges join them once `App::load_with_metrics` registers
+    // them (`observe_catalogs`); they have a series only per loaded catalog.
 
     /// Builds every instrument on `meter` and records `okf.build.info`: a
     /// gauge fixed at 1 whose `version` label is the crate version.
@@ -78,8 +162,186 @@ impl Metrics {
             .build()
             .record(1, &[KeyValue::new("version", env!("CARGO_PKG_VERSION"))]);
         Self {
-            inner: Arc::new(Instruments {}),
+            inner: Arc::new(Instruments {
+                publish_duration: seconds_histogram(
+                    meter,
+                    "okf.publish.duration",
+                    "Publishes, from the first lock to the refreshed snapshot.",
+                ),
+                publish_lock_wait: seconds_histogram(
+                    meter,
+                    "okf.publish.lock_wait",
+                    "Time a publish waited for the catalog's locks.",
+                ),
+                lint_rejections: meter
+                    .u64_counter("okf.lint.rejections")
+                    .with_description("Publish lint errors, by rule.")
+                    .build(),
+                poll_duration: seconds_histogram(
+                    meter,
+                    "okf.poll.duration",
+                    "Poll passes, by outcome.",
+                ),
+                catalog_refreshes: meter
+                    .u64_counter("okf.catalog.refreshes")
+                    .with_description("Each catalog's turn in a poll pass, by result.")
+                    .build(),
+                keycache_reloads: meter
+                    .u64_counter("okf.keycache.reloads")
+                    .with_description("Key cache and settings reloads, by outcome.")
+                    .build(),
+            }),
+            meter: meter.clone(),
         }
+    }
+
+    /// Records a finished publish.
+    ///
+    /// # Arguments
+    /// * `catalog` - the catalog's name (a validated catalog name).
+    /// * `outcome` - whether it committed (or had nothing to write).
+    /// * `elapsed` - the whole publish.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn publish(&self, catalog: &str, outcome: Outcome, elapsed: Duration) {
+        self.inner.publish_duration.record(
+            elapsed.as_secs_f64(),
+            &[
+                KeyValue::new("catalog", catalog.to_owned()),
+                KeyValue::new("outcome", outcome.as_str()),
+            ],
+        );
+    }
+
+    /// Records how long a publish waited for the catalog's locks.
+    ///
+    /// # Arguments
+    /// * `catalog` - the catalog's name.
+    /// * `waited` - the time from asking to holding every lock.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn publish_lock_wait(&self, catalog: &str, waited: Duration) {
+        self.inner.publish_lock_wait.record(
+            waited.as_secs_f64(),
+            &[KeyValue::new("catalog", catalog.to_owned())],
+        );
+    }
+
+    /// Counts one lint error that refused a publish.
+    ///
+    /// # Arguments
+    /// * `catalog` - the catalog's name.
+    /// * `rule` - the finding's rule id; folded by [`lint_rule_label`].
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn lint_rejection(&self, catalog: &str, rule: &str) {
+        self.inner.lint_rejections.add(
+            1,
+            &[
+                KeyValue::new("catalog", catalog.to_owned()),
+                KeyValue::new("rule", lint_rule_label(rule)),
+            ],
+        );
+    }
+
+    /// Records a poll pass.
+    ///
+    /// # Arguments
+    /// * `outcome` - whether the pass returned `Ok`.
+    /// * `elapsed` - its duration, the wait for an overlapping pass included.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn poll(&self, outcome: Outcome, elapsed: Duration) {
+        self.inner.poll_duration.record(
+            elapsed.as_secs_f64(),
+            &[KeyValue::new("outcome", outcome.as_str())],
+        );
+    }
+
+    /// Counts one catalog's turn in a poll pass.
+    ///
+    /// # Arguments
+    /// * `catalog` - the catalog's name.
+    /// * `result` - what the turn came to.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn catalog_refresh(&self, catalog: &str, result: RefreshResult) {
+        self.inner.catalog_refreshes.add(
+            1,
+            &[
+                KeyValue::new("catalog", catalog.to_owned()),
+                KeyValue::new("result", result.as_str()),
+            ],
+        );
+    }
+
+    /// Counts one key cache and settings reload.
+    ///
+    /// # Arguments
+    /// * `outcome` - whether it succeeded.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn keycache_reload(&self, outcome: Outcome) {
+        self.inner
+            .keycache_reloads
+            .add(1, &[KeyValue::new("outcome", outcome.as_str())]);
+    }
+
+    /// Registers the catalog gauges: `okf.catalog.concepts`,
+    /// `okf.catalog.generation` and `okf.changesets.open`, one series per
+    /// loaded catalog. Each callback holds only a [`Weak`] handle, so the
+    /// meter provider (which outlives the app) keeps no strong cycle, and
+    /// reads what `app` already holds: a scrape never queries Postgres.
+    ///
+    /// # Arguments
+    /// * `app` - the app to read; a callback finding it dropped reports
+    ///   nothing.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn observe_catalogs(&self, app: Weak<App>) {
+        // The gauge handles may be dropped: a callback stays registered with
+        // the provider (see `observe_export_failures`).
+        let concepts = app.clone();
+        self.meter
+            .u64_observable_gauge("okf.catalog.concepts")
+            .with_description("Concept documents in each catalog's current snapshot.")
+            .with_callback(move |observer| {
+                let Some(app) = concepts.upgrade() else {
+                    return;
+                };
+                for (name, state) in app.catalogs().iter() {
+                    let count = state.current().snapshot().concepts().count();
+                    observer.observe(
+                        u64::try_from(count).unwrap_or(u64::MAX),
+                        &[KeyValue::new("catalog", name.clone())],
+                    );
+                }
+            })
+            .build();
+        let generations = app.clone();
+        self.meter
+            .i64_observable_gauge("okf.catalog.generation")
+            .with_description("Each catalog's current snapshot generation.")
+            .with_callback(move |observer| {
+                let Some(app) = generations.upgrade() else {
+                    return;
+                };
+                for (name, state) in app.catalogs().iter() {
+                    observer.observe(
+                        state.current().generation(),
+                        &[KeyValue::new("catalog", name.clone())],
+                    );
+                }
+            })
+            .build();
+        self.meter
+            .i64_observable_gauge("okf.changesets.open")
+            .with_description("Open changesets per catalog, as of the last poll pass.")
+            .with_callback(move |observer| {
+                let Some(app) = app.upgrade() else {
+                    return;
+                };
+                for name in app.catalogs().keys() {
+                    observer.observe(
+                        app.open_changesets(name),
+                        &[KeyValue::new("catalog", name.clone())],
+                    );
+                }
+            })
+            .build();
     }
 
     /// The instruments on the global meter provider: a no-op until `serve`

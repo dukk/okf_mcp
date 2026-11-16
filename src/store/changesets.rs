@@ -19,6 +19,8 @@
 //! it never waits for anyone. A deadlock Postgres still detects is
 //! [`OkfError::Busy`], through `From<sqlx::Error>`.
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgExecutor, PgPool};
 
@@ -602,6 +604,21 @@ pub async fn prune_empty(
     .await?
     .rows_affected();
     Ok(pruned)
+}
+
+/// How many changesets are open in each catalog that has any, by name.
+/// One grouped read: the poll pass stores it for `okf.changesets.open`.
+///
+/// # Errors
+/// [`OkfError::Database`].
+pub async fn open_counts(pool: &PgPool) -> Result<BTreeMap<String, i64>, OkfError> {
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT c.name, count(*) FROM changesets s JOIN catalogs c ON c.id = s.catalog_id \
+         WHERE s.state = 'open' GROUP BY c.name",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().collect())
 }
 
 #[cfg(test)]

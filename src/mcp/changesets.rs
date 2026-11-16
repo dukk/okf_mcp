@@ -1210,7 +1210,8 @@ mod publish_tests {
     use crate::config::Config;
     use crate::error::ConflictFile;
     use crate::mcp::testing::{
-        app_with, changeset_row, context, files, open, principal_as, store_key, writer, TestApp,
+        app_with, app_with_metrics, changeset_row, context, files, open, principal_as, render,
+        store_key, writer, TestApp,
     };
     use crate::mcp::writes::{replace_body, ReplaceBodyParams};
     use crate::okf::ops::{self, LogKind};
@@ -1219,7 +1220,10 @@ mod publish_tests {
     use crate::store::keys::Access;
     use crate::store::publish::PublishedRevision;
     use crate::store::{catalogs, history};
+    use crate::telemetry::subscriber::capture::SpanRecorder;
     use crate::write::{apply, WriteReport};
+    use opentelemetry_sdk::trace::SpanData;
+    use tracing::instrument::WithSubscriber;
 
     const NOTE: &str = "---\ntype: Note\ntitle: A\ndescription: A note.\n---\n# A\n";
     const X: &str = "---\ntype: Note\ntitle: X\ndescription: X.\n---\n# X\n";
@@ -1237,6 +1241,252 @@ mod publish_tests {
             ("log.md", "# Log\n"),
         ];
         app_with(&[("pg", files)], Config::default()).await
+    }
+
+    /// [`pg`] with its own meter provider, so the test reads what the app
+    /// recorded.
+    async fn pg_with_metrics() -> (TestApp, prometheus::Registry) {
+        let files: &[(&str, &str)] = &[
+            ("a.md", NOTE),
+            ("hub.md", HUB),
+            ("infra/index.md", "# Infra\n"),
+            ("infra/x.md", X),
+            ("infra/y.md", Y),
+            ("log.md", "# Log\n"),
+        ];
+        app_with_metrics(&[("pg", files)], Config::default()).await
+    }
+
+    /// The one span named `name` in `spans`.
+    fn span<'a>(spans: &'a [SpanData], name: &str) -> &'a SpanData {
+        let mut named = spans.iter().filter(|span| span.name == name);
+        let found = named.next().unwrap_or_else(|| panic!("no span {name}"));
+        assert!(named.next().is_none(), "more than one span {name}");
+        found
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn publish_records_duration_and_lock_wait() {
+        let (test, registry) = pg_with_metrics().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        body(&ctx, &handle, "/a.md", "# A\n\nNew.\n").await;
+        let recorder = SpanRecorder::new();
+
+        publish_as(&ctx, &handle, "edit a")
+            .with_subscriber(recorder.dispatch())
+            .await
+            .unwrap();
+
+        let spans = recorder.finished();
+        let publish = span(&spans, "okf.publish");
+        for child in ["okf.publish.lock", "okf.publish.lint", "okf.publish.write"] {
+            assert_eq!(
+                span(&spans, child).parent_span_id,
+                publish.span_context.span_id(),
+                "{child}"
+            );
+        }
+        let entries = publish
+            .attributes
+            .iter()
+            .find(|kv| kv.key.as_str() == "okf.changeset.entries");
+        assert_eq!(
+            entries.map(|kv| kv.value.to_string()),
+            Some("1".to_string())
+        );
+        let text = render(&registry);
+        assert!(
+            text.contains(r#"okf_publish_duration_seconds_count{catalog="pg",outcome="ok"} 1"#),
+            "{text}"
+        );
+        assert!(
+            text.contains(r#"okf_publish_lock_wait_seconds_count{catalog="pg"} 1"#),
+            "{text}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_lint_failure_counts_by_rule() {
+        let (test, registry) = pg_with_metrics().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        body(&ctx, &handle, "/a.md", "See [gone](/gone.md).\n").await;
+
+        let error = publish_as(&ctx, &handle, "broken").await.unwrap_err();
+
+        assert_eq!(error.kind(), "LintFailed");
+        let text = render(&registry);
+        assert!(
+            text.contains(r#"okf_lint_rejections_total{catalog="pg",rule="broken-link"}"#),
+            "{text}"
+        );
+        assert!(
+            text.contains(r#"okf_publish_duration_seconds_count{catalog="pg",outcome="error"} 1"#),
+            "{text}"
+        );
+        // The lock was waited for before the lint refused.
+        assert!(
+            text.contains(r#"okf_publish_lock_wait_seconds_count{catalog="pg"} 1"#),
+            "{text}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn each_poll_tick_is_its_own_trace() {
+        let (test, _registry) = pg_with_metrics().await;
+        let recorder = SpanRecorder::new();
+
+        // Each pass runs inside a caller span: the pass must still be a root.
+        async {
+            let _outer = tracing::info_span!("caller").entered();
+            test.app.poll().await.unwrap();
+            test.app.poll().await.unwrap();
+        }
+        .with_subscriber(recorder.dispatch())
+        .await;
+
+        let spans = recorder.finished();
+        let polls: Vec<_> = spans
+            .iter()
+            .filter(|span| span.name == "okf.poll")
+            .collect();
+        assert_eq!(polls.len(), 2);
+        assert!(polls
+            .iter()
+            .all(|span| span.parent_span_id == opentelemetry::trace::SpanId::INVALID));
+        assert_ne!(
+            polls[0].span_context.trace_id(),
+            polls[1].span_context.trace_id()
+        );
+        // A catalog's turn is a child of its pass.
+        let turn = spans
+            .iter()
+            .find(|span| span.name == "okf.catalog.refresh")
+            .expect("a catalog refresh span");
+        assert!(polls
+            .iter()
+            .any(|poll| poll.span_context.span_id() == turn.parent_span_id));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn catalog_gauges_follow_the_snapshot() {
+        let (test, registry) = pg_with_metrics().await;
+        let state = test.app.catalog("pg").unwrap();
+        let concepts = state.current().snapshot().concepts().count();
+        let generation = state.current().generation();
+        assert!(concepts > 0);
+
+        let text = render(&registry);
+
+        assert!(
+            text.contains(&format!(
+                r#"okf_catalog_concepts{{catalog="pg"}} {concepts}"#
+            )),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!(
+                r#"okf_catalog_generation{{catalog="pg"}} {generation}"#
+            )),
+            "{text}"
+        );
+        // A publish moves the generation; the gauge follows after a poll.
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        body(&ctx, &handle, "/a.md", "# A\n\nNew.\n").await;
+        publish_as(&ctx, &handle, "edit a").await.unwrap();
+        test.app.poll().await.unwrap();
+        let text = render(&registry);
+        assert!(
+            text.contains(&format!(
+                r#"okf_catalog_generation{{catalog="pg"}} {}"#,
+                generation + 1
+            )),
+            "{text}"
+        );
+        // A deleted catalog's series is gone after the next poll.
+        catalogs::delete(
+            test.app.pool(),
+            "pg",
+            true,
+            &crate::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        test.app.poll().await.unwrap();
+        let text = render(&registry);
+        assert!(
+            !text.contains(r#"okf_catalog_concepts{catalog="pg"}"#),
+            "{text}"
+        );
+        assert!(
+            !text.contains(r#"okf_changesets_open{catalog="pg"}"#),
+            "{text}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn open_changesets_gauge() {
+        let (test, registry) = pg_with_metrics().await;
+        let first = writer(&test, "writer-a", "pg").await;
+        let second = writer(&test, "writer-b", "pg").await;
+        let _kept = open(&first).await;
+        let published = open(&second).await;
+        body(&second, &published, "/a.md", "# A\n\nNew.\n").await;
+        test.app.poll().await.unwrap();
+        let text = render(&registry);
+        assert!(
+            text.contains(r#"okf_changesets_open{catalog="pg"} 2"#),
+            "{text}"
+        );
+
+        publish_as(&second, &published, "edit a").await.unwrap();
+        // Counted by the poll, not read at the scrape.
+        assert!(render(&registry).contains(r#"okf_changesets_open{catalog="pg"} 2"#));
+        test.app.poll().await.unwrap();
+
+        let text = render(&registry);
+        assert!(
+            text.contains(r#"okf_changesets_open{catalog="pg"} 1"#),
+            "{text}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_poll_counts_catalog_refreshes_and_the_key_reload() {
+        let (test, registry) = pg_with_metrics().await;
+        // The database moved past this snapshot (an import by another process).
+        sqlx::query("UPDATE catalogs SET generation = generation + 1 WHERE name = 'pg'")
+            .execute(test.app.pool())
+            .await
+            .unwrap();
+        // A key change moves `admin_generation`, so the poll reloads the cache.
+        let mut conn = test.app.pool().acquire().await.unwrap();
+        catalogs::bump_admin_generation(&mut conn).await.unwrap();
+        drop(conn);
+
+        test.app.poll().await.unwrap();
+        test.app.poll().await.unwrap();
+
+        let text = render(&registry);
+        assert!(
+            text.contains(r#"okf_catalog_refreshes_total{catalog="pg",result="reloaded"} 1"#),
+            "{text}"
+        );
+        assert!(
+            text.contains(r#"okf_catalog_refreshes_total{catalog="pg",result="unchanged"} 1"#),
+            "{text}"
+        );
+        assert!(
+            text.contains(r#"okf_poll_duration_seconds_count{outcome="ok"} 2"#),
+            "{text}"
+        );
+        assert!(
+            text.contains(r#"okf_keycache_reloads_total{outcome="ok"} 1"#),
+            "{text}"
+        );
     }
 
     async fn body(ctx: &ToolContext, handle: &str, path: &str, text: &str) -> WriteReport {
