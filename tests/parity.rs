@@ -699,7 +699,7 @@ fn ops_output_never_names_a_cli_flag() {
     let produced = rust_ops(Path::new(FIXTURES), instant(FIXED_NOW), &ops_script());
     let mut strings = Vec::new();
     collect_strings(&produced, &mut strings);
-    let flag = regex::Regex::new(r"(^|\s)--[a-z]").expect("the pattern is valid");
+    let flag = regex::Regex::new(r"(^|[\s(`])--[a-z]").expect("the pattern is valid");
 
     let offenders: Vec<&str> = strings
         .into_iter()
