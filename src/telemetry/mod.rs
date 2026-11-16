@@ -127,7 +127,8 @@ impl Telemetry {
     ///
     /// # Returns
     /// The running telemetry; with no `[telemetry.otlp]` (or
-    /// `OTEL_SDK_DISABLED=true`) it holds no providers.
+    /// `OTEL_SDK_DISABLED=true`) it holds no tracer or logger, but always the
+    /// meter provider and the registry `/metrics` renders.
     ///
     /// # Errors
     /// [`OkfError::Config`] when a variable named by `headers_env` or
