@@ -170,6 +170,11 @@ webauthn-rs-proto = "=0.6.2"
 # The in-memory span, log and metric exporters the telemetry tests read back.
 # Features unify, so the test build gets them.
 opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["testing", "trace", "logs", "metrics"] }
+# The OTLP protobuf message types and their decoder, for the mock collector
+# the privacy sentinel test runs (tests/support/otlp_collector.rs). The same
+# versions and features the exporter already builds with (no tonic transport).
+opentelemetry-proto = { version = "0.33.1", default-features = false, features = ["gen-tonic-messages", "trace", "logs", "metrics"] }
+prost = { version = "0.14.4", default-features = false }
 # Property-based tests (Hypothesis-backed); the library is imported as `hegel`.
 hegeltest = "0.50.3"
 # The end-to-end tests talk to the server as a real MCP client would.
