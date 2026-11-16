@@ -34,6 +34,7 @@ use indexmap::IndexMap;
 use rayon::prelude::*;
 
 use crate::okf::caller::Caller;
+use crate::telemetry::subscriber::split_event;
 use regex::Regex;
 
 use crate::error::OkfError;
@@ -701,7 +702,12 @@ fn scan_all(
                 None => match workspace.read_text(path) {
                     Ok(text) => scan_secrets(path, &text),
                     Err(error) => {
-                        tracing::debug!(%path, %error, "secret scan skips an unreadable file");
+                        split_event!(
+                            debug,
+                            {},
+                            { %path, %error, },
+                            "secret scan skips an unreadable file"
+                        );
                         Vec::new()
                     }
                 },

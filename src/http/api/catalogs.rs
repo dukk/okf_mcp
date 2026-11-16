@@ -25,6 +25,7 @@ use crate::store::audit::AuditActor;
 use crate::store::catalogs::{self as catalog_rows, MaintenanceChange, Switch};
 use crate::store::ceiling::{self, MemberAccess};
 use crate::store::keys::Access;
+use crate::telemetry::subscriber::split_event;
 
 /// This area's routes.
 ///
@@ -231,8 +232,12 @@ async fn create_catalog(
     )
     .await?;
     // The audit log records the change (`catalog.created`); so does the log line.
-    tracing::info!(catalog = %row.name, key = %principal.key_id, actor = %principal.actor,
-                   "catalog created");
+    split_event!(
+        info,
+        { catalog = %row.name, },
+        { key = %principal.key_id, actor = %principal.actor, },
+        "catalog created"
+    );
     settle(&app).await;
     // The owner may be a suspended team. Creating bumps the admin generation,
     // so the poll `settle` ran reloaded the cache's suspension map; if that
@@ -283,8 +288,12 @@ async fn update_catalog(
         app.clock().now(),
     )
     .await?;
-    tracing::info!(%catalog, key = %principal.key_id, actor = %principal.actor,
-                   "catalog description changed");
+    split_event!(
+        info,
+        { %catalog, },
+        { key = %principal.key_id, actor = %principal.actor, },
+        "catalog description changed"
+    );
     settle(&app).await;
     Ok(Json(DescriptionChanged {
         name: catalog,
@@ -317,8 +326,12 @@ async fn set_owner(
         app.clock().now(),
     )
     .await?;
-    tracing::info!(%catalog, key = %principal.key_id, actor = %principal.actor,
-                   "catalog owner changed");
+    split_event!(
+        info,
+        { %catalog, },
+        { key = %principal.key_id, actor = %principal.actor, },
+        "catalog owner changed"
+    );
     settle(&app).await;
     Ok(Json(OwnerChanged {
         name: catalog,
@@ -382,8 +395,12 @@ async fn set_maintenance(
     };
     let previous =
         catalog_rows::set_maintenance(app.pool(), &change, &actor, app.clock().now()).await?;
-    tracing::info!(%catalog, previous = previous.as_str(), maintenance = body.maintenance.as_str(),
-                   key = %principal.key_id, actor = %principal.actor, "catalog maintenance set");
+    split_event!(
+        info,
+        { %catalog, previous = previous.as_str(), maintenance = body.maintenance.as_str(), },
+        { key = %principal.key_id, actor = %principal.actor, },
+        "catalog maintenance set"
+    );
     settle(&app).await;
     Ok(Json(MaintenanceChanged {
         name: catalog,
@@ -466,8 +483,12 @@ async fn set_member_access(
     })?;
     let previous =
         ceiling::set_member_access(app.pool(), &catalog, access, &actor, app.clock().now()).await?;
-    tracing::info!(%catalog, previous = previous.as_str(), access = access.as_str(),
-                   key = %principal.key_id, actor = %principal.actor, "member access set");
+    split_event!(
+        info,
+        { %catalog, previous = previous.as_str(), access = access.as_str(), },
+        { key = %principal.key_id, actor = %principal.actor, },
+        "member access set"
+    );
     settle(&app).await;
     Ok(Json(MemberAccessChanged {
         name: catalog,
@@ -503,8 +524,12 @@ async fn delete_catalog(
             },
             other => other,
         })?;
-    tracing::info!(%catalog, key = %principal.key_id, actor = %principal.actor,
-                   force = query.force, "catalog deleted");
+    split_event!(
+        info,
+        { %catalog, force = query.force, },
+        { key = %principal.key_id, actor = %principal.actor, },
+        "catalog deleted"
+    );
     settle(&app).await;
     Ok(Json(CatalogDeleted { name: catalog }))
 }

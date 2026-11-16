@@ -39,6 +39,7 @@ use crate::store::keys::{self as key_rows, Access, KeyKind, KeyRecord};
 use crate::store::teams::{self, SuspendedCatalog};
 use crate::store::unlocks::LiveUnlock;
 use crate::store::users::{self, UserAuth};
+use crate::telemetry::subscriber::split_event;
 
 /// The `key_id` prefix of a console session's principal. Key ids match
 /// `^[A-Za-z0-9._-]+$`, so `session:<name>` never equals one (plan
@@ -1188,7 +1189,12 @@ pub async fn require_key(
         })
         .into_response(),
         Ok(Some(principal)) => {
-            tracing::debug!(key = %principal.key_id, "authenticated");
+            split_event!(
+                debug,
+                {},
+                { key = %principal.key_id, },
+                "authenticated"
+            );
             request.extensions_mut().insert(principal);
             crate::http::console_session::insert_client_ip(&app, &mut request);
             next.run(request).await

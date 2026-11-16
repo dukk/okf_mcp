@@ -87,13 +87,30 @@ kinds of content that must not be exported:
 - **Content:** a document, a mail body, a link.
 
 Send all three to the target `okf_mcp::local_only` (the `LOCAL_ONLY` constant in
-`src/telemetry/`, added by M15 Task 1), which both OTLP layers turn off, so they reach stderr only. The exported
-event beside it keeps a closed value (`kind`, a count, a status):
+`src/telemetry/subscriber.rs`), which both OTLP layers turn off, so they reach stderr only.
+The exported event beside it keeps a closed value (`kind`, a count, a status):
 
 ```rust
 tracing::error!(kind = error.kind(), "request failed");
 tracing::error!(target: LOCAL_ONLY, error = %error, "request failed (detail)");
 ```
+
+`split_event!` writes both events in one call and is the usual way:
+
+```rust
+split_event!(
+    warn,
+    { reason = error.code(), },
+    { client_id, error = %error, },
+    "refused an OAuth client"
+);
+```
+
+The message must be a plain literal (no `{captured}` arguments); write the two events out
+when it needs one. Who did it counts as caller text: a user name, an `actor`, and a
+`key_id` (a console session's key id is `session:<name>`) go in the `LOCAL_ONLY` half. A
+user id, a job id, a catalog name that exists and an enum's `as_str` stay in the exported
+half. Events under a target outside `okf_mcp` are never exported and need no split.
 
 A reviewer checks every new event against this list.
 

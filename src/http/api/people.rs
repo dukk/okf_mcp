@@ -61,6 +61,7 @@ use crate::store::teams::{self, MemberChange, Membership, NewTeam, Role, TeamRec
 use crate::store::unassigned;
 use crate::store::users::{self, AdminChange, NewUser, UserRecord};
 use crate::store::{sign_in_events, user_sessions};
+use crate::telemetry::subscriber::split_event;
 
 /// One user as the API shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -573,8 +574,12 @@ async fn set_admin(
         allow_last: false,
     };
     let previous = users::set_admin(app.pool(), &name, change, &actor, app.clock().now()).await?;
-    tracing::info!(user = %name, previous, admin = body.admin, key = %principal.key_id,
-                   actor = %principal.actor, "admin flag set");
+    split_event!(
+        info,
+        { previous, admin = body.admin, },
+        { user = %name, key = %principal.key_id, actor = %principal.actor, },
+        "admin flag set"
+    );
     settle(&app).await;
     Ok(Json(AdminChanged {
         name,
@@ -600,8 +605,12 @@ async fn set_email(
     let now = app.clock().now();
     users::set_email(app.pool(), &name, body.email.as_deref(), &actor, now).await?;
     // The address itself is not logged.
-    tracing::info!(user = %name, cleared = body.email.is_none(), key = %principal.key_id,
-                   actor = %principal.actor, "email set");
+    split_event!(
+        info,
+        { cleared = body.email.is_none(), },
+        { user = %name, key = %principal.key_id, actor = %principal.actor, },
+        "email set"
+    );
     settle(&app).await;
     Ok(Json(users::find(app.pool(), &name).await?.into()))
 }
@@ -623,8 +632,12 @@ async fn invite_user(
     require_manager(&principal)?;
     let now = app.clock().now();
     let email = invite::send_setup(app.pool(), app.config(), &name, &actor, now).await?;
-    tracing::info!(user = %name, key = %principal.key_id, actor = %principal.actor,
-                   "setup email requested");
+    split_event!(
+        info,
+        {},
+        { user = %name, key = %principal.key_id, actor = %principal.actor, },
+        "setup email requested"
+    );
     Ok((StatusCode::ACCEPTED, Json(Invited { name, email })))
 }
 
@@ -657,8 +670,12 @@ async fn entitle(
         access,
     };
     ceiling::entitle(app.pool(), &new, &actor, app.clock().now()).await?;
-    tracing::info!(user = %name, %catalog, access = access.as_str(), key = %principal.key_id,
-                   actor = %principal.actor, "entitlement set");
+    split_event!(
+        info,
+        { %catalog, access = access.as_str(), },
+        { user = %name, key = %principal.key_id, actor = %principal.actor, },
+        "entitlement set"
+    );
     settle(&app).await;
     let entitlements = entitlement_views(&app, &name).await?;
     Ok(Json(Entitlements { name, entitlements }))
@@ -679,8 +696,12 @@ async fn unentitle(
     require_every_catalog(&principal)?;
     let now = app.clock().now();
     ceiling::unentitle(app.pool(), &name, &catalog, &actor, now).await?;
-    tracing::info!(user = %name, %catalog, key = %principal.key_id, actor = %principal.actor,
-                   "entitlement removed");
+    split_event!(
+        info,
+        { %catalog, },
+        { user = %name, key = %principal.key_id, actor = %principal.actor, },
+        "entitlement removed"
+    );
     settle(&app).await;
     let entitlements = entitlement_views(&app, &name).await?;
     Ok(Json(Entitlements { name, entitlements }))
@@ -720,8 +741,12 @@ async fn revoke_sessions(
 ) -> Result<Json<SessionsRevoked>, AppError> {
     require_every_catalog(&principal)?;
     let revoked = users::end_sessions(app.pool(), &name, &actor, app.clock().now()).await?;
-    tracing::info!(user = %name, revoked, key = %principal.key_id, actor = %principal.actor,
-                   "sessions ended by an admin");
+    split_event!(
+        info,
+        { revoked, },
+        { user = %name, key = %principal.key_id, actor = %principal.actor, },
+        "sessions ended by an admin"
+    );
     Ok(Json(SessionsRevoked { name, revoked }))
 }
 
@@ -744,8 +769,12 @@ async fn revoke_session(
     require_every_catalog(&principal)?;
     let now = app.clock().now();
     users::end_session_by_prefix(app.pool(), &name, &id_prefix, &actor, now).await?;
-    tracing::info!(user = %name, key = %principal.key_id, actor = %principal.actor,
-                   "session ended by an admin");
+    split_event!(
+        info,
+        {},
+        { user = %name, key = %principal.key_id, actor = %principal.actor, },
+        "session ended by an admin"
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 

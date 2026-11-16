@@ -20,6 +20,7 @@ use crate::http::api::{require_admin, require_every_catalog};
 use crate::http::AppError;
 use crate::mail::queue::{self, QueuedMail};
 use crate::mail::Template;
+use crate::telemetry::subscriber::split_event;
 
 /// One queued mail, never its body.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -103,7 +104,12 @@ async fn send_test(
     require_every_catalog(&principal)?;
     queue::enqueue(app.pool(), &body.to, &Template::Test, app.clock().now()).await?;
     // The address is not logged.
-    tracing::info!(key = %principal.key_id, actor = %principal.actor, "test email queued");
+    split_event!(
+        info,
+        {},
+        { key = %principal.key_id, actor = %principal.actor, },
+        "test email queued"
+    );
     Ok((StatusCode::ACCEPTED, Json(body)))
 }
 
@@ -141,7 +147,12 @@ async fn retry_mail(
 ) -> Result<StatusCode, AppError> {
     require_every_catalog(&principal)?;
     queue::retry(app.pool(), &id, app.clock().now()).await?;
-    tracing::info!(mail = %id, key = %principal.key_id, actor = %principal.actor, "mail retried");
+    split_event!(
+        info,
+        { mail = %id, },
+        { key = %principal.key_id, actor = %principal.actor, },
+        "mail retried"
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -160,7 +171,12 @@ async fn delete_mail(
 ) -> Result<StatusCode, AppError> {
     require_every_catalog(&principal)?;
     queue::delete(app.pool(), &id).await?;
-    tracing::info!(mail = %id, key = %principal.key_id, actor = %principal.actor, "mail deleted");
+    split_event!(
+        info,
+        { mail = %id, },
+        { key = %principal.key_id, actor = %principal.actor, },
+        "mail deleted"
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 

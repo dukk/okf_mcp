@@ -2,6 +2,7 @@
 
 use crate::okf::analysis::Finding;
 use crate::okf::paths::{escapes_root, normpath};
+use crate::telemetry::subscriber::split_event;
 
 /// Errors from reading, parsing or editing an OKF catalog.
 ///
@@ -576,7 +577,12 @@ impl From<sqlx::Error> for OkfError {
             // logged only at debug level, so keep Postgres' report (the
             // statement and the conflicting lock, never document text) here.
             // `?source` logs its `Debug` form, which includes the detail.
-            tracing::warn!(error = ?source, "retryable database error, answered Busy");
+            split_event!(
+                warn,
+                {},
+                { error = ?source, },
+                "retryable database error, answered Busy"
+            );
             OkfError::Busy {
                 reason: "the database aborted this request to resolve a lock conflict".to_string(),
             }
