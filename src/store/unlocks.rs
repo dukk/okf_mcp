@@ -372,7 +372,7 @@ pub struct UnlockFilter<'a> {
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "trivial constructor: builds an error value, no I/O"
+        reason = "trivial conversion: builds an error value, no I/O"
     )
 )]
 fn hours_refused(policy: &UnlockPolicy) -> OkfError {
@@ -548,7 +548,7 @@ async fn require_staff(conn: &mut PgConnection, actor: &AuditActor) -> Result<()
 /// Queues the unlocked email to every owner of the catalog's owner team
 /// that has an address, inside the unlock's transaction (no mail for an
 /// unlock that rolls back). An unowned catalog mails nobody.
-#[tracing::instrument(level = "trace", skip_all, fields(catalog_id))]
+#[tracing::instrument(level = "trace", skip_all, fields(catalog_id = catalog_id))]
 async fn notify_owners(
     conn: &mut PgConnection,
     catalog_id: i64,
@@ -674,7 +674,7 @@ pub async fn end(
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "one-line pure helper: arithmetic or formatting on its arguments, no I/O"
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
     )
 )]
 fn staff_person(person_id: i64) -> FixedPerson {

@@ -317,7 +317,7 @@ pub struct SettingRow {
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "trivial constructor: builds an error value, no I/O"
+        reason = "trivial conversion: builds an error value, no I/O"
     )
 )]
 fn invalid(reason: String) -> OkfError {
@@ -395,7 +395,7 @@ fn parse_boolean(key: SettingKey, text: &str) -> Result<Value, String> {
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "one-line pure helper: arithmetic or formatting on its arguments, no I/O"
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
     )
 )]
 fn unlock_hours_range() -> String {
@@ -452,7 +452,7 @@ fn parse_value(key: SettingKey, text: &str) -> Result<Value, String> {
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "one-line pure helper: arithmetic or formatting on its arguments, no I/O"
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
     )
 )]
 fn retention_range() -> String {
@@ -675,7 +675,7 @@ pub async fn load(
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "one-line pure helper: arithmetic or formatting on its arguments, no I/O"
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
     )
 )]
 fn updated_by(actor: &AuditActor) -> String {

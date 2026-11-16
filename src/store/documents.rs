@@ -39,7 +39,7 @@ pub struct DocumentRow {
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(catalog_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn published<'e>(
     executor: impl PgExecutor<'e>,
     catalog_id: i64,
@@ -105,13 +105,7 @@ impl Derived {
     ///
     /// # Returns
     /// The columns to store beside the content.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: maps a value, no I/O"
-        )
-    )]
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn of(doc: Option<&SnapshotDoc>) -> Self {
         // `let ... else` is an early return when the pattern does not match,
         // like `if doc is None: return Derived()`.

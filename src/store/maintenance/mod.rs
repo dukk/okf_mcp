@@ -38,7 +38,7 @@ use crate::store::changesets;
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "trivial constructor: builds an error value, no I/O"
+        reason = "trivial conversion: builds an error value, no I/O"
     )
 )]
 fn refused(reason: &str) -> OkfError {
@@ -75,7 +75,7 @@ fn validate(actor: &Actor, key: &str) -> Result<(), OkfError> {
     Ok(())
 }
 
-#[tracing::instrument(level = "trace", skip_all, fields(catalog_id))]
+#[tracing::instrument(level = "trace", skip_all, fields(catalog_id = catalog_id))]
 async fn lock(
     conn: &mut PgConnection,
     catalog_id: i64,
@@ -174,7 +174,7 @@ async fn recover(
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "one-line pure helper: arithmetic or formatting on its arguments, no I/O"
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
     )
 )]
 fn lease_end(now: DateTime<Utc>, deadline: DateTime<Utc>) -> DateTime<Utc> {

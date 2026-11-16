@@ -72,7 +72,7 @@ pub(super) fn required_id(id: &str) -> Result<(), OkfError> {
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "trivial constructor: builds an error value, no I/O"
+        reason = "trivial conversion: builds an error value, no I/O"
     )
 )]
 pub(super) fn not_found() -> OkfError {
@@ -192,7 +192,7 @@ pub(super) async fn page_ids(
 /// # Errors
 /// `NotFound` for absent/foreign cursors, `Refused` for invalid limits,
 /// or a database error. An empty catalog returns an empty page.
-#[tracing::instrument(level = "debug", skip_all, fields(catalog_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn list_runs(
     pool: &PgPool,
     catalog_id: i64,
@@ -220,7 +220,7 @@ pub async fn list_runs(
 ///
 /// # Errors
 /// `Refused` for a blank ID, `NotFound` for an absent/foreign run, or a database error.
-#[tracing::instrument(level = "debug", skip_all, fields(catalog_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn get_run(pool: &PgPool, catalog_id: i64, run_id: &str) -> Result<RunReport, OkfError> {
     required_id(run_id)?;
     let mut tx = snapshot(pool).await?;
@@ -384,7 +384,7 @@ async fn summary(
 ///
 /// # Errors
 /// Refuses invalid limits or conflicting idempotency; propagates database failures.
-#[tracing::instrument(level = "debug", skip_all, fields(catalog_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn claim(
     pool: &PgPool,
     catalog_id: i64,
@@ -483,7 +483,7 @@ pub async fn claim(
 ///
 /// # Errors
 /// Refuses expired, foreign, or terminal leases; propagates database failures.
-#[tracing::instrument(level = "debug", skip_all, fields(catalog_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn renew(
     pool: &PgPool,
     catalog_id: i64,
@@ -607,7 +607,7 @@ pub async fn renew(
 /// # Errors
 /// Refuses foreign runs without operator permission, incomplete completion, or invalid state.
 #[allow(clippy::too_many_arguments)]
-#[tracing::instrument(level = "debug", skip_all, fields(catalog_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn close(
     pool: &PgPool,
     catalog_id: i64,

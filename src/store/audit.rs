@@ -107,13 +107,7 @@ impl AuditActor {
     ///
     /// # Returns
     /// The actor; its label is `$USER` (else `$LOGNAME`, else `cli`).
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: maps a value, no I/O"
-        )
-    )]
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn cli() -> Self {
         // `or_else` tries the next variable only if the first is missing.
         let label = std::env::var("USER")
@@ -169,13 +163,7 @@ impl AuditActor {
     /// # Returns
     /// The actor. A console session has no credential id: `session:<name>`
     /// would name the person, which entries do only through `audit_people`.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: maps a value, no I/O"
-        )
-    )]
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn of(principal: &Principal, requester: &Requester) -> Self {
         let (credential, via) = match principal.kind {
             CredentialKind::Session { .. } => (None, Via::Session),
@@ -348,13 +336,7 @@ struct TargetParts<'a> {
 
 impl<'a> Target<'a> {
     /// The stored parts.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: maps a value, no I/O"
-        )
-    )]
+    #[tracing::instrument(level = "trace", skip_all)]
     fn parts(&self) -> TargetParts<'a> {
         let only = |kind| TargetParts {
             kind,
@@ -810,7 +792,7 @@ pub async fn team_ref(conn: &mut PgConnection, team: &str) -> Result<i64, OkfErr
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(catalog_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn catalog_teams(conn: &mut PgConnection, catalog_id: i64) -> Result<Vec<i64>, OkfError> {
     let team: Option<i64> = sqlx::query_scalar(
         "SELECT audit_team_ref(owner_team_id) FROM catalogs \
@@ -1478,13 +1460,7 @@ impl ListedRow {
     /// holds only the owner's team (the SQL drops the others, which may be
     /// another customer's or a staff member's personal team). The stored
     /// entry is never changed.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: maps a value, no I/O"
-        )
-    )]
+    #[tracing::instrument(level = "trace", skip_all)]
     fn into_record(self, owner: bool) -> AuditRecord {
         let actor = if owner && self.actor_operator {
             ActorView::Operator

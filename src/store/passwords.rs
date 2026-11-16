@@ -202,7 +202,7 @@ async fn matches_off_thread(stored: String, password: String) -> Result<bool, Ok
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "trivial constructor: builds an error value, no I/O"
+        reason = "trivial conversion: builds an error value, no I/O"
     )
 )]
 fn hasher_error(error: impl std::fmt::Display) -> OkfError {

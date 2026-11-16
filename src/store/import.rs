@@ -370,7 +370,7 @@ fn refuse_markdown_that_is_not_text(files: &Files) -> Result<(), OkfError> {
 }
 
 /// Every row of the catalog, tombstones included, by path.
-#[tracing::instrument(level = "debug", skip_all, fields(catalog_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub(crate) async fn existing_rows(
     conn: &mut PgConnection,
     catalog_id: i64,

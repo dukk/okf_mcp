@@ -1038,7 +1038,7 @@ async fn record_team(
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "trivial constructor: builds an error value, no I/O"
+        reason = "trivial conversion: builds an error value, no I/O"
     )
 )]
 fn unknown(name: &str) -> OkfError {

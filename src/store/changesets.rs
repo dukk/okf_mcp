@@ -210,7 +210,7 @@ struct RawListed {
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "trivial constructor: builds an error value, no I/O"
+        reason = "trivial conversion: builds an error value, no I/O"
     )
 )]
 fn no_longer_open(changeset_id: i64) -> OkfError {
@@ -233,7 +233,7 @@ fn no_longer_open(changeset_id: i64) -> OkfError {
 /// # Errors
 /// [`OkfError::Refused`] with [`CATALOG_GONE`] if the row is gone (a delete
 /// committed while this waited); [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(catalog_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn lock_catalog(conn: &mut PgConnection, catalog_id: i64) -> Result<(), OkfError> {
     let locked: Option<i64> =
         sqlx::query_scalar("SELECT id FROM catalogs WHERE id = $1 FOR KEY SHARE")
@@ -291,7 +291,7 @@ pub async fn by_id<'e>(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(catalog_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn open(
     conn: &mut PgConnection,
     catalog_id: i64,
@@ -392,7 +392,7 @@ pub async fn lock(conn: &mut PgConnection, id: i64) -> Result<Option<ChangesetRo
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(changeset_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(changeset_id = changeset_id))]
 pub async fn entries<'e>(
     executor: impl PgExecutor<'e>,
     changeset_id: i64,
@@ -412,7 +412,7 @@ pub async fn entries<'e>(
 ///
 /// # Errors
 /// [`OkfError::Busy`] if it is not open (any more); [`OkfError::Database`].
-#[tracing::instrument(level = "trace", skip_all, fields(changeset_id))]
+#[tracing::instrument(level = "trace", skip_all, fields(changeset_id = changeset_id))]
 async fn touch(
     conn: &mut PgConnection,
     changeset_id: i64,
@@ -446,7 +446,7 @@ async fn touch(
 /// [`OkfError::Busy`] if the changeset is no longer open (callers take
 /// [`lock`] first and refuse a closed one, so this is a backstop);
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(changeset_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(changeset_id = changeset_id))]
 pub async fn upsert_entry(
     conn: &mut PgConnection,
     changeset_id: i64,
@@ -488,7 +488,7 @@ pub async fn upsert_entry(
 /// # Errors
 /// [`OkfError::Busy`] if the changeset is no longer open;
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(changeset_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(changeset_id = changeset_id))]
 pub async fn remove_entries(
     conn: &mut PgConnection,
     changeset_id: i64,
@@ -519,7 +519,7 @@ pub async fn remove_entries(
 ///
 /// # Errors
 /// [`OkfError::Refused`] if it is not open; [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(changeset_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(changeset_id = changeset_id))]
 pub async fn set_state(
     conn: &mut PgConnection,
     changeset_id: i64,

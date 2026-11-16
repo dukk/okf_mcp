@@ -138,7 +138,7 @@ pub(crate) async fn check_free(conn: &mut PgConnection, name: &str) -> Result<()
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "trivial constructor: builds an error value, no I/O"
+        reason = "trivial conversion: builds an error value, no I/O"
     )
 )]
 fn name_taken(name: &str) -> OkfError {
@@ -169,7 +169,7 @@ fn name_taken(name: &str) -> OkfError {
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "trivial constructor: builds an error value, no I/O"
+        reason = "trivial conversion: builds an error value, no I/O"
     )
 )]
 pub(crate) fn or_name_taken<T>(
@@ -534,7 +534,7 @@ pub(crate) fn user_entry(action: Action, user_id: &str, details: serde_json::Val
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "trivial constructor: builds an error value, no I/O"
+        reason = "trivial conversion: builds an error value, no I/O"
     )
 )]
 pub(crate) fn unknown(name: &str) -> OkfError {
@@ -1089,7 +1089,7 @@ pub async fn delete(
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "one-line pure helper: arithmetic or formatting on its arguments, no I/O"
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
     )
 )]
 fn quoted(names: &[String]) -> String {
@@ -1106,7 +1106,7 @@ fn quoted(names: &[String]) -> String {
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "one-line pure helper: arithmetic or formatting on its arguments, no I/O"
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
     )
 )]
 fn count_of(rows: usize) -> i64 {

@@ -59,7 +59,7 @@ fn metadata(
 ///
 /// # Errors
 /// Database errors are propagated; malformed frontmatter is ignored per row.
-#[tracing::instrument(level = "debug", skip_all, fields(catalog_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn load(
     conn: &mut PgConnection,
     catalog_id: i64,
@@ -183,7 +183,7 @@ pub async fn load(
 ///
 /// # Errors
 /// Database errors are propagated.
-#[tracing::instrument(level = "debug", skip_all, fields(catalog_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn cursors(conn: &mut PgConnection, catalog_id: i64) -> Result<Cursors, OkfError> {
     let row = sqlx::query("SELECT changed_cursor, expiry_cursor, verification_cursor, next_aging_group FROM maintenance_state WHERE catalog_id=$1")
         .bind(catalog_id).fetch_optional(conn).await?;

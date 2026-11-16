@@ -142,7 +142,7 @@ fn csrf_for(id: &str) -> String {
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "one-line pure helper: arithmetic or formatting on its arguments, no I/O"
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
     )
 )]
 fn idle_cutoff(idle: Duration, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
@@ -161,7 +161,7 @@ fn idle_cutoff(idle: Duration, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "one-line pure helper: arithmetic or formatting on its arguments, no I/O"
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
     )
 )]
 fn write_resolution(idle: Duration) -> TimeDelta {
@@ -174,7 +174,7 @@ fn write_resolution(idle: Duration) -> TimeDelta {
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "one-line pure helper: arithmetic or formatting on its arguments, no I/O"
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
     )
 )]
 fn write_resolution_of(idle: TimeDelta) -> TimeDelta {

@@ -101,7 +101,7 @@ fn grant_name(user: &str, client: &ClientRecord) -> Result<String, OkfError> {
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "one-line pure helper: arithmetic or formatting on its arguments, no I/O"
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
     )
 )]
 fn actor_for(client: &ClientRecord) -> String {

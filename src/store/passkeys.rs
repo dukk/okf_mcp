@@ -378,7 +378,7 @@ fn credential_id(id: &str) -> Result<Vec<u8>, OkfError> {
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "trivial constructor: builds an error value, no I/O"
+        reason = "trivial conversion: builds an error value, no I/O"
     )
 )]
 fn not_found(id: &str) -> OkfError {

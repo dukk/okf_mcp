@@ -823,7 +823,7 @@ pub(crate) async fn record_catalog(
 /// [`OkfError::Database`], including for an id above `i32::MAX` (the
 /// two-key form takes `int4` keys; the server's cast reports "integer out of
 /// range" rather than this process panicking).
-#[tracing::instrument(level = "debug", skip_all, fields(catalog_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub(crate) async fn lock(conn: &mut PgConnection, catalog_id: i64) -> Result<(), OkfError> {
     // The two-key form, under this crate's namespace, so the lock cannot
     // collide with another application's advisory locks on a shared database.

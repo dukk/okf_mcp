@@ -343,7 +343,7 @@ async fn current_base(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "trace", skip_all, fields(catalog_id))]
+#[tracing::instrument(level = "trace", skip_all, fields(catalog_id = catalog_id))]
 async fn current_rows(
     conn: &mut PgConnection,
     catalog_id: i64,
@@ -668,7 +668,7 @@ fn as_conflict(error: OkfError, path: &str, expected: Option<i32>) -> OkfError {
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "trace", skip_all, fields(catalog_id))]
+#[tracing::instrument(level = "trace", skip_all, fields(catalog_id = catalog_id))]
 async fn with_current_revisions(
     pool: &PgPool,
     catalog_id: i64,

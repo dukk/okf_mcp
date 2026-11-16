@@ -209,7 +209,7 @@ fn compute(
 /// Writes each repaired file as the next revision of its path (1 for a new
 /// path; a tombstone's numbers continue), with a `create` or `update`
 /// revision carrying [`REPAIR_MESSAGE`].
-#[tracing::instrument(level = "trace", skip_all, fields(catalog_id))]
+#[tracing::instrument(level = "trace", skip_all, fields(catalog_id = catalog_id))]
 async fn write_files(
     conn: &mut sqlx::PgConnection,
     catalog_id: i64,
