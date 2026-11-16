@@ -30,7 +30,7 @@ pub struct CreateConceptParams {
     pub body: String,
     /// List the concept in its folder's index.md with this summary, creating folder indexes as needed.
     pub index_summary: Option<String>,
-    /// The index.md section to list it under (default: where `okf.py index` puts it); needs `index_summary`.
+    /// The index.md section to list it under (default: the section the server chooses for it); needs `index_summary`.
     pub index_section: Option<String>,
     /// Who wrote it, for the `generated` stamp (default: the key's actor).
     pub by: Option<String>,
@@ -331,7 +331,7 @@ impl OkfServer {
 pub enum QuestionRef {
     /// Its 1-based position, as `open_questions` numbers it.
     Number(u64),
-    /// Its exact text (a string of digits is read as a position, as `okf.py` does).
+    /// Its exact text (a string of digits is read as a position).
     Text(String),
 }
 
@@ -738,7 +738,7 @@ impl OkfServer {
     /// The `stamp` tool.
     #[tool(
         title = "Stamp Concept",
-        description = "okf.py stamp: set a concept's `generated` (content written) or append to \
+        description = "Set a concept's `generated` (content written) or append to \
                        its `verified` (checked against the real system) with { by, at: now }, in \
                        the changeset `changeset` names (open one with open_changeset). `by` \
                        defaults to the key's actor. Write access.",
@@ -762,7 +762,7 @@ impl OkfServer {
     /// The `review` tool.
     #[tool(
         title = "Record Review",
-        description = "okf.py review: replace a concept's `reviewed` with { by, at: now, outcome, \
+        description = "Replace a concept's `reviewed` with { by, at: now, outcome, \
                        note } and queue any `questions` in open_questions, in the changeset \
                        `changeset` names (open one with open_changeset). `by` defaults to the \
                        key's actor. Write access.",
@@ -786,7 +786,7 @@ impl OkfServer {
     /// The `question` tool.
     #[tool(
         title = "Add Question",
-        description = "okf.py question: queue one question in a concept's open_questions without \
+        description = "Queue one question in a concept's open_questions without \
                        recording a review, in the changeset `changeset` names (open one with \
                        open_changeset). Write access.",
         annotations(
@@ -809,7 +809,7 @@ impl OkfServer {
     /// The `unquestion` tool.
     #[tool(
         title = "Resolve Question",
-        description = "okf.py unquestion: remove one queued question, by its 1-based number in \
+        description = "Remove one queued question, by its 1-based number in \
                        open_questions or its exact text, deleting the key when none are left, in \
                        the changeset `changeset` names (open one with open_changeset). Write \
                        access.",
@@ -833,7 +833,7 @@ impl OkfServer {
     /// The `add_source` tool.
     #[tool(
         title = "Add Source",
-        description = "okf.py source: append an entry (id, resource, title, author) to a \
+        description = "Append an entry (id, resource, title, author) to a \
                        concept's `sources`, refusing a duplicate id, in the changeset `changeset` \
                        names (open one with open_changeset). Write access.",
         annotations(
@@ -881,7 +881,7 @@ impl OkfServer {
     /// The `log` tool.
     #[tool(
         title = "Add Log Entry",
-        description = "okf.py log: add `* **<kind>:** <text>` under today's UTC date in log.md, \
+        description = "Add `* **<kind>:** <text>` under today's UTC date in log.md, \
                        the only way to write log.md, in the changeset `changeset` names (open one \
                        with open_changeset). Replayed at publish onto a log.md that changed \
                        meanwhile, so concurrent entries never conflict. Write access.",
@@ -905,7 +905,7 @@ impl OkfServer {
     /// The `index` tool.
     #[tool(
         title = "Add Index Entry",
-        description = "okf.py index: list a concept in its folder's index.md as `* \
+        description = "List a concept in its folder's index.md as `* \
                        [Title](name.md) - summary`, in the changeset `changeset` names (open one \
                        with open_changeset); nothing happens if it is already linked. Replayed at \
                        publish onto an index.md that changed meanwhile, unless a free edit of \

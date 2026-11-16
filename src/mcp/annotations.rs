@@ -197,6 +197,57 @@ fn the_hints_go_on_the_wire_in_camel_case() {
     assert_eq!(json["annotations"]["openWorldHint"], false);
 }
 
+/// Every `description` string in a JSON value: the tool's own and those in its schemas.
+#[cfg(test)]
+fn collect_descriptions(value: &serde_json::Value, found: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, child) in map {
+                match child.as_str() {
+                    Some(text) if key == "description" => found.push(text.to_string()),
+                    _ => collect_descriptions(child, found),
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            items
+                .iter()
+                .for_each(|item| collect_descriptions(item, found));
+        }
+        _ => {}
+    }
+}
+
+/// Words that mark a contributor note, not text for a client: the reference CLI the server
+/// was ported from, and Rust-for-Python-developers asides.
+#[cfg(test)]
+const CONTRIBUTOR_WORDS: &[&str] = &["okf.py", "Python", "Rust", "`Copy`", "rename_all", "serde"];
+
+#[test]
+fn no_tool_text_names_okf_py_or_carries_a_contributor_note() {
+    let mut offenders = BTreeSet::new();
+
+    for tool in OkfServer::tools().list_all() {
+        let json = serde_json::to_value(&tool).expect("a tool serializes");
+        let mut descriptions = Vec::new();
+        collect_descriptions(&json, &mut descriptions);
+
+        for text in descriptions {
+            for word in CONTRIBUTOR_WORDS {
+                if text.contains(word) {
+                    offenders.insert(format!("{word:?}: {text}"));
+                }
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "tool descriptions with contributor text:\n{}",
+        offenders.into_iter().collect::<Vec<_>>().join("\n")
+    );
+}
+
 /// The tool parameters the directory review flagged ("Add a type to this
 /// parameter") that have not been fixed yet, as `(tool, parameter)` pairs.
 ///
