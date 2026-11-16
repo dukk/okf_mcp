@@ -251,7 +251,7 @@ async fn a_revert_holding_its_changeset_finishes_before_its_users_deletion() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_publish_racing_its_users_deletion_never_deadlocks() {
     // The issue's race, unforced and repeated: one side wins cleanly every
-    // time, and neither is ever `Busy`.
+    // time, and the losing publish is refused, never `Busy`.
     let test = pg().await;
     for round in 0..20 {
         // Arrange
@@ -276,8 +276,20 @@ async fn a_publish_racing_its_users_deletion_never_deadlocks() {
                 assert_eq!(deleted.discarded, 0, "round {round}");
                 assert_eq!(state, ChangesetState::Published, "round {round}");
             }
+            // The deletion won. A publish that resolved the handle first and
+            // then waited finds the changeset closed under its lock
+            // (`Refused`, "no longer open"); one that resolved it after the
+            // commit finds its key gone, so the handle names nothing it may
+            // use (`UnknownChangeset`). Never `Busy`.
             Err(error) => {
-                assert_ne!(error.kind(), "Busy", "round {round}: {error:?}");
+                let refused_under_the_lock = matches!(
+                    &error,
+                    OkfError::Refused { reason } if reason.contains("is no longer open")
+                );
+                assert!(
+                    refused_under_the_lock || matches!(error, OkfError::UnknownChangeset { .. }),
+                    "round {round}: {error:?}"
+                );
                 assert_eq!(deleted.discarded, 1, "round {round}");
                 assert_eq!(state, ChangesetState::Discarded, "round {round}");
             }

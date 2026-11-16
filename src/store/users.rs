@@ -2518,6 +2518,102 @@ pub(crate) mod tests {
         );
     }
 
+    /// How the deletion's actor names the non-admin user the writer holds.
+    #[derive(Debug, Clone, Copy)]
+    enum ActingAs {
+        /// By its user id (a session).
+        User,
+        /// Only by its key, whose owner `audit::record` resolves.
+        Key,
+        /// By another user's id, with the held user's key: the credential's
+        /// owner differs from `user_id`.
+        KeyOfAnother,
+    }
+
+    /// A deletion whose actor is a non-admin user (or whose credential is
+    /// that user's) locks that user with the target, not at the end in
+    /// `audit::record` (issue #418). A writer holds the user `FOR UPDATE`
+    /// and then needs the target, in id order (the held user is the lower
+    /// id); before the fix the deletion held the target while it waited for
+    /// the held user, and Postgres aborted one of the two as `Busy`.
+    async fn assert_a_deletion_takes_its_actor_with_its_target(acting_as: ActingAs) {
+        // Arrange
+        let db = test_db().await;
+        seed_catalog_owned_by(&db.pool, crate::db::TEST_TEAM).await;
+        let first = seed_user(&db.pool, "alice", None).await;
+        let second = seed_user(&db.pool, "bob", None).await;
+        // `<` on two `String`s compares them as Postgres' `ORDER BY id` does
+        // for these ASCII ids.
+        let (acting, target) = if first.id < second.id {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        let key = key_for(&db.pool, &acting.name, "acting-key", false).await;
+        let (credential, user_id) = match acting_as {
+            ActingAs::User => (None, Some(acting.id.clone())),
+            ActingAs::Key => (Some(key), None),
+            ActingAs::KeyOfAnother => {
+                let carol = seed_user(&db.pool, "carol", None).await;
+                (Some(key), Some(carol.id))
+            }
+        };
+        let actor = AuditActor {
+            credential,
+            user_id,
+            ..AuditActor::cli()
+        };
+        let mut writer = db.pool.begin().await.unwrap();
+        sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+            .bind(&acting.id)
+            .execute(&mut *writer)
+            .await
+            .unwrap();
+        let pool = db.pool.clone();
+        let target_name = target.name.clone();
+        let deleting =
+            tokio::spawn(async move { delete(&pool, &target_name, false, &actor, now()).await });
+        until_a_lock_is_awaited(&db.pool).await;
+
+        // Act: the writer's next lock, then its commit.
+        let next = tokio::time::timeout(
+            LOCK_WAIT,
+            sqlx::query("SELECT id FROM users WHERE id = $1 FOR KEY SHARE")
+                .bind(&target.id)
+                .execute(&mut *writer),
+        )
+        .await
+        .expect("the writer waited for the target for too long");
+        next.expect("the writer's lock on the target (a deadlock is aborted here)");
+        writer.commit().await.unwrap();
+        let deleted = tokio::time::timeout(LOCK_WAIT, deleting)
+            .await
+            .expect("the deletion waited for the writer for too long")
+            .unwrap();
+
+        // Assert
+        assert!(deleted.is_ok(), "{deleted:?}");
+        assert!(matches!(
+            find(&db.pool, &target.name).await,
+            Err(OkfError::UnknownName { .. })
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_deletion_by_a_non_admin_user_takes_that_user_with_its_target() {
+        assert_a_deletion_takes_its_actor_with_its_target(ActingAs::User).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_deletion_by_a_non_admin_users_key_takes_its_owner_with_its_target() {
+        assert_a_deletion_takes_its_actor_with_its_target(ActingAs::Key).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_deletion_whose_key_another_user_owns_takes_that_owner_with_its_target() {
+        assert_a_deletion_takes_its_actor_with_its_target(ActingAs::KeyOfAnother).await;
+    }
+
     /// The CLI's admin-flag change (it may clear the last admin).
     fn admin(on: bool) -> AdminChange {
         AdminChange {
