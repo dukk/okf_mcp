@@ -22,7 +22,28 @@
     }
   ],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "name": "job",
+        "label": "Job",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": {
+          "query": "label_values(okf_build_info, job)",
+          "refId": "job"
+        },
+        "definition": "label_values(okf_build_info, job)",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".+",
+        "current": {},
+        "sort": 1
+      }
+    ]
   },
   "annotations": {
     "list": []
@@ -56,7 +77,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (http_route) (rate(http_server_request_duration_seconds_count[5m]))",
+          "expr": "sum by (http_route) (rate(http_server_request_duration_seconds_count{job=~\"$job\"}[5m]))",
           "legendFormat": "{{http_route}}"
         }
       ]
@@ -89,7 +110,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{job=~\"$job\"}[5m])))",
           "legendFormat": "{{http_route}}"
         }
       ]
@@ -122,7 +143,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (tool, outcome) (rate(okf_mcp_tool_duration_seconds_count[5m]))",
+          "expr": "sum by (tool, outcome) (rate(okf_mcp_tool_duration_seconds_count{job=~\"$job\"}[5m]))",
           "legendFormat": "{{tool}} {{outcome}}"
         }
       ]
@@ -155,7 +176,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, tool) (rate(okf_mcp_tool_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, tool) (rate(okf_mcp_tool_duration_seconds_bucket{job=~\"$job\"}[5m])))",
           "legendFormat": "{{tool}}"
         }
       ]
@@ -188,7 +209,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, catalog) (rate(okf_publish_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, catalog) (rate(okf_publish_duration_seconds_bucket{job=~\"$job\"}[5m])))",
           "legendFormat": "p95 {{catalog}}"
         },
         {
@@ -197,7 +218,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "histogram_quantile(0.5, sum by (le, catalog) (rate(okf_publish_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.5, sum by (le, catalog) (rate(okf_publish_duration_seconds_bucket{job=~\"$job\"}[5m])))",
           "legendFormat": "p50 {{catalog}}"
         },
         {
@@ -206,7 +227,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, catalog) (rate(okf_publish_lock_wait_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, catalog) (rate(okf_publish_lock_wait_seconds_bucket{job=~\"$job\"}[5m])))",
           "legendFormat": "lock wait p95 {{catalog}}"
         }
       ]
@@ -239,7 +260,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(okf_poll_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(okf_poll_duration_seconds_bucket{job=~\"$job\"}[5m])))",
           "legendFormat": "p95"
         },
         {
@@ -248,7 +269,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (catalog) (rate(okf_catalog_refreshes_total{result=\"failed\"}[5m]))",
+          "expr": "sum by (catalog) (rate(okf_catalog_refreshes_total{job=~\"$job\",result=\"failed\"}[5m]))",
           "legendFormat": "failed refreshes {{catalog}}"
         },
         {
@@ -257,7 +278,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum(rate(okf_poll_duration_seconds_count{outcome=\"error\"}[5m]))",
+          "expr": "sum(rate(okf_poll_duration_seconds_count{job=~\"$job\",outcome=\"error\"}[5m]))",
           "legendFormat": "failed passes"
         }
       ]
@@ -290,7 +311,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (method, outcome) (rate(okf_auth_attempts_total[5m]))",
+          "expr": "sum by (method, outcome) (rate(okf_auth_attempts_total{job=~\"$job\"}[5m]))",
           "legendFormat": "{{method}} {{outcome}}"
         }
       ]
@@ -323,7 +344,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (provider, outcome) (rate(okf_mail_jobs_total[5m]))",
+          "expr": "sum by (provider, outcome) (rate(okf_mail_jobs_total{job=~\"$job\"}[5m]))",
           "legendFormat": "{{provider}} {{outcome}}"
         },
         {
@@ -332,7 +353,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (status) (okf_mail_queue_depth)",
+          "expr": "sum by (status) (okf_mail_queue_depth{job=~\"$job\"})",
           "legendFormat": "queue {{status}}"
         }
       ]
@@ -365,7 +386,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (signal, reason) (increase(okf_telemetry_export_failures_total[15m]))",
+          "expr": "sum by (signal, reason) (increase(okf_telemetry_export_failures_total{job=~\"$job\"}[15m]))",
           "legendFormat": "{{signal}} {{reason}}"
         }
       ]
@@ -398,7 +419,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "okf_clock_offset_seconds",
+          "expr": "okf_clock_offset_seconds{job=~\"$job\"}",
           "legendFormat": "offset"
         }
       ]

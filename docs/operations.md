@@ -729,6 +729,13 @@ selects ServiceMonitors by, often `release: <name>`). A NetworkPolicy that
 admits only the Prometheus pods to port 9464 is a sensible addition.
 [`examples/grafana/okf-mcp.json`](../examples/grafana/okf-mcp.json) is an
 example Grafana dashboard (import it, and pick the Prometheus data source).
+Every query is scoped with `{job=~"$job"}`, because names such as
+`http_server_request_duration_seconds` are standard and other services (or
+another okf-mcp installation) in the same Prometheus would otherwise be merged
+in. The `job` variable lists the values of the `job` label on `okf_build_info`,
+which the ServiceMonitor sets (by default to the Service's name,
+`okf-mcp-metrics`); choose your installation there. If you relabel `job`, the
+dashboard follows it.
 `tests/grafana_dashboard.rs` checks that it names only metrics the server
 exports. The server stays single-replica, so there is one target.
 

@@ -118,6 +118,54 @@ fn every_metric_in_the_dashboard_is_one_the_server_exports() {
     }
 }
 
+/// Every selector of a metric in `expression`, matchers included
+/// (`name{...}`), or the bare name when it has none.
+fn selectors(expression: &str) -> Vec<String> {
+    let pattern =
+        Regex::new(r"\b(?:okf_|http_server_|db_client_)[a-z_]+(?:\{[^}]*\})?").expect("pattern");
+    pattern
+        .find_iter(expression)
+        .map(|found| found.as_str().to_string())
+        .collect()
+}
+
+#[test]
+fn every_selector_is_scoped_by_the_job_variable() {
+    // Standard OTel names (`http_server_request_duration_seconds`) are shared
+    // by other services, so an unscoped query would merge them in.
+    let dashboard: Value = serde_json::from_str(DASHBOARD).expect("the dashboard is JSON");
+    let mut found = Vec::new();
+    expressions(&dashboard, &mut found);
+    for expression in &found {
+        let chosen = selectors(expression);
+        assert!(!chosen.is_empty(), "no selector in {expression}");
+        for selector in chosen {
+            assert!(
+                selector.contains(r#"job=~"$job""#),
+                "{selector} in `{expression}` is not scoped by $job"
+            );
+        }
+    }
+    let variables = dashboard["templating"]["list"]
+        .as_array()
+        .expect("template variables");
+    assert!(variables.iter().any(|variable| variable["name"] == "job"));
+}
+
+#[test]
+fn the_extractor_reads_labelled_selectors_with_variables() {
+    let expression = r#"sum by (le) (rate(okf_poll_duration_seconds_bucket{job=~"$job",outcome="error"}[$__rate_interval])) / okf_clock_offset_seconds{job=~"$job"}"#;
+    assert_eq!(
+        metric_names(expression),
+        [
+            "okf_poll_duration_seconds_bucket",
+            "okf_clock_offset_seconds"
+        ]
+    );
+    assert_eq!(selectors(expression).len(), 2);
+    assert!(selectors("okf_mail_queue_depth")[0].contains("okf_mail_queue_depth"));
+}
+
 #[test]
 fn the_extractor_reads_promql_the_way_the_dashboard_uses_it() {
     let names = metric_names(
