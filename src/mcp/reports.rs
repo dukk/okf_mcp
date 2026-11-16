@@ -132,7 +132,7 @@ pub struct LinksParams {
     pub mentions: Option<bool>,
 }
 
-/// `links_report`'s result: `okf.py links --json` plus the catalog.
+/// `links_report`'s result: the link report plus the catalog.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Links {
     /// The catalog.
@@ -151,7 +151,7 @@ pub struct LintParams {
     pub changeset: Option<String>,
 }
 
-/// `lint`'s result: `okf.py lint --json` plus the catalog.
+/// `lint`'s result: the lint report plus the catalog.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Lint {
     /// The catalog.
