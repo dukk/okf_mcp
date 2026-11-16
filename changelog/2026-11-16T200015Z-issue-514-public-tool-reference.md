@@ -30,3 +30,7 @@ description" suggestion, addressed once for every tool.
 ## Notes
 
 - The link points at `main`, so it resolves once this lands there.
+- Review round 2: a `$ref` parameter type links to a `### Type` section at the end of the
+  page (values, fields or alternatives), and an inline object parameter such as `submission`
+  gets a "Fields of" table, recursively, so a reader can build the argument without the Rust
+  source. A test checks every type link has a section and `submission`'s required fields appear.

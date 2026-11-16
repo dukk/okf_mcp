@@ -5,6 +5,7 @@
 //! A test renders the page and fails when the checked-in file differs. To refresh the file after
 //! changing a tool, run `OKF_UPDATE_TOOL_REFERENCE=1 cargo test --lib mcp::reference`.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use rmcp::model::Tool;
@@ -77,11 +78,9 @@ fn type_name(schema: &Value) -> String {
         return format!("one of: {}", listed.join(", "));
     }
     if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
-        return reference
-            .rsplit('/')
-            .next()
-            .unwrap_or(reference)
-            .to_string();
+        let name = reference.rsplit('/').next().unwrap_or(reference);
+        // Linked to the type's section at the end of the page (see `render_type`).
+        return format!("[`{name}`](#{})", type_anchor(name));
     }
     for key in ["anyOf", "oneOf"] {
         if let Some(options) = schema.get(key).and_then(Value::as_array) {
@@ -117,6 +116,19 @@ fn type_name(schema: &Value) -> String {
     } else {
         names.join(" or ")
     }
+}
+
+/// The anchor GitHub gives a type's heading, `## Type `Name```: the heading's text, lowercased,
+/// with punctuation dropped and spaces turned into hyphens. The "type" prefix keeps it apart from
+/// a tool's anchor (a type `Lint` would otherwise collide with the `lint` tool).
+///
+/// # Arguments
+/// * `name` - the type's name in `$defs`.
+///
+/// # Returns
+/// The fragment, without `#`.
+fn type_anchor(name: &str) -> String {
+    format!("type-{}", name.to_lowercase())
 }
 
 /// Make text safe for one table cell: one line, no pipe characters.
@@ -170,16 +182,59 @@ fn render_tool(page: &mut String, tool: &Tool) {
         own_description(tool)
     );
     let schema = Value::Object((*tool.input_schema).clone());
-    let required: Vec<&str> = schema
-        .get("required")
-        .and_then(Value::as_array)
-        .map(|names| names.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default();
+    let required = required_names(&schema);
     let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
         page.push_str("No parameters.\n\n");
         return;
     };
-    page.push_str("| Parameter | Type | Required | Description |\n|---|---|---|---|\n");
+    property_table(page, "Parameter", properties, &required);
+    nested_fields(page, "", properties);
+}
+
+/// Append a table for every property that is itself an object written inline (or an array of
+/// them), then recurse into it, so a parameter such as `submission` shows the fields it needs.
+/// Types that live in `$defs` get their own section instead (see [`render_type`]).
+///
+/// # Arguments
+/// * `page` - the page being built.
+/// * `prefix` - the dotted path of the object these properties belong to (empty at the top).
+/// * `properties` - the schema's `properties` object.
+fn nested_fields(page: &mut String, prefix: &str, properties: &serde_json::Map<String, Value>) {
+    for (name, property) in properties {
+        // An array's element schema is where its fields are described.
+        let object = property.get("items").unwrap_or(property);
+        let Some(fields) = object.get("properties").and_then(Value::as_object) else {
+            continue;
+        };
+        let path = format!("{prefix}{name}");
+        let each = if property.get("items").is_some() {
+            " (each item)"
+        } else {
+            ""
+        };
+        let _ = write!(page, "Fields of `{path}`{each}:\n\n");
+        property_table(page, "Field", fields, &required_names(object));
+        nested_fields(page, &format!("{path}."), fields);
+    }
+}
+
+/// Append a table of properties.
+///
+/// # Arguments
+/// * `page` - the page being built.
+/// * `heading` - the first column's title (`Parameter` or `Field`).
+/// * `properties` - the schema's `properties` object.
+/// * `required` - the names the schema lists as required.
+fn property_table(
+    page: &mut String,
+    heading: &str,
+    properties: &serde_json::Map<String, Value>,
+    required: &[&str],
+) {
+    let _ = writeln!(
+        page,
+        "| {heading} | Type | Required | Description |\n|---|---|---|---|"
+    );
     for (name, property) in properties {
         let description = property
             .get("description")
@@ -198,6 +253,92 @@ fn render_tool(page: &mut String, tool: &Tool) {
         );
     }
     page.push('\n');
+}
+
+/// The names a schema lists under `required`.
+///
+/// # Arguments
+/// * `schema` - an object schema.
+///
+/// # Returns
+/// The required property names (none when the key is absent).
+fn required_names(schema: &Value) -> Vec<&str> {
+    schema
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|names| names.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default()
+}
+
+/// Every named definition (`$defs`) in the tools' input schemas, by name. A type two tools share
+/// has one definition, so the first wins.
+///
+/// # Arguments
+/// * `tools` - the tools from the router.
+///
+/// # Returns
+/// The definitions, in name order.
+fn collect_defs(tools: &[Tool]) -> BTreeMap<String, Value> {
+    let mut defs = BTreeMap::new();
+    for tool in tools {
+        let defs_here = tool.input_schema.get("$defs").and_then(Value::as_object);
+        for (name, schema) in defs_here.into_iter().flatten() {
+            defs.entry(name.clone()).or_insert_with(|| schema.clone());
+        }
+    }
+    defs
+}
+
+/// Append one type's section: its description, then its values (an enum), its fields (an
+/// object) or its alternatives (an `anyOf` or `oneOf`, each with its own fields).
+///
+/// # Arguments
+/// * `page` - the page being built.
+/// * `name` - the type's name.
+/// * `schema` - its definition.
+fn render_type(page: &mut String, name: &str, schema: &Value) {
+    let _ = write!(page, "### Type `{name}`\n\n");
+    if let Some(text) = schema.get("description").and_then(Value::as_str) {
+        let _ = write!(page, "{}\n\n", text.trim());
+    }
+    render_shape(page, schema);
+}
+
+/// Append what a schema allows: enum values, object fields, or its alternatives.
+///
+/// # Arguments
+/// * `page` - the page being built.
+/// * `schema` - a definition or one alternative of one.
+fn render_shape(page: &mut String, schema: &Value) {
+    if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+        property_table(page, "Field", properties, &required_names(schema));
+        return;
+    }
+    if schema.get("enum").is_some() || schema.get("type").is_some() && schema.get("oneOf").is_none()
+    {
+        let _ = write!(page, "Value: {}\n\n", type_name(schema));
+        return;
+    }
+    for key in ["oneOf", "anyOf"] {
+        let Some(options) = schema.get(key).and_then(Value::as_array) else {
+            continue;
+        };
+        page.push_str("One of:\n\n");
+        for option in options {
+            let _ = write!(page, "- {}", type_name(option));
+            if let Some(text) = option.get("description").and_then(Value::as_str) {
+                let _ = write!(page, ": {}", cell(text));
+            }
+            page.push('\n');
+        }
+        page.push('\n');
+        // An alternative that is an object lists its fields under its bullet.
+        for option in options {
+            if option.get("properties").is_some() {
+                render_shape(page, option);
+            }
+        }
+    }
 }
 
 /// The whole page for the live tool list.
@@ -221,6 +362,14 @@ fn render() -> String {
     page.push('\n');
     for tool in &tools {
         render_tool(&mut page, tool);
+    }
+    // Every type a parameter's type links to is defined here, with its values or fields.
+    let defs = collect_defs(&tools);
+    if !defs.is_empty() {
+        page.push_str("## Types\n\nTypes the parameters above link to.\n\n");
+        for (name, schema) in &defs {
+            render_type(&mut page, name, schema);
+        }
     }
     page.trim_end().to_string() + "\n"
 }
@@ -268,4 +417,37 @@ fn the_reference_has_no_private_details() {
 
     assert!(!page.contains("okf.py"));
     assert!(!page.contains("vsix"));
+}
+
+#[test]
+fn every_type_a_parameter_links_to_is_defined_with_its_fields() {
+    let page = render();
+    let tools = OkfServer::tools().list_all();
+    let defs = collect_defs(&tools);
+
+    // A link target with no section would leave the reader unable to build the argument.
+    for link in page.split("](#type-").skip(1) {
+        let anchor = link.split(')').next().unwrap_or_default();
+        assert!(
+            defs.keys().any(|name| name.to_lowercase() == anchor),
+            "no section defines the type linked as #type-{anchor}"
+        );
+    }
+    // The parameter the reviewer named: `submission`'s required fields appear in the output.
+    let submit = tools
+        .iter()
+        .find(|tool| tool.name == "maintenance_submit")
+        .expect("maintenance_submit is registered");
+    let submission = &submit.input_schema["properties"]["submission"];
+    let section = page
+        .split("Fields of `submission`")
+        .nth(1)
+        .expect("a section for the submission's fields");
+    assert!(!required_names(submission).is_empty());
+    for field in required_names(submission) {
+        assert!(
+            section.contains(&format!("| `{field}` |")),
+            "submission field {field}"
+        );
+    }
 }

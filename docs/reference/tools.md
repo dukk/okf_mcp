@@ -231,7 +231,7 @@ Add `* **<kind>:** <text>` under today's UTC date in log.md, the only way to wri
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `text` | string | yes | The entry; runs of whitespace become single spaces. |
-| `kind` | LogKind | no | Update, Creation, Change or Import (default Update). |
+| `kind` | [`LogKind`](#type-logkind) | no | Update, Creation, Change or Import (default Update). |
 | `changeset` | string | yes | The changeset to write to: the handle `open_changeset` returned. |
 
 ## `maintenance_claim`
@@ -357,7 +357,18 @@ Report-only: submit bounded evidence and findings for an owned lease. Requires R
 | `work_id` | string | yes | Opaque work ID returned by maintenance_claim. |
 | `token` | string | yes | Current opaque lease token; must belong to the calling credential. |
 | `idempotency_key` | string | yes | Caller-chosen retry key (1..=128 non-whitespace ASCII bytes); reuse only for identical input. |
-| `submission` | Submission | yes | Revision-pinned assessment and proposed findings; never applies canonical edits. |
+| `submission` | object | yes | Revision-pinned assessment and proposed findings; never applies canonical edits. |
+
+Fields of `submission`:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `outcome` | one of: completed, inconclusive, failed | yes |  |
+| `assessment` | [`Assessment`](#type-assessment) | yes |  |
+| `summary` | string | yes |  |
+| `evidence` | array of [`Evidence`](#type-evidence) | yes |  |
+| `findings` | array of [`FindingInput`](#type-findinginput) | yes |  |
+| `reported_tokens` | integer | no |  |
 
 ## `move_concept`
 
@@ -594,5 +605,75 @@ Remove one queued question, by its 1-based number in open_questions or its exact
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `path` | string | yes | The concept, with or without `.md`, e.g. `/infra/ntp` or `/infra/ntp.md`. |
-| `question` | QuestionRef | yes | The question to remove: its 1-based number in `open_questions`, or its exact text. |
+| `question` | [`QuestionRef`](#type-questionref) | yes | The question to remove: its 1-based number in `open_questions`, or its exact text. |
 | `changeset` | string | yes | The changeset to write to: the handle `open_changeset` returned. |
+
+## Types
+
+Types the parameters above link to.
+
+### Type `Assessment`
+
+Value: one of: supported_current, outdated, unverifiable, not_assessed
+
+### Type `Category`
+
+Value: one of: suggested_link, possible_duplicate, conflicting_assertions, potentially_outdated_information, unverifiable_claim
+
+### Type `Evidence`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `pin` | [`RevisionPin`](#type-revisionpin) | yes |  |
+| `excerpt` | string | yes |  |
+
+### Type `ExternalObservation`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `resource` | string | yes |  |
+| `excerpt` | string | yes |  |
+| `attribution` | string | yes |  |
+
+### Type `FindingInput`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `category` | [`Category`](#type-category) | yes |  |
+| `assertion` | string | yes |  |
+| `follow_up` | string | yes |  |
+| `uncertainty` | string | yes |  |
+| `relationship` | [`Relationship`](#type-relationship) | yes |  |
+| `evidence` | array of [`Evidence`](#type-evidence) | yes |  |
+| `external` | array of [`ExternalObservation`](#type-externalobservation) | yes |  |
+
+### Type `LogKind`
+
+The kind of a `log.md` entry: `Update` (the default), `Creation`, `Change` or `Import`.
+
+One of:
+
+- string: `Update` (the default).
+- string: `Creation`.
+- string: `Change`.
+- string: `Import`.
+
+### Type `QuestionRef`
+
+A queued question, by 1-based position or by its exact text.
+
+One of:
+
+- integer: Its 1-based position, as `open_questions` numbers it.
+- string: Its exact text (a string of digits is read as a position).
+
+### Type `Relationship`
+
+Value: one of: direct_statement, inference, external_observation
+
+### Type `RevisionPin`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `path` | string | yes |  |
+| `revision` | integer | yes |  |
