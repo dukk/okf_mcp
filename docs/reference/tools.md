@@ -548,7 +548,7 @@ Set (or, with a null value, delete) one descriptive frontmatter key of a concept
 |---|---|---|---|
 | `path` | string | yes | The concept, with or without `.md`, e.g. `/infra/ntp` or `/infra/ntp.md`. |
 | `key` | string | yes | A descriptive key such as `title`, `status` or `tags`; the stamps, `open_questions` and `sources` have their own tools. |
-| `value` | any | yes | The new value as JSON; required, and an explicit null deletes the key (`type` cannot be deleted, and must be a non-blank string). |
+| `value` | string or number or boolean or array of string or number or boolean or array or object or object | yes | The new value as JSON; required, and an explicit null deletes the key (`type` cannot be deleted, and must be a non-blank string). |
 | `changeset` | string | yes | The changeset to write to: the handle `open_changeset` returned. |
 
 ## `split_concept`

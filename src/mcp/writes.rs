@@ -76,6 +76,13 @@ pub struct SetFrontmatterParams {
     // No `#[serde(default)]`: a missing `value` is a parameter error, so
     // forgetting the argument can never delete the key. `serde_json::Value`
     // is not an `Option`, so serde treats the field as required.
+    // `Value` publishes an any-value schema, which has no `type`; the
+    // extension names every JSON type the op accepts (issue #513), and the
+    // typed `items` keeps array schemas valid for the annotations test.
+    #[schemars(extend(
+        "type" = ["string", "number", "boolean", "array", "object", "null"],
+        "items" = {"type": ["string", "number", "boolean", "array", "object", "null"]}
+    ))]
     pub value: serde_json::Value,
     /// The changeset to write to: the handle `open_changeset` returned.
     pub changeset: String,
@@ -1837,5 +1844,61 @@ mod repair_tests {
         );
         assert!(curated_root.contains("Curated words.") && curated_infra.contains("Our systems."));
         assert_eq!(curated_root.matches("(a.md)").count(), 1, "{curated_root}");
+    }
+}
+
+#[cfg(test)]
+mod set_frontmatter_value_schema_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The published `value` schema names a direct type for every JSON type.
+    #[test]
+    fn the_published_value_schema_lists_every_json_type() {
+        let schema = schemars::schema_for!(SetFrontmatterParams);
+        let schema = serde_json::to_value(&schema).unwrap();
+        let kinds = &schema["properties"]["value"]["type"];
+        let mut listed: Vec<&str> = kinds
+            .as_array()
+            .expect("value has a type array")
+            .iter()
+            .filter_map(|k| k.as_str())
+            .collect();
+        listed.sort_unstable();
+        assert_eq!(
+            listed,
+            ["array", "boolean", "null", "number", "object", "string"]
+        );
+        assert!(schema["properties"]["value"]["items"]["type"].is_array());
+    }
+
+    /// Every kind the schema lists still deserializes, null included.
+    #[test]
+    fn every_listed_value_kind_still_deserializes() {
+        for value in [
+            json!("text"),
+            json!(3),
+            json!(1.5),
+            json!(true),
+            json!(["a", "b"]),
+            json!([{"k": ["nested"]}]),
+            json!({"by": "x", "n": {"deep": 1}}),
+            json!(null),
+        ] {
+            let params: SetFrontmatterParams = serde_json::from_value(
+                json!({"path": "/a", "key": "k", "value": value, "changeset": "c"}),
+            )
+            .expect("accepted kind deserializes");
+            assert_eq!(params.value, value);
+        }
+    }
+
+    /// A missing `value` stays a parameter error.
+    #[test]
+    fn a_missing_value_is_still_rejected() {
+        let missing = serde_json::from_value::<SetFrontmatterParams>(
+            json!({"path": "/a", "key": "k", "changeset": "c"}),
+        );
+        assert!(missing.is_err());
     }
 }
