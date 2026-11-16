@@ -13,7 +13,8 @@ Issue #470, part of epic #460.
   conversions (arithmetic or formatting, no I/O).
 
 ## Notes
-- Spans only: no SQL, transaction, lock order or control flow changed.
+- Instrumentation attributes plus caller-context propagation (`mcp::blocking` and the five
+  store `spawn_blocking` sites); no SQL, transaction, lock order or other control flow changed.
 - No argument, SQL, bind value, path, document text, user name, email, key secret or token
   is recorded, and no span uses `err` or `ret`.
 - Helpers under `okf.publish` are `trace` spans that nest in the existing `okf.publish*`
@@ -21,4 +22,5 @@ Issue #470, part of epic #460.
   import, repair, password hash and verify) now carry the caller's span and subscriber onto
   the blocking thread with `Caller::capture` and `enter` (review round 1); none wraps them again. The function that already carried its own span is unchanged.
 - `uninstrumented_fn` warnings in `src/store`: 417 before, 0 after.
-- The privacy sentinel test does not exist on `main` yet.
+- The privacy sentinel test exists on `main` and passed against this tree (5 of 5,
+  `gate.sh narrow --test telemetry_privacy`).
