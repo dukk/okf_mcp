@@ -573,7 +573,14 @@ impl App {
                     }
                     Arc::clone(state)
                 }
-                None if failed_before => continue,
+                None if failed_before => {
+                    // Still failed at this generation: it is a turn too, so
+                    // it counts and the span says so.
+                    self.metrics
+                        .catalog_refresh(&row.name, RefreshResult::Failed);
+                    turn.record("okf.refresh.result", RefreshResult::Failed.as_str());
+                    continue;
+                }
                 None => match CatalogState::load(&self.pool, &row.name)
                     .instrument(turn.clone())
                     .await
@@ -1394,6 +1401,39 @@ mod tests {
 
         let loaded = app.catalog("pg").unwrap().current();
         assert_eq!((loaded.generation(), loaded.files()), (3, 1));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_catalog_that_stays_unloadable_counts_a_failed_refresh_every_pass() {
+        let (test, registry) =
+            crate::mcp::testing::app_with_metrics(&[], crate::config::Config::default()).await;
+        let pool = test.app.pool().clone();
+        let pg = catalogs::create(
+            &pool,
+            &crate::store::catalogs::NewCatalog {
+                name: "pg",
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            },
+            &crate::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        import_files(&pool, "pg", &[("a.md", "# A\n")], false).await;
+        break_catalog(&pool, pg.id).await;
+
+        // The first pass tries the load and fails; the second skips the
+        // generation that already failed. Both are turns that failed.
+        test.app.poll().await.unwrap();
+        test.app.poll().await.unwrap();
+
+        assert!(test.app.catalog("pg").is_none());
+        let text = crate::mcp::testing::render(&registry);
+        assert!(
+            text.contains(r#"okf_catalog_refreshes_total{catalog="pg",result="failed"} 2"#),
+            "{text}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

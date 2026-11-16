@@ -215,7 +215,11 @@ async fn publish_locked(
     if entries.is_empty() {
         return Ok(PublishReport::default());
     }
-    tracing::Span::current().record("okf.changeset.entries", entries.len());
+    // `i64`, not `usize`: the span layer exports a `usize` as a string.
+    tracing::Span::current().record(
+        "okf.changeset.entries",
+        i64::try_from(entries.len()).unwrap_or(i64::MAX),
+    );
     let base = current_base(state, &mut tx).await?;
 
     // Step 3: base revisions against the documents as stored now.

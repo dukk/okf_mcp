@@ -1292,8 +1292,8 @@ mod publish_tests {
             .iter()
             .find(|kv| kv.key.as_str() == "okf.changeset.entries");
         assert_eq!(
-            entries.map(|kv| kv.value.to_string()),
-            Some("1".to_string())
+            entries.map(|kv| &kv.value),
+            Some(&opentelemetry::Value::I64(1))
         );
         let text = render(&registry);
         assert!(
