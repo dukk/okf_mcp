@@ -2051,7 +2051,7 @@
         "file": "analysis/lead.md",
         "line": 1,
         "rule": "sprawl",
-        "message": "sprawl score 22.2 > 16 (112 lines, 5 sections, 4 volatile); consider splitting (okf.py sprawl analysis/lead.md, okf-reorganize skill)"
+        "message": "sprawl score 22.2 > 16 (112 lines, 5 sections, 4 volatile); consider splitting (the sprawl tool on analysis/lead.md, okf-reorganize skill)"
       },
       {
         "file": "analysis/offsets.md",
