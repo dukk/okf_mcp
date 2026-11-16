@@ -1,6 +1,6 @@
 # okf-mcp observability: design
 
-Status: designed 2026-11-15 (issue #425). Not yet planned or delivered.
+Status: designed 2026-11-15 (issue #425); delivered in milestone 15 (epic #460), closed out 2026-11-16 (issue #497).
 
 ## Goal
 
@@ -276,8 +276,8 @@ version), `deployment.environment.name` when set, and whatever
 | Publish | `okf.publish`, children for the lock wait, lint, write, commit | `okf.catalog`, `okf.changeset.entries` |
 | Poll loop | `okf.poll` root per tick; a child per catalog refresh and the key-cache reload | `okf.catalog`, `okf.refresh.result` |
 | Mail | `okf.mail.job` root per apalis job | `okf.mail.provider`, outcome; never the address |
-| Auth | sign-in, session, OIDC, passkey, OAuth authorize and token | method, outcome; no token, code, email or password |
-| Postgres | the store functions' own `#[instrument]` spans, `db.system.name = postgresql`, `db.operation.name` from a constant | never SQL text or bind values |
+| Auth | sign-in, session, OIDC, passkey, OAuth authorize and token | `method`, `outcome`; no token, code, email or password (corrected, issue #497, 2026-11-16: carried by `signin::audit`, `signin::start_in`, `okf.oauth.token`, and OAuth authorize's `check_code` and `finish`, not one span per flow) |
+| Postgres | the store functions' own `#[instrument]` spans, `db.system.name = postgresql`, `db.operation.name` from a constant (corrected, issue #497, 2026-11-16: `<module>.<function>`, on functions that take a pool, connection or transaction) | never SQL text or bind values |
 | Clock check | `okf.clock.check` root | offset, outcome |
 | Archives | export and import spans | `okf.catalog`, bytes, outcome |
 | Everything else | the instrument policy below (`debug` or `trace`) | `fields(...)` of safe ids only |
@@ -317,7 +317,10 @@ OTel names; the Prometheus reader renders them with `_` and unit and
 | `okf.build.info` | gauge (1) | `version` |
 
 Gauges read existing state (the snapshot cache, the key cache, the pool,
-`apalis.jobs`) through observable callbacks, so nothing new is stored.
+`apalis.jobs`) through observable callbacks, so nothing new is stored
+*(Corrected, issue #497, 2026-11-16: one thing is: migration 0018, the
+partial index `changesets_open` on open changesets, keeps the open-changeset
+count from scanning the whole table each poll pass.)*.
 Catalog names are bounded by the catalogs that exist; a deleted catalog's
 series stop at the next collection.
 
@@ -373,8 +376,11 @@ of `Cargo.toml`; `const fn`, closures and test-only code are out of its
 scope. `docs/contributing/policy-lints.md` (new) carries the rules below.
 
 - **Level.** Public entry points into a module: `debug`. Private helpers:
-  `trace`. MCP tools, HTTP handlers, publish and the background roots:
-  `info`. With the OTLP span filter at `info`, the helper spans are
+  `trace`. The HTTP request span, `mcp <tool>`, publish and the
+  background roots: `info`; HTTP handlers and other public or async
+  functions: `debug`, beneath those roots *(Corrected, issue #497,
+  2026-11-16: handlers were listed as `info`; the sweeps, #472 and #473,
+  made them `debug`)*. With the OTLP span filter at `info`, the helper spans are
   disabled callsites (one atomic load each) and cost nothing; raising
   `traces_filter` to `debug` or `trace` gives the full call tree.
 - **`skip_all`, always,** with safe values through `fields(...)`.

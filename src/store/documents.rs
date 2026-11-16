@@ -39,7 +39,7 @@ pub struct DocumentRow {
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "documents.published", catalog_id = catalog_id))]
 pub async fn published<'e>(
     executor: impl PgExecutor<'e>,
     catalog_id: i64,
@@ -240,7 +240,7 @@ impl<'a> RevisionRecord<'a> {
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "documents.write_document"))]
 pub async fn write_document(
     conn: &mut PgConnection,
     write: &DocumentWrite<'_>,
@@ -283,7 +283,7 @@ pub async fn write_document(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "documents.delete_document"))]
 pub async fn delete_document(
     conn: &mut PgConnection,
     write: &DocumentWrite<'_>,
@@ -314,7 +314,7 @@ pub async fn delete_document(
 /// # Errors
 /// [`OkfError::Database`]: a unique violation if the revision already
 /// exists (which the publish lock rules out; publish maps it to a conflict).
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "documents.record_revision"))]
 pub async fn record_revision(
     conn: &mut PgConnection,
     write: &DocumentWrite<'_>,

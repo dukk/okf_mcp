@@ -167,7 +167,7 @@ pub struct Attempt<'a> {
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "sign_in_events.record"))]
 pub async fn record(
     pool: &PgPool,
     user_id: Option<&str>,
@@ -197,7 +197,7 @@ pub async fn record(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "sign_in_events.record_in"))]
 pub async fn record_in(conn: &mut PgConnection, attempt: &Attempt<'_>) -> Result<(), OkfError> {
     split_event!(
         info,
@@ -237,7 +237,7 @@ pub async fn record_in(conn: &mut PgConnection, attempt: &Attempt<'_>) -> Result
 ///
 /// # Errors
 /// [`OkfError::UnknownName`]; [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "sign_in_events.recent"))]
 pub async fn recent(pool: &PgPool, user: &str, limit: i64) -> Result<Vec<SignInEvent>, OkfError> {
     let user_id = crate::store::users::id_by_name(pool, user).await?;
     // `host(ip)` is the address as text without a prefix length.
@@ -272,7 +272,7 @@ pub async fn recent(pool: &PgPool, user: &str, limit: i64) -> Result<Vec<SignInE
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "sign_in_events.prune"))]
 pub async fn prune(pool: &PgPool, before: DateTime<Utc>) -> Result<u64, OkfError> {
     Ok(sqlx::query("DELETE FROM sign_in_events WHERE at < $1")
         .bind(before)
@@ -308,6 +308,44 @@ mod tests {
             assert_eq!(Outcome::parse(outcome.as_str()), Some(outcome));
         }
         assert_eq!(Method::parse("magic"), None);
+    }
+
+    /// Design, Postgres row of the span table: a store function's own span
+    /// says it is PostgreSQL and names its operation from a constant, and
+    /// never carries SQL text or bind values.
+    #[tokio::test]
+    async fn a_store_span_names_the_database_and_the_operation_and_no_sql() {
+        use crate::telemetry::config::LogFormat;
+        use crate::telemetry::subscriber::capture::{attribute, Observer};
+
+        let db = test_db().await;
+        let ip: IpAddr = "192.0.2.77".parse().unwrap();
+        let observer = Observer::start("off", "trace", "off", LogFormat::Text);
+
+        record(
+            &db.pool,
+            None,
+            Method::Password,
+            Outcome::Failed,
+            Some(ip),
+            now(),
+        )
+        .await
+        .unwrap();
+        let observed = observer.finish();
+
+        let spans = observed.spans_named("record");
+        assert_eq!(spans.len(), 1, "{:?}", observed.spans);
+        let text = |key: &str| attribute(spans[0], key).map(ToString::to_string);
+        assert_eq!(text("db.system.name").as_deref(), Some("postgresql"));
+        assert_eq!(
+            text("db.operation.name").as_deref(),
+            Some("sign_in_events.record")
+        );
+        let exported = observed.exported_text();
+        for sql in ["INSERT", "SELECT", "sign_in_events (", "$1", "192.0.2.77"] {
+            assert!(!exported.contains(sql), "{sql} in {exported}");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

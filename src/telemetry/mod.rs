@@ -57,6 +57,35 @@ fn warn_provider_off(signal: &'static str, error: &dyn std::fmt::Display) {
     );
 }
 
+/// The sampler `telemetry.otlp.sample_ratio` selects: a trace that starts
+/// here is kept with probability `ratio`, and a trace that arrives with a
+/// sampled (or unsampled) parent follows its parent. A ratio of `0.0` keeps
+/// no new trace and `1.0` keeps every one.
+///
+/// # Arguments
+/// * `ratio` - the validated ratio, `0.0..=1.0`.
+#[tracing::instrument(level = "trace", skip_all)]
+fn sampler_for(ratio: f64) -> Sampler {
+    Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(ratio)))
+}
+
+/// Warns that `telemetry.otlp.endpoint` already ends in `/v1/...`, so the
+/// exporters would post to `/v1/.../v1/<signal>`. It is a warning, not an
+/// error: a receiver can serve such a path. The endpoint is logged with
+/// userinfo, query and fragment removed.
+///
+/// # Arguments
+/// * `endpoint` - `telemetry.otlp.endpoint`.
+#[tracing::instrument(level = "trace", skip_all)]
+fn warn_if_endpoint_has_signal_path(endpoint: &str) {
+    if let Some(sanitized) = config::endpoint_with_signal_path(endpoint) {
+        tracing::warn!(
+            endpoint = %sanitized,
+            "telemetry.otlp.endpoint should be a base URL: /v1/<signal> is appended to it"
+        );
+    }
+}
+
 /// Logs that a shutdown thread did not start. The I/O error's text stays on
 /// stderr; the exported event keeps the provider's name.
 ///
@@ -204,7 +233,12 @@ impl Telemetry {
                 tracing::info!("OTLP export is off: OTEL_SDK_DISABLED is true");
                 None
             }
-            Some(otlp) => Some((otlp, OtlpTarget::resolve(otlp, env)?)),
+            Some(otlp) => {
+                if let Some(endpoint) = &otlp.endpoint {
+                    warn_if_endpoint_has_signal_path(endpoint);
+                }
+                Some((otlp, OtlpTarget::resolve(otlp, env)?))
+            }
             None => None,
         };
 
@@ -218,9 +252,7 @@ impl Telemetry {
                         .with_resource(resource.clone())
                         .with_span_processor(processor);
                     if let Some(ratio) = otlp.sample_ratio {
-                        builder = builder.with_sampler(Sampler::ParentBased(Box::new(
-                            Sampler::TraceIdRatioBased(ratio),
-                        )));
+                        builder = builder.with_sampler(sampler_for(ratio));
                     }
                     Some(builder.build())
                 }
@@ -844,6 +876,77 @@ mod tests {
             }
         });
         (port, heads)
+    }
+
+    /// Design, `sample_ratio`: 0.0 exports no new trace, 1.0 exports all of
+    /// them, through the sampler `start` installs.
+    #[test]
+    fn the_sample_ratio_keeps_no_trace_at_zero_and_every_trace_at_one() {
+        use opentelemetry::trace::{Span as _, Tracer, TracerProvider as _};
+        use opentelemetry_sdk::trace::InMemorySpanExporter;
+
+        for (ratio, kept) in [(0.0, 0), (1.0, 20)] {
+            let exporter = InMemorySpanExporter::default();
+            let provider = SdkTracerProvider::builder()
+                .with_sampler(sampler_for(ratio))
+                .with_simple_exporter(exporter.clone())
+                .build();
+            let tracer = provider.tracer("sample-ratio-test");
+
+            for _ in 0..20 {
+                tracer.start("root").end();
+            }
+
+            let exported = exporter.get_finished_spans().expect("spans");
+            assert_eq!(exported.len(), kept, "ratio {ratio}");
+        }
+    }
+
+    /// Design, endpoint paragraph: a base that already ends in `/v1/...` is
+    /// a warning (with userinfo, query and fragment dropped), a plain base
+    /// is silent.
+    #[test]
+    fn an_endpoint_that_already_ends_in_v1_warns_and_a_plain_base_does_not() {
+        use crate::telemetry::config::LogFormat;
+        use crate::telemetry::subscriber::capture::observe;
+
+        let observed = observe("trace", "trace", "trace", LogFormat::Text, || {
+            for endpoint in [
+                "https://otlp.example.com",
+                "https://otlp.example.com/otlp",
+                "https://otlp.example.com/v10",
+            ] {
+                warn_if_endpoint_has_signal_path(endpoint);
+            }
+        });
+        assert!(!observed.stderr.contains("base URL"), "{}", observed.stderr);
+
+        let observed = observe("trace", "trace", "trace", LogFormat::Text, || {
+            for ending in ["/v1/traces", "/v1/metrics", "/v1/logs", "/v1", "/v1/"] {
+                // Userinfo, a query and a fragment must not reach the log.
+                warn_if_endpoint_has_signal_path(&format!(
+                    "https://zq-user:zq-pass@otlp.example.com:4318/otlp{ending}?zq-query=1#zq-frag"
+                ));
+            }
+        });
+        assert_eq!(
+            observed.stderr.matches("base URL").count(),
+            5,
+            "{}",
+            observed.stderr
+        );
+        assert!(
+            observed
+                .stderr
+                .contains("https://otlp.example.com:4318/otlp/v1/traces"),
+            "{}",
+            observed.stderr
+        );
+        let exported = observed.exported_text();
+        for secret in ["zq-user", "zq-pass", "zq-query", "zq-frag"] {
+            assert!(!exported.contains(secret), "{secret} in {exported}");
+            assert!(!observed.stderr.contains(secret), "{secret}");
+        }
     }
 
     /// Task 1b: error text of these events reaches stderr only.

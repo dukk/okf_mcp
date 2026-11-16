@@ -163,7 +163,7 @@ fn grant_access(levels: &BTreeMap<String, Access>) -> Result<Access, OkfError> {
 /// # Errors
 /// [`OkfError::Unauthenticated`] when the user or the session is gone or
 /// ended; [`OkfError::Database`].
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "grants.lock_signed_in"))]
 async fn lock_signed_in(
     conn: &mut PgConnection,
     new: &NewSelfIssuedGrant<'_>,
@@ -209,7 +209,7 @@ async fn lock_signed_in(
 /// [`OkfError::Unauthenticated`] when the user or the session is gone;
 /// [`OkfError::CatalogNotSelected`] for a catalog deleted meanwhile;
 /// [`OkfError::Io`] if the OS random source fails; [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "grants.create_self_issued"))]
 pub async fn create_self_issued(
     pool: &PgPool,
     new: &NewSelfIssuedGrant<'_>,

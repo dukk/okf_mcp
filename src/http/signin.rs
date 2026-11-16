@@ -505,7 +505,11 @@ pub(crate) struct SignIn<'a> {
 /// [`OkfError::Unauthenticated`] when the user is gone or the stamped
 /// password changed; [`OkfError::Database`]; [`OkfError::Io`] from the
 /// random source.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(
+    level = "debug",
+    skip_all,
+    fields(method = tracing::field::Empty, outcome = tracing::field::Empty)
+)]
 pub(crate) async fn start_in(
     app: &App,
     conn: &mut PgConnection,
@@ -554,8 +558,31 @@ pub(crate) async fn start_in(
     // refusal, which `audit` counts). The caller's transaction commits
     // after this returns, and only a database failure at that commit can
     // still undo the sign-in.
+    record_attempt(signing_in.method, Outcome::Ok);
     app.metrics().auth_attempt(signing_in.method, Outcome::Ok);
     Ok(session_cookie(app, &user.id, &session, absolute))
+}
+
+/// Puts a sign-in attempt's `method` and `outcome` on the span that is
+/// current, the one `audit` or `start_in` declared them on (the design's
+/// Auth row). Both come from the audit's own closed enums, the labels of
+/// `okf_auth_attempts_total`, so no token, code, email or password can
+/// reach a span through here.
+///
+/// # Arguments
+/// * `method` - how they tried.
+/// * `outcome` - how it ended.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "records two fields on the caller's span; a span of its own would take them instead"
+    )
+)]
+pub(crate) fn record_attempt(method: Method, outcome: Outcome) {
+    let span = tracing::Span::current();
+    span.record("method", method.as_str());
+    span.record("outcome", outcome.as_str());
 }
 
 /// Records a refused sign-in attempt as a `sign_in_events` row (which also
@@ -569,7 +596,11 @@ pub(crate) async fn start_in(
 /// * `method` - how they tried.
 /// * `outcome` - what happened.
 /// * `ip` - their address, if known.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(
+    level = "debug",
+    skip_all,
+    fields(method = tracing::field::Empty, outcome = tracing::field::Empty)
+)]
 pub(crate) async fn audit(
     app: &App,
     user_id: Option<&str>,
@@ -577,6 +608,7 @@ pub(crate) async fn audit(
     outcome: Outcome,
     ip: Option<IpAddr>,
 ) {
+    record_attempt(method, outcome);
     app.metrics().auth_attempt(method, outcome);
     let now = app.clock().now();
     if let Err(error) = sign_in_events::record(app.pool(), user_id, method, outcome, ip, now).await
@@ -1177,6 +1209,54 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         panic!("{want} mails never queued; {} did", queued_mail(pool).await);
+    }
+
+    /// Design, Auth row: a sign-in's spans carry `method` and `outcome`
+    /// (the labels of `okf_auth_attempts_total`) and no email, password or
+    /// session id.
+    #[tokio::test]
+    async fn sign_in_spans_carry_method_and_outcome_and_no_secret() {
+        use crate::telemetry::config::LogFormat;
+        use crate::telemetry::subscriber::capture::{attribute, Observer};
+
+        const WRONG: &str = "zq-wrong-password-5d1c";
+        let test = login_app().await;
+        user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
+        let mut browser = Browser::default();
+        let observer = Observer::start("off", "debug", "off", LogFormat::Text);
+
+        let refused = post_sign_in(&mut browser, &test, "alice@example.com", WRONG).await;
+        let signed_in = post_sign_in(&mut browser, &test, "alice@example.com", PASSWORD).await;
+        let observed = observer.finish();
+
+        assert_eq!(refused.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(signed_in.status, StatusCode::SEE_OTHER);
+        let pair = |name: &str| -> Vec<(Option<String>, Option<String>)> {
+            observed
+                .spans_named(name)
+                .iter()
+                .map(|span| {
+                    (
+                        attribute(span, "method").map(ToString::to_string),
+                        attribute(span, "outcome").map(ToString::to_string),
+                    )
+                })
+                .collect()
+        };
+        let want = |outcome: &str| (Some("password".to_string()), Some(outcome.to_string()));
+        assert_eq!(pair("audit"), [want("failed")]);
+        assert_eq!(pair("start_in"), [want("ok")]);
+        let exported = observed.exported_text();
+        let line = signed_in.set_cookie(COOKIE).expect("a session cookie");
+        let session_id = line
+            .split(';')
+            .next()
+            .and_then(|pair| pair.split_once('='))
+            .map(|(_, value)| value)
+            .expect("a cookie value");
+        for secret in [WRONG, PASSWORD, "alice@example.com", session_id] {
+            assert!(!exported.contains(secret), "{secret} in {exported}");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

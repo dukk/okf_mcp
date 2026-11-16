@@ -384,6 +384,58 @@ async fn a_console_session_records_the_user_id_and_never_the_user_name() {
     }
 }
 
+/// Design, request span: a method outside the nine standard ones is
+/// `_OTHER` on the span and the metric label, so a client cannot mint a
+/// value.
+#[tokio::test]
+async fn an_unknown_method_is_other_on_the_span_and_the_metric() {
+    let (test, registry) = app_with_metrics(&[("main", &[])], Config::default()).await;
+    let router = router(Arc::clone(&test.app), &CancellationToken::new());
+    for filter in FILTERS {
+        let observer = Observer::start("off", filter, "off", LogFormat::Text);
+        let request = Request::builder()
+            .method(format!("ZQ{}", SENTINEL.len()).as_str())
+            .uri("/mcp")
+            .body(Body::empty())
+            .expect("request");
+        // The span ends with the response, so read the status and drop it
+        // before the exporter is flushed.
+        let status = router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("answers")
+            .status();
+        let observed = observer.finish();
+
+        // No key: the route exists (a span) and refuses the caller.
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{filter}");
+        let spans = observed.spans_named("_OTHER /mcp");
+        assert_eq!(spans.len(), 1, "{filter}: {}", dump(&observed));
+        assert_eq!(
+            attribute(spans[0], "http.request.method")
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("_OTHER"),
+            "{filter}"
+        );
+        assert!(
+            !dump(&observed).contains("ZQ"),
+            "{filter}: {}",
+            dump(&observed)
+        );
+    }
+    let text = render(&registry);
+    assert!(
+        text.lines().any(|line| {
+            line.starts_with("http_server_request_duration_seconds_count{")
+                && line.contains(r#"http_request_method="_OTHER""#)
+        }),
+        "{text}"
+    );
+    assert!(!text.contains("ZQ"), "{text}");
+}
+
 #[tokio::test]
 async fn http_requests_are_measured_by_method_route_and_status() {
     let (test, registry) = app_with_metrics(&[("main", &[])], Config::default()).await;

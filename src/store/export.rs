@@ -44,7 +44,7 @@ use crate::store::{catalogs, documents};
 // `W: Write + Send + 'static`: `out` moves to a blocking thread, so it must
 // be safe to send there (`Send`) and must not borrow anything that thread
 // could outlive (`'static`). `Vec<u8>` and `File` both qualify.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "export.export"))]
 pub async fn export<W>(
     pool: &PgPool,
     catalog: &str,
@@ -153,7 +153,7 @@ struct Exported<'a> {
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "export.record_export"))]
 async fn record_export(
     pool: &PgPool,
     exported: &Exported<'_>,

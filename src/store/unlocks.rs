@@ -424,7 +424,7 @@ fn check_reason(reason: &str) -> Result<&str, OkfError> {
 /// [`OkfError::Forbidden`] for an actor whose own user is not an admin user
 /// (the command line has none and passes);
 /// [`OkfError::Database`], a failed audit write or mail insert included.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "unlocks.create"))]
 pub async fn create(
     pool: &PgPool,
     new: &NewUnlock<'_>,
@@ -527,7 +527,7 @@ pub async fn create(
 /// # Errors
 /// [`OkfError::Forbidden`] for a user who is not (or no longer) an admin,
 /// or is gone; [`OkfError::Database`].
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "unlocks.require_staff"))]
 async fn require_staff(conn: &mut PgConnection, actor: &AuditActor) -> Result<(), OkfError> {
     let Some(user_id) = actor.user_id.as_deref() else {
         return Ok(());
@@ -548,7 +548,7 @@ async fn require_staff(conn: &mut PgConnection, actor: &AuditActor) -> Result<()
 /// Queues the unlocked email to every owner of the catalog's owner team
 /// that has an address, inside the unlock's transaction (no mail for an
 /// unlock that rolls back). An unowned catalog mails nobody.
-#[tracing::instrument(level = "trace", skip_all, fields(catalog_id = catalog_id))]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "unlocks.notify_owners", catalog_id = catalog_id))]
 async fn notify_owners(
     conn: &mut PgConnection,
     catalog_id: i64,
@@ -592,7 +592,7 @@ async fn notify_owners(
 /// [`OkfError::NotFound`] for an unknown id; [`OkfError::Refused`] for one
 /// that has already ended or expired; [`OkfError::Database`], a failed
 /// audit write included.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "unlocks.end"))]
 pub async fn end(
     pool: &PgPool,
     id: i64,
@@ -695,7 +695,7 @@ fn staff_person(person_id: i64) -> FixedPerson {
 ///
 /// # Errors
 /// [`OkfError::NotFound`] for an unknown id; [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "unlocks.find_in"))]
 pub async fn find_in(conn: &mut PgConnection, id: i64) -> Result<UnlockRecord, OkfError> {
     sqlx::query_as::<_, UnlockRow>(concat!(select_unlocks!(), " WHERE u.id = $1"))
         .bind(id)
@@ -718,7 +718,7 @@ pub async fn find_in(conn: &mut PgConnection, id: i64) -> Result<UnlockRecord, O
 ///
 /// # Errors
 /// As [`find_in`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "unlocks.find"))]
 pub async fn find(pool: &PgPool, id: i64) -> Result<UnlockRecord, OkfError> {
     let mut conn = pool.acquire().await?;
     find_in(&mut conn, id).await
@@ -735,7 +735,7 @@ pub async fn find(pool: &PgPool, id: i64) -> Result<UnlockRecord, OkfError> {
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "unlocks.list"))]
 pub async fn list(pool: &PgPool, filter: &UnlockFilter<'_>) -> Result<Vec<UnlockRecord>, OkfError> {
     // A malformed name (a NUL, which Postgres refuses) names nothing.
     let malformed = |name: Option<&str>| name.is_some_and(|name| !is_valid_name(name));
@@ -770,7 +770,7 @@ pub async fn list(pool: &PgPool, filter: &UnlockFilter<'_>) -> Result<Vec<Unlock
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "unlocks.live"))]
 pub async fn live(
     executor: impl PgExecutor<'_>,
     now: DateTime<Utc>,
@@ -799,7 +799,7 @@ pub async fn live(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "unlocks.tally"))]
 pub async fn tally(pool: &PgPool, id: i64, kind: AccessKind) -> Result<(), OkfError> {
     // One fixed statement per column: a column name cannot be a bind
     // parameter. Every variant is named, so a new kind must pick a column.

@@ -47,7 +47,7 @@ impl Unassigned {
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "unassigned.list"))]
 pub async fn list(pool: &PgPool) -> Result<Unassigned, OkfError> {
     // The key and code listings already carry `user`; filtering them reuses
     // their joins instead of repeating them. The tables hold at most a few

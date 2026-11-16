@@ -287,7 +287,7 @@ pub fn expiry(
 /// [`OkfError::CatalogNotSelected`] for an unknown catalog;
 /// [`OkfError::UnknownName`] for an unknown user; [`OkfError::Io`] if the OS
 /// random source fails; [`OkfError::Database`] otherwise.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "codes.create"))]
 pub async fn create(
     pool: &PgPool,
     new: &NewSignInCode<'_>,
@@ -385,7 +385,7 @@ pub async fn create(
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "codes.list"))]
 pub async fn list(pool: &PgPool) -> Result<Vec<SignInCodeRecord>, OkfError> {
     // Grouping by the primary key `s.id` lets the query select `s`'s other
     // columns ungrouped (Postgres knows they depend on it).
@@ -412,7 +412,7 @@ pub async fn list(pool: &PgPool) -> Result<Vec<SignInCodeRecord>, OkfError> {
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "codes.find_live"))]
 pub async fn find_live(
     pool: &PgPool,
     presented: &str,
@@ -447,7 +447,7 @@ pub async fn find_live(
 /// # Errors
 /// [`OkfError::Refused`] for an unknown, redeemed or already revoked code;
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "codes.revoke"))]
 pub async fn revoke(
     pool: &PgPool,
     id: &str,
@@ -500,7 +500,7 @@ pub async fn revoke(
 /// # Errors
 /// [`OkfError::UnknownName`] for an unknown user; [`OkfError::NotFound`]
 /// (`oauth/codes/<id>`) for an unknown code; [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "codes.assign_user"))]
 pub async fn assign_user(
     pool: &PgPool,
     id: &str,
@@ -586,7 +586,7 @@ struct LockedCode {
 /// [`OkfError::Refused`] when the code is unknown, expired, redeemed or
 /// revoked (one message for all four), or its named catalogs are all gone;
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "codes.redeem"))]
 pub async fn redeem(
     pool: &PgPool,
     code_id: &str,
@@ -747,7 +747,7 @@ pub(crate) fn client_host(client: &ClientRecord) -> String {
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "codes.prune"))]
 pub async fn prune(pool: &PgPool, expired_before: DateTime<Utc>) -> Result<u64, OkfError> {
     let deleted =
         sqlx::query("DELETE FROM sign_in_codes WHERE redeemed_at IS NULL AND expires_at < $1")

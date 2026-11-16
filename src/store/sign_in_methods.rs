@@ -20,7 +20,7 @@ use crate::error::OkfError;
 ///
 /// # Errors
 /// [`OkfError::NotFound`] for an unknown user; [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "sign_in_methods.count"))]
 pub async fn count(conn: &mut PgConnection, user_id: &str) -> Result<i64, OkfError> {
     let has_password: Option<bool> = sqlx::query_scalar(
         "SELECT password_hash IS NOT NULL FROM users WHERE id = $1 FOR NO KEY UPDATE",

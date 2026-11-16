@@ -158,7 +158,7 @@ struct Analyzed {
 /// (replaced since the caller was admitted; a retry is admitted afresh);
 /// [`OkfError::Database`], a
 /// failed audit write included.
-#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "import.import"))]
 pub async fn import(
     pool: &PgPool,
     catalog: &str,
@@ -374,7 +374,7 @@ fn refuse_markdown_that_is_not_text(files: &Files) -> Result<(), OkfError> {
 }
 
 /// Every row of the catalog, tombstones included, by path.
-#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "import.existing_rows", catalog_id = catalog_id))]
 pub(crate) async fn existing_rows(
     conn: &mut PgConnection,
     catalog_id: i64,

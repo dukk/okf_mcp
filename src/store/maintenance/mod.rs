@@ -75,7 +75,7 @@ fn validate(actor: &Actor, key: &str) -> Result<(), OkfError> {
     Ok(())
 }
 
-#[tracing::instrument(level = "trace", skip_all, fields(catalog_id = catalog_id))]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "maintenance.lock", catalog_id = catalog_id))]
 async fn lock(
     conn: &mut PgConnection,
     catalog_id: i64,
@@ -94,7 +94,7 @@ async fn lock(
     Ok(())
 }
 
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "maintenance.replay"))]
 async fn replay<T: DeserializeOwned>(
     conn: &mut PgConnection,
     catalog: i64,
@@ -118,7 +118,7 @@ async fn replay<T: DeserializeOwned>(
     })?))
 }
 
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "maintenance.receipt"))]
 async fn receipt<T: Serialize>(
     conn: &mut PgConnection,
     catalog: i64,
@@ -135,7 +135,7 @@ async fn receipt<T: Serialize>(
     Ok(())
 }
 
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "maintenance.recover"))]
 async fn recover(
     conn: &mut PgConnection,
     catalog: i64,

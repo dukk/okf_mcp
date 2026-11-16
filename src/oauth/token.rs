@@ -28,6 +28,7 @@ use crate::oauth::{pkce, OAuth};
 use crate::store::oauth::tokens::{
     self as token_rows, LiveAccessToken, NewToken, RefreshUse, RevokedToken, TokenKind,
 };
+use crate::store::sign_in_events::Outcome;
 use crate::telemetry::metrics::{Grant, Limiter};
 
 /// The routes: `POST /oauth/token` and `POST /oauth/revoke`.
@@ -285,15 +286,41 @@ fn grant_client(app: &App, grant_id: &str) -> Option<String> {
 
 /// `POST /oauth/token`. One `okf.oauth.token` span per request; its grant
 /// is one of the closed set, set once the form is read (an unsupported
-/// type stays empty: a client chose it).
+/// type stays empty: a client chose it). The span also carries `method`
+/// (`oauth_token`) and `outcome` (`ok` or `failed`, the spellings of
+/// `okf_auth_attempts_total`), and never a code, token or client id.
 #[tracing::instrument(
     level = "info",
     name = "okf.oauth.token",
     skip_all,
-    fields(okf.oauth.grant = tracing::field::Empty)
+    fields(
+        method = "oauth_token",
+        outcome = tracing::field::Empty,
+        okf.oauth.grant = tracing::field::Empty
+    )
 )]
 async fn token(
     State(app): State<Arc<App>>,
+    form: Result<Form<TokenForm>, FormRejection>,
+) -> Result<TokenResponse, OAuthError> {
+    // Held so the inner function records the grant on this span, not on its own.
+    let span = tracing::Span::current();
+    let result = issue_token(&span, app, form).await;
+    let outcome = if result.is_ok() {
+        Outcome::Ok
+    } else {
+        Outcome::Failed
+    };
+    span.record("outcome", outcome.as_str());
+    result
+}
+
+/// The body of [`token`]: rate limit, read the form, run the grant. It
+/// records the grant on `token`'s span.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn issue_token(
+    span: &tracing::Span,
+    app: Arc<App>,
     form: Result<Form<TokenForm>, FormRejection>,
 ) -> Result<TokenResponse, OAuthError> {
     let oauth = app
@@ -308,11 +335,11 @@ async fn token(
     })?;
     match required(&form.grant_type, "grant_type")? {
         "authorization_code" => {
-            tracing::Span::current().record("okf.oauth.grant", Grant::AuthorizationCode.as_str());
+            span.record("okf.oauth.grant", Grant::AuthorizationCode.as_str());
             exchange_code(&app, oauth, &form).await
         }
         "refresh_token" => {
-            tracing::Span::current().record("okf.oauth.grant", Grant::RefreshToken.as_str());
+            span.record("okf.oauth.grant", Grant::RefreshToken.as_str());
             refresh(&app, oauth, &form).await
         }
         other => Err(OAuthError::UnsupportedGrantType(format!(
@@ -822,6 +849,40 @@ mod tests {
         for secret in [refresh_token.as_str(), CLIENT_ID] {
             assert!(!exported.contains(secret), "{secret} in {exported}");
         }
+    }
+
+    /// Design, Auth row: the `okf.oauth.token` span says which method ran
+    /// and how it ended, and never a code or token.
+    #[tokio::test]
+    async fn the_token_span_carries_method_and_outcome() {
+        use crate::telemetry::config::LogFormat;
+        use crate::telemetry::subscriber::capture::{attribute, Observer};
+
+        let test = oauth_app().await;
+        let code = authorization_code(&test).await;
+        let observer = Observer::start("off", "info", "off", LogFormat::Text);
+
+        let (ok, _, _) = token(&test, exchange(&code)).await;
+        // The same code again is a replay.
+        let (replay, _, _) = token(&test, exchange(&code)).await;
+        let observed = observer.finish();
+
+        assert_eq!(ok, StatusCode::OK);
+        assert_ne!(replay, StatusCode::OK);
+        let seen: Vec<_> = observed
+            .spans_named("okf.oauth.token")
+            .iter()
+            .map(|span| {
+                (
+                    attribute(span, "method").map(ToString::to_string),
+                    attribute(span, "outcome").map(ToString::to_string),
+                )
+            })
+            .collect();
+        let want = |outcome: &str| (Some("oauth_token".to_string()), Some(outcome.to_string()));
+        assert_eq!(seen, [want("ok"), want("failed")]);
+        let exported = observed.exported_text();
+        assert!(!exported.contains(&code), "{exported}");
     }
 
     #[tokio::test(flavor = "multi_thread")]
