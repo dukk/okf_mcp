@@ -1,0 +1,22 @@
+# A ClusterIP Service for okf-mcp's /metrics listener ([telemetry.prometheus],
+# port 9464, named `metrics` on the Deployment in docs/operations.md section 5).
+#
+# The listener has no authentication. Keep this Service ClusterIP, never
+# route the Ingress to it, and consider a NetworkPolicy that admits only the
+# Prometheus pods to the port. It is a separate Service from the main one so
+# that nothing that exposes `okf-mcp` (the Ingress) can reach the metrics.
+apiVersion: v1
+kind: Service
+metadata:
+  name: okf-mcp-metrics
+  labels:
+    app: okf-mcp
+    app.kubernetes.io/component: metrics
+spec:
+  type: ClusterIP
+  selector:
+    app: okf-mcp
+  ports:
+    - name: metrics
+      port: 9464
+      targetPort: metrics

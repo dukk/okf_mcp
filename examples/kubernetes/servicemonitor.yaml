@@ -1,0 +1,21 @@
+# A Prometheus Operator ServiceMonitor that scrapes okf-mcp-metrics
+# (metrics-service.yaml) every 30 seconds at /metrics.
+#
+# Prometheus only picks up the ServiceMonitors its own `serviceMonitorSelector`
+# names. Add that label below; it is often `release: <helm release name>`.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: okf-mcp
+  labels:
+    app: okf-mcp
+    # release: prometheus   # the label your Prometheus selects ServiceMonitors by
+spec:
+  selector:
+    matchLabels:
+      app: okf-mcp
+      app.kubernetes.io/component: metrics
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
