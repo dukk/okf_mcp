@@ -757,8 +757,17 @@ impl App {
             // query, not yet started, for the `select!` below to drive.
             // Each check is the root of its own trace, whatever started the
             // loop (spec "Background roots").
+            // Kept as a handle: the result is recorded on this span, not on
+            // whatever span is current when the check finishes.
+            let root = tracing::info_span!(
+                parent: None,
+                "okf.clock.check",
+                okf.outcome = tracing::field::Empty,
+                okf.clock.offset = tracing::field::Empty,
+                otel.status_code = tracing::field::Empty,
+            );
             let check = clock_check::check_once(&server, self.clock(), clock_check::QUERY_TIMEOUT)
-                .instrument(tracing::info_span!(parent: None, "okf.clock.check"));
+                .instrument(root.clone());
             // A stop during a query ends it at once instead of waiting up to
             // `QUERY_TIMEOUT` (Brooke's review of PR #138).
             tokio::select! {
@@ -766,6 +775,18 @@ impl App {
                 status = check => {
                     let outcome = if status.ok { Outcome::Ok } else { Outcome::Error };
                     self.metrics.clock_check(outcome, status.offset_ms);
+                    root.record("okf.outcome", outcome.as_str());
+                    match status.offset_ms {
+                        // Seconds, as an `f64`, like the gauge.
+                        Some(offset_ms) => {
+                            root.record("okf.clock.offset", offset_ms as f64 / 1000.0);
+                        }
+                        // A failed check is a failed trace: the WARN event
+                        // alone does not set the span's status.
+                        None => {
+                            root.record("otel.status_code", "error");
+                        }
+                    }
                     self.set_clock_status(status);
                 }
             }
@@ -1941,6 +1962,24 @@ mod tests {
                 caller.span_context.trace_id(),
                 "{filter}"
             );
+            // The result is on the root: a closed outcome and the offset in
+            // seconds as a number, never a string; a success is not an error.
+            let attribute = |key| crate::telemetry::subscriber::capture::attribute(checks[0], key);
+            assert_eq!(
+                attribute("okf.outcome").map(ToString::to_string).as_deref(),
+                Some("ok"),
+                "{filter}"
+            );
+            assert!(
+                matches!(attribute("okf.clock.offset"), Some(opentelemetry::Value::F64(offset)) if offset.abs() < 1.0),
+                "{filter}: {:?}",
+                checks[0].attributes
+            );
+            assert_eq!(
+                checks[0].status,
+                opentelemetry::trace::Status::Unset,
+                "{filter}"
+            );
             let text = crate::mcp::testing::render(&registry);
             assert_eq!(
                 crate::mcp::testing::sample_of(&text, r#"okf_clock_checks_total{outcome="ok"}"#),
@@ -1950,6 +1989,82 @@ mod tests {
             let offset = crate::mcp::testing::sample_of(&text, "okf_clock_offset_seconds")
                 .unwrap_or_else(|| panic!("no offset gauge: {text}"));
             assert!(offset.abs() < 1.0, "{text}");
+        }
+    }
+
+    /// A UDP server that answers one request with a packet too short to be
+    /// an NTP reply.
+    async fn garbage_time_server() -> std::net::SocketAddr {
+        let socket = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let address = socket.local_addr().expect("address");
+        tokio::spawn(async move {
+            let mut request = [0u8; 48];
+            if let Ok((_, client)) = socket.recv_from(&mut request).await {
+                let _ = socket.send_to(&[0u8; 4], client).await;
+            }
+        });
+        address
+    }
+
+    #[tokio::test]
+    async fn a_failed_clock_check_marks_its_root_span_as_an_error() {
+        use crate::telemetry::config::LogFormat;
+        use crate::telemetry::subscriber::capture::{attribute, Observer};
+        for filter in ["info", "trace"] {
+            let server = garbage_time_server().await;
+            let config = Config {
+                time_server: Some(server.to_string()),
+                ..Config::default()
+            };
+            let (test, registry) =
+                crate::mcp::testing::app_with_metrics(&[("pg", &[])], config).await;
+            let observer = Observer::start("off", filter, "off", LogFormat::Text);
+            let shutdown = CancellationToken::new();
+            let running = Arc::clone(&test.app).check_clock_until(shutdown.clone());
+            let stop = async {
+                let app = &test.app;
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    while app.clock_status().is_none() {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                })
+                .await
+                .expect("a clock check within 10 s");
+                shutdown.cancel();
+            };
+            tokio::time::timeout(Duration::from_secs(15), async {
+                tokio::join!(running, stop)
+            })
+            .await
+            .expect("the loop stops when cancelled");
+            let observed = observer.finish();
+
+            let checks = observed.spans_named("okf.clock.check");
+            assert_eq!(checks.len(), 1, "{filter}");
+            assert_eq!(
+                attribute(checks[0], "okf.outcome")
+                    .map(ToString::to_string)
+                    .as_deref(),
+                Some("error"),
+                "{filter}"
+            );
+            assert!(
+                attribute(checks[0], "okf.clock.offset").is_none(),
+                "{filter}"
+            );
+            assert!(
+                matches!(checks[0].status, opentelemetry::trace::Status::Error { .. }),
+                "{filter}: {:?}",
+                checks[0].status
+            );
+            let text = crate::mcp::testing::render(&registry);
+            assert_eq!(
+                crate::mcp::testing::sample_of(&text, r#"okf_clock_checks_total{outcome="error"}"#),
+                Some(1.0),
+                "{filter}: {text}"
+            );
         }
     }
 }

@@ -165,8 +165,8 @@ fn resolved_catalog(span: &tracing::Span, app: &App, name: &str) -> Option<Strin
 /// * `span` - the handler's span (see [`resolved_catalog`]).
 /// * `app` - the shared state.
 /// * `direction` - export or import.
-/// * `catalog` - [`resolved_catalog`]'s answer; nothing is recorded for
-///   `None`.
+/// * `catalog` - [`resolved_catalog`]'s answer; the size and the metrics
+///   are recorded only for `Some`.
 /// * `started` - when the transfer began.
 /// * `bytes` - the archive's size when the transfer succeeded.
 #[tracing::instrument(level = "trace", skip_all)]
@@ -178,20 +178,26 @@ fn record_transfer(
     started: Instant,
     bytes: Option<usize>,
 ) {
-    let Some(catalog) = catalog else {
-        return;
-    };
     // `usize` to `u64` is lossless on every platform Rust supports.
     let bytes = bytes.map(|bytes| bytes as u64);
-    if let Some(bytes) = bytes {
-        // Spans take integers as `i64`; a size past `i64::MAX` is not real.
-        span.record("okf.archive.size", i64::try_from(bytes).unwrap_or(i64::MAX));
-    }
     let outcome = if bytes.is_some() {
         Outcome::Ok
     } else {
         Outcome::Error
     };
+    // The outcome is a closed value, so it is recorded even for a name no
+    // loaded catalog bears; the size and the metrics need a resolved catalog.
+    span.record("okf.outcome", outcome.as_str());
+    if outcome == Outcome::Error {
+        span.record("otel.status_code", "error");
+    }
+    let Some(catalog) = catalog else {
+        return;
+    };
+    if let Some(bytes) = bytes {
+        // Spans take integers as `i64`; a size past `i64::MAX` is not real.
+        span.record("okf.archive.size", i64::try_from(bytes).unwrap_or(i64::MAX));
+    }
     app.metrics()
         .archive(direction, catalog, outcome, started.elapsed(), bytes);
 }
@@ -221,7 +227,12 @@ fn record_transfer(
     name = "okf.archive.export",
     level = "info",
     skip_all,
-    fields(okf.catalog = tracing::field::Empty, okf.archive.size = tracing::field::Empty)
+    fields(
+        okf.catalog = tracing::field::Empty,
+        okf.archive.size = tracing::field::Empty,
+        okf.outcome = tracing::field::Empty,
+        otel.status_code = tracing::field::Empty,
+    )
 )]
 async fn export_catalog(
     State(app): State<Arc<App>>,
@@ -339,7 +350,12 @@ struct ImportQuery {
     name = "okf.archive.import",
     level = "info",
     skip_all,
-    fields(okf.catalog = tracing::field::Empty, okf.archive.size = tracing::field::Empty)
+    fields(
+        okf.catalog = tracing::field::Empty,
+        okf.archive.size = tracing::field::Empty,
+        okf.outcome = tracing::field::Empty,
+        otel.status_code = tracing::field::Empty,
+    )
 )]
 async fn import_catalog(
     State(app): State<Arc<App>>,
@@ -999,5 +1015,79 @@ mod tests {
         }
         let text = crate::mcp::testing::render(&registry);
         assert!(!text.contains(SENTINEL), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_refused_import_of_an_admitted_catalog_is_an_error_span_and_adds_no_bytes() {
+        use crate::telemetry::config::LogFormat;
+        use crate::telemetry::subscriber::capture::{attribute, Observer};
+        let (test, registry) =
+            crate::mcp::testing::app_with_metrics(&[("pg", &[])], Config::default()).await;
+        for filter in ["info", "trace"] {
+            let observer = Observer::start("off", filter, "off", LogFormat::Text);
+            // A generation that is not the catalog's: 409 after admission.
+            let refused = router(&test, admin())
+                .oneshot(
+                    Request::post("/catalogs/pg/import?replace=true&expect_generation=999")
+                        .body(Body::from(tarball()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let succeeded = router(&test, admin())
+                .oneshot(
+                    Request::get("/catalogs/pg/export")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let observed = observer.finish();
+
+            assert_eq!(refused.status(), StatusCode::CONFLICT, "{filter}");
+            assert_eq!(succeeded.status(), StatusCode::OK, "{filter}");
+            let imports = observed.spans_named("okf.archive.import");
+            assert_eq!(imports.len(), 1, "{filter}");
+            let outcome = |span| attribute(span, "okf.outcome").map(ToString::to_string);
+            assert_eq!(outcome(imports[0]).as_deref(), Some("error"), "{filter}");
+            assert!(
+                matches!(
+                    imports[0].status,
+                    opentelemetry::trace::Status::Error { .. }
+                ),
+                "{filter}"
+            );
+            assert_eq!(
+                attribute(imports[0], "okf.catalog")
+                    .map(ToString::to_string)
+                    .as_deref(),
+                Some("pg")
+            );
+            assert!(
+                attribute(imports[0], "okf.archive.size").is_none(),
+                "{filter}"
+            );
+            let exports = observed.spans_named("okf.archive.export");
+            assert_eq!(outcome(exports[0]).as_deref(), Some("ok"), "{filter}");
+            assert!(
+                !matches!(
+                    exports[0].status,
+                    opentelemetry::trace::Status::Error { .. }
+                ),
+                "{filter}"
+            );
+        }
+        let text = crate::mcp::testing::render(&registry);
+        let sample = |series: &str| crate::mcp::testing::sample_of(&text, series);
+        // One refused import per filter: errors counted, no bytes added.
+        assert_eq!(
+            sample(r#"okf_archive_duration_seconds_count{direction="import",outcome="error"}"#),
+            Some(2.0),
+            "{text}"
+        );
+        assert!(
+            !text.contains(r#"okf_archive_size_bytes_total{catalog="pg",direction="import"}"#),
+            "{text}"
+        );
     }
 }
