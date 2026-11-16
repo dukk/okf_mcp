@@ -270,8 +270,8 @@ version), `deployment.environment.name` when set, and whatever
 
 | Area | Span | Attributes |
 |---|---|---|
-| HTTP, every route | `TraceLayer` with a span maker: `otel.name = "<METHOD> <route>"`, `otel.kind = server` | `http.request.method` (unknown ones as `_OTHER`), `http.route` from `MatchedPath`, `http.response.status_code` (i64), `otel.status_code = ERROR` for 5xx only, `enduser.id` and `okf.key.id` once the principal is known (`Principal` has no team; corrected, M15 plan, 2026-11-15). An unmatched route gets no span. No URI, query or header |
-| MCP tools (42) | one `info` span per call, `otel.name = "mcp <tool>"`, opened in `OkfServer::call_tool`, the single choke point (corrected, M15 plan, 2026-11-15: was `#[instrument]` on each tool, which now carry `debug` spans beneath it) | `okf.tool`, `okf.catalog`, `okf.outcome`, `okf.error.kind`, `enduser.id`, `okf.key.id` |
+| HTTP, every route | `TraceLayer` with a span maker: `otel.name = "<METHOD> <route>"`, `otel.kind = server` | `http.request.method` (unknown ones as `_OTHER`), `http.route` from `MatchedPath`, `http.response.status_code` (i64), `otel.status_code = ERROR` for 5xx only, `enduser.id` and `okf.key.id` once the principal is known (`Principal` has no team; corrected, M15 plan, 2026-11-15; `okf.key.id` is the bare word `session` for a console session, never `session:<user name>`; corrected, issue #464, 2026-11-16). An unmatched route gets no span. No URI, query or header |
+| MCP tools (42) | one `info` span per call, `otel.name = "mcp <tool>"`, opened in `OkfServer::call_tool`, the single choke point (corrected, M15 plan, 2026-11-15: was `#[instrument]` on each tool, which now carry `debug` spans beneath it) | `okf.tool`, `okf.catalog` (a loaded catalog's name, else `none`), `okf.outcome`, `okf.error.kind`, `enduser.id`, `okf.key.id` (same rule as the HTTP row; corrected, issue #464, 2026-11-16) |
 | Publish | `okf.publish`, children for the lock wait, lint, write, commit | `okf.catalog`, `okf.changeset.entries` |
 | Poll loop | `okf.poll` root per tick; a child per catalog refresh and the key-cache reload | `okf.catalog`, `okf.refresh.result` |
 | Mail | `okf.mail.job` root per apalis job | `okf.mail.provider`, outcome; never the address |
@@ -328,7 +328,12 @@ series stop at the next collection.
   id.
 - **Span attributes** may also carry principal ids: `enduser.id` (the
   user's id) and `okf.key.id`. *(Corrected, M15 plan, 2026-11-15.)* Never names, email
-  addresses, display names or key material.
+  addresses, display names or key material. *(Corrected, issue #464,
+  2026-11-16.)* A console session's key id is `session:<user name>`, so for a
+  session credential `okf.key.id` is the kind only, `session`; the user is
+  identified by `enduser.id` alone. API keys and OAuth grants record their
+  real key id. One helper (`auth::record_principal_ids`) applies the rule to
+  both the HTTP and the MCP span.
 - **Never exported** (no OTLP span, event, log record or metric, and
   nothing on `/metrics`): URIs, query strings, headers, request or
   response bodies, document or concept text, concept paths, SQL, bind

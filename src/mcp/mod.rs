@@ -26,13 +26,29 @@ use std::sync::Arc;
 
 use axum::http::request::Parts;
 use rmcp::handler::server::router::tool::ToolRouter;
-use rmcp::model::{CallToolResult, Implementation, ServerCapabilities, ServerConfig};
+use rmcp::handler::server::tool::ToolCallContext;
+use rmcp::model::{
+    CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, ServerCapabilities,
+    ServerConfig,
+};
 use rmcp::{tool_handler, Json, ServerHandler};
+use tracing::Instrument;
 
 use crate::app::App;
 use crate::error::OkfError;
 use crate::mcp::context::ToolContext;
+use crate::telemetry::metrics::{tool_label, Outcome, SessionGuard};
 use crate::telemetry::subscriber::split_event;
+
+// `task_local!` is a value scoped to one async task, like a
+// `contextvars.ContextVar` in Python.
+tokio::task_local! {
+    /// The span of the tool call in progress (set by `call_tool`): how
+    /// [`tool_error`] records the error kind on the tool's root span rather
+    /// than on `Span::current()`, which under a raised `traces_filter` is the
+    /// tool method's own `debug` span or a helper's.
+    static TOOL_SPAN: tracing::Span;
+}
 
 /// What the server tells a client it is for.
 pub const INSTRUCTIONS: &str = "Open Knowledge Format catalogs: concepts (markdown with YAML \
@@ -48,6 +64,9 @@ pub const INSTRUCTIONS: &str = "Open Knowledge Format catalogs: concepts (markdo
 pub struct OkfServer {
     app: Arc<App>,
     tool_router: ToolRouter<OkfServer>,
+    // Held for the session's life: `okf.mcp.sessions.active` counts it open
+    // until the handler is dropped.
+    _session: SessionGuard,
 }
 
 impl OkfServer {
@@ -60,9 +79,29 @@ impl OkfServer {
     /// The handler, with every tool registered.
     pub fn new(app: Arc<App>) -> Self {
         Self {
+            _session: app.metrics().mcp_session(),
             app,
             tool_router: Self::tools(),
         }
+    }
+
+    /// The `catalog` label and attribute for a call: the argument's value
+    /// when it names a loaded catalog, else `none`. A name the client typed
+    /// that no catalog bears never becomes a label or an attribute.
+    ///
+    /// # Arguments
+    /// * `arguments` - the call's arguments.
+    ///
+    /// # Returns
+    /// A loaded catalog's name, or `"none"`.
+    #[tracing::instrument(level = "trace", skip_all)]
+    fn catalog_label(&self, arguments: Option<&rmcp::model::JsonObject>) -> String {
+        arguments
+            .and_then(|arguments| arguments.get("catalog"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|name| self.app.catalog(name).is_some())
+            .unwrap_or("none")
+            .to_string()
     }
 
     /// Every tool: each module's router, joined with `+`.
@@ -104,10 +143,79 @@ impl OkfServer {
     }
 }
 
-// `#[tool_handler]` writes `ServerHandler`'s `list_tools` and `call_tool`
-// over the stored router; `get_info` is ours.
+// `#[tool_handler]` writes `ServerHandler`'s `list_tools` over the stored
+// router; `get_info` and `call_tool` are ours (the macro skips a method that
+// is already written).
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for OkfServer {
+    /// Every tool call, the single choke point: opens the `mcp <tool>` span
+    /// (a child of the HTTP request span), records its outcome, and measures
+    /// the call. The tool's own spans are its children.
+    ///
+    /// # Arguments
+    /// * `request` - the tool name and arguments.
+    /// * `context` - rmcp's request context (the HTTP request's parts are in
+    ///   its extensions).
+    ///
+    /// # Returns
+    /// The tool's result, unchanged.
+    ///
+    /// # Errors
+    /// The router's protocol error (an unknown tool or bad arguments).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "it opens the tool span itself")
+    )]
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<CallToolResponse, rmcp::ErrorData> {
+        let tool = tool_label(&request.name);
+        let catalog = self.catalog_label(request.arguments.as_ref());
+        let span = tracing::info_span!(
+            "mcp",
+            otel.name = %format_args!("mcp {tool}"),
+            otel.kind = "server",
+            otel.status_code = tracing::field::Empty,
+            okf.tool = tool,
+            okf.catalog = catalog.as_str(),
+            okf.outcome = tracing::field::Empty,
+            okf.error.kind = tracing::field::Empty,
+            enduser.id = tracing::field::Empty,
+            okf.key.id = tracing::field::Empty,
+        );
+        // The principal the auth layer put on the HTTP request, as
+        // `ToolContext::from_parts` reads it; recorded on the handle.
+        if let Some(principal) = context
+            .extensions
+            .get::<Parts>()
+            .and_then(|parts| parts.extensions.get::<Arc<crate::auth::Principal>>())
+        {
+            crate::auth::record_principal_ids(&span, principal);
+        }
+        let started = std::time::Instant::now();
+        let call = ToolCallContext::new(self, request, context);
+        // `Instrument::instrument` enters the span on every poll of the
+        // future, so the tool's own spans and events are its children;
+        // `TOOL_SPAN.scope` makes the same span reachable from `tool_error`.
+        let result = TOOL_SPAN
+            .scope(
+                span.clone(),
+                self.tool_router.call(call).instrument(span.clone()),
+            )
+            .await;
+        let outcome = outcome_of(&result);
+        span.record("okf.outcome", outcome.as_str());
+        if outcome == Outcome::Error {
+            span.record("otel.status_code", "error");
+        }
+        self.app
+            .metrics()
+            .tool_call(tool, &catalog, outcome, started.elapsed());
+        result
+    }
+
     fn get_info(&self) -> ServerConfig {
         // `env!` reads this crate's name and version at compile time.
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
@@ -116,6 +224,22 @@ impl ServerHandler for OkfServer {
                 env!("CARGO_PKG_VERSION"),
             ))
             .with_instructions(INSTRUCTIONS)
+    }
+}
+
+/// How a tool call ended: `Error` for a protocol error or an `isError`
+/// result, else `Ok`.
+///
+/// # Arguments
+/// * `result` - what the router returned.
+///
+/// # Returns
+/// The outcome label.
+#[tracing::instrument(level = "trace", skip_all)]
+fn outcome_of(result: &Result<CallToolResponse, rmcp::ErrorData>) -> Outcome {
+    match result {
+        Ok(CallToolResponse::Complete(done)) if done.is_error != Some(true) => Outcome::Ok,
+        _ => Outcome::Error,
     }
 }
 
@@ -136,6 +260,11 @@ pub type ToolResult<T> = Result<Json<T>, CallToolResult>;
 /// # Returns
 /// The result to send the client.
 pub fn tool_error(error: &OkfError) -> CallToolResult {
+    // The kind goes on the tool's root span through the task-local handle
+    // (a no-op outside a tool call, as in the unit tests that call this).
+    let _ = TOOL_SPAN.try_with(|span| {
+        span.record("okf.error.kind", error.kind());
+    });
     if error.is_internal() {
         // The detail (`Display`) can name a path or echo input, so it stays
         // on stderr; the exported event keeps the kind.
@@ -182,6 +311,9 @@ where
         .await
         .unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic()))
 }
+
+#[cfg(test)]
+mod telemetry_tests;
 
 #[cfg(test)]
 mod tests {

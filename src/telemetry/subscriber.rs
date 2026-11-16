@@ -344,6 +344,17 @@ pub(crate) mod capture {
     use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
     use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 
+    /// A span's attribute, by key.
+    pub(crate) fn attribute<'a>(
+        span: &'a opentelemetry_sdk::trace::SpanData,
+        key: &str,
+    ) -> Option<&'a opentelemetry::Value> {
+        span.attributes
+            .iter()
+            .find(|attribute| attribute.key.as_str() == key)
+            .map(|attribute| &attribute.value)
+    }
+
     /// Everything one run of a subscriber produced.
     pub(crate) struct Observed {
         pub stderr: String,
@@ -354,6 +365,11 @@ pub(crate) mod capture {
     }
 
     impl Observed {
+        /// The exported spans called `name` (their `otel.name`).
+        pub(crate) fn spans_named(&self, name: &str) -> Vec<&opentelemetry_sdk::trace::SpanData> {
+            self.spans.iter().filter(|span| span.name == name).collect()
+        }
+
         /// Everything exported, as one text: each log record (target, body
         /// and attributes) and each span, for a test that a value never
         /// reached OTLP.
@@ -362,10 +378,100 @@ pub(crate) mod capture {
         }
     }
 
+    /// A subscriber with in-memory exporters, installed as the thread's
+    /// default until [`Observer::finish`]. Unlike [`observe`], the scope
+    /// spans `.await`s: use it from a `#[tokio::test]` (a current-thread
+    /// runtime, so every task the test spawns runs on this thread and sees
+    /// the default).
+    pub(crate) struct Observer {
+        span_exporter: InMemorySpanExporter,
+        log_exporter: InMemoryLogExporter,
+        tracer: SdkTracerProvider,
+        logger: SdkLoggerProvider,
+        capture: Capture,
+        guard: tracing::subscriber::DefaultGuard,
+    }
+
+    impl Observer {
+        /// Installs the subscriber.
+        ///
+        /// # Arguments
+        /// * `stderr`, `traces`, `logs` - the three filters, as in `observe`.
+        /// * `format` - the stderr format.
+        pub(crate) fn start(
+            stderr: &str,
+            traces: &str,
+            logs: &str,
+            format: super::LogFormat,
+        ) -> Self {
+            let span_exporter = InMemorySpanExporter::default();
+            let log_exporter = InMemoryLogExporter::default();
+            let tracer = SdkTracerProvider::builder()
+                .with_simple_exporter(span_exporter.clone())
+                .build();
+            let logger = SdkLoggerProvider::builder()
+                .with_simple_exporter(log_exporter.clone())
+                .build();
+            let capture = Capture::default();
+            let settings = super::LayerSettings {
+                format,
+                stderr: super::parse_filter(stderr).expect("stderr filter"),
+                traces: super::parse_filter(traces).expect("traces filter"),
+                logs: super::parse_filter(logs).expect("logs filter"),
+            };
+            let subscriber =
+                super::build_with_writer(settings, Some(&tracer), Some(&logger), capture.clone());
+            let guard = tracing::subscriber::set_default(subscriber);
+            // Tests on other threads, with no subscriber, can have cached
+            // "disabled" for a callsite this test uses; recompute every
+            // cached answer against this subscriber.
+            tracing::callsite::rebuild_interest_cache();
+            Self {
+                span_exporter,
+                log_exporter,
+                tracer,
+                logger,
+                capture,
+                guard,
+            }
+        }
+
+        /// Uninstalls the subscriber, flushes, and returns what it saw.
+        pub(crate) fn finish(self) -> Observed {
+            // The dispatcher goes first: dropping a provider inside the
+            // dispatcher's lock has deadlocked other projects' tests.
+            drop(self.guard);
+            self.tracer.force_flush().expect("flush spans");
+            self.logger.force_flush().expect("flush logs");
+            let emitted = self.log_exporter.get_emitted_logs().expect("logs");
+            let observed = Observed {
+                stderr: self.capture.text(),
+                spans: self.span_exporter.get_finished_spans().expect("spans"),
+                records: emitted.iter().map(|record| record.record.clone()).collect(),
+                logs: emitted
+                    .iter()
+                    .map(|record| {
+                        let body = record.record.body().map(|value| format!("{value:?}"));
+                        format!(
+                            "{}|{}",
+                            record
+                                .record
+                                .target()
+                                .map(ToString::to_string)
+                                .unwrap_or_default(),
+                            body.unwrap_or_default()
+                        )
+                    })
+                    .collect(),
+            };
+            let _ = self.tracer.shutdown();
+            let _ = self.logger.shutdown();
+            observed
+        }
+    }
+
     /// Builds the subscriber with in-memory exporters, runs `body` under it
-    /// as the thread's default, then shuts the providers down (after the
-    /// dispatcher is gone: dropping a provider inside the dispatcher's lock
-    /// has deadlocked other projects' tests).
+    /// as the thread's default, then shuts the providers down.
     pub(crate) fn observe(
         stderr: &str,
         traces: &str,
@@ -373,62 +479,9 @@ pub(crate) mod capture {
         format: super::LogFormat,
         body: impl FnOnce(),
     ) -> Observed {
-        let span_exporter = InMemorySpanExporter::default();
-        let log_exporter = InMemoryLogExporter::default();
-        let tracer = SdkTracerProvider::builder()
-            .with_simple_exporter(span_exporter.clone())
-            .build();
-        let logger = SdkLoggerProvider::builder()
-            .with_simple_exporter(log_exporter.clone())
-            .build();
-        let capture = Capture::default();
-        let settings = super::LayerSettings {
-            format,
-            stderr: super::parse_filter(stderr).expect("stderr filter"),
-            traces: super::parse_filter(traces).expect("traces filter"),
-            logs: super::parse_filter(logs).expect("logs filter"),
-        };
-        let subscriber =
-            super::build_with_writer(settings, Some(&tracer), Some(&logger), capture.clone());
-        tracing::subscriber::with_default(subscriber, || {
-            // Tests on other threads, with no subscriber, can have cached
-            // "disabled" for a callsite this body uses; recompute every
-            // cached answer against this subscriber first.
-            tracing::callsite::rebuild_interest_cache();
-            body();
-        });
-        tracer.force_flush().expect("flush spans");
-        logger.force_flush().expect("flush logs");
-        let observed = Observed {
-            stderr: capture.text(),
-            spans: span_exporter.get_finished_spans().expect("spans"),
-            records: log_exporter
-                .get_emitted_logs()
-                .expect("logs")
-                .iter()
-                .map(|record| record.record.clone())
-                .collect(),
-            logs: log_exporter
-                .get_emitted_logs()
-                .expect("logs")
-                .iter()
-                .map(|record| {
-                    let body = record.record.body().map(|value| format!("{value:?}"));
-                    format!(
-                        "{}|{}",
-                        record
-                            .record
-                            .target()
-                            .map(ToString::to_string)
-                            .unwrap_or_default(),
-                        body.unwrap_or_default()
-                    )
-                })
-                .collect(),
-        };
-        let _ = tracer.shutdown();
-        let _ = logger.shutdown();
-        observed
+        let observer = Observer::start(stderr, traces, logs, format);
+        body();
+        observer.finish()
     }
 }
 
