@@ -309,6 +309,9 @@ fn the_type_check_rejects_the_shapes_the_reviewer_rejects() {
     assert!(!has_direct_type(
         &json!({"anyOf": [{"type": "integer"}, {"type": "string"}]})
     ));
+    assert!(!has_direct_type(
+        &json!({"oneOf": [{"type": "integer"}, {"type": "string"}]})
+    ));
     assert!(!has_direct_type(&json!({})));
     assert!(!has_direct_type(&json!(true)));
     assert!(!has_direct_type(&json!({"type": "array", "items": {}})));
