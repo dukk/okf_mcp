@@ -1,8 +1,12 @@
 # okf_mcp
 
-A Rust port of `tools/okf.py`, the Open Knowledge Format catalog CLI, as a
-shared MCP server (design:
-`docs/superpowers/specs/2026-10-26-okf-mcp-server-design.md`).
+Telekin: a shared MCP server for Open Knowledge Format (OKF) catalogs, concepts
+(markdown with YAML frontmatter) about systems, projects, people and decisions.
+Every tool, with its parameters, is listed in the
+[tool reference](docs/reference/tools.md), which is generated from the server's
+tool list (design: `docs/superpowers/specs/2026-10-26-okf-mcp-server-design.md`).
+Its analyses and edit operations began as a port of `tools/okf.py`, the Python
+catalog CLI; "Testing" below says where that still matters.
 
 Status: every milestone of the design is delivered: 1 (core library), 2
 (analysis), 3 (storage), 4 (read-only server), 5 (writes), 6 (restructuring)
@@ -33,10 +37,10 @@ teams"; design:
 Deployed (every route but `/healthz` needs a bearer key) from the image `ghcr.io/hypotheosis/okf-mcp`, with its database
 backed up continuously and a restore drill done.
 
-The library reads a catalog into an in-memory `Snapshot` and runs `okf.py`'s
-analyses on it with the same JSON output (compared as parsed values): `lint`,
-the links report, `oldest`, `sprawl` and the secret scan, plus ranked
-`search`, which `okf.py` does not have. Catalogs live in Postgres: every file
+The library reads a catalog into an in-memory `Snapshot` and runs the analyses
+on it: `lint`, the links report, `oldest`, `sprawl` and the secret scan, plus
+ranked `search`. (Their JSON matches `okf.py`'s, compared as parsed values, which
+the parity tests check.) Catalogs live in Postgres: every file
 is a row holding its exact bytes and execute bit, with an append-only revision
 history, and each catalog's snapshot is built from its rows and swapped when
 the catalog changes. The `okf-mcp` command line administers catalogs and API
@@ -295,7 +299,7 @@ Every catalog path in an error body (`path`, `files[].path`,
 (`/infra/x.md`), like the paths in tool results such as `touched`. An
 `InvalidPath` whose path climbs out of the catalog (`../x`) echoes it as
 given. The report results (`lint`, `oldest`, `sprawl`, `links_report`) keep
-`okf.py`'s paths without the `/`, so the same lint finding names `/a.md` in
+the paths without the `/`, so the same lint finding names `/a.md` in
 a `LintFailed` error and `a.md` in `lint`'s result, on purpose.
 
 | Tool | Does |
@@ -306,10 +310,10 @@ a `LintFailed` error and `a.md` in `lint`'s result, on purpose.
 | `read_document` | The text of an `index.md`, `log.md` or `AGENTS.md` (default `/index.md`) |
 | `history` | A document's revisions, newest first (`limit` up to 200) |
 | `open_questions` | Every queued `open_questions` entry, by concept |
-| `oldest` | `okf.py oldest --json` |
-| `sprawl` | `okf.py sprawl --json` |
-| `links_report` | `okf.py links --json` (`mentions`, default true) |
-| `lint` | `okf.py lint --json` on the published catalog, or with `changeset` on that changeset's drafts applied to it |
+| `oldest` | The concepts least recently touched, stalest first, with the dates behind each rank (`open_questions_only` lists only those with queued questions) |
+| `sprawl` | How large each concept is and how it is organized, worst first, or one concept with `path` |
+| `links_report` | Broken and missing links, orphans and unlinked mentions of other concepts (`mentions`, default true) |
+| `lint` | The catalog's findings (errors and warnings) on the published catalog, or with `changeset` on that changeset's drafts applied to it |
 | `pending_changes` | The changeset `changeset` names: each changed path, its base and current revision, whether it is stale or replayable, and a unified diff |
 | `list_changesets` | The open changesets the key may use, empty ones included: its own, or with an `admin` key every key's in the catalogs it reaches. Each row has the handle, catalog, key name and immutable id, actor, creation and last-change times, `/`-prefixed paths, and `idle` (no change within `session_idle_timeout`) |
 
@@ -478,7 +482,7 @@ Content (`write`):
 | `replace_body` | A concept's new body, its frontmatter kept byte for byte |
 | `set_frontmatter` | Sets one descriptive key (`key`, `value`), or deletes it with `value: null`; the stamps, `open_questions` and `sources` have their own tools |
 
-Bookkeeping (`write`), ports of `okf.py`'s commands with its exact output:
+Bookkeeping (`write`):
 
 | Tool | Does |
 |---|---|
@@ -487,10 +491,10 @@ Bookkeeping (`write`), ports of `okf.py`'s commands with its exact output:
 | `question` | Queues one open question |
 | `unquestion` | Removes one, by 1-based number or exact text |
 | `add_source` | Appends a `sources` entry (`id`, `resource`, `title`, `author`) |
-| `remove_source` | Removes a `sources` entry by `id`, deleting the key when none are left; refused while a footnote still cites it (not in `okf.py`) |
+| `remove_source` | Removes a `sources` entry by `id`, deleting the key when none are left; refused while a footnote still cites it |
 | `log` | `* **<kind>:** <text>` under today's date in `log.md`, the only way to write it (`kind`: `Update`, `Creation`, `Change`, `Import`) |
 | `index` | Lists a concept in its folder's `index.md` |
-| `repair_indexes` | Creates whatever bookkeeping the catalog is missing: the root `index.md` and `log.md`, folder indexes, and folder and concept listings (see below; not in `okf.py`) |
+| `repair_indexes` | Creates whatever bookkeeping the catalog is missing: the root `index.md` and `log.md`, folder indexes, and folder and concept listings (see below) |
 
 `repair_indexes` repairs a catalog created before new catalogs got starter
 files, or one whose indexes were never written. Operators can repair every
@@ -512,8 +516,8 @@ Restructuring (`write`):
 
 | Tool | Does |
 |---|---|
-| `move_concept` | Moves or renames a concept (`old`, `new`), port of `okf.py mv`: its folder listing moves with it, and every link to it is rewritten, keeping each link's style and anchor |
-| `split_concept` | Carves a `section` out of a concept (`path`) into a new one (`to`), port of `okf.py split`: the parent keeps a stub linking to it, links to the section follow it, and it is listed in its folder (`type`, `title`, `description`, `stub`, `sources` as `okf.py`'s flags) |
+| `move_concept` | Moves or renames a concept (`old`, `new`): its folder listing moves with it, and every link to it is rewritten, keeping each link's style and anchor |
+| `split_concept` | Carves a `section` out of a concept (`path`) into a new one (`to`): the parent keeps a stub linking to it, links to the section follow it, and it is listed in its folder (`type`, `title`, `description`, `stub`, `sources`) |
 | `delete_concept` | Deletes a concept and its listing; refused with `StillLinked`, listing each link, while any other document links to it |
 
 Changesets:
@@ -578,7 +582,7 @@ key's actor.
 - `src/okf/` - the document model (`yaml`, `doc`, `markdown`, `paths`,
   `workspace`, `timestamp`), the `snapshot`, `analysis::*` (`links`, `lint`,
   `oldest`, `sprawl`, `secrets`), `search`, the edit operations `ops`
-  (ported from `okf.py`: the bookkeeping, `mv`, `split` and its link
+  (the bookkeeping, move, split and its link
   rewriting, with the replay of their `index.md` and `log.md` edits; and
   `delete`) and the write `rules`.
 - `src/db.rs`, `migrations/` - the Postgres pool and the schema, embedded at
@@ -670,8 +674,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The report structs derive `serde::Serialize`; their JSON has `okf.py
---json`'s keys in the same order.
+The report structs derive `serde::Serialize`; their JSON has the keys of
+`okf.py`'s `--json` output, in the same order.
 
 ## Testing
 
