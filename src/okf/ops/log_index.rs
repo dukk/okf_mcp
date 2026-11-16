@@ -204,7 +204,7 @@ pub fn index(
     let title = title
         .filter(|t| !t.is_empty())
         .or(frontmatter_title.filter(|t| !t.is_empty()))
-        .ok_or_else(|| refused(format!("{} has no title; pass --title", loaded.path)))?;
+        .ok_or_else(|| refused(format!("{} has no title; pass title", loaded.path)))?;
     let listing = Listing {
         concept: &loaded.path,
         title,
@@ -799,7 +799,7 @@ mod tests {
 
         assert_eq!(
             refusal(untitled),
-            "infra/untitled.md has no title; pass --title"
+            "infra/untitled.md has no title; pass title"
         );
         assert_eq!(refusal(no_index), "no index.md in /people; create it first");
         assert_eq!(
@@ -822,10 +822,7 @@ mod tests {
 
         // okf.py writes the same bullet for `title: 2026`, and crashes on the list.
         assert_eq!(year.message, "infra/index.md: * [2026](year.md) - y");
-        assert_eq!(
-            refusal(listed),
-            "infra/listed.md has no title; pass --title"
-        );
+        assert_eq!(refusal(listed), "infra/listed.md has no title; pass title");
     }
 
     #[test]
