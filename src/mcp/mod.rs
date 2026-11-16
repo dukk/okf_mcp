@@ -364,6 +364,13 @@ mod telemetry_tests;
 ///
 /// # Returns
 /// The parent span's id, or `None` for a root.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "its own span would become the current span it falls back to"
+    )
+)]
 fn tool_span_parent(extensions: &rmcp::model::Extensions) -> Option<tracing::span::Id> {
     extensions
         .get::<Parts>()
