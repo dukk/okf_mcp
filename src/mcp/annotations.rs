@@ -206,7 +206,6 @@ fn the_hints_go_on_the_wire_in_camel_case() {
 const KNOWN_UNTYPED_PARAMETERS: &[(&str, &str)] = &[
     ("maintenance_dispose", "disposition"),
     ("maintenance_submit", "submission"),
-    ("stamp", "field"),
     ("unquestion", "question"),
     ("set_frontmatter", "value"),
     // Not in the directory's review, but the same shape (`anyOf` of a `$ref`

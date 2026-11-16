@@ -143,6 +143,7 @@ impl OpOutcome {
 /// variants' doc comments become the choices' descriptions).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
+#[schemars(inline, extend("type" = "string"))]
 pub enum StampField {
     /// Replace `generated`: the content was (re)written.
     Generated,
@@ -306,6 +307,27 @@ fn is_bookkeeping(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stamp_field_has_a_direct_string_type_and_accepts_what_it_did() {
+        let schema = serde_json::to_value(schemars::schema_for!(StampField)).unwrap();
+        assert_eq!(schema["type"], "string");
+        let choices: Vec<_> = schema["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|choice| choice["const"].as_str().unwrap())
+            .collect();
+        assert_eq!(choices, ["generated", "verified"]);
+
+        let parse = |text: &str| serde_json::from_value::<StampField>(text.into());
+        assert_eq!(parse("generated").unwrap(), StampField::Generated);
+        assert_eq!(parse("verified").unwrap(), StampField::Verified);
+        for rejected in ["Generated", "VERIFIED", "reviewed", ""] {
+            assert!(parse(rejected).is_err(), "{rejected:?} must stay rejected");
+        }
+        assert!(serde_json::from_value::<StampField>(serde_json::json!(1)).is_err());
+    }
 
     #[test]
     fn rewrites_of_bookkeeping_files_replay_and_the_others_are_free() {
