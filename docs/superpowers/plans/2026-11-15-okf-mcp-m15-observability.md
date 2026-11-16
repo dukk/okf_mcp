@@ -594,10 +594,10 @@ let spans = opentelemetry_otlp::SpanExporter::builder()
     .with_http_client(http_client()?)
     .with_timeout(EXPORT_TIMEOUT)
     .build()
-    .map_err(|error| OkfError::Config { path: None, message: format!("OTLP span exporter: {error}") })?;
+    .map_err(|error| OkfError::Config { path: "[telemetry.otlp]".to_string(), message: format!("OTLP span exporter: {error}") })?;
 ```
 
-`LogExporter` is the same with `Signal::Logs`. `MetricExporter` uses `Signal::Metrics` and adds `.with_temporality(Temporality::Cumulative)`; Task 2 uses it. If `OkfError::Config`'s fields differ, follow its definition.
+`LogExporter` is the same with `Signal::Logs`. `MetricExporter` uses `Signal::Metrics` and adds `.with_temporality(Temporality::Cumulative)`; Task 2 uses it. `OkfError::Config { path: String, message }` has no `Option` path: telemetry problems use the path `[telemetry.otlp]` (`[telemetry]` from `install`).
 
 - **Counting exporters:** `CountingSpanExporter<E>` and `CountingLogExporter<E>`, exactly the probe's `CountingExporter`/`CountingLogExporter`, with a shared `ExportFailures` instead of a bare `AtomicU64`.
   - `ExportFailures` holds one `AtomicU64` per `(Signal, FailureReason)`, where `FailureReason` is `Timeout | Transport | Rejected | Other`.
@@ -786,6 +786,22 @@ If `set_global_default` fails (already set), return `OkfError::Config` ("a traci
 
 Put the install sequence in one function, `telemetry::install(config, telemetry) -> Result<(), OkfError>`, called by `cli::run`. Regression test (its own integration-test binary, `tests/telemetry_install.rs`, since it sets the process's global subscriber): run the start-up sequence with a capturing writer, then emit an event **on the same thread** after `install`, and assert that the configured subscriber got it (the JSON format, so the line is distinguishable from the fallback's text) and the fallback did not.
 
+> **Corrected (issue #461, 2026-11-15).** What shipped differs from the sketches above in these ways; read `src/telemetry/` for the code.
+> - **`Config` is no longer `Eq`** (`sample_ratio` is an `f64`); it is still `PartialEq`.
+> - **The probe crate was not in the repository**, so `DispatchSlot`, `CaptureDispatch`, `JsonWithTrace` and the counting exporters were written from the verified facts. The batch processors come from the `*_with_async_runtime` modules (`BatchSpanProcessor`, `BatchLogProcessor`), not the crate-root ones.
+> - **Span-layer error options:** the layer turns off `with_error_fields_to_exceptions`, `with_error_records_to_exceptions`, `with_error_events_to_exceptions` and `with_error_events_to_status` (the plan's `with_error_records_to_exceptions(true)` put error text in `exception.message`, which the privacy rules forbid). An ERROR event still marks the span `Error`, with an empty description.
+> - **Filters are built per arm in `build_with_writer`:** a filter's type names its subscriber, so `settings.stderr.and(cap(false))` cannot be shared by the text and JSON arms. `build_with_writer` and `fallback(rust_log, writer)` take the stderr writer, so tests capture it.
+> - **`ShutdownReport { traces, logs }`** holds a `ProviderOutcome` each: `NotRunning`, `Flushed` (including an already shut-down provider), `Failed(message)` or `Abandoned`. `ShutdownReport::all_flushed()` is the assertion Task 7 wants. Task 2 adds a `metrics` field.
+> - **Start-up sequence:** `telemetry::start_up(path, serve, env, writer) -> StartUp { config, telemetry }` runs `Config::load` and `Telemetry::start` under the fallback and drops its guard on return; `telemetry::install(&config.telemetry, telemetry.as_ref(), rust_log)` then sets the global subscriber (`install_with_writer` for tests). `cli::run` calls both; the serve body moved to `cli::serve`, so `telemetry.shutdown()` runs after a failure too, after a closed-message `tracing::error!("serve failed")` (the error's text is not exported; `main` prints it).
+> - **The wire is tested** in `telemetry::tests::spans_and_logs_reach_the_receiver_with_their_headers` with a loopback receiver.
+
+> **Corrected (issue #461, review of PR #480, 2026-11-15).**
+> - **`LogMailer` moved to `LOCAL_ONLY` in Task 1** (`src/mail/log.rs`, test `the_message_reaches_stderr_and_neither_otlp_layer`): the message holds the reset link, and the allow-list would otherwise export it. Task 1b keeps the rest of the audit.
+> - **The OTLP cap is `subscriber::otlp_cap`, a `filter_fn` over `is_exportable_target`** (exactly `okf_mcp`, or `okf_mcp::...`, never `okf_mcp_other`, never `LOCAL_ONLY` or under it), not `Targets`, whose directives match by string prefix. `cap(false)` is `stderr_cap()`.
+> - **`OTEL_SDK_DISABLED` is checked before the OTLP target is resolved**, so a disabled SDK needs no credentials.
+> - **Log correlation needs no feature:** `opentelemetry-appender-tracing` 0.33 has no `experimental_use_tracing_span_context`; the span layer's context activation (stated explicitly with `with_context_activation(true)`) gives the bridge the span's ids, tested by `an_exported_log_carries_the_enclosing_spans_ids`.
+> - Test helper `subscriber::capture::observe` runs a body under in-memory exporters; Tasks 1b and 7 can use it.
+
 - [ ] **Step 10: Gates and commit**
 
 `tools/agentic/gate.sh fmt`, `lint`, `test`. Then commit `feat(telemetry): config, subscriber, OTLP traces and logs (M15 Task 1)`.
@@ -795,7 +811,7 @@ Put the install sequence in one function, `telemetry::install(config, telemetry)
 ### Task 1b: The privacy audit of existing events
 
 The log bridge exports every `tracing` event that passes its filter. `skip_all` protects only the arguments of functions instrumented from now on; it does nothing for the events the crate already emits, and some of those carry exactly what the spec's "never recorded anywhere" list forbids. Found in review of the plan PR (#459):
-- `src/mail/log.rs:15-19` logs the recipient and the whole message, setup and reset links included (that is the `log` provider's purpose);
+- `src/mail/log.rs:15-19` logs the recipient and the whole message, setup and reset links included (that is the `log` provider's purpose); **done in Task 1 (issue #461, review of PR #480): it now logs with `target: LOCAL_ONLY`, with its own test, so Task 1 never ships a reset token to OTLP. Task 1b keeps the rest, and its sentinel case for the `log` provider is now a regression check;**
 - `src/oauth/authorize.rs:526` logs a caller-supplied `client_id` and the refusal's text;
 - `src/http/mod.rs:136` and `src/mcp/mod.rs:137` (`tool_error`) log an internal error's full `Display`.
 
@@ -823,7 +839,7 @@ tracing::error!(kind = self.0.kind(), "request failed");
 tracing::error!(target: LOCAL_ONLY, error = %self.0, "request failed (detail)");
 ```
 
-`LogMailer::send` logs with `target: LOCAL_ONLY` alone. `authorize.rs:526` becomes `warn!(reason = error.kind(), "refused an OAuth client")` plus a `LOCAL_ONLY` line with the `client_id` and the text. If the error type has no `kind`, give it one (a closed `&'static str`).
+`LogMailer::send` already logs with `target: LOCAL_ONLY` alone (Task 1). `authorize.rs:526` becomes `warn!(reason = error.kind(), "refused an OAuth client")` plus a `LOCAL_ONLY` line with the `client_id` and the text. If the error type has no `kind`, give it one (a closed `&'static str`).
 
 - [ ] **Step 4: Test.**
   - Unit tests per changed site, using the in-memory log exporter: a refused OAuth client whose id contains a sentinel exports no record containing it; the `log` mailer's send exports nothing; an internal error exports `kind` and not its text.

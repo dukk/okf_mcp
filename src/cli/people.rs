@@ -552,7 +552,8 @@ fn lines(rows: impl Iterator<Item = String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::{run, CatalogCommand, Cli, CodeCommand, Command, KeyCommand, OauthCommand};
+    use crate::cli::run_in_tests as run;
+    use crate::cli::{CatalogCommand, Cli, CodeCommand, Command, KeyCommand, OauthCommand};
     use crate::clock::FixedClock;
     use crate::db::pg_support::TestDb;
     use crate::db::{test_db, TEST_USER};

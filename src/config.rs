@@ -19,6 +19,7 @@ use serde::{Deserialize, Deserializer};
 use crate::store::catalogs;
 
 use crate::error::OkfError;
+use crate::telemetry::config::TelemetryConfig;
 
 /// The default import limit: 64 MiB, uncompressed.
 pub const DEFAULT_MAX_IMPORT_BYTES: u64 = 64 * 1024 * 1024;
@@ -489,7 +490,8 @@ impl MailConfig {
 // `#[serde(default)]` fills every missing key from `Default::default()`.
 // serde ignores keys the struct does not name unless told otherwise
 // (`deny_unknown_fields`), which is what lets later milestones' keys through.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+// Not `Eq`: `[telemetry.otlp] sample_ratio` is an `f64`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct Config {
     /// The largest uncompressed total an import may expand to (`"64MiB"`, or
@@ -545,6 +547,8 @@ pub struct Config {
     pub auth: AuthConfig,
     /// Outgoing mail (`[mail]`).
     pub mail: MailConfig,
+    /// Logs, traces and metrics (`[telemetry]`).
+    pub telemetry: TelemetryConfig,
 }
 
 impl Default for Config {
@@ -567,6 +571,7 @@ impl Default for Config {
             oauth: OAuthConfig::default(),
             auth: AuthConfig::default(),
             mail: MailConfig::default(),
+            telemetry: TelemetryConfig::default(),
         }
     }
 }
@@ -694,6 +699,7 @@ impl Config {
         }
         self.auth.validate()?;
         self.mail.validate()?;
+        self.telemetry.validate()?;
         self.validate_oidc()?;
         self.validate_public_url()
     }
