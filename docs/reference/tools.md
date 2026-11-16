@@ -79,7 +79,7 @@ Append an entry (id, resource, title, author) to a concept's `sources`, refusing
 | `id` | string | yes | The entry's id; an entry with this id must not exist. |
 | `resource` | string | yes | What was consulted: a URI, a path or a description. |
 | `title` | string | no | Its title. |
-| `author` | string | no | Its author, e.g. `human:pgrace`. |
+| `author` | string | no | Its author, e.g. `human:alice`. |
 | `changeset` | string | yes | The changeset to write to: the handle `open_changeset` returned. |
 
 ## `create_concept`

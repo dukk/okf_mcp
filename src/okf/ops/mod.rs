@@ -171,7 +171,7 @@ pub struct SourceEntry<'a> {
     pub resource: &'a str,
     /// Optional title.
     pub title: Option<&'a str>,
-    /// Optional author, e.g. `human:pgrace`.
+    /// Optional author, e.g. `human:alice`.
     pub author: Option<&'a str>,
 }
 

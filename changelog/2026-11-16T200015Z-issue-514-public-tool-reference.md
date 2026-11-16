@@ -19,7 +19,7 @@ description" suggestion, addressed once for every tool.
 
 - `OkfServer::tools()` ends every tool's description with
   ` Reference: <TOOL_REFERENCE_URL>#<tool name>`. One place, so no description can forget it;
-  about 90 characters per tool.
+  about 100 characters per tool.
 - README: opens as a description of Telekin and links the reference; the tool tables
   describe what `oldest`, `sprawl`, `links_report`, `lint`, `move_concept`,
   `split_concept`, `remove_source` and `repair_indexes` do instead of naming `okf.py`
