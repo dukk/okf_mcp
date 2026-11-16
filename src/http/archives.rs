@@ -2,7 +2,7 @@
 //! `.tar.gz`, and an import from one.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, FromRequest, Path, Query, Request, State};
@@ -17,13 +17,13 @@ use crate::archive::read_tarball;
 use crate::auth::{Admission, Principal};
 use crate::error::OkfError;
 use crate::http::requester::Requester;
-use crate::http::{timeout_layer, AppError, REQUEST_TIMEOUT};
+use crate::http::{timeout_layer_after, AppError, REQUEST_TIMEOUT};
 use crate::mcp::blocking;
 use crate::store::audit::{AccessKind, AuditActor};
 use crate::store::export::{export, ExportOptions};
 use crate::store::import::{import, ImportOptions, ImportScope};
 use crate::store::keys::Access;
-use crate::telemetry::metrics::{Direction, Outcome};
+use crate::telemetry::metrics::{Direction, Metrics, Outcome};
 use crate::telemetry::subscriber::split_event;
 
 /// The two routes, for the keyed part of the router.
@@ -49,8 +49,19 @@ pub(crate) fn routes(app: &App) -> Router<Arc<App>> {
 /// # Returns
 /// The `GET` method router.
 pub(crate) fn export_route() -> MethodRouter<Arc<App>> {
+    export_route_within(REQUEST_TIMEOUT)
+}
+
+/// [`export_route`] with its deadline given, so a test can pass a short one.
+///
+/// # Arguments
+/// * `timeout` - how long the export may take before the 503.
+///
+/// # Returns
+/// The `GET` method router.
+pub(crate) fn export_route_within(timeout: Duration) -> MethodRouter<Arc<App>> {
     // A layer on one method router applies to that route only.
-    get(export_catalog).layer(timeout_layer())
+    get(export_catalog).layer(timeout_layer_after(timeout))
 }
 
 /// The import route's method router: [`import_catalog`] with the body cap
@@ -159,47 +170,107 @@ fn resolved_catalog(span: &tracing::Span, app: &App, name: &str) -> Option<Strin
     Some(catalog)
 }
 
-/// Measures one archive transfer and records its size on the span.
-///
-/// # Arguments
-/// * `span` - the handler's span (see [`resolved_catalog`]).
-/// * `app` - the shared state.
-/// * `direction` - export or import.
-/// * `catalog` - [`resolved_catalog`]'s answer; the size and the metrics
-///   are recorded only for `Some`.
-/// * `started` - when the transfer began.
-/// * `bytes` - the archive's size when the transfer succeeded.
-#[tracing::instrument(level = "trace", skip_all)]
-fn record_transfer(
-    span: &tracing::Span,
-    app: &App,
+/// One archive transfer being measured. [`Transfer::finish`] records how it
+/// ended; if the handler's future is dropped first (the export route's
+/// timeout, or a client that disconnects mid-import), `Drop` records an
+/// error instead, so the slowest transfers never vanish from the spans and
+/// metrics.
+struct Transfer {
+    // The handler's span, captured before any trace-level helper span
+    // becomes the current one (see [`resolved_catalog`]).
+    span: tracing::Span,
+    metrics: Metrics,
     direction: Direction,
-    catalog: Option<&str>,
+    // The loaded catalog's own name; the size and the metrics are recorded
+    // only for `Some`.
+    catalog: Option<String>,
     started: Instant,
-    bytes: Option<usize>,
-) {
-    // `usize` to `u64` is lossless on every platform Rust supports.
-    let bytes = bytes.map(|bytes| bytes as u64);
-    let outcome = if bytes.is_some() {
-        Outcome::Ok
-    } else {
-        Outcome::Error
-    };
-    // The outcome is a closed value, so it is recorded even for a name no
-    // loaded catalog bears; the size and the metrics need a resolved catalog.
-    span.record("okf.outcome", outcome.as_str());
-    if outcome == Outcome::Error {
-        span.record("otel.status_code", "error");
+    finished: bool,
+}
+
+impl Transfer {
+    /// Starts measuring a transfer.
+    ///
+    /// # Arguments
+    /// * `span` - the handler's span.
+    /// * `app` - the shared state (for its metrics).
+    /// * `direction` - export or import.
+    /// * `catalog` - [`resolved_catalog`]'s answer.
+    #[tracing::instrument(level = "trace", skip_all)]
+    fn begin(
+        span: tracing::Span,
+        app: &App,
+        direction: Direction,
+        catalog: Option<String>,
+    ) -> Self {
+        Self {
+            span,
+            metrics: app.metrics().clone(),
+            direction,
+            catalog,
+            started: Instant::now(),
+            finished: false,
+        }
     }
-    let Some(catalog) = catalog else {
-        return;
-    };
-    if let Some(bytes) = bytes {
-        // Spans take integers as `i64`; a size past `i64::MAX` is not real.
-        span.record("okf.archive.size", i64::try_from(bytes).unwrap_or(i64::MAX));
+
+    /// Records the transfer's end: ok with its size, or an error for `None`.
+    ///
+    /// # Arguments
+    /// * `bytes` - the archive's size when the transfer succeeded.
+    #[tracing::instrument(level = "trace", skip_all)]
+    fn finish(mut self, bytes: Option<usize>) {
+        self.record(bytes);
     }
-    app.metrics()
-        .archive(direction, catalog, outcome, started.elapsed(), bytes);
+
+    /// Records the outcome once (a second call does nothing).
+    #[tracing::instrument(level = "trace", skip_all)]
+    fn record(&mut self, bytes: Option<usize>) {
+        if std::mem::replace(&mut self.finished, true) {
+            return;
+        }
+        // `usize` to `u64` is lossless on every platform Rust supports.
+        let bytes = bytes.map(|bytes| bytes as u64);
+        let outcome = if bytes.is_some() {
+            Outcome::Ok
+        } else {
+            Outcome::Error
+        };
+        // The outcome is a closed value, so it is recorded even for a name
+        // no loaded catalog bears; the size and the metrics need a resolved
+        // catalog.
+        self.span.record("okf.outcome", outcome.as_str());
+        if outcome == Outcome::Error {
+            self.span.record("otel.status_code", "error");
+        }
+        let Some(catalog) = self.catalog.as_deref() else {
+            return;
+        };
+        if let Some(bytes) = bytes {
+            // Spans take integers as `i64`; a size past `i64::MAX` is not
+            // real.
+            self.span
+                .record("okf.archive.size", i64::try_from(bytes).unwrap_or(i64::MAX));
+        }
+        self.metrics.archive(
+            self.direction,
+            catalog,
+            outcome,
+            self.started.elapsed(),
+            bytes,
+        );
+    }
+}
+
+// `Drop` runs when the value goes out of scope, like a Python context
+// manager's `__exit__`, and also when a cancelled future is dropped.
+impl Drop for Transfer {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "a drop hook that calls the recorder")
+    )]
+    fn drop(&mut self) {
+        self.record(None);
+    }
 }
 
 /// `GET /catalogs/{name}/export`: the published documents as a `.tar.gz`,
@@ -261,14 +332,9 @@ async fn export_catalog(
     // loaded catalog's own name, never the path segment.
     let span = tracing::Span::current();
     let catalog = resolved_catalog(&span, &app, &name);
-    let started = Instant::now();
+    let transfer = Transfer::begin(span, &app, Direction::Export, catalog);
     let exported = export(app.pool(), &name, Vec::new(), &options).await;
-    record_transfer(
-        &span,
-        &app,
-        Direction::Export,
-        catalog.as_deref(),
-        started,
+    transfer.finish(
         exported
             .as_ref()
             .ok()
@@ -377,7 +443,7 @@ async fn import_catalog(
     // loaded catalog's own name, never the path segment.
     let span = tracing::Span::current();
     let catalog = resolved_catalog(&span, &app, &name);
-    let started = Instant::now();
+    let transfer = Transfer::begin(span, &app, Direction::Import, catalog);
     let mut uploaded = None;
     // An `async` block, so every early return below (a refusal, a timeout)
     // still passes through the measurement after it.
@@ -474,14 +540,7 @@ async fn import_catalog(
     let succeeded = answer
         .as_ref()
         .is_ok_and(|response| response.status().is_success());
-    record_transfer(
-        &span,
-        &app,
-        Direction::Import,
-        catalog.as_deref(),
-        started,
-        uploaded.filter(|_| succeeded),
-    );
+    transfer.finish(uploaded.filter(|_| succeeded));
     answer
 }
 
@@ -1089,5 +1148,67 @@ mod tests {
             !text.contains(r#"okf_archive_size_bytes_total{catalog="pg",direction="import"}"#),
             "{text}"
         );
+    }
+
+    #[tokio::test]
+    async fn an_export_past_the_route_timeout_is_one_error_observation_and_an_error_span() {
+        use crate::telemetry::config::LogFormat;
+        use crate::telemetry::subscriber::capture::{attribute, Observer};
+        let (test, registry) =
+            crate::mcp::testing::app_with_metrics(&[("pg", &[])], Config::default()).await;
+        let pool = test.app.pool().clone();
+        // Hold every connection, so the export waits for one until the
+        // route's deadline drops it.
+        let mut held = Vec::new();
+        for _ in 0..pool.options().get_max_connections() {
+            held.push(pool.acquire().await.expect("a connection"));
+        }
+        let slow = Router::new()
+            .route(
+                "/catalogs/{name}/export",
+                export_route_within(Duration::from_millis(300)),
+            )
+            .layer(Extension(admin()))
+            .with_state(Arc::clone(&test.app));
+        let observer = Observer::start("off", "info", "off", LogFormat::Text);
+
+        let response = tokio::time::timeout(
+            Duration::from_secs(20),
+            slow.oneshot(
+                Request::get("/catalogs/pg/export")
+                    .body(Body::empty())
+                    .unwrap(),
+            ),
+        )
+        .await
+        .expect("the route answers at its deadline")
+        .unwrap();
+        let observed = observer.finish();
+        drop(held);
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let spans = observed.spans_named("okf.archive.export");
+        assert_eq!(spans.len(), 1, "{spans:?}");
+        assert_eq!(
+            attribute(spans[0], "okf.outcome")
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("error")
+        );
+        assert!(
+            matches!(spans[0].status, opentelemetry::trace::Status::Error { .. }),
+            "{:?}",
+            spans[0].status
+        );
+        let text = crate::mcp::testing::render(&registry);
+        assert_eq!(
+            crate::mcp::testing::sample_of(
+                &text,
+                r#"okf_archive_duration_seconds_count{direction="export",outcome="error"}"#
+            ),
+            Some(1.0),
+            "{text}"
+        );
+        assert!(!text.contains("okf_archive_size_bytes_total"), "{text}");
     }
 }
