@@ -19,6 +19,7 @@ use opentelemetry_sdk::metrics::Temporality;
 use opentelemetry_sdk::trace::{SpanData, SpanExporter};
 use opentelemetry_sdk::Resource;
 use secrecy::{ExposeSecret, SecretString};
+use serde::Deserialize;
 
 use super::config::OtlpConfig;
 use crate::error::OkfError;
@@ -31,8 +32,10 @@ pub const EXPORT_TIMEOUT: Duration = Duration::from_secs(10);
 /// this path.
 const CONFIG_PATH: &str = "[telemetry.otlp]";
 
-/// The three OTLP signals.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The three OTLP signals. Deserializes from the lower-case names
+/// `[telemetry.otlp] signals` takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Signal {
     /// Spans.
     Traces,

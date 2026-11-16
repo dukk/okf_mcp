@@ -8,6 +8,8 @@ use std::time::Duration;
 use serde::Deserialize;
 use tracing_subscriber::EnvFilter;
 
+use super::otlp::Signal;
+
 /// The service name OTLP reports when `service_name` is unset.
 pub const DEFAULT_SERVICE_NAME: &str = "okf-mcp";
 /// stderr's filter when neither `RUST_LOG` nor `[telemetry.stderr] filter` is set.
@@ -119,6 +121,11 @@ pub struct OtlpConfig {
     pub headers_env: Option<String>,
     /// The environment variable holding a Sentry DSN, instead of the two above.
     pub sentry_dsn_env: Option<String>,
+    /// Which signals are pushed. Unset: all three with `endpoint`; traces
+    /// and logs with `sentry_dsn_env` (Sentry's OTLP intake has no metrics
+    /// endpoint). A signal that is off gets no exporter and no layer or
+    /// reader; its filter and interval keys still parse.
+    pub signals: Option<Vec<Signal>>,
     /// The OTLP span layer's filter.
     pub traces_filter: String,
     /// The OTLP log layer's filter.
@@ -145,11 +152,87 @@ impl Default for OtlpConfig {
             endpoint: None,
             headers_env: None,
             sentry_dsn_env: None,
+            signals: None,
             traces_filter: DEFAULT_OTLP_FILTER.to_string(),
             logs_filter: DEFAULT_OTLP_FILTER.to_string(),
             sample_ratio: None,
             export_interval: DEFAULT_EXPORT_INTERVAL,
         }
+    }
+}
+
+impl OtlpConfig {
+    /// The signals this table exports: `signals` when set, else the default
+    /// for the target kind.
+    ///
+    /// # Returns
+    /// Signals in [`Signal::ALL`] order.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+        )
+    )]
+    pub fn exported_signals(&self) -> Vec<Signal> {
+        Signal::ALL
+            .into_iter()
+            .filter(|signal| self.exports(*signal))
+            .collect()
+    }
+
+    /// Whether `signal` is pushed over OTLP.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+        )
+    )]
+    pub fn exports(&self, signal: Signal) -> bool {
+        match &self.signals {
+            Some(signals) => signals.contains(&signal),
+            // Sentry's OTLP intake takes traces and logs only.
+            None => self.sentry_dsn_env.is_none() || signal != Signal::Metrics,
+        }
+    }
+
+    /// Checks `signals`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+        )
+    )]
+    fn check_signals(&self) -> Result<(), String> {
+        let Some(signals) = &self.signals else {
+            return Ok(());
+        };
+        if signals.is_empty() {
+            return Err(
+                "telemetry.otlp.signals must not be empty (omit the key for the default)"
+                    .to_string(),
+            );
+        }
+        if let Some(duplicate) = signals
+            .iter()
+            .enumerate()
+            .find_map(|(index, signal)| signals[..index].contains(signal).then_some(signal))
+        {
+            return Err(format!(
+                "telemetry.otlp.signals lists \"{}\" twice",
+                duplicate.label()
+            ));
+        }
+        if self.sentry_dsn_env.is_some() && signals.contains(&Signal::Metrics) {
+            return Err(
+                "telemetry.otlp.signals cannot include \"metrics\" with sentry_dsn_env: \
+                 Sentry has no OTLP metrics intake; use [telemetry.prometheus] for metrics"
+                    .to_string(),
+            );
+        }
+        Ok(())
     }
 }
 
@@ -164,7 +247,8 @@ impl TelemetryConfig {
     /// `headers_env` nor `sentry_dsn_env`; both forms at once; an endpoint
     /// that is not an `http` or `https` URL with a host and no userinfo,
     /// query or fragment; a `sample_ratio` outside `0.0..=1.0`; a zero
-    /// `export_interval`; or a filter that does not parse.
+    /// `export_interval`; an empty or duplicated `signals` list, or one that
+    /// has `metrics` with `sentry_dsn_env`; or a filter that does not parse.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -199,6 +283,7 @@ impl TelemetryConfig {
                 )
             }
         }
+        otlp.check_signals()?;
         if let Some(ratio) = otlp.sample_ratio {
             if !(0.0..=1.0).contains(&ratio) {
                 return Err(format!(
@@ -394,6 +479,74 @@ mod tests {
             .expect("parses")
             .validate()
             .expect("valid");
+    }
+
+    fn exported(toml: &str) -> Vec<Signal> {
+        let config = Config::from_toml(toml).expect("parses");
+        config.validate().expect("valid");
+        config.telemetry.otlp.expect("otlp").exported_signals()
+    }
+
+    #[test]
+    fn signals_default_to_all_with_an_endpoint_and_traces_and_logs_with_a_dsn() {
+        assert_eq!(
+            exported(
+                "[telemetry.otlp]\nendpoint = \"https://otlp.example.com\"\nheaders_env = \"H\"\n"
+            ),
+            Signal::ALL
+        );
+        assert_eq!(
+            exported("[telemetry.otlp]\nsentry_dsn_env = \"DSN\"\n"),
+            [Signal::Traces, Signal::Logs]
+        );
+    }
+
+    #[test]
+    fn signals_parse_any_non_empty_subset() {
+        let base =
+            "[telemetry.otlp]\nendpoint = \"https://otlp.example.com\"\nheaders_env = \"H\"\n";
+        assert_eq!(
+            exported(&format!("{base}signals = [\"metrics\", \"traces\"]\n")),
+            [Signal::Traces, Signal::Metrics]
+        );
+        assert_eq!(
+            exported("[telemetry.otlp]\nsentry_dsn_env = \"DSN\"\nsignals = [\"logs\"]\n"),
+            [Signal::Logs]
+        );
+    }
+
+    #[test]
+    fn a_disabled_signals_keys_still_parse() {
+        let toml = "[telemetry.otlp]\nsentry_dsn_env = \"DSN\"\nsignals = [\"logs\"]\n\
+                    traces_filter = \"debug\"\nsample_ratio = 0.5\nexport_interval = \"10s\"\n";
+        assert_eq!(exported(toml), [Signal::Logs]);
+        let error = refused(
+            "[telemetry.otlp]\nsentry_dsn_env = \"DSN\"\nsignals = [\"logs\"]\ntraces_filter = \"=[\"\n",
+        );
+        assert!(error.contains("traces_filter"), "{error}");
+    }
+
+    #[test]
+    fn bad_signals_are_refused() {
+        let base =
+            "[telemetry.otlp]\nendpoint = \"https://otlp.example.com\"\nheaders_env = \"H\"\n";
+        let error = refused(&format!("{base}signals = []\n"));
+        assert!(error.contains("signals must not be empty"), "{error}");
+        let error = refused(&format!(
+            "{base}signals = [\"logs\", \"traces\", \"logs\"]\n"
+        ));
+        assert!(error.contains("\"logs\" twice"), "{error}");
+        // An unknown name does not parse at all.
+        assert!(Config::from_toml(&format!("{base}signals = [\"profiles\"]\n")).is_err());
+        assert!(Config::from_toml(&format!("{base}signals = [\"Traces\"]\n")).is_err());
+        let error = refused(
+            "[telemetry.otlp]\nsentry_dsn_env = \"DSN\"\nsignals = [\"traces\", \"metrics\"]\n",
+        );
+        assert!(
+            error.contains("Sentry has no OTLP metrics intake")
+                && error.contains("[telemetry.prometheus]"),
+            "{error}"
+        );
     }
 
     #[test]
