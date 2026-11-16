@@ -165,7 +165,9 @@ async fn configured_headers_arrive() {
         Some("Bearer sentinel-otlp-token")
     );
     assert!(
-        otlp::spans(&requests).iter().any(|span| span.name == "probe"),
+        otlp::spans(&requests)
+            .iter()
+            .any(|span| span.name == "probe"),
         "the probe span arrived decoded"
     );
 }
@@ -300,8 +302,7 @@ fn set_cookie(response: &reqwest::Response, name: &str) -> Option<String> {
         .filter_map(|value| value.to_str().ok())
         .find_map(|line| {
             let pair = line.split(';').next()?;
-            pair.strip_prefix(&format!("{name}="))
-                .map(str::to_string)
+            pair.strip_prefix(&format!("{name}=")).map(str::to_string)
         })
 }
 
@@ -316,8 +317,9 @@ fn link_tokens(text: &str) -> Vec<String> {
 
 /// Names of every table the migrations create.
 fn migration_tables() -> BTreeSet<String> {
-    let pattern = regex::Regex::new(r"(?i)create\s+table\s+(?:if\s+not\s+exists\s+)?(?:\w+\.)?(\w+)")
-        .expect("pattern");
+    let pattern =
+        regex::Regex::new(r"(?i)create\s+table\s+(?:if\s+not\s+exists\s+)?(?:\w+\.)?(\w+)")
+            .expect("pattern");
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
     let mut tables = BTreeSet::new();
     for entry in std::fs::read_dir(dir).expect("migrations directory") {
@@ -379,7 +381,10 @@ async fn nothing_secret_is_exported_or_scraped() {
     let scrape_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind /metrics");
-    let scrape_url = format!("http://{}/metrics", scrape_listener.local_addr().expect("addr"));
+    let scrape_url = format!(
+        "http://{}/metrics",
+        scrape_listener.local_addr().expect("addr")
+    );
     let scrape_stop = CancellationToken::new();
     let scraping = tokio::spawn(okf_mcp::telemetry::scrape::serve(
         scrape_listener,
@@ -438,7 +443,10 @@ async fn nothing_secret_is_exported_or_scraped() {
     // --- MCP: a search, a read of a missing path, a write and a publish,
     // on a connection that also sends a header carrying a sentinel.
     let client = server
-        .client_with(&writer_key, &[("x-zq-sentinel-7f3a-hdr", header_value.as_str())])
+        .client_with(
+            &writer_key,
+            &[("x-zq-sentinel-7f3a-hdr", header_value.as_str())],
+        )
         .await
         .expect("mcp client");
     call(&client, "search", json!({"query": search_text})).await;
@@ -505,7 +513,10 @@ async fn nothing_secret_is_exported_or_scraped() {
         .post(format!("{base}/signin"))
         .header("sec-fetch-site", "same-origin")
         .header("content-type", "application/x-www-form-urlencoded")
-        .body(form(&[("email", &user_email), ("password", &wrong_password)]))
+        .body(form(&[
+            ("email", &user_email),
+            ("password", &wrong_password),
+        ]))
         .send()
         .await
         .expect("a refused sign-in");
@@ -777,7 +788,13 @@ async fn nothing_secret_is_exported_or_scraped() {
         );
     }
     let span_names: BTreeSet<&str> = spans.iter().map(|span| span.name.as_str()).collect();
-    for name in ["mcp search", "okf.publish", "okf.archive.export", "okf.archive.import", "okf.mail.job"] {
+    for name in [
+        "mcp search",
+        "okf.publish",
+        "okf.archive.export",
+        "okf.archive.import",
+        "okf.mail.job",
+    ] {
         assert!(
             span_names.contains(name),
             "no `{name}` span; names seen: {span_names:?}"
@@ -825,7 +842,15 @@ async fn nothing_secret_is_exported_or_scraped() {
     // A dependency's log record would carry its own wording or SQL keys; no
     // span or record carries a URL, a query, an address or a header.
     for body in &log_bodies {
-        for crate_name in ["sqlx", "apalis", "rmcp", "tower_http", "hyper", "reqwest", "rustls"] {
+        for crate_name in [
+            "sqlx",
+            "apalis",
+            "rmcp",
+            "tower_http",
+            "hyper",
+            "reqwest",
+            "rustls",
+        ] {
             assert!(
                 !body.contains(crate_name),
                 "a log record from a dependency? `{body}`"
@@ -920,7 +945,11 @@ async fn nothing_secret_is_exported_or_scraped() {
             }
         }
         if let Some(found) = sql.find(&text) {
-            leaks.push(format!("SQL text `{}` in a {} export", found.as_str(), request.path));
+            leaks.push(format!(
+                "SQL text `{}` in a {} export",
+                found.as_str(),
+                request.path
+            ));
         }
         // Request headers the collector saw are the exporter's own; the
         // body is what carries telemetry.

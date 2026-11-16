@@ -120,11 +120,7 @@ impl Collector {
             // The server ends when the task is aborted on drop.
             let _ = axum::serve(listener, router).await;
         });
-        Self {
-            addr,
-            shared,
-            task,
-        }
+        Self { addr, shared, task }
     }
 
     /// The collector's base URL, with no trailing slash.
@@ -224,7 +220,11 @@ async fn receive(
         body: body.to_vec(),
         payload,
     };
-    shared.requests.lock().expect("requests lock").push(recorded);
+    shared
+        .requests
+        .lock()
+        .expect("requests lock")
+        .push(recorded);
     let mode = shared.mode.lock().expect("mode lock").clone();
     match mode {
         Mode::Accept => (
