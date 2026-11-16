@@ -1,15 +1,15 @@
 # M15 Task 9d: instrument mcp, auth, mail, cli and the rest
 
 ## Added
-- `#[tracing::instrument(skip_all)]` on 255 functions in `src/mcp/**`,
+- `#[tracing::instrument(skip_all)]` on 254 functions in `src/mcp/**`,
   `src/auth.rs`, `src/mail/**`, `src/cli.rs`, `src/cli/**`, `src/app.rs`,
   `src/catalog.rs`, `src/archive.rs`, `src/db.rs`, `src/clock.rs`,
   `src/ntp.rs`, `src/keys.rs`, `src/keyed_lock.rs` and `src/write.rs`:
-  `level = "debug"` on async functions and `pub` entry points (176),
+  `level = "debug"` on async functions and `pub` entry points (175),
   `level = "trace"` on private synchronous helpers (79). No span records a
   field, so no name, email, token, key, document text, path or catalog-supplied
   text can reach a span.
-- 186 `uninstrumented_fn` exemptions, each with a reason:
+- 188 `uninstrumented_fn` exemptions, each with a reason:
   - 73 trivial accessors, conversions and one-line helpers;
   - 44 start-up code that runs before the subscriber exists (`src/config.rs`,
     the `src/telemetry/` config, builder and start-up code);
@@ -18,8 +18,10 @@
   - 9 formatter and layer impls in `src/telemetry/json.rs`;
   - 9 pure error rendering and classification helpers in `src/error.rs`;
   - 4 `Debug` impls, 1 `Drop` impl;
-  - 4 long-lived loops whose span would never close (`cli::serve`,
-    `cli::cancel_on_signal`, `App::poll_until`, `App::check_clock_until`) and
+  - 6 long-lived loops whose span would never close (`cli::serve`,
+    `cli::cancel_on_signal`, `App::poll_until`, `App::check_clock_until`,
+    the mail worker's `run_until_cancelled` and `telemetry::scrape::serve`; the
+    per-attempt `okf.mail.job` root is unchanged) and
     1 wrapper around the serve loop (`cli::dispatch`);
   - 2 functions that run before the subscriber exists (`main`, `cli::run`);
   - 1 root span maker (`clock_check::check_once`, which makes the
@@ -44,4 +46,4 @@
   added. `OkfServer::call_tool`, `App::poll`, `send_mail` and `auth`'s
   `span_key_id` and `record_principal_ids` carry spans of their own already
   and are untouched.
-- The privacy sentinel test is not yet available on main.
+- The privacy sentinel test (`tests/telemetry_privacy.rs`) is on main and passed against this tree (5 of 5).

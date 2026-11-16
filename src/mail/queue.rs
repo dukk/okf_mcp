@@ -680,7 +680,13 @@ pub(crate) fn run_worker(
 }
 
 /// [`run_worker`]'s loop: returns once `shutdown` is cancelled.
-#[tracing::instrument(level = "debug", skip_all)]
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "long-lived loop: its span would never close and would stay open as the parent of every later span"
+    )
+)]
 async fn run_until_cancelled(
     context: &MailContext,
     name: &str,
