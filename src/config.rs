@@ -180,13 +180,7 @@ pub struct OidcProviderConfig {
 ///
 /// # Returns
 /// `true` when it is well formed.
-#[cfg_attr(
-    dylint_lib = "hyp_tracing",
-    allow(
-        uninstrumented_fn,
-        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
-    )
-)]
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn is_provider_id(id: &str) -> bool {
     (1..=32).contains(&id.len())
         && id
@@ -356,7 +350,7 @@ impl MailProvider {
         dylint_lib = "hyp_tracing",
         allow(
             uninstrumented_fn,
-            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+            reason = "a pure match returning a closed value: a span would record nothing new"
         )
     )]
     pub fn as_str(self) -> &'static str {

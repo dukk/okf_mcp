@@ -17,7 +17,7 @@ use okf_mcp::clock::SystemClock;
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "runs before the subscriber exists: it installs the subscriber"
+        reason = "runs before the subscriber exists: it only hands the parsed command line to cli::run, which installs the subscriber"
     )
 )]
 async fn main() -> anyhow::Result<()> {

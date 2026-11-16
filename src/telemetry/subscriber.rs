@@ -89,7 +89,7 @@ const RMCP_CAP: Level = Level::INFO;
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+        reason = "runs inside the subscriber's per-event filter: a span here re-enters the subscriber"
     )
 )]
 fn is_exportable_target(target: &str) -> bool {

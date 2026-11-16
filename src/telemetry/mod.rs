@@ -109,7 +109,7 @@ impl ShutdownReport {
         dylint_lib = "hyp_tracing",
         allow(
             uninstrumented_fn,
-            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
     pub fn all_flushed(&self) -> bool {
@@ -288,7 +288,7 @@ impl Telemetry {
         dylint_lib = "hyp_tracing",
         allow(
             uninstrumented_fn,
-            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
     pub fn traces_enabled(&self) -> bool {
@@ -300,7 +300,7 @@ impl Telemetry {
         dylint_lib = "hyp_tracing",
         allow(
             uninstrumented_fn,
-            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
     pub fn logs_enabled(&self) -> bool {
@@ -321,7 +321,7 @@ impl Telemetry {
         dylint_lib = "hyp_tracing",
         allow(
             uninstrumented_fn,
-            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
     pub fn failures(&self) -> &Arc<ExportFailures> {
@@ -336,7 +336,7 @@ impl Telemetry {
         dylint_lib = "hyp_tracing",
         allow(
             uninstrumented_fn,
-            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
     pub fn subscriber(&self, settings: LayerSettings) -> impl tracing::Subscriber + Send + Sync {

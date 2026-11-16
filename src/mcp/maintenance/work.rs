@@ -102,7 +102,7 @@ pub use close_params::MaintenanceCloseParams;
     dylint_lib = "hyp_tracing",
     allow(
         uninstrumented_fn,
-        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        reason = "constant trait plumbing: the derive's schema_with hook returns a fixed schema"
     )
 )]
 fn close_state_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
