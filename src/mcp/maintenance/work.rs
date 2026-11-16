@@ -440,3 +440,32 @@ mod suspension_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod submit_schema_tests {
+    use super::*;
+
+    #[test]
+    fn the_submission_property_is_an_inline_object_with_its_full_shape() {
+        let schema = schemars::schema_for!(MaintenanceSubmitParams).to_value();
+        let property = &schema["properties"]["submission"];
+
+        assert_eq!(property["type"], "object");
+        assert!(property.get("$ref").is_none());
+        let properties = property["properties"].as_object().expect("properties");
+        for name in [
+            "outcome",
+            "assessment",
+            "summary",
+            "evidence",
+            "findings",
+            "reported_tokens",
+        ] {
+            assert!(properties.contains_key(name), "missing {name}");
+        }
+        assert_eq!(property["properties"]["outcome"]["type"], "string");
+        let required = property["required"].as_array().expect("required");
+        assert!(required.iter().any(|name| name == "summary"));
+        assert_eq!(property["additionalProperties"], false);
+    }
+}

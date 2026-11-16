@@ -42,7 +42,7 @@ pub const SPRAWL_WARN: f64 = 16.0;
 /// design (a list of entries, not a hub).
 const EXEMPT_TYPES: [&str; 1] = ["backlog"];
 
-/// One heading's section, keys in `okf.py`'s order.
+/// One heading's section.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct SprawlSection {
     /// Heading text.
@@ -57,7 +57,7 @@ pub struct SprawlSection {
     pub volatile: Option<String>,
 }
 
-/// A volatile heading or bold lead-in, keys in `okf.py`'s order.
+/// A volatile heading or bold lead-in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct VolatileItem {
     /// `heading` or `lead-in`.
@@ -70,7 +70,7 @@ pub struct VolatileItem {
     pub why: String,
 }
 
-/// One concept's sprawl report, keys in `okf.py`'s order.
+/// One concept's sprawl report.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct SprawlReport {
     /// `/`-prefixed path.

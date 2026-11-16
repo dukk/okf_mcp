@@ -136,6 +136,7 @@ mod submission {
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
     #[serde(deny_unknown_fields)]
+    #[schemars(inline)]
     pub struct Submission {
         #[schemars(schema_with = "submission_outcome_schema")]
         pub outcome: WorkOutcome,

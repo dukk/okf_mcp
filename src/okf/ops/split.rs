@@ -70,14 +70,14 @@ pub struct Split<'a> {
     /// The paragraph left in the parent; a link to the new concept is
     /// appended unless it has one.
     pub stub: Option<&'a str>,
-    /// Parent source ids to copy (`--source`); empty to copy the ones the
+    /// Parent source ids to copy (`sources`); empty to copy the ones the
     /// section's footnotes cite, else all of them.
     pub sources: &'a [String],
 }
 
 /// The note `okf.py` prints without `--description`.
 const NO_DESCRIPTION: &str =
-    "note: no --description given; write a real one in the new concept and its index listing";
+    "note: no description given; write a real one in the new concept and its index listing";
 
 /// The new concept's descriptive keys.
 struct Header<'a> {
@@ -516,7 +516,7 @@ fn choose_sources<'v>(
             .into_iter()
             .filter(|source| source_id(source).is_some_and(|id| named.iter().any(|n| n == id)))
             .collect();
-        return Ok((chosen, "named with --source"));
+        return Ok((chosen, "named with sources"));
     }
     let cited: Vec<&Value> = sources
         .iter()
@@ -789,7 +789,7 @@ mod tests {
             outcome.message,
             concat!(
                 "split 'Last bit' (1 lines) out of /splits/parent.md into /splits/deeper/last.md\n",
-                "sources copied: s2 (named with --source)\n",
+                "sources copied: s2 (named with sources)\n",
                 "footnotes carried: s1",
             )
         );
@@ -799,7 +799,7 @@ mod tests {
                 "note: 'Last bit' is the last section, so it runs to the end of the document; \
                  check that its closing paragraphs really belong to it and move any that \
                  don't back",
-                "note: no --description given; write a real one in the new concept and its \
+                "note: no description given; write a real one in the new concept and its \
                  index listing",
                 "created /splits/deeper/index.md; replace its TODO lines (and the parent's \
                  listing)",
