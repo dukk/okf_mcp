@@ -43,6 +43,7 @@ use crate::error::OkfError;
 use crate::http::sessions::bind_session;
 use crate::mcp::OkfServer;
 use crate::oauth;
+use crate::telemetry::subscriber::split_event;
 
 /// How long a request on any route but `/mcp` may take; for an import, how
 /// long reading and checking its upload may take (the import itself has no
@@ -133,7 +134,12 @@ impl IntoResponse for AppError {
         // details; the others at debug level, by kind only (a message can
         // name a path).
         if self.0.is_internal() {
-            tracing::error!(error = %self.0, "request failed");
+            split_event!(
+                error,
+                { kind = self.0.kind(), },
+                { error = %self.0, },
+                "request failed"
+            );
         } else {
             tracing::debug!(kind = self.0.kind(), "request refused");
         }
@@ -391,15 +397,30 @@ pub async fn serve(
     shutdown.cancel();
     // The loops return once `shutdown` is cancelled; a panic in one is logged.
     if let Err(error) = poller.await {
-        tracing::error!(%error, "the poll loop panicked");
+        split_event!(
+            error,
+            {},
+            { %error, },
+            "the poll loop panicked"
+        );
     }
     if let Err(error) = clock_checker.await {
-        tracing::error!(%error, "the clock check panicked");
+        split_event!(
+            error,
+            {},
+            { %error, },
+            "the clock check panicked"
+        );
     }
     // It finishes the mail in hand first.
     if let Some(mail_worker) = mail_worker {
         if let Err(error) = mail_worker.await {
-            tracing::error!(%error, "the mail worker panicked");
+            split_event!(
+                error,
+                {},
+                { %error, },
+                "the mail worker panicked"
+            );
         }
     }
     // The access counts still being written (plan Decision 5), bounded so a
@@ -416,6 +437,26 @@ pub async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Task 1b: a request's internal error is exported by kind only.
+    #[test]
+    fn an_internal_request_error_exports_its_kind_and_not_its_text() {
+        use crate::telemetry::config::LogFormat;
+        use crate::telemetry::subscriber::capture::observe;
+
+        let error = OkfError::Io {
+            path: "/zq-sentinel-7f3a-path.md".to_string(),
+            source: std::io::Error::other("disk"),
+        };
+        let observed = observe("trace", "trace", "trace", LogFormat::Text, || {
+            let _ = AppError(error).into_response();
+        });
+        let exported = observed.exported_text();
+        assert!(exported.contains("request failed"), "{exported}");
+        assert!(exported.contains("Io"), "{exported}");
+        assert!(!exported.contains("zq-sentinel-7f3a"), "{exported}");
+        assert!(observed.stderr.contains("zq-sentinel-7f3a-path"));
+    }
 
     /// A log sink for one test: everything the `fmt` subscriber writes.
     // `Arc<Mutex<..>>` so every writer the subscriber makes appends to one

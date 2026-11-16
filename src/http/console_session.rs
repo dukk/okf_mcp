@@ -31,6 +31,7 @@ use crate::store::ceiling;
 use crate::store::passwords::PasswordStamp;
 use crate::store::user_sessions::{self, NewSession, SessionStart};
 use crate::store::users::{self, UserAuth};
+use crate::telemetry::subscriber::split_event;
 
 /// The session cookie (plan Decision 9).
 pub const COOKIE: &str = "okf_session";
@@ -367,7 +368,12 @@ pub async fn require_principal(
     };
     match presented {
         Some(Ok(Some(principal))) => {
-            tracing::debug!(key = %principal.key_id, "authenticated");
+            split_event!(
+                debug,
+                {},
+                { key = %principal.key_id, },
+                "authenticated"
+            );
             request.extensions_mut().insert(principal);
             insert_client_ip(&app, &mut request);
             return next.run(request).await;
@@ -399,7 +405,12 @@ pub async fn require_principal(
         Ok(None) => return unauthorized_clearing(&app),
         Err(error) => return AppError(error).into_response(),
     };
-    tracing::debug!(key = %principal.key_id, "authenticated by a console session");
+    split_event!(
+        debug,
+        {},
+        { key = %principal.key_id, },
+        "authenticated by a console session"
+    );
     request.extensions_mut().insert(Arc::new(principal));
     request.extensions_mut().insert(ConsoleSession {
         id,

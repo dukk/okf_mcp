@@ -35,6 +35,7 @@ use crate::keyed_lock::KeyedLocks;
 use crate::oauth::error::OAuthError;
 use crate::oauth::OAuth;
 use crate::store::oauth::clients::{self as client_rows, ClientKind, ClientRecord, NewDcrClient};
+use crate::telemetry::subscriber::split_event;
 
 /// The whole-request deadline of a CIMD fetch, body included.
 pub const CIMD_TIMEOUT: Duration = Duration::from_secs(5);
@@ -826,9 +827,10 @@ async fn resolve_cimd(
         Err(error) => {
             return match cached {
                 Some(client) if is_usable_stale(&client, now) => {
-                    tracing::warn!(
-                        client = %client_id,
-                        %error,
+                    split_event!(
+                        warn,
+                        {},
+                        { client = %client_id, %error, },
                         "CIMD refetch failed; using the cached document"
                     );
                     Ok(client)

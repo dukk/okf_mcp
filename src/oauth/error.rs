@@ -6,6 +6,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 
 use crate::error::OkfError;
+use crate::telemetry::subscriber::split_event;
 
 /// An OAuth error. Each variant's text is safe to show the client: it never
 /// holds a secret. [`OAuthError::Server`] hides its detail.
@@ -113,8 +114,13 @@ impl OAuthError {
 impl IntoResponse for OAuthError {
     fn into_response(self) -> Response {
         if let OAuthError::Server(error) = &self {
-            // `%error` logs it with `Display`; an `OkfError` never holds a secret.
-            tracing::error!(%error, "oauth request failed");
+            // The detail stays on stderr; the exported event keeps the kind.
+            split_event!(
+                error,
+                { kind = error.kind(), },
+                { %error, },
+                "oauth request failed"
+            );
         } else {
             tracing::debug!(code = self.code(), "oauth request refused");
         }

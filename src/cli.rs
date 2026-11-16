@@ -36,6 +36,7 @@ use crate::store::repair;
 use crate::store::settings::SettingKey;
 use crate::store::teams::Role;
 use crate::store::unlocks::Category;
+use crate::telemetry::subscriber::split_event;
 use crate::telemetry::{self, StartUp, Telemetry};
 
 // `src/cli/admin.rs`: the `settings` and `mail` handlers.
@@ -952,7 +953,12 @@ async fn cancel_on_signal(shutdown: CancellationToken) {
     // registered; waiting forever then keeps that from reading as a signal.
     let interrupt = async {
         if let Err(error) = tokio::signal::ctrl_c().await {
-            tracing::error!(%error, "cannot listen for SIGINT");
+            split_event!(
+                error,
+                {},
+                { %error, },
+                "cannot listen for SIGINT"
+            );
             // Wait forever: SIGTERM still works.
             std::future::pending::<()>().await;
         }
@@ -965,7 +971,12 @@ async fn cancel_on_signal(shutdown: CancellationToken) {
                 signal.recv().await;
             }
             Err(error) => {
-                tracing::error!(%error, "cannot listen for SIGTERM");
+                split_event!(
+                    error,
+                    {},
+                    { %error, },
+                    "cannot listen for SIGTERM"
+                );
                 // Wait forever: Ctrl-C still works.
                 std::future::pending::<()>().await;
             }

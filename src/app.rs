@@ -32,6 +32,7 @@ use crate::store::oauth::{
 };
 use crate::store::settings::{self, Settings};
 use crate::store::{catalogs, changesets, email_tokens, sign_in_events, unlocks, user_sessions};
+use crate::telemetry::subscriber::{split_event, LOCAL_ONLY};
 
 /// Every loaded catalog, by name (a `BTreeMap`, so iteration is in name
 /// order, like `catalog list`).
@@ -249,10 +250,10 @@ impl App {
                 Admission::Customer | Admission::Untracked | Admission::Maintenance => Ok(()),
             };
             if let Err(error) = written {
-                tracing::error!(
-                    %error,
-                    catalog = %record.catalog,
-                    ?kind,
+                split_event!(
+                    error,
+                    { catalog = %record.catalog, ?kind, },
+                    { %error, },
                     "recording an operator access failed"
                 );
             }
@@ -511,7 +512,12 @@ impl App {
         let admin_generation = match catalogs::admin_generation(&self.pool).await {
             Ok(admin_generation) => admin_generation,
             Err(error) => {
-                tracing::error!(%error, "reading admin_generation failed; retrying at the next poll");
+                split_event!(
+                    error,
+                    { kind = error.kind(), },
+                    { %error, },
+                    "reading admin_generation failed; retrying at the next poll"
+                );
                 return;
             }
         };
@@ -534,7 +540,12 @@ impl App {
                 .admin_generation
                 .store(admin_generation, Ordering::Relaxed),
             Err(error) => {
-                tracing::error!(%error, "key or settings reload failed; retrying at the next poll");
+                split_event!(
+                    error,
+                    { kind = error.kind(), },
+                    { %error, },
+                    "key or settings reload failed; retrying at the next poll"
+                );
             }
         }
     }
@@ -551,7 +562,12 @@ impl App {
             Ok(0) => {}
             Ok(pruned) => tracing::info!(pruned, "discarded empty changesets a day old"),
             Err(error) => {
-                tracing::error!(%error, "pruning empty changesets failed; retrying at the next poll");
+                split_event!(
+                    error,
+                    { kind = error.kind(), },
+                    { %error, },
+                    "pruning empty changesets failed; retrying at the next poll"
+                );
             }
         }
     }
@@ -663,7 +679,12 @@ impl App {
                 () = shutdown.cancelled() => return,
                 _ = ticks.tick() => {
                     if let Err(error) = self.poll().await {
-                        tracing::error!(%error, "poll failed");
+                        split_event!(
+                            error,
+                            { kind = error.kind(), },
+                            { %error, },
+                            "poll failed"
+                        );
                     }
                 }
             }
@@ -721,7 +742,17 @@ fn log_pruned_retrying(what: &'static str, retry: &'static str, result: Result<u
     match result {
         Ok(0) => {}
         Ok(pruned) => tracing::info!(pruned, "deleted {what}"),
-        Err(error) => tracing::error!(%error, "deleting {what} failed; retrying {retry}"),
+        Err(error) => {
+            tracing::error!(
+                kind = error.kind(),
+                "deleting {what} failed; retrying {retry}"
+            );
+            tracing::error!(
+                target: LOCAL_ONLY,
+                %error,
+                "deleting {what} failed; retrying {retry} (detail)"
+            );
+        }
     }
 }
 
@@ -755,8 +786,14 @@ fn note_failure(broken: &mut Broken, row: &catalogs::Catalog, action: &str, erro
     tracing::error!(
         catalog = %row.name,
         generation = row.generation,
-        %error,
+        kind = error.kind(),
         "{action} failed; retrying {retry}"
+    );
+    tracing::error!(
+        target: LOCAL_ONLY,
+        catalog = %row.name,
+        %error,
+        "{action} failed; retrying {retry} (detail)"
     );
 }
 

@@ -15,6 +15,7 @@ use crate::store::audit::{self, Action, AuditActor};
 use crate::store::email_tokens::{self, Purpose};
 use crate::store::settings;
 use crate::store::users;
+use crate::telemetry::subscriber::split_event;
 
 /// Issues a setup link for `user`, queues the setup email and records
 /// `user.invited`, in one transaction under the user's row lock: the link
@@ -83,7 +84,12 @@ pub async fn send_setup(
     let entry = users::user_entry(Action::UserInvited, &issued.user.id, json!({}));
     audit::record(&mut tx, actor, &entry, now).await?;
     tx.commit().await?;
-    tracing::info!(%user, "setup email queued");
+    split_event!(
+        info,
+        { user_id = %issued.user.id, },
+        { %user, },
+        "setup email queued"
+    );
     Ok(issued.to)
 }
 

@@ -32,6 +32,7 @@ use rmcp::{tool_handler, Json, ServerHandler};
 use crate::app::App;
 use crate::error::OkfError;
 use crate::mcp::context::ToolContext;
+use crate::telemetry::subscriber::split_event;
 
 /// What the server tells a client it is for.
 pub const INSTRUCTIONS: &str = "Open Knowledge Format catalogs: concepts (markdown with YAML \
@@ -136,8 +137,14 @@ pub type ToolResult<T> = Result<Json<T>, CallToolResult>;
 /// The result to send the client.
 pub fn tool_error(error: &OkfError) -> CallToolResult {
     if error.is_internal() {
-        // `%error` logs it with `Display`; it never holds a key or a document.
-        tracing::error!(%error, "tool failed");
+        // The detail (`Display`) can name a path or echo input, so it stays
+        // on stderr; the exported event keeps the kind.
+        split_event!(
+            error,
+            { kind = error.kind(), },
+            { %error, },
+            "tool failed"
+        );
     } else {
         tracing::debug!(kind = error.kind(), "tool error");
     }
@@ -182,6 +189,27 @@ mod tests {
     use axum::http::Request;
 
     use crate::config::Config;
+
+    /// Task 1b: an internal error's text can name a path or echo input, so
+    /// the exported event keeps only its kind.
+    #[test]
+    fn an_internal_tool_error_exports_its_kind_and_not_its_text() {
+        use crate::telemetry::config::LogFormat;
+        use crate::telemetry::subscriber::capture::observe;
+
+        let error = OkfError::Io {
+            path: "/zq-sentinel-7f3a-path.md".to_string(),
+            source: std::io::Error::other("disk"),
+        };
+        let observed = observe("trace", "trace", "trace", LogFormat::Text, || {
+            tool_error(&error);
+        });
+        let exported = observed.exported_text();
+        assert!(exported.contains("tool failed"), "{exported}");
+        assert!(exported.contains("Io"), "{exported}");
+        assert!(!exported.contains("zq-sentinel-7f3a"), "{exported}");
+        assert!(observed.stderr.contains("zq-sentinel-7f3a-path"));
+    }
 
     #[test]
     fn reply_passes_values_and_turns_errors_into_error_results() {
