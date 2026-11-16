@@ -17,6 +17,8 @@ Issue #470, part of epic #460.
 - No argument, SQL, bind value, path, document text, user name, email, key secret or token
   is recorded, and no span uses `err` or `ret`.
 - Helpers under `okf.publish` are `trace` spans that nest in the existing `okf.publish*`
-  spans; none wraps them again. The function that already carried its own span is unchanged.
+  spans, because `mcp::blocking` and the store's direct `spawn_blocking` calls (export,
+  import, repair, password hash and verify) now carry the caller's span and subscriber onto
+  the blocking thread with `Caller::capture` and `enter` (review round 1); none wraps them again. The function that already carried its own span is unchanged.
 - `uninstrumented_fn` warnings in `src/store`: 417 before, 0 after.
 - The privacy sentinel test does not exist on `main` yet.

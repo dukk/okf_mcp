@@ -92,7 +92,9 @@ where
     record_export(pool, &exported, audit, now).await?;
     // `move` hands `rows` and `out` to the closure; `ExportFile`s borrow from
     // `rows` inside it, so nothing is copied.
+    let caller = crate::okf::caller::Caller::capture();
     let archive = tokio::task::spawn_blocking(move || {
+        let _entered = caller.enter();
         let files: Vec<ExportFile<'_>> = rows
             .iter()
             .map(|row| ExportFile {

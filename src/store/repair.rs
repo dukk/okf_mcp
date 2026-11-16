@@ -115,11 +115,14 @@ pub async fn repair(
     let (actor, now) = (options.actor.to_string(), options.now);
     // The op reads every document and parses concepts: CPU work, so it runs
     // on a blocking thread. `move` hands it owned copies of what it needs.
-    let computed =
-        tokio::task::spawn_blocking(move || compute(live, &name, &description, &actor, now))
-            .await
-            // A panic in the task is re-raised here, as if it ran inline.
-            .unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic()))?;
+    let caller = crate::okf::caller::Caller::capture();
+    let computed = tokio::task::spawn_blocking(move || {
+        let _entered = caller.enter();
+        compute(live, &name, &description, &actor, now)
+    })
+    .await
+    // A panic in the task is re-raised here, as if it ran inline.
+    .unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic()))?;
     let Computed { outcome, files } = computed;
     let mut report = RepairReport {
         catalog: found.name.clone(),

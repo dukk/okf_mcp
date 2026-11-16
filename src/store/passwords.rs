@@ -191,9 +191,13 @@ fn matches(stored: &str, password: &str) -> bool {
 async fn matches_off_thread(stored: String, password: String) -> Result<bool, OkfError> {
     // `move` hands the two strings to the closure, which runs on another
     // thread; `.await` waits for it without blocking this one.
-    tokio::task::spawn_blocking(move || matches(&stored, &password))
-        .await
-        .map_err(hasher_error)
+    let caller = crate::okf::caller::Caller::capture();
+    tokio::task::spawn_blocking(move || {
+        let _entered = caller.enter();
+        matches(&stored, &password)
+    })
+    .await
+    .map_err(hasher_error)
 }
 
 /// The error for a hasher that could not run (no OS randomness, or its
@@ -493,9 +497,13 @@ impl NewPassword {
         check_policy(password)?;
         let owned = password.to_string();
         // The first `?` is the task's (did it run?), the second `hash`'s own.
-        let hashed = tokio::task::spawn_blocking(move || hash(&owned))
-            .await
-            .map_err(hasher_error)??;
+        let caller = crate::okf::caller::Caller::capture();
+        let hashed = tokio::task::spawn_blocking(move || {
+            let _entered = caller.enter();
+            hash(&owned)
+        })
+        .await
+        .map_err(hasher_error)??;
         Ok(Self(hashed))
     }
 }

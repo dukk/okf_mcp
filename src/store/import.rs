@@ -211,12 +211,16 @@ pub async fn import(
     // Building a snapshot and linting it is CPU work (rayon across
     // documents): run it on a blocking thread so the async runtime's threads
     // stay free. `move` hands `files` to the closure, which hands it back.
-    let analyzed = tokio::task::spawn_blocking(move || analyze(files, now))
-        .await
-        // A panic in the blocking task is re-raised here, as if it ran inline.
-        // `into_panic` itself panics for a cancelled task, which only happens
-        // when the runtime is shutting down.
-        .unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic()))?;
+    let caller = crate::okf::caller::Caller::capture();
+    let analyzed = tokio::task::spawn_blocking(move || {
+        let _entered = caller.enter();
+        analyze(files, now)
+    })
+    .await
+    // A panic in the blocking task is re-raised here, as if it ran inline.
+    // `into_panic` itself panics for a cancelled task, which only happens
+    // when the runtime is shutting down.
+    .unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic()))?;
     let Analyzed {
         files,
         snapshot,
