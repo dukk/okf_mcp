@@ -41,17 +41,29 @@ impl<'a> MakeWriter<'a> for Capture {
     }
 }
 
-#[test]
-fn the_configured_subscriber_handles_events_after_start_up() {
+// Multi-thread: the OTLP batch processors spawn their workers on the runtime.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_configured_subscriber_handles_events_after_start_up() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("okf.toml");
-    std::fs::write(&path, "[telemetry.stderr]\nformat = \"json\"\n").expect("write config");
+    // A Sentry DSN, so OTLP starts with its default signals (traces and logs).
+    std::fs::write(
+        &path,
+        "[telemetry.stderr]\nformat = \"json\"\n[telemetry.otlp]\nsentry_dsn_env = \"DSN\"\n",
+    )
+    .expect("write config");
     let fallback = Capture::default();
     let configured = Capture::default();
 
     // The same sequence `cli::run` performs: start up under the fallback,
     // then install the configured subscriber.
-    let started = start_up(Some(&path), true, &|_| None, fallback.clone()).expect("start up");
+    let started = start_up(
+        Some(&path),
+        true,
+        &|name| (name == "DSN").then(|| "http://public@127.0.0.1:1/42".to_string()),
+        fallback.clone(),
+    )
+    .expect("start up");
     install_with_writer(
         &started.config.telemetry,
         started.telemetry.as_ref(),
@@ -74,7 +86,21 @@ fn the_configured_subscriber_handles_events_after_start_up() {
         fallback.text()
     );
 
+    // `install` logs which signals are exported: the Sentry default is
+    // traces and logs, with no metrics.
+    assert!(
+        json.contains("\"message\":\"OTLP export is on\"")
+            && json.contains("\"signals\":\"traces,logs\""),
+        "configured got: {json:?}"
+    );
+
     // A second install is refused, not silently ignored.
     let again = install_with_writer(&started.config.telemetry, None, None, Capture::default());
     assert!(again.is_err());
+
+    started
+        .telemetry
+        .expect("serve starts telemetry")
+        .shutdown()
+        .await;
 }

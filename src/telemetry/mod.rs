@@ -163,6 +163,8 @@ pub struct Telemetry {
     // What the Prometheus reader renders into; `scrape::serve` reads it.
     registry: prometheus::Registry,
     failures: Arc<ExportFailures>,
+    // The signals with a running OTLP exporter, for the start-up line.
+    otlp_signals: Vec<otlp::Signal>,
 }
 
 /// The resource every signal carries.
@@ -244,7 +246,11 @@ impl Telemetry {
 
         let mut tracer = None;
         let mut logger = None;
-        if let Some((otlp, target)) = &otlp {
+        // A signal that is off builds nothing: no exporter, no provider.
+        if let Some((otlp, target)) = otlp
+            .as_ref()
+            .filter(|(otlp, _)| otlp.exports(otlp::Signal::Traces))
+        {
             tracer = match otlp::span_exporter(target, &failures) {
                 Ok(exporter) => {
                     let processor = BatchSpanProcessor::builder(exporter, runtime::Tokio).build();
@@ -261,6 +267,11 @@ impl Telemetry {
                     None
                 }
             };
+        }
+        if let Some((_, target)) = otlp
+            .as_ref()
+            .filter(|(otlp, _)| otlp.exports(otlp::Signal::Logs))
+        {
             logger = match otlp::log_exporter(target, &failures) {
                 Ok(exporter) => {
                     let processor = BatchLogProcessor::builder(exporter, runtime::Tokio).build();
@@ -279,7 +290,19 @@ impl Telemetry {
         }
 
         let registry = prometheus::Registry::new();
-        let meter = build_meter_provider(resource, &registry, otlp.as_ref(), &failures)?;
+        let metrics_otlp = otlp
+            .as_ref()
+            .filter(|(otlp, _)| otlp.exports(otlp::Signal::Metrics));
+        let (meter, metrics_pushed) =
+            build_meter_provider(resource, &registry, metrics_otlp, &failures)?;
+        let otlp_signals = [
+            (otlp::Signal::Traces, tracer.is_some()),
+            (otlp::Signal::Logs, logger.is_some()),
+            (otlp::Signal::Metrics, metrics_pushed),
+        ]
+        .into_iter()
+        .filter_map(|(signal, running)| running.then_some(signal))
+        .collect();
         metrics::observe_export_failures(
             &opentelemetry::metrics::MeterProvider::meter(&meter, "okf-mcp"),
             Arc::clone(&failures),
@@ -296,6 +319,7 @@ impl Telemetry {
             meter,
             registry,
             failures,
+            otlp_signals,
         })
     }
 
@@ -312,6 +336,7 @@ impl Telemetry {
             meter: SdkMeterProvider::builder().build(),
             registry: prometheus::Registry::new(),
             failures: Arc::new(ExportFailures::default()),
+            otlp_signals: Vec::new(),
         }
     }
 
@@ -337,6 +362,16 @@ impl Telemetry {
     )]
     pub fn logs_enabled(&self) -> bool {
         self.logger.is_some()
+    }
+
+    /// The signals with a running OTLP exporter, in [`otlp::Signal::ALL`]
+    /// order; empty when OTLP is off.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor")
+    )]
+    pub fn otlp_signals(&self) -> &[otlp::Signal] {
+        &self.otlp_signals
     }
 
     /// The registry `/metrics` renders: the Prometheus reader writes into it.
@@ -429,6 +464,9 @@ impl Telemetry {
 /// * `otlp` - the resolved OTLP settings, when OTLP is on.
 /// * `failures` - the counts the metric exporter adds to.
 ///
+/// # Returns
+/// The provider, and whether an OTLP periodic reader was added.
+///
 /// # Errors
 /// [`OkfError::Config`] when the Prometheus reader cannot be built.
 #[tracing::instrument(level = "trace", skip_all)]
@@ -437,7 +475,7 @@ fn build_meter_provider(
     registry: &prometheus::Registry,
     otlp: Option<&(&config::OtlpConfig, OtlpTarget)>,
     failures: &Arc<ExportFailures>,
-) -> Result<SdkMeterProvider, OkfError> {
+) -> Result<(SdkMeterProvider, bool), OkfError> {
     let reader = opentelemetry_prometheus::exporter()
         .with_registry(registry.clone())
         // No `target_info` series and no `otel_scope_*` labels: every series
@@ -452,6 +490,7 @@ fn build_meter_provider(
     let mut builder = SdkMeterProvider::builder()
         .with_resource(resource)
         .with_reader(reader);
+    let mut pushed = false;
     if let Some((otlp, target)) = otlp {
         match otlp::metric_exporter(target, failures) {
             Ok(exporter) => {
@@ -460,11 +499,12 @@ fn build_meter_provider(
                         .with_interval(otlp.export_interval)
                         .build(),
                 );
+                pushed = true;
             }
             Err(error) => warn_provider_off("metrics", &error),
         }
     }
-    Ok(builder.build())
+    Ok((builder.build(), pushed))
 }
 
 /// Shuts the providers down, each on its own thread, and waits for them
@@ -670,7 +710,21 @@ where
     };
     let subscriber = subscriber::build_with_writer(settings, tracer, logger, writer);
     tracing::subscriber::set_global_default(subscriber)
-        .map_err(|_| error("a tracing subscriber is already installed".to_string()))
+        .map_err(|_| error("a tracing subscriber is already installed".to_string()))?;
+    if let Some(telemetry) = telemetry.filter(|telemetry| !telemetry.otlp_signals.is_empty()) {
+        tracing::info!(signals = %otlp_signals_text(&telemetry.otlp_signals), "OTLP export is on");
+    }
+    Ok(())
+}
+
+/// The exported signals as `traces,logs`, for the start-up line.
+#[tracing::instrument(level = "trace", skip_all)]
+fn otlp_signals_text(signals: &[otlp::Signal]) -> String {
+    signals
+        .iter()
+        .map(|signal| signal.label())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 #[cfg(test)]
@@ -1015,6 +1069,95 @@ mod tests {
         assert!(paths[0].starts_with("POST /v1/logs "), "{paths:?}");
         assert!(paths[1].starts_with("POST /v1/metrics "), "{paths:?}");
         assert!(paths[2].starts_with("POST /v1/traces "), "{paths:?}");
+    }
+
+    fn sentry_config(signals: Option<Vec<otlp::Signal>>) -> TelemetryConfig {
+        TelemetryConfig {
+            otlp: Some(config::OtlpConfig {
+                sentry_dsn_env: Some("DSN".to_string()),
+                signals,
+                ..config::OtlpConfig::default()
+            }),
+            ..TelemetryConfig::default()
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_disabled_signal_builds_no_exporter_provider_or_reader() {
+        let env = |name: &str| (name == "DSN").then(|| "http://public@127.0.0.1:1/42".to_string());
+        let sentry_default = Telemetry::start(&sentry_config(None), &env).expect("starts");
+        assert!(sentry_default.traces_enabled() && sentry_default.logs_enabled());
+        assert_eq!(
+            sentry_default.otlp_signals(),
+            [otlp::Signal::Traces, otlp::Signal::Logs]
+        );
+
+        let logs_only =
+            Telemetry::start(&sentry_config(Some(vec![otlp::Signal::Logs])), &env).expect("starts");
+        assert!(!logs_only.traces_enabled() && logs_only.logs_enabled());
+        assert_eq!(logs_only.otlp_signals(), [otlp::Signal::Logs]);
+
+        let mut endpoint = TelemetryConfig::default();
+        endpoint.otlp = Some(config::OtlpConfig {
+            endpoint: Some("http://127.0.0.1:1".to_string()),
+            headers_env: Some("none".to_string()),
+            signals: Some(vec![otlp::Signal::Metrics]),
+            ..config::OtlpConfig::default()
+        });
+        let metrics_only = Telemetry::start(&endpoint, &|_| None).expect("starts");
+        assert!(!metrics_only.traces_enabled() && !metrics_only.logs_enabled());
+        assert_eq!(metrics_only.otlp_signals(), [otlp::Signal::Metrics]);
+        // All twelve failure series exist from the first scrape, at 0.
+        let families = logs_only.registry().gather();
+        let family = families
+            .iter()
+            .find(|family| family.name() == "okf_telemetry_export_failures_total")
+            .expect("failure counts");
+        assert_eq!(family.get_metric().len(), 12);
+        assert!(family
+            .get_metric()
+            .iter()
+            .all(|metric| metric.get_counter().get_value() == 0.0));
+        // Dropping a running provider blocks on its worker; shut each down.
+        for telemetry in [sentry_default, logs_only, metrics_only] {
+            telemetry.shutdown().await;
+        }
+    }
+
+    /// Sentry's intake has no metrics endpoint: with `sentry_dsn_env` and the
+    /// default signals no request goes to `/v1/metrics`, and traces and logs
+    /// still arrive at their Sentry paths.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn with_a_sentry_dsn_no_request_goes_to_the_metrics_path() {
+        let (port, mut heads) = receiver().await;
+        let dsn = format!("http://public@127.0.0.1:{port}/42");
+        let config = sentry_config(None);
+        let telemetry = Telemetry::start(&config, &|name| (name == "DSN").then(|| dsn.clone()))
+            .expect("starts");
+        let settings = subscriber::settings(&config, Some("error")).expect("settings");
+        let dispatch = telemetry.subscriber(settings);
+        tracing::subscriber::with_default(dispatch, || {
+            let span = tracing::info_span!(target: "okf_mcp::test", "exported");
+            let _entered = span.enter();
+            tracing::info!(target: "okf_mcp::test", "exported-log");
+        });
+        let report = telemetry.shutdown().await;
+        assert!(report.all_flushed(), "{report:?}");
+        let mut paths = Vec::new();
+        while let Ok(Some(head)) = tokio::time::timeout(Duration::from_secs(3), heads.recv()).await
+        {
+            paths.push(head.lines().next().unwrap_or_default().to_string());
+        }
+        paths.sort();
+        assert_eq!(paths.len(), 2, "{paths:?}");
+        assert!(
+            paths[0].starts_with("POST /api/42/integration/otlp/v1/logs "),
+            "{paths:?}"
+        );
+        assert!(
+            paths[1].starts_with("POST /api/42/integration/otlp/v1/traces "),
+            "{paths:?}"
+        );
     }
 
     #[tokio::test]
