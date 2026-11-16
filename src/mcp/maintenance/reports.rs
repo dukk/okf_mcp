@@ -274,6 +274,10 @@ mod dispose_schema_tests {
         .map(|variant| serde_json::to_value(variant).expect("a disposition serializes"));
         assert_eq!(property["enum"], json!(every_variant));
         assert!(property.get("$ref").is_none());
+        assert_eq!(
+            property["description"],
+            "Human follow-up decision; acceptance does not apply the proposed change."
+        );
     }
 
     #[test]
