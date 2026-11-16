@@ -1188,6 +1188,15 @@ async fn call_tool(
 
 `feat(telemetry): HTTP request spans, MCP tool spans and their metrics (M15 Task 3)`
 
+> **Corrected (issue #464, 2026-11-16).** What shipped differs from the sketches above in these ways; read `src/http/mod.rs`, `src/mcp/mod.rs`, `src/auth.rs` and `src/telemetry/{propagation,metrics}.rs` for the code.
+> - **`okf.key.id` is `session` for a console session** (decision, 2026-11-16). A session's `Principal.key_id` is `session:<user name>`, and a name never goes in a span attribute. `auth::span_key_id` maps it (the kind only); API keys and OAuth grants record their real key id; `Principal.key_id` itself is unchanged. `auth::record_principal_ids(span, principal)` is the one helper both spans use, and `auth::record_on_request_span(extensions, principal)` is what `require_key` and `require_principal` call (the plan's inline `span.record` blocks are replaced by these). `enduser.id` is `Principal.user_id`.
+> - **One middleware, not two hooks.** `request_telemetry` (in `src/http/mod.rs`, inside `TraceLayer`) stores `RequestSpan` and also measures the request: `Metrics::http_in_flight(method, route)` returns a drop guard (no `on_request` hook), and `Metrics::http_request(method, route, status, elapsed)` records `http.server.request.duration` with `http.response.status_code` as a label. `record_response` replaces `DefaultOnResponse` and calls it, so the `info` line is unchanged. An unmatched route is neither spanned nor measured.
+> - **The request span's log fields changed.** `method`/`path`/`version` became `http.request.method`/`http.route` (and the others above); an unmatched request has no span, so the `<unmatched>` placeholder and `UNMATCHED_ROUTE` are gone. The log-capture test now asserts `http.route=` and the absence of `<unmatched>`.
+> - **`propagation::link_from` keeps ids and flags only**; the header's `tracestate` is dropped, so no header text is exported on a link. Task 6 adds `inject` beside it and needs no change.
+> - **`call_tool` types:** `CallToolRequestParams` and `CallToolResponse` (rmcp 3.8). `#[tool_handler]` skips a `call_tool` already written. The session gauge is held by a `SessionGuard` field in `OkfServer`, created in `OkfServer::new` (which only the session factory calls), not by an `impl Drop`. `catalog_label` returns `none` for a name no loaded catalog bears. `TOOL_SPAN` is private to `src/mcp/mod.rs`.
+> - **Test helpers:** `telemetry::subscriber::capture::Observer` (`start`, `finish`) is `observe` with a scope that spans `.await`; `mcp::testing::McpProbe` is a minimal MCP client for a real session over `http::serve`. Tests live in `src/http/telemetry_tests.rs` and `src/mcp/telemetry_tests.rs`. A console session is not an MCP credential, so its test covers the HTTP span only. `search` takes no `catalog` argument; the MCP span tests use `get_concept`.
+> - Task 10 Step 2a: the four named tests are in those two files (`FILTERS` lists the two span filters).
+
 ---
 
 ### Task 4: Publish, changesets, the poll loop and caches
