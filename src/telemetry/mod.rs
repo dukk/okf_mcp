@@ -609,6 +609,43 @@ mod tests {
         assert!(!telemetry.traces_enabled() && !telemetry.logs_enabled());
     }
 
+    #[tokio::test]
+    async fn otel_sdk_disabled_still_populates_the_prometheus_exposition() {
+        let mut config = TelemetryConfig::default();
+        config.otlp = Some(config::OtlpConfig {
+            sentry_dsn_env: Some("DSN".to_string()),
+            ..config::OtlpConfig::default()
+        });
+        let telemetry = Telemetry::start(&config, &|name| {
+            (name == "OTEL_SDK_DISABLED").then(|| "true".to_string())
+        })
+        .expect("starts");
+        // What `App::load` does with the global provider, on this telemetry's
+        // own meter, so parallel tests cannot interfere.
+        let _metrics = metrics::Metrics::new(&opentelemetry::metrics::MeterProvider::meter(
+            &telemetry.meter,
+            "okf-mcp",
+        ));
+
+        let families = telemetry.registry().gather();
+
+        for expected in metrics::Metrics::FAMILIES {
+            assert!(
+                families.iter().any(|family| family.name() == *expected),
+                "{expected} missing from {:?}",
+                families
+                    .iter()
+                    .map(|family| family.name())
+                    .collect::<Vec<_>>()
+            );
+        }
+        let failures = families
+            .iter()
+            .find(|family| family.name() == "okf_telemetry_export_failures_total")
+            .expect("the failure family");
+        assert_eq!(failures.get_metric().len(), 12);
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn shutdown_returns_within_the_deadline_with_a_hung_exporter() {
         let processor = BatchSpanProcessor::builder(HangingSpanExporter, runtime::Tokio).build();
