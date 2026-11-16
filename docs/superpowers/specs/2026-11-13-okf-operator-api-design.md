@@ -202,7 +202,9 @@ owner `NOT NULL`) is unaffected.
   - `GET /api/v1/users?email=`, `GET /api/v1/users/{name}`,
     `POST /api/v1/users`, `PUT /api/v1/users/{name}/email`,
     `POST /api/v1/users/{name}/invite`, `DELETE /api/v1/users/{name}`;
-  - `GET /api/v1/teams/{name}`, `POST /api/v1/teams`,
+  - `GET /api/v1/teams` *(added, issue #502, 2026-11-16: the team list,
+    so an external provisioning system can reconcile its records)*,
+    `GET /api/v1/teams/{name}`, `POST /api/v1/teams`,
     `PUT /api/v1/teams/{name}/members/{user}`,
     `DELETE /api/v1/teams/{name}/members/{user}`,
     `DELETE /api/v1/teams/{name}`, `PUT /api/v1/teams/{name}/suspension`
@@ -211,7 +213,8 @@ owner `NOT NULL`) is unaffected.
     `PUT /api/v1/catalogs/{catalog}/member-access`;
   - `GET /api/v1/audit` (to confirm its own actions).
 - It may **not**: act on an admin user in any way (each allowed handler
-  refuses a target that is an admin, 403), list every user or team, read
+  refuses a target that is an admin, 403), list every user (or, before
+  issue #502, every team), read
   or export catalogs, manage keys or grants, change settings, set the admin
   flag, entitle users, import, or end other people's sessions.
 - It is server-wide, not scoped to teams: it may act on any non-admin user,

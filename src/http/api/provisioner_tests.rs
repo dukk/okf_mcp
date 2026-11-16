@@ -190,7 +190,8 @@ async fn a_provisioner_is_refused_every_other_route_and_every_catalog() {
     let p = Some(key.as_str());
     let refused = [
         ("GET", "/api/v1/users", None),
-        ("GET", "/api/v1/teams", None),
+        // Only the GET of the team list is allowed (issue #502).
+        ("HEAD", "/api/v1/teams", None),
         ("GET", "/api/v1/keys", None),
         (
             "POST",
@@ -326,6 +327,7 @@ fn the_allow_list_is_the_specs_and_names_routes_by_template() {
         ("PUT", "/api/v1/users/{name}/email"),
         ("POST", "/api/v1/users/{name}/invite"),
         ("DELETE", "/api/v1/users/{name}"),
+        ("GET", "/api/v1/teams"),
         ("GET", "/api/v1/teams/{name}"),
         ("POST", "/api/v1/teams"),
         ("PUT", "/api/v1/teams/{name}/members/{user}"),
@@ -349,5 +351,83 @@ fn the_allow_list_is_the_specs_and_names_routes_by_template() {
         &axum::http::Method::PUT,
         "/api/v1/users/{name}/admin"
     ));
-    assert!(!provisioner_may(&axum::http::Method::GET, "/api/v1/teams"));
+    // The team list is a read only: no other method on it (issue #502).
+    for method in [
+        axum::http::Method::HEAD,
+        axum::http::Method::PUT,
+        axum::http::Method::PATCH,
+        axum::http::Method::DELETE,
+    ] {
+        assert!(!provisioner_may(&method, "/api/v1/teams"), "{method}");
+    }
+    assert!(!provisioner_may(
+        &axum::http::Method::GET,
+        "/api/v1/unassigned"
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_provisioner_lists_every_team_as_an_admin_sees_them() {
+    let test = app().await;
+    let root = every_catalog_admin(&test).await;
+    let key = provisioner(&test).await;
+    // A shared team, a suspended one, and an admin user's personal team:
+    // the list leaves none of them out for a provisioner.
+    for (uri, body) in [
+        ("/api/v1/users", json!({"name": "alice"})),
+        ("/api/v1/users", json!({"name": "staff"})),
+        ("/api/v1/teams", json!({"name": "acme", "owner": "alice"})),
+        (
+            "/api/v1/teams",
+            json!({"name": "dormant", "owner": "alice"}),
+        ),
+    ] {
+        let (status, answer) = send(&test, "POST", uri, Some(&root), Some(body)).await;
+        assert_eq!(status.as_u16(), 201, "POST {uri}: {answer}");
+    }
+    for (uri, body) in [
+        ("/api/v1/users/staff/admin", json!({"admin": true})),
+        (
+            "/api/v1/teams/dormant/suspension",
+            json!({"suspended": true}),
+        ),
+    ] {
+        let (status, answer) = send(&test, "PUT", uri, Some(&root), Some(body)).await;
+        assert_eq!(status.as_u16(), 200, "PUT {uri}: {answer}");
+    }
+
+    let (status, listed) = send(&test, "GET", "/api/v1/teams", Some(&key), None).await;
+    let (_, as_admin) = send(&test, "GET", "/api/v1/teams", Some(&root), None).await;
+
+    assert_eq!(status.as_u16(), 200, "{listed}");
+    assert_eq!(listed, as_admin, "the provisioner sees the admin's list");
+    let names: Vec<&str> = listed["teams"]
+        .as_array()
+        .expect("a team array")
+        .iter()
+        .filter_map(|team| team["name"].as_str())
+        .collect();
+    for name in ["acme", "alice", "dormant", "staff", crate::db::TEST_USER] {
+        assert!(names.contains(&name), "{name} missing from {names:?}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn listing_teams_widens_a_provisioner_to_nothing_else() {
+    let test = app().await;
+    let key = provisioner(&test).await;
+    let p = Some(key.as_str());
+    let (listed, _) = send(&test, "GET", "/api/v1/teams", p, None).await;
+    assert_eq!(listed.as_u16(), 200);
+    // The neighbouring reads it could not make before stay refused.
+    for uri in [
+        "/api/v1/users",
+        "/api/v1/unassigned",
+        "/api/v1/catalogs",
+        "/api/v1/keys",
+        "/api/v1/audit/export",
+    ] {
+        let (status, answer) = send(&test, "GET", uri, p, None).await;
+        assert_eq!(status.as_u16(), 403, "GET {uri}: {answer}");
+    }
 }
