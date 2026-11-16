@@ -271,8 +271,18 @@ fn mcp_service(
 ) -> StreamableHttpService<OkfServer, LocalSessionManager> {
     let mut sessions = LocalSessionManager::default();
     sessions.session_config.keep_alive = Some(app.config().session_idle_timeout);
+    // The same switch for the later POSTs of a session (`tools/list`, ...):
+    // rmcp reads it from the session config, not from the HTTP config.
+    sessions.session_config.sse_retry = None;
     let config = StreamableHttpServerConfig::default()
         .with_allowed_hosts(app.config().allowed_hosts.iter().cloned())
+        // No SSE priming event on the `initialize` reply. For protocol
+        // versions before 2026-07-28 rmcp streams every POST reply and, when
+        // `sse_retry` is set, prepends an empty-data event that strict
+        // clients (Google Gemini's connector) reject. It only aids
+        // resumption, which `LocalSessionManager` does not support for POST
+        // streams anyway.
+        .with_sse_retry(None)
         // A child token: cancelling `shutdown` cancels it too, and rmcp
         // cancelling its own copy never reaches `shutdown`.
         .with_cancellation_token(shutdown.child_token());

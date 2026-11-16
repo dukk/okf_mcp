@@ -167,6 +167,10 @@ where
     // Dropping `tx` without `commit()` (any `?` below) rolls everything back:
     // a refused edit leaves no entry behind.
     let mut tx = app.pool().begin().await?;
+    if audit.is_some() {
+        // The entry's users before the changeset, as publish (issue #418).
+        crate::store::publish::lock_people(&mut tx, &ctx.audit_actor(), state.name()).await?;
+    }
     changesets::lock_catalog(&mut tx, state.id()).await?;
     // The row was read unlocked; `lock` reads it again once the lock is
     // granted, so a publish, discard or prune that held it is seen here.
