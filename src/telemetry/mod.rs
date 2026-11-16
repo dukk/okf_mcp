@@ -487,11 +487,13 @@ mod tests {
         let telemetry =
             Telemetry::start(&config, &only_disabled).expect("starts without credentials");
         assert!(!telemetry.traces_enabled() && !telemetry.logs_enabled());
-        let mut dsn = TelemetryConfig::default();
-        dsn.otlp = Some(config::OtlpConfig {
-            sentry_dsn_env: Some("DSN_FOR_TEST".to_string()),
-            ..config::OtlpConfig::default()
-        });
+        let dsn = TelemetryConfig {
+            otlp: Some(config::OtlpConfig {
+                sentry_dsn_env: Some("DSN_FOR_TEST".to_string()),
+                ..config::OtlpConfig::default()
+            }),
+            ..TelemetryConfig::default()
+        };
         Telemetry::start(&dsn, &only_disabled).expect("starts without a DSN");
     }
 
