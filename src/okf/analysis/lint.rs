@@ -272,9 +272,9 @@ impl<'a> Linter<'a> {
         }
         let message = format!(
             // `{:?}` prints an f64 as Python's str() does (20.0, not 20);
-            // `{}` prints SPRAWL_WARN as 16, like okf.py's int.
+            // `{}` prints SPRAWL_WARN as 16, like an int.
             "sprawl score {:?} > {} ({} lines, {} sections, {} volatile); consider \
-             splitting (okf.py sprawl {}, okf-reorganize skill)",
+             splitting (the sprawl tool on {}, okf-reorganize skill)",
             sprawl.score, SPRAWL_WARN, sprawl.lines, sprawl.sections, sprawl.volatile, self.path
         );
         self.warn(1, "sprawl", message);
@@ -784,7 +784,7 @@ mod tests {
         assert_eq!(
             sprawl.message,
             "sprawl score 20.0 > 16 (400 lines, 0 sections, 0 volatile); consider splitting \
-             (okf.py sprawl a.md, okf-reorganize skill)"
+             (the sprawl tool on a.md, okf-reorganize skill)"
         );
     }
 

@@ -42,9 +42,9 @@ pub struct WriteReport {
     /// or a deletion), in the op's order. A touched path that left nothing to
     /// store (gone, and never published) is not listed.
     pub touched: Vec<String>,
-    /// What `okf.py` would have printed, e.g. `infra/x.md: generated { by: a, at: ... }`.
+    /// A one-line summary of the write, e.g. `infra/x.md: generated { by: a, at: ... }`.
     pub message: String,
-    /// `okf.py`'s notes (a non-kebab-case name, a folder index created).
+    /// Notes on the write (a non-kebab-case name, a folder index created).
     pub notes: Vec<String>,
 }
 

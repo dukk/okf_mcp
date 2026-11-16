@@ -45,7 +45,7 @@ pub struct LinkIssue {
 pub struct IndexDrift {
     /// The unlisted document, or the index with a misfiled bullet.
     pub file: String,
-    /// What is wrong, worded as `okf.py` words it.
+    /// What is wrong.
     pub problem: String,
 }
 
@@ -71,7 +71,7 @@ pub struct UnlinkedMention {
     pub hits: Vec<MentionHit>,
 }
 
-/// Counts: `concepts`, then one per report list, in `okf.py`'s key order.
+/// Counts: `concepts`, then one per report list.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct LinksSummary {
     /// Number of concepts.
@@ -92,7 +92,7 @@ pub struct LinksSummary {
     pub unlinked_mentions: usize,
 }
 
-/// The whole report, keys in `okf.py`'s order.
+/// The whole link report.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct LinksReport {
     /// Links whose target does not exist.

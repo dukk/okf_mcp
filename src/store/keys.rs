@@ -1787,7 +1787,7 @@ async fn require_named_grants(conn: &mut PgConnection, id: &str) -> Result<(), O
             reason: format!("key {id:?} is revoked"),
         }),
         Some((true, false)) => Err(OkfError::Refused {
-            reason: format!("key {id:?} is granted every catalog (--all)"),
+            reason: format!("key {id:?} is granted every catalog"),
         }),
         None => Err(OkfError::Refused {
             reason: format!("no key {id:?}"),

@@ -162,10 +162,10 @@
       "output": "split 'Background' (5 lines) out of /splits/parent.md into /splits/background.md\nsources copied: s1 (cited by the section's footnotes)\nfootnotes carried: s1\ntouched (pass these to publish):\n  splits/parent.md\n  splits/background.md\n  splits/index.md\n  splits/user.md"
     },
     {
-      "output": "split 'Last bit' (1 lines) out of /splits/parent.md into /splits/deeper/last.md\nsources copied: s2 (named with --source)\nfootnotes carried: s1\ntouched (pass these to publish):\n  splits/parent.md\n  splits/deeper/last.md\n  splits/deeper/index.md\n  splits/index.md",
+      "output": "split 'Last bit' (1 lines) out of /splits/parent.md into /splits/deeper/last.md\nsources copied: s2 (named with sources)\nfootnotes carried: s1\ntouched (pass these to publish):\n  splits/parent.md\n  splits/deeper/last.md\n  splits/deeper/index.md\n  splits/index.md",
       "notes": [
         "note: 'Last bit' is the last section, so it runs to the end of the document; check that its closing paragraphs really belong to it and move any that don't back",
-        "note: no --description given; write a real one in the new concept and its index listing",
+        "note: no description given; write a real one in the new concept and its index listing",
         "created /splits/deeper/index.md; replace its TODO lines (and the parent's listing)"
       ]
     },
@@ -178,7 +178,7 @@
     {
       "output": "split 'Other' (1 lines) out of /splits/parent.md into /splits/other.md\nsources copied: s1, s2 (all of the parent's (none was cited by footnote; prune them))\nfootnotes carried: n2\ntouched (pass these to publish):\n  splits/parent.md\n  splits/other.md\n  splits/user.md\n  splits/index.md",
       "notes": [
-        "note: no --description given; write a real one in the new concept and its index listing"
+        "note: no description given; write a real one in the new concept and its index listing"
       ]
     }
   ],

@@ -173,9 +173,7 @@ pub(crate) fn require_every_catalog(principal: &Principal) -> Result<(), OkfErro
     match &principal.reach {
         Reach::All => Ok(()),
         Reach::Catalogs(_) => Err(OkfError::Forbidden {
-            reason: "this needs an admin key that reaches every catalog \
-                     (okf-mcp key create --all)"
-                .to_string(),
+            reason: "this needs an admin key that reaches every catalog".to_string(),
         }),
     }
 }
