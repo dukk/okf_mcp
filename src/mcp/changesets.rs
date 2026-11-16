@@ -1220,10 +1220,8 @@ mod publish_tests {
     use crate::store::keys::Access;
     use crate::store::publish::PublishedRevision;
     use crate::store::{catalogs, history};
-    use crate::telemetry::subscriber::capture::SpanRecorder;
+    use crate::telemetry::subscriber::capture::{SeenSpan, SeenValue, SpanRecorder};
     use crate::write::{apply, WriteReport};
-    use opentelemetry_sdk::trace::SpanData;
-    use tracing::instrument::WithSubscriber;
     use tracing::Instrument;
 
     const NOTE: &str = "---\ntype: Note\ntitle: A\ndescription: A note.\n---\n# A\n";
@@ -1259,7 +1257,7 @@ mod publish_tests {
     }
 
     /// The one span named `name` in `spans`.
-    fn span<'a>(spans: &'a [SpanData], name: &str) -> &'a SpanData {
+    fn span<'a>(spans: &'a [SeenSpan], name: &str) -> &'a SeenSpan {
         let mut named = spans.iter().filter(|span| span.name == name);
         let found = named.next().unwrap_or_else(|| panic!("no span {name}"));
         assert!(named.next().is_none(), "more than one span {name}");
@@ -1274,27 +1272,16 @@ mod publish_tests {
         body(&ctx, &handle, "/a.md", "# A\n\nNew.\n").await;
         let recorder = SpanRecorder::new();
 
-        publish_as(&ctx, &handle, "edit a")
-            .with_subscriber(recorder.dispatch())
-            .await
-            .unwrap();
+        recorder.run(publish_as(&ctx, &handle, "edit a")).unwrap();
 
         let spans = recorder.finished();
         let publish = span(&spans, "okf.publish");
         for child in ["okf.publish.lock", "okf.publish.lint", "okf.publish.write"] {
-            assert_eq!(
-                span(&spans, child).parent_span_id,
-                publish.span_context.span_id(),
-                "{child}"
-            );
+            assert_eq!(span(&spans, child).parent, Some(publish.id), "{child}");
         }
-        let entries = publish
-            .attributes
-            .iter()
-            .find(|kv| kv.key.as_str() == "okf.changeset.entries");
         assert_eq!(
-            entries.map(|kv| &kv.value),
-            Some(&opentelemetry::Value::I64(1))
+            publish.field("okf.changeset.entries"),
+            Some(&SeenValue::I64(1))
         );
         let text = render(&registry);
         assert!(
@@ -1342,16 +1329,15 @@ mod publish_tests {
         // The caller span is attached with `instrument`, so no entered guard
         // is held across an await.
         // The span is made inside the subscribed future, so it is a real one.
-        async {
+        // The span is made inside the recorded future, so it is a real one.
+        recorder.run(async {
             async {
                 test.app.poll().await.unwrap();
                 test.app.poll().await.unwrap();
             }
             .instrument(tracing::info_span!("caller"))
             .await;
-        }
-        .with_subscriber(recorder.dispatch())
-        .await;
+        });
 
         let spans = recorder.finished();
         let polls: Vec<_> = spans
@@ -1359,21 +1345,14 @@ mod publish_tests {
             .filter(|span| span.name == "okf.poll")
             .collect();
         assert_eq!(polls.len(), 2);
-        assert!(polls
-            .iter()
-            .all(|span| span.parent_span_id == opentelemetry::trace::SpanId::INVALID));
-        assert_ne!(
-            polls[0].span_context.trace_id(),
-            polls[1].span_context.trace_id()
-        );
+        // A root has no parent, so each pass starts a trace of its own.
+        assert!(polls.iter().all(|span| span.parent.is_none()));
         // A catalog's turn is a child of its pass.
         let turn = spans
             .iter()
             .find(|span| span.name == "okf.catalog.refresh")
             .expect("a catalog refresh span");
-        assert!(polls
-            .iter()
-            .any(|poll| poll.span_context.span_id() == turn.parent_span_id));
+        assert!(polls.iter().any(|poll| Some(poll.id) == turn.parent));
     }
 
     #[tokio::test(flavor = "multi_thread")]

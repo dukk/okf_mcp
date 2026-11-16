@@ -344,46 +344,166 @@ pub(crate) mod capture {
     use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
     use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 
-    /// An in-memory span recorder for async tests: run a future under
+    /// A field's value as `tracing` recorded it.
+    #[derive(Debug, Clone, PartialEq)]
+    pub(crate) enum SeenValue {
+        /// Recorded as a signed integer (`record_i64`).
+        I64(i64),
+        /// Recorded as a string, or through `Display`/`Debug`.
+        Text(String),
+        /// Any other type (`u64`, `bool`, and so on).
+        Other,
+    }
+
+    /// One span as the recorder saw it.
+    #[derive(Debug, Clone)]
+    pub(crate) struct SeenSpan {
+        /// A number unique within the recorder.
+        pub id: u64,
+        /// The span's name.
+        pub name: String,
+        /// The id of its parent; `None` for a root.
+        pub parent: Option<u64>,
+        /// Its fields, as recorded at creation and by later `record` calls.
+        pub fields: Vec<(String, SeenValue)>,
+    }
+
+    impl SeenSpan {
+        /// A field's value.
+        pub(crate) fn field(&self, name: &str) -> Option<&SeenValue> {
+            self.fields
+                .iter()
+                .rev()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value)
+        }
+    }
+
+    struct SeenVisitor<'a>(&'a mut Vec<(String, SeenValue)>);
+
+    impl tracing::field::Visit for SeenVisitor<'_> {
+        fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+            self.0
+                .push((field.name().to_string(), SeenValue::I64(value)));
+        }
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.0
+                .push((field.name().to_string(), SeenValue::Text(value.to_string())));
+        }
+        fn record_u64(&mut self, field: &tracing::field::Field, _value: u64) {
+            self.0.push((field.name().to_string(), SeenValue::Other));
+        }
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0.push((
+                field.name().to_string(),
+                SeenValue::Text(format!("{value:?}")),
+            ));
+        }
+    }
+
+    /// The layer behind [`SpanRecorder`]: notes each span as it is created.
+    struct Collect(Arc<Mutex<Vec<SeenSpan>>>);
+
+    impl<S> tracing_subscriber::Layer<S> for Collect
+    where
+        S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+    {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            id: &tracing::span::Id,
+            ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let parent = if attrs.is_root() {
+                None
+            } else if let Some(parent) = attrs.parent() {
+                Some(parent.into_u64())
+            } else {
+                ctx.current_span().id().map(tracing::span::Id::into_u64)
+            };
+            let mut fields = Vec::new();
+            attrs.record(&mut SeenVisitor(&mut fields));
+            self.0.lock().expect("recorder lock").push(SeenSpan {
+                id: id.into_u64(),
+                name: attrs.metadata().name().to_string(),
+                parent,
+                fields,
+            });
+        }
+
+        fn on_record(
+            &self,
+            id: &tracing::span::Id,
+            values: &tracing::span::Record<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut seen = self.0.lock().expect("recorder lock");
+            if let Some(span) = seen.iter_mut().find(|span| span.id == id.into_u64()) {
+                values.record(&mut SeenVisitor(&mut span.fields));
+            }
+        }
+    }
+
+    /// A span recorder for async tests: run a future under
     /// [`SpanRecorder::dispatch`] with `tracing::instrument::WithSubscriber`
     /// (a thread-local default would miss a multi-thread runtime's other
-    /// workers), then read [`SpanRecorder::finished`].
+    /// workers), then read [`SpanRecorder::finished`]. It records at the
+    /// `tracing` level, so what a test sees is what the code recorded, with no
+    /// exporter, sampler or thread-local OpenTelemetry context in between.
     pub(crate) struct SpanRecorder {
         dispatch: tracing::Dispatch,
-        exporter: InMemorySpanExporter,
-        provider: SdkTracerProvider,
+        seen: Arc<Mutex<Vec<SeenSpan>>>,
     }
 
     impl SpanRecorder {
-        /// A recorder over the same span layer the server uses.
+        /// A recorder with no spans yet.
         pub(crate) fn new() -> Self {
-            use opentelemetry::trace::TracerProvider as _;
             use tracing_subscriber::layer::SubscriberExt;
 
-            let exporter = InMemorySpanExporter::default();
-            let provider = SdkTracerProvider::builder()
-                .with_simple_exporter(exporter.clone())
-                .build();
-            let layer = tracing_opentelemetry::layer().with_tracer(provider.tracer("okf-mcp"));
-            let dispatch = tracing::Dispatch::new(tracing_subscriber::registry().with(layer));
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let subscriber = tracing_subscriber::registry().with(Collect(Arc::clone(&seen)));
             Self {
-                dispatch,
-                exporter,
-                provider,
+                dispatch: tracing::Dispatch::new(subscriber),
+                seen,
             }
         }
 
-        /// The dispatcher to run the future under.
-        pub(crate) fn dispatch(&self) -> tracing::Dispatch {
-            self.dispatch.clone()
+        /// Runs `future` to completion with this recorder as the default
+        /// subscriber, on a thread and a current-thread runtime of its own,
+        /// so every poll of it sees the default (a future on a multi-thread
+        /// runtime hops between workers, and other tests' subscribers share
+        /// those). The caller blocks meanwhile, so call it from a test body,
+        /// not from a runtime worker; what `future` uses from the test's own
+        /// runtime (the pool) keeps being served by that runtime's workers.
+        ///
+        /// # Panics
+        /// If the runtime cannot be built, or `future` panics.
+        pub(crate) fn run<F>(&self, future: F) -> F::Output
+        where
+            F: std::future::Future + Send,
+            F::Output: Send,
+        {
+            // A scoped thread may borrow from the caller's stack.
+            std::thread::scope(|scope| {
+                scope
+                    .spawn(|| {
+                        let runtime = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .expect("a current-thread runtime");
+                        tracing::dispatcher::with_default(&self.dispatch, || {
+                            runtime.block_on(future)
+                        })
+                    })
+                    .join()
+                    .expect("the recorded future finished without panicking")
+            })
         }
 
-        /// The spans that have ended so far. The simple processor exports on
-        /// its own thread, so this flushes first: under load a bare read can
-        /// run before the last spans arrive.
-        pub(crate) fn finished(&self) -> Vec<opentelemetry_sdk::trace::SpanData> {
-            self.provider.force_flush().expect("flush spans");
-            self.exporter.get_finished_spans().expect("spans")
+        /// The spans created so far, in creation order.
+        /// The spans created so far, in creation order.
+        pub(crate) fn finished(&self) -> Vec<SeenSpan> {
+            self.seen.lock().expect("recorder lock").clone()
         }
     }
 

@@ -560,7 +560,12 @@ impl App {
                     // owner change shows without a rebuild.
                     state.set_description(&row.description);
                     state.set_owner_team(row.owner_team.as_deref());
-                    if row.generation > state.current().generation() && !failed_before {
+                    let behind = row.generation > state.current().generation();
+                    if behind && failed_before {
+                        // This generation already failed to build: the turn
+                        // is skipped, but it is still a failed one.
+                        result = RefreshResult::Failed;
+                    } else if behind {
                         match state.refresh(&self.pool).instrument(turn.clone()).await {
                             Ok(true) => result = RefreshResult::Reloaded,
                             Ok(false) => {}
@@ -1434,6 +1439,45 @@ mod tests {
             text.contains(r#"okf_catalog_refreshes_total{catalog="pg",result="failed"} 2"#),
             "{text}"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_loaded_catalog_that_keeps_failing_to_refresh_counts_failed_every_pass() {
+        use crate::telemetry::subscriber::capture::{SeenValue, SpanRecorder};
+
+        let (test, registry) = crate::mcp::testing::app_with_metrics(
+            &[("pg", &[("a.md", "# A\n")])],
+            crate::config::Config::default(),
+        )
+        .await;
+        let pool = test.app.pool().clone();
+        let id = test.app.catalog("pg").unwrap().id();
+        break_catalog(&pool, id).await;
+        bump_generation(&pool, id).await;
+        let recorder = SpanRecorder::new();
+
+        // The first pass tries the refresh and fails; the second skips the
+        // generation that already failed. Both are turns that failed.
+        recorder.run(async {
+            test.app.poll().await.unwrap();
+            test.app.poll().await.unwrap();
+        });
+
+        // The old snapshot still serves.
+        assert!(test.app.catalog("pg").is_some());
+        let text = crate::mcp::testing::render(&registry);
+        assert!(
+            text.contains(r#"okf_catalog_refreshes_total{catalog="pg",result="failed"} 2"#),
+            "{text}"
+        );
+        let results: Vec<_> = recorder
+            .finished()
+            .iter()
+            .filter(|span| span.name == "okf.catalog.refresh")
+            .map(|span| span.field("okf.refresh.result").cloned())
+            .collect();
+        let failed = Some(SeenValue::Text("failed".to_string()));
+        assert_eq!(results, [failed.clone(), failed]);
     }
 
     #[tokio::test(flavor = "multi_thread")]
