@@ -80,8 +80,8 @@ pub struct SetFrontmatterParams {
     // extension names every JSON type the op accepts (issue #513), and the
     // typed `items` keeps array schemas valid for the annotations test.
     #[schemars(extend(
-        "type" = ["string", "number", "boolean", "array", "object", "null"],
-        "items" = {"type": ["string", "number", "boolean", "array", "object", "null"]}
+        "type" = ["string", "number", "integer", "boolean", "array", "object", "null"],
+        "items" = {"type": ["string", "number", "integer", "boolean", "array", "object", "null"]}
     ))]
     pub value: serde_json::Value,
     /// The changeset to write to: the handle `open_changeset` returned.
@@ -1908,7 +1908,7 @@ mod set_frontmatter_value_schema_tests {
         listed.sort_unstable();
         assert_eq!(
             listed,
-            ["array", "boolean", "null", "number", "object", "string"]
+            ["array", "boolean", "integer", "null", "number", "object", "string"]
         );
         assert!(schema["properties"]["value"]["items"]["type"].is_array());
     }
