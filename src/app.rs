@@ -33,7 +33,7 @@ use crate::store::oauth::{
 };
 use crate::store::settings::{self, Settings};
 use crate::store::{catalogs, changesets, email_tokens, sign_in_events, unlocks, user_sessions};
-use crate::telemetry::metrics::{Metrics, Outcome};
+use crate::telemetry::metrics::{Metrics, Outcome, RefreshResult};
 use crate::telemetry::subscriber::{split_event, LOCAL_ONLY};
 
 /// Every loaded catalog, by name (a `BTreeMap`, so iteration is in name
@@ -131,6 +131,10 @@ pub struct App {
     // The metric instruments (M15 Task 2); built on the global meter provider
     // unless a test supplies its own.
     metrics: Metrics,
+    // Open changesets per catalog name, as the last poll pass counted them
+    // (`okf.changesets.open` reads it; a scrape never queries Postgres). A
+    // `std` lock: held only to read or swap the map.
+    open_changesets: RwLock<BTreeMap<String, i64>>,
     // Test hook: a background access write waits for this lock first, so a
     // test can hold it to run a deletion or a transfer between admission
     // and persistence.
@@ -221,6 +225,8 @@ impl App {
         let passkeys = Passkeys::new(&config)?;
         // A provider whose secret variable is unset fails start-up here.
         let oidc = OidcProviders::new(&config, |name| std::env::var(name).ok())?;
+        // A failed count leaves the map empty until the first poll pass.
+        let open_changesets = changesets::open_counts(&pool).await.unwrap_or_default();
         let app = Arc::new(Self {
             pool,
             config,
@@ -243,11 +249,13 @@ impl App {
             oidc,
             access_writes: std::sync::Mutex::new(tokio::task::JoinSet::new()),
             metrics,
+            open_changesets: RwLock::new(open_changesets),
             #[cfg(test)]
             access_hold: Arc::default(),
         });
         // `Arc::downgrade`: the gauges' callbacks live in the meter provider,
         // which outlives the app, so they hold a weak handle (no cycle).
+        app.metrics.observe_catalogs(Arc::downgrade(&app));
         app.metrics.observe_pool(Arc::downgrade(&app));
         Ok(app)
     }
@@ -488,7 +496,33 @@ impl App {
     ///
     /// # Errors
     /// [`OkfError::Database`] reading the catalog list.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "makes the okf.poll root span itself")
+    )]
     pub async fn poll(&self) -> Result<(), OkfError> {
+        let started = std::time::Instant::now();
+        // `parent: None` makes each pass the root of its own trace, whatever
+        // span the caller is in (spec "Background roots").
+        let result = self
+            .poll_pass()
+            .instrument(tracing::info_span!(parent: None, "okf.poll"))
+            .await;
+        let outcome = if result.is_ok() {
+            Outcome::Ok
+        } else {
+            Outcome::Error
+        };
+        self.metrics.poll(outcome, started.elapsed());
+        result
+    }
+
+    /// The body of [`App::poll`], inside its `okf.poll` span.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "runs inside the okf.poll span")
+    )]
+    async fn poll_pass(&self) -> Result<(), OkfError> {
         // The guard releases the mutex when the function returns; through
         // it (`*broken`, like a reference) the pass reads and replaces the
         // broken catalogs.
@@ -498,6 +532,7 @@ impl App {
         self.prune_empty_changesets().await;
         self.prune_oauth().await;
         self.prune_audit().await;
+        self.count_open_changesets().await;
         crate::mail::queue::record_depth(&self.pool, &self.metrics).await;
         let current = self.catalogs();
         let mut next = Catalogs::new();
@@ -512,32 +547,66 @@ impl App {
             // The same id: the same catalog. A different id under the same
             // name: deleted and created again, so load it from scratch.
             let existing = current.get(&row.name).filter(|state| state.id() == row.id);
+            // One span per catalog's turn; its `okf.refresh.result` is set
+            // below, and the awaits that do the work run inside it.
+            let turn = tracing::info_span!(
+                "okf.catalog.refresh",
+                okf.catalog = %row.name,
+                okf.refresh.result = tracing::field::Empty,
+            );
+            let mut result = RefreshResult::Unchanged;
             let state = match existing {
                 Some(state) => {
                     // Outside the snapshot, so a `catalog update` or
                     // owner change shows without a rebuild.
                     state.set_description(&row.description);
                     state.set_owner_team(row.owner_team.as_deref());
-                    if row.generation > state.current().generation() && !failed_before {
-                        if let Err(error) = state.refresh(&self.pool).await {
-                            // The old snapshot stays in place.
-                            note_failure(&mut still_broken, &row, "refresh", &error);
+                    let behind = row.generation > state.current().generation();
+                    if behind && failed_before {
+                        // This generation already failed to build: the turn
+                        // is skipped, but it is still a failed one.
+                        result = RefreshResult::Failed;
+                    } else if behind {
+                        match state.refresh(&self.pool).instrument(turn.clone()).await {
+                            Ok(true) => result = RefreshResult::Reloaded,
+                            Ok(false) => {}
+                            Err(error) => {
+                                // The old snapshot stays in place.
+                                result = RefreshResult::Failed;
+                                note_failure(&mut still_broken, &row, "refresh", &error);
+                            }
                         }
                     }
                     Arc::clone(state)
                 }
-                None if failed_before => continue,
-                None => match CatalogState::load(&self.pool, &row.name).await {
+                None if failed_before => {
+                    // Still failed at this generation: it is a turn too, so
+                    // it counts and the span says so.
+                    self.metrics
+                        .catalog_refresh(&row.name, RefreshResult::Failed);
+                    turn.record("okf.refresh.result", RefreshResult::Failed.as_str());
+                    continue;
+                }
+                None => match CatalogState::load(&self.pool, &row.name)
+                    .instrument(turn.clone())
+                    .await
+                {
                     Ok(state) => {
                         tracing::info!(catalog = %row.name, "catalog loaded");
+                        result = RefreshResult::Loaded;
                         Arc::new(state)
                     }
                     Err(error) => {
                         note_failure(&mut still_broken, &row, "load", &error);
+                        self.metrics
+                            .catalog_refresh(&row.name, RefreshResult::Failed);
+                        turn.record("okf.refresh.result", RefreshResult::Failed.as_str());
                         continue;
                     }
                 },
             };
+            self.metrics.catalog_refresh(&row.name, result);
+            turn.record("okf.refresh.result", result.as_str());
             next.insert(row.name, state);
         }
         *self.catalogs.write().expect("catalog map lock poisoned") = Arc::new(next);
@@ -578,7 +647,13 @@ impl App {
             *self.settings.write().expect("settings lock poisoned") = Arc::new(settings);
             Ok::<(), OkfError>(())
         }
+        .instrument(tracing::info_span!("okf.keycache.reload"))
         .await;
+        self.metrics.keycache_reload(if reloaded.is_ok() {
+            Outcome::Ok
+        } else {
+            Outcome::Error
+        });
         match reloaded {
             Ok(()) => self
                 .admin_generation
@@ -592,6 +667,49 @@ impl App {
                 );
             }
         }
+    }
+
+    /// Counts the open changesets per catalog for `okf.changesets.open`.
+    /// Called only under `polling`. A failure is logged (its text stays off
+    /// OTLP) and the last counts stay.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn count_open_changesets(&self) {
+        match changesets::open_counts(&self.pool).await {
+            Ok(counts) => {
+                *self
+                    .open_changesets
+                    .write()
+                    .expect("open changesets lock poisoned") = counts;
+            }
+            Err(error) => {
+                split_event!(
+                    error,
+                    { kind = error.kind(), },
+                    { %error, },
+                    "counting open changesets failed; keeping the last counts"
+                );
+            }
+        }
+    }
+
+    /// How many changesets were open in `catalog` at the last poll pass.
+    ///
+    /// # Arguments
+    /// * `catalog` - the catalog's name.
+    ///
+    /// # Returns
+    /// The count; 0 for a catalog with none (or one not yet counted).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor, read by a scrape")
+    )]
+    pub fn open_changesets(&self, catalog: &str) -> i64 {
+        self.open_changesets
+            .read()
+            .expect("open changesets lock poisoned")
+            .get(catalog)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Discards empty changesets unchanged for [`EMPTY_CHANGESET_HOURS`].
@@ -1317,6 +1435,78 @@ mod tests {
 
         let loaded = app.catalog("pg").unwrap().current();
         assert_eq!((loaded.generation(), loaded.files()), (3, 1));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_catalog_that_stays_unloadable_counts_a_failed_refresh_every_pass() {
+        let (test, registry) =
+            crate::mcp::testing::app_with_metrics(&[], crate::config::Config::default()).await;
+        let pool = test.app.pool().clone();
+        let pg = catalogs::create(
+            &pool,
+            &crate::store::catalogs::NewCatalog {
+                name: "pg",
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            },
+            &crate::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        import_files(&pool, "pg", &[("a.md", "# A\n")], false).await;
+        break_catalog(&pool, pg.id).await;
+
+        // The first pass tries the load and fails; the second skips the
+        // generation that already failed. Both are turns that failed.
+        test.app.poll().await.unwrap();
+        test.app.poll().await.unwrap();
+
+        assert!(test.app.catalog("pg").is_none());
+        let text = crate::mcp::testing::render(&registry);
+        assert!(
+            text.contains(r#"okf_catalog_refreshes_total{catalog="pg",result="failed"} 2"#),
+            "{text}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_loaded_catalog_that_keeps_failing_to_refresh_counts_failed_every_pass() {
+        use crate::telemetry::subscriber::capture::{SeenValue, SpanRecorder};
+
+        let (test, registry) = crate::mcp::testing::app_with_metrics(
+            &[("pg", &[("a.md", "# A\n")])],
+            crate::config::Config::default(),
+        )
+        .await;
+        let pool = test.app.pool().clone();
+        let id = test.app.catalog("pg").unwrap().id();
+        break_catalog(&pool, id).await;
+        bump_generation(&pool, id).await;
+        let recorder = SpanRecorder::new();
+
+        // The first pass tries the refresh and fails; the second skips the
+        // generation that already failed. Both are turns that failed.
+        recorder.run(async {
+            test.app.poll().await.unwrap();
+            test.app.poll().await.unwrap();
+        });
+
+        // The old snapshot still serves.
+        assert!(test.app.catalog("pg").is_some());
+        let text = crate::mcp::testing::render(&registry);
+        assert!(
+            text.contains(r#"okf_catalog_refreshes_total{catalog="pg",result="failed"} 2"#),
+            "{text}"
+        );
+        let results: Vec<_> = recorder
+            .finished()
+            .iter()
+            .filter(|span| span.name == "okf.catalog.refresh")
+            .map(|span| span.field("okf.refresh.result").cloned())
+            .collect();
+        let failed = Some(SeenValue::Text("failed".to_string()));
+        assert_eq!(results, [failed.clone(), failed]);
     }
 
     #[tokio::test(flavor = "multi_thread")]

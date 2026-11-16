@@ -1224,7 +1224,7 @@ Each uses `app_with_metrics` plus the in-memory span exporter:
   - the write and commit.
 
   `Metrics::publish(catalog, outcome, elapsed)`, and `Metrics::lint_rejection(catalog, rule)` for each error in `LintFailed` (rule names are the lint's own closed set).
-- **The poll loop.** In `poll_until`, each tick runs `self.poll().instrument(tracing::info_span!(parent: None, "okf.poll"))`. `parent: None` makes each tick its own trace (spec "Background roots"). Inside `poll`:
+- **The poll loop.** (Corrected, issue #465: the root is made in `App::poll`, see the note below.) Each tick runs `self.poll().instrument(tracing::info_span!(parent: None, "okf.poll"))`. `parent: None` makes each tick its own trace (spec "Background roots"). Inside `poll`:
   - each catalog refresh is `info_span!("okf.catalog.refresh", okf.catalog = %name)`;
   - the key-cache reload is `info_span!("okf.keycache.reload")`.
 
@@ -1238,6 +1238,14 @@ Each uses `app_with_metrics` plus the in-memory span exporter:
 - [ ] **Step 3: Gates and commit**
 
 `feat(telemetry): publish, poll and catalog instrumentation (M15 Task 4)`
+
+> **Corrected (issue #465, 2026-11-16).** What shipped differs from the sketch above in these ways; read `src/store/publish.rs`, `src/app.rs` and `src/telemetry/metrics.rs`.
+> - **The `okf.poll` root is made inside `App::poll`**, not in `poll_until`: `poll` wraps a private `poll_pass` in `info_span!(parent: None, "okf.poll")` and records `okf.poll.duration` there, so a direct `app.poll()` is its own trace too (that is what `each_poll_tick_is_its_own_trace` calls). `poll_until` is unchanged.
+> - **`publish` is a thin wrapper** (the `okf.publish` span, `okf.publish.duration`, one `okf.lint.rejections` per `LintFailed` error) around a private `publish_locked`. `okf.publish.lock` covers the in-process mutex, the transaction begin and the three row locks, and `okf.publish.lock_wait` is recorded even when a lock step refuses; `okf.publish.lint` wraps `check`; `okf.publish.write` wraps the writes, the generation bump, the audit entry and the commit. `okf.refresh.result` is a field on each `okf.catalog.refresh` span.
+> - **`rule` is folded by `metrics::lint_rule_label`**: the lint's fixed ids pass, every `secret:<id>` becomes `secret`, anything else is `other`. Add a new lint rule to `LINT_RULES` (`every_rule_the_lint_names_is_a_label_of_its_own` scans the lint's source and fails until you do).
+> - **Gauges:** `Metrics` keeps its `Meter` and `Metrics::observe_catalogs(Weak<App>)` registers `okf.catalog.concepts`, `okf.catalog.generation` and `okf.changesets.open`; `App::load_with_metrics` calls it after `Arc::new`. The gauge handles are **not** kept on `App` (see the Task 2 correction). `okf.changesets.open` reads `App::open_changesets`, filled by `changesets::open_counts` at load and once per poll pass; a catalog with none reports 0. Task 5's mail-queue gauge (it reads a count the poll stores, as the open-changeset one does) and Task 6's pool gauges can follow the same shape (a `Metrics` method taking a `Weak<App>`).
+> - **`RefreshResult`** (`unchanged | reloaded | loaded | failed`) is the typed label; `okf.keycache.reloads` counts only an attempted reload (after `admin_generation` moved).
+> - **Tests** live in `mcp::changesets::publish_tests`; `telemetry::subscriber::capture::SpanRecorder` runs a future under an in-memory span exporter via `WithSubscriber` (a thread-local default misses a multi-thread runtime's workers).
 
 ---
 
