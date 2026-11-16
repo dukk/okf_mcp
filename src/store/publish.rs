@@ -17,6 +17,7 @@ use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::Serialize;
 use sqlx::{PgConnection, PgPool};
+use tracing::Instrument;
 
 use crate::app::App;
 use crate::catalog::{CatalogState, Loaded};
@@ -32,6 +33,7 @@ use crate::store::audit::{self, Action, AuditActor, Entry, Target};
 use crate::store::catalogs::{self, is_unique_violation};
 use crate::store::changesets::{self, ChangesetRow, ChangesetState, EntryRow};
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
+use crate::telemetry::metrics::Outcome;
 use crate::telemetry::subscriber::split_event;
 
 /// What a publish did.
@@ -127,7 +129,44 @@ struct Publication<'a> {
 /// - [`OkfError::Database`], the audit entry's included.
 ///
 /// On every error the transaction rolls back and the changeset stays as it was.
+///
+/// Records `okf.publish.duration` for every call, and one
+/// `okf.lint.rejections` per lint error of a refusal.
+#[tracing::instrument(
+    level = "info",
+    name = "okf.publish",
+    skip_all,
+    fields(okf.catalog = %state.name(), okf.changeset.entries = tracing::field::Empty)
+)]
 pub async fn publish(
+    app: &App,
+    state: &CatalogState,
+    input: &PublishInput<'_>,
+    audit: &AuditActor,
+) -> Result<PublishReport, OkfError> {
+    let started = std::time::Instant::now();
+    let result = publish_locked(app, state, input, audit).await;
+    let outcome = if result.is_ok() {
+        Outcome::Ok
+    } else {
+        Outcome::Error
+    };
+    app.metrics()
+        .publish(state.name(), outcome, started.elapsed());
+    if let Err(OkfError::LintFailed { errors, .. }) = &result {
+        for finding in errors {
+            app.metrics().lint_rejection(state.name(), &finding.rule);
+        }
+    }
+    result
+}
+
+/// [`publish`] without its metrics, inside its `okf.publish` span.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "runs inside the okf.publish span")
+)]
+async fn publish_locked(
     app: &App,
     state: &CatalogState,
     input: &PublishInput<'_>,
@@ -146,25 +185,41 @@ pub async fn publish(
     {
         return Ok(PublishReport::default());
     }
-    // Step 2. The guard (`_publishing`) releases the mutex when it goes out
-    // of scope at the end of the function, after the refresh.
-    let _publishing = state.publish_lock().lock().await;
+    // Step 2: every lock, timed as the wait. The guard (`_publishing`)
+    // releases the mutex when it goes out of scope at the end of the
+    // function, after the refresh. Dropping `tx` without `commit()` (any `?`
+    // or early return) rolls back.
+    let lock_started = std::time::Instant::now();
+    let locks = async {
+        let publishing = state.publish_lock().lock().await;
+        let mut tx = app.pool().begin().await?;
+        catalogs::lock(&mut tx, state.id()).await?;
+        changesets::lock_catalog(&mut tx, state.id()).await?;
+        let locked = changesets::lock(&mut tx, changeset.id)
+            .await?
+            .filter(|row| row.state == ChangesetState::Open)
+            .ok_or_else(|| OkfError::Refused {
+                reason: format!("changeset {} is no longer open", changeset.handle),
+            })?;
+        Ok::<_, OkfError>((publishing, tx, locked))
+    }
+    .instrument(tracing::info_span!("okf.publish.lock"))
+    .await;
+    // A refusal waited too, so the wait is recorded before `?` returns it.
+    app.metrics()
+        .publish_lock_wait(state.name(), lock_started.elapsed());
+    let (_publishing, mut tx, locked) = locks?;
     let now = app.clock().now();
-    // Dropping `tx` without `commit()` (any `?` or early return) rolls back.
-    let mut tx = app.pool().begin().await?;
-    catalogs::lock(&mut tx, state.id()).await?;
-    changesets::lock_catalog(&mut tx, state.id()).await?;
-    let locked = changesets::lock(&mut tx, changeset.id)
-        .await?
-        .filter(|row| row.state == ChangesetState::Open)
-        .ok_or_else(|| OkfError::Refused {
-            reason: format!("changeset {} is no longer open", changeset.handle),
-        })?;
     // Again under the lock: a discard may have emptied it meanwhile.
     let entries = changesets::entries(&mut *tx, locked.id).await?;
     if entries.is_empty() {
         return Ok(PublishReport::default());
     }
+    // `i64`, not `usize`: the span layer exports a `usize` as a string.
+    tracing::Span::current().record(
+        "okf.changeset.entries",
+        i64::try_from(entries.len()).unwrap_or(i64::MAX),
+    );
     let base = current_base(state, &mut tx).await?;
 
     // Step 3: base revisions against the documents as stored now.
@@ -173,7 +228,9 @@ pub async fn publish(
     let merged = merge(entries, &current)?;
 
     // Step 4: the rules, lint and links on the result.
-    let (overlay, warnings) = check(base, &locked, merged.entries, now).await?;
+    let (overlay, warnings) = check(base, &locked, merged.entries, now)
+        .instrument(tracing::info_span!("okf.publish.lint"))
+        .await?;
 
     // Step 5: documents, revisions, generation, state; one commit.
     let publication = Publication {
@@ -182,44 +239,50 @@ pub async fn publish(
         message,
         now,
     };
-    let revisions = match write_all(&mut tx, &publication, &overlay, &current, &paths).await {
-        Ok(revisions) => revisions,
-        // The backstop's conflict: roll back first, so the re-read below
-        // sees only what is committed, and report the revision there now.
-        Err(OkfError::Conflict { files }) => {
-            tx.rollback().await?;
-            let files = with_current_revisions(app.pool(), state.id(), files).await?;
-            return Err(OkfError::Conflict { files });
-        }
-        Err(error) => return Err(error),
-    };
-    // A publish that wrote no revision changed no document: it is not a
-    // catalog write, so it bumps nothing and records nothing.
-    if !revisions.is_empty() {
-        let generation: i64 = sqlx::query_scalar(
+    // `tx` moves into the block (it is consumed by `commit`); the rest is borrowed.
+    let revisions = async {
+        let revisions = match write_all(&mut tx, &publication, &overlay, &current, &paths).await {
+            Ok(revisions) => revisions,
+            // The backstop's conflict: roll back first, so the re-read below
+            // sees only what is committed, and report the revision there now.
+            Err(OkfError::Conflict { files }) => {
+                tx.rollback().await?;
+                let files = with_current_revisions(app.pool(), state.id(), files).await?;
+                return Err(OkfError::Conflict { files });
+            }
+            Err(error) => return Err(error),
+        };
+        // A publish that wrote no revision changed no document: it is not a
+        // catalog write, so it bumps nothing and records nothing.
+        if !revisions.is_empty() {
+            let generation: i64 = sqlx::query_scalar(
             "UPDATE catalogs SET generation = generation + 1 WHERE id = $1 RETURNING generation",
         )
         .bind(state.id())
         .fetch_one(&mut *tx)
         .await?;
-        let teams = audit::catalog_teams(&mut tx, state.id()).await?;
-        let entry = Entry {
-            action: Action::CatalogPublished,
-            target: Target::Catalog(state.name()),
-            person: None,
-            teams: &teams,
-            // The diff stays in the catalog's history, found by the handle.
-            details: serde_json::json!({
-                "changeset": locked.handle,
-                "files": revisions.len(),
-                "generation_from": generation - 1,
-                "generation_to": generation,
-            }),
-        };
-        audit::record(&mut tx, audit, &entry, now).await?;
+            let teams = audit::catalog_teams(&mut tx, state.id()).await?;
+            let entry = Entry {
+                action: Action::CatalogPublished,
+                target: Target::Catalog(state.name()),
+                person: None,
+                teams: &teams,
+                // The diff stays in the catalog's history, found by the handle.
+                details: serde_json::json!({
+                    "changeset": locked.handle,
+                    "files": revisions.len(),
+                    "generation_from": generation - 1,
+                    "generation_to": generation,
+                }),
+            };
+            audit::record(&mut tx, audit, &entry, now).await?;
+        }
+        changesets::set_state(&mut tx, locked.id, ChangesetState::Published, now).await?;
+        tx.commit().await?;
+        Ok::<_, OkfError>(revisions)
     }
-    changesets::set_state(&mut tx, locked.id, ChangesetState::Published, now).await?;
-    tx.commit().await?;
+    .instrument(tracing::info_span!("okf.publish.write"))
+    .await?;
 
     // Step 6, still under the in-process lock (the advisory lock ended with
     // the transaction): the next publish of this catalog checks against
