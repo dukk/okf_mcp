@@ -397,6 +397,7 @@ pub struct UnquestionParams {
     /// The concept, with or without `.md`, e.g. `/infra/ntp` or `/infra/ntp.md`.
     pub path: String,
     /// The question to remove: its 1-based number in `open_questions`, or its exact text.
+    #[schemars(extend("type" = ["integer", "string"]))]
     pub question: QuestionRef,
     /// The changeset to write to: the handle `open_changeset` returned.
     pub changeset: String,
@@ -1118,6 +1119,25 @@ mod tests {
         assert_eq!(delete.value, serde_json::Value::Null);
         let required = tool.input_schema["required"].as_array().unwrap();
         assert!(required.iter().any(|name| name == "value"), "{required:?}");
+    }
+
+    #[test]
+    fn unquestion_question_has_a_direct_type_and_still_accepts_both_forms() {
+        let tools = OkfServer::bookkeeping_router().list_all();
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name == "unquestion")
+            .expect("unquestion is registered");
+        let question = &tool.input_schema["properties"]["question"];
+
+        assert_eq!(question["type"], serde_json::json!(["integer", "string"]));
+        assert!(question["description"].as_str().is_some(), "{question}");
+        assert_eq!(question["$ref"], "#/$defs/QuestionRef");
+
+        let number: QuestionRef = serde_json::from_value(serde_json::json!(2)).unwrap();
+        let text: QuestionRef = serde_json::from_value(serde_json::json!("Who owns it?")).unwrap();
+        assert_eq!(number, QuestionRef::Number(2));
+        assert_eq!(text, QuestionRef::Text("Who owns it?".to_string()));
     }
 
     #[test]
