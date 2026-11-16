@@ -39,6 +39,13 @@ pub struct Mail {
 }
 
 impl std::fmt::Debug for Mail {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Debug impl: runs while an event is formatted, and a span there re-enters the subscriber"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // `finish_non_exhaustive` prints `..`: there are fields not shown.
         formatter
@@ -93,6 +100,7 @@ pub trait Mailer: Send + Sync {
 /// [`OkfError::Config`] when a named environment variable is unset or
 /// empty, the From address does not parse, or the provider cannot be built
 /// (an SMTP host lettre refuses), or SES finds no AWS region.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn from_config(config: &MailConfig) -> Result<Arc<dyn Mailer>, OkfError> {
     from_config_with(config, &|name| std::env::var(name).ok()).await
 }
@@ -101,6 +109,7 @@ pub async fn from_config(config: &MailConfig) -> Result<Arc<dyn Mailer>, OkfErro
 /// set process-wide variables.
 // `&dyn Fn(&str) -> Option<String>`: any callable taking a name, like a
 // Python `Callable[[str], Optional[str]]`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn from_config_with(
     config: &MailConfig,
     env: &dyn Fn(&str) -> Option<String>,
@@ -149,6 +158,7 @@ pub(crate) async fn from_config_with(
 
 /// Reads a secret from the environment variable a config key names. The
 /// error names the variable, never its value.
+#[tracing::instrument(level = "trace", skip_all)]
 fn secret(env: &dyn Fn(&str) -> Option<String>, name: &str, key: &str) -> Result<String, OkfError> {
     match env(name) {
         Some(value) if !value.trim().is_empty() => Ok(value),
@@ -159,6 +169,7 @@ fn secret(env: &dyn Fn(&str) -> Option<String>, name: &str, key: &str) -> Result
 }
 
 /// A `[mail]` problem found at start-up.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn config_error(message: String) -> OkfError {
     OkfError::Config {
         path: "[mail]".to_string(),

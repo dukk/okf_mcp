@@ -50,6 +50,7 @@ pub struct ClockStatus {
 /// # Returns
 /// The status: an offset and stratum, or `ok: false`. A failure is a status,
 /// not an error, so the function has no `Result`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn check_once(server: &str, clock: &dyn Clock, timeout: Duration) -> ClockStatus {
     let checked_at = format_timestamp(clock.now());
     match ntp::query(server, clock, timeout).await {

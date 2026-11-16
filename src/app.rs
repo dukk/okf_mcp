@@ -165,6 +165,7 @@ impl App {
     /// [`crate::mail::from_config`] (a mail secret missing from the
     /// environment, or no AWS region for SES) or [`OidcProviders::new`] (an
     /// OIDC client secret missing from the environment).
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn load(
         pool: PgPool,
         config: Config,
@@ -269,6 +270,7 @@ impl App {
     /// * `record` - the access, with identities and scope fixed at admission.
     /// * `kind` - read, write or export.
     /// * `admission` - how it was let in.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn note_access(&self, record: AccessRecord, kind: AccessKind, admission: Admission) {
         let pool = self.pool.clone();
         #[cfg(test)]
@@ -304,6 +306,7 @@ impl App {
 
     /// Waits for every background access write started so far (tests, and
     /// shutdown, so a stopping server loses no count).
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn settle_access(&self) {
         // Take the set out under the lock, then wait without holding it
         // (`mem::take` leaves an empty set in its place).
@@ -326,16 +329,37 @@ impl App {
     }
 
     /// The database.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn pool(&self) -> &PgPool {
         &self.pool
     }
 
     /// The server's settings.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn config(&self) -> &Config {
         &self.config
     }
 
     /// The source of every timestamp.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn clock(&self) -> &dyn Clock {
         self.clock.as_ref()
     }
@@ -344,6 +368,13 @@ impl App {
     ///
     /// # Returns
     /// The limiters.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn sign_in_limits(&self) -> &SignInLimits {
         &self.sign_in_limits
     }
@@ -353,6 +384,13 @@ impl App {
     ///
     /// # Returns
     /// The same clock [`App::clock`] lends.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn clock_handle(&self) -> Arc<dyn Clock> {
         Arc::clone(&self.clock)
     }
@@ -361,6 +399,13 @@ impl App {
     ///
     /// # Returns
     /// The mailer the mail worker sends with.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn mailer(&self) -> &Arc<dyn crate::mail::Mailer> {
         &self.mailer
     }
@@ -369,11 +414,25 @@ impl App {
     ///
     /// # Returns
     /// `None` when none are configured (or there is no `public_url`).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn oidc(&self) -> Option<&OidcProviders> {
         self.oidc.as_ref()
     }
 
     /// The key cache (shared with the auth layer).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn keys(&self) -> &Arc<Keys> {
         &self.keys
     }
@@ -383,6 +442,13 @@ impl App {
     ///
     /// # Returns
     /// A shared snapshot (cheap: an `Arc` clone, one atomic increment).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn settings(&self) -> Arc<Settings> {
         Arc::clone(&self.settings.read().expect("settings lock poisoned"))
     }
@@ -391,6 +457,13 @@ impl App {
     ///
     /// # Returns
     /// The bindings, shared by every `/mcp` request.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn sessions(&self) -> &SessionKeys {
         &self.sessions
     }
@@ -399,6 +472,13 @@ impl App {
     ///
     /// # Returns
     /// `None` when OAuth is off (no `public_url`).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn oauth(&self) -> Option<&OAuth> {
         self.oauth.as_ref()
     }
@@ -407,6 +487,13 @@ impl App {
     ///
     /// # Returns
     /// `None` when passkeys are off (no `public_url`, or an address host).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn passkeys(&self) -> Option<&Passkeys> {
         self.passkeys.as_ref()
     }
@@ -415,6 +502,13 @@ impl App {
     ///
     /// # Returns
     /// Every open changeset's cached overlay, shared by every tool call.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn overlays(&self) -> &Overlays {
         &self.overlays
     }
@@ -425,6 +519,13 @@ impl App {
     ///
     /// # Returns
     /// The locks, keyed by changeset id.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn write_queue(&self) -> &KeyedLocks {
         &self.write_queue
     }
@@ -434,6 +535,7 @@ impl App {
     /// # Returns
     /// A copy of the status, or `None` without a `time_server` or before the
     /// first check.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn clock_status(&self) -> Option<ClockStatus> {
         // A std lock is "poisoned" when a thread panicked while holding it;
         // nothing here can panic under the lock, so that is an invariant.
@@ -447,6 +549,7 @@ impl App {
     ///
     /// # Arguments
     /// * `status` - the check's outcome.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn set_clock_status(&self, status: ClockStatus) {
         *self
             .clock_status
@@ -456,6 +559,13 @@ impl App {
 
     /// Every loaded catalog, as of now. Cheap (an `Arc` clone); one call
     /// gives a consistent view to check names against and take states from.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn catalogs(&self) -> Arc<Catalogs> {
         Arc::clone(&self.catalogs.read().expect("catalog map lock poisoned"))
     }
@@ -467,6 +577,13 @@ impl App {
     ///
     /// # Returns
     /// Its state, or `None` if no such catalog is loaded.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn catalog(&self, name: &str) -> Option<Arc<CatalogState>> {
         self.catalogs().get(name).cloned()
     }
@@ -621,6 +738,7 @@ impl App {
     /// Failing to read the counter or to reload is logged, not returned: the
     /// stored counter stays as it was, so the next pass tries again, and the
     /// caller's catalog changes go ahead regardless.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn reload_keys_if_changed(&self) {
         let admin_generation = match catalogs::admin_generation(&self.pool).await {
             Ok(admin_generation) => admin_generation,
@@ -717,6 +835,7 @@ impl App {
     ///
     /// A failure is logged, not returned: the next pass tries again, and
     /// the rest of the pass is not held up by it.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn prune_empty_changesets(&self) {
         let now = self.clock.now();
         let older_than = now - TimeDelta::hours(EMPTY_CHANGESET_HOURS);
@@ -744,6 +863,7 @@ impl App {
     /// left from when it was are cleared too. Called only under `polling`.
     ///
     /// A failure is logged, not returned, and waits for the next hourly pass.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn prune_oauth(&self) {
         let now_instant = std::time::Instant::now();
         {
@@ -800,6 +920,7 @@ impl App {
     /// only under `polling`, after the settings reload.
     ///
     /// A failure is logged, not returned, and waits for the next daily pass.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn prune_audit(&self) {
         let now_instant = std::time::Instant::now();
         {
@@ -827,6 +948,13 @@ impl App {
     /// * `shutdown` - cancelled when the server stops.
     // `self: Arc<Self>`: the method takes a shared handle by value, so the
     // spawned task owns one and the `App` lives as long as the loop.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "long-lived loop: its span would never close and would stay open as the parent of every later span"
+        )
+    )]
     pub async fn poll_until(self: Arc<Self>, shutdown: CancellationToken) {
         let mut ticks = tokio::time::interval(self.config.poll_interval);
         // After a slow pass, wait a full interval instead of catching up.
@@ -858,6 +986,13 @@ impl App {
     ///
     /// # Arguments
     /// * `shutdown` - cancelled when the server stops.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "long-lived loop: its span would never close and would stay open as the parent of every later span"
+        )
+    )]
     pub async fn check_clock_until(self: Arc<Self>, shutdown: CancellationToken) {
         // `let ... else`: return when there is no server to ask.
         let Some(server) = self.config.time_server.clone() else {
@@ -917,6 +1052,13 @@ impl App {
 /// # Arguments
 /// * `what` - the rows, for the log line.
 /// * `result` - how many were deleted, or the failure.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn log_pruned(what: &'static str, result: Result<u64, OkfError>) {
     log_pruned_retrying(what, "in an hour", result);
 }
@@ -928,6 +1070,7 @@ fn log_pruned(what: &'static str, result: Result<u64, OkfError>) {
 /// * `what` - the rows, for the log line.
 /// * `retry` - when the next pass runs (`"in an hour"`), for a failure.
 /// * `result` - how many were deleted, or the failure.
+#[tracing::instrument(level = "trace", skip_all)]
 fn log_pruned_retrying(what: &'static str, retry: &'static str, result: Result<u64, OkfError>) {
     match result {
         Ok(0) => {}
@@ -958,6 +1101,7 @@ fn log_pruned_retrying(what: &'static str, retry: &'static str, result: Result<u
 /// * `row` - the catalog's row from this pass's list.
 /// * `action` - `"load"` or `"refresh"`, for the log line.
 /// * `error` - what went wrong.
+#[tracing::instrument(level = "trace", skip_all)]
 fn note_failure(broken: &mut Broken, row: &catalogs::Catalog, action: &str, error: &OkfError) {
     let retry = match error {
         OkfError::CatalogNotSelected { .. } => {

@@ -159,6 +159,7 @@ pub struct Document {
 ///
 /// # Returns
 /// The value, when the frontmatter parses and `key` holds a string.
+#[tracing::instrument(level = "trace", skip_all)]
 fn text_field(doc: &SnapshotDoc, key: &str) -> Option<String> {
     // `?` on an `Option` returns `None` at once, like a Python early return.
     let data = doc.frontmatter().data()?;
@@ -173,6 +174,7 @@ fn text_field(doc: &SnapshotDoc, key: &str) -> Option<String> {
 /// # Returns
 /// The object (keys in file order) and `None`; or null and the error's
 /// message when it does not parse; or null and `None` without frontmatter.
+#[tracing::instrument(level = "trace", skip_all)]
 fn frontmatter_json(doc: &SnapshotDoc) -> (serde_json::Value, Option<String>) {
     match doc.frontmatter() {
         Frontmatter::Parsed(data) => {
@@ -204,6 +206,7 @@ fn frontmatter_json(doc: &SnapshotDoc) -> (serde_json::Value, Option<String>) {
 /// # Errors
 /// [`OkfError::Refused`] if `section` names no heading (the message lists
 /// them) or several (it lists their slugs).
+#[tracing::instrument(level = "trace", skip_all)]
 fn concept(
     catalog: &str,
     snapshot: &Snapshot,
@@ -309,6 +312,7 @@ fn concept(
 /// it and one's pending changeset does not apply; any other error from
 /// [`ToolContext::view`] (a database error, `Busy`), at once; as
 /// [`concept`] for `section`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn get_concept(
     ctx: &ToolContext,
     params: GetConceptParams,
@@ -358,6 +362,7 @@ pub(crate) async fn get_concept(
 ///
 /// # Errors
 /// A selection error; as [`ToolContext::pin`]; as [`require_selected`].
+#[tracing::instrument(level = "debug", skip_all)]
 async fn read_set(
     ctx: &ToolContext,
     catalog: Option<&str>,
@@ -385,6 +390,7 @@ async fn read_set(
 /// # Errors
 /// Any error from [`ToolContext::view`] but a broken overlay (a database
 /// error, `Busy`): the call fails at once.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn view_or_note(
     ctx: &ToolContext,
     state: &CatalogState,
@@ -410,6 +416,13 @@ async fn view_or_note(
 /// # Returns
 /// Whether it is an `index.md` or `log.md` (any folder's) or the root
 /// `AGENTS.md`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn readable(path: &str) -> bool {
     matches!(basename(path), "index.md" | "log.md") || path == "AGENTS.md"
 }
@@ -429,6 +442,7 @@ fn readable(path: &str) -> bool {
 /// or the first catalog's overlay error if one's pending changeset does not
 /// apply ([`is_broken_overlay`]); any other error from
 /// [`ToolContext::view`] (a database error, `Busy`), at once.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn read_document(
     ctx: &ToolContext,
     params: ReadDocumentParams,

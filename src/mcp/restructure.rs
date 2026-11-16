@@ -79,6 +79,7 @@ pub struct DeleteConceptParams {
 /// # Errors
 /// As [`apply`]; the op's [`OkfError::NotFound`] or [`OkfError::InvalidPath`]
 /// (taken, reserved, machinery).
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn move_concept(
     ctx: &ToolContext,
     params: MoveConceptParams,
@@ -106,6 +107,7 @@ pub(crate) async fn move_concept(
 /// # Errors
 /// As [`apply`]; the op's refusals ([`OkfError::Refused`] for a heading it
 /// cannot find or that is ambiguous, an empty section or an unknown source).
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn split_concept(
     ctx: &ToolContext,
     params: SplitConceptParams,
@@ -154,6 +156,7 @@ pub(crate) async fn split_concept(
 /// # Errors
 /// As [`apply`]; [`OkfError::StillLinked`] while other documents link to
 /// it; [`OkfError::InvalidPath`] for a non-concept or machinery.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn delete_concept(
     ctx: &ToolContext,
     params: DeleteConceptParams,

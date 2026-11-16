@@ -28,6 +28,7 @@ pub struct MaintenanceResult<T> {
 }
 
 impl<T> MaintenanceResult<T> {
+    #[tracing::instrument(level = "trace", skip_all)]
     fn new(catalog: &str, result: T) -> Self {
         Self {
             catalog: catalog.to_string(),
@@ -36,6 +37,7 @@ impl<T> MaintenanceResult<T> {
     }
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn actor(ctx: &ToolContext) -> Actor {
     Actor {
         key_id: ctx.principal().key_id.clone(),
@@ -43,24 +45,47 @@ fn actor(ctx: &ToolContext) -> Actor {
     }
 }
 
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn pin_path(pin: &mut RevisionPin) {
     pin.path = format!("/{}", pin.path.trim_start_matches('/'));
 }
 
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn lease_path(lease: &mut Lease) {
     pin_path(&mut lease.pin);
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn evidence_paths(evidence: &mut [Evidence]) {
     for item in evidence {
         pin_path(&mut item.pin);
     }
 }
 
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn finding_paths(finding: &mut store_reports::FindingRecord) {
     evidence_paths(&mut finding.input.evidence);
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn not_found() -> OkfError {
     OkfError::NotFound {
         path: "maintenance/report".into(),
@@ -69,6 +94,7 @@ fn not_found() -> OkfError {
 
 // The lease store deliberately masks foreign and missing IDs alike as Refused.
 // MCP exposes both through the same NotFound shape, without altering other refusals.
+#[tracing::instrument(level = "trace", skip_all)]
 fn missing_record(error: OkfError) -> OkfError {
     match error {
         OkfError::Refused { ref reason }

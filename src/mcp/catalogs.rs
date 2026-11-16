@@ -25,6 +25,7 @@ pub struct SuspensionInfo {
 // implementing it also gives `.into()` and lets `.map(SuspensionInfo::from)`
 // convert a borrowed cache entry into an owned listing field.
 impl From<&SuspendedCatalog> for SuspensionInfo {
+    #[tracing::instrument(level = "trace", skip_all)]
     fn from(suspended: &SuspendedCatalog) -> Self {
         Self {
             team: suspended.team.clone(),
@@ -76,6 +77,7 @@ pub struct CatalogList {
 /// rather than failing the call, since this is the tool to diagnose it with.
 /// A suspended catalog is listed with `suspended` set, and the selection
 /// leaves it out of a connection's list ([`crate::selection::resolve`]).
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn list(ctx: &ToolContext) -> CatalogList {
     let catalogs = ctx
         .catalogs()

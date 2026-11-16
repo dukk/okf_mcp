@@ -29,6 +29,7 @@ use crate::store::audit::{self, ActorView, AuditRecord, FilterText, TargetView, 
 /// # Errors
 /// An unknown action or a time that is not RFC 3339 (naming the filter),
 /// or a database error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn audit(pool: &PgPool, command: &AuditCommand) -> anyhow::Result<String> {
     Ok(match command {
         AuditCommand::List(args) => {
@@ -53,6 +54,7 @@ pub(super) async fn audit(pool: &PgPool, command: &AuditCommand) -> anyhow::Resu
 ///
 /// # Returns
 /// The filters, borrowing the flags' text.
+#[tracing::instrument(level = "trace", skip_all)]
 fn filter_text(args: &AuditArgs) -> FilterText<'_> {
     FilterText {
         // `as_deref` lends an `Option<String>` out as an `Option<&str>`.
@@ -80,6 +82,7 @@ fn filter_text(args: &AuditArgs) -> FilterText<'_> {
 ///
 /// # Returns
 /// The line, without a newline.
+#[tracing::instrument(level = "trace", skip_all)]
 fn format_record(record: &AuditRecord) -> String {
     let teams: Vec<String> = record
         .teams
@@ -105,6 +108,7 @@ fn format_record(record: &AuditRecord) -> String {
 /// # Returns
 /// `person NAME`, else `credential ID`, else the label; `operator` for a
 /// redacted actor, which the CLI's admin view never has.
+#[tracing::instrument(level = "trace", skip_all)]
 fn format_actor(actor: &ActorView) -> String {
     match actor {
         ActorView::Operator => "operator".to_string(),
@@ -134,6 +138,7 @@ fn format_actor(actor: &ActorView) -> String {
 /// # Returns
 /// `user NAME` (a user is named by its person), or `KIND NAME` (`-` for no
 /// name) followed by ` person NAME` when the entry names one.
+#[tracing::instrument(level = "trace", skip_all)]
 fn format_target(target: &TargetView) -> String {
     if target.kind == "user" {
         return format!("user {}", target.person.as_deref().unwrap_or("-"));
@@ -154,6 +159,7 @@ fn format_target(target: &TargetView) -> String {
 /// The text borrowed unchanged when it has no control character (the
 /// usual case, so no copy), else an escaped copy. `Cow` ("clone on
 /// write") holds either.
+#[tracing::instrument(level = "trace", skip_all)]
 fn escaped(text: &str) -> Cow<'_, str> {
     if !text.chars().any(char::is_control) {
         return Cow::Borrowed(text);

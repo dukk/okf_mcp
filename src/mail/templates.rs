@@ -53,6 +53,13 @@ pub enum Template {
 // A hand-written `Debug` (Python's `__repr__`) instead of `#[derive(Debug)]`,
 // so `{:?}` never prints a link's token.
 impl std::fmt::Debug for Template {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Debug impl: runs while an event is formatted, and a span there re-enters the subscriber"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Template::Setup { user, .. } => formatter
@@ -88,6 +95,7 @@ impl Template {
     ///
     /// # Returns
     /// `"setup"`, `"reset"`, `"method_added"`, `"test"` or `"unlocked"`.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn name(&self) -> &'static str {
         match self {
             Template::Setup { .. } => "setup",
@@ -110,11 +118,19 @@ impl Template {
 ///
 /// # Returns
 /// The absolute URL, `{public_url}{path}?token={token}`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub fn link(public_url: &str, path: &str, token: &str) -> String {
     format!("{}{path}?token={token}", public_url.trim_end_matches('/'))
 }
 
 /// The closing contact line, when the operator set one (unescaped).
+#[tracing::instrument(level = "trace", skip_all)]
 fn contact_line(brand: &Brand) -> Option<String> {
     brand
         .support_contact
@@ -126,6 +142,7 @@ fn contact_line(brand: &Brand) -> Option<String> {
 /// before branding: empty for the default name, so the default renders
 /// exactly as it always has ("Reset your password"), else the name and a
 /// space ("Reset your Acme Notes password").
+#[tracing::instrument(level = "trace", skip_all)]
 fn product_words(brand: &Brand) -> String {
     if brand.product_name == DEFAULT_PRODUCT_NAME {
         String::new()
@@ -135,6 +152,7 @@ fn product_words(brand: &Brand) -> String {
 }
 
 /// A plain-text body with the contact line, if any, as its last paragraph.
+#[tracing::instrument(level = "trace", skip_all)]
 fn with_contact(text: String, brand: &Brand) -> String {
     match contact_line(brand) {
         Some(line) => format!("{text}\n{line}\n"),
@@ -144,6 +162,7 @@ fn with_contact(text: String, brand: &Brand) -> String {
 
 /// Wraps paragraphs of already-escaped HTML in a minimal document, with the
 /// contact line, if any, as the last paragraph.
+#[tracing::instrument(level = "trace", skip_all)]
 fn html_document(subject: &str, paragraphs: &[String], brand: &Brand) -> String {
     let contact = contact_line(brand).map(|line| escape(&line));
     // `chain` appends the optional paragraph (an `Option` iterates as zero
@@ -161,6 +180,13 @@ fn html_document(subject: &str, paragraphs: &[String], brand: &Brand) -> String 
 }
 
 /// An escaped link, shown as its own text.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn anchor(link: &str) -> String {
     let link = escape(link);
     format!("<a href=\"{link}\">{link}</a>")
@@ -175,6 +201,7 @@ fn anchor(link: &str) -> String {
 ///
 /// # Returns
 /// `(subject, plain text, HTML)`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn render(template: &Template, brand: &Brand) -> (String, String, String) {
     let name = brand.product_name.as_str();
     let (subject, text, html) = match template {

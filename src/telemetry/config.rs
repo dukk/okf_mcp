@@ -38,6 +38,13 @@ pub struct TelemetryConfig {
 }
 
 impl Default for TelemetryConfig {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+        )
+    )]
     fn default() -> Self {
         Self {
             service_name: DEFAULT_SERVICE_NAME.to_string(),
@@ -126,6 +133,13 @@ pub struct OtlpConfig {
 }
 
 impl Default for OtlpConfig {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+        )
+    )]
     fn default() -> Self {
         Self {
             endpoint: None,
@@ -151,6 +165,13 @@ impl TelemetryConfig {
     /// that is not an `http` or `https` URL with a host and no userinfo,
     /// query or fragment; a `sample_ratio` outside `0.0..=1.0`; a zero
     /// `export_interval`; or a filter that does not parse.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+        )
+    )]
     pub fn validate(&self) -> Result<(), String> {
         check_filter("telemetry.stderr.filter", self.stderr.filter.as_deref())?;
         let Some(otlp) = &self.otlp else {
@@ -195,6 +216,13 @@ impl TelemetryConfig {
 
 /// Checks an endpoint is an `http` or `https` URL with a host, and no
 /// userinfo, query or fragment (the exporters append `/v1/<signal>`).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 fn check_endpoint(endpoint: &str) -> Result<(), String> {
     let url = reqwest::Url::parse(endpoint)
         .map_err(|_| "telemetry.otlp.endpoint is not a URL".to_string())?;
@@ -215,6 +243,13 @@ fn check_endpoint(endpoint: &str) -> Result<(), String> {
 }
 
 /// Parses `directives` as an `EnvFilter`, naming `key` in the error.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 fn check_filter(key: &str, directives: Option<&str>) -> Result<(), String> {
     match directives {
         Some(text) => parse_filter(text)
@@ -236,6 +271,13 @@ fn check_filter(key: &str, directives: Option<&str>) -> Result<(), String> {
 ///
 /// # Errors
 /// The parser's message.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 pub(crate) fn parse_filter(text: &str) -> Result<EnvFilter, String> {
     let trimmed = text
         .split(',')

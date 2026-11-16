@@ -28,7 +28,13 @@ use tokio_util::sync::CancellationToken;
 ///
 /// # Errors
 /// The listener's I/O error.
-#[tracing::instrument(level = "debug", skip_all)]
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "long-lived loop: its span would never close and would stay open as the parent of every later span"
+    )
+)]
 pub async fn serve(
     listener: TcpListener,
     registry: Registry,

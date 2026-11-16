@@ -96,6 +96,13 @@ pub struct OAuthConfig {
 }
 
 impl Default for OAuthConfig {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+        )
+    )]
     fn default() -> Self {
         Self {
             access_token_ttl: DEFAULT_ACCESS_TOKEN_TTL,
@@ -173,6 +180,7 @@ pub struct OidcProviderConfig {
 ///
 /// # Returns
 /// `true` when it is well formed.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn is_provider_id(id: &str) -> bool {
     (1..=32).contains(&id.len())
         && id
@@ -181,11 +189,25 @@ pub(crate) fn is_provider_id(id: &str) -> bool {
 }
 
 /// `["openid", "email", "profile"]`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 fn default_oidc_scopes() -> Vec<String> {
     Vec::from(["openid", "email", "profile"].map(String::from))
 }
 
 impl Default for AuthConfig {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+        )
+    )]
     fn default() -> Self {
         Self {
             password_sign_in: true,
@@ -211,6 +233,13 @@ impl AuthConfig {
     /// A zero or out-of-range duration, `max_keys_per_user` above
     /// [`MAX_KEYS_PER_USER_LIMIT`], or a `trusted_proxy_header` that is not
     /// an HTTP header name.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+        )
+    )]
     fn validate(&self) -> Result<(), String> {
         for (name, value) in [
             ("auth.console_session_idle", self.console_session_idle),
@@ -267,6 +296,13 @@ pub const MAX_AUTH_DURATION: Duration = Duration::from_secs(10 * 31_557_600);
 ///
 /// # Errors
 /// A zero duration, or one longer than [`MAX_AUTH_DURATION`].
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 pub(crate) fn check_auth_duration(name: &str, value: Duration) -> Result<(), String> {
     if value.is_zero() {
         return Err(format!("{name} must be more than zero"));
@@ -310,6 +346,13 @@ impl MailProvider {
     /// # Returns
     /// `"smtp"`, `"postmark"`, `"ses"` or `"log"`, as `[mail] provider`
     /// takes it.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "a pure match returning a closed value: a span would record nothing new"
+        )
+    )]
     pub fn as_str(self) -> &'static str {
         match self {
             MailProvider::Smtp => "smtp",
@@ -363,14 +406,35 @@ pub struct SesConfig {
 }
 
 // `serde(default = "...")` takes a function's name, not a value.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 fn default_smtp_port() -> u16 {
     DEFAULT_SMTP_PORT
 }
 
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 fn default_true() -> bool {
     true
 }
 
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 fn default_message_stream() -> String {
     DEFAULT_POSTMARK_STREAM.to_string()
 }
@@ -398,6 +462,13 @@ pub struct MailConfig {
 }
 
 impl Default for MailConfig {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+        )
+    )]
     fn default() -> Self {
         Self {
             provider: MailProvider::Log,
@@ -423,6 +494,13 @@ impl MailConfig {
     /// without `password_env` (or the reverse); `provider = "postmark"`
     /// without a `[mail.postmark]` table, or with a blank `token_env` or
     /// `message_stream`; `provider = "ses"` with a blank `region`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+        )
+    )]
     fn validate(&self) -> Result<(), String> {
         self.from
             .parse::<Mailbox>()
@@ -552,6 +630,13 @@ pub struct Config {
 }
 
 impl Default for Config {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+        )
+    )]
     fn default() -> Self {
         Self {
             max_import_bytes: ByteSize::b(DEFAULT_MAX_IMPORT_BYTES),
@@ -576,6 +661,13 @@ impl Default for Config {
     }
 }
 
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 fn deserialize_maintenance_intervals<'de, D>(
     deserializer: D,
 ) -> Result<BTreeMap<String, Duration>, D::Error>
@@ -595,6 +687,7 @@ where
 impl Config {
     /// Review cadence for a catalog, defaulting to 30 days.
     #[must_use]
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn maintenance_review_interval(&self, catalog: &str) -> chrono::Duration {
         let interval = self
             .maintenance_review_intervals
@@ -617,6 +710,13 @@ impl Config {
     /// # Errors
     /// The TOML parser's error if the text is not valid TOML or a value has
     /// the wrong type.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+        )
+    )]
     pub fn from_toml(text: &str) -> Result<Self, toml::de::Error> {
         toml::from_str(text)
     }
@@ -639,6 +739,13 @@ impl Config {
     /// `public_url` that is not an `https` origin (`http` on
     /// a loopback host only) whose host `allowed_hosts` admits, or an
     /// `[[auth.oidc]]` provider that cannot work (see `validate_oidc`).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+        )
+    )]
     pub fn validate(&self) -> Result<(), String> {
         if self.poll_interval.is_zero() {
             return Err("poll_interval must be more than zero".to_string());
@@ -736,6 +843,13 @@ impl Config {
     ///
     /// # Errors
     /// The problem in words, naming the provider and the key.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+        )
+    )]
     fn validate_oidc(&self) -> Result<(), String> {
         if self.auth.oidc.is_empty() {
             return Ok(());
@@ -792,6 +906,13 @@ impl Config {
     ///
     /// # Errors
     /// The problem in words.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+        )
+    )]
     fn validate_public_url(&self) -> Result<(), String> {
         let Some(public_url) = self.public_url.as_deref() else {
             return Ok(());
@@ -855,6 +976,13 @@ impl Config {
     /// # Errors
     /// [`OkfError::Config`] if the file can't be read or parsed, or fails
     /// [`Config::validate`].
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+        )
+    )]
     pub fn load(path: Option<&Path>) -> Result<Self, OkfError> {
         // `let ... else` is a pattern match that must diverge (here `return`)
         // when the pattern does not match: an early return for `None`.
@@ -882,6 +1010,13 @@ impl Config {
 ///
 /// # Returns
 /// The normalized host.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 fn normalize_host(host: &str) -> String {
     host.trim_matches(|c| c == '[' || c == ']')
         .to_ascii_lowercase()
@@ -894,6 +1029,13 @@ fn normalize_host(host: &str) -> String {
 ///
 /// # Returns
 /// `true` for `localhost` and loopback addresses of either family.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 fn is_loopback(host: &str) -> bool {
     // `parse::<IpAddr>()` reads either address family; `is_ok_and` is
     // Python's `try: ... except: False` around a test.

@@ -105,6 +105,13 @@ pub struct ShutdownReport {
 
 impl ShutdownReport {
     /// `true` when every provider that was running flushed.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn all_flushed(&self) -> bool {
         [&self.traces, &self.logs, &self.metrics]
             .iter()
@@ -134,6 +141,13 @@ pub struct Telemetry {
 /// `Resource::builder` runs the SDK's detectors, so `OTEL_RESOURCE_ATTRIBUTES`
 /// adds keys such as `k8s.pod.name`; what is set here in code overrides the
 /// same key from the environment.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 fn resource(config: &TelemetryConfig) -> Resource {
     let mut attributes = vec![KeyValue::new("service.version", env!("CARGO_PKG_VERSION"))];
     if let Some(environment) = &config.environment {
@@ -168,6 +182,13 @@ impl Telemetry {
     /// # Errors
     /// [`OkfError::Config`] when a variable named by `headers_env` or
     /// `sentry_dsn_env` is unset or blank, or its value does not parse.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+        )
+    )]
     pub fn start(
         config: &TelemetryConfig,
         env: &dyn Fn(&str) -> Option<String>,
@@ -263,11 +284,25 @@ impl Telemetry {
     }
 
     /// Whether OTLP spans are being exported.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn traces_enabled(&self) -> bool {
         self.tracer.is_some()
     }
 
     /// Whether OTLP logs are being exported.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn logs_enabled(&self) -> bool {
         self.logger.is_some()
     }
@@ -282,6 +317,13 @@ impl Telemetry {
     }
 
     /// The failed-export counts the exporters keep.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn failures(&self) -> &Arc<ExportFailures> {
         &self.failures
     }
@@ -290,6 +332,13 @@ impl Telemetry {
     ///
     /// # Arguments
     /// * `settings` - the resolved filters and format.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn subscriber(&self, settings: LayerSettings) -> impl tracing::Subscriber + Send + Sync {
         subscriber::build(settings, self.tracer.as_ref(), self.logger.as_ref())
     }
@@ -301,11 +350,25 @@ impl Telemetry {
     /// # Returns
     /// Each provider's outcome. A provider that was already shut down counts
     /// as flushed, and says nothing.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     pub async fn shutdown(self) -> ShutdownReport {
         self.shutdown_within(SHUTDOWN_DEADLINE).await
     }
 
     /// [`Telemetry::shutdown`] with the deadline as a parameter.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+        )
+    )]
     async fn shutdown_within(self, deadline: Duration) -> ShutdownReport {
         let Self {
             tracer,
@@ -378,6 +441,13 @@ fn build_meter_provider(
 /// Plain threads, not tasks: the tokio batch processor ignores the timeout
 /// given to `shutdown_with_timeout`, and a dead receiver costs several retry
 /// timeouts.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "exporter or its start-up helper: a span here feeds back into the exporter, or runs before the subscriber exists"
+    )
+)]
 fn shutdown_blocking(
     tracer: Option<SdkTracerProvider>,
     logger: Option<SdkLoggerProvider>,
@@ -486,6 +556,13 @@ pub struct StartUp {
 ///
 /// # Errors
 /// [`OkfError::Config`] from [`Config::load`] or [`Telemetry::start`].
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 pub fn start_up<W>(
     path: Option<&Path>,
     serve: bool,
@@ -518,6 +595,13 @@ where
 /// # Errors
 /// [`OkfError::Config`] when a configured filter does not parse or a
 /// subscriber is already installed.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 pub fn install(
     config: &TelemetryConfig,
     telemetry: Option<&Telemetry>,
@@ -527,6 +611,13 @@ pub fn install(
 }
 
 /// [`install`] with stderr's writer as a parameter, for tests.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
 pub fn install_with_writer<W>(
     config: &TelemetryConfig,
     telemetry: Option<&Telemetry>,

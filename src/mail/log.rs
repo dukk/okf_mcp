@@ -14,6 +14,7 @@ pub(crate) struct LogMailer;
 
 #[async_trait::async_trait]
 impl Mailer for LogMailer {
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn send(&self, mail: &Mail) -> Result<(), MailError> {
         // `%value` records a field with its `Display` form.
         tracing::info!(

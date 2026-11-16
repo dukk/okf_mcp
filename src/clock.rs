@@ -20,6 +20,13 @@ pub trait Clock: Send + Sync {
 pub struct SystemClock;
 
 impl Clock for SystemClock {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn now(&self) -> DateTime<Utc> {
         Utc::now()
     }
@@ -33,6 +40,13 @@ pub struct FixedClock(
 );
 
 impl Clock for FixedClock {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn now(&self) -> DateTime<Utc> {
         self.0
     }
@@ -53,6 +67,13 @@ impl Clock for FixedClock {
 /// let t = Utc.with_ymd_and_hms(2026, 10, 26, 23, 1, 11).unwrap();
 /// assert_eq!(format_timestamp(t), "2026-10-26T23:01:11Z");
 /// ```
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub fn format_timestamp(instant: DateTime<Utc>) -> String {
     instant.format(TIMESTAMP_FORMAT).to_string()
 }
@@ -71,6 +92,7 @@ pub fn format_timestamp(instant: DateTime<Utc>) -> String {
 /// # Errors
 /// [`crate::error::OkfError::LimitExceeded`] with `limit: "duration"` when
 /// the sum is past chrono's range.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn after(
     now: DateTime<Utc>,
     duration: std::time::Duration,

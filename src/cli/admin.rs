@@ -32,6 +32,7 @@ use crate::store::settings::{self, SettingRow};
 ///
 /// # Errors
 /// A value the setting refuses, or a database error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn settings(
     pool: &PgPool,
     defaults: &AuthConfig,
@@ -71,6 +72,7 @@ pub(super) async fn settings(
 /// # Errors
 /// An address that is not one, an unknown id, mail that has not failed
 /// (retry) or is being sent (delete), or a database error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn mail(
     pool: &PgPool,
     command: MailCommand,
@@ -108,6 +110,7 @@ pub(super) async fn mail(
 ///
 /// # Returns
 /// The line, without a newline.
+#[tracing::instrument(level = "trace", skip_all)]
 fn format_setting(row: &SettingRow) -> String {
     let source = match (row.overridden, row.updated_by.as_deref(), row.updated_at) {
         (true, Some(by), Some(at)) => format!("set by {by} at {}", format_timestamp(at)),
@@ -131,6 +134,7 @@ fn format_setting(row: &SettingRow) -> String {
 ///
 /// # Returns
 /// The line, without a newline.
+#[tracing::instrument(level = "trace", skip_all)]
 fn format_mail(mail: &QueuedMail) -> String {
     tab_row(&[
         &mail.id,

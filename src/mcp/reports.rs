@@ -174,6 +174,7 @@ pub struct Lint {
 ///
 /// # Errors
 /// A selection error; as [`ToolContext::view`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn open_questions(
     ctx: &ToolContext,
     params: CatalogParam,
@@ -221,6 +222,7 @@ pub(crate) async fn open_questions(
 ///
 /// # Errors
 /// A selection error; as [`ToolContext::view`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn oldest_report(
     ctx: &ToolContext,
     params: OldestParams,
@@ -252,6 +254,7 @@ pub(crate) async fn oldest_report(
 /// A selection error; as [`ToolContext::view`]; [`OkfError::NotFound`] for
 /// an unknown `path`, and [`OkfError::InvalidPath`] for one that is not a
 /// concept.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn sprawl_report(
     ctx: &ToolContext,
     params: SprawlParams,
@@ -286,6 +289,7 @@ pub(crate) async fn sprawl_report(
 ///
 /// # Errors
 /// A selection error; as [`ToolContext::view`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn links(ctx: &ToolContext, params: LinksParams) -> Result<Links, OkfError> {
     let (state, view) =
         one_view(ctx, params.catalog.as_deref(), params.changeset.as_deref()).await?;
@@ -310,6 +314,7 @@ pub(crate) async fn links(ctx: &ToolContext, params: LinksParams) -> Result<Link
 ///
 /// # Errors
 /// A selection error; as [`ToolContext::view`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn lint_report(ctx: &ToolContext, params: LintParams) -> Result<Lint, OkfError> {
     let (state, view) =
         one_view(ctx, params.catalog.as_deref(), params.changeset.as_deref()).await?;
@@ -337,6 +342,7 @@ pub(crate) async fn lint_report(ctx: &ToolContext, params: LintParams) -> Result
 /// # Errors
 /// As [`ToolContext::pin`]; as [`ToolContext::report_catalog`]; as
 /// [`ToolContext::view`].
+#[tracing::instrument(level = "debug", skip_all)]
 async fn one_view(
     ctx: &ToolContext,
     catalog: Option<&str>,

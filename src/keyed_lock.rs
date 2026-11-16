@@ -55,6 +55,13 @@ impl KeyedLocks {
     ///
     /// # Returns
     /// The locks.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn new() -> Self {
         Self::default()
     }
@@ -68,6 +75,7 @@ impl KeyedLocks {
     ///
     /// # Returns
     /// The guard; the lock is held until it is dropped.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn lock(&self, key: i64) -> KeyedGuard<'_> {
         let (registration, mutex) = self.register(key);
         let held = mutex.lock_owned().await;
@@ -79,6 +87,7 @@ impl KeyedLocks {
 
     /// Counts one more user of `key`'s entry (creating it) and clones its
     /// mutex, both under the map lock.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn register(&self, key: i64) -> (Registration<'_>, Arc<AsyncMutex<()>>) {
         let mut map = self.map();
         let entry = map.entry(key).or_default();
@@ -93,12 +102,26 @@ impl KeyedLocks {
         self.map().len()
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn map(&self) -> MutexGuard<'_, HashMap<i64, Entry>> {
         self.locks.lock().expect("keyed lock map poisoned")
     }
 }
 
 impl Drop for Registration<'_> {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Drop impl: runs during teardown or unwinding, where a span records nothing useful"
+        )
+    )]
     fn drop(&mut self) {
         let mut map = self.owner.map();
         // Give this caller's count back; remove the entry once nobody uses it.

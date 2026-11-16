@@ -68,6 +68,7 @@ pub(crate) struct SesMailer {
 /// # Errors
 /// [`OkfError::Config`] when neither `mail.ses.region` nor the SDK's
 /// region chain gives a region.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn from_config(
     from: &str,
     ses: Option<&SesConfig>,
@@ -103,6 +104,7 @@ pub(crate) async fn from_config(
 /// [`OkfError::Config`] when neither gives one.
 // `impl ProvideRegion + 'static`: any region source the chain can own, like
 // a Python argument typed with a Protocol.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn resolve_region(
     configured: Option<&str>,
     fallback: impl ProvideRegion + 'static,
@@ -132,6 +134,7 @@ impl SesMailer {
     ///
     /// # Returns
     /// The mailer.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn new(config: aws_sdk_sesv2::config::Builder, from: &str) -> Self {
         let config = config
             // One attempt: the queue retries with its own backoff, so an SDK
@@ -152,6 +155,7 @@ impl SesMailer {
 }
 
 /// One UTF-8 part of a message.
+#[tracing::instrument(level = "trace", skip_all)]
 fn utf8(data: &str) -> Result<Content, MailError> {
     Content::builder()
         .data(data)
@@ -164,6 +168,7 @@ fn utf8(data: &str) -> Result<Content, MailError> {
 /// Sorts a failed `SendEmail` (see the module docs for the policy).
 // `SdkError<E, R>`: the SDK's error, generic over the operation's modeled
 // error `E` and the raw response type `R` (here the SDK's HTTP response).
+#[tracing::instrument(level = "trace", skip_all)]
 fn classify(error: &SdkError<SendEmailError, HttpResponse>) -> MailError {
     let SdkError::ServiceError(service) = error else {
         // `DisplayErrorContext` prints the whole source chain (the
@@ -206,12 +211,20 @@ fn classify(error: &SdkError<SendEmailError, HttpResponse>) -> MailError {
 /// Whether an HTTP status may pass whatever its error code: a request
 /// timeout, throttling, a credential or authorization refusal (401, 403),
 /// or any server error.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn retryable_status(status: u16) -> bool {
     matches!(status, 401 | 403 | 408 | 429 | 500..=599)
 }
 
 /// Whether an unmodeled SES error code may pass: throttling, a credential
 /// or authorization problem an operator can fix, or a server error.
+#[tracing::instrument(level = "trace", skip_all)]
 fn retryable_code(code: &str) -> bool {
     matches!(
         code,
@@ -240,6 +253,7 @@ fn retryable_code(code: &str) -> bool {
 
 #[async_trait::async_trait]
 impl Mailer for SesMailer {
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn send(&self, mail: &Mail) -> Result<(), MailError> {
         let message = Message::builder()
             .subject(utf8(&mail.subject)?)

@@ -13,6 +13,13 @@ use okf_mcp::clock::SystemClock;
 // `#[tokio::main]` wraps `main` in a tokio runtime, so it can `.await`.
 // Returning `anyhow::Result` prints the error chain and exits non-zero.
 #[tokio::main]
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists: it only hands the parsed command line to cli::run, which installs the subscriber"
+    )
+)]
 async fn main() -> anyhow::Result<()> {
     // `Arc::new` puts the clock on the heap behind a shared handle; the server
     // keeps one for as long as it runs.

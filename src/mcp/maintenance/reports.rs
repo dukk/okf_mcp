@@ -69,6 +69,7 @@ pub struct MaintenanceDisposeParams {
     pub idempotency_key: String,
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn maintenance_list_runs(
     ctx: &ToolContext,
     params: MaintenanceListRunsParams,
@@ -85,6 +86,7 @@ pub(crate) async fn maintenance_list_runs(
     Ok(MaintenanceResult::new(state.name(), result))
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn maintenance_get_run(
     ctx: &ToolContext,
     params: MaintenanceGetRunParams,
@@ -104,6 +106,7 @@ pub(crate) async fn maintenance_get_run(
     Ok(MaintenanceResult::new(state.name(), result))
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn maintenance_list_findings(
     ctx: &ToolContext,
     params: MaintenanceListFindingsParams,
@@ -125,6 +128,7 @@ pub(crate) async fn maintenance_list_findings(
 ///
 /// # Errors
 /// As `maintenance_list_findings`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn maintenance_list_findings_by(
     ctx: &ToolContext,
     params: MaintenanceListFindingsParams,
@@ -151,6 +155,7 @@ pub(crate) async fn maintenance_list_findings_by(
     Ok(MaintenanceResult::new(state.name(), result))
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn maintenance_get_finding(
     ctx: &ToolContext,
     params: MaintenanceGetFindingParams,
@@ -179,6 +184,7 @@ pub(crate) async fn maintenance_get_finding(
 ///
 /// # Errors
 /// `CatalogNotSelected` for a catalog the key does not reach; database errors.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn maintenance_finding_counts(
     ctx: &ToolContext,
     catalog: &str,
@@ -189,6 +195,7 @@ pub(crate) async fn maintenance_finding_counts(
     Ok(MaintenanceResult::new(state.name(), counts))
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn maintenance_dispose(
     ctx: &ToolContext,
     params: MaintenanceDisposeParams,

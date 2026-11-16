@@ -77,6 +77,7 @@ impl OkfServer {
     ///
     /// # Returns
     /// The handler, with every tool registered.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn new(app: Arc<App>) -> Self {
         Self {
             _session: app.metrics().mcp_session(),
@@ -108,6 +109,7 @@ impl OkfServer {
     ///
     /// # Returns
     /// The router `#[tool_handler]` dispatches calls through.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn tools() -> ToolRouter<Self> {
         Self::catalogs_router()
             + Self::search_router()
@@ -138,6 +140,13 @@ impl OkfServer {
     // `CallToolResult` is a large error type, but rmcp fixes it: a tool's
     // error must be one, and `?` here passes it straight through.
     #[allow(clippy::result_large_err)]
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub(crate) fn context(&self, parts: &Parts) -> Result<ToolContext, CallToolResult> {
         ToolContext::from_parts(&self.app, parts).map_err(|error| tool_error(&error))
     }
@@ -216,6 +225,7 @@ impl ServerHandler for OkfServer {
         result
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     fn get_info(&self) -> ServerConfig {
         // `env!` reads this crate's name and version at compile time.
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
@@ -259,6 +269,7 @@ pub type ToolResult<T> = Result<Json<T>, CallToolResult>;
 ///
 /// # Returns
 /// The result to send the client.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn tool_error(error: &OkfError) -> CallToolResult {
     // The kind goes on the tool's root span through the task-local handle
     // (a no-op outside a tool call, as in the unit tests that call this).
@@ -289,6 +300,13 @@ pub fn tool_error(error: &OkfError) -> CallToolResult {
 /// The value as structured content, or the error as an `isError` result.
 // A large error type, fixed by rmcp, as for `OkfServer::context`.
 #[allow(clippy::result_large_err)]
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub fn reply<T>(result: Result<T, OkfError>) -> ToolResult<T> {
     result.map(Json).map_err(|error| tool_error(&error))
 }
@@ -302,6 +320,13 @@ pub fn reply<T>(result: Result<T, OkfError>) -> ToolResult<T> {
 ///
 /// # Returns
 /// What `work` returns.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "carries the caller's span onto a blocking thread; a span of its own would replace the caller"
+    )
+)]
 pub async fn blocking<T, F>(work: F) -> T
 where
     F: FnOnce() -> T + Send + 'static,

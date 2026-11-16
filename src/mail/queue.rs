@@ -96,6 +96,13 @@ pub(crate) struct SendMail {
 }
 
 impl std::fmt::Debug for SendMail {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Debug impl: runs while an event is formatted, and a span there re-enters the subscriber"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // `Mail`'s own `Debug` already leaves the bodies out.
         formatter
@@ -143,6 +150,7 @@ macro_rules! status_sql {
 }
 
 /// The error for a queue operation apalis refused (its own error type).
+#[tracing::instrument(level = "trace", skip_all)]
 fn queue_error(error: impl std::fmt::Display) -> OkfError {
     OkfError::Io {
         path: "<mail queue>".to_string(),
@@ -162,6 +170,7 @@ fn queue_error(error: impl std::fmt::Display) -> OkfError {
 ///
 /// # Errors
 /// As [`enqueue_in`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn enqueue(
     pool: &PgPool,
     to: &str,
@@ -186,6 +195,7 @@ pub async fn enqueue(
 /// # Errors
 /// [`OkfError::LimitExceeded`] with `limit: "email"` for a malformed
 /// address; [`OkfError::Database`] or [`OkfError::Io`] if the insert fails.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn enqueue_in(
     conn: &mut PgConnection,
     to: &str,
@@ -228,6 +238,7 @@ pub async fn enqueue_in(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn list(pool: &PgPool) -> Result<Vec<QueuedMail>, OkfError> {
     // `job` is the JSON payload as bytes; `convert_from(..)::jsonb` reads
     // it, and only the recipient and the template's name leave the
@@ -289,11 +300,19 @@ pub async fn record_depth(pool: &PgPool, metrics: &Metrics) {
 /// Whether `id` can be a job id (a ULID: ASCII letters and digits). Text
 /// that cannot (a NUL, which Postgres refuses as a database error, among
 /// others) names no job and never reaches SQL.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn is_job_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.bytes().all(|byte| byte.is_ascii_alphanumeric())
 }
 
 /// The error for a job id that names no mail job.
+#[tracing::instrument(level = "trace", skip_all)]
 fn unknown_job(id: &str) -> OkfError {
     OkfError::UnknownName {
         noun: "mail job",
@@ -303,6 +322,7 @@ fn unknown_job(id: &str) -> OkfError {
 
 /// Explains why a job-id write matched no row: the job is unknown, or in a
 /// state the operation does not take.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn refusal(pool: &PgPool, id: &str, why: &str) -> Result<OkfError, OkfError> {
     let exists: Option<String> =
         sqlx::query_scalar("SELECT status FROM apalis.jobs WHERE id = $1 AND job_type = $2")
@@ -329,6 +349,7 @@ async fn refusal(pool: &PgPool, id: &str, why: &str) -> Result<OkfError, OkfErro
 /// # Errors
 /// [`OkfError::UnknownName`] (`noun: "mail job"`); [`OkfError::Refused`]
 /// for a job that has not failed; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn retry(pool: &PgPool, id: &str, now: DateTime<Utc>) -> Result<(), OkfError> {
     if !is_job_id(id) {
         return Err(unknown_job(id));
@@ -365,6 +386,7 @@ pub async fn retry(pool: &PgPool, id: &str, now: DateTime<Utc>) -> Result<(), Ok
 /// # Errors
 /// [`OkfError::UnknownName`] (`noun: "mail job"`); [`OkfError::Refused`]
 /// while a worker holds it; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn delete(pool: &PgPool, id: &str) -> Result<(), OkfError> {
     if !is_job_id(id) {
         return Err(unknown_job(id));
@@ -397,6 +419,7 @@ pub async fn delete(pool: &PgPool, id: &str) -> Result<(), OkfError> {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn prune(pool: &PgPool, now: DateTime<Utc>) -> Result<u64, OkfError> {
     Ok(sqlx::query(
         "DELETE FROM apalis.jobs WHERE job_type = $1 AND ( \
@@ -432,6 +455,7 @@ pub(crate) struct MailContext {
 /// Moves a job's `run_at` to now plus its backoff: 30 s doubling per
 /// attempt so far, capped at an hour. In SQL, on the database's clock,
 /// which is the one apalis compares `run_at` with.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn reschedule(pool: &PgPool, id: &str) -> Result<(), OkfError> {
     // `attempts` is the count before this try is acked (0 on the first
     // failure), so the first retry waits 30 s. `LEAST(attempts, 16)` keeps
@@ -551,6 +575,7 @@ async fn deliver(
 ///
 /// # Returns
 /// `okf-mail-<host>-<pid>`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn worker_name() -> String {
     // `$HOSTNAME`, else the kernel's name for the host, else a placeholder.
     let host = std::env::var("HOSTNAME")
@@ -571,6 +596,7 @@ fn worker_name() -> String {
 ///
 /// # Returns
 /// A new pool; closing it leaves `pool` untouched.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn worker_pool(pool: &PgPool) -> PgPool {
     // `connect_options()` is shared (`Arc`); `as_ref().clone()` copies it so
     // the name can be changed for this pool only.
@@ -614,6 +640,7 @@ impl WorkerTiming {
 /// # Returns
 /// The worker's task; it ends once `shutdown` is cancelled and the job in
 /// hand (if any) is finished.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn spawn_worker(app: Arc<App>, shutdown: CancellationToken) -> JoinHandle<()> {
     let context = MailContext {
         pool: worker_pool(app.pool()),
@@ -639,6 +666,7 @@ pub fn spawn_worker(app: Arc<App>, shutdown: CancellationToken) -> JoinHandle<()
 ///
 /// # Returns
 /// The worker's task.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn run_worker(
     context: MailContext,
     name: String,
@@ -652,6 +680,13 @@ pub(crate) fn run_worker(
 }
 
 /// [`run_worker`]'s loop: returns once `shutdown` is cancelled.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "long-lived loop: its span would never close and would stay open as the parent of every later span"
+    )
+)]
 async fn run_until_cancelled(
     context: &MailContext,
     name: &str,

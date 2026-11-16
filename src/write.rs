@@ -114,6 +114,7 @@ struct Touched {
 // may move to another thread (`Send`) and owns everything it uses
 // (`'static`), because it runs on a blocking thread that may outlive this
 // call's borrows. `&OpContext<'_>` lets it borrow `by` only during the call.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn apply<F>(
     ctx: &ToolContext,
     changeset: &str,
@@ -140,6 +141,7 @@ where
 ///
 /// # Errors
 /// As [`apply`]; [`OkfError::Database`] from the entry.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn apply_audited<F>(
     ctx: &ToolContext,
     changeset: &str,
@@ -280,6 +282,7 @@ where
 /// `Err(path)`, handing the path back, when there is nothing to store.
 // `Result<EntryRow, String>` here is "store this, or nothing for this path";
 // it is not an error the caller reports.
+#[tracing::instrument(level = "trace", skip_all)]
 fn new_entry(
     previous: Option<&EntryRow>,
     published: Option<i32>,
@@ -324,6 +327,7 @@ fn new_entry(
 /// # Errors
 /// The overlay's copy failing (it does not, once built); the op's error; a
 /// rule's error for the first refused path.
+#[tracing::instrument(level = "trace", skip_all)]
 fn run<F>(
     overlay: &Overlay,
     by: &str,
@@ -361,6 +365,7 @@ where
 /// [`OkfError::InvalidPath`], [`OkfError::SecretDetected`],
 /// [`OkfError::FrontmatterParse`]; [`OkfError::Refused`] for content that is
 /// not UTF-8 (no op writes any).
+#[tracing::instrument(level = "trace", skip_all)]
 fn touched_file(workspace: &MemWorkspace, path: &str) -> Result<Touched, OkfError> {
     let path = rules::check_path(path)?;
     let file = workspace.stored(&path);
@@ -386,6 +391,7 @@ fn touched_file(workspace: &MemWorkspace, path: &str) -> Result<Touched, OkfErro
 ///
 /// # Returns
 /// The JSON array to store, or `None` (a free edit).
+#[tracing::instrument(level = "trace", skip_all)]
 fn merged_replay(
     previous: Option<&EntryRow>,
     new_ops: Option<&Vec<ReplayOp>>,

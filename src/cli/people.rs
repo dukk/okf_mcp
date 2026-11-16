@@ -51,6 +51,7 @@ use crate::store::users::{self, AdminChange, NewUser, UserRecord};
 /// another user has or that is not one, an `admin` entitlement, an invite
 /// without an email or `public_url`), an unknown
 /// user or catalog, or a database error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn user(
     pool: &PgPool,
     config: &Config,
@@ -180,6 +181,7 @@ pub(super) async fn user(
 /// personal team, a team that owns a catalog, a notice over 2000 characters
 /// or holding a NUL), an unknown or malformed team name, an unknown user,
 /// or a database error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn team(
     pool: &PgPool,
     command: TeamCommand,
@@ -244,6 +246,7 @@ pub(super) async fn team(
 ///
 /// # Errors
 /// A database error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn unassigned(pool: &PgPool) -> anyhow::Result<String> {
     let found = unassigned::list(pool).await?;
     if found.is_empty() {
@@ -279,6 +282,7 @@ pub(super) async fn unassigned(pool: &PgPool) -> anyhow::Result<String> {
 ///
 /// # Errors
 /// An unknown catalog or team, or a database error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn set_owner(
     pool: &PgPool,
     catalog: &str,
@@ -305,6 +309,7 @@ pub(super) async fn set_owner(
 ///
 /// # Errors
 /// An unknown catalog, or a database error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn set_member_access(
     pool: &PgPool,
     catalog: &str,
@@ -333,6 +338,7 @@ pub(super) async fn set_member_access(
 ///
 /// # Errors
 /// An unknown catalog, or a database error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn set_maintenance(
     pool: &PgPool,
     catalog: &str,
@@ -367,6 +373,7 @@ pub(super) async fn set_maintenance(
 /// # Errors
 /// An unknown, revoked (by name) or ambiguous target, an unknown user, or
 /// a database error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn assign_key(
     pool: &PgPool,
     target: &str,
@@ -398,6 +405,7 @@ pub(super) async fn assign_key(
 ///
 /// # Errors
 /// An unknown code or user, or a database error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn assign_code(
     pool: &PgPool,
     id: &str,
@@ -416,6 +424,7 @@ pub(super) async fn assign_code(
 ///
 /// # Returns
 /// The line, with its newline.
+#[tracing::instrument(level = "trace", skip_all)]
 fn describe_member_change(change: MemberChange, team: &str, user: &str, role: Role) -> String {
     let role = role.as_str();
     match change {
@@ -434,6 +443,7 @@ fn describe_member_change(change: MemberChange, team: &str, user: &str, role: Ro
 ///
 /// # Returns
 /// The line, with its newline.
+#[tracing::instrument(level = "trace", skip_all)]
 fn describe_admin_change(name: &str, previous: bool, on: bool) -> String {
     match (previous, on) {
         (false, true) => format!("{name} is now an admin\n"),
@@ -452,6 +462,7 @@ fn describe_admin_change(name: &str, previous: bool, on: bool) -> String {
 ///
 /// # Returns
 /// The line, without a newline.
+#[tracing::instrument(level = "trace", skip_all)]
 fn format_user(user: &UserRecord) -> String {
     tab_row(&[
         &user.name,
@@ -476,6 +487,7 @@ fn format_user(user: &UserRecord) -> String {
 ///
 /// # Returns
 /// The line, without a newline.
+#[tracing::instrument(level = "trace", skip_all)]
 fn format_session(session: &SessionInfo) -> String {
     let ip = session.ip.map(|address| address.to_string());
     tab_row(&[
@@ -495,6 +507,7 @@ fn format_session(session: &SessionInfo) -> String {
 ///
 /// # Returns
 /// The line, without a newline.
+#[tracing::instrument(level = "trace", skip_all)]
 fn format_sign_in(event: &SignInEvent) -> String {
     let ip = event.ip.map(|address| address.to_string());
     tab_row(&[
@@ -514,6 +527,7 @@ fn format_sign_in(event: &SignInEvent) -> String {
 ///
 /// # Returns
 /// The line, without a newline.
+#[tracing::instrument(level = "trace", skip_all)]
 fn format_team(team: &TeamRecord) -> String {
     let members: Vec<String> = team
         .members
@@ -545,6 +559,13 @@ fn format_team(team: &TeamRecord) -> String {
 ///
 /// # Returns
 /// The text to print.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn lines(rows: impl Iterator<Item = String>) -> String {
     rows.map(|row| row + "\n").collect()
 }
