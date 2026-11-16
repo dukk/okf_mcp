@@ -89,11 +89,25 @@ pub(crate) struct ExistingRow {
 
 impl ExistingRow {
     /// Not a tombstone?
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub(crate) fn is_live(&self) -> bool {
         self.deleted_at.is_none()
     }
 
     /// Live with exactly this content and execute bit?
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     fn is_live_with(&self, file: &StoredFile) -> bool {
         self.is_live() && self.executable == file.executable && self.content == file.content
     }
@@ -144,6 +158,7 @@ struct Analyzed {
 /// (replaced since the caller was admitted; a retry is admitted afresh);
 /// [`OkfError::Database`], a
 /// failed audit write included.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn import(
     pool: &PgPool,
     catalog: &str,
@@ -196,12 +211,16 @@ pub async fn import(
     // Building a snapshot and linting it is CPU work (rayon across
     // documents): run it on a blocking thread so the async runtime's threads
     // stay free. `move` hands `files` to the closure, which hands it back.
-    let analyzed = tokio::task::spawn_blocking(move || analyze(files, now))
-        .await
-        // A panic in the blocking task is re-raised here, as if it ran inline.
-        // `into_panic` itself panics for a cancelled task, which only happens
-        // when the runtime is shutting down.
-        .unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic()))?;
+    let caller = crate::okf::caller::Caller::capture();
+    let analyzed = tokio::task::spawn_blocking(move || {
+        let _entered = caller.enter();
+        analyze(files, now)
+    })
+    .await
+    // A panic in the blocking task is re-raised here, as if it ran inline.
+    // `into_panic` itself panics for a cancelled task, which only happens
+    // when the runtime is shutting down.
+    .unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic()))?;
     let Analyzed {
         files,
         snapshot,
@@ -301,6 +320,7 @@ pub async fn import(
 ///
 /// # Returns
 /// The files to import.
+#[tracing::instrument(level = "trace", skip_all)]
 fn with_catalog_documents(mut incoming: Files, existing: &HashMap<String, ExistingRow>) -> Files {
     // `retain` is an in-place filter, like
     // `{k: v for k, v in d.items() if is_machinery(k)}` without a new dict.
@@ -321,6 +341,7 @@ fn with_catalog_documents(mut incoming: Files, existing: &HashMap<String, Existi
 
 /// Refuses markdown that is not text, then builds and lints the snapshot of
 /// the incoming files (runs on a blocking thread).
+#[tracing::instrument(level = "trace", skip_all)]
 fn analyze(files: Files, now: DateTime<Utc>) -> Result<Analyzed, OkfError> {
     refuse_markdown_that_is_not_text(&files)?;
     let workspace = MemWorkspace::from_stored(files)?;
@@ -338,6 +359,7 @@ fn analyze(files: Files, now: DateTime<Utc>) -> Result<Analyzed, OkfError> {
 
 /// A markdown file must be UTF-8 text: it is analyzed. Lists every one that
 /// is not.
+#[tracing::instrument(level = "trace", skip_all)]
 fn refuse_markdown_that_is_not_text(files: &Files) -> Result<(), OkfError> {
     let problems: Vec<String> = files
         .iter()
@@ -352,6 +374,7 @@ fn refuse_markdown_that_is_not_text(files: &Files) -> Result<(), OkfError> {
 }
 
 /// Every row of the catalog, tombstones included, by path.
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub(crate) async fn existing_rows(
     conn: &mut PgConnection,
     catalog_id: i64,

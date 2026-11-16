@@ -40,6 +40,13 @@ impl Method {
     ///
     /// # Returns
     /// `"password"`, `"passkey"`, `"oidc"` or `"setup"`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn as_str(self) -> &'static str {
         match self {
             Method::Password => "password",
@@ -56,6 +63,13 @@ impl Method {
     ///
     /// # Returns
     /// The method, or `None` for an unknown spelling.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn parse(text: &str) -> Option<Self> {
         match text {
             "password" => Some(Method::Password),
@@ -72,6 +86,13 @@ impl Outcome {
     ///
     /// # Returns
     /// `"ok"`, `"failed"` or `"locked"`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn as_str(self) -> &'static str {
         match self {
             Outcome::Ok => "ok",
@@ -87,6 +108,13 @@ impl Outcome {
     ///
     /// # Returns
     /// The outcome, or `None` for an unknown spelling.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn parse(text: &str) -> Option<Self> {
         match text {
             "ok" => Some(Outcome::Ok),
@@ -139,6 +167,7 @@ pub struct Attempt<'a> {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn record(
     pool: &PgPool,
     user_id: Option<&str>,
@@ -168,6 +197,7 @@ pub async fn record(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn record_in(conn: &mut PgConnection, attempt: &Attempt<'_>) -> Result<(), OkfError> {
     split_event!(
         info,
@@ -207,6 +237,7 @@ pub async fn record_in(conn: &mut PgConnection, attempt: &Attempt<'_>) -> Result
 ///
 /// # Errors
 /// [`OkfError::UnknownName`]; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn recent(pool: &PgPool, user: &str, limit: i64) -> Result<Vec<SignInEvent>, OkfError> {
     let user_id = crate::store::users::id_by_name(pool, user).await?;
     // `host(ip)` is the address as text without a prefix length.
@@ -241,6 +272,7 @@ pub async fn recent(pool: &PgPool, user: &str, limit: i64) -> Result<Vec<SignInE
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn prune(pool: &PgPool, before: DateTime<Utc>) -> Result<u64, OkfError> {
     Ok(sqlx::query("DELETE FROM sign_in_events WHERE at < $1")
         .bind(before)

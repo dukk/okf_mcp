@@ -43,6 +43,7 @@ pub struct PasskeyInfo {
 ///
 /// # Errors
 /// As [`add_in`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn add(
     pool: &PgPool,
     user_id: &str,
@@ -68,6 +69,7 @@ pub async fn add(
 /// # Errors
 /// [`OkfError::Refused`] if the credential is already registered;
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn add_in(
     conn: &mut PgConnection,
     user_id: &str,
@@ -132,6 +134,7 @@ pub struct SessionRegistration<'a> {
 /// [`OkfError::Unauthenticated`] once the session or the user is gone;
 /// [`OkfError::Refused`] for a credential already registered;
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn add_from_session_in(
     conn: &mut PgConnection,
     registration: &SessionRegistration<'_>,
@@ -189,6 +192,7 @@ pub async fn add_from_session_in(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn for_user(pool: &PgPool, user_id: &str) -> Result<Vec<(String, Passkey)>, OkfError> {
     let rows: Vec<(String, Json<Passkey>)> = sqlx::query_as(
         "SELECT name, passkey FROM user_passkeys WHERE user_id = $1 ORDER BY created_at",
@@ -214,6 +218,7 @@ pub async fn for_user(pool: &PgPool, user_id: &str) -> Result<Vec<(String, Passk
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn find(
     pool: &PgPool,
     credential_id: &[u8],
@@ -254,6 +259,7 @@ pub async fn find(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn lock_for_sign_in(
     conn: &mut PgConnection,
     credential_id: &[u8],
@@ -303,6 +309,7 @@ pub async fn lock_for_sign_in(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn update_in(
     conn: &mut PgConnection,
     credential_id: &[u8],
@@ -331,6 +338,7 @@ pub async fn update_in(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn list(pool: &PgPool, user_id: &str) -> Result<Vec<PasskeyInfo>, OkfError> {
     let rows: Vec<Listed> = sqlx::query_as(
         "SELECT credential_id, name, created_at, last_used_at \
@@ -360,11 +368,19 @@ struct Listed {
 }
 
 /// The raw credential id of an API id; not found when it is not base64url.
+#[tracing::instrument(level = "trace", skip_all)]
 fn credential_id(id: &str) -> Result<Vec<u8>, OkfError> {
     URL_SAFE_NO_PAD.decode(id).map_err(|_| not_found(id))
 }
 
 /// The 404 for a passkey the user does not have.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: builds an error value, no I/O"
+    )
+)]
 fn not_found(id: &str) -> OkfError {
     OkfError::NotFound {
         path: format!("me/passkeys/{id}"),
@@ -381,6 +397,7 @@ fn not_found(id: &str) -> OkfError {
 ///
 /// # Errors
 /// [`OkfError::NotFound`] unless the user owns it; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn rename(pool: &PgPool, user_id: &str, id: &str, name: &str) -> Result<(), OkfError> {
     let renamed =
         sqlx::query("UPDATE user_passkeys SET name = $3 WHERE credential_id = $1 AND user_id = $2")
@@ -407,6 +424,7 @@ pub async fn rename(pool: &PgPool, user_id: &str, id: &str, name: &str) -> Resul
 /// [`OkfError::NotFound`] unless the user owns it (an unknown user
 /// included); [`OkfError::Refused`] for the last sign-in method;
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn remove(pool: &PgPool, user_id: &str, id: &str) -> Result<(), OkfError> {
     let credential_id = credential_id(id)?;
     let mut tx = pool.begin().await?;

@@ -34,6 +34,7 @@ use crate::store::{settings, unlocks};
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn load(pool: &PgPool, now: DateTime<Utc>) -> Result<AccessGates, OkfError> {
     load_with(pool, now, || async {}).await
 }
@@ -45,6 +46,7 @@ pub async fn load(pool: &PgPool, now: DateTime<Utc>) -> Result<AccessGates, OkfE
 /// [`OkfError::Database`].
 // `F: FnOnce() -> Fut` with `Fut: Future`: a closure returning a future,
 // the Rust spelling of "an async callback".
+#[tracing::instrument(level = "trace", skip_all)]
 async fn load_with<F, Fut>(
     pool: &PgPool,
     now: DateTime<Utc>,
@@ -149,6 +151,7 @@ where
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all)]
 async fn ensure_audit_rows(pool: &PgPool) -> Result<(), OkfError> {
     // A credential's label is its `actor`, which it keeps for life, as
     // `audit::record` passes it.

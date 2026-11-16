@@ -332,9 +332,16 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    tokio::task::spawn_blocking(work)
-        .await
-        .unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic()))
+    // Blocking threads do not inherit the current span or the scoped
+    // subscriber, so spans opened by `work` would be unrelated roots. Carry
+    // them across, as the rayon passes do.
+    let caller = crate::okf::caller::Caller::capture();
+    tokio::task::spawn_blocking(move || {
+        let _entered = caller.enter();
+        work()
+    })
+    .await
+    .unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic()))
 }
 
 #[cfg(test)]

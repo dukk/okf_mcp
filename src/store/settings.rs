@@ -80,6 +80,13 @@ pub struct Brand {
 
 // `Default` by hand: a derived one would make the product name empty.
 impl Default for Brand {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     fn default() -> Self {
         Self {
             product_name: DEFAULT_PRODUCT_NAME.to_string(),
@@ -133,6 +140,13 @@ impl Settings {
     ///
     /// # Returns
     /// Its policy values.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn from_config(defaults: &AuthConfig) -> Self {
         Self {
             password_sign_in: defaults.password_sign_in,
@@ -156,6 +170,13 @@ impl Settings {
     ///
     /// # Returns
     /// A copy of the product name and support contact.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn brand(&self) -> Brand {
         Brand {
             product_name: self.product_name.clone(),
@@ -231,6 +252,13 @@ impl SettingKey {
     ///
     /// # Returns
     /// The `server_settings.key` value.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn as_str(self) -> &'static str {
         match self {
             SettingKey::PasswordSignIn => "password_sign_in",
@@ -256,6 +284,13 @@ impl SettingKey {
     ///
     /// # Returns
     /// The key, or `None` for a name this server does not know.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn parse(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|key| key.as_str() == name)
     }
@@ -278,6 +313,13 @@ pub struct SettingRow {
 }
 
 /// The refusal for a value a setting cannot take.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: builds an error value, no I/O"
+    )
+)]
 fn invalid(reason: String) -> OkfError {
     OkfError::LimitExceeded {
         limit: "setting",
@@ -287,6 +329,7 @@ fn invalid(reason: String) -> OkfError {
 
 /// Parses a duration in the config file's format and checks it as the
 /// config file does.
+#[tracing::instrument(level = "trace", skip_all)]
 fn duration(key: SettingKey, text: &str) -> Result<Duration, String> {
     let parsed = humantime::parse_duration(text)
         .map_err(|error| format!("{}: {text:?} is not a duration ({error})", key.as_str()))?;
@@ -297,6 +340,7 @@ fn duration(key: SettingKey, text: &str) -> Result<Duration, String> {
 /// A product name as stored: trimmed, 1 to [`MAX_PRODUCT_NAME_CHARS`]
 /// characters, no control characters (a NUL, which Postgres refuses, or a
 /// line break in a mail subject).
+#[tracing::instrument(level = "trace", skip_all)]
 fn check_product_name(text: &str) -> Result<&str, String> {
     let name = text.trim();
     // `chars().count()`: characters, not bytes (`len()` counts UTF-8 bytes).
@@ -313,6 +357,7 @@ fn check_product_name(text: &str) -> Result<&str, String> {
 /// A support contact: one plain email address, or an `https://` URL with a
 /// host, with no whitespace or control characters (the URL parser would
 /// silently drop a tab or line break, which would then be stored).
+#[tracing::instrument(level = "trace", skip_all)]
 fn check_support_contact(text: &str) -> Result<(), String> {
     let refuse =
         || format!("support_contact takes an email address, an https:// URL or none, not {text:?}");
@@ -333,6 +378,7 @@ fn check_support_contact(text: &str) -> Result<(), String> {
 }
 
 /// Reads the text of a boolean setting: `true`/`on` or `false`/`off`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn parse_boolean(key: SettingKey, text: &str) -> Result<Value, String> {
     match text {
         "true" | "on" => Ok(Value::Bool(true)),
@@ -345,6 +391,13 @@ fn parse_boolean(key: SettingKey, text: &str) -> Result<Value, String> {
 }
 
 /// The refusal text for an `unlock_max_hours` outside its range.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
+    )
+)]
 fn unlock_hours_range() -> String {
     format!(
         "unlock_max_hours takes a whole number from 1 to {}",
@@ -353,6 +406,7 @@ fn unlock_hours_range() -> String {
 }
 
 /// Turns the text [`set`] was given into the JSON to store.
+#[tracing::instrument(level = "trace", skip_all)]
 fn parse_value(key: SettingKey, text: &str) -> Result<Value, String> {
     let text = text.trim();
     match key {
@@ -394,6 +448,13 @@ fn parse_value(key: SettingKey, text: &str) -> Result<Value, String> {
 }
 
 /// The refusal text for an `audit_retention_days` outside its range.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
+    )
+)]
 fn retention_range() -> String {
     format!(
         "audit_retention_days takes a whole number from {} to {}",
@@ -405,6 +466,7 @@ fn retention_range() -> String {
 /// Applies one stored value to `settings`, after checking it. Used when
 /// setting a value (to refuse a bad one) and when loading (to skip one).
 /// On an error `settings` is unchanged.
+#[tracing::instrument(level = "trace", skip_all)]
 fn apply(settings: &mut Settings, key: SettingKey, value: &Value) -> Result<(), String> {
     // A closure (Python's lambda, but it may span lines) shared by the
     // five duration keys.
@@ -487,6 +549,7 @@ fn apply(settings: &mut Settings, key: SettingKey, value: &Value) -> Result<(), 
 }
 
 /// A setting's effective value as [`set`] would accept it.
+#[tracing::instrument(level = "trace", skip_all)]
 fn display(settings: &Settings, key: SettingKey) -> String {
     let format = |value: Duration| humantime::format_duration(value).to_string();
     match key {
@@ -522,6 +585,7 @@ struct StoredSetting {
 
 /// Overlays stored rows on the defaults, skipping (with a log line) rows
 /// this server cannot read.
+#[tracing::instrument(level = "trace", skip_all)]
 fn overlay(defaults: &AuthConfig, rows: &[StoredSetting]) -> Settings {
     let mut settings = Settings::from_config(defaults);
     for row in rows {
@@ -559,6 +623,7 @@ fn overlay(defaults: &AuthConfig, rows: &[StoredSetting]) -> Settings {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn brand_in(conn: &mut PgConnection) -> Result<Brand, OkfError> {
     let rows = sqlx::query_as::<_, StoredSetting>(
         "SELECT key, value, updated_at, updated_by FROM server_settings \
@@ -573,6 +638,7 @@ pub async fn brand_in(conn: &mut PgConnection) -> Result<Brand, OkfError> {
 /// Every stored override.
 // `impl PgExecutor<'_>` takes a `&PgPool` or a `&mut PgConnection` (a
 // transaction), like a Python function typed against a protocol.
+#[tracing::instrument(level = "trace", skip_all)]
 async fn stored(executor: impl PgExecutor<'_>) -> Result<Vec<StoredSetting>, OkfError> {
     Ok(sqlx::query_as::<_, StoredSetting>(
         "SELECT key, value, updated_at, updated_by FROM server_settings",
@@ -594,6 +660,7 @@ async fn stored(executor: impl PgExecutor<'_>) -> Result<Vec<StoredSetting>, Okf
 ///
 /// # Errors
 /// [`OkfError::Database`]. An unreadable stored value is not an error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn load(
     executor: impl PgExecutor<'_>,
     defaults: &AuthConfig,
@@ -604,6 +671,13 @@ pub async fn load(
 /// What `settings list` shows as who wrote an override: the credential's
 /// actor (a session's user name), or `cli:<os user>` for the command line,
 /// as the audit entry's actor label reads.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
+    )
+)]
 fn updated_by(actor: &AuditActor) -> String {
     match actor.via {
         Via::Cli | Via::System => actor.stored_label(),
@@ -616,6 +690,7 @@ fn updated_by(actor: &AuditActor) -> String {
 /// into an entry (spec "People in entries"). Every key is listed, so a new
 /// setting must decide which arm it takes. The unlock settings are policy
 /// (a flag and a number of hours), never a person, so they are recorded.
+#[tracing::instrument(level = "trace", skip_all)]
 fn audited_value(key: SettingKey, value: &Value) -> Option<&Value> {
     match key {
         SettingKey::SupportContact => None,
@@ -653,6 +728,7 @@ fn audited_value(key: SettingKey, value: &Value) -> Option<&Value> {
 /// [`OkfError::LimitExceeded`] with `limit: "setting"` for a value the
 /// setting cannot take (nothing is written); [`OkfError::Database`],
 /// including a failed audit write, which stores nothing.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn set(
     pool: &PgPool,
     key: SettingKey,
@@ -736,6 +812,7 @@ pub async fn set(
 /// # Errors
 /// [`OkfError::Database`], including a failed audit write, which keeps
 /// the override.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn reset(
     pool: &PgPool,
     key: SettingKey,
@@ -794,6 +871,7 @@ pub async fn reset(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn list(pool: &PgPool, defaults: &AuthConfig) -> Result<Vec<SettingRow>, OkfError> {
     let rows = stored(pool).await?;
     let settings = overlay(defaults, &rows);

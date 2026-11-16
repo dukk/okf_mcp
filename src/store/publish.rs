@@ -311,6 +311,7 @@ async fn publish_locked(
 /// # Errors
 /// As [`CatalogState::refresh`]; [`OkfError::Busy`] if the snapshot still
 /// does not match (only a refresh failing silently could cause it).
+#[tracing::instrument(level = "trace", skip_all)]
 async fn current_base(
     state: &CatalogState,
     conn: &mut PgConnection,
@@ -342,6 +343,7 @@ async fn current_base(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all, fields(catalog_id = catalog_id))]
 async fn current_rows(
     conn: &mut PgConnection,
     catalog_id: i64,
@@ -377,6 +379,7 @@ async fn current_rows(
 ///
 /// # Errors
 /// [`OkfError::Conflict`] listing every conflicting file; a replay's error.
+#[tracing::instrument(level = "trace", skip_all)]
 fn merge(
     entries: Vec<EntryRow>,
     current: &HashMap<String, CurrentRow>,
@@ -426,6 +429,7 @@ fn merge(
 ///
 /// # Errors
 /// The replay's own error (text it cannot place a bullet in).
+#[tracing::instrument(level = "trace", skip_all)]
 fn replayed_text(entry: &EntryRow, live: Option<&CurrentRow>) -> Result<Option<String>, OkfError> {
     // A deletion is never replayed: whatever was published since is
     // something the changeset did not see.
@@ -458,6 +462,7 @@ fn replayed_text(entry: &EntryRow, live: Option<&CurrentRow>) -> Result<Option<S
 /// # Errors
 /// A content rule's error; an overlay that does not apply;
 /// [`OkfError::LintFailed`].
+#[tracing::instrument(level = "trace", skip_all)]
 async fn check(
     base: Arc<Loaded>,
     changeset: &ChangesetRow,
@@ -495,6 +500,7 @@ async fn check(
 /// # Errors
 /// The first refused file's error, in path order (so a refusal is the same
 /// on every attempt).
+#[tracing::instrument(level = "trace", skip_all)]
 fn check_contents(entries: Vec<EntryRow>) -> Result<Vec<EntryRow>, OkfError> {
     for entry in &entries {
         // A file that is not text is stored and exported but not scanned
@@ -514,6 +520,7 @@ fn check_contents(entries: Vec<EntryRow>) -> Result<Vec<EntryRow>, OkfError> {
 /// as do links from unchanged documents into deleted paths. Errors
 /// elsewhere become advice, beside the warnings in changed files. Warnings
 /// elsewhere are left out: they predate this publish.
+#[tracing::instrument(level = "trace", skip_all)]
 fn split_lint(
     overlay: &Overlay,
     changed: &BTreeSet<String>,
@@ -534,6 +541,7 @@ fn split_lint(
 /// Links from documents this publish does not change into paths it deletes
 /// (design "Publish", step 4). Changed documents' links into them are
 /// already `broken-link` errors in changed files.
+#[tracing::instrument(level = "trace", skip_all)]
 fn links_into_deleted(
     snapshot: &Snapshot,
     changed: &BTreeSet<String>,
@@ -571,6 +579,7 @@ fn links_into_deleted(
 /// # Errors
 /// [`OkfError::Database`]; a unique violation (two writers of one revision,
 /// which the lock rules out) as [`OkfError::Conflict`].
+#[tracing::instrument(level = "trace", skip_all)]
 async fn write_all(
     conn: &mut PgConnection,
     publication: &Publication<'_>,
@@ -637,6 +646,7 @@ async fn write_all(
 
 /// The design's backstop: a unique violation while writing is a conflict,
 /// never the opaque `Database` error.
+#[tracing::instrument(level = "trace", skip_all)]
 fn as_conflict(error: OkfError, path: &str, expected: Option<i32>) -> OkfError {
     match error {
         // `if` guard: this arm matches only a unique violation.
@@ -658,6 +668,7 @@ fn as_conflict(error: OkfError, path: &str, expected: Option<i32>) -> OkfError {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all, fields(catalog_id = catalog_id))]
 async fn with_current_revisions(
     pool: &PgPool,
     catalog_id: i64,

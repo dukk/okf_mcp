@@ -52,6 +52,7 @@ pub struct DispositionRecord {
     pub at: String,
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn load_evidence(
     conn: &mut PgConnection,
     catalog: i64,
@@ -73,6 +74,7 @@ pub(super) async fn load_evidence(
         .collect()
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 async fn finding(
     conn: &mut PgConnection,
     catalog: i64,
@@ -131,6 +133,7 @@ async fn finding(
 ///
 /// # Errors
 /// `Refused` for blank IDs, `NotFound` for absent/foreign findings, or database errors.
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn get_finding(
     pool: &PgPool,
     catalog_id: i64,
@@ -151,6 +154,7 @@ pub async fn get_finding(
 ///
 /// # Errors
 /// `Refused` for invalid limits, `NotFound` for absent/foreign cursors, or database errors.
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn list_findings(
     pool: &PgPool,
     catalog_id: i64,
@@ -177,6 +181,7 @@ pub async fn list_findings(
 ///
 /// # Errors
 /// As [`list_findings`].
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn list_findings_with(
     pool: &PgPool,
     catalog_id: i64,
@@ -228,6 +233,7 @@ pub struct FindingCounts {
 ///
 /// # Errors
 /// Database errors; `Refused` for a stored disposition outside the four values.
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn count_findings(pool: &PgPool, catalog_id: i64) -> Result<FindingCounts, OkfError> {
     // The inner select computes each finding's current disposition, the outer
     // one groups them (grouping by a correlated subquery directly is refused).
@@ -268,6 +274,7 @@ pub async fn count_findings(pool: &PgPool, catalog_id: i64) -> Result<FindingCou
 /// retries; masked `SecretDetected` for secrets; `NotFound` for absent/foreign
 /// findings/catalogs; database errors. All mutation and receipt writes are atomic.
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn dispose(
     pool: &PgPool,
     catalog_id: i64,
@@ -325,12 +332,26 @@ pub async fn dispose(
     Ok(result)
 }
 
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: builds an error value, no I/O"
+    )
+)]
 fn missing() -> OkfError {
     OkfError::NotFound {
         path: "maintenance/work".into(),
     }
 }
 
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: builds an error value, no I/O"
+    )
+)]
 fn stale() -> OkfError {
     OkfError::Busy {
         reason: "maintenance lease has expired or ended".into(),
@@ -341,6 +362,7 @@ fn stale() -> OkfError {
 ///
 /// # Errors
 /// `Refused` when `value` does not serialize to a string.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) fn enum_text(value: impl Serialize) -> Result<String, OkfError> {
     serde_json::to_value(value)
         .ok()
@@ -348,6 +370,7 @@ pub(super) fn enum_text(value: impl Serialize) -> Result<String, OkfError> {
         .ok_or_else(|| refused("invalid maintenance enum"))
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 async fn store_evidence(
     conn: &mut PgConnection,
     catalog: i64,
@@ -379,6 +402,7 @@ async fn store_evidence(
 /// for invalid reports or conflicting retries, and propagates masked secret
 /// detection and database errors. Validation failures persist no report writes.
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn submit(
     pool: &PgPool,
     catalog_id: i64,

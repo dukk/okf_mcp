@@ -34,12 +34,20 @@ use crate::maintenance::types::Actor;
 use crate::okf::analysis::secrets::scan_secrets;
 use crate::store::changesets;
 
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: builds an error value, no I/O"
+    )
+)]
 fn refused(reason: &str) -> OkfError {
     OkfError::Refused {
         reason: reason.into(),
     }
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 fn validate(actor: &Actor, key: &str) -> Result<(), OkfError> {
     if actor.key_id.trim().is_empty() || actor.actor.trim().is_empty() {
         return Err(refused(
@@ -67,6 +75,7 @@ fn validate(actor: &Actor, key: &str) -> Result<(), OkfError> {
     Ok(())
 }
 
+#[tracing::instrument(level = "trace", skip_all, fields(catalog_id = catalog_id))]
 async fn lock(
     conn: &mut PgConnection,
     catalog_id: i64,
@@ -85,6 +94,7 @@ async fn lock(
     Ok(())
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 async fn replay<T: DeserializeOwned>(
     conn: &mut PgConnection,
     catalog: i64,
@@ -108,6 +118,7 @@ async fn replay<T: DeserializeOwned>(
     })?))
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 async fn receipt<T: Serialize>(
     conn: &mut PgConnection,
     catalog: i64,
@@ -124,6 +135,7 @@ async fn receipt<T: Serialize>(
     Ok(())
 }
 
+#[tracing::instrument(level = "trace", skip_all)]
 async fn recover(
     conn: &mut PgConnection,
     catalog: i64,
@@ -158,6 +170,13 @@ async fn recover(
     Ok(())
 }
 
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
+    )
+)]
 fn lease_end(now: DateTime<Utc>, deadline: DateTime<Utc>) -> DateTime<Utc> {
     (now + Duration::seconds(900)).min(deadline)
 }

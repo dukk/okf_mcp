@@ -20,6 +20,7 @@ pub struct PinnedConcept {
     pub outdated: bool,
 }
 
+#[tracing::instrument(level = "trace", skip_all, fields(catalog_id = catalog_id))]
 async fn pinned(
     conn: &mut PgConnection,
     catalog_id: i64,
@@ -76,6 +77,7 @@ async fn pinned(
 /// [`OkfError::Refused`] for invalid pins, missing/deletion revisions or non-text
 /// content; masked [`OkfError::SecretDetected`] for secret-bearing pin paths;
 /// [`OkfError::Database`] for database failures.
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn read(
     pool: &PgPool,
     catalog_id: i64,
@@ -101,6 +103,7 @@ pub async fn read(
 /// [`OkfError::Refused`] for invalid evidence or excerpts absent from their exact
 /// revision; masked [`OkfError::SecretDetected`] for untrusted evidence text;
 /// [`OkfError::Database`] for database failures.
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn validate(
     conn: &mut PgConnection,
     catalog_id: i64,

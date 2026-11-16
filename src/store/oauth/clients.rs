@@ -20,6 +20,13 @@ impl ClientKind {
     ///
     /// # Returns
     /// `"dcr"` or `"cimd"`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn as_str(self) -> &'static str {
         match self {
             ClientKind::Dcr => "dcr",
@@ -34,6 +41,13 @@ impl ClientKind {
     ///
     /// # Returns
     /// The kind, or `None` for anything else.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn parse(text: &str) -> Option<Self> {
         match text {
             "dcr" => Some(ClientKind::Dcr),
@@ -94,6 +108,13 @@ struct ClientRow {
 }
 
 impl From<ClientRow> for ClientRecord {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     fn from(row: ClientRow) -> Self {
         Self {
             client_id: row.client_id,
@@ -119,6 +140,7 @@ impl From<ClientRow> for ClientRecord {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn find(pool: &PgPool, client_id: &str) -> Result<Option<ClientRecord>, OkfError> {
     let row = sqlx::query_as::<_, ClientRow>(concat!(
         "SELECT ",
@@ -145,6 +167,7 @@ pub async fn find(pool: &PgPool, client_id: &str) -> Result<Option<ClientRecord>
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn prune_unbound_dcr(
     pool: &PgPool,
     created_before: DateTime<Utc>,
@@ -206,6 +229,7 @@ macro_rules! unbound_dcr_count {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn insert_dcr(
     pool: &PgPool,
     new: &NewDcrClient<'_>,
@@ -255,6 +279,7 @@ pub async fn insert_dcr(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn upsert_cimd(pool: &PgPool, client: &ClientRecord) -> Result<(), OkfError> {
     sqlx::query(
         "INSERT INTO oauth_clients \
@@ -290,6 +315,7 @@ pub async fn upsert_cimd(pool: &PgPool, client: &ClientRecord) -> Result<(), Okf
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn count_unbound_dcr(pool: &PgPool) -> Result<i64, OkfError> {
     Ok(
         sqlx::query_scalar::<_, i64>(concat!("SELECT ", unbound_dcr_count!()))

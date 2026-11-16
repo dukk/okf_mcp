@@ -25,6 +25,13 @@ impl Unassigned {
     ///
     /// # Returns
     /// `true` when every list is empty.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn is_empty(&self) -> bool {
         self.keys.is_empty() && self.codes.is_empty() && self.catalogs.is_empty()
     }
@@ -40,6 +47,7 @@ impl Unassigned {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn list(pool: &PgPool) -> Result<Unassigned, OkfError> {
     // The key and code listings already carry `user`; filtering them reuses
     // their joins instead of repeating them. The tables hold at most a few

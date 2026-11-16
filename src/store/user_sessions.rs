@@ -58,6 +58,13 @@ pub struct NewSession {
 // A hand-written `Debug` (Python's `__repr__`) instead of `#[derive]`, so
 // `{:?}` in a log line can never print a secret.
 impl std::fmt::Debug for NewSession {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display or Debug impl: runs inside the subscriber while it formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("NewSession")
@@ -81,6 +88,13 @@ pub struct SessionRow {
 }
 
 impl std::fmt::Debug for SessionRow {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display or Debug impl: runs inside the subscriber while it formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("SessionRow")
@@ -112,6 +126,7 @@ pub struct SessionInfo {
 
 /// The CSRF token of the session whose raw id is `id`: 256 bits, 43
 /// base64url characters, computable only from the id.
+#[tracing::instrument(level = "trace", skip_all)]
 fn csrf_for(id: &str) -> String {
     URL_SAFE_NO_PAD.encode(keys::hash(&format!("{CSRF_LABEL}{id}")))
 }
@@ -123,6 +138,13 @@ fn csrf_for(id: &str) -> String {
 /// `last_seen_at`), so no session ends sooner than `idle` after its real
 /// last use. `None` when the cutoff reaches past every stored time (a
 /// configured idle beyond 1970 never times out; no session predates it).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
+    )
+)]
 fn idle_cutoff(idle: Duration, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
     TimeDelta::from_std(idle)
         .ok()
@@ -135,12 +157,26 @@ fn idle_cutoff(idle: Duration, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
 /// quarter of `idle`, at most [`MAX_LAST_SEEN_RESOLUTION`]. A session used
 /// more often than every `idle` therefore always has a recent enough
 /// `last_seen_at` to stay alive, however short `idle` is.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
+    )
+)]
 fn write_resolution(idle: Duration) -> TimeDelta {
     // `idle / 4` past chrono's range is far above the cap, so the cap wins.
     TimeDelta::from_std(idle).map_or(MAX_LAST_SEEN_RESOLUTION, write_resolution_of)
 }
 
 /// [`write_resolution`] for an idle limit already in chrono's range.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
+    )
+)]
 fn write_resolution_of(idle: TimeDelta) -> TimeDelta {
     (idle / 4).min(MAX_LAST_SEEN_RESOLUTION)
 }
@@ -180,6 +216,7 @@ pub struct SessionStart<'a> {
 ///
 /// # Errors
 /// As [`start`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn create(
     pool: &PgPool,
     user_id: &str,
@@ -224,6 +261,7 @@ pub async fn create(
 /// sign-in) their password changed since it was checked;
 /// [`OkfError::LimitExceeded`] for an absurd `absolute`; [`OkfError::Io`]
 /// if the OS random source fails; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn start(
     executor: impl PgExecutor<'_>,
     request: &SessionStart<'_>,
@@ -283,6 +321,13 @@ struct Stored {
 
 impl Stored {
     /// The session as a request sees it, given the raw id it was found by.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     fn into_row(self, id: &str) -> SessionRow {
         SessionRow {
             user_id: self.user_id,
@@ -324,6 +369,7 @@ impl Stored {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn touch(
     pool: &PgPool,
     id: &str,
@@ -397,6 +443,7 @@ pub async fn touch(
 ///
 /// # Errors
 /// [`OkfError::Database`]. An unknown id is not an error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn revoke(executor: impl PgExecutor<'_>, id: &str) -> Result<(), OkfError> {
     sqlx::query("DELETE FROM user_sessions WHERE id_hash = $1")
         .bind(keys::hash(id).as_slice())
@@ -423,6 +470,7 @@ pub async fn revoke(executor: impl PgExecutor<'_>, id: &str) -> Result<(), OkfEr
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn hold_live(
     executor: impl PgExecutor<'_>,
     id: &str,
@@ -456,6 +504,7 @@ pub async fn hold_live(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn revoke_all(
     executor: impl PgExecutor<'_>,
     user_id: &str,
@@ -497,6 +546,7 @@ struct Listed {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn list(
     pool: &PgPool,
     user_id: &str,
@@ -543,6 +593,7 @@ pub async fn list(
 /// [`OkfError::UnknownName`] with `noun: "session"` for a malformed prefix
 /// or one that matches none of the user's sessions; [`OkfError::Refused`]
 /// for one that matches several; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn revoke_by_prefix(
     pool: &PgPool,
     user_id: &str,
@@ -567,6 +618,7 @@ pub async fn revoke_by_prefix(
 ///
 /// # Errors
 /// As [`revoke_by_prefix`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn revoke_by_prefix_in(
     conn: &mut PgConnection,
     user_id: &str,
@@ -628,6 +680,7 @@ pub(crate) async fn revoke_by_prefix_in(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn prune(pool: &PgPool, now: DateTime<Utc>) -> Result<u64, OkfError> {
     Ok(
         sqlx::query("DELETE FROM user_sessions WHERE expires_at <= $1")

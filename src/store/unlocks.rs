@@ -85,6 +85,13 @@ impl Category {
     /// # Returns
     /// `"support"`, `"deletion_request"`, `"export_request"`,
     /// `"security_investigation"`, `"legal"` or `"other"`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn as_str(self) -> &'static str {
         match self {
             Category::Support => "support",
@@ -103,6 +110,13 @@ impl Category {
     ///
     /// # Returns
     /// The category, or `None` for anything else.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn parse(text: &str) -> Option<Self> {
         Self::ALL
             .into_iter()
@@ -114,6 +128,13 @@ impl Category {
     /// # Returns
     /// `"support"`, `"a deletion request"`, `"an export request"`, `"a
     /// security investigation"`, `"a legal obligation"` or `"another reason"`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn label(self) -> &'static str {
         match self {
             Category::Support => "support",
@@ -200,6 +221,13 @@ impl UnlockState {
     ///
     /// # Returns
     /// `"live"`, `"expired"` or `"ended"`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn as_str(self) -> &'static str {
         match self {
             UnlockState::Live => "live",
@@ -218,6 +246,13 @@ impl UnlockRecord {
     ///
     /// # Returns
     /// Its state.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn state(&self, now: DateTime<Utc>) -> UnlockState {
         if self.ended_at.is_some() {
             UnlockState::Ended
@@ -233,6 +268,13 @@ impl UnlockRecord {
     ///
     /// # Returns
     /// The time.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn ends(&self) -> DateTime<Utc> {
         self.ended_at.unwrap_or(self.expires_at)
     }
@@ -259,6 +301,13 @@ struct UnlockRow {
 
 impl UnlockRow {
     /// The public record.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     fn into_record(self) -> UnlockRecord {
         UnlockRecord {
             id: self.id,
@@ -319,6 +368,13 @@ pub struct UnlockFilter<'a> {
 }
 
 /// The refusal for an unlock past the time limit.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: builds an error value, no I/O"
+    )
+)]
 fn hours_refused(policy: &UnlockPolicy) -> OkfError {
     OkfError::LimitExceeded {
         limit: "unlock_max_hours",
@@ -328,6 +384,7 @@ fn hours_refused(policy: &UnlockPolicy) -> OkfError {
 
 /// A reason as stored: trimmed, 1 to [`MAX_REASON_CHARS`] characters, with
 /// no control characters (a NUL, which Postgres refuses, would be a 500).
+#[tracing::instrument(level = "trace", skip_all)]
 fn check_reason(reason: &str) -> Result<&str, OkfError> {
     let reason = reason.trim();
     // `chars().count()`: characters, not bytes (`len()` counts UTF-8 bytes).
@@ -367,6 +424,7 @@ fn check_reason(reason: &str) -> Result<&str, OkfError> {
 /// [`OkfError::Forbidden`] for an actor whose own user is not an admin user
 /// (the command line has none and passes);
 /// [`OkfError::Database`], a failed audit write or mail insert included.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn create(
     pool: &PgPool,
     new: &NewUnlock<'_>,
@@ -469,6 +527,7 @@ pub async fn create(
 /// # Errors
 /// [`OkfError::Forbidden`] for a user who is not (or no longer) an admin,
 /// or is gone; [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all)]
 async fn require_staff(conn: &mut PgConnection, actor: &AuditActor) -> Result<(), OkfError> {
     let Some(user_id) = actor.user_id.as_deref() else {
         return Ok(());
@@ -489,6 +548,7 @@ async fn require_staff(conn: &mut PgConnection, actor: &AuditActor) -> Result<()
 /// Queues the unlocked email to every owner of the catalog's owner team
 /// that has an address, inside the unlock's transaction (no mail for an
 /// unlock that rolls back). An unowned catalog mails nobody.
+#[tracing::instrument(level = "trace", skip_all, fields(catalog_id = catalog_id))]
 async fn notify_owners(
     conn: &mut PgConnection,
     catalog_id: i64,
@@ -532,6 +592,7 @@ async fn notify_owners(
 /// [`OkfError::NotFound`] for an unknown id; [`OkfError::Refused`] for one
 /// that has already ended or expired; [`OkfError::Database`], a failed
 /// audit write included.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn end(
     pool: &PgPool,
     id: i64,
@@ -609,6 +670,13 @@ pub async fn end(
 /// not an admin under the user's lock, so every unlock's person was operator
 /// staff when it began; a later demotion or deletion of the user changes
 /// neither the person nor the marking (plan Decision 18).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
+    )
+)]
 fn staff_person(person_id: i64) -> FixedPerson {
     FixedPerson {
         person_id,
@@ -627,6 +695,7 @@ fn staff_person(person_id: i64) -> FixedPerson {
 ///
 /// # Errors
 /// [`OkfError::NotFound`] for an unknown id; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn find_in(conn: &mut PgConnection, id: i64) -> Result<UnlockRecord, OkfError> {
     sqlx::query_as::<_, UnlockRow>(concat!(select_unlocks!(), " WHERE u.id = $1"))
         .bind(id)
@@ -649,6 +718,7 @@ pub async fn find_in(conn: &mut PgConnection, id: i64) -> Result<UnlockRecord, O
 ///
 /// # Errors
 /// As [`find_in`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn find(pool: &PgPool, id: i64) -> Result<UnlockRecord, OkfError> {
     let mut conn = pool.acquire().await?;
     find_in(&mut conn, id).await
@@ -665,6 +735,7 @@ pub async fn find(pool: &PgPool, id: i64) -> Result<UnlockRecord, OkfError> {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn list(pool: &PgPool, filter: &UnlockFilter<'_>) -> Result<Vec<UnlockRecord>, OkfError> {
     // A malformed name (a NUL, which Postgres refuses) names nothing.
     let malformed = |name: Option<&str>| name.is_some_and(|name| !is_valid_name(name));
@@ -699,6 +770,7 @@ pub async fn list(pool: &PgPool, filter: &UnlockFilter<'_>) -> Result<Vec<Unlock
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn live(
     executor: impl PgExecutor<'_>,
     now: DateTime<Utc>,
@@ -727,6 +799,7 @@ pub async fn live(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn tally(pool: &PgPool, id: i64, kind: AccessKind) -> Result<(), OkfError> {
     // One fixed statement per column: a column name cannot be a bind
     // parameter. Every variant is named, so a new kind must pick a column.
