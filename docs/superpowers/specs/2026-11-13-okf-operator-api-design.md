@@ -705,8 +705,10 @@ are the places where what shipped is narrower, wider or more exact.
   `set_admin`'s order (admins by id, then the rest by id); then teams,
   catalogs and changesets, then `server_state`, then the rest. Credential
   writers use `audit::lock_credential_people`, which snapshots, locks and
-  rechecks (#398). The rule is in `tools/agentic/lessons.md`. Two known
-  gaps remain: #418 and #421 (below).
+  rechecks (#398). The rule is in `tools/agentic/lessons.md`. A publish,
+  an admin's discard and an audited edit take their entry's users before
+  their changeset, and user deletion takes its actor with the user (#418).
+  One known gap remains: #421 (below).
 - **Migration `0014_audit_row_locks.sql`** (PR #419 review). The resolvers
   upserted their audit row on every call, and `ON CONFLICT DO UPDATE` locks
   the row even when nothing changes, so two admins acting on each other
@@ -755,10 +757,8 @@ are the places where what shipped is narrower, wider or more exact.
   stay with milestone 15, as planned. #296 (credential user and catalog
   owner `NOT NULL`) is unaffected.
 - Follow-ups open at the close of the milestone:
-  - #418: a publish by a user's key can deadlock with deleting that user
-    (the publish records under the user's lock after taking its
-    changeset); Postgres aborts one as `Busy`, retryable, nothing half
-    done.
+  - #418: a publish by a user's key could deadlock with deleting that
+    user; fixed after the milestone (above).
   - #421: `lock_people` snapshots a catalog's owner before the catalog
     lock, so a concurrent transfer can still need a retry.
   - #423: the provisioner's every-use auditing (above).

@@ -927,16 +927,19 @@ const SOLE_OWNED_TEAMS: &str = "\
 /// Catalogs, their history (whose `actor` text stays) and every audit entry
 /// are kept; the user's `audit_people` row becomes `deleted user #N`.
 ///
-/// Lock order: every admin row in id order, then the user (as
-/// [`set_admin`]), then its personal team, then its shared teams in id
-/// order, then its keys and grants in id order, then their open changesets
-/// in id order. A key or code being created for the user holds the user
-/// `FOR KEY SHARE` (`id_of`); the deletion waits for it and then deletes
-/// it too. A changeset being opened by one of its keys waits for the key's
-/// lock and then finds the key gone. A publish by one of its keys that is
-/// already running when the deletion starts may make Postgres abort one of
-/// the two as a deadlock ([`OkfError::Busy`], retryable): the publish holds
-/// its changeset and records its entry under the user's `FOR KEY SHARE`.
+/// Lock order: every admin row in id order, then the user with every other
+/// user its entries resolve (the actor, its credential's owner, the people
+/// of its open changesets' personal owner teams), in id order
+/// ([`audit::lock_people`], as [`set_admin`]), then its personal team, then
+/// its shared teams in id order, then its keys and grants in id order, then
+/// their open changesets in id order. A key or code being created for the
+/// user holds the user `FOR KEY SHARE` (`id_of`); the deletion waits for it
+/// and then deletes it too. A changeset being opened by one of its keys
+/// waits for the key's lock and then finds the key gone. A publish, discard
+/// or audited edit takes the users its entry resolves before its changeset
+/// (`publish::lock_people`), so one by the user's key either finishes
+/// before the deletion takes the user, or waits for it and is refused,
+/// never a deadlock (issue #418).
 ///
 /// # Arguments
 /// * `pool` - the database.
@@ -954,7 +957,7 @@ const SOLE_OWNED_TEAMS: &str = "\
 /// [`OkfError::Forbidden`] for a provisioner and an admin user;
 /// [`OkfError::Refused`] naming the catalogs its personal team owns, the
 /// shared teams it is the only owner of, or that it is the last admin user;
-/// [`OkfError::Busy`] for a deadlock; [`OkfError::Database`].
+/// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.delete"))]
 pub async fn delete(
     pool: &PgPool,
@@ -975,14 +978,31 @@ pub async fn delete(
         sqlx::query_scalar("SELECT id FROM users WHERE is_admin ORDER BY id FOR UPDATE")
             .fetch_all(&mut *tx)
             .await?;
-    // `FOR UPDATE` holds the row, so a credential or membership created
-    // concurrently (its foreign-key check takes `FOR KEY SHARE`) waits.
-    let (user_id, is_admin): (String, bool) =
-        sqlx::query_as("SELECT id, is_admin FROM users WHERE name = $1 FOR UPDATE")
-            .bind(name)
-            .fetch_optional(&mut *tx)
-            .await?
-            .ok_or_else(|| unknown(name))?;
+    // The catalogs of its keys' open changesets, read without a lock: the
+    // discard entries resolve their personal owner teams' people.
+    let open_catalogs: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT cat.name FROM changesets c JOIN api_keys k ON k.id = c.key_id \
+                                   JOIN users u ON u.id = k.user_id \
+                                   JOIN catalogs cat ON cat.id = c.catalog_id \
+         WHERE u.name = $1 AND c.state = 'open' ORDER BY cat.name",
+    )
+    .bind(name)
+    .fetch_all(&mut *tx)
+    .await?;
+    let open_catalogs: Vec<&str> = open_catalogs.iter().map(String::as_str).collect();
+    // Then the user `FOR UPDATE`, so a credential or membership created
+    // concurrently (its foreign-key check takes `FOR KEY SHARE`) waits, with
+    // every other user its entries resolve (the actor, its credential's
+    // owner, those people) in `audit::lock_people`' order (issue #418).
+    let people = People {
+        target: Some((name, RowLock::Update)),
+        catalogs: &open_catalogs,
+        ..People::default()
+    };
+    // `lock_people` answers `Some` whenever it is given a target.
+    let (user_id, is_admin) = audit::lock_people(&mut tx, actor, &people)
+        .await?
+        .ok_or_else(|| unknown(name))?;
     audit::refuse_admin_target(actor, is_admin, name)?;
     // The personal team: a catalog assigned to it concurrently takes
     // `FOR KEY SHARE` on this row, so either it waits for this delete (and
