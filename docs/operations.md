@@ -1296,7 +1296,14 @@ REST, and a non-zero exit naming the cause on the command line.
   only owner of a shared team (add another owner first), and, over REST and
   in the console, for the last admin user. The command line has operator
   access and may delete the last admin user, as it may clear the last admin
-  flag. A user being a plain member of a shared team, or the owner of one
+  flag. Over REST, `DELETE /api/v1/users/{name}?unless_shared_member=true`
+  adds a precondition, checked in the same transaction as the delete: a
+  user who is a member (owner or member, suspended team or not) of any team
+  but its own personal one is refused with a 409 whose message starts `the
+  user is a member of shared team(s): ` and lists the teams, and nothing is
+  deleted. That refusal is checked first, so it wins over every other one,
+  the last-owner refusal included. Without the parameter the rules below apply
+  unchanged. A user being a plain member of a shared team, or the owner of one
   with other owners, does not stop the deletion: the membership goes with
   it.
 - `team delete` is refused for a personal team (it goes with its user) and
@@ -2839,7 +2846,7 @@ admin). Every change takes effect at once. A refusal under the
 | `GET /api/v1/users` | admin | `?email=` (optional) answers only the user with that email, in any letter case: zero or one, in the same view; text that cannot be an address finds none, and an unknown parameter is 400. `{users}`, by name: `name`, `display_name`, `created_at`, `credentials` (keys, grants and codes naming it, whoever manages them), `teams`, `email` (`null` when unset), `is_admin`, `has_password` (never the password or its hash) |
 | `POST /api/v1/users` | admin, every catalog | Body `{name, display_name}` (`display_name` optional). Creates the user and its personal team; 201 with the user. 409 for an invalid or taken name, 422 without `name` |
 | `GET /api/v1/users/{name}` | admin | `{user, keys, codes, entitlements}`: the user, the keys, grants and codes naming it that the caller manages, and its entitlements (`[{catalog, access, created_at}]`, by catalog) |
-| `DELETE /api/v1/users/{name}` | admin, every catalog | Deletes the user with its credentials, sessions and personal team (see "Deletion rules"); 204. 409 for a personal team that owns catalogs, the last owner of a shared team, or the last admin user |
+| `DELETE /api/v1/users/{name}` | admin, every catalog | Deletes the user with its credentials, sessions and personal team (see "Deletion rules"); 204. Optional query `?unless_shared_member=true`: delete nothing and answer 409 while the user is a member, in any role, of any team other than its own personal team (suspended teams included); the check runs under the delete's own locks, so a membership committed concurrently is never removed silently. A client tells this 409 from the others by the `message`: it starts `the user is a member of shared team(s): ` and then the quoted team names, while every other deletion refusal starts `user "<name>" cannot be deleted`. It wins over every other refusal, the last-owner one included. `false` or no parameter: unchanged. 400 for another query parameter or a non-boolean value. Otherwise 409 for a personal team that owns catalogs, the last owner of a shared team, or the last admin user |
 | `PUT /api/v1/users/{name}/admin` | admin, every catalog | Body `{admin: bool}`. Answers `{name, previous, admin}`. A change signs the user out of every console session (they sign in again with the new flag). 409 for clearing the last admin user (only the CLI may), 422 without `admin` |
 | `PUT /api/v1/users/{name}/email` | admin, every catalog | Body `{email}` (`null` clears; the field is required). Answers the user. A change ends the user's outstanding emailed links. 409 "Another user has this email" (in any letter case), 422 for an address that is not one or without `email` |
 | `POST /api/v1/users/{name}/invite` | admin, every catalog | Queues a setup email with a single-use link (replacing any older one) to the user's email; 202 `{name, email}`. 409 without an email or without `public_url` |

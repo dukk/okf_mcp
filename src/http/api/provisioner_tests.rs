@@ -431,3 +431,45 @@ async fn listing_teams_widens_a_provisioner_to_nothing_else() {
         assert_eq!(status.as_u16(), 403, "GET {uri}: {answer}");
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_provisioner_deletes_a_user_unless_a_shared_team_member() {
+    let test = app().await;
+    let root = every_catalog_admin(&test).await;
+    let key = provisioner(&test).await;
+    let p = Some(key.as_str());
+    for (uri, body) in [
+        ("/api/v1/users", json!({"name": "alice"})),
+        ("/api/v1/users", json!({"name": "bob"})),
+        ("/api/v1/teams", json!({"name": "acme", "owner": "alice"})),
+    ] {
+        let (status, answer) = send(&test, "POST", uri, Some(&root), Some(body)).await;
+        assert_eq!(status.as_u16() / 100, 2, "{uri}: {answer}");
+    }
+    let (_, _) = send(
+        &test,
+        "PUT",
+        "/api/v1/teams/acme/members/bob",
+        Some(&root),
+        Some(json!({"role": "member"})),
+    )
+    .await;
+
+    let (refused, error) = send(
+        &test,
+        "DELETE",
+        "/api/v1/users/bob?unless_shared_member=true",
+        p,
+        None,
+    )
+    .await;
+    let (still, _) = send(&test, "GET", "/api/v1/users/bob", Some(&root), None).await;
+    let (plain, _) = send(&test, "DELETE", "/api/v1/users/bob", p, None).await;
+
+    assert_eq!(refused.as_u16(), 409, "{error}");
+    assert!(error["message"]
+        .as_str()
+        .is_some_and(|m| m.starts_with(crate::store::users::SHARED_MEMBER_REFUSAL)));
+    assert_eq!(still.as_u16(), 200);
+    assert_eq!(plain.as_u16(), 204, "without the parameter nothing changes");
+}

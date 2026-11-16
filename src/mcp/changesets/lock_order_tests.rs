@@ -95,9 +95,16 @@ fn delete_in_task(
 ) -> tokio::task::JoinHandle<Result<DeletedUser, OkfError>> {
     let pool = test.app.pool().clone();
     let name = name.to_string();
-    tokio::spawn(
-        async move { users::delete(&pool, &name, false, &AuditActor::cli(), Utc::now()).await },
-    )
+    tokio::spawn(async move {
+        users::delete(
+            &pool,
+            &name,
+            users::DeleteOptions::default(),
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+    })
 }
 
 /// Waits until `count` backends of this database wait on a lock.
