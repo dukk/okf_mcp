@@ -54,6 +54,7 @@ use crate::store::email_tokens::{self, Purpose};
 use crate::store::passkeys::{self as passkey_rows, SessionRegistration};
 use crate::store::sign_in_events::{Method, Outcome};
 use crate::store::users::UserAuth;
+use crate::telemetry::metrics::Limiter;
 use crate::telemetry::subscriber::split_event;
 
 /// The ceremony cookie: `SameSite=Strict`, five minutes.
@@ -297,6 +298,9 @@ fn screen(app: &App, parts: &Parts, limited: bool) -> Option<Response> {
             .sign_in_limits()
             .sign_in_per_ip
             .try_take(&ip_key(ip), Instant::now());
+    if !admitted {
+        app.metrics().rate_limited(Limiter::SignInPerIp);
+    }
     (!admitted).then(too_many)
 }
 

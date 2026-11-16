@@ -38,6 +38,7 @@ use crate::store::settings::Brand;
 use crate::store::sign_in_events::{self, Attempt, Method, Outcome};
 use crate::store::user_sessions::{self, SessionStart};
 use crate::store::users::{self, UserAuth};
+use crate::telemetry::metrics::Limiter;
 use crate::telemetry::subscriber::split_event;
 
 /// Every refused password sign-in says this, whatever the reason (spec).
@@ -331,6 +332,7 @@ async fn sign_in_post(
         .sign_in_per_ip
         .try_take(&ip_key(ip), Instant::now())
     {
+        app.metrics().rate_limited(Limiter::SignInPerIp);
         let mut view = sign_in_view(&app, return_to);
         view.error = Some(TOO_MANY);
         return sign_in_response(StatusCode::TOO_MANY_REQUESTS, &view, &brand);
@@ -511,6 +513,11 @@ pub(crate) async fn start_in(
             );
         }
     }
+    // Counted once the session exists (a failure above is the caller's
+    // refusal, which `audit` counts). The caller's transaction commits
+    // after this returns, and only a database failure at that commit can
+    // still undo the sign-in.
+    app.metrics().auth_attempt(signing_in.method, Outcome::Ok);
     Ok(session_cookie(app, &user.id, &session, absolute))
 }
 
@@ -532,6 +539,7 @@ pub(crate) async fn audit(
     outcome: Outcome,
     ip: Option<IpAddr>,
 ) {
+    app.metrics().auth_attempt(method, outcome);
     let now = app.clock().now();
     if let Err(error) = sign_in_events::record(app.pool(), user_id, method, outcome, ip, now).await
     {
@@ -646,6 +654,7 @@ async fn forgot_post(
     let limits = app.sign_in_limits();
     let ip = client_ip(&parts, &app.config().auth);
     if !limits.forgot_per_ip.try_take(&ip_key(ip), now) {
+        app.metrics().rate_limited(Limiter::ForgotPerIp);
         return message_page(
             StatusCode::TOO_MANY_REQUESTS,
             "Forgot your password?",
@@ -675,6 +684,8 @@ async fn forgot_post(
                     );
                 }
             });
+        } else {
+            app.metrics().rate_limited(Limiter::ForgotPerEmail);
         }
     }
     pages::page(
@@ -1070,11 +1081,11 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::http::api::testing::{
-        allow, app, fail_on, login_app, user_with_password, wait_for_lock_waiters, Browser,
-        Payload, Reply, MAIN, PASSWORD,
+        allow, app, fail_on, login_app, login_app_with_metrics, user_with_password,
+        wait_for_lock_waiters, Browser, Payload, Reply, MAIN, PASSWORD,
     };
     use crate::http::console_session::{start_session_with, COOKIE};
-    use crate::mcp::testing::{app_with, TestApp};
+    use crate::mcp::testing::{app_with, render, sample_of, TestApp};
     use crate::store::audit::AuditActor;
     use crate::store::settings::{self, SettingKey};
     use crate::store::sign_in_events::{Method, Outcome};
@@ -1336,6 +1347,70 @@ mod tests {
             (&events[1].method, &events[1].outcome),
             (Method::Password, Outcome::Failed)
         ));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sign_in_outcomes_are_counted_by_method() {
+        let (test, registry) = login_app_with_metrics().await;
+        user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
+        let mut browser = Browser::default();
+        let wrong = "not-the-password-at-all";
+
+        post_sign_in(&mut browser, &test, "alice@example.com", wrong).await;
+        post_sign_in(&mut browser, &test, "alice@example.com", PASSWORD).await;
+        // The right password reset the count, so it takes LOCK_AFTER more:
+        // the last one locks the account, and so the right one is refused.
+        for _ in 0..passwords::LOCK_AFTER {
+            post_sign_in(&mut browser, &test, "alice@example.com", wrong).await;
+        }
+        post_sign_in(&mut browser, &test, "alice@example.com", PASSWORD).await;
+        let text = render(&registry);
+
+        let series = |outcome: &str| {
+            sample_of(
+                &text,
+                &format!("okf_auth_attempts_total{{method=\"password\",outcome=\"{outcome}\"}}"),
+            )
+        };
+        assert_eq!(series("ok"), Some(1.0), "{text}");
+        // The first wrong one, then LOCK_AFTER - 1 before the lock.
+        assert_eq!(series("failed"), Some(10.0), "{text}");
+        // The attempt that locked, and the right password once locked.
+        assert_eq!(series("locked"), Some(2.0), "{text}");
+        // Closed labels only: neither the address nor either password.
+        for secret in ["alice", "example.com", PASSWORD, wrong] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rate_limit_refusals_count_by_limiter() {
+        let (test, registry) = login_app_with_metrics().await;
+        let mut browser = Browser::default();
+        for _ in 0..30 {
+            post_sign_in(
+                &mut browser,
+                &test,
+                "nobody@example.com",
+                "whatever-password",
+            )
+            .await;
+        }
+        let before = render(&registry);
+
+        let limited = post_sign_in(
+            &mut browser,
+            &test,
+            "nobody@example.com",
+            "whatever-password",
+        )
+        .await;
+        let after = render(&registry);
+
+        assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS);
+        let series = "okf_ratelimit_rejections_total{limiter=\"sign_in_per_ip\"}";
+        assert_eq!(sample_of(&before, series), None, "{before}");
+        assert_eq!(sample_of(&after, series), Some(1.0), "{after}");
     }
 
     #[tokio::test(flavor = "multi_thread")]
