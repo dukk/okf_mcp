@@ -53,6 +53,13 @@ pub enum SameSite {
 
 impl SameSite {
     /// The attribute's value.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn as_str(self) -> &'static str {
         match self {
             Self::Lax => "Lax",
@@ -89,6 +96,13 @@ impl ConsoleSession {
 // Written by hand, not derived (Python's `__repr__`), so a stray `{:?}`
 // never prints the id or the token.
 impl std::fmt::Debug for ConsoleSession {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display/Debug impl: runs while the subscriber formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("ConsoleSession")
@@ -111,6 +125,13 @@ impl std::fmt::Debug for ConsoleSession {
 /// header is missing or unreadable, the peer address. Without the setting
 /// no header is read at all: a client could write any value there. `None`
 /// without `ConnectInfo` (in-process `oneshot` tests).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub fn client_ip(request_parts: &Parts, config: &AuthConfig) -> Option<IpAddr> {
     request_ip(&request_parts.extensions, &request_parts.headers, config)
 }
@@ -125,6 +146,7 @@ pub fn client_ip(request_parts: &Parts, config: &AuthConfig) -> Option<IpAddr> {
 ///
 /// # Returns
 /// As [`client_ip`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn request_ip(
     extensions: &Extensions,
     headers: &HeaderMap,
@@ -146,6 +168,13 @@ pub fn request_ip(
 /// # Arguments
 /// * `app` - the shared state (its `[auth]` config).
 /// * `request` - the request, before it is passed on.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub(crate) fn insert_client_ip(app: &App, request: &mut Request) {
     let ip = request_ip(request.extensions(), request.headers(), &app.config().auth);
     request.extensions_mut().insert(ClientIp(ip));
@@ -153,6 +182,13 @@ pub(crate) fn insert_client_ip(app: &App, request: &mut Request) {
 
 /// The last hop of the last `name` header. Earlier entries were written by
 /// the client (or proxies before ours) and prove nothing.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn forwarded_ip(headers: &HeaderMap, name: &str) -> Option<IpAddr> {
     let value = headers.get_all(name).iter().next_back()?.to_str().ok()?;
     value.rsplit(',').next()?.trim().parse().ok()
@@ -168,6 +204,7 @@ fn forwarded_ip(headers: &HeaderMap, name: &str) -> Option<IpAddr> {
 /// The value, or `None` when absent or empty.
 // `<'a>`: the returned `&str` borrows from `headers`, so it lives as long
 // as they do (no copy is made).
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers
         .get_all(header::COOKIE)
@@ -195,6 +232,7 @@ pub(crate) fn cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> 
 /// # Panics
 /// If `name` or `value` is not a valid header value: callers pass constants
 /// and base64url, so that is a bug.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn set_cookie(
     name: &str,
     value: &str,
@@ -219,6 +257,13 @@ pub(crate) fn set_cookie(
 ///
 /// # Returns
 /// `true` for an `https` `public_url`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub(crate) fn secure_cookies(app: &App) -> bool {
     app.config()
         .public_url
@@ -232,6 +277,13 @@ pub(crate) fn secure_cookies(app: &App) -> bool {
 /// # Arguments
 /// * `target` - the headers to add to.
 /// * `extra` - the headers to add.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub(crate) fn append_all(target: &mut HeaderMap, extra: &HeaderMap) {
     for (name, value) in extra {
         target.append(name.clone(), value.clone());
@@ -240,6 +292,13 @@ pub(crate) fn append_all(target: &mut HeaderMap, extra: &HeaderMap) {
 
 /// Does the request carry the session's CSRF token? Compared in constant
 /// time.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn csrf_matches(headers: &HeaderMap, expected: &str) -> bool {
     headers
         .get(CSRF_HEADER)
@@ -247,6 +306,13 @@ fn csrf_matches(headers: &HeaderMap, expected: &str) -> bool {
 }
 
 /// Methods that change nothing, so need no CSRF header.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn is_safe_method(method: &Method) -> bool {
     matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
 }
@@ -263,6 +329,7 @@ fn is_safe_method(method: &Method) -> bool {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn session_user(app: &App, user_id: &str) -> Result<Option<UserAuth>, OkfError> {
     match app.keys().user_admin(user_id) {
         Some(user) => Ok(Some(user)),
@@ -285,6 +352,7 @@ pub(crate) async fn session_user(app: &App, user_id: &str) -> Result<Option<User
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn signed_in_user(
     app: &App,
     headers: &HeaderMap,
@@ -304,6 +372,7 @@ pub(crate) async fn signed_in_user(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 async fn session_principal(app: &App, user_id: &str) -> Result<Option<Principal>, OkfError> {
     if let Some(user) = app.keys().user_admin(user_id) {
         return Ok(Some(Principal::for_session(
@@ -333,6 +402,13 @@ async fn session_principal(app: &App, user_id: &str) -> Result<Option<Principal>
 }
 
 /// [`unauthorized`], also clearing a session cookie that no longer works.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn unauthorized_clearing(app: &App) -> Response {
     let mut response = unauthorized(app);
     append_all(response.headers_mut(), &clear_cookie(app));
@@ -354,6 +430,7 @@ fn unauthorized_clearing(app: &App) -> Response {
 /// 403 for a cookie write without the CSRF token; 500 if a lookup fails.
 // Used as `axum::middleware::from_fn_with_state(app, require_principal)`;
 // axum fills each argument from the request (the extractor pattern).
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn require_principal(
     State(app): State<Arc<App>>,
     mut request: Request,
@@ -440,6 +517,7 @@ pub async fn require_principal(
 /// [`OkfError::Database`]; [`OkfError::Io`] if the random source fails;
 /// [`OkfError::LimitExceeded`] for an absolute lifetime past the calendar;
 /// [`OkfError::Unauthenticated`] once the user is gone.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn start_session(
     app: &App,
     user: &UserAuth,
@@ -467,6 +545,7 @@ pub async fn start_session(
 /// # Errors
 /// As [`start_session`], and [`OkfError::Unauthenticated`] when the user
 /// is gone or the password changed meanwhile.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn start_session_with(
     app: &App,
     user: &UserAuth,
@@ -498,6 +577,7 @@ pub async fn start_session_with(
 ///
 /// # Returns
 /// The header.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn session_cookie(
     app: &App,
     user_id: &str,
@@ -527,6 +607,7 @@ pub(crate) fn session_cookie(
 ///
 /// # Returns
 /// The header.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn clear_cookie(app: &App) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(

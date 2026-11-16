@@ -42,6 +42,13 @@ impl ProtectedResourceMetadata {
     ///
     /// # Returns
     /// The document.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial constructor: builds a value from its arguments"
+        )
+    )]
     pub fn new(settings: &OAuthSettings) -> Self {
         Self {
             resource: settings.resource.clone(),
@@ -92,6 +99,7 @@ impl AuthorizationServerMetadata {
     ///
     /// # Returns
     /// The document.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn new(settings: &OAuthSettings) -> Self {
         let issuer = &settings.issuer;
         Self {
@@ -121,6 +129,13 @@ impl AuthorizationServerMetadata {
 /// `GET /.well-known/oauth-protected-resource` (also with the `/mcp`
 /// suffix, the path-suffixed form RFC 9728 section 3.1 clients try first) and
 /// `GET /.well-known/oauth-authorization-server`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub fn routes() -> Router<Arc<App>> {
     Router::new()
         .route(PROTECTED_RESOURCE_PATH, get(protected_resource))
@@ -134,6 +149,7 @@ pub fn routes() -> Router<Arc<App>> {
 }
 
 /// `GET /.well-known/oauth-protected-resource[/mcp]`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn protected_resource(State(app): State<Arc<App>>) -> Response {
     match app.oauth() {
         Some(oauth) => public(ProtectedResourceMetadata::new(&oauth.settings)),
@@ -142,6 +158,7 @@ async fn protected_resource(State(app): State<Arc<App>>) -> Response {
 }
 
 /// `GET /.well-known/oauth-authorization-server`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn authorization_server(State(app): State<Arc<App>>) -> Response {
     match app.oauth() {
         Some(oauth) => public(AuthorizationServerMetadata::new(&oauth.settings)),
@@ -152,6 +169,7 @@ async fn authorization_server(State(app): State<Arc<App>>) -> Response {
 /// A public JSON document, readable cross-origin.
 // `impl Serialize` in argument position: any serializable type, chosen at
 // compile time (a generic parameter without a name).
+#[tracing::instrument(level = "trace", skip_all)]
 fn public(document: impl Serialize) -> Response {
     let mut response = Json(document).into_response();
     response.headers_mut().insert(

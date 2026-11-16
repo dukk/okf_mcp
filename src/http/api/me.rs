@@ -68,6 +68,7 @@ struct SessionUser<'a> {
 ///
 /// # Errors
 /// [`OkfError::Forbidden`] for a bearer key or OAuth token.
+#[tracing::instrument(level = "trace", skip_all)]
 fn session_user(principal: &Principal) -> Result<SessionUser<'_>, OkfError> {
     // A tuple match checks both at once; every combination is listed, so a
     // new credential kind fails to compile here until someone decides.
@@ -81,6 +82,7 @@ fn session_user(principal: &Principal) -> Result<SessionUser<'_>, OkfError> {
 }
 
 /// The 403 for a self-service route called with a key or an OAuth token.
+#[tracing::instrument(level = "trace", skip_all)]
 fn needs_session() -> OkfError {
     OkfError::Forbidden {
         reason: "this needs a console session: sign in at /signin \
@@ -101,6 +103,7 @@ fn needs_session() -> OkfError {
 ///
 /// # Errors
 /// [`OkfError::Forbidden`] for a bearer key or OAuth token.
+#[tracing::instrument(level = "trace", skip_all)]
 fn session_and_user(
     principal: &Principal,
     session: Option<Extension<ConsoleSession>>,
@@ -130,6 +133,7 @@ pub(crate) struct CeilingEntry {
 ///
 /// # Returns
 /// The entries, sorted by catalog (a `BTreeMap` iterates in key order).
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn ceiling_view(ceiling: Ceiling) -> Vec<CeilingEntry> {
     ceiling
         .into_iter()
@@ -208,6 +212,13 @@ pub(crate) struct PasskeyView {
 }
 
 impl From<passkeys::PasskeyInfo> for PasskeyView {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn from(info: passkeys::PasskeyInfo) -> Self {
         // Destructured, so a new field fails to compile here until someone
         // decides whether the API shows it.
@@ -247,6 +258,13 @@ pub(crate) struct IdentityView {
 }
 
 impl From<identities::IdentityInfo> for IdentityView {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn from(info: identities::IdentityInfo) -> Self {
         let identities::IdentityInfo {
             provider,
@@ -300,6 +318,13 @@ pub(crate) struct SessionView {
 }
 
 impl From<user_sessions::SessionInfo> for SessionView {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn from(info: user_sessions::SessionInfo) -> Self {
         let user_sessions::SessionInfo {
             id_prefix,
@@ -342,6 +367,13 @@ pub(crate) struct SignInView {
 }
 
 impl From<sign_in_events::SignInEvent> for SignInView {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn from(event: sign_in_events::SignInEvent) -> Self {
         let sign_in_events::SignInEvent {
             method,
@@ -416,6 +448,13 @@ struct PasswordBody {
 }
 
 impl std::fmt::Debug for PasswordBody {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display/Debug impl: runs while the subscriber formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("PasswordBody")
@@ -427,6 +466,13 @@ impl std::fmt::Debug for PasswordBody {
 }
 
 /// This area's routes.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/me", get(account))
@@ -458,6 +504,7 @@ pub(crate) fn routes() -> Router<Arc<App>> {
 /// # Errors
 /// [`OkfError::InvalidPath`] (400) for no catalogs, a catalog given twice,
 /// or an unknown level.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) fn requested_levels(
     entries: &[CatalogLevelBody],
 ) -> Result<BTreeMap<String, Access>, OkfError> {
@@ -492,6 +539,7 @@ pub(super) fn requested_levels(
 /// # Errors
 /// [`OkfError::LimitExceeded`] with `limit: "ceiling"`, naming the first
 /// catalog that is outside it or above its level.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) fn within_ceiling(
     levels: &BTreeMap<String, Access>,
     ceiling: &Ceiling,
@@ -530,6 +578,7 @@ pub(super) fn within_ceiling(
 /// # Errors
 /// [`OkfError::InvalidPath`] (400) for a malformed or past time;
 /// [`OkfError::LimitExceeded`] with `limit: "max_key_lifetime"` past the limit.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(super) fn key_expiry(
     requested: Option<&str>,
     max_lifetime: Option<std::time::Duration>,
@@ -586,6 +635,7 @@ pub(super) fn key_expiry(
 /// # Errors
 /// [`OkfError::NotFound`] for an unknown id or another user's credential
 /// (worded alike); [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 async fn own(
     app: &App,
     user: SessionUser<'_>,
@@ -622,6 +672,7 @@ async fn own(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 async fn owned(app: &App, user: SessionUser<'_>, kind: KeyKind) -> Result<Vec<KeyView>, OkfError> {
     Ok(key_rows::list(app.pool())
         .await?
@@ -636,6 +687,7 @@ async fn owned(app: &App, user: SessionUser<'_>, kind: KeyKind) -> Result<Vec<Ke
 ///
 /// # Errors
 /// 404 for a key that belongs to no user; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn account(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -682,6 +734,7 @@ async fn account(
 ///
 /// # Errors
 /// 403 for a bearer caller; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn list_keys(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -699,6 +752,7 @@ async fn list_keys(
 /// unknown level or a bad expiry; 409 for a bad or taken name or a default
 /// catalog that is not granted; 422 above the ceiling, past the key limit
 /// or the lifetime limit, or for an unknown body field such as `all`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn create_key(
     State(app): State<Arc<App>>,
     audit: crate::store::audit::AuditActor,
@@ -768,6 +822,7 @@ async fn create_key(
 /// # Errors
 /// 403 for a bearer caller; 404 for another user's key or an unknown id;
 /// 409 for a bad or taken name or a revoked key; 422 without `name`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn rename_key(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -791,6 +846,7 @@ async fn rename_key(
 /// # Errors
 /// 403 for a bearer caller; 404 for another user's key or an unknown id;
 /// 409 if it is already revoked.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn revoke_key(
     State(app): State<Arc<App>>,
     audit: crate::store::audit::AuditActor,
@@ -804,6 +860,7 @@ async fn revoke_key(
 ///
 /// # Errors
 /// 403 for a bearer caller; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn list_grants(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -819,6 +876,7 @@ async fn list_grants(
 ///
 /// # Errors
 /// As [`revoke_key`].
+#[tracing::instrument(level = "debug", skip_all)]
 async fn revoke_grant(
     State(app): State<Arc<App>>,
     audit: crate::store::audit::AuditActor,
@@ -844,6 +902,7 @@ async fn revoke_grant(
 /// # Errors
 /// 403 for a bearer caller; 404 for another user's credential or an
 /// unknown id; 409 if it is already revoked.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn revoke_own(
     app: &App,
     principal: &Principal,
@@ -879,6 +938,7 @@ async fn revoke_own(
 /// console reads as "signed out"); 401 once this session has ended; 422
 /// for a password the policy refuses (`limit: "password"`) or a body
 /// without `new_password`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn change_password(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -953,6 +1013,7 @@ async fn change_password(
 ///
 /// # Errors
 /// As [`passwords::change_from_session_in`]; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 async fn store_password_change(
     app: &App,
     change: &SessionChange<'_>,
@@ -969,6 +1030,7 @@ async fn store_password_change(
 ///
 /// # Errors
 /// 403 for a bearer caller; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn list_passkeys(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -991,6 +1053,7 @@ async fn list_passkeys(
 /// 403 for a bearer caller; 404 for an unknown id or another user's
 /// passkey; 422 for a name that is empty, over 64 characters or holds a
 /// control character (`limit: "passkey_name"`).
+#[tracing::instrument(level = "debug", skip_all)]
 async fn rename_passkey(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -1013,6 +1076,7 @@ async fn rename_passkey(
 /// # Errors
 /// 403 for a bearer caller; 404 for an unknown id or another user's
 /// passkey; 409 when it is the user's last sign-in method.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn remove_passkey(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -1034,6 +1098,7 @@ async fn remove_passkey(
 ///
 /// # Errors
 /// 403 for a bearer caller; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn list_identities(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -1068,6 +1133,7 @@ async fn list_identities(
 /// # Errors
 /// 403 for a bearer caller; 404 when none is linked there (another
 /// user's included); 409 when it is the user's last sign-in method.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn unlink_identity(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -1088,6 +1154,7 @@ async fn unlink_identity(
 ///
 /// # Errors
 /// 403 for a bearer caller; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn list_sessions(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -1112,6 +1179,7 @@ async fn list_sessions(
 /// 403 for a bearer caller; 404 for a malformed prefix or one that matches
 /// none of the user's sessions (another user's included); 409 for a prefix
 /// that matches several.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn revoke_session(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -1132,6 +1200,7 @@ async fn revoke_session(
 ///
 /// # Errors
 /// 403 for a bearer caller; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn list_sign_ins(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,

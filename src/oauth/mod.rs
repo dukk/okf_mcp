@@ -102,6 +102,7 @@ impl OAuth {
     /// [`OkfError::Config`] if `public_url` cannot appear in a header
     /// (`Config::validate` refuses such a URL first, so only a caller that
     /// skipped validation sees this).
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn new(config: &Config) -> Result<Option<Self>, OkfError> {
         let Some(public_url) = config.public_url.as_deref() else {
             return Ok(None);
@@ -151,6 +152,13 @@ impl OAuth {
 ///
 /// # Returns
 /// A router whose responses all carry `Cache-Control: no-store`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub fn routes() -> Router<Arc<App>> {
     Router::new()
         .merge(metadata::routes())
@@ -162,6 +170,7 @@ pub fn routes() -> Router<Arc<App>> {
 
 /// Marks a response uncacheable: tokens, codes and consent pages must never
 /// be stored by a cache.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn no_store(mut response: Response) -> Response {
     response
         .headers_mut()

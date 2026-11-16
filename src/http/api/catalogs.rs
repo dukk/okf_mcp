@@ -35,6 +35,13 @@ use crate::telemetry::subscriber::split_event;
 /// # Returns
 /// The router. Every path parameter is `{catalog}`, as in the other areas:
 /// axum refuses two routes that name the same position differently.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn routes(app: &App) -> Router<Arc<App>> {
     Router::new()
         // `get(a).post(b)` is one method router: one path, a handler per method.
@@ -88,6 +95,13 @@ impl CatalogSummary {
     /// * `state` - its state.
     /// * `principal` - the caller, which must reach the catalog (its
     ///   suspension is shown only to those who do).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn of(name: &str, state: &CatalogState, principal: &Principal) -> Self {
         // `current()` is an `Arc` of the loaded snapshot: one consistent
         // generation, file count and concept count.
@@ -185,6 +199,7 @@ pub(crate) struct CatalogDeleted {
 ///
 /// # Returns
 /// The listing, by name (`Catalogs` is a `BTreeMap`, so it iterates sorted).
+#[tracing::instrument(level = "debug", skip_all)]
 async fn list_catalogs(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -212,6 +227,7 @@ async fn list_catalogs(
 /// 403 for any other key; 404 ([`OkfError::UnknownName`]) for an unknown
 /// owner; 409 ([`OkfError::Refused`]) for an invalid or taken name; 422 for a
 /// body without `owner`; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn create_catalog(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -272,6 +288,7 @@ async fn create_catalog(
 /// # Errors
 /// 404 for a catalog the key does not reach or that does not exist; 403
 /// below `admin`; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn update_catalog(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -310,6 +327,7 @@ async fn update_catalog(
 /// # Errors
 /// 403 for any other key; 404 for an unknown catalog or team; 422 for a body
 /// without `team`; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn set_owner(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -372,6 +390,7 @@ pub(crate) struct MaintenanceChanged {
 /// and every other key); 404 for an unknown catalog asked by an admin; 422
 /// without `maintenance`, with another value or an unknown field; 500 for a
 /// database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn set_maintenance(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -443,6 +462,7 @@ pub(crate) struct MemberAccessChanged {
 /// # Errors
 /// 404 for a catalog the caller does not reach or that does not exist; 403
 /// below `admin` on it.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn member_access(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -464,6 +484,7 @@ async fn member_access(
 /// # Errors
 /// 403 for a caller `may_set_member_access` refuses; 400 for an unknown
 /// level; 404 for an unknown catalog; 422 without `access`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn set_member_access(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -505,6 +526,7 @@ async fn set_member_access(
 /// 404 for a catalog the key does not reach or that does not exist; 403
 /// below `admin`; 409 ([`OkfError::Refused`]) with unpublished changes and
 /// no `force`; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn delete_catalog(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,

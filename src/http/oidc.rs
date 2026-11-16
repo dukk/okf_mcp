@@ -84,6 +84,13 @@ const NO_SUCH_PROVIDER: &str = "No such sign-in provider.";
 ///
 /// # Returns
 /// The router, with the request timeout.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/auth/oidc/{provider}/start", get(start))
@@ -96,6 +103,13 @@ pub(crate) fn routes() -> Router<Arc<App>> {
 ///
 /// # Returns
 /// The router.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn api_routes() -> Router<Arc<App>> {
     // `{provider}`: Task 10b's `/me/identities/{provider}` must use the same
     // parameter name at this position, or the router refuses to build.
@@ -109,6 +123,7 @@ pub(crate) fn api_routes() -> Router<Arc<App>> {
 ///
 /// # Returns
 /// One button per configured provider, by id.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn buttons(app: &App) -> Vec<ProviderButton> {
     app.oidc().map_or_else(Vec::new, |oidc| {
         oidc.labels()
@@ -121,6 +136,7 @@ pub(crate) fn buttons(app: &App) -> Vec<ProviderButton> {
 }
 
 /// The `Set-Cookie` header that clears the flow cookie.
+#[tracing::instrument(level = "trace", skip_all)]
 fn clear_flow(app: &App) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -154,6 +170,7 @@ struct NewFlow<'a> {
 /// [`OkfError::NotFound`] for an unknown provider; [`OkfError::Busy`] when
 /// discovery fails with nothing cached or too many flows are in progress;
 /// [`OkfError::Io`] from the random source.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn begin(
     app: &App,
     oidc: &OidcProviders,
@@ -197,6 +214,7 @@ struct StartQuery {
 /// `GET /auth/oidc/{provider}/start`: 303 to the provider. Each start
 /// takes from the per-address sign-in limit, so no one address can fill
 /// the flow map.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn start(
     State(app): State<Arc<App>>,
     Path(provider): Path<String>,
@@ -260,6 +278,13 @@ enum Done {
 }
 
 /// A message page that also clears the flow cookie.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn page(brand: &Brand, headers: &HeaderMap, status: StatusCode, message: &str) -> Response {
     let mut response = message_page(status, TITLE, message, brand);
     append_all(response.headers_mut(), headers);
@@ -267,6 +292,7 @@ fn page(brand: &Brand, headers: &HeaderMap, status: StatusCode, message: &str) -
 }
 
 /// `GET /auth/oidc/{provider}/callback`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn callback(
     State(app): State<Arc<App>>,
     Path(provider): Path<String>,
@@ -345,6 +371,7 @@ async fn callback(
 }
 
 /// What to call a provider in the method-added notice.
+#[tracing::instrument(level = "trace", skip_all)]
 fn method_text(app: &App, provider: &str) -> String {
     let label = app
         .oidc()
@@ -355,6 +382,7 @@ fn method_text(app: &App, provider: &str) -> String {
 
 /// The identity's email, trimmed, when it may be used to find an account:
 /// sent, and verified by the provider.
+#[tracing::instrument(level = "trace", skip_all)]
 fn verified_email(identity: &Identity) -> Option<&str> {
     identity
         .email
@@ -369,6 +397,7 @@ fn verified_email(identity: &Identity) -> Option<&str> {
 /// so a changed email at the provider never reaches another account.
 /// Everything is one transaction ([`complete_sign_in`]); after its commit
 /// only the response is built.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn finish_sign_in(
     app: &App,
     parts: &Parts,
@@ -418,6 +447,7 @@ async fn finish_sign_in(
 /// [`OkfError::Unauthenticated`] for an identity unlinked (or a user
 /// deleted) meanwhile; [`OkfError::Refused`] as `identities::sign_in_in`;
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 async fn complete_sign_in(
     app: &App,
     parts: &Parts,
@@ -452,6 +482,7 @@ async fn complete_sign_in(
 /// The user of this browser's console session, when it is the live session
 /// that started the link (same id, compared in constant time, and the same
 /// user).
+#[tracing::instrument(level = "debug", skip_all)]
 async fn linking_user(
     app: &App,
     parts: &Parts,
@@ -474,6 +505,7 @@ async fn linking_user(
 /// its email (spec), and ends their other sessions unless kept, in one
 /// transaction. Only the browser still holding the session that started
 /// the link may finish it. After the commit only the notice runs, detached.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn finish_link(
     app: &Arc<App>,
     parts: &Parts,
@@ -521,6 +553,7 @@ async fn finish_link(
 ///
 /// # Errors
 /// As `identities::link_for_session_in`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn link_in_one_transaction(
     app: &App,
     user: &UserAuth,
@@ -552,6 +585,7 @@ struct LinkBody {
 /// 429 once the user's allowance is spent (a burst of
 /// [`crate::oidc::LINK_STARTS_PER_USER`], refilled one per minute);
 /// 503 when the provider cannot be reached.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn link(
     State(app): State<Arc<App>>,
     Path(provider): Path<String>,

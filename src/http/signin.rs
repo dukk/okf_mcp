@@ -103,6 +103,13 @@ pub(crate) struct SetupView<'a> {
 ///
 /// # Returns
 /// The router, with the request timeout.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn routes(app: &App) -> Router<Arc<App>> {
     let router = if app.config().public_url.is_some() {
         Router::new()
@@ -124,16 +131,31 @@ pub(crate) fn routes(app: &App) -> Router<Arc<App>> {
 
 /// Whether the pages offer a passkey: only when passkeys are on (a
 /// domain `public_url`).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn offers_passkeys(app: &App) -> bool {
     app.passkeys().is_some()
 }
 
 /// The OIDC provider buttons, one per configured provider.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn provider_buttons(app: &App) -> Vec<ProviderButton> {
     super::oidc::buttons(app)
 }
 
 /// What `/signin` offers on this server.
+#[tracing::instrument(level = "trace", skip_all)]
 fn sign_in_view(app: &App, return_to: String) -> SignInView {
     let login = app.config().public_url.is_some();
     SignInView {
@@ -158,6 +180,13 @@ fn sign_in_view(app: &App, return_to: String) -> SignInView {
 /// `Referrer-Policy: no-referrer`. A client that sends none (curl, an old
 /// browser) is let through: it is not a browser being steered. The passkey
 /// routes (`http::passkeys`) check it too.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub(crate) fn cross_site(headers: &HeaderMap) -> bool {
     headers
         .get("sec-fetch-site")
@@ -171,6 +200,7 @@ pub(crate) fn cross_site(headers: &HeaderMap) -> bool {
 ///
 /// # Returns
 /// The HTML, every value escaped.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn sign_in_html(view: &SignInView) -> String {
     let return_to = escape(&view.return_to);
     let mut html = String::from("        <h1>Sign in</h1>\n");
@@ -241,6 +271,7 @@ pub(crate) fn sign_in_html(view: &SignInView) -> String {
 }
 
 /// `/signin` with `status`; the passkey script only when offered.
+#[tracing::instrument(level = "trace", skip_all)]
 fn sign_in_response(status: StatusCode, view: &SignInView, brand: &Brand) -> Response {
     let scripts: &[&str] = if view.passkey { &[PASSKEY_SCRIPT] } else { &[] };
     pages::respond(
@@ -261,6 +292,7 @@ fn sign_in_response(status: StatusCode, view: &SignInView, brand: &Brand) -> Res
 ///
 /// # Returns
 /// The page, under the console CSP.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn message_page(
     status: StatusCode,
     title: &str,
@@ -285,6 +317,7 @@ struct SignInQuery {
 }
 
 /// `GET /signin`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn sign_in_page(State(app): State<Arc<App>>, Query(query): Query<SignInQuery>) -> Response {
     let mut view = sign_in_view(&app, safe_return_to(query.return_to.as_deref()));
     // Only a known notice is shown: the page never echoes text from its URL.
@@ -309,6 +342,7 @@ struct SignInForm {
 /// the one message, 429 past the per-address limit, or 403 from another
 /// site. Every 401 costs one argon2 verification (`passwords::verify` checks
 /// a dummy hash when there is no real one).
+#[tracing::instrument(level = "debug", skip_all)]
 async fn sign_in_post(
     State(app): State<Arc<App>>,
     parts: Parts,
@@ -401,6 +435,7 @@ async fn sign_in_post(
 /// [`OkfError::Unauthenticated`] when the password (or the user) changed
 /// after the check; [`OkfError::Database`]; [`OkfError::Io`] from the
 /// random source.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn begin(
     app: &App,
     parts: &Parts,
@@ -423,6 +458,7 @@ async fn begin(
 }
 
 /// The client address and `User-Agent` a new session records.
+#[tracing::instrument(level = "trace", skip_all)]
 fn client_of<'a>(app: &App, parts: &'a Parts) -> (Option<IpAddr>, &'a str) {
     let user_agent = parts
         .headers
@@ -469,6 +505,7 @@ pub(crate) struct SignIn<'a> {
 /// [`OkfError::Unauthenticated`] when the user is gone or the stamped
 /// password changed; [`OkfError::Database`]; [`OkfError::Io`] from the
 /// random source.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn start_in(
     app: &App,
     conn: &mut PgConnection,
@@ -532,6 +569,7 @@ pub(crate) async fn start_in(
 /// * `method` - how they tried.
 /// * `outcome` - what happened.
 /// * `ip` - their address, if known.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn audit(
     app: &App,
     user_id: Option<&str>,
@@ -566,6 +604,7 @@ pub(crate) async fn audit(
 ///
 /// # Errors
 /// [`OkfError::Database`] opening or ending the savepoint.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn notify_method_added(
     app: &App,
     conn: &mut PgConnection,
@@ -595,6 +634,7 @@ pub(crate) async fn notify_method_added(
 }
 
 /// The forgot page's body: the form, or the one answer.
+#[tracing::instrument(level = "trace", skip_all)]
 fn forgot_html(sent: bool) -> String {
     if sent {
         return format!(
@@ -617,6 +657,7 @@ fn forgot_html(sent: bool) -> String {
 }
 
 /// `GET /signin/forgot`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn forgot_page(State(app): State<Arc<App>>) -> Response {
     pages::page(
         StatusCode::OK,
@@ -636,6 +677,7 @@ struct ForgotForm {
 
 /// `POST /signin/forgot`: always the same answer (spec), 429 only past the
 /// per-address limit, 403 from another site.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn forgot_post(
     State(app): State<Arc<App>>,
     parts: Parts,
@@ -701,6 +743,7 @@ async fn forgot_post(
 ///
 /// # Errors
 /// [`OkfError::Database`]; [`OkfError::Io`] from the random source.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn send_reset(app: &App, email: &str) -> Result<(), OkfError> {
     let Some(public_url) = app.config().public_url.as_deref() else {
         return Ok(());
@@ -733,6 +776,7 @@ struct TokenQuery {
 
 /// The answer to an emailed link that does not work: 410 for an expired,
 /// used or unknown one, else the error.
+#[tracing::instrument(level = "trace", skip_all)]
 fn link_error(error: OkfError, brand: &Brand) -> Response {
     match error {
         OkfError::Gone { .. } => {
@@ -746,6 +790,7 @@ fn link_error(error: OkfError, brand: &Brand) -> Response {
 ///
 /// # Returns
 /// `Err` with what to tell the person (never the password itself).
+#[tracing::instrument(level = "trace", skip_all)]
 fn check_new_password(password: &str, confirm: &str) -> Result<(), String> {
     if password != confirm {
         return Err("The two passwords do not match.".to_string());
@@ -758,6 +803,7 @@ fn check_new_password(password: &str, confirm: &str) -> Result<(), String> {
 }
 
 /// The error line of a form page.
+#[tracing::instrument(level = "trace", skip_all)]
 fn error_line(error: Option<&str>) -> String {
     error.map_or_else(String::new, |message| {
         format!(
@@ -774,6 +820,7 @@ fn error_line(error: Option<&str>) -> String {
 ///
 /// # Returns
 /// The HTML, every value escaped.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn setup_html(view: &SetupView<'_>) -> String {
     let return_to = escape(view.return_to);
     let passkey = if view.passkey {
@@ -812,6 +859,7 @@ pub(crate) fn setup_html(view: &SetupView<'_>) -> String {
 }
 
 /// The setup page with `status`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn setup_response(status: StatusCode, view: &SetupView<'_>, brand: &Brand) -> Response {
     let scripts: &[&str] = if view.passkey { &[PASSKEY_SCRIPT] } else { &[] };
     pages::respond(
@@ -822,6 +870,7 @@ fn setup_response(status: StatusCode, view: &SetupView<'_>, brand: &Brand) -> Re
 }
 
 /// `GET /account/setup?token=...`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn setup_page(State(app): State<Arc<App>>, Query(query): Query<TokenQuery>) -> Response {
     let return_to = safe_return_to(query.return_to.as_deref());
     let brand = app.settings().brand();
@@ -854,6 +903,7 @@ struct NewPasswordForm {
 
 /// `POST /account/setup`: sets the password and signs in. The link is used
 /// only once the password passes, so a weak one can be retried.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn setup_post(
     State(app): State<Arc<App>>,
     parts: Parts,
@@ -929,6 +979,7 @@ async fn setup_post(
 /// [`OkfError::Gone`] for a link that no longer works (also when a
 /// concurrent post used it first); [`OkfError::LimitExceeded`],
 /// [`OkfError::Io`] or [`OkfError::Database`] otherwise.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn use_link(
     app: &App,
     parts: &Parts,
@@ -979,6 +1030,7 @@ struct LinkUsed {
 }
 
 /// The reset page's body.
+#[tracing::instrument(level = "trace", skip_all)]
 fn reset_html(token: &str, error: Option<&str>) -> String {
     format!(
         r#"        <h1>Choose a new password</h1>
@@ -999,6 +1051,7 @@ fn reset_html(token: &str, error: Option<&str>) -> String {
 }
 
 /// The reset page with `status`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn reset_response(status: StatusCode, token: &str, error: Option<&str>, brand: &Brand) -> Response {
     pages::page(
         status,
@@ -1010,6 +1063,7 @@ fn reset_response(status: StatusCode, token: &str, error: Option<&str>, brand: &
 }
 
 /// `GET /account/reset?token=...`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn reset_page(State(app): State<Arc<App>>, Query(query): Query<TokenQuery>) -> Response {
     let brand = app.settings().brand();
     match email_tokens::peek(app.pool(), &query.token, Purpose::Reset, app.clock().now()).await {
@@ -1020,6 +1074,7 @@ async fn reset_page(State(app): State<Arc<App>>, Query(query): Query<TokenQuery>
 
 /// `POST /account/reset`: sets the password, ends every session (spec),
 /// sends the notice and returns to `/signin`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn reset_post(
     State(app): State<Arc<App>>,
     parts: Parts,

@@ -35,6 +35,13 @@ use crate::telemetry::metrics::{Grant, Limiter};
 /// # Returns
 /// A router for [`crate::oauth::routes`] to merge (which adds
 /// `Cache-Control: no-store` to every answer).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/oauth/token", post(token))
@@ -57,6 +64,13 @@ struct TokenForm {
 }
 
 impl std::fmt::Debug for TokenForm {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display/Debug impl: runs while the subscriber formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // `finish_non_exhaustive` prints `..` for the fields left out.
         formatter
@@ -88,6 +102,13 @@ struct TokenResponse {
 }
 
 impl std::fmt::Debug for TokenResponse {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display/Debug impl: runs while the subscriber formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("TokenResponse")
@@ -98,6 +119,7 @@ impl std::fmt::Debug for TokenResponse {
 }
 
 impl IntoResponse for TokenResponse {
+    #[tracing::instrument(level = "trace", skip_all)]
     fn into_response(self) -> Response {
         // RFC 6749 section 5.1: a response carrying tokens must not be
         // cached, by HTTP/1.1 (`Cache-Control`) or HTTP/1.0 (`Pragma`) caches.
@@ -124,6 +146,13 @@ impl IntoResponse for TokenResponse {
 ///
 /// # Errors
 /// [`OAuthError::InvalidRequest`] naming the field.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn required<'a>(value: &'a Option<String>, name: &str) -> Result<&'a str, OAuthError> {
     value
         .as_deref()
@@ -166,6 +195,7 @@ struct Minted {
 /// # Errors
 /// [`OkfError::Io`] if the random source fails; [`OkfError::Database`];
 /// [`OkfError::Config`] for an impossible lifetime.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn mint(
     conn: &mut PgConnection,
     oauth: &OAuth,
@@ -220,6 +250,7 @@ async fn mint(
 }
 
 /// After commit: caches the new access token and hands back the response.
+#[tracing::instrument(level = "trace", skip_all)]
 fn remember(oauth: &OAuth, minted: Minted) -> TokenResponse {
     oauth.access.remember(
         minted.access_hash,
@@ -235,6 +266,7 @@ fn remember(oauth: &OAuth, minted: Minted) -> TokenResponse {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 async fn revoke_family(app: &App, oauth: &OAuth, family_id: &str) -> Result<(), OkfError> {
     let revoked = token_rows::revoke_family(app.pool(), family_id, app.clock().now()).await?;
     oauth.access.forget(&revoked);
@@ -242,6 +274,7 @@ async fn revoke_family(app: &App, oauth: &OAuth, family_id: &str) -> Result<(), 
 }
 
 /// The grant's client, if the grant is live and has one.
+#[tracing::instrument(level = "trace", skip_all)]
 fn grant_client(app: &App, grant_id: &str) -> Option<String> {
     // `?` on an `Option` returns `None` early, as on a `Result`.
     match &app.keys().find_grant(grant_id)?.kind {
@@ -289,6 +322,7 @@ async fn token(
 }
 
 /// `grant_type=authorization_code`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn exchange_code(
     app: &App,
     oauth: &OAuth,
@@ -384,6 +418,7 @@ async fn exchange_code(
 }
 
 /// `grant_type=refresh_token`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn refresh(app: &App, oauth: &OAuth, form: &TokenForm) -> Result<TokenResponse, OAuthError> {
     let presented = required(&form.refresh_token, "refresh_token")?;
     let client_id = required(&form.client_id, "client_id")?;
@@ -439,6 +474,7 @@ async fn refresh(app: &App, oauth: &OAuth, form: &TokenForm) -> Result<TokenResp
 
 /// `POST /oauth/revoke` (RFC 7009): 200 for any token, an unknown one
 /// included. A refresh token takes its whole family with it.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn revoke(
     State(app): State<Arc<App>>,
     form: Result<Form<RevokeForm>, FormRejection>,

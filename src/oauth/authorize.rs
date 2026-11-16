@@ -81,6 +81,13 @@ const CROSS_SITE: &str = "This form can only be sent from this site. Start again
 ///
 /// # Returns
 /// A router for [`crate::oauth::routes`] to merge.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub fn routes() -> Router<Arc<App>> {
     Router::new().route("/oauth/authorize", get(authorize).post(consent_post))
 }
@@ -125,6 +132,13 @@ struct ConsentForm {
 }
 
 impl std::fmt::Debug for ConsentForm {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display/Debug impl: runs while the subscriber formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("ConsentForm")
@@ -154,6 +168,7 @@ enum Approval {
 ///
 /// # Returns
 /// [`Approval::Current`] only when `posted` is that code's summary token.
+#[tracing::instrument(level = "trace", skip_all)]
 fn approval(accepted: Option<&AcceptedCode>, posted: Option<&str>) -> Approval {
     let Some(accepted) = accepted else {
         return Approval::NoCode;
@@ -184,6 +199,7 @@ fn approval(accepted: Option<&AcceptedCode>, posted: Option<&str>) -> Approval {
 ///
 /// # Returns
 /// Whether the nonce matched and was spent.
+#[tracing::instrument(level = "trace", skip_all)]
 fn claim_consent(consent: Option<&mut UserConsent>, posted: Option<&str>, fresh: String) -> bool {
     let Some(consent) = consent else {
         return false;
@@ -224,6 +240,7 @@ enum Hop {
 ///
 /// # Returns
 /// The redirect or the forwarding page.
+#[tracing::instrument(level = "trace", skip_all)]
 fn back_to_client(
     brand: &Brand,
     redirect_uri: &str,
@@ -271,6 +288,7 @@ fn back_to_client(
 ///
 /// # Returns
 /// The redirect or the forwarding page.
+#[tracing::instrument(level = "trace", skip_all)]
 fn error_to_client(
     brand: &Brand,
     redirect_uri: &str,
@@ -288,6 +306,7 @@ fn error_to_client(
 }
 
 /// The page view of a pending authorization.
+#[tracing::instrument(level = "trace", skip_all)]
 fn view(pending_id: &str, pending: &PendingAuthorization) -> PageView {
     // `redirect_uri_matches` parsed the URI before trusting it, so the
     // fallback never shows.
@@ -309,6 +328,7 @@ fn view(pending_id: &str, pending: &PendingAuthorization) -> PageView {
 }
 
 /// What a sign-in code grants, as step 2 states it.
+#[tracing::instrument(level = "trace", skip_all)]
 fn summary(record: &SignInCodeRecord) -> GrantSummary {
     GrantSummary {
         access: record.access.as_str(),
@@ -333,6 +353,7 @@ fn summary(record: &SignInCodeRecord) -> GrantSummary {
 ///
 /// # Returns
 /// The encoded query, without the `?`.
+#[tracing::instrument(level = "trace", skip_all)]
 fn canonical_query(query: &AuthorizeQuery) -> String {
     let fields = [
         ("response_type", &query.response_type),
@@ -354,6 +375,13 @@ fn canonical_query(query: &AuthorizeQuery) -> String {
 }
 
 /// The sign-in code path's URL for a request's [`canonical_query`].
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn code_href(query: &str) -> String {
     format!("/oauth/authorize?{query}&signin=code")
 }
@@ -367,6 +395,13 @@ fn code_href(query: &str) -> String {
 /// # Returns
 /// The URL with `signin=code` added, or `None` when it is not an authorize
 /// URL (so `/signin` shows no link for console sign-ins).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 pub(crate) fn code_path_href(return_to: &str) -> Option<String> {
     // `strip_prefix` is Python's `removeprefix`, returning `None` when the
     // prefix is absent.
@@ -381,6 +416,7 @@ pub(crate) fn code_path_href(return_to: &str) -> Option<String> {
 ///
 /// # Returns
 /// The redirect.
+#[tracing::instrument(level = "trace", skip_all)]
 fn to_sign_in(query: &str) -> Response {
     let return_to = format!("/oauth/authorize?{query}");
     // `byte_serialize` percent-encodes for a query value, like Python's
@@ -413,6 +449,7 @@ enum Choice {
 /// catalog not offered, a level above the offer or unknown, a ticked
 /// catalog without a level, a checkbox value other than `on`, or any
 /// other field.
+#[tracing::instrument(level = "trace", skip_all)]
 fn chosen_levels(
     choices: &BTreeMap<String, String>,
     offered: &Ceiling,
@@ -457,6 +494,7 @@ fn chosen_levels(
 ///
 /// # Returns
 /// The page, or the expired page if `pending` is on the code path.
+#[tracing::instrument(level = "trace", skip_all)]
 fn user_consent_page(
     pending_id: &str,
     pending: &PendingAuthorization,
@@ -486,6 +524,7 @@ fn user_consent_page(
 /// # Errors
 /// [`OkfError::UnknownName`] once the user is gone; [`OkfError::Io`] if
 /// the OS random source fails; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 async fn new_consent(app: &App, user: &UserAuth) -> Result<UserConsent, OkfError> {
     Ok(UserConsent {
         user_id: user.id.clone(),
@@ -503,6 +542,7 @@ async fn new_consent(app: &App, user: &UserAuth) -> Result<UserConsent, OkfError
 /// # Errors
 /// The status and message of the error page to show: never a redirect,
 /// since neither the client nor the redirect URI is trusted yet.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn trusted_client<'q>(
     app: &App,
     oauth: &OAuth,
@@ -563,6 +603,7 @@ async fn trusted_client<'q>(
 /// `GET /oauth/authorize`: validates the request, then shows step 1 (the
 /// sign-in code path), the signed-in consent page, or sends the browser to
 /// `/signin`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn authorize(
     State(app): State<Arc<App>>,
     headers: HeaderMap,
@@ -673,6 +714,7 @@ async fn authorize(
 }
 
 /// `POST /oauth/authorize`: the consent form (spec "Consent flow").
+#[tracing::instrument(level = "debug", skip_all)]
 async fn consent_post(
     State(app): State<Arc<App>>,
     parts: axum::http::request::Parts,
@@ -767,6 +809,7 @@ async fn consent_post(
 
 /// Counts a failed attempt and answers step 1 again, or drops the request
 /// at [`MAX_FAILED_ATTEMPTS`].
+#[tracing::instrument(level = "trace", skip_all)]
 fn failed_attempt(
     oauth: &OAuth,
     pending_id: &str,
@@ -795,6 +838,7 @@ fn failed_attempt(
 
 /// `action=code`: checks the code without consuming it, and shows step 2
 /// with a fresh summary token that replaces any earlier summary's.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn check_code(
     app: &App,
     oauth: &OAuth,
@@ -833,6 +877,7 @@ async fn check_code(
 
 /// `action=approve` from the current summary: redeems its code into a
 /// grant and [`finish`]es.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn approve(
     app: &App,
     oauth: &OAuth,
@@ -863,6 +908,7 @@ async fn approve(
 ///
 /// # Returns
 /// The forwarding page to the client with `code`, or an error page.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn finish(
     app: &App,
     oauth: &OAuth,
@@ -937,6 +983,7 @@ async fn finish(
 /// # Returns
 /// The forwarding page to the client, the page again (nothing or a bad
 /// default chosen), or an error page.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn consent_as_user(
     app: &App,
     oauth: &OAuth,
@@ -1034,6 +1081,7 @@ async fn consent_as_user(
 }
 
 /// A 500 error page; the details go to the log only.
+#[tracing::instrument(level = "trace", skip_all)]
 fn server_error(error: &OkfError, brand: &Brand) -> Response {
     split_event!(
         error,

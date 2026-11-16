@@ -43,6 +43,7 @@ impl AuditParams {
     /// # Errors
     /// As [`audit::parse_filters`]: 400 for an unknown action or a time
     /// that is not RFC 3339.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn query(&self) -> Result<AuditQuery<'_>, OkfError> {
         audit::parse_filters(&FilterText {
             team: self.team.as_deref(),
@@ -70,6 +71,13 @@ pub(crate) struct AuditPage {
 }
 
 /// This area's routes.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/audit", get(list_audit))
@@ -92,6 +100,7 @@ pub(crate) fn routes() -> Router<Arc<App>> {
 /// [`OkfError::Forbidden`] for anyone else (a member who is not an owner,
 /// an owner's key, a team the session's user does not own, a malformed
 /// team name); [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 async fn viewer(app: &App, principal: &Principal, team: Option<&str>) -> Result<Viewer, OkfError> {
     if principal.provisioner {
         return Ok(Viewer::Credential(principal.key_id.clone()));
@@ -122,6 +131,7 @@ async fn viewer(app: &App, principal: &Principal, team: Option<&str>) -> Result<
 /// # Errors
 /// 400 for a bad filter; 403 for a caller that may not read (see
 /// [`viewer`]); 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn list_audit(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -149,6 +159,7 @@ async fn list_audit(
 ///
 /// # Errors
 /// As [`list_audit`].
+#[tracing::instrument(level = "debug", skip_all)]
 async fn export_audit(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,

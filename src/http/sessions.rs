@@ -48,6 +48,13 @@ impl SessionKeys {
     ///
     /// # Returns
     /// The map.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial constructor: builds a value from its arguments"
+        )
+    )]
     pub fn new(idle: Duration) -> Self {
         Self {
             idle,
@@ -62,6 +69,7 @@ impl SessionKeys {
     /// * `session` - the `Mcp-Session-Id` rmcp issued.
     /// * `key_id` - the key of the request that opened it.
     /// * `now` - the time of that request.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn bind(&self, session: &str, key_id: &str, now: Instant) {
         let mut bindings = self.lock();
         // `retain` keeps the entries the closure accepts: Python's
@@ -86,6 +94,7 @@ impl SessionKeys {
     /// # Returns
     /// `true` only if `key_id` opened the session and it has not idled out;
     /// an idled-out binding is dropped.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn admits(&self, session: &str, key_id: &str, now: Instant) -> bool {
         let mut bindings = self.lock();
         let Some(binding) = bindings.get_mut(session) else {
@@ -106,6 +115,13 @@ impl SessionKeys {
     ///
     /// # Arguments
     /// * `session` - its id.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn release(&self, session: &str) {
         self.lock().remove(session);
     }
@@ -116,6 +132,13 @@ impl SessionKeys {
         self.lock().len()
     }
 
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn lock(&self) -> MutexGuard<'_, HashMap<String, Binding>> {
         // Poisoned only if a thread panicked while holding it; nothing here
         // can panic with it held.
@@ -139,6 +162,7 @@ impl SessionKeys {
 ///
 /// # Returns
 /// rmcp's response, or 404.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn bind_session(State(app): State<Arc<App>>, request: Request, next: Next) -> Response {
     let key_id = request
         .extensions()

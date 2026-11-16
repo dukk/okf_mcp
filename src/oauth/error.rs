@@ -60,6 +60,13 @@ impl OAuthError {
     ///
     /// # Returns
     /// The RFC's spelling, e.g. `"invalid_grant"`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn code(&self) -> &'static str {
         match self {
             OAuthError::InvalidRequest(_) => "invalid_request",
@@ -82,6 +89,13 @@ impl OAuthError {
     ///
     /// # Returns
     /// The status.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn status(&self) -> StatusCode {
         match self {
             OAuthError::InvalidClient(_) => StatusCode::UNAUTHORIZED,
@@ -103,6 +117,13 @@ impl OAuthError {
     ///
     /// # Returns
     /// The JSON value.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
             "error": self.code(),
@@ -112,6 +133,7 @@ impl OAuthError {
 }
 
 impl IntoResponse for OAuthError {
+    #[tracing::instrument(level = "trace", skip_all)]
     fn into_response(self) -> Response {
         if let OAuthError::Server(error) = &self {
             // The detail stays on stderr; the exported event keeps the kind.

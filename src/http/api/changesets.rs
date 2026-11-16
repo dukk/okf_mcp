@@ -39,6 +39,13 @@ struct ListQuery {
 /// # Returns
 /// `GET /changesets`, `GET /changesets/{handle}/diff` and
 /// `DELETE /changesets/{handle}`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/changesets", get(list))
@@ -50,6 +57,7 @@ pub(crate) fn routes() -> Router<Arc<App>> {
 ///
 /// # Errors
 /// 404 for a catalog the key does not reach; 500 if the store fails.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn list(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -66,6 +74,7 @@ async fn list(
 ///
 /// # Errors
 /// 404 for a handle the key may not use; 409 for a published or discarded one.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn diff(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -84,6 +93,7 @@ async fn diff(
 /// 404 for a handle the key may not use; 403 for an owner below write
 /// (none exists: opening needs write); 409 if it was published or
 /// discarded meanwhile.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn remove(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,

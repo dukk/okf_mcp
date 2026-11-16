@@ -42,6 +42,13 @@ pub(crate) struct QueuedMailView {
 }
 
 impl From<QueuedMail> for QueuedMailView {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn from(mail: QueuedMail) -> Self {
         let QueuedMail {
             id,
@@ -80,6 +87,13 @@ pub(crate) struct TestMail {
 }
 
 /// This area's routes.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/mail/test", post(send_test))
@@ -96,6 +110,7 @@ pub(crate) fn routes() -> Router<Arc<App>> {
 /// # Errors
 /// 403 unless the caller is an admin reaching every catalog; 422 for an
 /// address that is not one, or without `to`.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn send_test(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -117,6 +132,7 @@ async fn send_test(
 ///
 /// # Errors
 /// 403 below admin; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn list_queue(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -140,6 +156,7 @@ async fn list_queue(
 /// # Errors
 /// 403 unless the caller is an admin reaching every catalog; 404 for an
 /// unknown id; 409 for a mail that has not failed.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn retry_mail(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -164,6 +181,7 @@ async fn retry_mail(
 /// # Errors
 /// 403 unless the caller is an admin reaching every catalog; 404 for an
 /// unknown id; 409 while a worker is sending it.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn delete_mail(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,

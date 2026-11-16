@@ -46,6 +46,13 @@ use crate::store::unlocks::{
 const OPERATOR: &str = "an operator";
 
 /// This area's routes.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
+    )
+)]
 pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/unlocks", get(list_unlocks).post(create_unlock))
@@ -92,6 +99,13 @@ impl UnlockView {
     ///
     /// # Returns
     /// The view.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn of(record: UnlockRecord, now: DateTime<Utc>) -> Self {
         Self {
             state: record.state(now),
@@ -150,6 +164,13 @@ impl OwnerUnlockView {
     ///
     /// # Returns
     /// The view.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn of(record: UnlockRecord, now: DateTime<Utc>) -> Self {
         Self {
             state: record.state(now),
@@ -203,6 +224,13 @@ struct ListParams {
 
 /// Whether the caller administers `catalog`: an admin credential at
 /// `admin` there (every catalog for an every-catalog admin).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
 fn administers(principal: &Principal, catalog: &str) -> bool {
     principal.level(catalog) == Some(Access::Admin)
 }
@@ -219,6 +247,7 @@ fn administers(principal: &Principal, catalog: &str) -> bool {
 /// not administer or that does not exist, or an unknown user; 409 for a
 /// target user who is not an admin; 422 for hours over `unlock_max_hours` (or 0), a
 /// blank or over-long reason, or a bad body; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn create_unlock(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -290,6 +319,7 @@ async fn create_unlock(
 /// 403 for a caller that is neither an admin nor, through a console
 /// session, an owner of the named team; 400 for an unknown parameter; 500
 /// for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn list_unlocks(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -341,6 +371,7 @@ async fn list_unlocks(
 /// 403 below admin; 404 for an unknown id or one of a catalog the caller
 /// does not administer; 409 for one already ended or expired; 500 for a
 /// database failure.
+#[tracing::instrument(level = "debug", skip_all)]
 async fn end_unlock(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,

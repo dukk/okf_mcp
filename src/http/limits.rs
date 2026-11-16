@@ -55,6 +55,13 @@ impl KeyedLimiter {
     ///
     /// # Returns
     /// The limiter.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial constructor: builds a value from its arguments"
+        )
+    )]
     pub fn new(capacity: u32, per: Duration, max_keys: usize) -> Self {
         Self {
             capacity,
@@ -73,6 +80,7 @@ impl KeyedLimiter {
     /// `true` if the request may go ahead. A full map refuses a new key:
     /// spraying keys must not evict the buckets that are holding someone
     /// back.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn try_take(&self, key: &str, now: Instant) -> bool {
         // One lock covers finding or creating the key's bucket and taking
         // from it, so concurrent first requests share one bucket and no
@@ -106,6 +114,13 @@ impl SignInLimits {
     ///
     /// # Returns
     /// The limits.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial constructor: builds a value from its arguments"
+        )
+    )]
     pub fn new() -> Self {
         Self {
             sign_in_per_ip: KeyedLimiter::new(SIGN_IN_PER_IP, SIGN_IN_WINDOW, MAX_LIMITED_KEYS),
@@ -116,6 +131,13 @@ impl SignInLimits {
 }
 
 impl Default for SignInLimits {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
     fn default() -> Self {
         Self::new()
     }
@@ -130,6 +152,7 @@ impl Default for SignInLimits {
 /// An IPv4 address as text; an IPv6 address as its /64 (`2001:db8::/64`),
 /// so one host cannot get a bucket per address; or `"unknown"` (requests
 /// with no address, such as in-process tests, share one bucket).
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn ip_key(ip: Option<IpAddr>) -> String {
     // `to_canonical` turns an IPv4-mapped IPv6 address (`::ffff:192.0.2.7`)
     // back into the IPv4 address it carries.
