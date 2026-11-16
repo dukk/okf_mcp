@@ -51,6 +51,7 @@ use crate::store::settings::Brand;
 use crate::store::sign_in_events::{Method, Outcome};
 use crate::store::user_sessions;
 use crate::store::users::UserAuth;
+use crate::telemetry::metrics::Limiter;
 use crate::telemetry::subscriber::split_event;
 
 /// The flow cookie: `SameSite=Lax`, so the provider's redirect carries it.
@@ -215,6 +216,7 @@ async fn start(
         .sign_in_per_ip
         .try_take(&ip_key(ip), Instant::now())
     {
+        app.metrics().rate_limited(Limiter::SignInPerIp);
         return message_page(StatusCode::TOO_MANY_REQUESTS, TITLE, TOO_MANY, &brand);
     }
     let return_to = safe_return_to(query.return_to.as_deref());
@@ -581,6 +583,7 @@ async fn link(
     // A signed-in user is not limited by address, so their own allowance
     // keeps them from filling the flow map every sign-in shares.
     if !oidc.may_start_link(&user_id, Instant::now()) {
+        app.metrics().rate_limited(Limiter::LinkStarts);
         let body = serde_json::json!({
             "error": "TooManyRequests",
             "message": TOO_MANY_LINKS,

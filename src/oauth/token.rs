@@ -28,6 +28,7 @@ use crate::oauth::{pkce, OAuth};
 use crate::store::oauth::tokens::{
     self as token_rows, LiveAccessToken, NewToken, RefreshUse, RevokedToken, TokenKind,
 };
+use crate::telemetry::metrics::{Grant, Limiter};
 
 /// The routes: `POST /oauth/token` and `POST /oauth/revoke`.
 ///
@@ -249,7 +250,15 @@ fn grant_client(app: &App, grant_id: &str) -> Option<String> {
     }
 }
 
-/// `POST /oauth/token`.
+/// `POST /oauth/token`. One `okf.oauth.token` span per request; its grant
+/// is one of the closed set, set once the form is read (an unsupported
+/// type stays empty: a client chose it).
+#[tracing::instrument(
+    level = "info",
+    name = "okf.oauth.token",
+    skip_all,
+    fields(okf.oauth.grant = tracing::field::Empty)
+)]
 async fn token(
     State(app): State<Arc<App>>,
     form: Result<Form<TokenForm>, FormRejection>,
@@ -258,14 +267,21 @@ async fn token(
         .oauth()
         .ok_or_else(|| OAuthError::InvalidRequest("OAuth is off".to_string()))?;
     if !oauth.token_limit.try_take(Instant::now()) {
+        app.metrics().rate_limited(Limiter::OauthToken);
         return Err(OAuthError::SlowDown);
     }
     let Form(form) = form.map_err(|_| {
         OAuthError::InvalidRequest("the body must be application/x-www-form-urlencoded".to_string())
     })?;
     match required(&form.grant_type, "grant_type")? {
-        "authorization_code" => exchange_code(&app, oauth, &form).await,
-        "refresh_token" => refresh(&app, oauth, &form).await,
+        "authorization_code" => {
+            tracing::Span::current().record("okf.oauth.grant", Grant::AuthorizationCode.as_str());
+            exchange_code(&app, oauth, &form).await
+        }
+        "refresh_token" => {
+            tracing::Span::current().record("okf.oauth.grant", Grant::RefreshToken.as_str());
+            refresh(&app, oauth, &form).await
+        }
         other => Err(OAuthError::UnsupportedGrantType(format!(
             "{other:?} is not supported"
         ))),
@@ -363,6 +379,7 @@ async fn exchange_code(
             "the code was used twice".to_string(),
         ));
     }
+    app.metrics().oauth_token_issued(Grant::AuthorizationCode);
     Ok(remember(oauth, minted))
 }
 
@@ -414,6 +431,7 @@ async fn refresh(app: &App, oauth: &OAuth, form: &TokenForm) -> Result<TokenResp
             };
             let minted = mint(&mut tx, oauth, binding, now).await?;
             tx.commit().await.map_err(OkfError::from)?;
+            app.metrics().oauth_token_issued(Grant::RefreshToken);
             Ok(remember(oauth, minted))
         }
     }
@@ -429,6 +447,7 @@ async fn revoke(
         .oauth()
         .ok_or_else(|| OAuthError::InvalidRequest("OAuth is off".to_string()))?;
     if !oauth.token_limit.try_take(Instant::now()) {
+        app.metrics().rate_limited(Limiter::OauthToken);
         return Err(OAuthError::SlowDown);
     }
     let Form(form) = form.map_err(|_| {
@@ -458,12 +477,12 @@ mod tests {
     use axum::http::{HeaderMap, StatusCode};
 
     use super::{TokenForm, TokenResponse};
-    use crate::mcp::testing::TestApp;
+    use crate::mcp::testing::{render, sample_of, TestApp};
     use crate::oauth::state::code_key;
     use crate::oauth::testing::{
         authorize_query, authorize_query_for, form, forwarded, hidden, insert_loopback_client,
-        oauth_app, send, sign_in_code, CLIENT_ID, LOOPBACK_CLIENT_ID, LOOPBACK_ON_PORT,
-        LOOPBACK_REDIRECT_URI, REDIRECT_URI, RESOURCE, VERIFIER,
+        oauth_app, oauth_app_with_metrics, send, sign_in_code, CLIENT_ID, LOOPBACK_CLIENT_ID,
+        LOOPBACK_ON_PORT, LOOPBACK_REDIRECT_URI, REDIRECT_URI, RESOURCE, VERIFIER,
     };
     use crate::store::keys::Access;
 
@@ -712,6 +731,81 @@ mod tests {
 
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"], "invalid_grant");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn oauth_tokens_count_by_grant() {
+        use crate::telemetry::config::LogFormat;
+        use crate::telemetry::subscriber::capture::observe;
+
+        let (test, registry) = oauth_app_with_metrics().await;
+        let code = authorization_code(&test).await;
+        let (_, _, first) = token(&test, exchange(&code)).await;
+        let refresh_token = text(&first, "refresh_token");
+        let counted = render(&registry);
+        let series = |grant: &str, text: &str| {
+            sample_of(
+                text,
+                &format!("okf_oauth_tokens_issued_total{{grant=\"{grant}\"}}"),
+            )
+        };
+        assert_eq!(
+            series("authorization_code", &counted),
+            Some(1.0),
+            "{counted}"
+        );
+        assert_eq!(series("refresh_token", &counted), None, "{counted}");
+
+        // The refresh runs under an in-memory span exporter, on this thread.
+        let observed = tokio::task::block_in_place(|| {
+            observe("trace", "trace", "trace", LogFormat::Text, || {
+                tokio::runtime::Handle::current()
+                    .block_on(token(&test, refresh(&refresh_token, CLIENT_ID)));
+            })
+        });
+
+        let counted = render(&registry);
+        assert_eq!(
+            series("authorization_code", &counted),
+            Some(1.0),
+            "{counted}"
+        );
+        assert_eq!(series("refresh_token", &counted), Some(1.0), "{counted}");
+        let span = observed
+            .spans
+            .iter()
+            .find(|span| span.name == "okf.oauth.token")
+            .expect("an okf.oauth.token span");
+        let grant = span
+            .attributes
+            .iter()
+            .find(|attribute| attribute.key.as_str() == "okf.oauth.grant")
+            .map(|attribute| attribute.value.to_string());
+        assert_eq!(grant.as_deref(), Some("refresh_token"));
+        let exported = observed.exported_text();
+        for secret in [refresh_token.as_str(), CLIENT_ID] {
+            assert!(!exported.contains(secret), "{secret} in {exported}");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_exhausted_token_bucket_counts_as_the_oauth_token_limiter() {
+        let (test, registry) = oauth_app_with_metrics().await;
+        let oauth = test.app.oauth().expect("OAuth is on");
+        while oauth.token_limit.try_take(std::time::Instant::now()) {}
+
+        let (status, _, body) = token(&test, exchange("okfac_unused")).await;
+
+        assert_ne!(status, StatusCode::OK, "{body}");
+        let counted = render(&registry);
+        assert_eq!(
+            sample_of(
+                &counted,
+                "okf_ratelimit_rejections_total{limiter=\"oauth_token\"}"
+            ),
+            Some(1.0),
+            "{counted}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

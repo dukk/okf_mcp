@@ -49,6 +49,7 @@ use crate::store::oauth::codes::{self as code_rows, SignInCodeRecord};
 use crate::store::oauth::grants::{self as grant_rows, NewSelfIssuedGrant};
 use crate::store::settings::Brand;
 use crate::store::users::UserAuth;
+use crate::telemetry::metrics::Limiter;
 use crate::telemetry::subscriber::split_event;
 
 /// The message for every unusable sign-in code, so the page never says
@@ -689,6 +690,7 @@ async fn consent_post(
     }
     let now = Instant::now();
     if !oauth.consent_limit.try_take(now) {
+        app.metrics().rate_limited(Limiter::OauthConsent);
         return consent::error_page(
             StatusCode::TOO_MANY_REQUESTS,
             "Too many sign-in attempts. Wait a minute.",
