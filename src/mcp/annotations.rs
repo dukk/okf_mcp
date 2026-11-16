@@ -254,13 +254,7 @@ fn no_tool_text_names_okf_py_or_carries_a_contributor_note() {
 /// This list only shrinks: each of #509 to #513 deletes its entry in the same
 /// PR as its fix, and it must be empty when epic #507 closes.
 #[cfg(test)]
-const KNOWN_UNTYPED_PARAMETERS: &[(&str, &str)] = &[
-    ("set_frontmatter", "value"),
-    // Not in the directory's review, but the same shape (`anyOf` of a `$ref`
-    // and null, no `type`): found by this test (issue #508). Needs its own
-    // issue, then its entry deleted.
-    ("log", "kind"),
-];
+const KNOWN_UNTYPED_PARAMETERS: &[(&str, &str)] = &[("set_frontmatter", "value")];
 
 /// Does this property schema carry a direct `type` keyword?
 ///
