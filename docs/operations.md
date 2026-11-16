@@ -35,11 +35,11 @@ changesets and the routes in detail.
 
 ## 2. The image
 
-- **Name:** `ghcr.io/hypotheosis/okf-mcp:<version>`, for example `:0.19.0`.
+- **Name:** `ghcr.io/hypotheosis/okf-mcp:<version>`, for example `:0.20.0`.
   Every build is also tagged `:sha-<short commit>`. There is no `:latest`:
   manifests pin a version.
-- **Built by** `.github/workflows/image.yml` when a `v*` tag is pushed (`v0.19.0`
-  gives `:0.19.0`), and on a manual dispatch (which publishes `:sha-<short>`
+- **Built by** `.github/workflows/image.yml` when a `v*` tag is pushed (`v0.20.0`
+  gives `:0.20.0`), and on a manual dispatch (which publishes `:sha-<short>`
   only). The workflow runs no tests; they run before each merge.
 - **Contents:** Debian bookworm-slim with `ca-certificates`, and the binary at
   `/usr/local/bin/okf-mcp`. No git. The binary uses rustls and links no
@@ -407,7 +407,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: okf-mcp
-          image: ghcr.io/hypotheosis/okf-mcp:0.19.0
+          image: ghcr.io/hypotheosis/okf-mcp:0.20.0
           args: ["serve"]
           ports:
             - name: http
