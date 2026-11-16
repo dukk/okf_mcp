@@ -144,22 +144,7 @@ pub(crate) async fn app_with_metrics(
     catalogs_and_files: &[(&str, &[(&str, &str)])],
     config: Config,
 ) -> (TestApp, prometheus::Registry) {
-    let registry = prometheus::Registry::new();
-    let reader = opentelemetry_prometheus::exporter()
-        .with_registry(registry.clone())
-        .without_target_info()
-        .scope_info_enabled(false)
-        .build()
-        .expect("the Prometheus reader");
-    let provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
-        .with_reader(reader)
-        .build();
-    let meter = opentelemetry::metrics::MeterProvider::meter(&provider, "okf-mcp");
-    let metrics = Metrics::new(&meter);
-    crate::telemetry::metrics::observe_export_failures(
-        &meter,
-        Arc::new(crate::telemetry::otlp::ExportFailures::default()),
-    );
+    let (provider, metrics, registry) = local_metrics();
     let db = seed(catalogs_and_files, Utc::now()).await;
     let mut config = config;
     config.mail.worker = false;
@@ -184,6 +169,51 @@ pub(crate) fn render(registry: &prometheus::Registry) -> String {
     prometheus::TextEncoder::new()
         .encode_to_string(&registry.gather())
         .expect("encode the metrics")
+}
+
+/// The instruments on a local meter provider that renders into its own
+/// registry, shaped as `serve` builds them. Keep the provider alive: dropping
+/// it shuts the instruments down.
+///
+/// # Panics
+/// If the Prometheus reader cannot be built: a broken test setup.
+pub(crate) fn local_metrics() -> (
+    opentelemetry_sdk::metrics::SdkMeterProvider,
+    Metrics,
+    prometheus::Registry,
+) {
+    let registry = prometheus::Registry::new();
+    let reader = opentelemetry_prometheus::exporter()
+        .with_registry(registry.clone())
+        .without_target_info()
+        .scope_info_enabled(false)
+        .build()
+        .expect("the Prometheus reader");
+    let provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+        .with_reader(reader)
+        .build();
+    let meter = opentelemetry::metrics::MeterProvider::meter(&provider, "okf-mcp");
+    let metrics = Metrics::new(&meter);
+    crate::telemetry::metrics::observe_export_failures(
+        &meter,
+        Arc::new(crate::telemetry::otlp::ExportFailures::default()),
+    );
+    (provider, metrics, registry)
+}
+
+/// The value of one rendered series, as [`render`] prints it.
+///
+/// # Arguments
+/// * `rendered` - the exposition text.
+/// * `series` - the series exactly as rendered, labels included, in
+///   Prometheus's sorted label order (`okf_auth_attempts_total{method="password",outcome="ok"}`).
+///
+/// # Returns
+/// The series' value, or `None` when it is not there.
+pub(crate) fn sample_of(rendered: &str, series: &str) -> Option<f64> {
+    rendered
+        .lines()
+        .find_map(|line| line.strip_prefix(series)?.strip_prefix(' ')?.parse().ok())
 }
 
 /// Creates catalog `name`, owned by the fixture team, at `at`.

@@ -13,7 +13,7 @@ use tower::ServiceExt;
 use crate::http::api::testing::{Browser, MAIN};
 use crate::http::console_session::COOKIE;
 use crate::http::router;
-use crate::mcp::testing::{app_with, TestApp};
+use crate::mcp::testing::{app_with, app_with_metrics, TestApp};
 use crate::store::keys::{Access, Grants};
 use crate::store::oauth::clients::ClientKind;
 use crate::store::oauth::codes::{self as code_rows, insert_test_client, NewSignInCode};
@@ -57,6 +57,21 @@ pub(crate) async fn oauth_app() -> TestApp {
     // fixed test id goes in through the store's plain-SQL helper.
     insert_test_client(test.app.pool(), CLIENT_ID, ClientKind::Dcr, REDIRECT_URI).await;
     test
+}
+
+/// [`oauth_app`] recording on a local meter provider, and the registry it
+/// renders into.
+///
+/// # Panics
+/// As [`oauth_app`].
+pub(crate) async fn oauth_app_with_metrics() -> (TestApp, prometheus::Registry) {
+    let (test, registry) = app_with_metrics(
+        &[("main", MAIN), ("other", &[("index.md", "# Other\n")])],
+        oauth_config(PUBLIC_URL),
+    )
+    .await;
+    insert_test_client(test.app.pool(), CLIENT_ID, ClientKind::Dcr, REDIRECT_URI).await;
+    (test, registry)
 }
 
 /// Registers the DCR client [`LOOPBACK_CLIENT_ID`] with the portless
