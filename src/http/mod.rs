@@ -33,8 +33,9 @@ use serde::Serialize;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tower_http::timeout::TimeoutLayer;
-use tower_http::trace::{DefaultOnResponse, TraceLayer};
+use tower_http::trace::{DefaultOnResponse, OnResponse, TraceLayer};
 use tracing::Level;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::app::App;
 use crate::auth::require_key;
@@ -310,43 +311,183 @@ pub fn router(app: Arc<App>, shutdown: &CancellationToken) -> Router {
         // and no literal path, so neither does an id in a path segment (a
         // session's id prefix, a mail job id). `Router::layer` wraps the
         // routes, so it runs after routing and sees `MatchedPath`.
+        // The telemetry middleware goes first so it is inside `TraceLayer`
+        // (the last `.layer` is the outermost): it runs with the request span
+        // current.
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&app),
+            request_telemetry,
+        ))
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(request_span)
-                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+                .on_response(record_response),
         )
         // Hands `app` to every handler that asks for `State<Arc<App>>`.
         .with_state(app)
 }
 
-/// What the request span records as the path of a request no route
-/// matched: never the client's text.
-const UNMATCHED_ROUTE: &str = "<unmatched>";
+/// The request span `TraceLayer` opened, for code deeper in the stack that
+/// records the request's root fields (the principal's ids). Recording on a
+/// handle, not on `Span::current()`, is what keeps the fields on the root
+/// once the sweep's helper spans are current and a raised `traces_filter`
+/// exports them.
+#[derive(Debug, Clone)]
+pub struct RequestSpan(pub tracing::Span);
 
-/// The request span: method, matched route template and HTTP version. It
-/// records the route (`/api/v1/users/{name}/sessions/{id_prefix}`), never
-/// the literal path (which can carry an id or a token), the query (which
-/// can carry a single-use token) or any header.
+/// The OpenTelemetry semantic-convention name of an HTTP method: the nine
+/// standard ones as they are, anything else `_OTHER`, so a client cannot
+/// mint a label or attribute value.
+///
+/// # Arguments
+/// * `method` - the request's method.
+///
+/// # Returns
+/// A name from a closed set.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "a pure match over the method")
+)]
+fn semconv_method(method: &axum::http::Method) -> &'static str {
+    use axum::http::Method;
+    match *method {
+        Method::GET => "GET",
+        Method::POST => "POST",
+        Method::PUT => "PUT",
+        Method::DELETE => "DELETE",
+        Method::HEAD => "HEAD",
+        Method::OPTIONS => "OPTIONS",
+        Method::PATCH => "PATCH",
+        Method::TRACE => "TRACE",
+        Method::CONNECT => "CONNECT",
+        _ => "_OTHER",
+    }
+}
+
+/// The request span: a root span named `<METHOD> <route>`, with the matched
+/// route template, never the literal path (which can carry an id or a
+/// token), the query (which can carry a single-use token) or any header. A
+/// request no route matched gets no span, so a scanner probing random paths
+/// does not create a trace each (it still gets its 404).
+///
+/// The span is a root (`parent: None`), never the child of whatever span is
+/// current; a caller's `traceparent` becomes a span link, never the parent.
+/// This function is exempt from `uninstrumented_fn` for the same reason: an
+/// `#[instrument]` here would make its own span the parent of every request
+/// and export a span even for an unmatched path.
 ///
 /// # Arguments
 /// * `request` - the incoming request, after routing.
 ///
 /// # Returns
-/// An `info` span named `request`; its `path` is the route template, or
-/// [`UNMATCHED_ROUTE`] when no route matched.
+/// The span, or [`tracing::Span::none`] for an unmatched route.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "it opens the request span itself")
+)]
 fn request_span<B>(request: &axum::http::Request<B>) -> tracing::Span {
     // `MatchedPath` is the template axum's router put in the request's
     // extensions (a typed per-request map) when a route matched.
-    let route = request
+    let Some(route) = request
         .extensions()
         .get::<MatchedPath>()
-        .map_or(UNMATCHED_ROUTE, MatchedPath::as_str);
-    tracing::info_span!(
+        .map(MatchedPath::as_str)
+    else {
+        return tracing::Span::none();
+    };
+    let method = semconv_method(request.method());
+    // Integer fields are recorded as `i64` later: other integer types export
+    // as strings. `Empty` fields are declared now and filled in as known.
+    let span = tracing::info_span!(
+        parent: None,
         "request",
-        method = %request.method(),
-        path = %route,
-        version = ?request.version(),
-    )
+        otel.name = %format_args!("{method} {route}"),
+        otel.kind = "server",
+        otel.status_code = tracing::field::Empty,
+        http.request.method = method,
+        http.route = route,
+        http.response.status_code = tracing::field::Empty,
+        enduser.id = tracing::field::Empty,
+        okf.key.id = tracing::field::Empty,
+    );
+    if let Some(link) = crate::telemetry::propagation::link_from(request.headers()) {
+        // The caller's trace is linked, never adopted (spec Decision 4).
+        span.add_link(link);
+    }
+    span
+}
+
+/// `TraceLayer`'s response hook: records the status on the request span
+/// (an `i64`; `error` only for a 5xx, never a 4xx) and writes the same
+/// `info` line `DefaultOnResponse` did.
+///
+/// # Arguments
+/// * `response` - the response about to be sent.
+/// * `latency` - how long the handler took.
+/// * `span` - the request span (a disabled one for an unmatched route).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "it records on the request span handle")
+)]
+fn record_response<B>(response: &Response<B>, latency: Duration, span: &tracing::Span) {
+    let status = response.status();
+    span.record("http.response.status_code", i64::from(status.as_u16()));
+    if status.is_server_error() {
+        span.record("otel.status_code", "error");
+    }
+    DefaultOnResponse::new()
+        .level(Level::INFO)
+        .on_response(response, latency, span);
+}
+
+/// axum middleware inside `TraceLayer`: stores the request span in the
+/// request's extensions ([`RequestSpan`]) for the auth layers, and measures
+/// the request (`http.server.request.duration` and
+/// `http.server.active_requests`). An unmatched route has no span and is
+/// not measured.
+///
+/// Exempt from `uninstrumented_fn`: its own span would become
+/// `Span::current()` and it would capture that instead of the request span.
+///
+/// # Arguments
+/// * `app` - the shared state, for its metrics.
+/// * `request` - the request, after routing.
+/// * `next` - the rest of the stack.
+///
+/// # Returns
+/// The route's response.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "it must capture the request span")
+)]
+async fn request_telemetry(
+    State(app): State<Arc<App>>,
+    mut request: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    let Some(route) = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|matched| matched.as_str().to_string())
+    else {
+        return next.run(request).await;
+    };
+    let method = semconv_method(request.method());
+    request
+        .extensions_mut()
+        .insert(RequestSpan(tracing::Span::current()));
+    // The guard decrements on drop, so a client that disconnects (dropping
+    // this future) still balances the counter.
+    let _in_flight = app.metrics().http_in_flight(method, &route);
+    let started = std::time::Instant::now();
+    let response = next.run(request).await;
+    app.metrics().http_request(
+        method,
+        &route,
+        response.status().as_u16(),
+        started.elapsed(),
+    );
+    response
 }
 
 /// How long a stopping server waits for its background access writes.
@@ -433,6 +574,9 @@ pub async fn serve(
     }
     served
 }
+
+#[cfg(test)]
+mod telemetry_tests;
 
 #[cfg(test)]
 mod tests {
@@ -573,12 +717,12 @@ mod tests {
         assert_eq!(revoked.as_u16(), 204);
         assert_eq!(unmatched.as_u16(), 404);
         assert!(
-            logged.contains("path=/api/v1/users/{name}/sessions/{id_prefix}"),
+            logged.contains(r#"http.route="/api/v1/users/{name}/sessions/{id_prefix}""#),
             "the route template is logged: {logged}"
         );
         assert!(
-            logged.contains("path=<unmatched>"),
-            "an unmatched request logs a placeholder: {logged}"
+            !logged.contains("<unmatched>"),
+            "an unmatched request opens no span: {logged}"
         );
         assert!(
             !logged.contains(&prefix),

@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use opentelemetry::metrics::{Counter, Histogram, Meter};
+use opentelemetry::metrics::{Counter, Histogram, Meter, UpDownCounter};
 use opentelemetry::KeyValue;
 
 use super::otlp::{ExportFailures, FailureReason, Signal};
@@ -144,6 +144,11 @@ struct Instruments {
     poll_duration: Histogram<f64>,
     catalog_refreshes: Counter<u64>,
     keycache_reloads: Counter<u64>,
+    // Task 3: HTTP and MCP.
+    http_duration: Histogram<f64>,
+    http_active: UpDownCounter<i64>,
+    tool_duration: Histogram<f64>,
+    mcp_sessions: UpDownCounter<i64>,
     // Auth, rate limits and mail (Task 5).
     auth_attempts: Counter<u64>,
     oauth_tokens_issued: Counter<u64>,
@@ -205,6 +210,24 @@ impl Metrics {
                 keycache_reloads: meter
                     .u64_counter("okf.keycache.reloads")
                     .with_description("Key cache and settings reloads, by outcome.")
+                    .build(),
+                http_duration: seconds_histogram(
+                    meter,
+                    "http.server.request.duration",
+                    "HTTP server request duration, by method, route and status.",
+                ),
+                http_active: meter
+                    .i64_up_down_counter("http.server.active_requests")
+                    .with_description("HTTP requests being served, by method and route.")
+                    .build(),
+                tool_duration: seconds_histogram(
+                    meter,
+                    "okf.mcp.tool.duration",
+                    "MCP tool call duration, by tool, catalog and outcome.",
+                ),
+                mcp_sessions: meter
+                    .i64_up_down_counter("okf.mcp.sessions.active")
+                    .with_description("Open MCP sessions.")
                     .build(),
                 auth_attempts: counter(meter, "okf.auth.attempts", "Sign-in attempts."),
                 oauth_tokens_issued: counter(
@@ -382,6 +405,129 @@ impl Metrics {
     #[tracing::instrument(level = "trace", skip_all)]
     pub fn global() -> Self {
         Self::new(&opentelemetry::global::meter("okf-mcp"))
+    }
+}
+
+/// Task 3: the HTTP and MCP instruments' typed methods.
+impl Metrics {
+    /// Records one finished HTTP request.
+    ///
+    /// # Arguments
+    /// * `method` - the semconv method (`GET`, ... or `_OTHER`).
+    /// * `route` - the matched route template; never the literal path.
+    /// * `status` - the response status code.
+    /// * `elapsed` - how long the request took.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn http_request(&self, method: &'static str, route: &str, status: u16, elapsed: Duration) {
+        self.inner.http_duration.record(
+            elapsed.as_secs_f64(),
+            &[
+                KeyValue::new("http.request.method", method),
+                KeyValue::new("http.route", route.to_string()),
+                KeyValue::new("http.response.status_code", i64::from(status)),
+            ],
+        );
+    }
+
+    /// Counts a request as in flight until the returned guard drops
+    /// (including when the request's future is cancelled).
+    ///
+    /// # Arguments
+    /// * `method` - the semconv method.
+    /// * `route` - the matched route template.
+    ///
+    /// # Returns
+    /// The guard; dropping it decrements the counter.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn http_in_flight(&self, method: &'static str, route: &str) -> InFlight {
+        let attributes = vec![
+            KeyValue::new("http.request.method", method),
+            KeyValue::new("http.route", route.to_string()),
+        ];
+        self.inner.http_active.add(1, &attributes);
+        InFlight {
+            counter: self.inner.http_active.clone(),
+            attributes,
+        }
+    }
+
+    /// Records one finished MCP tool call.
+    ///
+    /// # Arguments
+    /// * `tool` - a [`tool_label`] value.
+    /// * `catalog` - a loaded catalog's name, or `none`.
+    /// * `outcome` - how the call ended.
+    /// * `elapsed` - how long it took.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn tool_call(
+        &self,
+        tool: &'static str,
+        catalog: &str,
+        outcome: Outcome,
+        elapsed: Duration,
+    ) {
+        self.inner.tool_duration.record(
+            elapsed.as_secs_f64(),
+            &[
+                KeyValue::new("tool", tool),
+                KeyValue::new("catalog", catalog.to_string()),
+                KeyValue::new("outcome", outcome.as_str()),
+            ],
+        );
+    }
+
+    /// Counts an MCP session as open until the returned guard drops.
+    ///
+    /// # Returns
+    /// The guard; dropping it decrements `okf.mcp.sessions.active`.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn mcp_session(&self) -> SessionGuard {
+        self.inner.mcp_sessions.add(1, &[]);
+        SessionGuard {
+            counter: self.inner.mcp_sessions.clone(),
+        }
+    }
+}
+
+/// An HTTP request in flight; decrements `http.server.active_requests` when
+/// dropped.
+#[derive(Debug)]
+pub struct InFlight {
+    counter: UpDownCounter<i64>,
+    attributes: Vec<KeyValue>,
+}
+
+// `Drop` runs when the value goes out of scope, like a Python context
+// manager's `__exit__`, and also when a cancelled future is dropped.
+impl Drop for InFlight {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "a drop hook that only adds to one counter"
+        )
+    )]
+    fn drop(&mut self) {
+        self.counter.add(-1, &self.attributes);
+    }
+}
+
+/// An open MCP session; decrements `okf.mcp.sessions.active` when dropped.
+#[derive(Debug)]
+pub struct SessionGuard {
+    counter: UpDownCounter<i64>,
+}
+
+impl Drop for SessionGuard {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "a drop hook that only adds to one counter"
+        )
+    )]
+    fn drop(&mut self) {
+        self.counter.add(-1, &[]);
     }
 }
 

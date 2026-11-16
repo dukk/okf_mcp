@@ -10,6 +10,7 @@ pub mod config;
 pub mod json;
 pub mod metrics;
 pub mod otlp;
+pub mod propagation;
 pub mod scrape;
 pub mod subscriber;
 

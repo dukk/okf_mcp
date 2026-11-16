@@ -374,6 +374,7 @@ pub async fn require_principal(
                 { key = %principal.key_id, },
                 "authenticated"
             );
+            crate::auth::record_on_request_span(request.extensions(), &principal);
             request.extensions_mut().insert(principal);
             insert_client_ip(&app, &mut request);
             return next.run(request).await;
@@ -411,6 +412,7 @@ pub async fn require_principal(
         { key = %principal.key_id, },
         "authenticated by a console session"
     );
+    crate::auth::record_on_request_span(request.extensions(), &principal);
     request.extensions_mut().insert(Arc::new(principal));
     request.extensions_mut().insert(ConsoleSession {
         id,

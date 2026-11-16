@@ -1158,6 +1158,58 @@ pub(crate) fn unauthorized(app: &App) -> Response {
         .into_response()
 }
 
+/// The `okf.key.id` span attribute for a principal: the credential's id for
+/// an API key or an OAuth grant, and the bare word `session` for a console
+/// session. A session's `key_id` is `session:<user name>` (see
+/// [`SESSION_KEY_PREFIX`]), and a name never goes in a span attribute.
+///
+/// # Arguments
+/// * `principal` - who the request acts as.
+///
+/// # Returns
+/// The value to record.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "a pure mapping of two fields")
+)]
+pub(crate) fn span_key_id(principal: &Principal) -> &str {
+    match principal.kind {
+        CredentialKind::Session { .. } => "session",
+        CredentialKind::ApiKey | CredentialKind::OAuth { .. } => &principal.key_id,
+    }
+}
+
+/// Records the principal's ids on `span`: `enduser.id` (the user's id, when
+/// the credential has a user) and `okf.key.id` ([`span_key_id`]). The one
+/// helper both the HTTP request span and the MCP tool span use, so the two
+/// never disagree about what may be exported. `span` must be a handle to the
+/// span (the request or tool root), never `Span::current()`, which under a
+/// raised trace filter is a child span that declares neither field.
+///
+/// # Arguments
+/// * `span` - the root span's handle.
+/// * `principal` - who the request acts as.
+#[tracing::instrument(level = "trace", skip_all)]
+pub(crate) fn record_principal_ids(span: &tracing::Span, principal: &Principal) {
+    span.record("okf.key.id", span_key_id(principal));
+    if let Some(user_id) = principal.user_id.as_deref() {
+        span.record("enduser.id", user_id);
+    }
+}
+
+/// Records the principal's ids on the request span the telemetry middleware
+/// stored in `extensions`, if there is one (no span for an unmatched route).
+///
+/// # Arguments
+/// * `extensions` - the request's extensions.
+/// * `principal` - who the request acts as.
+#[tracing::instrument(level = "trace", skip_all)]
+pub(crate) fn record_on_request_span(extensions: &axum::http::Extensions, principal: &Principal) {
+    if let Some(crate::http::RequestSpan(span)) = extensions.get::<crate::http::RequestSpan>() {
+        record_principal_ids(span, principal);
+    }
+}
+
 /// axum middleware: admits a request with a live API key or OAuth access
 /// token, inserting its `Arc<Principal>` into the request's extensions, and
 /// answers anything else with 401 and [`challenge`].
@@ -1195,6 +1247,7 @@ pub async fn require_key(
                 { key = %principal.key_id, },
                 "authenticated"
             );
+            record_on_request_span(request.extensions(), &principal);
             request.extensions_mut().insert(principal);
             crate::http::console_session::insert_client_ip(&app, &mut request);
             next.run(request).await
