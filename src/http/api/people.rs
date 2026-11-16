@@ -5,8 +5,9 @@
 //!
 //! Access (plan Decision 3, milestone 14 provisioners):
 //! - the provisioner allow-list permits non-admin account mutations and
-//!   team management, user lookup by email and user/team detail. It never
-//!   lists all users/teams or shows a user's keys and sign-in codes;
+//!   team management, user lookup by email, user/team detail and the team
+//!   list (issue #502). It never lists all users or shows a user's keys and
+//!   sign-in codes;
 //! - all other routes keep the admin rules below;
 //! - creating, deleting and changing users, teams and memberships, and
 //!   listing what is unassigned, need an admin key that reaches every
@@ -864,16 +865,18 @@ async fn delete_user(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `GET /teams`: every team.
+/// `GET /teams`: every team. A provisioner may list them too (issue #502),
+/// so it can reconcile its own records; the view holds no catalog content.
 ///
 /// # Errors
-/// 403 below admin; 500 for a database failure.
+/// 403 below admin, unless the key is a provisioner; 500 for a database
+/// failure.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn list_teams(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
 ) -> Result<Json<TeamList>, AppError> {
-    require_admin(&principal)?;
+    require_reader(&principal)?;
     let teams = teams::list(app.pool())
         .await?
         .into_iter()
