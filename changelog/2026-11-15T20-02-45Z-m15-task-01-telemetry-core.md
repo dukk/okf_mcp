@@ -18,6 +18,9 @@
 - `OTEL_SDK_DISABLED` is checked before OTLP credentials are resolved.
 - Context activation is explicit, and a test checks an exported log carries its span's trace and span ids.
 
+## Review round 2 (PR #480)
+- The JSON line's `trace_id`/`span_id` come from the whole subscriber (the captured `Dispatch`'s current span and the `Registry`'s ancestors), not the fmt layer's filtered context, so a warning inside an exported debug span carries its ids when stderr is at `warn` and traces at `debug`. If the span is not exported, the nearest exported ancestor's ids are used.
+
 ## Notes
 - Span-layer error-to-exception options are off so error text never becomes an attribute or status description.
 - No metrics, request spans or privacy audit yet: Tasks 1b, 2 and 3.

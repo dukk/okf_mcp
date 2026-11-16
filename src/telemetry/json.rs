@@ -86,7 +86,7 @@ where
 {
     fn format_event(
         &self,
-        ctx: &FmtContext<'_, S, N>,
+        _ctx: &FmtContext<'_, S, N>,
         mut writer: Writer<'_>,
         event: &Event<'_>,
     ) -> fmt::Result {
@@ -102,7 +102,7 @@ where
         );
         object.insert("level".to_string(), Value::from(metadata.level().as_str()));
         object.insert("target".to_string(), Value::from(metadata.target()));
-        if let Some((trace_id, span_id)) = self.current_ids(ctx) {
+        if let Some((trace_id, span_id)) = self.current_ids(event) {
             object.insert("trace_id".to_string(), Value::from(trace_id));
             object.insert("span_id".to_string(), Value::from(span_id));
         }
@@ -112,26 +112,41 @@ where
 }
 
 impl JsonWithTrace {
-    /// The trace and span ids (lower-case hex) of the event's current span,
-    /// when the OTel layer is tracing it.
-    fn current_ids<S, N>(&self, ctx: &FmtContext<'_, S, N>) -> Option<(String, String)>
-    where
-        S: Subscriber + for<'lookup> LookupSpan<'lookup>,
-        N: for<'writer> FormatFields<'writer> + 'static,
-    {
+    /// The trace and span ids (lower-case hex) of the event's span, or of its
+    /// nearest ancestor the OTel layer is tracing.
+    ///
+    /// The span comes from the whole subscriber, not from the fmt layer's
+    /// context: `FmtContext::lookup_current` only sees spans that pass the
+    /// fmt layer's own filter, so with stderr at `warn` and traces at
+    /// `debug` an exported `debug` span would be invisible and a warning
+    /// inside it would lose its ids (or take an ancestor's). The captured
+    /// `Dispatch` answers `current_span` for every span the registry tracks,
+    /// and its `Registry` walks the ancestors.
+    fn current_ids(&self, event: &Event<'_>) -> Option<(String, String)> {
         use opentelemetry::trace::TraceContextExt;
+        use tracing_subscriber::registry::LookupSpan;
+        use tracing_subscriber::Registry;
 
-        let span = ctx.lookup_current()?;
         let dispatch = self.0 .0.get()?.upgrade()?;
+        // An explicit parent, a root event, or the thread's current span.
+        let id = if event.is_contextual() {
+            dispatch.current_span().id().cloned()?
+        } else {
+            event.parent().cloned()?
+        };
+        let registry = dispatch.downcast_ref::<Registry>()?;
+        let span = registry.span(&id)?;
         // Not under `ExtensionsMut`: `get_otel_context` locks the span's
         // extensions itself.
-        let context = tracing_opentelemetry::get_otel_context(&span.id(), &dispatch)?;
-        let span_context = context.span().span_context().clone();
-        span_context.is_valid().then(|| {
-            (
-                span_context.trace_id().to_string(),
-                span_context.span_id().to_string(),
-            )
+        span.scope().find_map(|ancestor| {
+            let context = tracing_opentelemetry::get_otel_context(&ancestor.id(), &dispatch)?;
+            let span_context = context.span().span_context().clone();
+            span_context.is_valid().then(|| {
+                (
+                    span_context.trace_id().to_string(),
+                    span_context.span_id().to_string(),
+                )
+            })
         })
     }
 }
@@ -197,6 +212,82 @@ mod tests {
                 .is_some_and(|text| text.ends_with('Z')),
             "{line}"
         );
+    }
+
+    #[test]
+    fn ids_come_from_the_exported_span_even_when_stderr_filters_it_out() {
+        let exporter = InMemorySpanExporter::default();
+        let tracer = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let capture = Capture::default();
+        // stderr at warn, spans exported from debug: the debug span is
+        // invisible to the fmt layer's own context.
+        let settings = LayerSettings {
+            format: LogFormat::Json,
+            stderr: parse_filter("warn").expect("filter"),
+            traces: parse_filter("debug").expect("filter"),
+            logs: parse_filter("debug").expect("filter"),
+        };
+        let subscriber = build_with_writer(settings, Some(&tracer), None, capture.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            let outer = tracing::debug_span!(target: "okf_mcp::test", "outer");
+            let _outer = outer.enter();
+            let inner = tracing::debug_span!(target: "okf_mcp::test", "inner");
+            let _inner = inner.enter();
+            tracing::warn!(target: "okf_mcp::test", "inside inner");
+        });
+        let _ = tracer.force_flush();
+        let spans = exporter.get_finished_spans().expect("spans");
+        let inner = spans
+            .iter()
+            .find(|span| span.name == "inner")
+            .expect("inner");
+        let outer = spans
+            .iter()
+            .find(|span| span.name == "outer")
+            .expect("outer");
+        let text = capture.text();
+        let line: Value = serde_json::from_str(text.lines().next().expect("a line")).expect("JSON");
+        assert_eq!(line["trace_id"], inner.span_context.trace_id().to_string());
+        // The inner span's id, not the ancestor's.
+        assert_eq!(line["span_id"], inner.span_context.span_id().to_string());
+        assert_ne!(line["span_id"], outer.span_context.span_id().to_string());
+        let _ = tracer.shutdown();
+    }
+
+    #[test]
+    fn an_event_whose_span_is_not_exported_takes_the_nearest_exported_ancestor() {
+        let exporter = InMemorySpanExporter::default();
+        let tracer = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let capture = Capture::default();
+        // Only `info` and above is exported, so the trace-level child is not.
+        let settings = LayerSettings {
+            format: LogFormat::Json,
+            stderr: parse_filter("trace").expect("filter"),
+            traces: parse_filter("info").expect("filter"),
+            logs: parse_filter("info").expect("filter"),
+        };
+        let subscriber = build_with_writer(settings, Some(&tracer), None, capture.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            let outer = tracing::info_span!(target: "okf_mcp::test", "outer");
+            let _outer = outer.enter();
+            let inner = tracing::trace_span!(target: "okf_mcp::test", "hidden");
+            let _inner = inner.enter();
+            tracing::warn!(target: "okf_mcp::test", "inside hidden");
+        });
+        let _ = tracer.force_flush();
+        let spans = exporter.get_finished_spans().expect("spans");
+        let outer = spans
+            .iter()
+            .find(|span| span.name == "outer")
+            .expect("outer");
+        let line: Value =
+            serde_json::from_str(capture.text().lines().next().expect("a line")).expect("JSON");
+        assert_eq!(line["span_id"], outer.span_context.span_id().to_string());
+        let _ = tracer.shutdown();
     }
 
     #[test]
