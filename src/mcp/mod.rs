@@ -182,7 +182,9 @@ impl ServerHandler for OkfServer {
     ) -> Result<CallToolResponse, rmcp::ErrorData> {
         let tool = tool_label(&request.name);
         let catalog = self.catalog_label(request.arguments.as_ref());
+        let parent = tool_span_parent(&context.extensions);
         let span = tracing::info_span!(
+            parent: parent,
             "mcp",
             otel.name = %format_args!("mcp {tool}"),
             otel.kind = "server",
@@ -346,6 +348,29 @@ where
 
 #[cfg(test)]
 mod telemetry_tests;
+
+/// The parent of a tool call's `mcp <tool>` span.
+///
+/// The stateful session runs the handler on its worker task, not in the HTTP
+/// request's task, so `Span::current()` is empty there. The request span the
+/// HTTP layer stored in the request's extensions ([`crate::http::RequestSpan`])
+/// is the parent instead; with none (a handler called directly) it is
+/// whatever span is current, and with that also empty the tool span is a
+/// root. (Rust note: `Option<Id>` works as a `parent:`, where `None` makes a
+/// root span.)
+///
+/// # Arguments
+/// * `extensions` - the MCP request's extensions, which hold the HTTP `Parts`.
+///
+/// # Returns
+/// The parent span's id, or `None` for a root.
+fn tool_span_parent(extensions: &rmcp::model::Extensions) -> Option<tracing::span::Id> {
+    extensions
+        .get::<Parts>()
+        .and_then(|parts| parts.extensions.get::<crate::http::RequestSpan>())
+        .and_then(|request_span| request_span.0.id())
+        .or_else(|| tracing::Span::current().id())
+}
 
 #[cfg(test)]
 mod tests {
