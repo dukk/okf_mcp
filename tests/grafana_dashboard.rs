@@ -17,8 +17,9 @@ use serde_json::Value;
 const DASHBOARD: &str = include_str!("../examples/grafana/okf-mcp.json");
 
 /// PromQL words that can stand where a metric name could: grouping and
-/// matching keywords. (Function names are skipped by being followed by `(`.)
-const KEYWORDS: [&str; 8] = [
+/// matching keywords and the set operators. (Function names are skipped by
+/// being followed by `(`.)
+const KEYWORDS: [&str; 11] = [
     "by",
     "without",
     "on",
@@ -27,6 +28,9 @@ const KEYWORDS: [&str; 8] = [
     "group_right",
     "bool",
     "offset",
+    "and",
+    "or",
+    "unless",
 ];
 
 /// Every `expr` in the dashboard, panels and nested rows alike.
@@ -51,7 +55,8 @@ fn expressions(node: &Value, found: &mut Vec<String>) {
 fn metric_names(expression: &str) -> Vec<String> {
     let strings = Regex::new(r#""[^"]*""#).expect("pattern");
     let braces = Regex::new(r"\{[^}]*\}").expect("pattern");
-    let grouping = Regex::new(r"\b(?:by|without)\s*\([^)]*\)").expect("pattern");
+    let grouping = Regex::new(r"\b(?:by|without|on|ignoring|group_left|group_right)\s*\([^)]*\)")
+        .expect("pattern");
     let ranges = Regex::new(r"\[[^\]]*\]").expect("pattern");
     let identifier = Regex::new(r"[A-Za-z_:][A-Za-z0-9_:]*(\s*\()?").expect("pattern");
 
@@ -167,6 +172,55 @@ fn every_histogram_has_a_heatmap_of_its_buckets() {
         .collect();
     assert_eq!(histograms, in_heatmaps);
     assert_eq!(in_heatmaps.len(), 6, "{in_heatmaps:?}");
+
+    // And each one also has a quantile view beside its heatmap.
+    let mut quantile_expressions = Vec::new();
+    expressions(&dashboard, &mut quantile_expressions);
+    let with_quantiles: BTreeSet<String> = quantile_expressions
+        .iter()
+        .filter(|expression| expression.contains("histogram_quantile"))
+        .flat_map(|expression| metric_names(expression))
+        .filter_map(|name| name.strip_suffix("_bucket").map(str::to_string))
+        .collect();
+    assert_eq!(with_quantiles, in_heatmaps);
+}
+
+/// Whether a selector picks only failures: an `outcome="error"` or a 5xx
+/// status matcher. Such series exist only once a failure has happened.
+fn selects_failures(expression: &str) -> bool {
+    expression.contains(r#"outcome="error""#)
+        || expression.contains(r#"http_response_status_code=~"5..""#)
+}
+
+#[test]
+fn every_error_ratio_reads_zero_when_nothing_failed() {
+    // A failure series has no samples until the first failure, so a bare
+    // `failures / total` is empty ("No data") on a healthy server. The
+    // numerator must fall back to `0 * total` over the same labels, which
+    // keeps "no traffic" (an empty denominator) as "No data".
+    let dashboard: Value = serde_json::from_str(DASHBOARD).expect("the dashboard is JSON");
+    let mut found = Vec::new();
+    expressions(&dashboard, &mut found);
+    let ratios: Vec<_> = found
+        .iter()
+        .filter(|expression| selects_failures(expression) && expression.contains(" / "))
+        .collect();
+    assert!(ratios.len() >= 2, "found {ratios:?}");
+    for ratio in ratios {
+        let (numerator, _) = ratio.split_once(") / ").expect("a parenthesised numerator");
+        assert!(
+            numerator.contains(" or on(") && numerator.contains("(0 * "),
+            "`{ratio}` is empty, not 0, when nothing has failed"
+        );
+    }
+}
+
+#[test]
+fn the_extractor_skips_set_operators() {
+    let names = metric_names(
+        r#"(sum by (tool) (rate(a_total{outcome="error"}[5m])) or on(tool) (0 * sum by (tool) (rate(a_total[5m])))) / sum by (tool) (rate(a_total[5m]))"#,
+    );
+    assert_eq!(names, ["a_total", "a_total", "a_total"]);
 }
 
 /// Every selector of a metric in `expression`, matchers included
