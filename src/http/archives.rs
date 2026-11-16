@@ -195,22 +195,30 @@ impl Transfer {
     /// * `span` - the handler's span.
     /// * `app` - the shared state (for its metrics).
     /// * `direction` - export or import.
-    /// * `catalog` - [`resolved_catalog`]'s answer.
+    ///
+    /// It starts before the permission and unlock checks, so a refusal
+    /// there (an early `?`) still closes the span with an error outcome. It
+    /// has no catalog until [`Transfer::admit`]: nothing but the closed
+    /// outcome is recorded for a refused request.
     #[tracing::instrument(level = "trace", skip_all)]
-    fn begin(
-        span: tracing::Span,
-        app: &App,
-        direction: Direction,
-        catalog: Option<String>,
-    ) -> Self {
+    fn begin(span: tracing::Span, app: &App, direction: Direction) -> Self {
         Self {
             span,
             metrics: app.metrics().clone(),
             direction,
-            catalog,
+            catalog: None,
             started: Instant::now(),
             finished: false,
         }
+    }
+
+    /// Names the catalog once the request is admitted to it.
+    ///
+    /// # Arguments
+    /// * `catalog` - [`resolved_catalog`]'s answer.
+    #[tracing::instrument(level = "trace", skip_all)]
+    fn admit(&mut self, catalog: Option<String>) {
+        self.catalog = catalog;
     }
 
     /// Records the transfer's end: ok with its size, or an error for `None`.
@@ -314,6 +322,8 @@ async fn export_catalog(
     // `?` returns early with the error, converted to `AppError` by `From`.
     // Export stays open while the owner team is suspended (M13 spec), so
     // members can take their data; reach and read access still apply.
+    // Before any check, so a refusal still ends the span with an error.
+    let mut transfer = Transfer::begin(tracing::Span::current(), &app, Direction::Export);
     principal.require_export(&name)?;
     // Then the unlock (M14 Task 9b), before anything is read or recorded.
     let now = app.clock().now();
@@ -330,9 +340,7 @@ async fn export_catalog(
     };
     // Only now is the name admitted: the span and the metrics take the
     // loaded catalog's own name, never the path segment.
-    let span = tracing::Span::current();
-    let catalog = resolved_catalog(&span, &app, &name);
-    let transfer = Transfer::begin(span, &app, Direction::Export, catalog);
+    transfer.admit(resolved_catalog(&transfer.span, &app, &name));
     let exported = export(app.pool(), &name, Vec::new(), &options).await;
     transfer.finish(
         exported
@@ -435,15 +443,15 @@ async fn import_catalog(
     // the key check.
     request: Request,
 ) -> Result<Response, AppError> {
+    // Before any check, so a refusal still ends the span with an error.
+    let mut transfer = Transfer::begin(tracing::Span::current(), &app, Direction::Import);
     principal.require(Access::Admin, &name)?;
     // An import rewrites the catalog's contents: a write, which needs the
     // unlock a write does (M14 Task 9b). Checked before the body is read.
     let admission = principal.admission(&name, Access::Write, app.clock().now())?;
     // Only now is the name admitted: the span and the metrics take the
     // loaded catalog's own name, never the path segment.
-    let span = tracing::Span::current();
-    let catalog = resolved_catalog(&span, &app, &name);
-    let transfer = Transfer::begin(span, &app, Direction::Import, catalog);
+    transfer.admit(resolved_catalog(&transfer.span, &app, &name));
     let mut uploaded = None;
     // An `async` block, so every early return below (a refusal, a timeout)
     // still passes through the measurement after it.
@@ -1210,5 +1218,48 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("okf_archive_size_bytes_total"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_refused_request_still_ends_the_span_with_an_error_and_records_no_series() {
+        use crate::telemetry::config::LogFormat;
+        use crate::telemetry::subscriber::capture::{attribute, Observer};
+        let (test, registry) =
+            crate::mcp::testing::app_with_metrics(&[("pg", &[])], Config::default()).await;
+        // A key that may read but not write.
+        let reader = Arc::new(Principal {
+            access: Access::Read,
+            ..(*principal(&[], None)).clone()
+        });
+        for filter in ["info", "trace"] {
+            let observer = Observer::start("off", filter, "off", LogFormat::Text);
+            let import = router(&test, Arc::clone(&reader))
+                .oneshot(
+                    Request::post("/catalogs/pg/import")
+                        .body(Body::from(tarball()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let observed = observer.finish();
+
+            assert_eq!(import.status(), StatusCode::FORBIDDEN, "{filter}");
+            let spans = observed.spans_named("okf.archive.import");
+            assert_eq!(spans.len(), 1, "{filter}");
+            assert_eq!(
+                attribute(spans[0], "okf.outcome")
+                    .map(ToString::to_string)
+                    .as_deref(),
+                Some("error"),
+                "{filter}"
+            );
+            assert!(
+                matches!(spans[0].status, opentelemetry::trace::Status::Error { .. }),
+                "{filter}"
+            );
+            assert!(attribute(spans[0], "okf.catalog").is_none(), "{filter}");
+        }
+        let text = crate::mcp::testing::render(&registry);
+        assert!(!text.contains("okf_archive_"), "{text}");
     }
 }
