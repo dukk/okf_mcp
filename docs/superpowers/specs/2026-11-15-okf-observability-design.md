@@ -317,10 +317,10 @@ OTel names; the Prometheus reader renders them with `_` and unit and
 | `okf.build.info` | gauge (1) | `version` |
 
 Gauges read existing state (the snapshot cache, the key cache, the pool,
-`apalis.jobs`) through observable callbacks, so nothing new is stored
-*(Corrected, issue #497, 2026-11-16: one thing is: migration 0018, the
-partial index `changesets_open` on open changesets, keeps the open-changeset
-count from scanning the whole table each poll pass.)*.
+`apalis.jobs`) through observable callbacks, so nothing new is stored, apart from one index
+*(corrected, issue #497, 2026-11-16: migration 0018, the partial index
+`changesets_open` on open changesets, keeps the open-changeset count from
+scanning the whole table each poll pass)*.
 Catalog names are bounded by the catalogs that exist; a deleted catalog's
 series stop at the next collection.
 

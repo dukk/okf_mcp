@@ -1,7 +1,7 @@
 # M15 Task 12: observability close-out gaps (issue #497)
 
 ## Added
-- `db.system.name = "postgresql"` and `db.operation.name = "<module>.<function>"` on the `#[instrument]` span of every function in `src/store/**` that takes a pool, connection or transaction (259 spans, plus `publish::publish`). No SQL text or bind value is recorded.
+- `db.system.name = "postgresql"` and `db.operation.name = "<module>.<function>"` on the `#[instrument]` span of every function in `src/store/**` that takes a pool, connection or transaction (260 spans; `publish_locked` runs inside the tagged `okf.publish` span and is not tagged itself). No SQL text or bind value is recorded.
 - `method` and `outcome` on the auth spans: `signin::audit`, `signin::start_in` (through `signin::record_attempt`), `okf.oauth.token` (`method = "oauth_token"`) and OAuth authorize's `check_code` and `finish` (`method = "oauth_authorize"`, with a `Decision` drop guard). The outcome spellings are those of `okf_auth_attempts_total`.
 - `secrecy` 0.10.3: the OTLP header values and the Sentry DSN are `SecretString`s until `OtlpTarget::exposed_headers` hands them to an exporter.
 - A warning when `telemetry.otlp.endpoint` ends in `/v1/traces`, `/v1/metrics`, `/v1/logs` or `/v1`, with userinfo, query and fragment removed (`config::endpoint_with_signal_path`, `warn_if_endpoint_has_signal_path`).
