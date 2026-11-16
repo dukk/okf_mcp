@@ -39,6 +39,7 @@ pub struct DocumentRow {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn published<'e>(
     executor: impl PgExecutor<'e>,
     catalog_id: i64,
@@ -66,6 +67,7 @@ pub async fn published<'e>(
 /// Times keyed by catalog-relative path (the stored paths already have the
 /// spelling lint looks up); no dirty paths (M5 adds a session's changeset
 /// paths).
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn commit_times(rows: &[DocumentRow]) -> CommitTimes {
     let times = rows
         .iter()
@@ -103,6 +105,7 @@ impl Derived {
     ///
     /// # Returns
     /// The columns to store beside the content.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn of(doc: Option<&SnapshotDoc>) -> Self {
         // `let ... else` is an early return when the pattern does not match,
         // like `if doc is None: return Derived()`.
@@ -167,6 +170,13 @@ impl RevisionOp {
     ///
     /// # Returns
     /// `"create"`, `"update"`, `"delete"` or `"import"`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn as_str(self) -> &'static str {
         match self {
             RevisionOp::Create => "create",
@@ -198,6 +208,13 @@ impl<'a> RevisionRecord<'a> {
     ///
     /// # Returns
     /// The record, with the message `import` and no changeset.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn import(file: Option<&'a StoredFile>) -> Self {
         Self {
             op: if file.is_some() {
@@ -223,6 +240,7 @@ impl<'a> RevisionRecord<'a> {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn write_document(
     conn: &mut PgConnection,
     write: &DocumentWrite<'_>,
@@ -265,6 +283,7 @@ pub async fn write_document(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn delete_document(
     conn: &mut PgConnection,
     write: &DocumentWrite<'_>,
@@ -295,6 +314,7 @@ pub async fn delete_document(
 /// # Errors
 /// [`OkfError::Database`]: a unique violation if the revision already
 /// exists (which the publish lock rules out; publish maps it to a conflict).
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn record_revision(
     conn: &mut PgConnection,
     write: &DocumentWrite<'_>,
@@ -321,6 +341,13 @@ pub async fn record_revision(
 }
 
 /// The spelling stored in `documents.kind` (the schema's `CHECK` list).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: maps a value, no I/O"
+    )
+)]
 fn kind_name(kind: DocKind) -> &'static str {
     match kind {
         DocKind::Concept => "concept",

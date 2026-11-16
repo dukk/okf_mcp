@@ -31,6 +31,13 @@ impl Access {
     ///
     /// # Returns
     /// `"read"`, `"write"` or `"admin"`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn as_str(self) -> &'static str {
         match self {
             Access::Read => "read",
@@ -46,6 +53,13 @@ impl Access {
     ///
     /// # Returns
     /// The level, or `None` for anything other than [`Access::as_str`]'s spellings.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn parse(text: &str) -> Option<Self> {
         match text {
             "read" => Some(Access::Read),
@@ -71,6 +85,13 @@ impl KeyKind {
     ///
     /// # Returns
     /// `"key"` or `"oauth"`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn as_str(self) -> &'static str {
         match self {
             KeyKind::Key => "key",
@@ -85,6 +106,13 @@ impl KeyKind {
     ///
     /// # Returns
     /// The kind, or `None` for anything else.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn parse(text: &str) -> Option<Self> {
         match text {
             "key" => Some(KeyKind::Key),
@@ -229,6 +257,7 @@ struct KeyRow {
 ///
 /// # Returns
 /// `true` for a non-empty name of letters, digits, `.`, `_` and `-`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn is_valid_name(name: &str) -> bool {
     !name.is_empty()
         && name
@@ -246,6 +275,7 @@ pub(crate) fn is_valid_name(name: &str) -> bool {
 /// # Errors
 /// [`OkfError::LimitExceeded`] for a self-issued key granted every catalog,
 /// with `admin` access, or reporting maintenance.
+#[tracing::instrument(level = "trace", skip_all)]
 fn check_self_issued(new: &NewKey<'_>) -> Result<(), OkfError> {
     if !new.self_issued {
         return Ok(());
@@ -287,6 +317,7 @@ fn check_self_issued(new: &NewKey<'_>) -> Result<(), OkfError> {
 /// [`OkfError::Refused`] for levels with [`Grants::All`], levels on an admin
 /// key, a level for a catalog not granted, or a level that is `admin` or
 /// above the key's own.
+#[tracing::instrument(level = "trace", skip_all)]
 fn catalog_levels(new: &NewKey<'_>) -> Result<Vec<Option<&'static str>>, OkfError> {
     let refused = |reason: String| Err(OkfError::Refused { reason });
     let names = match new.grants {
@@ -366,6 +397,7 @@ pub struct NewProvisioner<'a> {
 /// [`OkfError::Refused`] for an invalid name or a live name and actor
 /// already taken; [`OkfError::UnknownName`] for an unknown user;
 /// [`OkfError::Io`] if the OS random source fails; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn create_provisioner(
     pool: &PgPool,
     new: &NewProvisioner<'_>,
@@ -447,6 +479,7 @@ pub async fn create_provisioner(
 /// (granted or default); [`OkfError::UnknownName`] for an unknown user;
 /// [`OkfError::Io`] if the OS random source fails; [`OkfError::Database`]
 /// otherwise.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn create(
     pool: &PgPool,
     new: &NewKey<'_>,
@@ -466,6 +499,7 @@ pub async fn create(
 ///
 /// # Errors
 /// As [`create`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn create_with_id(
     pool: &PgPool,
     new: &NewKey<'_>,
@@ -482,6 +516,7 @@ pub async fn create_with_id(
 }
 
 /// Locks a new key's user and all people its audit entry will resolve.
+#[tracing::instrument(level = "trace", skip_all)]
 async fn lock_new_key(
     conn: &mut PgConnection,
     new: &NewKey<'_>,
@@ -507,6 +542,7 @@ async fn lock_new_key(
 }
 
 /// Records creation after inserting the key and its grants, before commit.
+#[tracing::instrument(level = "trace", skip_all)]
 async fn record_created(
     conn: &mut PgConnection,
     id: &str,
@@ -542,6 +578,7 @@ async fn record_created(
 ///
 /// # Errors
 /// As [`create`].
+#[tracing::instrument(level = "trace", skip_all)]
 async fn insert_key(
     conn: &mut PgConnection,
     new: &NewKey<'_>,
@@ -633,6 +670,7 @@ async fn insert_key(
 /// [`OkfError::LimitExceeded`] with `limit: "max_keys_per_user"` at the
 /// limit; [`OkfError::UnknownName`] for an unknown user; otherwise as
 /// [`create`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn create_self_issued(
     pool: &PgPool,
     new: &NewKey<'_>,
@@ -690,6 +728,7 @@ pub async fn create_self_issued(
 /// # Errors
 /// [`OkfError::Refused`] for an invalid name, a name and actor another live
 /// key already has, or no live API key with this id; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn rename_by_id(pool: &PgPool, id: &str, name: &str) -> Result<(), OkfError> {
     if !is_valid_name(name) {
         return Err(OkfError::Refused {
@@ -765,6 +804,7 @@ pub(crate) async fn insert_legacy_test_key(
 /// # Errors
 /// [`OkfError::CatalogNotSelected`] for the first name with no catalog;
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn catalog_ids(
     conn: &mut PgConnection,
     names: &[String],
@@ -803,6 +843,7 @@ pub(crate) async fn catalog_ids(
 /// [`OkfError::Refused`] for no catalogs or an ungranted default (checked
 /// before any query); [`OkfError::CatalogNotSelected`] for an unknown catalog;
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn resolve_grants(
     conn: &mut PgConnection,
     noun: &str,
@@ -852,6 +893,7 @@ pub(crate) async fn resolve_grants(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn list(pool: &PgPool) -> Result<Vec<KeyRecord>, OkfError> {
     // `levels` is aggregated in the same order as `catalogs`, so the two
     // arrays pair up; `COALESCE(g.access, k.access)` resolves a NULL level
@@ -921,6 +963,7 @@ pub async fn list(pool: &PgPool) -> Result<Vec<KeyRecord>, OkfError> {
 /// turning reporting on for an OAuth grant; [`OkfError::LimitExceeded`]
 /// (`maintenance_report`) for turning it on for a self-issued key, as at
 /// creation; [`OkfError::Database`] for storage failures.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn set_maintenance_report_target(
     pool: &PgPool,
     target: &str,
@@ -946,6 +989,7 @@ pub async fn set_maintenance_report_target(
 ///
 /// # Errors
 /// As [`set_maintenance_report_target`]; [`OkfError::Refused`] if there is no key with this id.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn set_maintenance_report_by_id(
     pool: &PgPool,
     id: &str,
@@ -957,6 +1001,7 @@ pub async fn set_maintenance_report_by_id(
 }
 
 /// Maps only the live-name constraint to a user-facing duplicate refusal.
+#[tracing::instrument(level = "trace", skip_all)]
 fn live_name_or(
     inserted: Result<String, sqlx::Error>,
     name: &str,
@@ -983,6 +1028,7 @@ fn live_name_or(
 }
 
 /// The body of [`set_maintenance_report_target`] and [`set_maintenance_report_by_id`].
+#[tracing::instrument(level = "trace", skip_all)]
 async fn set_maintenance_report_with(
     pool: &PgPool,
     selector: Selector<'_>,
@@ -1070,6 +1116,7 @@ async fn set_maintenance_report_with(
 /// # Errors
 /// [`OkfError::Refused`] if there is no such key or it is already revoked;
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn revoke_target(
     pool: &PgPool,
     target: &str,
@@ -1087,6 +1134,7 @@ pub async fn revoke_target(
 ///
 /// # Errors
 /// As [`revoke_target`]; [`OkfError::Refused`] if there is no key with this id.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn revoke_by_id(
     pool: &PgPool,
     id: &str,
@@ -1097,6 +1145,7 @@ pub async fn revoke_by_id(
 }
 
 /// The body of [`revoke_target`] and [`revoke_by_id`].
+#[tracing::instrument(level = "trace", skip_all)]
 async fn revoke_with(
     pool: &PgPool,
     selector: Selector<'_>,
@@ -1133,6 +1182,7 @@ async fn revoke_with(
 }
 
 /// Revokes a key selected by immutable id or an unambiguous live name.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn revoke(
     pool: &PgPool,
     target: &str,
@@ -1157,6 +1207,7 @@ pub async fn revoke(
 /// [`OkfError::Refused`] if there is no such key, it is revoked, or it already
 /// has every catalog (`--all`); [`OkfError::CatalogNotSelected`] if there is no such
 /// catalog; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn grant_target(
     pool: &PgPool,
     target: &str,
@@ -1182,6 +1233,7 @@ pub async fn grant_target(
 ///
 /// # Errors
 /// As [`grant_target`]; [`OkfError::Refused`] if there is no key with this id.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn grant_by_id(
     pool: &PgPool,
     id: &str,
@@ -1193,6 +1245,7 @@ pub async fn grant_by_id(
 }
 
 /// The body of [`grant_target`] and [`grant_by_id`].
+#[tracing::instrument(level = "trace", skip_all)]
 async fn grant_with(
     pool: &PgPool,
     selector: Selector<'_>,
@@ -1248,6 +1301,7 @@ async fn grant_with(
 }
 
 /// Grants a catalog to a key selected by immutable id or unambiguous name.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn grant(
     pool: &PgPool,
     target: &str,
@@ -1269,6 +1323,7 @@ pub async fn grant(
 ///
 /// # Errors
 /// As [`grant`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn ungrant_target(
     pool: &PgPool,
     target: &str,
@@ -1294,6 +1349,7 @@ pub async fn ungrant_target(
 ///
 /// # Errors
 /// As [`ungrant_target`]; [`OkfError::Refused`] if there is no key with this id.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn ungrant_by_id(
     pool: &PgPool,
     id: &str,
@@ -1305,6 +1361,7 @@ pub async fn ungrant_by_id(
 }
 
 /// The body of [`ungrant_target`] and [`ungrant_by_id`].
+#[tracing::instrument(level = "trace", skip_all)]
 async fn ungrant_with(
     pool: &PgPool,
     selector: Selector<'_>,
@@ -1365,6 +1422,7 @@ async fn ungrant_with(
 }
 
 /// Removes a catalog grant from a key selected by id or unambiguous name.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn ungrant(
     pool: &PgPool,
     target: &str,
@@ -1392,6 +1450,7 @@ pub async fn ungrant(
 /// # Errors
 /// [`OkfError::UnknownName`] for an unknown user; [`OkfError::NotFound`]
 /// (`keys/<id>`) when no row has this id; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn assign_user_by_id(
     pool: &PgPool,
     id: &str,
@@ -1426,6 +1485,7 @@ pub async fn assign_user_by_id(
 /// [`OkfError::Refused`] for an unknown, revoked (by name) or ambiguous
 /// target, or an actor given with an id; [`OkfError::UnknownName`] for an
 /// unknown user; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn assign_user_target(
     pool: &PgPool,
     target: &str,
@@ -1454,6 +1514,7 @@ pub async fn assign_user_target(
 ///
 /// # Errors
 /// [`OkfError::UnknownName`] for an unknown user; [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all)]
 async fn set_user(
     conn: &mut PgConnection,
     id: &str,
@@ -1522,6 +1583,7 @@ async fn set_user(
 /// # Errors
 /// [`OkfError::Database`], including when no row has this id (callers have
 /// just locked or changed it).
+#[tracing::instrument(level = "trace", skip_all)]
 async fn key_target<'a>(conn: &mut PgConnection, id: &'a str) -> Result<Target<'a>, OkfError> {
     let kind: String = sqlx::query_scalar("SELECT kind FROM api_keys WHERE id = $1")
         .bind(id)
@@ -1548,6 +1610,7 @@ async fn key_target<'a>(conn: &mut PgConnection, id: &'a str) -> Result<Target<'
 ///
 /// # Errors
 /// [`OkfError::Database`] and the errors of [`audit::record`].
+#[tracing::instrument(level = "trace", skip_all)]
 async fn record_change(
     conn: &mut PgConnection,
     id: &str,
@@ -1598,6 +1661,7 @@ enum Selector<'a> {
 }
 
 /// The id `selector` names, inside the change's transaction.
+#[tracing::instrument(level = "trace", skip_all)]
 async fn select(conn: &mut PgConnection, selector: Selector<'_>) -> Result<String, OkfError> {
     match selector {
         Selector::Resolve { target, actor } => resolve_active(conn, target, actor, false).await,
@@ -1630,6 +1694,7 @@ async fn select(conn: &mut PgConnection, selector: Selector<'_>) -> Result<Strin
 /// # Errors
 /// [`OkfError::Refused`] for an unknown, revoked or ambiguous target, or an
 /// actor given with an id; [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all)]
 async fn resolve_active(
     conn: &mut PgConnection,
     target: &str,
@@ -1708,6 +1773,7 @@ async fn resolve_active(
 /// Refuses an unknown key id, a revoked key (as [`revoke`] does: its grants
 /// no longer matter), and a key granted every catalog: its grants are not
 /// per catalog, so granting or removing one would change nothing it reaches.
+#[tracing::instrument(level = "trace", skip_all)]
 async fn require_named_grants(conn: &mut PgConnection, id: &str) -> Result<(), OkfError> {
     // `Option<(bool, bool)>`: `None` when there is no such row.
     let key: Option<(bool, bool)> =

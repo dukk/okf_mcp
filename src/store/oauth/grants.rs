@@ -48,6 +48,13 @@ pub struct NewSelfIssuedGrant<'a> {
 }
 
 impl std::fmt::Debug for NewSelfIssuedGrant<'_> {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display or Debug impl: runs inside the subscriber while it formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("NewSelfIssuedGrant")
@@ -73,6 +80,7 @@ impl std::fmt::Debug for NewSelfIssuedGrant<'_> {
 ///
 /// # Errors
 /// [`OkfError::Io`] if the OS random source fails.
+#[tracing::instrument(level = "trace", skip_all)]
 fn grant_name(user: &str, client: &ClientRecord) -> Result<String, OkfError> {
     let id = new_id()?;
     // `new_id` is 32 hex characters; `get(..8)` returns `None` rather than
@@ -89,6 +97,13 @@ fn grant_name(user: &str, client: &ClientRecord) -> Result<String, OkfError> {
 ///
 /// # Returns
 /// A non-empty actor.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
+    )
+)]
 fn actor_for(client: &ClientRecord) -> String {
     match client.client_name.as_deref().map(str::trim) {
         // `chars().take(n)` cuts on character boundaries, never inside a
@@ -109,6 +124,7 @@ fn actor_for(client: &ClientRecord) -> String {
 ///
 /// # Errors
 /// [`OkfError::Refused`].
+#[tracing::instrument(level = "trace", skip_all)]
 fn grant_access(levels: &BTreeMap<String, Access>) -> Result<Access, OkfError> {
     // The schema also refuses an admin self-issued row; checking here gives
     // a reason instead of a CHECK violation.
@@ -147,6 +163,7 @@ fn grant_access(levels: &BTreeMap<String, Access>) -> Result<Access, OkfError> {
 /// # Errors
 /// [`OkfError::Unauthenticated`] when the user or the session is gone or
 /// ended; [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all)]
 async fn lock_signed_in(
     conn: &mut PgConnection,
     new: &NewSelfIssuedGrant<'_>,
@@ -192,6 +209,7 @@ async fn lock_signed_in(
 /// [`OkfError::Unauthenticated`] when the user or the session is gone;
 /// [`OkfError::CatalogNotSelected`] for a catalog deleted meanwhile;
 /// [`OkfError::Io`] if the OS random source fails; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn create_self_issued(
     pool: &PgPool,
     new: &NewSelfIssuedGrant<'_>,

@@ -98,6 +98,7 @@ pub(crate) use user_auth_columns;
 ///
 /// # Errors
 /// [`OkfError::Refused`] for an invalid name.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn check_name(noun: &str, name: &str) -> Result<(), OkfError> {
     if is_valid_name(name) {
         Ok(())
@@ -117,6 +118,7 @@ pub(crate) fn check_name(noun: &str, name: &str) -> Result<(), OkfError> {
 ///
 /// # Errors
 /// [`OkfError::Refused`] when taken; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn check_free(conn: &mut PgConnection, name: &str) -> Result<(), OkfError> {
     let taken: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM users WHERE name = $1) \
@@ -132,6 +134,13 @@ pub(crate) async fn check_free(conn: &mut PgConnection, name: &str) -> Result<()
 }
 
 /// The refusal for a name a user or team already has.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: builds an error value, no I/O"
+    )
+)]
 fn name_taken(name: &str) -> OkfError {
     OkfError::Refused {
         reason: format!("the name {name:?} is already taken by a user or team"),
@@ -156,6 +165,13 @@ fn name_taken(name: &str) -> OkfError {
 /// [`OkfError::Refused`] for a unique violation; [`OkfError::Database`]
 /// otherwise.
 // Generic over `T`: an insert may return an id (`String`) or anything else.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: builds an error value, no I/O"
+    )
+)]
 pub(crate) fn or_name_taken<T>(
     inserted: Result<T, sqlx::Error>,
     name: &str,
@@ -185,6 +201,7 @@ pub(crate) fn or_name_taken<T>(
 /// [`OkfError::Refused`] for an invalid name or one a user or team already
 /// has (including one taken by a concurrent create); [`OkfError::Database`]
 /// otherwise.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn create(
     pool: &PgPool,
     new: &NewUser<'_>,
@@ -264,6 +281,7 @@ pub async fn create(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn list(pool: &PgPool) -> Result<Vec<UserRecord>, OkfError> {
     Ok(
         sqlx::query_as::<_, UserRecord>(concat!(select_users!(), " ORDER BY u.name"))
@@ -283,6 +301,7 @@ pub async fn list(pool: &PgPool) -> Result<Vec<UserRecord>, OkfError> {
 ///
 /// # Errors
 /// [`OkfError::UnknownName`] if there is none; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn find<'e>(
     executor: impl sqlx::PgExecutor<'e>,
     name: &str,
@@ -320,6 +339,7 @@ pub async fn find<'e>(
 ///
 /// # Errors
 /// [`OkfError::UnknownName`]; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn id_of(conn: &mut PgConnection, name: &str) -> Result<String, OkfError> {
     sqlx::query_scalar("SELECT id FROM users WHERE name = $1 FOR KEY SHARE")
         .bind(name)
@@ -346,6 +366,7 @@ pub(crate) async fn id_of(conn: &mut PgConnection, name: &str) -> Result<String,
 /// [`OkfError::UnknownName`]; [`OkfError::Database`].
 // `impl PgExecutor<'e>` accepts `&PgPool` or `&mut PgConnection`, so one
 // function serves both, like `catalogs::find`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn id_by_name<'e>(
     executor: impl sqlx::PgExecutor<'e>,
     name: &str,
@@ -382,6 +403,7 @@ pub async fn id_by_name<'e>(
 ///
 /// # Errors
 /// [`OkfError::UnknownName`]; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn end_sessions(
     pool: &PgPool,
     name: &str,
@@ -424,6 +446,7 @@ pub async fn end_sessions(
 /// malformed prefix or one matching none of the user's sessions (noun
 /// `"session"`); [`OkfError::Refused`] for a prefix matching several;
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn end_session_by_prefix(
     pool: &PgPool,
     name: &str,
@@ -460,6 +483,7 @@ pub async fn end_session_by_prefix(
 ///
 /// # Errors
 /// As [`audit::lock_people`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn lock_target(
     conn: &mut PgConnection,
     name: &str,
@@ -488,6 +512,13 @@ pub(crate) async fn lock_target(
 ///
 /// # Returns
 /// The entry, to pass to [`audit::record`].
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: maps a value, no I/O"
+    )
+)]
 pub(crate) fn user_entry(action: Action, user_id: &str, details: serde_json::Value) -> Entry<'_> {
     Entry {
         action,
@@ -499,6 +530,13 @@ pub(crate) fn user_entry(action: Action, user_id: &str, details: serde_json::Val
 }
 
 /// The error for a user name that names no user.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: builds an error value, no I/O"
+    )
+)]
 pub(crate) fn unknown(name: &str) -> OkfError {
     OkfError::UnknownName {
         noun: "user",
@@ -521,6 +559,7 @@ const MAX_EMAIL_LENGTH: usize = 254;
 ///
 /// # Errors
 /// [`OkfError::LimitExceeded`] with `limit: "email"`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn check_email(email: &str) -> Result<(), OkfError> {
     let refuse = |reason: &str| OkfError::LimitExceeded {
         limit: "email",
@@ -557,6 +596,7 @@ pub(crate) fn check_email(email: &str) -> Result<(), OkfError> {
 ///
 /// # Returns
 /// The normalized address, or `None`.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn normalize_email(raw: &str) -> Option<String> {
     let email = raw.trim().to_lowercase();
     is_lookup_email(&email).then_some(email)
@@ -566,6 +606,7 @@ pub(crate) fn normalize_email(raw: &str) -> Option<String> {
 /// Store functions that take a typed address check it, so text Postgres
 /// would refuse (a NUL) is an ordinary "no such user", never a database
 /// error.
+#[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn is_lookup_email(email: &str) -> bool {
     check_email(email).is_ok()
 }
@@ -594,6 +635,7 @@ pub(crate) fn is_lookup_email(email: &str) -> bool {
 /// when another user has it (in any letter case); [`OkfError::Forbidden`]
 /// for a provisioner and an admin user; [`OkfError::UnknownName`];
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn set_email(
     pool: &PgPool,
     name: &str,
@@ -694,6 +736,7 @@ pub struct AdminChange {
 /// # Errors
 /// [`OkfError::UnknownName`]; [`OkfError::Refused`] when clearing the last
 /// admin user without `allow_last`; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn set_admin(
     pool: &PgPool,
     name: &str,
@@ -758,6 +801,7 @@ pub async fn set_admin(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn find_by_email(pool: &PgPool, email: &str) -> Result<Option<UserAuth>, OkfError> {
     // No user has an address `check_email` refuses, and such text (a NUL,
     // which Postgres rejects as a database error) never reaches SQL.
@@ -790,6 +834,7 @@ pub async fn find_by_email(pool: &PgPool, email: &str) -> Result<Option<UserAuth
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn find_record_by_email(
     pool: &PgPool,
     email: &str,
@@ -820,6 +865,7 @@ pub async fn find_record_by_email(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn find_auth(pool: &PgPool, user_id: &str) -> Result<Option<UserAuth>, OkfError> {
     Ok(sqlx::query_as::<_, UserAuth>(concat!(
         "SELECT ",
@@ -842,6 +888,7 @@ pub async fn find_auth(pool: &PgPool, user_id: &str) -> Result<Option<UserAuth>,
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn auth_by_id(pool: &PgPool) -> Result<HashMap<String, UserAuth>, OkfError> {
     let users =
         sqlx::query_as::<_, UserAuth>(concat!("SELECT ", user_auth_columns!(), " FROM users u"))
@@ -908,6 +955,7 @@ const SOLE_OWNED_TEAMS: &str = "\
 /// [`OkfError::Refused`] naming the catalogs its personal team owns, the
 /// shared teams it is the only owner of, or that it is the last admin user;
 /// [`OkfError::Busy`] for a deadlock; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn delete(
     pool: &PgPool,
     name: &str,
@@ -1037,6 +1085,13 @@ pub async fn delete(
 }
 
 /// Names for a refusal, each quoted: `"a", "b"`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
+    )
+)]
 fn quoted(names: &[String]) -> String {
     // `{:?}` of a string quotes (and escapes) it.
     names
@@ -1047,6 +1102,13 @@ fn quoted(names: &[String]) -> String {
 }
 
 /// A row count as the `i64` the summary reports.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
+    )
+)]
 fn count_of(rows: usize) -> i64 {
     // `try_from`: a `usize` into an `i64` cannot fail for any real count.
     i64::try_from(rows).unwrap_or(i64::MAX)
@@ -1071,6 +1133,7 @@ fn count_of(rows: usize) -> i64 {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all)]
 async fn discard_open_changesets(
     conn: &mut PgConnection,
     user_id: &str,

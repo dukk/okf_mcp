@@ -193,4 +193,28 @@ mod tests {
             .iter()
             .all(|(_, parent, _)| parent.as_deref() == Some("build")));
     }
+
+    /// `mcp::blocking` runs its closure on a tokio blocking thread, which has
+    /// neither the caller's span nor its scoped subscriber.
+    #[tokio::test]
+    async fn blocking_work_keeps_the_callers_span_and_subscriber() {
+        let (subscriber, seen) = recording();
+        let test_thread = thread::current().id();
+        // A guard (not `with_default`) because the scope spans an `.await`.
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let root = tracing::info_span!("root");
+        // Act: run a span-opening closure through `blocking` under `root`.
+        let _entered = root.enter();
+        let worker = crate::mcp::blocking(|| {
+            leaf();
+            thread::current().id()
+        })
+        .await;
+        // Assert: the leaf is a child of `root`, and it ran on another thread.
+        assert_ne!(worker, test_thread);
+        let seen = seen.lock().expect("lock");
+        let leaves = named(&seen, "leaf");
+        assert_eq!(leaves.len(), 1);
+        assert_eq!(leaves[0].1.as_deref(), Some("root"));
+    }
 }

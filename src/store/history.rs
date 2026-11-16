@@ -35,6 +35,7 @@ pub struct RevisionRow {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn revisions(
     pool: &PgPool,
     catalog_id: i64,
@@ -77,6 +78,7 @@ pub struct RevisionContent {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(catalog_id = catalog_id))]
 pub async fn content_at(
     pool: &PgPool,
     catalog_id: i64,

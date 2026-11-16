@@ -44,6 +44,7 @@ use crate::store::{catalogs, documents};
 // `W: Write + Send + 'static`: `out` moves to a blocking thread, so it must
 // be safe to send there (`Send`) and must not borrow anything that thread
 // could outlive (`'static`). `Vec<u8>` and `File` both qualify.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn export<W>(
     pool: &PgPool,
     catalog: &str,
@@ -91,7 +92,9 @@ where
     record_export(pool, &exported, audit, now).await?;
     // `move` hands `rows` and `out` to the closure; `ExportFile`s borrow from
     // `rows` inside it, so nothing is copied.
+    let caller = crate::okf::caller::Caller::capture();
     let archive = tokio::task::spawn_blocking(move || {
+        let _entered = caller.enter();
         let files: Vec<ExportFile<'_>> = rows
             .iter()
             .map(|row| ExportFile {
@@ -150,6 +153,7 @@ struct Exported<'a> {
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all)]
 async fn record_export(
     pool: &PgPool,
     exported: &Exported<'_>,

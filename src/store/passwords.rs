@@ -74,6 +74,13 @@ pub struct PasswordStamp(String);
 
 impl PasswordStamp {
     /// The stored PHC string, for the session insert's comparison.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
@@ -81,6 +88,13 @@ impl PasswordStamp {
 
 // Hand-written (Python's `__repr__`), so `{:?}` never prints the hash.
 impl std::fmt::Debug for PasswordStamp {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display or Debug impl: runs inside the subscriber while it formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("PasswordStamp(<redacted>)")
     }
@@ -117,6 +131,7 @@ pub enum SignInOutcome {
 ///
 /// # Errors
 /// [`OkfError::LimitExceeded`] with `limit: "password"`, naming the rule.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn check_policy(password: &str) -> Result<(), OkfError> {
     let refuse = |reason: String| OkfError::LimitExceeded {
         limit: "password",
@@ -152,6 +167,7 @@ pub fn check_policy(password: &str) -> Result<(), OkfError> {
 ///
 /// # Errors
 /// [`OkfError::Io`] if the OS random source fails.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn hash(password: &str) -> Result<String, OkfError> {
     let hashed: PasswordHash = Argon2::default()
         .hash_password(password.as_bytes())
@@ -162,6 +178,7 @@ pub fn hash(password: &str) -> Result<String, OkfError> {
 /// Does `password` match the stored PHC string? The parameters come from
 /// the string, and the comparison is constant-time. A malformed string
 /// matches nothing.
+#[tracing::instrument(level = "trace", skip_all)]
 fn matches(stored: &str, password: &str) -> bool {
     Argon2::default()
         .verify_password(password.as_bytes(), stored)
@@ -170,16 +187,28 @@ fn matches(stored: &str, password: &str) -> bool {
 
 /// [`matches`] on tokio's blocking pool. Takes owned strings because the
 /// closure outlives this call's borrows.
+#[tracing::instrument(level = "trace", skip_all)]
 async fn matches_off_thread(stored: String, password: String) -> Result<bool, OkfError> {
     // `move` hands the two strings to the closure, which runs on another
     // thread; `.await` waits for it without blocking this one.
-    tokio::task::spawn_blocking(move || matches(&stored, &password))
-        .await
-        .map_err(hasher_error)
+    let caller = crate::okf::caller::Caller::capture();
+    tokio::task::spawn_blocking(move || {
+        let _entered = caller.enter();
+        matches(&stored, &password)
+    })
+    .await
+    .map_err(hasher_error)
 }
 
 /// The error for a hasher that could not run (no OS randomness, or its
 /// blocking task died). The messages of both name no input.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: builds an error value, no I/O"
+    )
+)]
 fn hasher_error(error: impl std::fmt::Display) -> OkfError {
     OkfError::Io {
         path: "<password hasher>".to_string(),
@@ -225,6 +254,7 @@ macro_rules! candidate_columns {
 ///
 /// # Errors
 /// [`OkfError::Database`]; [`OkfError::Io`] if the hasher task fails.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn verify(
     pool: &PgPool,
     email: &str,
@@ -259,6 +289,7 @@ pub async fn verify(
 ///
 /// # Errors
 /// [`OkfError::Database`]; [`OkfError::Io`] if the hasher task fails.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn verify_user(
     pool: &PgPool,
     user_id: &str,
@@ -279,6 +310,7 @@ pub async fn verify_user(
 /// The row may be stale by the time the hash is checked (argon2 takes tens
 /// of milliseconds), so both writes re-check the lock in SQL rather than
 /// trusting `candidate.locked_until`.
+#[tracing::instrument(level = "trace", skip_all)]
 async fn check_candidate(
     pool: &PgPool,
     candidate: Option<Candidate>,
@@ -312,6 +344,7 @@ async fn check_candidate(
 /// # Returns
 /// [`SignInOutcome::Ok`]; [`SignInOutcome::Locked`] if a lock appeared;
 /// [`SignInOutcome::Failed`] if the password changed or the user is gone.
+#[tracing::instrument(level = "trace", skip_all)]
 async fn record_success(
     pool: &PgPool,
     user: UserAuth,
@@ -349,6 +382,7 @@ async fn record_success(
 /// # Returns
 /// [`SignInOutcome::Locked`] when the account is locked after this failure
 /// (by it, or concurrently); [`SignInOutcome::Failed`] otherwise.
+#[tracing::instrument(level = "trace", skip_all)]
 async fn record_failure(
     pool: &PgPool,
     user_id: &str,
@@ -399,6 +433,7 @@ async fn record_failure(
 /// # Errors
 /// [`OkfError::LimitExceeded`] from [`check_policy`]; [`OkfError::UnknownName`]
 /// for an unknown id; [`OkfError::Io`] if hashing fails; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn set(
     pool: &PgPool,
     user_id: &str,
@@ -424,6 +459,7 @@ pub async fn set(
 ///
 /// # Errors
 /// As [`set`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn reset(
     pool: &PgPool,
     user_id: &str,
@@ -456,13 +492,18 @@ impl NewPassword {
     /// # Errors
     /// [`OkfError::LimitExceeded`] from [`check_policy`]; [`OkfError::Io`]
     /// if hashing fails.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn hash(password: &str) -> Result<Self, OkfError> {
         check_policy(password)?;
         let owned = password.to_string();
         // The first `?` is the task's (did it run?), the second `hash`'s own.
-        let hashed = tokio::task::spawn_blocking(move || hash(&owned))
-            .await
-            .map_err(hasher_error)??;
+        let caller = crate::okf::caller::Caller::capture();
+        let hashed = tokio::task::spawn_blocking(move || {
+            let _entered = caller.enter();
+            hash(&owned)
+        })
+        .await
+        .map_err(hasher_error)??;
         Ok(Self(hashed))
     }
 }
@@ -475,6 +516,13 @@ impl NewPassword {
     ///
     /// # Returns
     /// The stamp.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
     pub fn stamp(&self) -> PasswordStamp {
         PasswordStamp(self.0.clone())
     }
@@ -482,6 +530,13 @@ impl NewPassword {
 
 // Hand-written (Python's `__repr__`), so `{:?}` never prints the hash.
 impl std::fmt::Debug for NewPassword {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display or Debug impl: runs inside the subscriber while it formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("NewPassword(<redacted>)")
     }
@@ -500,6 +555,7 @@ impl std::fmt::Debug for NewPassword {
 ///
 /// # Errors
 /// [`OkfError::UnknownName`] for an unknown id; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn set_in(
     conn: &mut PgConnection,
     user_id: &str,
@@ -547,6 +603,7 @@ pub async fn set_in(
 ///
 /// # Errors
 /// As [`set_in`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn reset_in(
     conn: &mut PgConnection,
     user_id: &str,
@@ -577,6 +634,13 @@ pub struct SessionChange<'a> {
 
 // Hand-written (Python's `__repr__`): the session id is a credential.
 impl std::fmt::Debug for SessionChange<'_> {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display or Debug impl: runs inside the subscriber while it formats an event"
+        )
+    )]
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("SessionChange")
@@ -613,6 +677,7 @@ impl std::fmt::Debug for SessionChange<'_> {
 /// [`OkfError::Unauthenticated`] once the session or the user is gone;
 /// [`OkfError::Forbidden`] when the password changed since it was checked;
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn change_from_session_in(
     conn: &mut PgConnection,
     change: &SessionChange<'_>,
