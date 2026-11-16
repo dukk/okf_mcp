@@ -1128,53 +1128,6 @@
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "$defs": {
-        "Submission": {
-          "type": "object",
-          "properties": {
-            "outcome": {
-              "type": "string",
-              "enum": [
-                "completed",
-                "inconclusive",
-                "failed"
-              ]
-            },
-            "assessment": {
-              "$ref": "#/$defs/Assessment"
-            },
-            "summary": {
-              "type": "string"
-            },
-            "evidence": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/Evidence"
-              }
-            },
-            "findings": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/FindingInput"
-              }
-            },
-            "reported_tokens": {
-              "type": [
-                "integer",
-                "null"
-              ],
-              "format": "uint64",
-              "minimum": 0
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "outcome",
-            "assessment",
-            "summary",
-            "evidence",
-            "findings"
-          ]
-        },
         "Assessment": {
           "type": "string",
           "enum": [
@@ -1319,7 +1272,51 @@
         },
         "submission": {
           "description": "Revision-pinned assessment and proposed findings; never applies canonical edits.",
-          "$ref": "#/$defs/Submission"
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "completed",
+                "inconclusive",
+                "failed"
+              ]
+            },
+            "assessment": {
+              "$ref": "#/$defs/Assessment"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "evidence": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Evidence"
+              }
+            },
+            "findings": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/FindingInput"
+              }
+            },
+            "reported_tokens": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "outcome",
+            "assessment",
+            "summary",
+            "evidence",
+            "findings"
+          ]
         }
       },
       "additionalProperties": false,
