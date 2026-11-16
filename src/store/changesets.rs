@@ -611,6 +611,7 @@ pub async fn prune_empty(
 ///
 /// # Errors
 /// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn open_counts(pool: &PgPool) -> Result<BTreeMap<String, i64>, OkfError> {
     let rows: Vec<(String, i64)> = sqlx::query_as(
         "SELECT c.name, count(*) FROM changesets s JOIN catalogs c ON c.id = s.catalog_id \

@@ -495,6 +495,10 @@ impl App {
     ///
     /// # Errors
     /// [`OkfError::Database`] reading the catalog list.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "makes the okf.poll root span itself")
+    )]
     pub async fn poll(&self) -> Result<(), OkfError> {
         let started = std::time::Instant::now();
         // `parent: None` makes each pass the root of its own trace, whatever
@@ -654,6 +658,7 @@ impl App {
     /// Counts the open changesets per catalog for `okf.changesets.open`.
     /// Called only under `polling`. A failure is logged (its text stays off
     /// OTLP) and the last counts stay.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn count_open_changesets(&self) {
         match changesets::open_counts(&self.pool).await {
             Ok(counts) => {
@@ -680,6 +685,10 @@ impl App {
     ///
     /// # Returns
     /// The count; 0 for a catalog with none (or one not yet counted).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor, read by a scrape")
+    )]
     pub fn open_changesets(&self, catalog: &str) -> i64 {
         self.open_changesets
             .read()
