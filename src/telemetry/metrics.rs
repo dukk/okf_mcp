@@ -95,6 +95,10 @@ const LINT_RULES: &[&str] = &[
     "index-frontmatter",
     "no-frontmatter",
     "no-type",
+    "no-title",
+    "no-description",
+    "sources-shape",
+    "generated",
     "okf-version",
     "sprawl",
     "status",
@@ -436,6 +440,36 @@ mod tests {
         assert_eq!(tool_label("not_a_tool"), "other");
         assert_eq!(tool_label(""), "other");
         assert_eq!(tool_label("get_concept "), "other");
+    }
+
+    #[test]
+    fn every_rule_the_lint_names_is_a_label_of_its_own() {
+        // The rule ids are string literals in the lint's source, as the
+        // second argument of `error`/`warn` or the third of `finding`.
+        let source = include_str!("../okf/analysis/lint.rs");
+        let production = source.split("#[cfg(test)]").next().expect("the source");
+        let rules = regex::Regex::new(
+            r#"(?s)(?:\.(?:error|warn)\(\s*[^,"]*,\s*|\bfinding\(\s*[^,]+,\s*[^,]+,\s*)"([a-z]+(?:-[a-z]+)*)""#,
+        )
+        .expect("the pattern");
+        let found: Vec<&str> = rules
+            .captures_iter(production)
+            .map(|capture| capture.get(1).expect("a rule").as_str())
+            .collect();
+        assert!(found.len() > 20, "the scan found {found:?}");
+        for rule in found {
+            assert_eq!(
+                lint_rule_label(rule),
+                rule,
+                "{rule} is missing from LINT_RULES"
+            );
+        }
+        for rule in ["link-into-deleted", "no-title", "no-description"] {
+            assert_eq!(lint_rule_label(rule), rule);
+        }
+        assert_eq!(lint_rule_label("secret:github-token"), "secret");
+        assert_eq!(lint_rule_label("secret:assignment"), "secret");
+        assert_eq!(lint_rule_label("made up"), "other");
     }
 
     #[test]

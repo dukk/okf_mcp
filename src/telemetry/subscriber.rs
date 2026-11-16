@@ -351,7 +351,7 @@ pub(crate) mod capture {
     pub(crate) struct SpanRecorder {
         dispatch: tracing::Dispatch,
         exporter: InMemorySpanExporter,
-        _provider: SdkTracerProvider,
+        provider: SdkTracerProvider,
     }
 
     impl SpanRecorder {
@@ -363,12 +363,17 @@ pub(crate) mod capture {
             let exporter = InMemorySpanExporter::default();
             let provider = SdkTracerProvider::builder()
                 .with_simple_exporter(exporter.clone())
+                // Not the default `ParentBased`: a span parented on another
+                // test's unsampled context (the thread-local one a migrating
+                // task leaves behind) would be dropped.
+                .with_sampler(opentelemetry_sdk::trace::Sampler::AlwaysOn)
                 .build();
             let layer = tracing_opentelemetry::layer().with_tracer(provider.tracer("okf-mcp"));
+            let dispatch = tracing::Dispatch::new(tracing_subscriber::registry().with(layer));
             Self {
-                dispatch: tracing::Dispatch::new(tracing_subscriber::registry().with(layer)),
+                dispatch,
                 exporter,
-                _provider: provider,
+                provider,
             }
         }
 
@@ -377,8 +382,11 @@ pub(crate) mod capture {
             self.dispatch.clone()
         }
 
-        /// The spans that have ended so far.
+        /// The spans that have ended so far. The simple processor exports on
+        /// its own thread, so this flushes first: under load a bare read can
+        /// run before the last spans arrive.
         pub(crate) fn finished(&self) -> Vec<opentelemetry_sdk::trace::SpanData> {
+            self.provider.force_flush().expect("flush spans");
             self.exporter.get_finished_spans().expect("spans")
         }
     }
