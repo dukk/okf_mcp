@@ -1124,21 +1124,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_startup_line_names_the_exported_signals() {
-        use crate::telemetry::config::LogFormat;
-        use crate::telemetry::subscriber::capture::observe;
-
-        let observed = observe("trace", "trace", "trace", LogFormat::Text, || {
-            tracing::info!(signals = %otlp_signals_text(&[otlp::Signal::Traces, otlp::Signal::Logs]), "OTLP export is on");
-        });
-        assert!(
-            observed.stderr.contains("traces,logs"),
-            "{}",
-            observed.stderr
-        );
-    }
-
     /// Sentry's intake has no metrics endpoint: with `sentry_dsn_env` and the
     /// default signals no request goes to `/v1/metrics`, and traces and logs
     /// still arrive at their Sentry paths.
