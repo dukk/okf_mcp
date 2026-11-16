@@ -204,7 +204,6 @@ fn the_hints_go_on_the_wire_in_camel_case() {
 /// PR as its fix, and it must be empty when epic #507 closes.
 #[cfg(test)]
 const KNOWN_UNTYPED_PARAMETERS: &[(&str, &str)] = &[
-    ("maintenance_dispose", "disposition"),
     ("maintenance_submit", "submission"),
     ("stamp", "field"),
     ("unquestion", "question"),

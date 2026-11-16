@@ -54,19 +54,55 @@ pub struct MaintenanceGetFindingParams {
     pub finding_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct MaintenanceDisposeParams {
-    /// Required authorized catalog name; connection defaults do not apply.
-    pub catalog: String,
-    /// Opaque finding ID belonging to the named catalog.
-    pub finding_id: String,
-    /// Human follow-up decision; acceptance does not apply the proposed change.
-    pub disposition: Disposition,
-    /// Human-readable reason recorded with attribution; secrets and oversized text are refused.
-    pub rationale: String,
-    /// Caller-chosen retry key (1..=128 non-whitespace ASCII bytes); reuse only for identical input.
-    pub idempotency_key: String,
+// The `schema_with` hook makes the `JsonSchema` derive emit a wrapper function
+// of its own that cannot carry an attribute, and an exemption on the struct or
+// the field does not reach it. The struct lives in its own module so the
+// exemption covers exactly that module (as `maintenance::types::Submission`).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "constant trait plumbing: the derive's schema_with hook returns a fixed schema"
+    )
+)]
+mod dispose_params {
+    use super::{disposition_schema, Disposition, JsonSchema};
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct MaintenanceDisposeParams {
+        /// Required authorized catalog name; connection defaults do not apply.
+        pub catalog: String,
+        /// Opaque finding ID belonging to the named catalog.
+        pub finding_id: String,
+        /// Human follow-up decision; acceptance does not apply the proposed change.
+        #[schemars(schema_with = "disposition_schema")]
+        pub disposition: Disposition,
+        /// Human-readable reason recorded with attribution; secrets and oversized text are refused.
+        pub rationale: String,
+        /// Caller-chosen retry key (1..=128 non-whitespace ASCII bytes); reuse only for identical input.
+        pub idempotency_key: String,
+    }
+}
+
+pub use dispose_params::MaintenanceDisposeParams;
+
+/// The `disposition` property's schema: the enum inlined, so the property has
+/// a direct `type` instead of a bare `$ref`. A test keeps it in step with
+/// [`Disposition`].
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "constant trait plumbing: the derive's schema_with hook returns a fixed schema"
+    )
+)]
+fn disposition_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "string",
+        "enum": ["open", "accepted_for_follow_up", "dismissed", "needs_input"]
+    })
 }
 
 #[tracing::instrument(level = "debug", skip_all)]
@@ -215,4 +251,51 @@ pub(crate) async fn maintenance_dispose(
     .await?;
     finding_paths(&mut result);
     Ok(MaintenanceResult::new(state.name(), result))
+}
+
+#[cfg(test)]
+mod dispose_schema_tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn the_disposition_schema_is_an_inline_string_enum() {
+        let schema = schemars::schema_for!(MaintenanceDisposeParams);
+        let property = &schema.to_value()["properties"]["disposition"];
+
+        assert_eq!(property["type"], "string");
+        let every_variant = [
+            Disposition::Open,
+            Disposition::AcceptedForFollowUp,
+            Disposition::Dismissed,
+            Disposition::NeedsInput,
+        ]
+        .map(|variant| serde_json::to_value(variant).expect("a disposition serializes"));
+        assert_eq!(property["enum"], json!(every_variant));
+        assert!(property.get("$ref").is_none());
+    }
+
+    #[test]
+    fn every_disposition_still_deserializes_and_unknown_ones_are_refused() {
+        for (text, expected) in [
+            ("open", Disposition::Open),
+            ("accepted_for_follow_up", Disposition::AcceptedForFollowUp),
+            ("dismissed", Disposition::Dismissed),
+            ("needs_input", Disposition::NeedsInput),
+        ] {
+            let params: MaintenanceDisposeParams = serde_json::from_value(json!({
+                "catalog": "c", "finding_id": "f", "disposition": text,
+                "rationale": "r", "idempotency_key": "k"
+            }))
+            .expect("a known disposition is accepted");
+            assert_eq!(params.disposition, expected);
+        }
+
+        let unknown = serde_json::from_value::<MaintenanceDisposeParams>(json!({
+            "catalog": "c", "finding_id": "f", "disposition": "Open",
+            "rationale": "r", "idempotency_key": "k"
+        }));
+        assert!(unknown.is_err());
+    }
 }
