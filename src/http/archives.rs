@@ -22,6 +22,7 @@ use crate::store::audit::{AccessKind, AuditActor};
 use crate::store::export::{export, ExportOptions};
 use crate::store::import::{import, ImportOptions, ImportScope};
 use crate::store::keys::Access;
+use crate::telemetry::subscriber::split_event;
 
 /// The two routes, for the keyed part of the router.
 ///
@@ -325,9 +326,10 @@ async fn import_catalog(
     // transaction, which rolls back, and nothing is imported.
     if let Some(state) = app.catalog(&name) {
         if let Err(error) = state.refresh(app.pool()).await {
-            tracing::error!(
-                catalog = %name,
-                %error,
+            split_event!(
+                error,
+                { catalog = %name, kind = error.kind(), },
+                { %error, },
                 "refresh after import failed; the poll loop retries"
             );
         }
@@ -341,7 +343,12 @@ async fn import_catalog(
         AccessKind::Write,
     );
     // The key's id, never the key itself.
-    tracing::info!(catalog = %name, key = %principal.key_id, "imported");
+    split_event!(
+        info,
+        { catalog = %name, },
+        { key = %principal.key_id, },
+        "imported"
+    );
     Ok(Json(report).into_response())
 }
 

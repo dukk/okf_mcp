@@ -46,8 +46,36 @@ pub const EXPORT_STACK: [&str; 10] = [
 /// The target of events that may carry text the privacy rules keep out of
 /// OTLP: a caller-supplied value, an internal error's full text, the `log`
 /// mail provider's message. Such events reach stderr only. `pub` so every
-/// module writes `tracing::warn!(target: LOCAL_ONLY, ...)` (Task 1b).
+/// module writes `tracing::warn!(target: LOCAL_ONLY, ...)`, or `split_event!`.
 pub const LOCAL_ONLY: &str = "okf_mcp::local_only";
+
+/// Emits one event in two halves: the exported half, with values the
+/// privacy rules allow in OTLP, and a [`LOCAL_ONLY`] half beside it, with the
+/// values they keep out (caller text, an error's full text, content). On
+/// stderr that is two lines, one per sink; the second ends in `(detail)`.
+///
+/// ```ignore
+/// split_event!(
+///     warn,
+///     { kind = error.kind(), },
+///     { client_id = %id, reason = %error, },
+///     "refused an OAuth client"
+/// );
+/// ```
+///
+/// Each field list ends in a comma (or is empty). The message is a literal,
+/// which may capture variables (`{what}`).
+macro_rules! split_event {
+    ($level:ident, { $($exported:tt)* }, { $($local:tt)* }, $message:literal) => {{
+        tracing::$level!($($exported)* $message);
+        tracing::$level!(
+            target: $crate::telemetry::subscriber::LOCAL_ONLY,
+            $($local)*
+            concat!($message, " (detail)")
+        );
+    }};
+}
+pub(crate) use split_event;
 
 /// The highest level any layer takes from `rmcp`: at `debug` it logs whole
 /// JSON-RPC messages, credentials among them.
@@ -364,6 +392,15 @@ pub(crate) mod capture {
         pub records: Vec<opentelemetry_sdk::logs::SdkLogRecord>,
     }
 
+    impl Observed {
+        /// Everything exported, as one text: each log record (target, body
+        /// and attributes) and each span, for a test that a value never
+        /// reached OTLP.
+        pub(crate) fn exported_text(&self) -> String {
+            format!("{:?}|{:?}|{:?}", self.logs, self.records, self.spans)
+        }
+    }
+
     /// Builds the subscriber with in-memory exporters, runs `body` under it
     /// as the thread's default, then shuts the providers down (after the
     /// dispatcher is gone: dropping a provider inside the dispatcher's lock
@@ -392,7 +429,13 @@ pub(crate) mod capture {
         };
         let subscriber =
             super::build_with_writer(settings, Some(&tracer), Some(&logger), capture.clone());
-        tracing::subscriber::with_default(subscriber, body);
+        tracing::subscriber::with_default(subscriber, || {
+            // Tests on other threads, with no subscriber, can have cached
+            // "disabled" for a callsite this body uses; recompute every
+            // cached answer against this subscriber first.
+            tracing::callsite::rebuild_interest_cache();
+            body();
+        });
         tracer.force_flush().expect("flush spans");
         logger.force_flush().expect("flush logs");
         let observed = Observed {
@@ -514,6 +557,25 @@ mod tests {
 
     /// `LOCAL_ONLY` is a sub-target of `okf_mcp`; the cap's most-specific
     /// match must still turn it off.
+    #[test]
+    fn a_split_event_exports_the_closed_half_and_prints_both() {
+        let observed = observe("trace", "trace", "trace", LogFormat::Text, || {
+            split_event!(
+                warn,
+                { kind = "Io", },
+                { error = %"SENTINEL-DETAIL", },
+                "request failed"
+            );
+        });
+        let exported = observed.exported_text();
+        assert!(exported.contains("request failed"), "{exported}");
+        assert!(exported.contains("Io"), "{exported}");
+        assert!(!exported.contains("SENTINEL-DETAIL"), "{exported}");
+        assert!(!exported.contains("(detail)"), "{exported}");
+        assert!(observed.stderr.contains("request failed (detail)"));
+        assert!(observed.stderr.contains("SENTINEL-DETAIL"));
+    }
+
     #[test]
     fn local_only_events_reach_stderr_only() {
         let observed = observe("trace", "trace", "trace", LogFormat::Text, || {

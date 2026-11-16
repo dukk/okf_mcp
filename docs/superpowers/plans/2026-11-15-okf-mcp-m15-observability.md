@@ -841,6 +841,9 @@ tracing::error!(target: LOCAL_ONLY, error = %self.0, "request failed (detail)");
 
 `LogMailer::send` already logs with `target: LOCAL_ONLY` alone (Task 1). `authorize.rs:526` becomes `warn!(reason = error.kind(), "refused an OAuth client")` plus a `LOCAL_ONLY` line with the `client_id` and the text. If the error type has no `kind`, give it one (a closed `&'static str`).
 
+> **Corrected (issue #462, 2026-11-15).** The audit shipped as written, with these differences.
+> (1) Sites use the macro `split_event!` (`src/telemetry/subscriber.rs`) instead of two hand-written statements: `split_event!(warn, { exported fields, }, { local fields, }, "message")` emits the exported event and a `LOCAL_ONLY` twin ending in `(detail)`. A message with a `{captured}` argument cannot go through it (`concat!` loses the capture), so `log_pruned_retrying` and `note_failure` in `src/app.rs` write both events out. (2) Principal text counts as caller text: `actor` (a user name), `user = %user.name` and `key`/`key_id` (a console session's key id is `session:<name>`) moved to the `LOCAL_ONLY` twin of every audit-style event; the exported event keeps ids, counts and closed values. (3) `authorize.rs` exports `reason = error.code()` (a closed `&'static str`; `OAuthError` has no `kind`). (4) Events whose target is outside `okf_mcp` (the investigator's `okf_maintenance::rejection`, the `okf-maintenance` binary) never reach the OTLP allow-list and were left alone. (5) The per-site unit tests sit beside the sites (`an_internal_request_error_...` in `src/http/mod.rs`, `an_internal_tool_error_...` in `src/mcp/mod.rs`, `a_refused_client_id_...` in `src/oauth/authorize.rs`, `a_split_event_...` in `src/telemetry/subscriber.rs`). Task 7 still adds the end-to-end sentinel cases below. The classification table is in the PR description of issue #462.
+
 - [ ] **Step 4: Test.**
   - Unit tests per changed site, using the in-memory log exporter: a refused OAuth client whose id contains a sentinel exports no record containing it; the `log` mailer's send exports nothing; an internal error exports `kind` and not its text.
   - The sentinel test (Task 7) gains these cases: the `log` mail provider with a sign-up invitation, a refused OAuth client id, and an internal error whose text holds the sentinel. Add them here if Task 7 has merged, or note them on Task 7's issue.
@@ -1211,7 +1214,7 @@ Each uses `app_with_metrics` plus the in-memory span exporter:
   - the write and commit.
 
   `Metrics::publish(catalog, outcome, elapsed)`, and `Metrics::lint_rejection(catalog, rule)` for each error in `LintFailed` (rule names are the lint's own closed set).
-- **The poll loop.** In `poll_until`, each tick runs `self.poll().instrument(tracing::info_span!(parent: None, "okf.poll"))`. `parent: None` makes each tick its own trace (spec "Background roots"). Inside `poll`:
+- **The poll loop.** (Corrected, issue #465: the root is made in `App::poll`, see the note below.) Each tick runs `self.poll().instrument(tracing::info_span!(parent: None, "okf.poll"))`. `parent: None` makes each tick its own trace (spec "Background roots"). Inside `poll`:
   - each catalog refresh is `info_span!("okf.catalog.refresh", okf.catalog = %name)`;
   - the key-cache reload is `info_span!("okf.keycache.reload")`.
 
@@ -1225,6 +1228,14 @@ Each uses `app_with_metrics` plus the in-memory span exporter:
 - [ ] **Step 3: Gates and commit**
 
 `feat(telemetry): publish, poll and catalog instrumentation (M15 Task 4)`
+
+> **Corrected (issue #465, 2026-11-16).** What shipped differs from the sketch above in these ways; read `src/store/publish.rs`, `src/app.rs` and `src/telemetry/metrics.rs`.
+> - **The `okf.poll` root is made inside `App::poll`**, not in `poll_until`: `poll` wraps a private `poll_pass` in `info_span!(parent: None, "okf.poll")` and records `okf.poll.duration` there, so a direct `app.poll()` is its own trace too (that is what `each_poll_tick_is_its_own_trace` calls). `poll_until` is unchanged.
+> - **`publish` is a thin wrapper** (the `okf.publish` span, `okf.publish.duration`, one `okf.lint.rejections` per `LintFailed` error) around a private `publish_locked`. `okf.publish.lock` covers the in-process mutex, the transaction begin and the three row locks, and `okf.publish.lock_wait` is recorded even when a lock step refuses; `okf.publish.lint` wraps `check`; `okf.publish.write` wraps the writes, the generation bump, the audit entry and the commit. `okf.refresh.result` is a field on each `okf.catalog.refresh` span.
+> - **`rule` is folded by `metrics::lint_rule_label`**: the lint's fixed ids pass, every `secret:<id>` becomes `secret`, anything else is `other`. Add a new lint rule to `LINT_RULES` (a test lists them).
+> - **Gauges:** `Metrics` keeps its `Meter` and `Metrics::observe_catalogs(Weak<App>)` registers `okf.catalog.concepts`, `okf.catalog.generation` and `okf.changesets.open`; `App::load_with_metrics` calls it after `Arc::new`. The gauge handles are **not** kept on `App` (see the Task 2 correction). `okf.changesets.open` reads `App::open_changesets`, filled by `changesets::open_counts` at load and once per poll pass; a catalog with none reports 0. Task 6's pool gauges can follow the same shape (a `Metrics` method taking a `Weak<App>`).
+> - **`RefreshResult`** (`unchanged | reloaded | loaded | failed`) is the typed label; `okf.keycache.reloads` counts only an attempted reload (after `admin_generation` moved).
+> - **Tests** live in `mcp::changesets::publish_tests`; `telemetry::subscriber::capture::SpanRecorder` runs a future under an in-memory span exporter via `WithSubscriber` (a thread-local default misses a multi-thread runtime's workers).
 
 ---
 

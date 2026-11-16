@@ -20,6 +20,7 @@ use crate::http::api::{require_admin, require_every_catalog, settle};
 use crate::http::AppError;
 use crate::store::audit::AuditActor;
 use crate::store::settings::{self, SettingKey, SettingRow};
+use crate::telemetry::subscriber::split_event;
 
 /// One setting as the API shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -176,8 +177,12 @@ async fn set_setting(
     let key = key_of(&key)?;
     settings::set(app.pool(), key, &body.value, &actor, app.clock().now()).await?;
     // `key` names the setting here, so the credential is logged as `key_id`.
-    tracing::info!(setting = key.as_str(), value = %body.value, key_id = %principal.key_id,
-                   actor = %principal.actor, "setting changed");
+    split_event!(
+        info,
+        { setting = key.as_str(), },
+        { value = %body.value, key_id = %principal.key_id, actor = %principal.actor, },
+        "setting changed"
+    );
     settle(&app).await;
     Ok(Json(current(&app, key).await?))
 }
@@ -196,8 +201,12 @@ async fn reset_setting(
     require_every_catalog(&principal)?;
     let key = key_of(&key)?;
     settings::reset(app.pool(), key, &actor, app.clock().now()).await?;
-    tracing::info!(setting = key.as_str(), key_id = %principal.key_id, actor = %principal.actor,
-                   "setting reset");
+    split_event!(
+        info,
+        { setting = key.as_str(), },
+        { key_id = %principal.key_id, actor = %principal.actor, },
+        "setting reset"
+    );
     settle(&app).await;
     Ok(Json(current(&app, key).await?))
 }

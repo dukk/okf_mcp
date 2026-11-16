@@ -4,6 +4,7 @@
 //! It has no authentication and the ingress never routes to it; the
 //! operator reaches it through the cluster network only.
 
+use super::subscriber::split_event;
 use std::sync::Arc;
 
 use axum::extract::State;
@@ -73,7 +74,7 @@ async fn render(State(gather): State<Gather>) -> Response {
         )
             .into_response(),
         Err(error) => {
-            tracing::error!(%error, "encoding the metrics failed");
+            split_event!(error, {}, { %error, }, "encoding the metrics failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }

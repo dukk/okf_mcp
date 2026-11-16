@@ -38,6 +38,7 @@ use crate::store::settings::Brand;
 use crate::store::sign_in_events::{self, Attempt, Method, Outcome};
 use crate::store::user_sessions::{self, SessionStart};
 use crate::store::users::{self, UserAuth};
+use crate::telemetry::subscriber::split_event;
 
 /// Every refused password sign-in says this, whatever the reason (spec).
 pub const SIGN_IN_FAILED: &str = "Email or password is incorrect";
@@ -502,7 +503,12 @@ pub(crate) async fn start_in(
         Ok(()) => savepoint.commit().await?,
         Err(error) => {
             savepoint.rollback().await?;
-            tracing::error!(%error, "recording a sign-in event failed");
+            split_event!(
+                error,
+                { kind = error.kind(), },
+                { %error, },
+                "recording a sign-in event failed"
+            );
         }
     }
     Ok(session_cookie(app, &user.id, &session, absolute))
@@ -529,7 +535,12 @@ pub(crate) async fn audit(
     let now = app.clock().now();
     if let Err(error) = sign_in_events::record(app.pool(), user_id, method, outcome, ip, now).await
     {
-        tracing::error!(%error, "recording a sign-in event failed");
+        split_event!(
+            error,
+            { kind = error.kind(), },
+            { %error, },
+            "recording a sign-in event failed"
+        );
     }
 }
 
@@ -564,7 +575,12 @@ pub(crate) async fn notify_method_added(
         Ok(()) => savepoint.commit().await?,
         Err(error) => {
             savepoint.rollback().await?;
-            tracing::error!(%error, user = %user.id, "queueing the sign-in method notice failed");
+            split_event!(
+                error,
+                { user = %user.id, },
+                { %error, },
+                "queueing the sign-in method notice failed"
+            );
         }
     }
     Ok(())
@@ -651,7 +667,12 @@ async fn forgot_post(
             let app = Arc::clone(&app);
             tokio::spawn(async move {
                 if let Err(error) = send_reset(&app, &email).await {
-                    tracing::error!(%error, "sending a password reset link failed");
+                    split_event!(
+                        error,
+                        { kind = error.kind(), },
+                        { %error, },
+                        "sending a password reset link failed"
+                    );
                 }
             });
         }

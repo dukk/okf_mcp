@@ -56,6 +56,7 @@ use crate::error::OkfError;
 use crate::store::audit::{self, Action, AuditActor, Entry, Target, Via};
 use crate::store::catalogs::bump_admin_generation;
 use crate::store::unlocks;
+use crate::telemetry::subscriber::split_event;
 
 /// The product name with no override.
 pub const DEFAULT_PRODUCT_NAME: &str = "okf";
@@ -525,13 +526,19 @@ fn overlay(defaults: &AuthConfig, rows: &[StoredSetting]) -> Settings {
     let mut settings = Settings::from_config(defaults);
     for row in rows {
         let Some(key) = SettingKey::parse(&row.key) else {
-            tracing::debug!(setting = %row.key, "ignoring a setting this server does not know");
+            split_event!(
+                debug,
+                {},
+                { setting = %row.key, },
+                "ignoring a setting this server does not know"
+            );
             continue;
         };
         if let Err(problem) = apply(&mut settings, key, &row.value) {
-            tracing::warn!(
-                setting = %row.key,
-                %problem,
+            split_event!(
+                warn,
+                {},
+                { setting = %row.key, %problem, },
                 "stored setting is invalid; using the default"
             );
         }

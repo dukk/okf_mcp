@@ -10,6 +10,7 @@ use serde::Serialize;
 
 use crate::clock::{format_timestamp, Clock};
 use crate::ntp;
+use crate::telemetry::subscriber::split_event;
 
 /// How often the check runs after the first one (at startup).
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(15 * 60);
@@ -74,7 +75,12 @@ pub async fn check_once(server: &str, clock: &dyn Clock, timeout: Duration) -> C
         Err(error) => {
             // `%error` logs the value through its `Display` (the message);
             // `NtpError`'s messages name the server.
-            tracing::warn!(%error, "the clock check failed");
+            split_event!(
+                warn,
+                {},
+                { %error, },
+                "the clock check failed"
+            );
             ClockStatus {
                 ok: false,
                 checked_at,

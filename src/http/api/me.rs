@@ -42,6 +42,7 @@ use crate::store::keys::{
 };
 use crate::store::passwords::{self, NewPassword, SessionChange, SignInOutcome};
 use crate::store::{identities, passkeys, sign_in_events, teams, user_sessions, users};
+use crate::telemetry::subscriber::split_event;
 
 /// How many recent sign-ins `GET /me/sign-ins` and the admin's
 /// `GET /users/{name}/sign-ins` show.
@@ -748,7 +749,12 @@ async fn create_key(
     let created =
         key_rows::create_self_issued(app.pool(), &new, policy.max_keys_per_user, &audit, now)
             .await?;
-    tracing::info!(user = %user.name, key = %created.id, "self-issued key created");
+    split_event!(
+        info,
+        { key = %created.id, },
+        { user = %user.name, },
+        "self-issued key created"
+    );
     settle(&app).await;
     let key = own(&app, user, KeyKind::Key, &created.id).await?;
     Ok(Json(CreatedKeyView {
@@ -848,7 +854,12 @@ async fn revoke_own(
     let user = session_user(principal)?;
     let target = own(app, user, kind, id).await?;
     key_rows::revoke_by_id(app.pool(), &target.id, audit, app.clock().now()).await?;
-    tracing::info!(user = %user.name, credential = %target.id, "self-service revoke");
+    split_event!(
+        info,
+        { credential = %target.id, },
+        { user = %user.name, },
+        "self-service revoke"
+    );
     settle(app).await;
     Ok(Json(own(app, user, kind, &target.id).await?.into()))
 }
@@ -919,7 +930,12 @@ async fn change_password(
         now,
     };
     let ended = store_password_change(&app, &change, &account).await?;
-    tracing::info!(user = %user.name, ended, "password changed from the account page");
+    split_event!(
+        info,
+        { ended, },
+        { user = %user.name, },
+        "password changed from the account page"
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1004,7 +1020,12 @@ async fn remove_passkey(
 ) -> Result<StatusCode, AppError> {
     let user = session_user(&principal)?;
     passkeys::remove(app.pool(), user.id, &id).await?;
-    tracing::info!(user = %user.name, "passkey removed from the account page");
+    split_event!(
+        info,
+        {},
+        { user = %user.name, },
+        "passkey removed from the account page"
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1054,7 +1075,12 @@ async fn unlink_identity(
 ) -> Result<StatusCode, AppError> {
     let user = session_user(&principal)?;
     identities::unlink(app.pool(), user.id, &provider).await?;
-    tracing::info!(user = %user.name, %provider, "identity unlinked from the account page");
+    split_event!(
+        info,
+        { %provider, },
+        { user = %user.name, },
+        "identity unlinked from the account page"
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1093,7 +1119,12 @@ async fn revoke_session(
 ) -> Result<StatusCode, AppError> {
     let user = session_user(&principal)?;
     user_sessions::revoke_by_prefix(app.pool(), user.id, &id_prefix).await?;
-    tracing::info!(user = %user.name, %id_prefix, "session ended from the account page");
+    split_event!(
+        info,
+        { %id_prefix, },
+        { user = %user.name, },
+        "session ended from the account page"
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 

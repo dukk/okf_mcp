@@ -27,6 +27,7 @@ use crate::error::OkfError;
 use crate::http::limits::KeyedLimiter;
 use crate::keys;
 use crate::oauth::expiring::ExpiringMap;
+use crate::telemetry::subscriber::split_event;
 
 /// A client configured from a discovery document: an authorization
 /// endpoint, and maybe a token and a userinfo endpoint (the typestate the
@@ -470,9 +471,10 @@ impl OidcProviders {
             }
             Err(error) => match cached.as_mut() {
                 Some(entry) => {
-                    tracing::warn!(
-                        provider = id,
-                        %error,
+                    split_event!(
+                        warn,
+                        { provider = id, },
+                        { %error, },
                         "OIDC discovery failed; keeping the cached document"
                     );
                     entry.refresh_at = now + FAILED_REFRESH_RETRY;

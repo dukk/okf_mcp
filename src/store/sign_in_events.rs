@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgPool};
 
 use crate::error::OkfError;
+use crate::telemetry::subscriber::split_event;
 
 /// How someone tried to sign in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,15 +169,14 @@ pub async fn record(
 /// # Errors
 /// [`OkfError::Database`].
 pub async fn record_in(conn: &mut PgConnection, attempt: &Attempt<'_>) -> Result<(), OkfError> {
-    tracing::info!(
-        user_id = attempt.user_id.unwrap_or("-"),
-        method = attempt.method.as_str(),
-        outcome = attempt.outcome.as_str(),
-        ip = attempt
+    split_event!(
+        info,
+        { user_id = attempt.user_id.unwrap_or("-"), method = attempt.method.as_str(), outcome = attempt.outcome.as_str(), },
+        { ip = attempt
             .ip
             .map(|address| address.to_string())
             .as_deref()
-            .unwrap_or("-"),
+            .unwrap_or("-"), },
         "sign-in attempt"
     );
     // The address goes in as text and is cast to `inet` by Postgres, so no

@@ -54,6 +54,7 @@ use crate::store::email_tokens::{self, Purpose};
 use crate::store::passkeys::{self as passkey_rows, SessionRegistration};
 use crate::store::sign_in_events::{Method, Outcome};
 use crate::store::users::UserAuth;
+use crate::telemetry::subscriber::split_event;
 
 /// The ceremony cookie: `SameSite=Strict`, five minutes.
 pub const CEREMONY_COOKIE: &str = "okf_passkey";
@@ -206,7 +207,12 @@ fn expired() -> OkfError {
 /// session a 401 would read as "signed out", and the session is still live
 /// (issue #325).
 fn registration_refused(error: &WebauthnError) -> OkfError {
-    tracing::debug!(%error, "WebAuthn refused a registration");
+    split_event!(
+        debug,
+        {},
+        { %error, },
+        "WebAuthn refused a registration"
+    );
     OkfError::LimitExceeded {
         limit: "passkey",
         reason: REGISTRATION_FAILED.to_string(),
@@ -215,7 +221,12 @@ fn registration_refused(error: &WebauthnError) -> OkfError {
 
 /// Logs why webauthn-rs refused, and answers with one message.
 fn refused(error: &WebauthnError, message: &str) -> OkfError {
-    tracing::debug!(%error, "WebAuthn refused");
+    split_event!(
+        debug,
+        {},
+        { %error, },
+        "WebAuthn refused"
+    );
     OkfError::Unauthenticated {
         reason: message.to_string(),
     }
@@ -712,7 +723,12 @@ async fn verify_and_start(
             });
         }
         Err(error) => {
-            tracing::debug!(%error, user = %user.id, "passkey assertion refused");
+            split_event!(
+                debug,
+                { user = %user.id, },
+                { %error, },
+                "passkey assertion refused"
+            );
             return Ok(Verdict::Refused {
                 user_id: Some(user.id),
             });

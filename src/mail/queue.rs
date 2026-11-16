@@ -38,6 +38,7 @@ use crate::clock::Clock;
 use crate::error::OkfError;
 use crate::store::settings;
 use crate::store::users::check_email;
+use crate::telemetry::subscriber::split_event;
 
 /// The apalis queue (`apalis.jobs.job_type`). Set explicitly: apalis's
 /// default is the Rust type's path, which a rename would orphan.
@@ -412,22 +413,42 @@ async fn send_mail(
     // `AbortError` tells it never to fetch the job again.
     match error {
         MailError::Permanent(_) => {
-            tracing::warn!(job = %id, template = %job.template, %error, "mail refused for good");
+            split_event!(
+                warn,
+                { job = %id, template = %job.template, },
+                { %error, },
+                "mail refused for good"
+            );
             Err(Box::new(AbortError::new(error)))
         }
         MailError::Retryable(reason) => {
             let age = context.clock.now().timestamp() - job.queued_at;
             if age >= RETRY_WINDOW_HOURS * 60 * 60 {
-                tracing::warn!(job = %id, template = %job.template, %reason, "mail given up");
+                split_event!(
+                    warn,
+                    { job = %id, template = %job.template, },
+                    { %reason, },
+                    "mail given up"
+                );
                 return Err(Box::new(AbortError::new(MailError::Retryable(format!(
                     "gave up after {RETRY_WINDOW_HOURS} hours: {reason}"
                 )))));
             }
             if let Err(error) = reschedule(&context.pool, &id).await {
                 // Still a plain error: apalis fetches it again, just sooner.
-                tracing::error!(job = %id, %error, "rescheduling a mail job failed");
+                split_event!(
+                    error,
+                    { job = %id, },
+                    { %error, },
+                    "rescheduling a mail job failed"
+                );
             }
-            tracing::info!(job = %id, template = %job.template, %reason, "mail failed; will retry");
+            split_event!(
+                info,
+                { job = %id, template = %job.template, },
+                { %reason, },
+                "mail failed; will retry"
+            );
             Err(Box::new(MailError::Retryable(reason)))
         }
     }
@@ -570,7 +591,12 @@ async fn run_until_cancelled(
         match worker.run_until(signal).await {
             Ok(()) => return,
             Err(error) => {
-                tracing::error!(%error, "the mail worker stopped; restarting it soon");
+                split_event!(
+                    error,
+                    {},
+                    { %error, },
+                    "the mail worker stopped; restarting it soon"
+                );
             }
         }
         tokio::select! {

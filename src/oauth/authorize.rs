@@ -49,6 +49,7 @@ use crate::store::oauth::codes::{self as code_rows, SignInCodeRecord};
 use crate::store::oauth::grants::{self as grant_rows, NewSelfIssuedGrant};
 use crate::store::settings::Brand;
 use crate::store::users::UserAuth;
+use crate::telemetry::subscriber::split_event;
 
 /// The message for every unusable sign-in code, so the page never says
 /// whether a code exists, expired, was redeemed or was revoked.
@@ -513,7 +514,12 @@ async fn trusted_client<'q>(
     let client = match clients::resolve(app, oauth, client_id).await {
         Ok(client) => client,
         Err(OAuthError::Server(error)) => {
-            tracing::error!(%error, "resolving an OAuth client failed");
+            split_event!(
+                error,
+                { kind = error.kind(), },
+                { %error, },
+                "resolving an OAuth client failed"
+            );
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "The server could not check this client.",
@@ -523,7 +529,12 @@ async fn trusted_client<'q>(
             // The page stays generic; the log says why, so an operator can
             // tell an unknown DCR id from a document this server refuses
             // (issue #273). A client id is not a secret.
-            tracing::warn!(client_id, reason = %error, "refused an OAuth client");
+            split_event!(
+                warn,
+                { reason = error.code(), },
+                { client_id, error = %error, },
+                "refused an OAuth client"
+            );
             return Err((
                 StatusCode::BAD_REQUEST,
                 "This client is not known to the server.",
@@ -863,7 +874,12 @@ async fn finish(
     // Creating the grant bumped admin_generation, so this loads it into the
     // key cache before the client's token request can arrive.
     if let Err(error) = app.poll().await {
-        tracing::error!(%error, "poll after creating a grant failed");
+        split_event!(
+            error,
+            { kind = error.kind(), },
+            { %error, },
+            "poll after creating a grant failed"
+        );
     }
     let (code, family_id) = match (
         keys::generate_with(keys::AUTHORIZATION_CODE_PREFIX),
@@ -956,9 +972,10 @@ async fn consent_as_user(
             );
         }
         Err(Choice::Tampered) => {
-            tracing::warn!(
-                user = %user.name,
-                client = %pending.client.client_id,
+            split_event!(
+                warn,
+                {},
+                { user = %user.name, client = %pending.client.client_id, },
                 "refused a consent outside the offered choices"
             );
             return refuse(TAMPERED);
@@ -1005,10 +1022,10 @@ async fn consent_as_user(
             }
             Err(error) => return server_error(&error, &brand),
         };
-    tracing::info!(
-        user = %user.name,
-        client = %pending.client.client_id,
-        grant = %grant_id,
+    split_event!(
+        info,
+        { grant = %grant_id, },
+        { user = %user.name, client = %pending.client.client_id, },
         "consent granted as the signed-in user"
     );
     finish(app, oauth, &form.pending, pending, grant_id).await
@@ -1016,7 +1033,12 @@ async fn consent_as_user(
 
 /// A 500 error page; the details go to the log only.
 fn server_error(error: &OkfError, brand: &Brand) -> Response {
-    tracing::error!(%error, "consent failed");
+    split_event!(
+        error,
+        { kind = error.kind(), },
+        { %error, },
+        "consent failed"
+    );
     consent::error_page(
         StatusCode::INTERNAL_SERVER_ERROR,
         "The server could not complete sign-in.",
@@ -1055,6 +1077,35 @@ mod tests {
     use crate::store::settings::{self, SettingKey};
     use crate::store::user_sessions;
     use crate::store::users::{self, NewUser};
+
+    /// Task 1b: a refused client's id is caller text, so it reaches stderr
+    /// only, and the exported event keeps the error's code.
+    #[test]
+    fn a_refused_client_id_reaches_stderr_and_not_otlp() {
+        use crate::telemetry::config::LogFormat;
+        use crate::telemetry::subscriber::capture::observe;
+
+        const SENTINEL: &str = "zq-sentinel-7f3a-client";
+        let observed = observe("trace", "trace", "trace", LogFormat::Text, || {
+            // A one-thread runtime keeps every task on this thread, under
+            // the scoped subscriber.
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime");
+            runtime.block_on(async {
+                let test = oauth_app().await;
+                let query = authorize_query_for(SENTINEL, REDIRECT_URI);
+                let (status, _, _) =
+                    send(&test, "GET", &format!("/oauth/authorize?{query}"), None).await;
+                assert_eq!(status, StatusCode::BAD_REQUEST);
+            });
+        });
+        let exported = observed.exported_text();
+        assert!(exported.contains("refused an OAuth client"), "{exported}");
+        assert!(!exported.contains(SENTINEL), "{exported}");
+        assert!(observed.stderr.contains(SENTINEL), "{}", observed.stderr);
+    }
 
     /// Replaces one parameter of the valid query.
     fn query_with(name: &str, value: &str) -> String {

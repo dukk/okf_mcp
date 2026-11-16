@@ -34,6 +34,7 @@ use crate::store::catalogs::{self, is_unique_violation};
 use crate::store::changesets::{self, ChangesetRow, ChangesetState, EntryRow};
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
 use crate::telemetry::metrics::Outcome;
+use crate::telemetry::subscriber::split_event;
 
 /// What a publish did.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, JsonSchema)]
@@ -284,9 +285,10 @@ async fn publish_locked(
     // this one's result. A failed refresh does not undo a committed publish;
     // the poll loop retries it, and the next publish refreshes first.
     if let Err(error) = state.refresh(app.pool()).await {
-        tracing::error!(
-            catalog = %state.name(),
-            %error,
+        split_event!(
+            error,
+            { catalog = %state.name(), kind = error.kind(), },
+            { %error, },
             "refresh after publish failed; the poll loop retries"
         );
     }

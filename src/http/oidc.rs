@@ -51,6 +51,7 @@ use crate::store::settings::Brand;
 use crate::store::sign_in_events::{Method, Outcome};
 use crate::store::user_sessions;
 use crate::store::users::UserAuth;
+use crate::telemetry::subscriber::split_event;
 
 /// The flow cookie: `SameSite=Lax`, so the provider's redirect carries it.
 pub const FLOW_COOKIE: &str = "okf_oidc";
@@ -313,7 +314,12 @@ async fn callback(
             )
         }
         Err(error) => {
-            tracing::info!(provider = %provider, %error, "OIDC sign-in refused");
+            split_event!(
+                info,
+                { provider = %provider, },
+                { %error, },
+                "OIDC sign-in refused"
+            );
             audit(&app, None, Method::Oidc, Outcome::Failed, ip).await;
             return page(&brand, &headers, StatusCode::BAD_REQUEST, SIGN_IN_RETRY);
         }

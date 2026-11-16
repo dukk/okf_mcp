@@ -14,6 +14,7 @@ use std::sync::RwLock;
 use crate::error::OkfError;
 use crate::okf::paths::{escapes_root, normpath, walk_order, SKIP_DIRS, SKIP_TOP};
 use crate::okf::pystr::universal_newlines;
+use crate::telemetry::subscriber::split_event;
 
 /// Read and write access to one catalog's files.
 ///
@@ -318,7 +319,12 @@ impl DiskWorkspace {
             let entry = entry.map_err(io_err)?;
             let file_name = entry.file_name();
             let Some(name) = file_name.to_str() else {
-                tracing::warn!(?file_name, "skipping non-UTF-8 file name");
+                split_event!(
+                    warn,
+                    {},
+                    { ?file_name, },
+                    "skipping non-UTF-8 file name"
+                );
                 continue;
             };
             let rel = if prefix.is_empty() {
@@ -347,13 +353,23 @@ impl DiskWorkspace {
                     Resolution::Inside => None,
                 };
                 if let Some(reason) = skip_reason {
-                    tracing::warn!(path = %rel, reason, "not listing symlink");
+                    split_event!(
+                        warn,
+                        { reason, },
+                        { path = %rel, },
+                        "not listing symlink"
+                    );
                     continue;
                 }
             } else if !file_type.is_file() {
                 // Not a directory, symlink or regular file: a FIFO, socket or
                 // device, which a read would block on or fail.
-                tracing::warn!(path = %rel, "not listing a special file (FIFO, socket or device)");
+                split_event!(
+                    warn,
+                    {},
+                    { path = %rel, },
+                    "not listing a special file (FIFO, socket or device)"
+                );
                 continue;
             }
             out.push(rel);
