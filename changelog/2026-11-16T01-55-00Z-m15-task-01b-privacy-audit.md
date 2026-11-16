@@ -4,9 +4,12 @@ The OTLP log bridge exports every `okf_mcp` event that passes its filter, so
 the events the crate already emitted had to be checked against the spec's
 "never exported" list. A grep-based scan of all of `src/` (including
 `src/telemetry/**`, `src/bin/**`, and files with an early `#[cfg(test)]` module)
-found 76 `split_event!` calls and 47 direct event calls in production code; each
-was classified. The first pass missed `settle` (`src/http/api/mod.rs`, a
-scanner gap) and three events in `src/telemetry/mod.rs` (found in review).
+found 79 `split_event!` calls and 43 direct event calls in production code (after
+merging main with the metrics work); each was classified. The first pass missed `settle` (`src/http/api/mod.rs`, a
+scanner gap) three events in `src/telemetry/mod.rs` (found in review), and three events that
+the metrics work (#463) added: the `/metrics` listener errors in `src/cli.rs`,
+`encoding the metrics failed` in `src/telemetry/scrape.rs`, and the metrics-off
+warning in `src/telemetry/mod.rs`.
 
 ## What changed
 
@@ -27,7 +30,7 @@ scanner gap) and three events in `src/telemetry/mod.rs` (found in review).
   from operator config (listen address, NTP server, default catalog).
 - `src/telemetry/mod.rs`: the shutdown-thread error is split (`warn_thread_not_started`)
   and the two `OTLP ... are off: {error}` startup warnings now export only the
-  signal name, with the error on stderr (`warn_provider_off`). The shutdown
+  signal name (traces, logs, metrics), with the error on stderr (`warn_provider_off`). The shutdown
   thread case cannot be forced in a test, so both helpers are tested directly.
 - `LogMailer` was already moved by Task 1 (issue #461).
 

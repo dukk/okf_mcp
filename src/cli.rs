@@ -723,34 +723,73 @@ fn parse_expiry(text: &str) -> Result<Duration, String> {
 /// * `config` - the loaded configuration (`--listen` overrides its address).
 /// * `args` - the `serve` flags.
 /// * `clock` - the source of every timestamp written.
+/// * `registry` - what `/metrics` renders, from `serve`'s running telemetry
+///   (`None` in unit tests, which start none).
 ///
 /// # Errors
-/// Any failure to connect, load, bind or serve, with context.
+/// Any failure to connect, load, bind or serve, with context; a `--listen`
+/// that overlaps `[telemetry.prometheus] listen`.
 async fn serve(
     database_url: Option<&str>,
     mut config: Config,
     args: ServeArgs,
     clock: Arc<dyn Clock>,
+    registry: Option<prometheus::Registry>,
 ) -> anyhow::Result<()> {
-    let pool = connect(database_url, &config).await?;
     if let Some(listen) = args.listen {
         config.listen = listen;
+        // The file's own check saw the file's address, not this one.
+        config
+            .validate_metrics_listen()
+            .map_err(anyhow::Error::msg)?;
     }
+    let pool = connect(database_url, &config).await?;
     let listen = config.listen;
+    let metrics_listen = config.telemetry.prometheus.as_ref().map(|prom| prom.listen);
     let app = App::load(pool, config, clock)
         .await
         .context("load the catalogs")?;
     let listener = TcpListener::bind(listen)
         .await
         .with_context(|| format!("listen on {listen}"))?;
+    // Bound before serving, so a taken port stops start-up instead of
+    // leaving a server with no `/metrics`.
+    let scrape_listener = match (metrics_listen, registry) {
+        (Some(address), Some(registry)) => Some((
+            TcpListener::bind(address)
+                .await
+                .with_context(|| format!("listen for /metrics on {address}"))?,
+            registry,
+        )),
+        _ => None,
+    };
     tracing::info!(%listen, "serving");
     let shutdown = CancellationToken::new();
     // A background task; it cancels `shutdown` on the first signal.
     tokio::spawn(cancel_on_signal(shutdown.clone()));
-    http::serve(app, listener, shutdown)
+    let scraping = scrape_listener.map(|(scrape_listener, registry)| {
+        tokio::spawn(telemetry::scrape::serve(
+            scrape_listener,
+            registry,
+            shutdown.clone(),
+        ))
+    });
+    let served = http::serve(app, listener, shutdown.clone())
         .await
-        .context("serve")?;
-    Ok(())
+        .context("serve");
+    // However `http::serve` ended, stop `/metrics` and wait for it: the
+    // caller flushes telemetry next, and the listener must be gone by then.
+    shutdown.cancel();
+    if let Some(scraping) = scraping {
+        match scraping.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => split_event!(error, {}, { %error, }, "the /metrics listener failed"),
+            Err(error) => {
+                split_event!(error, {}, { %error, }, "the /metrics listener task failed");
+            }
+        }
+    }
+    served
 }
 
 /// [`run`] without the subscriber install, which a process may do once: the
@@ -815,7 +854,8 @@ async fn dispatch(
         .unwrap_or_else(|| Command::Serve(ServeArgs::default()))
     {
         Command::Serve(args) => {
-            let served = serve(cli.database_url.as_deref(), config, args, clock).await;
+            let registry = telemetry.as_ref().map(Telemetry::registry);
+            let served = serve(cli.database_url.as_deref(), config, args, clock, registry).await;
             // The closed message only: the error's text can carry anything,
             // and `main` prints the full chain to stderr.
             if served.is_err() {
@@ -2755,6 +2795,29 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("DATABASE_URL"));
+    }
+
+    #[tokio::test]
+    async fn serve_listen_overlapping_the_metrics_listener_is_refused() {
+        let mut config = Config::default();
+        config.telemetry.prometheus = Some(crate::telemetry::config::PrometheusConfig {
+            listen: "127.0.0.1:9090".parse().unwrap(),
+        });
+        let args = ServeArgs {
+            listen: Some("127.0.0.1:9090".parse().unwrap()),
+        };
+
+        // No database is given: the overlap is refused before any connection.
+        let error = serve(None, config, args, fixed_now(), None)
+            .await
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("telemetry.prometheus.listen overlaps listen"),
+            "{error}"
+        );
     }
 
     #[tokio::test]

@@ -48,3 +48,6 @@ Each rule below records a real bug the review bot found in an earlier PR, mostly
 - **Find the whole class.** When you fix one path, grep for every sibling path with the same pattern and fix those too.
 - **Tests must fail without the fix.** Verify that by temporarily reverting the code, and say so in your report. After restoring a reverted file, `touch` it (or restore with `git checkout`, which sets a new modification time). Otherwise cargo can reuse the test binary built from the reverted copy and report stale results.
 - **The PR description and claims must match the final code** exactly. Update them after every review round.
+
+## Events and privacy
+- **Every event with error text, caller text or principal text uses `split_event!` (or an explicit `LOCAL_ONLY` twin).** `%error`, `?error`, `reason`, a user name, `actor`, `key_id`, a path, a client id and an IP never go in the exported half; see `docs/contributing/policy-lints.md` "Events". When you audit events, grep the whole of `src/` for `(error|warn|info|debug|trace|event)!(` (a scanner that stops at the first `#[cfg(test)]` module skipped `settle`, and one that skips `src/telemetry/**` skipped three more), and re-run the grep after merging main: other PRs add events (the metrics PR added three with `%error`).
