@@ -927,16 +927,19 @@ const SOLE_OWNED_TEAMS: &str = "\
 /// Catalogs, their history (whose `actor` text stays) and every audit entry
 /// are kept; the user's `audit_people` row becomes `deleted user #N`.
 ///
-/// Lock order: every admin row in id order, then the user (as
-/// [`set_admin`]), then its personal team, then its shared teams in id
-/// order, then its keys and grants in id order, then their open changesets
-/// in id order. A key or code being created for the user holds the user
-/// `FOR KEY SHARE` (`id_of`); the deletion waits for it and then deletes
-/// it too. A changeset being opened by one of its keys waits for the key's
-/// lock and then finds the key gone. A publish by one of its keys that is
-/// already running when the deletion starts may make Postgres abort one of
-/// the two as a deadlock ([`OkfError::Busy`], retryable): the publish holds
-/// its changeset and records its entry under the user's `FOR KEY SHARE`.
+/// Lock order: every admin row in id order, then the user with every other
+/// user its entries resolve (the actor, its credential's owner, the people
+/// of its open changesets' personal owner teams), in id order
+/// ([`audit::lock_people`], as [`set_admin`]), then its personal team, then
+/// its shared teams in id order, then its keys and grants in id order, then
+/// their open changesets in id order. A key or code being created for the
+/// user holds the user `FOR KEY SHARE` (`id_of`); the deletion waits for it
+/// and then deletes it too. A changeset being opened by one of its keys
+/// waits for the key's lock and then finds the key gone. A publish, discard
+/// or audited edit takes the users its entry resolves before its changeset
+/// (`publish::lock_people`), so one by the user's key either finishes
+/// before the deletion takes the user, or waits for it and is refused,
+/// never a deadlock (issue #418).
 ///
 /// # Arguments
 /// * `pool` - the database.
@@ -954,7 +957,7 @@ const SOLE_OWNED_TEAMS: &str = "\
 /// [`OkfError::Forbidden`] for a provisioner and an admin user;
 /// [`OkfError::Refused`] naming the catalogs its personal team owns, the
 /// shared teams it is the only owner of, or that it is the last admin user;
-/// [`OkfError::Busy`] for a deadlock; [`OkfError::Database`].
+/// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.delete"))]
 pub async fn delete(
     pool: &PgPool,
@@ -975,14 +978,31 @@ pub async fn delete(
         sqlx::query_scalar("SELECT id FROM users WHERE is_admin ORDER BY id FOR UPDATE")
             .fetch_all(&mut *tx)
             .await?;
-    // `FOR UPDATE` holds the row, so a credential or membership created
-    // concurrently (its foreign-key check takes `FOR KEY SHARE`) waits.
-    let (user_id, is_admin): (String, bool) =
-        sqlx::query_as("SELECT id, is_admin FROM users WHERE name = $1 FOR UPDATE")
-            .bind(name)
-            .fetch_optional(&mut *tx)
-            .await?
-            .ok_or_else(|| unknown(name))?;
+    // The catalogs of its keys' open changesets, read without a lock: the
+    // discard entries resolve their personal owner teams' people.
+    let open_catalogs: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT cat.name FROM changesets c JOIN api_keys k ON k.id = c.key_id \
+                                   JOIN users u ON u.id = k.user_id \
+                                   JOIN catalogs cat ON cat.id = c.catalog_id \
+         WHERE u.name = $1 AND c.state = 'open' ORDER BY cat.name",
+    )
+    .bind(name)
+    .fetch_all(&mut *tx)
+    .await?;
+    let open_catalogs: Vec<&str> = open_catalogs.iter().map(String::as_str).collect();
+    // Then the user `FOR UPDATE`, so a credential or membership created
+    // concurrently (its foreign-key check takes `FOR KEY SHARE`) waits, with
+    // every other user its entries resolve (the actor, its credential's
+    // owner, those people) in `audit::lock_people`' order (issue #418).
+    let people = People {
+        target: Some((name, RowLock::Update)),
+        catalogs: &open_catalogs,
+        ..People::default()
+    };
+    // `lock_people` answers `Some` whenever it is given a target.
+    let (user_id, is_admin) = audit::lock_people(&mut tx, actor, &people)
+        .await?
+        .ok_or_else(|| unknown(name))?;
     audit::refuse_admin_target(actor, is_admin, name)?;
     // The personal team: a catalog assigned to it concurrently takes
     // `FOR KEY SHARE` on this row, so either it waits for this delete (and
@@ -2496,6 +2516,102 @@ pub(crate) mod tests {
             state, "discarded",
             "no changeset is left open without a key"
         );
+    }
+
+    /// How the deletion's actor names the non-admin user the writer holds.
+    #[derive(Debug, Clone, Copy)]
+    enum ActingAs {
+        /// By its user id (a session).
+        User,
+        /// Only by its key, whose owner `audit::record` resolves.
+        Key,
+        /// By another user's id, with the held user's key: the credential's
+        /// owner differs from `user_id`.
+        KeyOfAnother,
+    }
+
+    /// A deletion whose actor is a non-admin user (or whose credential is
+    /// that user's) locks that user with the target, not at the end in
+    /// `audit::record` (issue #418). A writer holds the user `FOR UPDATE`
+    /// and then needs the target, in id order (the held user is the lower
+    /// id); before the fix the deletion held the target while it waited for
+    /// the held user, and Postgres aborted one of the two as `Busy`.
+    async fn assert_a_deletion_takes_its_actor_with_its_target(acting_as: ActingAs) {
+        // Arrange
+        let db = test_db().await;
+        seed_catalog_owned_by(&db.pool, crate::db::TEST_TEAM).await;
+        let first = seed_user(&db.pool, "alice", None).await;
+        let second = seed_user(&db.pool, "bob", None).await;
+        // `<` on two `String`s compares them as Postgres' `ORDER BY id` does
+        // for these ASCII ids.
+        let (acting, target) = if first.id < second.id {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        let key = key_for(&db.pool, &acting.name, "acting-key", false).await;
+        let (credential, user_id) = match acting_as {
+            ActingAs::User => (None, Some(acting.id.clone())),
+            ActingAs::Key => (Some(key), None),
+            ActingAs::KeyOfAnother => {
+                let carol = seed_user(&db.pool, "carol", None).await;
+                (Some(key), Some(carol.id))
+            }
+        };
+        let actor = AuditActor {
+            credential,
+            user_id,
+            ..AuditActor::cli()
+        };
+        let mut writer = db.pool.begin().await.unwrap();
+        sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+            .bind(&acting.id)
+            .execute(&mut *writer)
+            .await
+            .unwrap();
+        let pool = db.pool.clone();
+        let target_name = target.name.clone();
+        let deleting =
+            tokio::spawn(async move { delete(&pool, &target_name, false, &actor, now()).await });
+        until_a_lock_is_awaited(&db.pool).await;
+
+        // Act: the writer's next lock, then its commit.
+        let next = tokio::time::timeout(
+            LOCK_WAIT,
+            sqlx::query("SELECT id FROM users WHERE id = $1 FOR KEY SHARE")
+                .bind(&target.id)
+                .execute(&mut *writer),
+        )
+        .await
+        .expect("the writer waited for the target for too long");
+        next.expect("the writer's lock on the target (a deadlock is aborted here)");
+        writer.commit().await.unwrap();
+        let deleted = tokio::time::timeout(LOCK_WAIT, deleting)
+            .await
+            .expect("the deletion waited for the writer for too long")
+            .unwrap();
+
+        // Assert
+        assert!(deleted.is_ok(), "{deleted:?}");
+        assert!(matches!(
+            find(&db.pool, &target.name).await,
+            Err(OkfError::UnknownName { .. })
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_deletion_by_a_non_admin_user_takes_that_user_with_its_target() {
+        assert_a_deletion_takes_its_actor_with_its_target(ActingAs::User).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_deletion_by_a_non_admin_users_key_takes_its_owner_with_its_target() {
+        assert_a_deletion_takes_its_actor_with_its_target(ActingAs::Key).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_deletion_whose_key_another_user_owns_takes_that_owner_with_its_target() {
+        assert_a_deletion_takes_its_actor_with_its_target(ActingAs::KeyOfAnother).await;
     }
 
     /// The CLI's admin-flag change (it may clear the last admin).

@@ -3,8 +3,10 @@
 //!
 //! The lock is two locks, taken in this order. First the in-process mutex
 //! ([`CatalogState::publish_lock`]), held until the snapshot is swapped.
-//! Then the advisory lock in the transaction, which a CLI import takes too.
-//! The transaction then takes the catalog row (`lock_catalog`) and the
+//! Then, in the transaction, the user rows its audit entry resolves
+//! (`lock_people`), so the publish takes users before its changeset as
+//! `users::delete` does, then the advisory lock, which a CLI import takes
+//! too. The transaction then takes the catalog row (`lock_catalog`) and the
 //! changeset row (`changesets::lock`), in the order every changeset
 //! transaction uses. While the locks are held, nothing else can change the
 //! catalog's documents or this changeset's entries, so the checks see
@@ -29,7 +31,7 @@ use crate::okf::ops::replay::{replay, ReplayOp};
 use crate::okf::rules;
 use crate::okf::snapshot::Snapshot;
 use crate::overlay::{build_overlay, Overlay};
-use crate::store::audit::{self, Action, AuditActor, Entry, Target};
+use crate::store::audit::{self, Action, AuditActor, Entry, People, Target};
 use crate::store::catalogs::{self, is_unique_violation};
 use crate::store::changesets::{self, ChangesetRow, ChangesetState, EntryRow};
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
@@ -198,6 +200,11 @@ async fn publish_locked(
     let locks = async {
         let publishing = state.publish_lock().lock().await;
         let mut tx = app.pool().begin().await?;
+        // The users the entry resolves (the actor, its key's owner and the
+        // person of a personal owner team), before the changeset: the
+        // order `users::delete` takes them in (issue #418). After the
+        // mutex, so no waiter on it holds a row lock.
+        lock_people(&mut tx, audit, state.name()).await?;
         catalogs::lock(&mut tx, state.id()).await?;
         changesets::lock_catalog(&mut tx, state.id()).await?;
         let locked = changesets::lock(&mut tx, changeset.id)
@@ -308,6 +315,35 @@ async fn publish_locked(
         warnings,
         replayed: merged.replayed,
     })
+}
+
+/// Locks, first in a changeset transaction that records a catalog entry,
+/// every user row that entry will lock ([`audit::lock_people`] with the
+/// catalog): the actor, its credential's owner and the person of a
+/// personal owner team. Taken after them, the changeset row can no longer
+/// close a cycle with `users::delete`, which locks the user, then its keys,
+/// then their changesets (issue #418). Publish, discard and an audited edit
+/// all call it.
+///
+/// # Arguments
+/// * `conn` - the change's transaction (`&mut tx`).
+/// * `actor` - who records the entry.
+/// * `catalog` - the changeset's catalog, by name.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "publish.lock_people"))]
+pub(crate) async fn lock_people(
+    conn: &mut PgConnection,
+    actor: &AuditActor,
+    catalog: &str,
+) -> Result<(), OkfError> {
+    let people = People {
+        catalogs: &[catalog],
+        ..People::default()
+    };
+    audit::lock_people(conn, actor, &people).await?;
+    Ok(())
 }
 
 /// The snapshot at the catalog's current generation (design "Publish",
