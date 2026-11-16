@@ -936,8 +936,9 @@ pub struct DeleteOptions {
     /// the API).
     pub allow_last_admin: bool,
     /// Refuses the deletion while the user is a member of any team but its
-    /// own personal one, in any role and suspended or not, checked under the same locks as the delete (an external system's
-    /// "delete only if unshared", with no read-then-delete race).
+    /// own personal one, in any role and suspended or not. Checked under the
+    /// same locks as the delete, so an external system's "delete only if
+    /// unshared" has no read-then-delete race.
     pub unless_shared_member: bool,
 }
 

@@ -2182,6 +2182,14 @@ mod tests {
             None,
         )
         .await;
+        let (maybe, _) = send(
+            &test,
+            "DELETE",
+            "/api/v1/users/bob?unless_shared_member=maybe",
+            admin,
+            None,
+        )
+        .await;
         let (off, _) = send(
             &test,
             "DELETE",
@@ -2209,6 +2217,7 @@ mod tests {
         );
         assert_eq!(still.as_u16(), 200, "the user stays");
         assert_eq!(typo.as_u16(), 400, "a misspelled parameter deletes nothing");
+        assert_eq!(maybe.as_u16(), 400, "a non-boolean value deletes nothing");
         assert_eq!(off.as_u16(), 204, "false is the unchanged behaviour");
         assert_eq!(unshared.as_u16(), 204, "no shared team: deleted as before");
     }
