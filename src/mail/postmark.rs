@@ -118,11 +118,14 @@ impl Mailer for PostmarkMailer {
             html_body: &mail.html,
             message_stream: &self.message_stream,
         };
+        let mut trace_headers = reqwest::header::HeaderMap::new();
+        crate::telemetry::propagation::inject(&mut trace_headers);
         let response = self
             .client
             .post(&self.endpoint)
             .header(ACCEPT, "application/json")
             .header(TOKEN_HEADER, self.token.clone())
+            .headers(trace_headers)
             .json(&body)
             .send()
             .await
@@ -179,6 +182,18 @@ mod tests {
             .with_state(mock.clone());
         tokio::spawn(async move { axum::serve(listener, router).await });
         (endpoint, mock)
+    }
+
+    #[tokio::test]
+    async fn outbound_requests_carry_traceparent() {
+        use crate::telemetry::propagation::testing::{assert_joins_the_callers_trace, echo_stub};
+        let (url, seen) = echo_stub().await;
+        let mailer = mailer(&format!("{url}/email"));
+
+        assert_joins_the_callers_trace(&seen, || async {
+            mailer.send(&mail()).await.expect("sent");
+        })
+        .await;
     }
 
     fn mail() -> Mail {

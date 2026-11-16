@@ -688,10 +688,13 @@ impl CimdFetcher {
         if literal.is_some_and(|ip| !self.allow_private && !is_public_address(ip)) {
             return Err(CimdError::PrivateAddress);
         }
+        let mut headers = reqwest::header::HeaderMap::new();
+        crate::telemetry::propagation::inject(&mut headers);
         let mut response = self
             .client
             .get(url.clone())
             .header(header::ACCEPT, "application/json")
+            .headers(headers)
             .send()
             .await
             .map_err(classify_transport)?;
@@ -949,6 +952,19 @@ mod tests {
 
     fn v6(text: &str) -> IpAddr {
         IpAddr::V6(text.parse::<Ipv6Addr>().expect("v6"))
+    }
+
+    #[tokio::test]
+    async fn outbound_requests_carry_traceparent() {
+        use crate::telemetry::propagation::testing::{assert_joins_the_callers_trace, echo_stub};
+        let (base, seen) = echo_stub().await;
+        let fetcher = CimdFetcher::new(true, true).expect("a fetcher");
+        let url = Url::parse(&format!("{base}/client.json")).expect("a URL");
+
+        assert_joins_the_callers_trace(&seen, || async {
+            fetcher.fetch(&url).await.expect("fetched");
+        })
+        .await;
     }
 
     #[test]

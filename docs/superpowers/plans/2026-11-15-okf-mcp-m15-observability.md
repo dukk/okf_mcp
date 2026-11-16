@@ -1307,6 +1307,14 @@ Each uses `app_with_metrics` plus the in-memory span exporter:
 
 `feat(telemetry): pool, clock, archive metrics and outbound trace context (M15 Task 6)`
 
+
+> **Corrected (issue #467, 2026-11-16).** What shipped differs from the sketches above in these ways; read `src/telemetry/{propagation,metrics}.rs`, `src/app.rs`, `src/http/archives.rs` and the three clients for the code.
+> - **Pool gauge:** `Metrics::observe_pool(Weak<App>)` registers `db.client.connection.count` (`state` = `idle` or `used`; `used` is `size - idle`, with idle clamped to size so the two always sum to the size). `App::load_with_metrics` calls it beside `observe_catalogs`. `Metrics` now keeps its `Meter` (as #465 does) for observable gauges registered after the `App` exists. The gauge is not in `Metrics::FAMILIES`: it exists only once an `App` does.
+> - **`inject(headers: &mut http::HeaderMap)`** (axum's and reqwest 0.13's `HeaderMap` are the same type) reads `tracing::Span::current().context()`, is deliberately not instrumented (a trace-level span of its own would become the current span and the header would name the helper), and is exempted from the lint with that reason. Tests: `propagation::tests::inject_*` at both `info` and `trace`; `propagation::testing::{echo_stub, assert_joins_the_callers_trace}` serve the three `outbound_requests_carry_traceparent` tests (OIDC's `send`, `CimdFetcher::fetch`, `PostmarkMailer::send`).
+> - **Clock:** `Metrics::clock_check(Outcome, Option<i64>)` counts `okf.clock.checks{outcome}` (`ok` when the reply was usable) and sets `okf.clock.offset` (unit `s`, `f64`) only on success; a failed check leaves the last offset. `check_clock_until` records them; the check future carries the `okf.clock.check` root span.
+> - **Archives:** the spans are named `okf.archive.export` and `okf.archive.import`. `Metrics::archive(Direction, catalog, Outcome, elapsed, bytes)`: `okf.archive.duration` is labelled `direction` and `outcome`; `okf.archive.size` (`catalog`, `direction`) counts bytes only on success, and an import's size is the uploaded (compressed) body. Both the span's `okf.catalog` and every metric take `app.catalog(name)`'s own name, so a name no loaded catalog bears (unknown, or admitted but not yet loaded) records nothing at all, not even a duration.
+> - Later tasks need no change: grep of Tasks 7, 9a-9d and 10 found no use of the symbols above beyond the sentinel case Task 7 already lists.
+
 ---
 
 ### Task 7: The mock OTLP collector and the privacy sentinel test

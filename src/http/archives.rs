@@ -2,6 +2,7 @@
 //! `.tar.gz`, and an import from one.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, FromRequest, Path, Query, Request, State};
@@ -22,6 +23,7 @@ use crate::store::audit::{AccessKind, AuditActor};
 use crate::store::export::{export, ExportOptions};
 use crate::store::import::{import, ImportOptions, ImportScope};
 use crate::store::keys::Access;
+use crate::telemetry::metrics::{Direction, Outcome};
 use crate::telemetry::subscriber::split_event;
 
 /// The two routes, for the keyed part of the router.
@@ -136,6 +138,64 @@ fn note_unlocked(
     }
 }
 
+/// Records the span's `okf.catalog` for a catalog the request has been
+/// admitted to and that is loaded, and returns that catalog's own name.
+/// A name that no loaded catalog bears (an unknown or refused path segment)
+/// is recorded nowhere: neither the span nor a metric label takes a raw
+/// path value, only one validated against server state.
+///
+/// # Arguments
+/// * `span` - the handler's span, captured before this function's own
+///   trace-level span becomes the current one.
+/// * `app` - the shared state.
+/// * `name` - the catalog, from the path, already admitted.
+///
+/// # Returns
+/// The loaded catalog's name, or `None`.
+#[tracing::instrument(level = "trace", skip_all)]
+fn resolved_catalog(span: &tracing::Span, app: &App, name: &str) -> Option<String> {
+    let catalog = app.catalog(name)?.name().to_owned();
+    span.record("okf.catalog", catalog.as_str());
+    Some(catalog)
+}
+
+/// Measures one archive transfer and records its size on the span.
+///
+/// # Arguments
+/// * `span` - the handler's span (see [`resolved_catalog`]).
+/// * `app` - the shared state.
+/// * `direction` - export or import.
+/// * `catalog` - [`resolved_catalog`]'s answer; nothing is recorded for
+///   `None`.
+/// * `started` - when the transfer began.
+/// * `bytes` - the archive's size when the transfer succeeded.
+#[tracing::instrument(level = "trace", skip_all)]
+fn record_transfer(
+    span: &tracing::Span,
+    app: &App,
+    direction: Direction,
+    catalog: Option<&str>,
+    started: Instant,
+    bytes: Option<usize>,
+) {
+    let Some(catalog) = catalog else {
+        return;
+    };
+    // `usize` to `u64` is lossless on every platform Rust supports.
+    let bytes = bytes.map(|bytes| bytes as u64);
+    if let Some(bytes) = bytes {
+        // Spans take integers as `i64`; a size past `i64::MAX` is not real.
+        span.record("okf.archive.size", i64::try_from(bytes).unwrap_or(i64::MAX));
+    }
+    let outcome = if bytes.is_some() {
+        Outcome::Ok
+    } else {
+        Outcome::Error
+    };
+    app.metrics()
+        .archive(direction, catalog, outcome, started.elapsed(), bytes);
+}
+
 /// `GET /catalogs/{name}/export`: the published documents as a `.tar.gz`,
 /// for a key with `read` on the catalog.
 ///
@@ -157,6 +217,12 @@ fn note_unlocked(
 // Each argument is an extractor: axum fills it from the request (the state,
 // the auth layer's principal, the `{name}` path segment), much as a Python
 // web framework injects arguments by their annotations.
+#[tracing::instrument(
+    name = "okf.archive.export",
+    level = "info",
+    skip_all,
+    fields(okf.catalog = tracing::field::Empty, okf.archive.size = tracing::field::Empty)
+)]
 async fn export_catalog(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -180,7 +246,24 @@ async fn export_catalog(
         // a catalog created again under this name since the gates loaded.
         expect_catalog_id: admitted_id(&principal, &name),
     };
-    let (bytes, _generation) = export(app.pool(), &name, Vec::new(), &options).await?;
+    // Only now is the name admitted: the span and the metrics take the
+    // loaded catalog's own name, never the path segment.
+    let span = tracing::Span::current();
+    let catalog = resolved_catalog(&span, &app, &name);
+    let started = Instant::now();
+    let exported = export(app.pool(), &name, Vec::new(), &options).await;
+    record_transfer(
+        &span,
+        &app,
+        Direction::Export,
+        catalog.as_deref(),
+        started,
+        exported
+            .as_ref()
+            .ok()
+            .map(|(bytes, _generation)| bytes.len()),
+    );
+    let (bytes, _generation) = exported?;
     note_unlocked(
         &app,
         &principal,
@@ -252,6 +335,12 @@ struct ImportQuery {
 /// without `?replace=true`, or one no longer at `expect_generation`; 500 for a
 /// database failure. A refresh that fails after the import committed is
 /// logged, not returned.
+#[tracing::instrument(
+    name = "okf.archive.import",
+    level = "info",
+    skip_all,
+    fields(okf.catalog = tracing::field::Empty, okf.archive.size = tracing::field::Empty)
+)]
 async fn import_catalog(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
@@ -268,88 +357,116 @@ async fn import_catalog(
     // An import rewrites the catalog's contents: a write, which needs the
     // unlock a write does (M14 Task 9b). Checked before the body is read.
     let admission = principal.admission(&name, Access::Write, app.clock().now())?;
-    let max_bytes = app.config().max_import_bytes.as_u64();
-    // An `async` block is a future that runs only when awaited (here, under
-    // the deadline). Its error is the response to send instead.
-    let upload = async {
-        // `Bytes::from_request` is what a `Bytes` handler argument runs: it
-        // honours the route's `DefaultBodyLimit`, and its rejection is a
-        // ready-made response (413 past the cap).
-        let body = Bytes::from_request(request, &())
-            .await
-            .map_err(IntoResponse::into_response)?;
-        // Decompressing and checking every entry is CPU work, so it runs on
-        // a blocking thread; `move` hands `body` (a cheap reference-counted
-        // buffer) to the closure.
-        blocking(move || read_tarball(body.as_ref(), max_bytes))
-            .await
-            .map_err(|error| AppError(error).into_response())
-    };
-    // `timeout` gives `Err(Elapsed)` if the deadline passes first; dropping
-    // the unfinished upload then cancels it, and nothing is imported.
-    let files = match tokio::time::timeout(REQUEST_TIMEOUT, upload).await {
-        Ok(Ok(files)) => files,
-        Ok(Err(refusal)) => return Ok(refusal),
-        Err(_elapsed) => return Ok(upload_timed_out()),
-    };
-    let options = ImportOptions {
-        replace: query.replace,
-        scope: if query.only_machinery {
-            ImportScope::Machinery
-        } else {
-            ImportScope::Everything
-        },
-        expect_generation: query.expect_generation,
-        // As for export: the store checks it under the catalog's lock.
-        expect_catalog_id: admitted_id(&principal, &name),
-        actor: &principal.actor,
-        audit: &actor,
-        now: app.clock().now(),
-    };
-    let report = import(app.pool(), &name, files, &options)
-        .await
-        // `store::import`'s "not empty" refusal names the CLI flag: say what
-        // HTTP needs instead. Its generation refusal ("... export it again")
-        // already fits and passes through unchanged.
-        .map_err(|error| match error {
-            OkfError::Refused { reason } => OkfError::Refused {
-                reason: reason.replace("pass --replace", "add ?replace=true"),
+    // Only now is the name admitted: the span and the metrics take the
+    // loaded catalog's own name, never the path segment.
+    let span = tracing::Span::current();
+    let catalog = resolved_catalog(&span, &app, &name);
+    let started = Instant::now();
+    let mut uploaded = None;
+    // An `async` block, so every early return below (a refusal, a timeout)
+    // still passes through the measurement after it.
+    let answer: Result<Response, AppError> = async {
+        let max_bytes = app.config().max_import_bytes.as_u64();
+        // An `async` block is a future that runs only when awaited (here, under
+        // the deadline). Its error is the response to send instead.
+        let upload = async {
+            // `Bytes::from_request` is what a `Bytes` handler argument runs: it
+            // honours the route's `DefaultBodyLimit`, and its rejection is a
+            // ready-made response (413 past the cap).
+            let body = Bytes::from_request(request, &())
+                .await
+                .map_err(IntoResponse::into_response)?;
+            // Decompressing and checking every entry is CPU work, so it runs on
+            // a blocking thread; `move` hands `body` (a cheap reference-counted
+            // buffer) to the closure.
+            let size = body.len();
+            blocking(move || read_tarball(body.as_ref(), max_bytes))
+                .await
+                .map(|files| (files, size))
+                .map_err(|error| AppError(error).into_response())
+        };
+        // `timeout` gives `Err(Elapsed)` if the deadline passes first; dropping
+        // the unfinished upload then cancels it, and nothing is imported.
+        let files = match tokio::time::timeout(REQUEST_TIMEOUT, upload).await {
+            Ok(Ok((files, size))) => {
+                uploaded = Some(size);
+                files
+            }
+            Ok(Err(refusal)) => return Ok(refusal),
+            Err(_elapsed) => return Ok(upload_timed_out()),
+        };
+        let options = ImportOptions {
+            replace: query.replace,
+            scope: if query.only_machinery {
+                ImportScope::Machinery
+            } else {
+                ImportScope::Everything
             },
-            other => other,
-        })?;
-    // Swap the new snapshot in now, not at the next poll. The import has
-    // committed, so a failed refresh must not turn it into an error (a
-    // retry would then get 409): log it and leave it to the poll loop. A
-    // catalog the app has not loaded yet arrives with the next poll. So does
-    // a committed import whose client disconnects (dropping this future)
-    // during the refresh; a disconnect during `import` itself drops its
-    // transaction, which rolls back, and nothing is imported.
-    if let Some(state) = app.catalog(&name) {
-        if let Err(error) = state.refresh(app.pool()).await {
-            split_event!(
-                error,
-                { catalog = %name, kind = error.kind(), },
-                { %error, },
-                "refresh after import failed; the poll loop retries"
-            );
+            expect_generation: query.expect_generation,
+            // As for export: the store checks it under the catalog's lock.
+            expect_catalog_id: admitted_id(&principal, &name),
+            actor: &principal.actor,
+            audit: &actor,
+            now: app.clock().now(),
+        };
+        let report = import(app.pool(), &name, files, &options)
+            .await
+            // `store::import`'s "not empty" refusal names the CLI flag: say what
+            // HTTP needs instead. Its generation refusal ("... export it again")
+            // already fits and passes through unchanged.
+            .map_err(|error| match error {
+                OkfError::Refused { reason } => OkfError::Refused {
+                    reason: reason.replace("pass --replace", "add ?replace=true"),
+                },
+                other => other,
+            })?;
+        // Swap the new snapshot in now, not at the next poll. The import has
+        // committed, so a failed refresh must not turn it into an error (a
+        // retry would then get 409): log it and leave it to the poll loop. A
+        // catalog the app has not loaded yet arrives with the next poll. So does
+        // a committed import whose client disconnects (dropping this future)
+        // during the refresh; a disconnect during `import` itself drops its
+        // transaction, which rolls back, and nothing is imported.
+        if let Some(state) = app.catalog(&name) {
+            if let Err(error) = state.refresh(app.pool()).await {
+                split_event!(
+                    error,
+                    { catalog = %name, kind = error.kind(), },
+                    { %error, },
+                    "refresh after import failed; the poll loop retries"
+                );
+            }
         }
+        note_unlocked(
+            &app,
+            &principal,
+            &requester,
+            &name,
+            admission,
+            AccessKind::Write,
+        );
+        // The key's id, never the key itself.
+        split_event!(
+            info,
+            { catalog = %name, },
+            { key = %principal.key_id, },
+            "imported"
+        );
+        Ok(Json(report).into_response())
     }
-    note_unlocked(
+    .await;
+    let succeeded = answer
+        .as_ref()
+        .is_ok_and(|response| response.status().is_success());
+    record_transfer(
+        &span,
         &app,
-        &principal,
-        &requester,
-        &name,
-        admission,
-        AccessKind::Write,
+        Direction::Import,
+        catalog.as_deref(),
+        started,
+        uploaded.filter(|_| succeeded),
     );
-    // The key's id, never the key itself.
-    split_event!(
-        info,
-        { catalog = %name, },
-        { key = %principal.key_id, },
-        "imported"
-    );
-    Ok(Json(report).into_response())
+    answer
 }
 
 /// The answer to an upload not read and checked within [`REQUEST_TIMEOUT`]:
@@ -755,5 +872,132 @@ mod tests {
         assert_eq!(zero, 64 * 1024);
         assert_eq!(default, (64 << 20) + (64 << 20) / 1000 + 64 * 1024);
         assert_eq!(huge, usize::MAX);
+    }
+
+    /// A value that must never appear in a span or a metric.
+    const SENTINEL: &str = "zq-sentinel-9e3a";
+
+    /// The body of a response as bytes.
+    async fn body_of(response: Response) -> Vec<u8> {
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("a body")
+            .to_vec()
+    }
+
+    #[tokio::test]
+    async fn archive_export_and_import_are_measured() {
+        let (test, registry) =
+            crate::mcp::testing::app_with_metrics(&[("pg", &[])], Config::default()).await;
+        let exported = router(&test, admin())
+            .oneshot(
+                Request::get("/catalogs/pg/export")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(exported.status(), StatusCode::OK);
+        let exported_len = body_of(exported).await.len();
+        let upload = tarball();
+        let imported = router(&test, admin())
+            .oneshot(
+                Request::post("/catalogs/pg/import")
+                    .body(Body::from(upload.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(imported.status(), StatusCode::OK);
+
+        let text = crate::mcp::testing::render(&registry);
+
+        let sample = |series: &str| crate::mcp::testing::sample_of(&text, series);
+        assert_eq!(
+            sample(r#"okf_archive_size_bytes_total{catalog="pg",direction="export"}"#),
+            Some(exported_len as f64),
+            "{text}"
+        );
+        assert_eq!(
+            sample(r#"okf_archive_size_bytes_total{catalog="pg",direction="import"}"#),
+            Some(upload.len() as f64),
+            "{text}"
+        );
+        for direction in ["export", "import"] {
+            let series = format!(
+                r#"okf_archive_duration_seconds_count{{direction="{direction}",outcome="ok"}}"#
+            );
+            assert_eq!(sample(&series), Some(1.0), "{direction}: {text}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unknown_catalog_leaves_no_span_attribute_and_no_series() {
+        use crate::telemetry::config::LogFormat;
+        use crate::telemetry::subscriber::capture::{attribute, Observer};
+        let (test, registry) =
+            crate::mcp::testing::app_with_metrics(&[("pg", &[])], Config::default()).await;
+        for filter in ["info", "trace"] {
+            let observer = Observer::start("off", filter, "off", LogFormat::Text);
+            let export = router(&test, admin())
+                .oneshot(
+                    Request::get(format!("/catalogs/{SENTINEL}/export"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let import = router(&test, admin())
+                .oneshot(
+                    Request::post(format!("/catalogs/{SENTINEL}/import"))
+                        .body(Body::from(tarball()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let known = router(&test, admin())
+                .oneshot(
+                    Request::get("/catalogs/pg/export")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let observed = observer.finish();
+
+            assert_eq!(export.status(), StatusCode::NOT_FOUND, "{filter}");
+            assert_eq!(import.status(), StatusCode::NOT_FOUND, "{filter}");
+            assert_eq!(known.status(), StatusCode::OK, "{filter}");
+            // Each route's span for the unknown name has no catalog at all.
+            for name in ["okf.archive.export", "okf.archive.import"] {
+                let spans = observed.spans_named(name);
+                let unnamed = spans
+                    .iter()
+                    .filter(|span| attribute(span, "okf.catalog").is_none())
+                    .count();
+                assert_eq!(unnamed, 1, "{filter} {name}: {spans:?}");
+            }
+            // The known catalog's export span names it and carries the size.
+            let named: Vec<_> = observed
+                .spans_named("okf.archive.export")
+                .into_iter()
+                .filter(|span| attribute(span, "okf.catalog").is_some())
+                .collect();
+            assert_eq!(named.len(), 1, "{filter}");
+            assert_eq!(
+                attribute(named[0], "okf.catalog")
+                    .map(ToString::to_string)
+                    .as_deref(),
+                Some("pg"),
+                "{filter}"
+            );
+            assert!(
+                attribute(named[0], "okf.archive.size").is_some(),
+                "{filter}"
+            );
+            assert!(!observed.exported_text().contains(SENTINEL), "{filter}");
+        }
+        let text = crate::mcp::testing::render(&registry);
+        assert!(!text.contains(SENTINEL), "{text}");
     }
 }
