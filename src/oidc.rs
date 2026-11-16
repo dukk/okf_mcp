@@ -112,9 +112,11 @@ pub struct HttpError(String);
 /// any `Fn(HttpRequest) -> impl Future<Output = Result<HttpResponse, E>>`).
 async fn send(client: reqwest::Client, request: HttpRequest) -> Result<HttpResponse, HttpError> {
     // The annotation names the conversion's error type for `map_err`.
-    let request: reqwest::Request = request
+    let mut request: reqwest::Request = request
         .try_into()
         .map_err(|error: reqwest::Error| HttpError(error.to_string()))?;
+    // The provider's logs can join the trace of the sign-in that asked.
+    crate::telemetry::propagation::inject(request.headers_mut());
     let response = client
         .execute(request)
         .await
@@ -612,6 +614,22 @@ mod tests {
         OidcProviders::new(&config(idp), |_| Some(SECRET.to_string()))
             .expect("built")
             .expect("on")
+    }
+
+    #[tokio::test]
+    async fn outbound_requests_carry_traceparent() {
+        use crate::telemetry::propagation::testing::{assert_joins_the_callers_trace, echo_stub};
+        let (url, seen) = echo_stub().await;
+        let client = reqwest::Client::new();
+
+        assert_joins_the_callers_trace(&seen, || async {
+            let request = openidconnect::http::Request::builder()
+                .uri(format!("{url}/.well-known/openid-configuration"))
+                .body(Vec::new())
+                .expect("a request");
+            send(client.clone(), request).await.expect("answered");
+        })
+        .await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
