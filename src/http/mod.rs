@@ -481,8 +481,12 @@ async fn request_telemetry(
     let _in_flight = app.metrics().http_in_flight(method, &route);
     let started = std::time::Instant::now();
     let response = next.run(request).await;
-    app.metrics()
-        .http_request(method, &route, response.status().as_u16(), started.elapsed());
+    app.metrics().http_request(
+        method,
+        &route,
+        response.status().as_u16(),
+        started.elapsed(),
+    );
     response
 }
 
@@ -713,7 +717,7 @@ mod tests {
         assert_eq!(revoked.as_u16(), 204);
         assert_eq!(unmatched.as_u16(), 404);
         assert!(
-            logged.contains("http.route=/api/v1/users/{name}/sessions/{id_prefix}"),
+            logged.contains(r#"http.route="/api/v1/users/{name}/sessions/{id_prefix}""#),
             "the route template is logged: {logged}"
         );
         assert!(

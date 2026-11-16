@@ -54,7 +54,10 @@ mod tests {
 
         let link = link_from(&headers).expect("a link");
 
-        assert_eq!(link.trace_id().to_string(), "0af7651916cd43dd8448eb211c80319c");
+        assert_eq!(
+            link.trace_id().to_string(),
+            "0af7651916cd43dd8448eb211c80319c"
+        );
         assert_eq!(link.span_id().to_string(), "b7ad6b7169203331");
         assert!(link.is_remote());
         assert!(link.is_sampled());

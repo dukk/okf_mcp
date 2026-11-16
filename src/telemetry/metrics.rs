@@ -192,7 +192,13 @@ impl Metrics {
     /// * `outcome` - how the call ended.
     /// * `elapsed` - how long it took.
     #[tracing::instrument(level = "trace", skip_all)]
-    pub fn tool_call(&self, tool: &'static str, catalog: &str, outcome: Outcome, elapsed: Duration) {
+    pub fn tool_call(
+        &self,
+        tool: &'static str,
+        catalog: &str,
+        outcome: Outcome,
+        elapsed: Duration,
+    ) {
         self.inner.tool_duration.record(
             elapsed.as_secs_f64(),
             &[

@@ -32,7 +32,12 @@ async fn observed<Fut: Future<Output = ()>>(filter: &str, body: Fut) -> Observed
 }
 
 /// Sends `GET uri` with extra headers through the whole router.
-async fn fetch(test: &TestApp, uri: &str, key: Option<&str>, headers: &[(&str, &str)]) -> StatusCode {
+async fn fetch(
+    test: &TestApp,
+    uri: &str,
+    key: Option<&str>,
+    headers: &[(&str, &str)],
+) -> StatusCode {
     let mut request = Request::get(uri);
     if let Some(key) = key {
         request = request.header("authorization", format!("Bearer {key}"));
@@ -61,7 +66,13 @@ async fn a_request_span_names_method_and_route() {
             let uri = format!("/api/v1/catalogs/main/health?{SENTINEL}=1");
             let status = fetch(&test, &uri, Some(&key), &[("x-probe", SENTINEL)]).await;
             assert_eq!(status, StatusCode::OK, "{filter}");
-            fetch(&test, &format!("/api/v1/catalogs/{SENTINEL}/health"), Some(&key), &[]).await;
+            fetch(
+                &test,
+                &format!("/api/v1/catalogs/{SENTINEL}/health"),
+                Some(&key),
+                &[],
+            )
+            .await;
         })
         .await;
 
@@ -72,16 +83,27 @@ async fn a_request_span_names_method_and_route() {
             .find(|span| attribute(span, "http.response.status_code") == Some(&200.into()))
             .unwrap_or_else(|| panic!("{filter}: a 200 span"));
         assert_eq!(
-            attribute(ok, "http.request.method").map(ToString::to_string).as_deref(),
+            attribute(ok, "http.request.method")
+                .map(ToString::to_string)
+                .as_deref(),
             Some("GET")
         );
         assert_eq!(
-            attribute(ok, "http.route").map(ToString::to_string).as_deref(),
+            attribute(ok, "http.route")
+                .map(ToString::to_string)
+                .as_deref(),
             Some("/api/v1/catalogs/{catalog}/health")
         );
         assert_eq!(ok.status, Status::Unset, "{filter}");
-        assert!(!dump(&observed).contains(SENTINEL), "{filter}: {}", dump(&observed));
-        assert!(!dump(&observed).contains(&key), "{filter}: the bearer value leaked");
+        assert!(
+            !dump(&observed).contains(SENTINEL),
+            "{filter}: {}",
+            dump(&observed)
+        );
+        assert!(
+            !dump(&observed).contains(&key),
+            "{filter}: the bearer value leaked"
+        );
     }
 }
 
@@ -101,7 +123,11 @@ async fn a_5xx_is_an_error_and_a_4xx_is_not() {
             Some(&404.into()),
             "{filter}"
         );
-        assert_eq!(span.status, Status::Unset, "{filter}: a 4xx is not an error");
+        assert_eq!(
+            span.status,
+            Status::Unset,
+            "{filter}: a 4xx is not an error"
+        );
     }
     test.app.pool().close().await;
     for filter in FILTERS {
@@ -202,11 +228,16 @@ async fn an_authenticated_request_records_principal_ids() {
             "{filter}"
         );
         assert_eq!(
-            attribute(span, "okf.key.id").map(ToString::to_string).as_deref(),
+            attribute(span, "okf.key.id")
+                .map(ToString::to_string)
+                .as_deref(),
             Some(key_id.as_str()),
             "{filter}"
         );
-        assert!(!dump(&observed).contains(&key), "{filter}: the bearer value leaked");
+        assert!(
+            !dump(&observed).contains(&key),
+            "{filter}: the bearer value leaked"
+        );
     }
 }
 
@@ -261,9 +292,15 @@ async fn principal_ids_land_on_the_request_span_under_helper_spans() {
         })
         .await;
         let span = &observed.spans_named("GET /probe")[0];
-        assert!(attribute(span, "enduser.id").is_some(), "{filter}: {}", dump(&observed));
+        assert!(
+            attribute(span, "enduser.id").is_some(),
+            "{filter}: {}",
+            dump(&observed)
+        );
         assert_eq!(
-            attribute(span, "okf.key.id").map(ToString::to_string).as_deref(),
+            attribute(span, "okf.key.id")
+                .map(ToString::to_string)
+                .as_deref(),
             Some(key_id.as_str()),
             "{filter}"
         );
@@ -311,11 +348,17 @@ async fn a_console_session_records_the_user_id_and_never_the_user_name() {
             "{filter}"
         );
         assert_eq!(
-            attribute(span, "okf.key.id").map(ToString::to_string).as_deref(),
+            attribute(span, "okf.key.id")
+                .map(ToString::to_string)
+                .as_deref(),
             Some("session"),
             "{filter}"
         );
-        assert!(!dump(&observed).contains(name), "{filter}: {}", dump(&observed));
+        assert!(
+            !dump(&observed).contains(name),
+            "{filter}: {}",
+            dump(&observed)
+        );
     }
 }
 
@@ -336,9 +379,15 @@ async fn http_requests_are_measured_by_method_route_and_status() {
         .unwrap_or_else(|| panic!("no duration series in {text}"));
     assert!(count.contains(r#"http_route="/healthz""#), "{count}");
     assert!(count.contains(r#"http_request_method="GET""#), "{count}");
-    assert!(count.contains(r#"http_response_status_code="200""#), "{count}");
+    assert!(
+        count.contains(r#"http_response_status_code="200""#),
+        "{count}"
+    );
     assert!(count.ends_with(" 2"), "{count}");
-    assert!(!text.contains(SENTINEL), "an unmatched path is not measured: {text}");
+    assert!(
+        !text.contains(SENTINEL),
+        "an unmatched path is not measured: {text}"
+    );
     // Every request finished, so none is in flight.
     assert!(
         text.lines()

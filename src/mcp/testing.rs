@@ -720,22 +720,6 @@ pub(crate) async fn settle_access(test: &TestApp) {
         .expect("the background access writes finish within 30 seconds");
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn an_app_with_metrics_renders_into_its_own_registry() {
-        let (test_app, registry) = app_with_metrics(&[], Config::default()).await;
-
-        let text = render(&registry);
-
-        assert!(text.contains("# TYPE okf_build_info gauge"), "{text}");
-        // The app holds the handle `app_with_metrics` built, not the global one.
-        let _ = test_app.app.metrics();
-    }
-}
-
 /// A minimal MCP client over HTTP, for tests that need a real session
 /// through the real router (`http::serve` on a loopback socket): one
 /// `initialize`, then any number of tool calls.
@@ -779,7 +763,8 @@ impl McpProbe {
             key: key.to_string(),
             session,
         };
-        let initialized = serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
+        let initialized =
+            serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
         let accepted = Self::post(
             &probe.client,
             endpoint,
@@ -826,15 +811,23 @@ impl McpProbe {
             "jsonrpc": "2.0", "id": 2, "method": "tools/call",
             "params": {"name": tool, "arguments": arguments}
         });
-        let text = Self::post(&self.client, &self.endpoint, &self.key, Some(&self.session), &body)
-            .await
-            .text()
-            .await
-            .expect("the answer's body");
+        let text = Self::post(
+            &self.client,
+            &self.endpoint,
+            &self.key,
+            Some(&self.session),
+            &body,
+        )
+        .await
+        .text()
+        .await
+        .expect("the answer's body");
         // A JSON answer, or an event stream whose `data:` lines carry it.
         std::iter::once(text.as_str())
             .chain(text.lines().filter_map(|line| line.strip_prefix("data:")))
-            .filter_map(|candidate| serde_json::from_str::<serde_json::Value>(candidate.trim()).ok())
+            .filter_map(|candidate| {
+                serde_json::from_str::<serde_json::Value>(candidate.trim()).ok()
+            })
             .find(|message| message.get("id") == Some(&serde_json::json!(2)))
             .unwrap_or_else(|| panic!("no JSON-RPC answer in {text}"))
     }
@@ -850,5 +843,21 @@ impl McpProbe {
             .await
             .expect("the server answers");
         assert!(response.status().is_success(), "{}", response.status());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_app_with_metrics_renders_into_its_own_registry() {
+        let (test_app, registry) = app_with_metrics(&[], Config::default()).await;
+
+        let text = render(&registry);
+
+        assert!(text.contains("# TYPE okf_build_info gauge"), "{text}");
+        // The app holds the handle `app_with_metrics` built, not the global one.
+        let _ = test_app.app.metrics();
     }
 }

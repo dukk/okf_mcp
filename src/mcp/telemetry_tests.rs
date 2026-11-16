@@ -36,7 +36,13 @@ impl Served {
     /// server's tasks run on the test's thread and see its subscriber.
     async fn start() -> Self {
         let (test, registry) = app_with_metrics(
-            &[("pg", &[("a.md", "---\ntype: Note\ntitle: Alpha\n---\n# Alpha\nText.\n")])],
+            &[(
+                "pg",
+                &[(
+                    "a.md",
+                    "---\ntype: Note\ntitle: Alpha\n---\n# Alpha\nText.\n",
+                )],
+            )],
             Config::default(),
         )
         .await;
@@ -60,7 +66,9 @@ impl Served {
         .await
         .expect("create a key");
         test.app.poll().await.expect("poll the key in");
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
         let endpoint = format!("http://{}/mcp", listener.local_addr().expect("address"));
         let shutdown = CancellationToken::new();
         let server = tokio::spawn(crate::http::serve(
@@ -96,11 +104,17 @@ async fn every_tool_call_opens_one_mcp_span() {
         let observer = Observer::start("off", filter, "off", LogFormat::Text);
         let probe = McpProbe::open(&served.endpoint, &served.key).await;
         let answer = probe
-            .call("get_concept", serde_json::json!({"path": "/a.md", "catalog": "pg"}))
+            .call(
+                "get_concept",
+                serde_json::json!({"path": "/a.md", "catalog": "pg"}),
+            )
             .await;
         assert_eq!(answer["result"]["isError"], false, "{answer}");
         let unloaded = probe
-            .call("get_concept", serde_json::json!({"path": "/a.md", "catalog": SENTINEL}))
+            .call(
+                "get_concept",
+                serde_json::json!({"path": "/a.md", "catalog": SENTINEL}),
+            )
             .await;
         assert!(unloaded.get("result").is_some(), "{unloaded}");
         let key_id: String = sqlx::query_scalar("SELECT id FROM api_keys")
@@ -114,18 +128,29 @@ async fn every_tool_call_opens_one_mcp_span() {
         assert_eq!(spans.len(), 2, "{filter}: {:?}", observed.spans);
         let loaded = spans
             .iter()
-            .find(|span| attribute(span, "okf.catalog").map(ToString::to_string).as_deref() == Some("pg"))
+            .find(|span| {
+                attribute(span, "okf.catalog")
+                    .map(ToString::to_string)
+                    .as_deref()
+                    == Some("pg")
+            })
             .unwrap_or_else(|| panic!("{filter}: a span for pg"));
         assert_eq!(
-            attribute(loaded, "okf.tool").map(ToString::to_string).as_deref(),
+            attribute(loaded, "okf.tool")
+                .map(ToString::to_string)
+                .as_deref(),
             Some("get_concept")
         );
         assert_eq!(
-            attribute(loaded, "okf.outcome").map(ToString::to_string).as_deref(),
+            attribute(loaded, "okf.outcome")
+                .map(ToString::to_string)
+                .as_deref(),
             Some("ok")
         );
         assert_eq!(
-            attribute(loaded, "okf.key.id").map(ToString::to_string).as_deref(),
+            attribute(loaded, "okf.key.id")
+                .map(ToString::to_string)
+                .as_deref(),
             Some(key_id.as_str())
         );
         assert!(attribute(loaded, "enduser.id").is_some(), "{filter}");
@@ -133,7 +158,12 @@ async fn every_tool_call_opens_one_mcp_span() {
         // An unloaded catalog name is never an attribute.
         let none = spans
             .iter()
-            .find(|span| attribute(span, "okf.catalog").map(ToString::to_string).as_deref() == Some("none"))
+            .find(|span| {
+                attribute(span, "okf.catalog")
+                    .map(ToString::to_string)
+                    .as_deref()
+                    == Some("none")
+            })
             .unwrap_or_else(|| panic!("{filter}: a span for no catalog"));
         assert_eq!(none.name, "mcp get_concept");
         assert!(
@@ -162,12 +192,16 @@ async fn a_tool_error_records_its_kind_not_its_message() {
 
         let span = &observed.spans_named("mcp get_concept")[0];
         assert_eq!(
-            attribute(span, "okf.outcome").map(ToString::to_string).as_deref(),
+            attribute(span, "okf.outcome")
+                .map(ToString::to_string)
+                .as_deref(),
             Some("error"),
             "{filter}"
         );
         assert_eq!(
-            attribute(span, "okf.error.kind").map(ToString::to_string).as_deref(),
+            attribute(span, "okf.error.kind")
+                .map(ToString::to_string)
+                .as_deref(),
             Some("NotFound"),
             "{filter}"
         );
@@ -186,10 +220,7 @@ async fn a_tool_error_records_its_kind_not_its_message() {
 async fn error_kind_lands_on_the_tool_span_under_helper_spans() {
     for filter in FILTERS {
         let observer = Observer::start("off", filter, "off", LogFormat::Text);
-        let span = tracing::info_span!(
-            "mcp",
-            okf.error.kind = tracing::field::Empty,
-        );
+        let span = tracing::info_span!("mcp", okf.error.kind = tracing::field::Empty,);
         TOOL_SPAN
             .scope(span.clone(), async {
                 async {
@@ -206,7 +237,9 @@ async fn error_kind_lands_on_the_tool_span_under_helper_spans() {
 
         let tool = &observed.spans_named("mcp")[0];
         assert_eq!(
-            attribute(tool, "okf.error.kind").map(ToString::to_string).as_deref(),
+            attribute(tool, "okf.error.kind")
+                .map(ToString::to_string)
+                .as_deref(),
             Some("NotFound"),
             "{filter}"
         );
@@ -238,10 +271,16 @@ async fn tool_duration_is_recorded_per_tool_catalog_outcome() {
     let served = Served::start().await;
     let probe = McpProbe::open(&served.endpoint, &served.key).await;
     probe
-        .call("get_concept", serde_json::json!({"path": "/a.md", "catalog": "pg"}))
+        .call(
+            "get_concept",
+            serde_json::json!({"path": "/a.md", "catalog": "pg"}),
+        )
         .await;
     probe
-        .call("get_concept", serde_json::json!({"path": "/missing.md", "catalog": "pg"}))
+        .call(
+            "get_concept",
+            serde_json::json!({"path": "/missing.md", "catalog": "pg"}),
+        )
         .await;
     probe.close().await;
 
@@ -257,12 +296,18 @@ async fn tool_duration_is_recorded_per_tool_catalog_outcome() {
             })
             .map(str::to_string)
     };
-    assert!(series("get_concept", "ok").is_some_and(|line| line.ends_with(" 1")), "{text}");
+    assert!(
+        series("get_concept", "ok").is_some_and(|line| line.ends_with(" 1")),
+        "{text}"
+    );
     assert!(
         series("get_concept", "error").is_some_and(|line| line.ends_with(" 1")),
         "{text}"
     );
-    assert!(text.contains("okf_mcp_tool_duration_seconds_bucket{"), "{text}");
+    assert!(
+        text.contains("okf_mcp_tool_duration_seconds_bucket{"),
+        "{text}"
+    );
     served.stop().await;
 }
 
