@@ -142,6 +142,29 @@ impl TestServer {
         catalogs_and_files: Vec<(&str, Files)>,
         make_config: impl FnOnce(&str) -> Config,
     ) -> Self {
+        Self::start_serving(catalogs_and_files, make_config, false).await
+    }
+
+    /// As [`TestServer::start_with`], optionally running the mail worker
+    /// (`[mail] worker` as the settings say), for tests that watch a queued
+    /// mail get sent. The other starters only enqueue.
+    ///
+    /// # Arguments
+    /// * `catalogs_and_files` - as for `start`.
+    /// * `make_config` - builds the settings from `http://127.0.0.1:<port>`.
+    /// * `mail_worker` - `true` keeps the settings' `mail.worker` (on by
+    ///   default); `false` turns the worker off.
+    ///
+    /// # Returns
+    /// The running server.
+    ///
+    /// # Panics
+    /// As [`TestServer::start`].
+    pub async fn start_serving(
+        catalogs_and_files: Vec<(&str, Files)>,
+        make_config: impl FnOnce(&str) -> Config,
+        mail_worker: bool,
+    ) -> Self {
         let db = TestDb::start_migrated().await;
         migrate_with_owner(&db.pool).await;
         for (name, files) in catalogs_and_files {
@@ -170,7 +193,7 @@ impl TestServer {
                 .await
                 .expect("import");
         }
-        let (base, app, shutdown, served) = serve_app(&db, make_config).await;
+        let (base, app, shutdown, served) = serve_app(&db, make_config, mail_worker).await;
         Self {
             base,
             app,
@@ -204,11 +227,26 @@ impl TestServer {
             .expect("the old server stops")
             .expect("the old server's task")
             .expect("the old server serves without an I/O error");
-        let (base, app, shutdown, served) = serve_app(&self.db, move |_| config).await;
+        let (base, app, shutdown, served) = serve_app(&self.db, move |_| config, false).await;
         self.base = base;
         self.app = app;
         self.shutdown = shutdown;
         self.served = served;
+    }
+
+    /// Stops the server (its poll loop, its mail worker and its connections)
+    /// and waits until it has, leaving the database up. Close every client
+    /// first: an open connection holds the server up.
+    ///
+    /// # Panics
+    /// If the server does not stop within [`STOP_TIMEOUT`] or its task fails.
+    pub async fn stop(&mut self) {
+        self.shutdown.cancel();
+        tokio::time::timeout(STOP_TIMEOUT, &mut self.served)
+            .await
+            .expect("the server stops")
+            .expect("the server's task")
+            .expect("the server serves without an I/O error");
     }
 
     /// The MCP endpoint.
@@ -485,6 +523,7 @@ impl TestServer {
 /// # Arguments
 /// * `db` - the database, already migrated and imported.
 /// * `make_config` - builds the settings from the base URL.
+/// * `mail_worker` - whether the settings' `mail.worker` stands.
 ///
 /// # Returns
 /// The base URL, the app, the token that stops the server, and the task
@@ -495,6 +534,7 @@ impl TestServer {
 async fn serve_app(
     db: &TestDb,
     make_config: impl FnOnce(&str) -> Config,
+    mail_worker: bool,
 ) -> (String, Arc<App>, CancellationToken, Served) {
     // Port 0: the OS picks a free one. Bound first, so the settings can
     // name the server's own URL.
@@ -503,8 +543,8 @@ async fn serve_app(
         .expect("bind");
     let base = format!("http://{}", listener.local_addr().expect("address"));
     let mut config = make_config(&base);
-    // Test servers only enqueue; the mail tests run their own worker.
-    config.mail.worker = false;
+    // Test servers only enqueue unless a test asks for the worker.
+    config.mail.worker &= mail_worker;
     let app = App::load(db.pool.clone(), config, Arc::new(SystemClock))
         .await
         .expect("app loads");
