@@ -70,7 +70,7 @@ Valkey, and several replicas can run behind one Service; the key cache and the
 OAuth access-token cache learn of a revocation on every replica at once. Set
 `mode = "cluster"` for a cluster such as ElastiCache Serverless (which needs a
 `rediss://` URL). Without `[redis]` nothing changes. `docs/operations.md`
-covers the `[redis]` settings, the caveats and what happens when Redis is down.
+("Redis") covers the `[redis]` settings, the caveats and what happens when Redis is down.
 
 ## Command line
 
