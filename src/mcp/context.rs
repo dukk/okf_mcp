@@ -14,6 +14,7 @@ use crate::auth::{Admission, CatalogScope, Principal};
 use crate::catalog::CatalogState;
 use crate::error::OkfError;
 use crate::http::requester::Requester;
+use crate::labels::directory::Labels;
 use crate::overlay::View;
 use crate::selection::{connection_catalogs, in_scope, resolve, Selection, Sources};
 use crate::store::audit::{AccessKind, AccessRecord, AuditActor, Source};
@@ -198,6 +199,28 @@ impl ToolContext {
     )]
     pub fn principal(&self) -> &Principal {
         &self.principal
+    }
+
+    /// The label directory, as of the key cache's last reload.
+    ///
+    /// # Returns
+    /// The shared directory (a pointer copy).
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn labels(&self) -> Arc<Labels> {
+        self.app.keys().labels()
+    }
+
+    /// A catalog's label for a tool output.
+    ///
+    /// # Arguments
+    /// * `slug` - the catalog's id.
+    ///
+    /// # Returns
+    /// Its label, or the id when the directory does not know it yet (a
+    /// catalog created since the last reload).
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn catalog_label(&self, slug: &str) -> String {
+        self.labels().catalog(slug).unwrap_or(slug).to_string()
     }
 
     /// The catalog map this call sees.
@@ -1099,7 +1122,7 @@ mod tests {
             .await
             .map(|result| {
                 let mut catalogs: Vec<String> =
-                    result.hits.into_iter().map(|hit| hit.catalog).collect();
+                    result.hits.into_iter().map(|hit| hit.hit.catalog).collect();
                 catalogs.dedup();
                 catalogs.join(",")
             });
