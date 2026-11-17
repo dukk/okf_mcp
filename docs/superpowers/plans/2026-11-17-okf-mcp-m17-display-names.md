@@ -553,29 +553,73 @@ ALTER TABLE catalogs ADD CONSTRAINT catalogs_display_name_length CHECK (char_len
 
 > `\u2028` inside a Postgres regex is a regex escape, not a string escape: with `standard_conforming_strings` on (the default), `'[[:cntrl:]\u2028\u2029]'` reaches the regex engine as written, and the ARE syntax reads `\uXXXX`. Step 3's test checks this on a real row.
 
-- [ ] **Step 3: A migration test** (`src/store/users.rs` tests). Test databases run every migration, so this asserts what the migration leaves behind, and that its regex class matches U+2028 on a real Postgres:
+- [ ] **Step 3: A migration test on legacy data** (`src/db.rs` tests, beside `migration_0010_keeps_every_row_and_both_migrators_rerun_as_no_ops`, which is the pattern: `MIGRATOR.run_to(N, ..)`, seed with `sqlx::raw_sql`, then `MIGRATOR.run(..)`).
 
 ```rust
-#[tokio::test]
-async fn migration_0019_normalised_display_names_stay_within_the_check() {
-    let db = test_db().await;
-    // Raw strings (`r"..."`): Rust would read `\u2028` as a malformed escape.
-    let over: (i64,) = sqlx::query_as(
-        r"SELECT count(*) FROM users WHERE char_length(display_name) > 80
-          OR display_name ~ '[[:cntrl:]\u2028\u2029]'",
+#[tokio::test(flavor = "multi_thread")]
+async fn migration_0019_normalises_legacy_display_names_and_adds_the_checks() {
+    // Arrange: a database at 0018 (what a v0.21 server left), holding the
+    // dirty values 0009 never refused. Raw strings (`r#"..."#`): Rust would
+    // read `\u2028` as a malformed escape; `E'..'` makes Postgres read it.
+    let db = pg_support::TestDb::start().await;
+    MIGRATOR.run_to(18, &db.pool).await.unwrap();
+    sqlx::raw_sql(
+        r#"INSERT INTO users (name, display_name, created_at) VALUES
+               ('long', repeat('x', 85), now()),
+               ('ctrl', E'  Alice\tExample\u2028Smith  ', now()),
+               ('clean', 'Bob', now());
+           INSERT INTO teams (name, display_name, created_at) VALUES
+               ('acme', E'Acme\nLtd', now());"#,
     )
-    .fetch_one(&db.pool)
+    .execute(&db.pool)
     .await
     .unwrap();
-    assert_eq!(over.0, 0);
-    // The regex class itself, on a literal: proves `\u2028` reaches the engine.
-    let matched: (bool,) = sqlx::query_as(r"SELECT E'a\u2028b' ~ '[[:cntrl:]\u2028\u2029]'")
+
+    // Act: the rest of the migrations, 0019 included.
+    MIGRATOR.run(&db.pool).await.unwrap();
+
+    // Assert: exact normalised values (control characters and U+2028 become
+    // spaces, then trim, then the first 80 characters), untouched clean rows,
+    // and the CHECKs in force.
+    let names: Vec<(String, String)> =
+        sqlx::query_as("SELECT name, display_name FROM users ORDER BY name")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        names,
+        [
+            ("clean".to_string(), "Bob".to_string()),
+            ("ctrl".to_string(), "Alice Example Smith".to_string()),
+            ("long".to_string(), "x".repeat(80)),
+        ]
+    );
+    let team: (String,) = sqlx::query_as("SELECT display_name FROM teams WHERE name = 'acme'")
         .fetch_one(&db.pool)
         .await
         .unwrap();
-    assert!(matched.0);
+    assert_eq!(team.0, "Acme Ltd");
+    let catalog_default: (String,) =
+        sqlx::query_as("SELECT column_default FROM information_schema.columns \
+                        WHERE table_name = 'catalogs' AND column_name = 'display_name'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(catalog_default.0, "''::text");
+    for table in ["users", "teams"] {
+        let refused = sqlx::query(&format!(
+            "UPDATE {table} SET display_name = repeat('x', 81) WHERE name IN ('clean', 'acme')"
+        ))
+        .execute(&db.pool)
+        .await;
+        assert!(refused.is_err(), "{table}: the CHECK should refuse 81 characters");
+    }
 }
 ```
+
+The expected `"Alice Example Smith"` relies on the migration's replace-then-trim order. The tab and U+2028 each become one space, and no run of spaces is collapsed: the source has exactly one character at each spot. If Step 2's SQL changes, change this expectation with it. The test also proves that adding the CHECKs succeeds on a database that held dirty data.
+
+> **Corrected (PR #596 review).** The first draft asserted only on an already-migrated, empty database, which would pass with the normalising `UPDATE`s deleted.
 
 - [ ] **Step 4: Rows and inputs**
   - `Catalog` gains `pub display_name: String` (doc: "Its display name; empty when unset."). Add `c.display_name` to `select_catalogs!`, to the `INSERT` (`$6`) and to its `RETURNING`.
@@ -1466,7 +1510,7 @@ export function named(label, slug) {
   - **Catalogs table:**
     - the first column is `named(catalog.label, catalog.name)`, and the Owner column is `catalog.owner_team_label`;
     - the drawer has Display name and Description fields saved together through `PATCH /catalogs/{name}`;
-    - a non-admin team owner (the `owner` need) sees and uses the same drawer fields, and a plain member does not;
+    - a non-admin team owner, signed in with a session, opens their catalog's drawer from the Catalogs link, sees Display name and Description (and no team picker, member access or delete), saves a new display name, and sees the row's label change; a plain member opening the same row sees no editor;
     - the delete dialog still asks for the slug and shows it.
 - [ ] **Step 2: Implement.** Make these edits; the line numbers are from `283594c`:
   - **`users.js`:**
@@ -1483,7 +1527,13 @@ export function named(label, slug) {
   - **`catalogs.js`:**
     - Name `:22` → `named(c.label, c.name)`; Owner `:32-34` → `c.owner_team_label ?? c.owner_team`;
     - the drawer `:84-99` "Save description" becomes "Save", with both inputs sending only the fields that changed;
-    - the visibility of the drawer's form follows `store.can('admin') || shows('owner')`; reuse the condition the maintenance switch already uses for owners;
+    - **Share one details editor between the admin and owner drawers.** Today a non-admin row opens `openMaintenance` (`catalogs.js:41`, `:150-158`), which has no form. `openEdit` can't be reused: it starts with `namesOf('teams')` (`:87-89`), and `GET /teams` is admin-only (`require_reader`), so it returns early for an owner.
+      - Extract `detailsEditor(row, ticket)` from `openEdit` (`:91-99`). It builds the Display name and Description form, saves through `PATCH /catalogs/{name}` sending only the changed fields, toasts, and calls `load()` and `refreshIdentity()`. It uses no team list.
+      - `openEdit` (admins) uses it in place of its inline form and keeps the owner picker, members, maintenance and delete sections.
+      - `openMaintenance` becomes `openOwner`. It runs `maySwitchMaintenance(row)` (the existing owner check), then opens the drawer with `detailsEditor(row, ticket)` **only when allowed**, followed by the maintenance switch.
+      - The owner path has no team picker, member access or delete. The table's `onRow` stays `admin ? openEdit : openOwner`.
+
+      > **Corrected (PR #596 review).** The first draft only changed the form's visibility, which an owner never reaches.
     - toasts `:99`, `:112`, `:247`, `:260` → the label.
 - [ ] **Step 3: Gates (with `test-ui`), changelog `m17-task-10b-console-admin`, commit** `feat(console): label-first users, teams and catalogs, with edits`.
 
