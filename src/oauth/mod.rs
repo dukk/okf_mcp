@@ -27,6 +27,7 @@ use axum::Router;
 use crate::app::App;
 use crate::config::Config;
 use crate::error::OkfError;
+use crate::shared::Redis;
 
 /// Where the Protected Resource Metadata is served (RFC 9728), also with
 /// the resource's path appended (`.../mcp`).
@@ -94,6 +95,8 @@ impl OAuth {
     ///
     /// # Arguments
     /// * `config` - the server's settings.
+    /// * `redis` - the shared Redis, with `[redis]`: access-token revocations
+    ///   are then counted there for every replica (spec Decision 15).
     ///
     /// # Returns
     /// `None` without `public_url` (OAuth off), else the state.
@@ -103,7 +106,7 @@ impl OAuth {
     /// (`Config::validate` refuses such a URL first, so only a caller that
     /// skipped validation sees this).
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn new(config: &Config) -> Result<Option<Self>, OkfError> {
+    pub fn new(config: &Config, redis: Option<&Redis>) -> Result<Option<Self>, OkfError> {
         let Some(public_url) = config.public_url.as_deref() else {
             return Ok(None);
         };
@@ -133,7 +136,7 @@ impl OAuth {
         Ok(Some(Self {
             settings,
             challenge,
-            access: access::AccessTokens::new(),
+            access: access::AccessTokens::new(redis.cloned()),
             pending: expiring::ExpiringMap::new(state::PENDING_TTL, state::MAX_PENDING),
             codes: expiring::ExpiringMap::new(
                 state::AUTHORIZATION_CODE_TTL,
@@ -184,14 +187,14 @@ mod tests {
 
     #[test]
     fn oauth_is_off_without_public_url() {
-        assert!(OAuth::new(&Config::default()).unwrap().is_none());
+        assert!(OAuth::new(&Config::default(), None).unwrap().is_none());
     }
 
     #[test]
     fn settings_derive_from_public_url() {
         let config = crate::store::oauth::testing::oauth_config("https://okf.example.com/");
 
-        let oauth = OAuth::new(&config).unwrap().expect("on");
+        let oauth = OAuth::new(&config, None).unwrap().expect("on");
 
         assert_eq!(oauth.settings.issuer, "https://okf.example.com");
         assert_eq!(oauth.settings.resource, "https://okf.example.com/mcp");

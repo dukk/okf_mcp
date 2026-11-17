@@ -24,7 +24,7 @@ use crate::error::OkfError;
 use crate::keys;
 use crate::oauth::error::OAuthError;
 use crate::oauth::state::{code_key, AuthorizationCode};
-use crate::oauth::{pkce, OAuth};
+use crate::oauth::{access, pkce, OAuth};
 use crate::store::oauth::tokens::{
     self as token_rows, LiveAccessToken, NewToken, RefreshUse, RevokedToken, TokenKind,
 };
@@ -270,7 +270,7 @@ fn remember(oauth: &OAuth, minted: Minted) -> TokenResponse {
 #[tracing::instrument(level = "debug", skip_all)]
 async fn revoke_family(app: &App, oauth: &OAuth, family_id: &str) -> Result<(), OkfError> {
     let revoked = token_rows::revoke_family(app.pool(), family_id, app.clock().now()).await?;
-    oauth.access.forget(&revoked);
+    oauth.access.forget(&revoked).await;
     Ok(())
 }
 
@@ -408,7 +408,9 @@ async fn exchange_code(
             "code_verifier does not match".to_string(),
         ));
     }
-    if app.keys().find_grant(&stored.grant_id).is_none() {
+    // A grant made on another replica may not have reached this key cache
+    // yet: `find_grant` catches up before refusing (spec Decision 14).
+    if access::find_grant(app, &stored.grant_id).await.is_none() {
         return Err(OAuthError::InvalidGrant(
             "the grant was revoked".to_string(),
         ));
@@ -450,52 +452,70 @@ async fn refresh(app: &App, oauth: &OAuth, form: &TokenForm) -> Result<TokenResp
     let presented = required(&form.refresh_token, "refresh_token")?;
     let client_id = required(&form.client_id, "client_id")?;
     let now = app.clock().now();
-    let mut tx = app.pool().begin().await.map_err(OkfError::from)?;
-    match token_rows::use_refresh(&mut tx, &keys::hash(presented), now).await? {
-        RefreshUse::Unknown => Err(OAuthError::InvalidGrant(
-            "unknown, expired or revoked refresh token".to_string(),
-        )),
-        RefreshUse::Reused { family_id } => {
-            // Nothing was written; dropping `tx` rolls back and releases the
-            // row lock before the revocation updates the row.
-            drop(tx);
-            revoke_family(app, oauth, &family_id).await?;
-            Err(OAuthError::InvalidGrant(
-                "the refresh token was already used".to_string(),
-            ))
-        }
-        RefreshUse::Rotated {
-            grant_id,
-            family_id,
-            resource,
-        } => {
-            // Each refusal returns before `commit`, so dropping `tx` rolls
-            // back the `used_at` mark and the rightful client can still use
-            // the token.
-            if grant_client(app, &grant_id).as_deref() != Some(client_id) {
-                return Err(OAuthError::InvalidGrant(
-                    "the refresh token belongs to another client".to_string(),
-                ));
+    // At most two passes: the second only after catching the key cache up
+    // on a grant it did not hold (spec Decision 14).
+    let mut caught_up = false;
+    loop {
+        let mut tx = app.pool().begin().await.map_err(OkfError::from)?;
+        // `return match`: every arm but the catch-up's `continue` ends the call.
+        return match token_rows::use_refresh(&mut tx, &keys::hash(presented), now).await? {
+            RefreshUse::Unknown => Err(OAuthError::InvalidGrant(
+                "unknown, expired or revoked refresh token".to_string(),
+            )),
+            RefreshUse::Reused { family_id } => {
+                // Nothing was written; dropping `tx` rolls back and releases the
+                // row lock before the revocation updates the row.
+                drop(tx);
+                revoke_family(app, oauth, &family_id).await?;
+                Err(OAuthError::InvalidGrant(
+                    "the refresh token was already used".to_string(),
+                ))
             }
-            if form
-                .resource
-                .as_deref()
-                .is_some_and(|asked| asked != resource)
-            {
-                return Err(OAuthError::InvalidTarget(
-                    "resource differs from the original grant".to_string(),
-                ));
+            RefreshUse::Rotated {
+                grant_id,
+                family_id,
+                resource,
+            } => {
+                // A live row whose grant this key cache lacks: the grant may
+                // come from another replica, not announced here yet. Roll back
+                // first (dropping `tx` releases the row locks), so the catch-up
+                // never waits on the poll pass while holding them, then run the
+                // refresh again once.
+                if !caught_up && app.keys().find_grant(&grant_id).is_none() && app.redis().is_some()
+                {
+                    drop(tx);
+                    app.catch_up_keys().await;
+                    caught_up = true;
+                    continue;
+                }
+                // Each refusal returns before `commit`, so dropping `tx` rolls
+                // back the `used_at` mark and the rightful client can still use
+                // the token.
+                if grant_client(app, &grant_id).as_deref() != Some(client_id) {
+                    return Err(OAuthError::InvalidGrant(
+                        "the refresh token belongs to another client".to_string(),
+                    ));
+                }
+                if form
+                    .resource
+                    .as_deref()
+                    .is_some_and(|asked| asked != resource)
+                {
+                    return Err(OAuthError::InvalidTarget(
+                        "resource differs from the original grant".to_string(),
+                    ));
+                }
+                let binding = Binding {
+                    grant_id: &grant_id,
+                    family_id: &family_id,
+                    resource: &resource,
+                };
+                let minted = mint(&mut tx, oauth, binding, now).await?;
+                tx.commit().await.map_err(OkfError::from)?;
+                app.metrics().oauth_token_issued(Grant::RefreshToken);
+                Ok(remember(oauth, minted))
             }
-            let binding = Binding {
-                grant_id: &grant_id,
-                family_id: &family_id,
-                resource: &resource,
-            };
-            let minted = mint(&mut tx, oauth, binding, now).await?;
-            tx.commit().await.map_err(OkfError::from)?;
-            app.metrics().oauth_token_issued(Grant::RefreshToken);
-            Ok(remember(oauth, minted))
-        }
+        };
     }
 }
 
@@ -527,7 +547,7 @@ async fn revoke(
         Some(RevokedToken {
             kind: TokenKind::Access,
             ..
-        }) => oauth.access.forget(&[hash]),
+        }) => oauth.access.forget(&[hash]).await,
         None => {}
     }
     Ok(StatusCode::OK)
@@ -543,53 +563,11 @@ mod tests {
     use crate::mcp::testing::{render, sample_of, TestApp};
     use crate::oauth::state::code_key;
     use crate::oauth::testing::{
-        authorize_query, authorize_query_for, form, forwarded, hidden, insert_loopback_client,
-        oauth_app, oauth_app_with_metrics, send, sign_in_code, CLIENT_ID, LOOPBACK_CLIENT_ID,
-        LOOPBACK_ON_PORT, LOOPBACK_REDIRECT_URI, REDIRECT_URI, RESOURCE, VERIFIER,
+        authorization_code, authorization_code_for, authorize_query_for, form,
+        insert_loopback_client, oauth_app, oauth_app_with_metrics, send, CLIENT_ID,
+        LOOPBACK_CLIENT_ID, LOOPBACK_ON_PORT, LOOPBACK_REDIRECT_URI, REDIRECT_URI, RESOURCE,
+        VERIFIER,
     };
-    use crate::store::keys::Access;
-
-    /// Runs authorize and consent (code, then Approve from the summary);
-    /// returns the `okfac_` code.
-    async fn authorization_code(test: &TestApp) -> String {
-        authorization_code_for(test, &authorize_query()).await
-    }
-
-    /// [`authorization_code`] for the authorize request `query`.
-    async fn authorization_code_for(test: &TestApp, query: &str) -> String {
-        let code = sign_in_code(test, Access::Read).await;
-        let (_, _, page) = send(test, "GET", &format!("/oauth/authorize?{query}"), None).await;
-        let (pending, csrf) = (hidden(&page, "pending"), hidden(&page, "csrf"));
-        let (_, _, summary) = send(
-            test,
-            "POST",
-            "/oauth/authorize",
-            Some(form(&[
-                ("pending", &pending),
-                ("csrf", &csrf),
-                ("action", "code"),
-                ("sign_in_code", &code),
-            ])),
-        )
-        .await;
-        let (status, headers, page) = send(
-            test,
-            "POST",
-            "/oauth/authorize",
-            Some(form(&[
-                ("pending", &pending),
-                ("csrf", &csrf),
-                ("summary", &hidden(&summary, "summary")),
-                ("action", "approve"),
-            ])),
-        )
-        .await;
-        forwarded(status, &headers, &page)
-            .query_pairs()
-            .find(|(key, _)| key == "code")
-            .map(|(_, value)| value.into_owned())
-            .expect("a code")
-    }
 
     fn exchange(code: &str) -> String {
         exchange_with(code, "", "")
@@ -930,6 +908,73 @@ mod tests {
         assert!(!works(&test, &text(&first, "access_token")).await);
         let (status, _, _) = token(&test, refresh(&new_refresh, CLIENT_ID)).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_exchange_on_the_other_replica_catches_up_on_its_grant() {
+        // Codes are per instance until Task 7, so A's stored code is copied
+        // into B's map by hand; the exchange on B must then catch up on the
+        // grant A's consent made (spec Decision 14) instead of refusing it.
+        let (a, b, _redis) = crate::oauth::testing::oauth_replica_pair().await;
+        let code = authorization_code(&a).await;
+        let key = code_key(&code);
+        let now = Instant::now();
+        let stored = a
+            .app
+            .oauth()
+            .expect("OAuth is on")
+            .codes
+            .update(&key, now, |stored| stored.clone())
+            .expect("A holds the code");
+        let grant = stored.grant_id.clone();
+        let b_oauth = b.oauth().expect("OAuth is on");
+        assert!(b_oauth.codes.insert(key, stored, now), "B takes the copy");
+        assert!(b.keys().find_grant(&grant).is_none(), "B lacks the grant");
+        let request = TokenForm {
+            grant_type: Some("authorization_code".to_string()),
+            code: Some(code),
+            client_id: Some(CLIENT_ID.to_string()),
+            redirect_uri: Some(REDIRECT_URI.to_string()),
+            code_verifier: Some(VERIFIER.to_string()),
+            resource: Some(RESOURCE.to_string()),
+            ..TokenForm::default()
+        };
+
+        let answer = super::exchange_code(&b, b_oauth, &request).await;
+
+        let tokens = answer.unwrap_or_else(|error| panic!("B issues tokens: {error:?}"));
+        assert!(b.keys().find_grant(&grant).is_some(), "B learned the grant");
+        let principal = b_oauth
+            .access
+            .verify(&b, RESOURCE, &tokens.access_token)
+            .await
+            .expect("verify answers")
+            .expect("the issued access token verifies on B");
+        assert_eq!(principal.key_id, grant);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_refresh_on_the_other_replica_catches_up_on_its_grant() {
+        // The code is exchanged on A (codes are per instance until Task 7);
+        // the refresh token lives in Postgres, so B can rotate it, once it
+        // has caught up on the grant A's consent made (spec Decision 14).
+        let (a, b, _redis) = crate::oauth::testing::oauth_replica_pair().await;
+        let code = authorization_code(&a).await;
+        let (_, refresh_token) = crate::oauth::testing::exchange_for_tokens(&a, &code).await;
+        let request = TokenForm {
+            grant_type: Some("refresh_token".to_string()),
+            refresh_token: Some(refresh_token),
+            client_id: Some(CLIENT_ID.to_string()),
+            ..TokenForm::default()
+        };
+
+        let answer = super::refresh(&b, b.oauth().expect("OAuth is on"), &request).await;
+
+        assert!(
+            answer.is_ok(),
+            "B rotates the refresh token: {:?}",
+            answer.err()
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
