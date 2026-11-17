@@ -90,9 +90,10 @@ them such as a team's members or a user's teams) gains a computed
 When two catalogs reachable by the same person share a label, surfaces
 that list them together (the console catalog selector, the consent
 page) disambiguate with the owner team's label: "Personal memory (Acme
-team)". If that still leaves two identical (two catalogs of one team, or
-owner teams that share a label), each of those also shows its id:
-"Notes (Acme, m-7b1e…)". Every choice shown is therefore distinct. The
+team)". Any text that still occurs twice in the final list (two catalogs
+of one team, owner teams that share a label, or a display name that
+happens to look like a generated suffix) switches to its label plus its id,
+"Notes (id: m-7b1e…)", until every choice shown is distinct. The
 disambiguation is computed server-side alongside the listing.
 
 ## Part 2: Editing endpoints and permissions
@@ -143,7 +144,8 @@ moves to a muted secondary "ID: m-7b1e…" line or tooltip.
   slug.
 - **Account page:** an editable "Display name" field saving through
   `PATCH /me`; the slug becomes an "Account ID" line; the teams list and
-  ceiling table show labels.
+  ceiling table show labels. A "Teams you own" section lets a team owner
+  rename each shared team they own (the Teams page stays admin-only).
 - **Users, teams, catalogs pages:** the first column is the label with
   the slug as a secondary line in the same cell; drawer titles use the
   label; edit drawers gain a display-name field shown only to callers

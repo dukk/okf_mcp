@@ -896,8 +896,27 @@ mod tests {
             vec![],
         );
         let choices = labels.catalog_choices(["m-1", "m-2"]);
-        assert_eq!(choices[0].1, "Notes (Acme, m-1)");
-        assert_eq!(choices[1].1, "Notes (Acme, m-2)");
+        assert_eq!(choices[0].1, "Notes (id: m-1)");
+        assert_eq!(choices[1].1, "Notes (id: m-2)");
+    }
+
+    #[test]
+    fn a_literal_label_shaped_like_a_fallback_still_gets_a_distinct_choice() {
+        // m-3's own display name is exactly m-1's fallback text.
+        let labels = Labels::from_rows(
+            vec![],
+            vec![TeamRow { name: "acme".into(), display_name: "Acme".into(), personal_of: None }],
+            vec![
+                CatalogRow { name: "m-1".into(), display_name: "Notes".into(), description: "".into(), owner_team: Some("acme".into()) },
+                CatalogRow { name: "m-2".into(), display_name: "Notes".into(), description: "".into(), owner_team: Some("acme".into()) },
+                CatalogRow { name: "m-3".into(), display_name: "Notes (id: m-1)".into(), description: "".into(), owner_team: Some("acme".into()) },
+            ],
+            vec![],
+        );
+        let choices = labels.catalog_choices(["m-1", "m-2", "m-3"]);
+        assert_eq!(choices[0].1, "Notes (id: m-1)");
+        assert_eq!(choices[1].1, "Notes (id: m-2)");
+        assert_eq!(choices[2].1, "Notes (id: m-1) (id: m-3)");
     }
 
     #[test]
@@ -916,23 +935,28 @@ mod tests {
             vec![],
         );
         let choices = labels.catalog_choices(["m-1", "m-2", "m-3"]);
-        assert_eq!(choices[0].1, "Notes (Acme, m-1)");
-        assert_eq!(choices[1].1, "Notes (Acme, m-2)");
+        assert_eq!(choices[0].1, "Notes (id: m-1)");
+        assert_eq!(choices[1].1, "Notes (id: m-2)");
         assert_eq!(choices[2].1, "Other");
     }
 
     #[hegel::test]
     fn catalog_choices_are_always_distinct(tc: hegel::TestCase) {
         use hegel::generators;
-        // Few distinct labels and teams, so collisions are common.
+        // A small pool of labels, including ones shaped like the generated
+        // suffixes ("(Same)", "(id: m-N)"), so every kind of collision is
+        // common: plain duplicates, owner-suffix collisions and literal
+        // labels equal to another catalog's fallback.
+        const POOL: [&str; 6] =
+            ["L0", "L1", "L0 (Same)", "L0 (id: m-0)", "L0 (id: m-1)", "L0 (id: m-1) (id: m-2)"];
         let count = tc.draw(generators::integers::<usize>().min_value(1).max_value(8));
         let rows: Vec<CatalogRow> = (0..count)
             .map(|i| {
-                let label = tc.draw(generators::integers::<u8>().max_value(2));
+                let label = tc.draw(generators::integers::<usize>().max_value(POOL.len() - 1));
                 let team = tc.draw(generators::integers::<u8>().max_value(1));
                 CatalogRow {
                     name: format!("m-{i}"),
-                    display_name: format!("L{label}"),
+                    display_name: POOL[label].to_string(),
                     description: String::new(),
                     owner_team: Some(format!("t-{team}")),
                 }
@@ -946,6 +970,16 @@ mod tests {
         let choices = labels.catalog_choices(slugs.iter().map(String::as_str));
         let distinct: std::collections::HashSet<&str> = choices.iter().map(|(_, label)| label.as_str()).collect();
         assert_eq!(distinct.len(), choices.len());
+    }
+
+    #[test]
+    fn the_directory_keeps_a_catalogs_raw_display_name() {
+        let labels = sample();
+        // m-1 has no display name; its label comes from the description.
+        assert_eq!(labels.catalog_display_name("m-1"), Some(""));
+        assert_eq!(labels.catalog("m-1"), Some("Personal memory"));
+        assert_eq!(labels.catalog_display_name("m-2"), Some("Personal memory"));
+        assert_eq!(labels.catalog_display_name("m-9"), None);
     }
 
     #[test]
@@ -1011,6 +1045,9 @@ pub struct CatalogRow {
 /// One catalog's label and owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CatalogEntry {
+    // The stored value: Tasks 5 and 7 return it as `display_name`, and a
+    // label cannot tell whether it was unset.
+    display_name: Arc<str>,
     label: Arc<str>,
     owner_team: Option<Arc<str>>,
 }
@@ -1098,6 +1135,7 @@ impl Labels {
             .map(|row| {
                 let entry = CatalogEntry {
                     label: Arc::from(catalog_label(&row.display_name, &row.description)),
+                    display_name: Arc::from(row.display_name),
                     owner_team: row.owner_team.map(Arc::from),
                 };
                 (row.name, entry)
@@ -1117,14 +1155,23 @@ Add the accessors, each a trivial-accessor `uninstrumented_fn` allow:
 - `user(&self, slug) -> Option<&str>`, `team(..)`, `catalog(..)`;
 - `actor(&self, actor) -> Option<&str>` (= `self.user(actor)`; doc comment cites plan Decision 5);
 - `catalog_owner(&self, slug) -> Option<&str>`;
+- `catalog_display_name(&self, slug) -> Option<&str>`: the stored display name (empty when unset), which Tasks 5 and 7 return as `display_name`;
 - `teams_of(&self, user) -> impl Iterator<Item = &str>`;
-- `catalog_choices<'a>(&self, slugs: impl IntoIterator<Item = &'a str>) -> Vec<(String, String)>` returns `(slug, shown text)` in the input order, every shown text distinct, in two passes:
-  1. Count the labels among the given slugs. A label that occurs once is shown as is; a duplicate becomes `{label} ({owner team label})`, or `{label} (no team)` for an unassigned catalog.
-  2. Count the results of pass 1. Any text that still occurs more than once becomes `{label} ({owner team label}, {slug})`. Slugs are unique, so the result is too. This covers two catalogs of one team, and owner teams that share a label.
+- `catalog_choices<'a>(&self, slugs: impl IntoIterator<Item = &'a str>) -> Vec<(String, String)>` returns `(slug, shown text)` in the input order, every shown text distinct:
+  1. **Owner suffix.** Count the labels among the given slugs. A label that occurs once is shown as is; a duplicate becomes `{label} ({owner team label})`, or `{label} (no team)` for an unassigned catalog.
+  2. **Fallback until unique.** Repeat until no shown text occurs twice among the complete final set (every entry, suffixed or not): for every text that does, switch each member of that group not yet on its fallback to its fallback `{label} (id: {slug})`, built from its own label.
 
-  An unknown slug is returned with the slug as its text: it is a catalog created since the last load, and showing its id beats hiding it.
+  Why this ends with unique choices:
+  - **Fallbacks never collide with each other.** A slug is `[a-z0-9-]+`, so it contains neither a space nor `)`. The text after the last ` (id: ` of a fallback is therefore its slug and a closing `)`, and two different slugs give two different texts.
+  - **Every pass shrinks the work.** Each pass that finds a duplicate moves at least one entry onto its fallback, and an entry never leaves it. So the loop runs at most once per entry.
+  - **So nothing is left duplicated.** When the loop stops, no group of two or more remains: any such group would have to consist only of fallbacks, which cannot collide.
+  - **Labels shaped like fallbacks are covered.** A literal label can equal another entry's fallback text, for example `Notes (id: m-1)`. It then sits in a duplicate group and moves onto its own fallback.
 
-  > **Corrected (PR #596 review).** The first draft stopped at the owner-team suffix, which does not separate two catalogs of one team or teams that share a label.
+  Keep the input order, and use a `HashMap<&str, usize>` per pass. The lists are a person's catalogs, so a few passes over a few entries cost nothing.
+
+  An unknown slug is returned with the slug as its text: it is a catalog created since the last load, and showing its id beats hiding it. It takes part in the duplicate check like any other text.
+
+  > **Corrected (PR #596 review, twice).** The first draft stopped at the owner-team suffix, which does not separate two catalogs of one team or teams that share a label. The second added one slug pass, which a literal display name shaped like a suffix could still collide with. The loop above checks the complete final set.
 
 - [ ] **Step 3: Load it with the key cache** (`src/auth.rs`)
   - `KeyCache` gains `labels: Arc<Labels>` (default empty).
@@ -1150,6 +1197,8 @@ Add the accessors, each a trivial-accessor `uninstrumented_fn` allow:
   - `catalog_summary_has_display_name_and_label`.
   - `patch_me_sets_my_display_name` (session); `patch_me_refuses_a_key_without_a_user` (404, like `GET /me`).
   - `patch_me_refuses_an_over_long_name` (422, `"limit": "display_name"`).
+  - `account_lists_owned_team_details`: `GET /me` for an owner of shared team `acme` (display name "Acme") returns `owned_team_details` with `{name: "acme", display_name: "Acme", label: "Acme", personal: false}` and its personal team with `personal: true`; `owned_teams` is unchanged.
+  - `catalog_summary_display_name_is_the_stored_value`: a catalog with only a description has `display_name: ""` and `label` equal to the description.
   - `patch_user_is_for_managers_only`: admin → 200; provisioner → 200; scoped admin → 403; session → 403.
   - `patch_team_owner_session_ok_member_403_personal_409`.
   - `patch_catalog_owner_session_may_rename_its_teams_catalog`: an owner-only write-ceiling session → 200 and `label` is the new name; a member → 403; a suspended team's owner → 403 `Suspended`.
@@ -1163,8 +1212,10 @@ Add the accessors, each a trivial-accessor `uninstrumented_fn` allow:
 - [ ] **Step 2: Additive view fields**
   - **`UserView`:** `pub label: String` = `user_label(&display_name, email.as_deref())`, computed in `From<UserRecord>`.
   - **`TeamView`:** `pub label: String`. `From<TeamRecord>` cannot see the user, so replace it with `TeamView::of(record, &Labels)`, computing `team_label(&display_name, personal_of.and_then(|user| labels.user(user)))`. Each `MemberView` gains `pub label: String` = `labels.user(&member.user)`, falling back to the slug only if missing (a user created since the last load). Call sites pass `&app.keys().labels()`. The handlers already `settle` after a write, so the directory is fresh.
-  - **`CatalogSummary`:** `pub display_name: String`, `pub label: String`, `pub owner_team_label: Option<String>`. Read `display_name` and `label` from `app.keys().labels()` in `of` (pass `&Labels` in). The create handler builds them from the row with `catalog_label`.
-  - **`AccountView` (`me.rs`):** `pub label: String` from the record.
+  - **`CatalogSummary`:** `pub display_name: String`, `pub label: String`, `pub owner_team_label: Option<String>`. Read them from `app.keys().labels()` in `of` (pass `&Labels` in): `catalog_display_name`, `catalog` and the owner team's `team`. The create handler builds them from the row with `catalog_label`.
+  - **`AccountView` (`me.rs`):**
+    - `pub label: String` from the record.
+    - `pub owned_team_details: Vec<OwnedTeam>`, beside the existing `owned_teams: Vec<String>` (kept as is). Each `OwnedTeam { name, display_name, label, personal: bool }` is read with one query on `teams` for the names in `owned_teams`. The Account page needs the current display name to prefill its team editor (Task 10a), and the Teams page is admin-only.
   - **`WhoAmI` (`identity.rs`):** `pub user_label: Option<String>` from `labels.user(user)`.
 
   Keep every existing field and its meaning.
@@ -1350,6 +1401,11 @@ Mount it with `.route("/labels", get(labels))`. Test the scope as Step 1 says.
     - typing "Alice B" and pressing `#account-display-name-save` shows a toast, and after a reload the header says `Alice B - ...`;
     - an 81-character name shows the server's refusal and keeps the old value;
     - the slug is shown in `#account-id` as `Account ID: alice`.
+  - **A non-admin team owner renames their team from Account.** Seed bob, a non-admin user who owns the shared team `acme` (display name "Acme") and is a member of no other shared team.
+    - The Account page's "Teams you own" section lists `acme` with an input `#account-team-acme` holding "Acme".
+    - Saving "Acme Ltd" through `#account-team-acme-save` shows a toast; after a reload the input holds "Acme Ltd".
+    - The personal team is listed as "Named after you", with no input.
+    - A member who is not an owner sees the team in Teams but no editor.
 
   Follow `tests/ui_e2e/harness.rs` (`drive`, `Ui`) and the existing `account.rs` journeys.
 - [ ] **Step 2: `core/labels.js`**
@@ -1389,6 +1445,11 @@ export function named(label, slug) {
   - The Name row becomes "Display name", with a text input `#account-display-name` (`maxlength="80"`) and a `#account-display-name-save` button. Saving calls `api.patch('/me', { display_name })`, toasts "Display name saved", then `refreshIdentity()`.
   - Add a muted row `#account-id`: "Account ID: <code>{account.user}</code>".
   - The Teams list shows `teamLabel(team)`, and the ceiling table's catalog column shows `catalogLabel(catalog)`.
+  - **"Teams you own"** (the owner editor for non-admins; the Teams page stays admin-only, since its list and detail routes use `require_reader`). It is built from `account.owned_team_details`.
+    - Each shared team gets an input `#account-team-<name>`, prefilled with `display_name`, and a `#account-team-<name>-save` button that calls `api.patch(`/teams/${name}`, { display_name })`, toasts "Team name saved" and runs `refreshIdentity()`.
+    - A personal team shows its label and "Named after you", with no input.
+
+    > **Corrected (PR #596 review).** The first draft put the team editor only in the admin Teams drawer, which a non-admin owner cannot open.
   - Use the existing `api.patch` helper if `core/api.js` has one; otherwise add `patch` beside `put` in the same style.
 - [ ] **Step 5: CSS.** `.named { display: flex; flex-direction: column; }` and `.id-line { font-size: 0.8em; font-family: var(--pico-font-family-monospace); }`, using the existing tokens. No new colours.
 - [ ] **Step 6: `just test-ui` via `gate.sh test-ui`, plus the other gates; changelog `m17-task-10a-console-core`; commit** `feat(console): labels in the header and an editable display name`.
