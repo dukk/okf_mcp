@@ -1,6 +1,8 @@
 //! Two replicas over one Postgres and one Redis (milestone 16). Every test
 //! sets `poll_interval = 1h` (`TestServer::start_shared`): what passes was
-//! carried by Redis announcements, not by the poll loop.
+//! carried by Redis announcements, not by the poll loop. The MCP session
+//! tests (milestone 16 Task 5) open a session on one replica and use it, or
+//! are refused, on the other.
 
 mod support;
 
@@ -13,6 +15,9 @@ use okf_mcp::store::audit::AuditActor;
 use okf_mcp::store::keys::{self, Access, Grants, NewKey};
 use okf_mcp::store::users::{self, NewUser};
 use serde_json::json;
+use support::mcp_raw::{
+    delete_on, first_event_data, notify_on, open_session, post_on, stream_on, TOOLS_LIST,
+};
 use support::oauth::{sign_in_code, CimdHost, OAuthClient};
 use support::redis::TestRedis;
 use support::server::{call, files, Sibling, TestServer, OWNER};
@@ -296,4 +301,284 @@ async fn kill_pubsub_connections(redis: &TestRedis) {
         .query_async(&mut connection)
         .await
         .expect("client kill");
+}
+
+// ---- MCP sessions shared between replicas (Task 5) ----
+
+/// Two replicas on one Redis with `config`, and a reader key (default catalog
+/// `main`) that both know.
+async fn session_pair(redis: &TestRedis, config: Config) -> (TestServer, Sibling, String) {
+    let a = TestServer::start_shared(pg(), redis, |_| config.clone()).await;
+    let b = a.sibling(redis, |_| config.clone()).await;
+    let key = a.key("reader", Access::Read, &[], Some("main")).await;
+    eventually("B knows the reader key", || {
+        b.app.keys().find(&key).is_some()
+    })
+    .await;
+    (a, b, key)
+}
+
+/// Opens a session on `mcp_url` and sends its `initialized` notification.
+async fn open_ready(mcp_url: &str, key: &str) -> String {
+    let session = open_session(mcp_url, key).await;
+    assert_eq!(notify_on(mcp_url, key, &session).await, 202);
+    session
+}
+
+/// `tools/list` on `session`: the status.
+async fn tools_list(mcp_url: &str, key: &str, session: &str) -> reqwest::StatusCode {
+    post_on(mcp_url, key, session, TOOLS_LIST).await.status()
+}
+
+/// The binding key and the state key of `session` on `redis`'s prefix.
+fn session_keys(handle: &okf_mcp::shared::Redis, session: &str) -> (String, String) {
+    let id = okf_mcp::shared::hashed(session);
+    (handle.key("mcp:bind", &id), handle.key("mcp:state", &id))
+}
+
+/// Runs a raw command (test set-up and inspection).
+async fn raw<T: redis::FromRedisValue>(handle: &okf_mcp::shared::Redis, cmd: &mut redis::Cmd) -> T {
+    cmd.query_async(&mut handle.connection())
+        .await
+        .expect("a raw redis command")
+}
+
+/// How many of `keys` exist.
+async fn existing(handle: &okf_mcp::shared::Redis, keys: &[&str]) -> i64 {
+    let mut command = redis::cmd("EXISTS");
+    for key in keys {
+        command.arg(*key);
+    }
+    raw(handle, &mut command).await
+}
+
+/// Opens on A, then lists and calls a tool on B, which restores from Redis.
+async fn session_moves_between_replicas(redis: &TestRedis) {
+    let (a, b, key) = session_pair(redis, Config::default()).await;
+
+    let session = open_ready(&a.mcp_url(), &key).await;
+    let listed = post_on(&b.mcp_url(), &key, &session, TOOLS_LIST).await;
+    let listed_status = listed.status();
+    let listed_body = listed.text().await.expect("the tools/list body");
+    let called = post_on(
+        &b.mcp_url(),
+        &key,
+        &session,
+        r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_concept","arguments":{"path":"a"}}}"#,
+    )
+    .await;
+    let called_status = called.status();
+    let called_body = called.text().await.expect("the tools/call body");
+
+    assert_eq!(listed_status, 200);
+    let first: serde_json::Value =
+        serde_json::from_str(first_event_data(&listed_body)).expect("a JSON event");
+    assert!(first["result"]["tools"].is_array(), "{listed_body}");
+    assert_eq!(called_status, 200);
+    let answer: serde_json::Value =
+        serde_json::from_str(first_event_data(&called_body)).expect("a JSON event");
+    assert_eq!(answer["id"], 3, "{called_body}");
+    assert!(answer["result"].is_object(), "{called_body}");
+    assert_ne!(answer["result"]["isError"], json!(true), "{called_body}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_opened_on_one_replica_serves_tools_on_the_other() {
+    let redis = TestRedis::start().await;
+    session_moves_between_replicas(&redis).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_opened_on_one_replica_serves_tools_on_the_other_in_cluster_mode() {
+    let redis = TestRedis::start_cluster().await;
+    session_moves_between_replicas(&redis).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn another_key_on_that_session_is_refused_on_either_replica() {
+    let redis = TestRedis::start().await;
+    let (a, b, owner) = session_pair(&redis, Config::default()).await;
+    let intruder = a.key("intruder", Access::Read, &[], Some("main")).await;
+    eventually("B knows the intruder key", || {
+        b.app.keys().find(&intruder).is_some()
+    })
+    .await;
+    let session = open_ready(&a.mcp_url(), &owner).await;
+
+    let mut refusals = Vec::new();
+    for url in [a.mcp_url(), b.mcp_url()] {
+        refusals.push(tools_list(&url, &intruder, &session).await);
+        refusals.push(stream_on(&url, &intruder, &session).await);
+    }
+    let own_on_b = tools_list(&b.mcp_url(), &owner, &session).await;
+
+    assert_eq!(refusals, vec![reqwest::StatusCode::NOT_FOUND; 4]);
+    assert_eq!(own_on_b, 200, "the owner is still admitted");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_binding_without_its_state_is_refused_on_every_replica() {
+    let redis = TestRedis::start().await;
+    let (a, b, key) = session_pair(&redis, Config::default()).await;
+    let handle = support::server::redis_connect(&redis).await;
+    let session = open_ready(&a.mcp_url(), &key).await;
+    let (_, state) = session_keys(&handle, &session);
+
+    // As an eviction would.
+    let _: i64 = raw(&handle, redis::cmd("DEL").arg(&state)).await;
+    // A still holds a local worker for the session: the script, not a
+    // failed restore, must refuse it.
+    let on_a = tools_list(&a.mcp_url(), &key, &session).await;
+    let on_b = tools_list(&b.mcp_url(), &key, &session).await;
+
+    assert_eq!(on_a, 404);
+    assert_eq!(on_b, 404);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_state_without_a_binding_is_never_restored() {
+    let redis = TestRedis::start().await;
+    let (a, b, key) = session_pair(&redis, Config::default()).await;
+    let handle = support::server::redis_connect(&redis).await;
+    let session = open_ready(&a.mcp_url(), &key).await;
+    let (bind, _) = session_keys(&handle, &session);
+
+    let _: i64 = raw(&handle, redis::cmd("DEL").arg(&bind)).await;
+    let on_b = tools_list(&b.mcp_url(), &key, &session).await;
+    let on_a = tools_list(&a.mcp_url(), &key, &session).await;
+
+    assert_eq!(on_b, 404);
+    assert_eq!(on_a, 404, "the binding is the check, not the local worker");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_revoked_keys_session_is_refused_on_every_replica() {
+    let redis = TestRedis::start().await;
+    let (a, b, admin) = pair(&redis).await;
+    let key = a.key("reader", Access::Read, &[], Some("main")).await;
+    eventually("B knows the reader key", || {
+        b.app.keys().find(&key).is_some()
+    })
+    .await;
+    let session = open_ready(&a.mcp_url(), &key).await;
+    assert_eq!(tools_list(&b.mcp_url(), &key, &session).await, 200);
+
+    let id = a.app.keys().find(&key).expect("cached").key_id.clone();
+    api(
+        reqwest::Method::POST,
+        &a.base,
+        &format!("/api/v1/keys/{id}/revoke"),
+        &admin,
+        serde_json::Value::Null,
+    )
+    .await;
+    eventually("B refuses the revoked key", || {
+        b.app.keys().find(&key).is_none()
+    })
+    .await;
+
+    assert_eq!(tools_list(&a.mcp_url(), &key, &session).await, 401);
+    assert_eq!(tools_list(&b.mcp_url(), &key, &session).await, 401);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_idle_session_expires_in_redis() {
+    let redis = TestRedis::start().await;
+    let config = Config {
+        session_idle_timeout: Duration::from_secs(2),
+        ..Config::default()
+    };
+    let (a, b, key) = session_pair(&redis, config).await;
+    let handle = support::server::redis_connect(&redis).await;
+    let session = open_ready(&a.mcp_url(), &key).await;
+    let (bind, state) = session_keys(&handle, &session);
+
+    let bind_ttl: i64 = raw(&handle, redis::cmd("PTTL").arg(&bind)).await;
+    let state_ttl: i64 = raw(&handle, redis::cmd("PTTL").arg(&state)).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let on_b = tools_list(&b.mcp_url(), &key, &session).await;
+    let left = existing(&handle, &[&bind, &state]).await;
+
+    assert!((1..=2000).contains(&bind_ttl), "{bind_ttl}");
+    assert!((1..=2000).contains(&state_ttl), "{state_ttl}");
+    assert_eq!(on_b, 404);
+    assert_eq!(left, 0, "both keys expired");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn use_on_one_replica_keeps_the_session_alive_for_the_other() {
+    let redis = TestRedis::start().await;
+    let config = Config {
+        session_idle_timeout: Duration::from_secs(3),
+        ..Config::default()
+    };
+    let (a, b, key) = session_pair(&redis, config).await;
+    let session = open_ready(&a.mcp_url(), &key).await;
+
+    let mut on_b = Vec::new();
+    for _ in 0..5 {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        on_b.push(tools_list(&b.mcp_url(), &key, &session).await);
+    }
+    // Five seconds without use on A: its own worker idled out, so A
+    // restores the session from Redis, whose TTL B kept sliding.
+    let on_a = tools_list(&a.mcp_url(), &key, &session).await;
+
+    assert_eq!(on_b, vec![reqwest::StatusCode::OK; 5]);
+    assert_eq!(on_a, 200);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn delete_ends_the_session_everywhere() {
+    let redis = TestRedis::start().await;
+    let (a, b, owner) = session_pair(&redis, Config::default()).await;
+    let intruder = a.key("intruder", Access::Read, &[], Some("main")).await;
+    eventually("B knows the intruder key", || {
+        b.app.keys().find(&intruder).is_some()
+    })
+    .await;
+    let handle = support::server::redis_connect(&redis).await;
+
+    // Another key's DELETE on B is refused and releases nothing.
+    let kept = open_ready(&a.mcp_url(), &owner).await;
+    let (kept_bind, kept_state) = session_keys(&handle, &kept);
+    let foreign_delete = delete_on(&b.mcp_url(), &intruder, &kept).await;
+    let kept_left = existing(&handle, &[&kept_bind, &kept_state]).await;
+
+    // B has never received a POST or GET for this session, so it holds no
+    // local copy (review of PR #552).
+    let session = open_ready(&a.mcp_url(), &owner).await;
+    let (bind, state) = session_keys(&handle, &session);
+    let deleted = delete_on(&b.mcp_url(), &owner, &session).await;
+    let left = existing(&handle, &[&bind, &state]).await;
+    let on_a = tools_list(&a.mcp_url(), &owner, &session).await;
+    let on_b = tools_list(&b.mcp_url(), &owner, &session).await;
+
+    assert_eq!(foreign_delete, 404);
+    assert_eq!(kept_left, 2, "another key's DELETE releases nothing");
+    assert_eq!(deleted, 202);
+    assert_eq!(left, 0, "both keys are gone");
+    assert_eq!(on_a, 404);
+    assert_eq!(on_b, 404);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn redis_down_answers_503_not_a_fallback() {
+    let redis = TestRedis::start().await;
+    let (a, _b, key) = session_pair(&redis, Config::default()).await;
+    let session = open_ready(&a.mcp_url(), &key).await;
+    if redis.stop().await.is_none() {
+        // A shared server: it cannot be stopped for one test.
+        return;
+    }
+
+    // A holds the session locally, but the binding check is authoritative.
+    let status = tokio::time::timeout(
+        Duration::from_secs(30),
+        tools_list(&a.mcp_url(), &key, &session),
+    )
+    .await
+    .expect("an answer within 30 s while Redis is down");
+
+    assert_eq!(status, 503);
 }
