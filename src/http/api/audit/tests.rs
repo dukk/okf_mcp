@@ -453,6 +453,9 @@ async fn a_person_shows_by_the_snapshot_label_and_a_deleted_user_by_the_placehol
 
     assert_eq!(alice["person"], "alice");
     assert_eq!(alice["person_label"], "Alice Example");
+    // The acting key's user is a person too, labelled from its own snapshot.
+    assert_eq!(before[1]["actor"]["person"], TEST_USER);
+    assert!(before[1]["actor"]["person_label"].is_string());
     assert_eq!(
         ghost_before["person_label"], "Unnamed user",
         "no display name, no email"
