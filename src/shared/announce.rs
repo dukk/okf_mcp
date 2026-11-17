@@ -85,9 +85,90 @@ pub async fn listen(app: Arc<App>, shutdown: CancellationToken) {
     let Some(redis) = app.redis().cloned() else {
         return;
     };
+    let source = RedisSource(redis.clone());
+    run(&app, &redis, &source, RESUBSCRIBE_GRACE, &shutdown).await;
+}
+
+/// Where the subscriber's events come from: a live [`crate::shared::Subscription`]
+/// in production, a script in tests.
+#[async_trait::async_trait]
+trait Events: Send {
+    /// The next event, or `None` once the stream is gone for good.
+    async fn next(&mut self) -> Option<SubscriptionEvent>;
+}
+
+/// Opens subscriptions; injectable so a test can script outages.
+#[async_trait::async_trait]
+trait Source: Send + Sync {
+    /// The stream type one subscription yields.
+    type Stream: Events;
+
+    /// Subscribes to the announcement channel.
+    async fn subscribe(&self) -> redis::RedisResult<Self::Stream>;
+}
+
+/// The real source: a subscription on the shared Redis.
+struct RedisSource(Redis);
+
+#[async_trait::async_trait]
+impl Events for crate::shared::Subscription {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "long-lived loop or thin delegate: a span would record nothing"
+        )
+    )]
+    async fn next(&mut self) -> Option<SubscriptionEvent> {
+        crate::shared::Subscription::next(self).await
+    }
+}
+
+#[async_trait::async_trait]
+impl Source for RedisSource {
+    type Stream = crate::shared::Subscription;
+
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "long-lived loop or thin delegate: a span would record nothing"
+        )
+    )]
+    async fn subscribe(&self) -> redis::RedisResult<Self::Stream> {
+        self.0.subscribe(&self.0.channel(CHANNEL)).await
+    }
+}
+
+/// The subscriber's loop, with its subscription source and grace period
+/// injected: subscribes, reloads on `Subscribed` and on an announcement of
+/// another generation, replaces a subscription that stays `Disconnected` for
+/// `grace`, and subscribes again with backoff after the stream ends or a
+/// subscribe fails.
+///
+/// # Arguments
+/// * `app` - the instance whose key cache is reloaded.
+/// * `redis` - where failures are counted.
+/// * `source` - opens each subscription.
+/// * `grace` - how long a subscription may stay disconnected.
+/// * `shutdown` - cancelled when the server stops.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "long-lived loop: a span would stay open until shutdown"
+    )
+)]
+async fn run<S: Source>(
+    app: &App,
+    redis: &Redis,
+    source: &S,
+    grace: Duration,
+    shutdown: &CancellationToken,
+) {
     let mut backoff = BACKOFF_MIN;
     while !shutdown.is_cancelled() {
-        match redis.subscribe(&redis.channel(CHANNEL)).await {
+        match source.subscribe().await {
             Ok(mut subscription) => {
                 // When the library reported the connection lost, until it
                 // reports the subscription again.
@@ -96,9 +177,7 @@ pub async fn listen(app: Arc<App>, shutdown: CancellationToken) {
                     // Never ready while connected; `pending` waits forever.
                     let replace_at = async {
                         match disconnected_at {
-                            Some(since) => {
-                                tokio::time::sleep_until(since + RESUBSCRIBE_GRACE).await;
-                            }
+                            Some(since) => tokio::time::sleep_until(since + grace).await,
                             None => std::future::pending().await,
                         }
                     };
@@ -168,9 +247,113 @@ mod catch_up_tests {
     use tokio_util::sync::CancellationToken;
 
     use super::listen;
+    use super::{run, Events, Source};
     use crate::config::Config;
     use crate::mcp::testing::replica_pair;
+    use crate::shared::SubscriptionEvent;
     use crate::store::audit::AuditActor;
+
+    /// A scripted subscription: yields its events, then waits forever.
+    struct Scripted(std::collections::VecDeque<SubscriptionEvent>);
+
+    #[async_trait::async_trait]
+    impl Events for Scripted {
+        #[cfg_attr(
+            dylint_lib = "hyp_tracing",
+            allow(uninstrumented_fn, reason = "test double")
+        )]
+        async fn next(&mut self) -> Option<SubscriptionEvent> {
+            match self.0.pop_front() {
+                Some(event) => Some(event),
+                None => std::future::pending().await,
+            }
+        }
+    }
+
+    /// Attempt 1: `Disconnected` and nothing more. Attempt 2: fails.
+    /// Attempt 3: `Subscribed`. Records whether the key was still cached when
+    /// each attempt began.
+    struct Outage {
+        attempts: std::sync::Mutex<Vec<bool>>,
+        holds_key: Box<dyn Fn() -> bool + Send + Sync>,
+    }
+
+    #[async_trait::async_trait]
+    impl Source for Outage {
+        type Stream = Scripted;
+
+        #[cfg_attr(
+            dylint_lib = "hyp_tracing",
+            allow(uninstrumented_fn, reason = "test double")
+        )]
+        async fn subscribe(&self) -> redis::RedisResult<Scripted> {
+            let attempt = {
+                let mut attempts = self.attempts.lock().expect("attempts lock");
+                attempts.push((self.holds_key)());
+                attempts.len()
+            };
+            match attempt {
+                1 => Ok(Scripted([SubscriptionEvent::Disconnected].into())),
+                2 => Err(redis::RedisError::from((redis::ErrorKind::Io, "refused"))),
+                _ => Ok(Scripted([SubscriptionEvent::Subscribed].into())),
+            }
+        }
+    }
+
+    /// A subscription that is `Disconnected` and never `Subscribed` again is
+    /// replaced after the grace period; a subscribe that fails is retried
+    /// after the backoff; the first `Subscribed` then reloads. Without the
+    /// replacement attempt 2 never happens and B never reloads.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_subscription_stuck_disconnected_is_replaced_and_a_failed_subscribe_retried() {
+        let (first, second, _redis) = tokio::time::timeout(
+            Duration::from_secs(120),
+            replica_pair(&[], Config::default()),
+        )
+        .await
+        .expect("starting two replicas within 120 s");
+        let a = first.app.clone();
+        let b = second;
+        let key = crate::mcp::testing::staff_root(&first).await;
+        a.poll().await.expect("A's poll");
+        b.reload_keys_now(false).await;
+        let id = a.keys().find(&key).expect("cached").key_id.clone();
+        crate::store::keys::revoke_by_id(a.pool(), &id, &AuditActor::cli(), chrono::Utc::now())
+            .await
+            .expect("revoke");
+        a.poll().await.expect("A's poll");
+
+        let holder = b.clone();
+        let source = Outage {
+            attempts: std::sync::Mutex::new(Vec::new()),
+            holds_key: Box::new(move || holder.keys().find(&key).is_some()),
+        };
+        let shutdown = CancellationToken::new();
+        let redis = b.redis().expect("B's redis").clone();
+        let finished = tokio::time::timeout(Duration::from_secs(20), async {
+            let looped = run(&b, &redis, &source, Duration::from_millis(200), &shutdown);
+            tokio::pin!(looped);
+            loop {
+                tokio::select! {
+                    () = &mut looped => return,
+                    () = tokio::time::sleep(Duration::from_millis(50)) => {
+                        let attempts = source.attempts.lock().expect("attempts lock").len();
+                        if attempts >= 3 && !(source.holds_key)() {
+                            shutdown.cancel();
+                        }
+                    }
+                }
+            }
+        })
+        .await;
+        assert!(finished.is_ok(), "attempt 3 reloaded B within 20 s");
+        let attempts = source.attempts.lock().expect("attempts lock").clone();
+        assert_eq!(
+            attempts,
+            vec![true, true, true],
+            "no reload before attempt 3"
+        );
+    }
 
     /// A change committed and announced while a replica has no subscription
     /// is not replayed by Redis: the replica's first `Subscribed` must reload.
