@@ -391,7 +391,7 @@ pub fn user_label(display_name: &str, email: Option<&str>) -> String {
     local.map_or_else(|| UNNAMED_USER.to_string(), Cow::into_owned)
 }
 
-/// A team's label: for a personal team, "<user label>'s team"; else its
+/// A team's label: for a personal team, "{user label}'s team"; else its
 /// display name, else [`UNNAMED_TEAM`].
 ///
 /// # Arguments
@@ -426,10 +426,11 @@ pub fn team_label(display_name: &str, personal_of: Option<&str>) -> String {
 pub fn catalog_label(display_name: &str, description: &str) -> String {
     // A description may span lines; a label never does.
     let collapsed = description.split_whitespace().collect::<Vec<_>>().join(" ");
-    [bounded(display_name), bounded(&collapsed)]
+    let label = [bounded(display_name), bounded(&collapsed)]
         .into_iter()
         .find(|candidate| !candidate.is_empty())
-        .map_or_else(|| UNTITLED_CATALOG.to_string(), Cow::into_owned)
+        .map_or_else(|| UNTITLED_CATALOG.to_string(), Cow::into_owned);
+    label
 }
 
 /// A filename stem from a label: ASCII letters and digits lowercased, every
