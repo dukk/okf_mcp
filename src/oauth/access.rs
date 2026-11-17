@@ -312,8 +312,9 @@ impl AccessTokens {
 /// A live grant's principal, catching the key cache up first when it does
 /// not hold the grant (spec Decision 14): the grant may have been made on
 /// another instance whose announcement has not reached this one yet. Only a
-/// caller holding a live token row or code calls this, so it cannot be used
-/// to make a database read per request.
+/// caller holding a live token row or code calls this, so only such a holder
+/// can cause the catch-up's database read: one per request, serialized with
+/// the poll pass, while its grant stays missing (revoked or expired).
 ///
 /// # Arguments
 /// * `app` - the shared state.
