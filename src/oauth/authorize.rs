@@ -3,8 +3,10 @@
 //! The GET validates the request in a fixed order. Until the client and its
 //! exact redirect URI are known, a failure is an error page, never a
 //! redirect (no open redirect). After that, failures go back to the client
-//! as `error=...`. A valid request becomes a pending authorization in
-//! memory, and the POSTs walk it through the sign-in code and consent.
+//! as `error=...`. A valid request becomes a pending authorization (in
+//! memory, or in Redis with `[redis]`, so the POSTs may reach any replica),
+//! and the POSTs walk it through the sign-in code and consent. A Redis
+//! failure fails closed: the busy page (503), never a fallback to memory.
 //! Approve and Deny answer with a page that forwards the browser to the
 //! client rather than a 303 (issue #435).
 //!
@@ -77,6 +79,9 @@ const NOTHING_CHOSEN: &str = "Choose at least one catalog, or Deny.";
 const DEFAULT_NOT_CHOSEN: &str = "The default catalog must be one you allow.";
 /// A form posted from another site (403).
 const CROSS_SITE: &str = "This form can only be sent from this site. Start again from your client.";
+/// The busy page (503): a Redis failure or a database deadlock, or no room
+/// for an authorization code.
+const BUSY: &str = "The server is busy. Start again from your client in a minute.";
 
 /// The routes: `GET` and `POST /oauth/authorize`.
 ///
@@ -149,7 +154,7 @@ impl std::fmt::Debug for ConsentForm {
     }
 }
 
-/// What an Approve finds, decided under the pending map's lock.
+/// What an Approve finds, decided in the consent POST's one atomic update.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Approval {
     /// No code has been accepted yet: back to step 1.
@@ -191,7 +196,8 @@ fn approval(accepted: Option<&AcceptedCode>, posted: Option<&str>) -> Approval {
 
 /// Spends a signed-in page's consent nonce: when `posted` is the current
 /// nonce, it is replaced by `fresh`, so the same page (or a replay of its
-/// form) cannot approve again. Runs under the pending map's lock.
+/// form) cannot approve again. Runs inside the consent POST's one atomic
+/// update ([`consent_change`]).
 ///
 /// # Arguments
 /// * `consent` - the pending request's consent, if it is on the user path.
@@ -702,16 +708,96 @@ async fn authorize(
         Some(user) => user_consent_page(&pending_id, &pending, &user.name, None, &brand),
         None => consent::code_page(&view(&pending_id, &pending), None, &brand),
     };
-    // `insert` is `false` when the bounded map is full: an unauthenticated
-    // GET must not grow memory without limit.
-    if !oauth.pending.insert(pending_id, pending, Instant::now()) {
-        return consent::error_page(
+    // `insert` is `false` when the bounded memory map is full: an
+    // unauthenticated GET must not grow memory without limit. A Redis
+    // failure is the busy page (spec Decision 16).
+    match oauth
+        .pending
+        .insert(&pending_id, pending, Instant::now())
+        .await
+    {
+        Ok(true) => page,
+        Ok(false) => consent::error_page(
             StatusCode::SERVICE_UNAVAILABLE,
             "Too many sign-ins are in progress. Try again in a few minutes.",
             &brand,
-        );
+        ),
+        Err(error) => server_error(&error, &brand),
     }
-    page
+}
+
+/// What a consent POST's update reads: a snapshot of the request after the
+/// change, the Approve decision, and whether a signed-in page's nonce was
+/// spent.
+type Decided = (PendingAuthorization, Approval, bool);
+
+/// The change a consent POST makes to its pending authorization, in one
+/// atomic update (a compare-and-set in Redis).
+///
+/// The CSRF token is checked first, and a mismatch changes nothing:
+/// someone who learned the id cannot cancel the request. A request whose
+/// wrong codes are spent is refused too (it is normally gone already). An
+/// Approve's summary token is matched against the code it was rendered for,
+/// so the code id and its token come from one snapshot, and a signed-in
+/// Approve's nonce is spent, so one page approves once on every replica.
+///
+/// # Arguments
+/// * `form` - the posted form.
+/// * `fresh` - the replacement nonce for a signed-in Approve, else `None`.
+///
+/// # Returns
+/// The closure for [`crate::shared::ephemeral::Ephemeral::update`]. It may
+/// run more than once, each time on a fresh copy, so it reads only that copy
+/// and clones `fresh` (`lessons.md`). It answers `None` when the CSRF token
+/// does not match.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "builds a closure and returns it; the update that runs it has the span"
+    )
+)]
+// `impl FnMut(..) + 'f`: an unnamed closure type that may be called several
+// times and borrows `form` for `'f` (Python: returning an inner function).
+fn consent_change<'f>(
+    form: &'f ConsentForm,
+    fresh: Option<String>,
+) -> impl FnMut(&mut PendingAuthorization) -> Option<Decided> + 'f {
+    // `move`: the closure owns `fresh` (and a copy of the `form` reference).
+    move |pending| {
+        let matches: bool = pending.csrf.as_bytes().ct_eq(form.csrf.as_bytes()).into();
+        let live = pending.failed_attempts < MAX_FAILED_ATTEMPTS;
+        (matches && live).then(|| {
+            let decided = approval(pending.accepted.as_ref(), form.summary.as_deref());
+            // Cloned, not taken: in Redis this closure can run again on a
+            // fresh copy (`Ephemeral::update`), and that run must see the
+            // same token, or it would refuse a valid Approve.
+            let claimed = fresh.clone().is_some_and(|fresh| {
+                claim_consent(pending.consent.as_mut(), form.summary.as_deref(), fresh)
+            });
+            (pending.clone(), decided, claimed)
+        })
+    }
+}
+
+/// Drops a pending authorization (denied, spent or refused), then answers
+/// `answer`.
+///
+/// # Arguments
+/// * `oauth` - the OAuth state.
+/// * `pending_id` - the request's id.
+/// * `brand` - for the busy page.
+/// * `answer` - the page to answer once it is dropped.
+///
+/// # Returns
+/// `answer`, or the busy page when Redis fails: the request then stays
+/// until it expires, and the answer must not say it ended.
+#[tracing::instrument(level = "trace", skip_all)]
+async fn ending(oauth: &OAuth, pending_id: &str, brand: &Brand, answer: Response) -> Response {
+    match oauth.pending.remove(pending_id).await {
+        Ok(()) => answer,
+        Err(error) => server_error(&error, brand),
+    }
 }
 
 /// `POST /oauth/authorize`: the consent form (spec "Consent flow").
@@ -744,8 +830,8 @@ async fn consent_post(
         return consent::error_page(StatusCode::BAD_REQUEST, EXPIRED, &brand);
     };
     // A signed-in Approve spends its page's nonce; the replacement is made
-    // here, outside the lock, because making it can fail.
-    let mut fresh = if form.action == "consent" {
+    // here, outside the update, because making it can fail.
+    let fresh = if form.action == "consent" {
         match keys::generate_with("") {
             Ok(nonce) => Some(nonce),
             Err(error) => return server_error(&error, &brand),
@@ -753,23 +839,16 @@ async fn consent_post(
     } else {
         None
     };
-    // The CSRF token is checked before anything else, and a mismatch leaves
-    // the pending authorization alone: someone who learned its id cannot
-    // cancel it. Under the same lock (`update` holds it only for the
-    // closure), an Approve's summary token is matched against the code it
-    // was rendered for, so the code id and its token come from one snapshot,
-    // and a signed-in Approve's nonce is spent, so it approves once.
-    let pending = oauth.pending.update(&form.pending, now, |pending| {
-        let matches: bool = pending.csrf.as_bytes().ct_eq(form.csrf.as_bytes()).into();
-        matches.then(|| {
-            let decided = approval(pending.accepted.as_ref(), form.summary.as_deref());
-            // `take` moves the token out of the `Option`, leaving `None`.
-            let claimed = fresh.take().is_some_and(|fresh| {
-                claim_consent(pending.consent.as_mut(), form.summary.as_deref(), fresh)
-            });
-            (pending.clone(), decided, claimed)
-        })
-    });
+    // The CSRF token, the summary token and the nonce, in one atomic update
+    // ([`consent_change`]).
+    let pending = match oauth
+        .pending
+        .update(&form.pending, now, consent_change(&form, fresh))
+        .await
+    {
+        Ok(pending) => pending,
+        Err(error) => return server_error(&error, &brand),
+    };
     // `Some(Some(_))`: the entry is live (outer) and the token matched (inner).
     let Some(Some((pending, decided, claimed))) = pending else {
         return consent::error_page(StatusCode::BAD_REQUEST, EXPIRED, &brand);
@@ -779,14 +858,14 @@ async fn consent_post(
     let code_path = pending.consent.is_none();
     match form.action.as_str() {
         "deny" => {
-            oauth.pending.remove(&form.pending);
-            error_to_client(
+            let denied = error_to_client(
                 &brand,
                 &pending.redirect_uri,
                 (pending.state.as_deref(), &oauth.settings.issuer),
                 ("access_denied", "the person signing in denied access"),
                 Hop::Forward,
-            )
+            );
+            ending(oauth, &form.pending, &brand, denied).await
         }
         "code" if code_path => {
             let presented = form.sign_in_code.as_deref().unwrap_or_default();
@@ -811,29 +890,35 @@ async fn consent_post(
 /// Counts a failed attempt and answers step 1 again, or drops the request
 /// at [`MAX_FAILED_ATTEMPTS`].
 #[tracing::instrument(level = "trace", skip_all)]
-fn failed_attempt(
+async fn failed_attempt(
     oauth: &OAuth,
     pending_id: &str,
     pending: &PendingAuthorization,
     brand: &Brand,
 ) -> Response {
-    let attempts = oauth.pending.update(pending_id, Instant::now(), |pending| {
-        pending.failed_attempts = pending.failed_attempts.saturating_add(1);
-        pending.accepted = None;
-        pending.failed_attempts
-    });
+    // Idempotent on a fresh copy: each run counts once on the value it was
+    // given, so wrong codes on every replica add up.
+    let attempts = oauth
+        .pending
+        .update(pending_id, Instant::now(), |pending| {
+            pending.failed_attempts = pending.failed_attempts.saturating_add(1);
+            pending.accepted = None;
+            pending.failed_attempts
+        })
+        .await;
     match attempts {
-        Some(attempts) if attempts < MAX_FAILED_ATTEMPTS => {
+        Ok(Some(attempts)) if attempts < MAX_FAILED_ATTEMPTS => {
             consent::code_page(&view(pending_id, pending), Some(BAD_CODE), brand)
         }
-        Some(_) | None => {
-            oauth.pending.remove(pending_id);
-            consent::error_page(
+        Ok(Some(_) | None) => {
+            let refused = consent::error_page(
                 StatusCode::BAD_REQUEST,
                 "Too many wrong sign-in codes.",
                 brand,
-            )
+            );
+            ending(oauth, pending_id, brand, refused).await
         }
+        Err(error) => server_error(&error, brand),
     }
 }
 
@@ -920,11 +1005,18 @@ async fn check_code(
                 code_id: record.id.clone(),
                 summary_nonce: summary_nonce.clone(),
             };
-            let stored = oauth.pending.update(pending_id, Instant::now(), |pending| {
-                pending.accepted = Some(accepted);
-            });
-            if stored.is_none() {
-                return consent::error_page(StatusCode::BAD_REQUEST, EXPIRED, &brand);
+            let stored = oauth
+                .pending
+                .update(pending_id, Instant::now(), |pending| {
+                    // Cloned, not moved: the closure may run again on a
+                    // fresh copy (`Ephemeral::update`).
+                    pending.accepted = Some(accepted.clone());
+                })
+                .await;
+            match stored {
+                Ok(Some(())) => {}
+                Ok(None) => return consent::error_page(StatusCode::BAD_REQUEST, EXPIRED, &brand),
+                Err(error) => return server_error(&error, &brand),
             }
             decision.accept();
             consent::summary_page(
@@ -934,7 +1026,7 @@ async fn check_code(
                 &brand,
             )
         }
-        Ok(None) => failed_attempt(oauth, pending_id, pending, &brand),
+        Ok(None) => failed_attempt(oauth, pending_id, pending, &brand).await,
         Err(error) => server_error(&error, &brand),
     }
 }
@@ -950,14 +1042,15 @@ async fn approve(
     code_id: &str,
 ) -> Response {
     let brand = app.settings().brand();
-    let grant_id = match code_rows::redeem(app.pool(), code_id, &pending.client, app.clock().now())
-        .await
-    {
-        Ok(grant_id) => grant_id,
-        // Expired, revoked or redeemed meanwhile (another approve won).
-        Err(OkfError::Refused { .. }) => return failed_attempt(oauth, pending_id, pending, &brand),
-        Err(error) => return server_error(&error, &brand),
-    };
+    let grant_id =
+        match code_rows::redeem(app.pool(), code_id, &pending.client, app.clock().now()).await {
+            Ok(grant_id) => grant_id,
+            // Expired, revoked or redeemed meanwhile (another approve won).
+            Err(OkfError::Refused { .. }) => {
+                return failed_attempt(oauth, pending_id, pending, &brand).await
+            }
+            Err(error) => return server_error(&error, &brand),
+        };
     finish(app, oauth, pending_id, pending, grant_id).await
 }
 
@@ -985,9 +1078,13 @@ async fn finish(
     grant_id: String,
 ) -> Response {
     let mut decision = Decision::start();
-    // The request is spent once the grant exists, whatever happens next.
-    oauth.pending.remove(pending_id);
     let brand = app.settings().brand();
+    // The request is spent once the grant exists, whatever happens next. A
+    // Redis failure stops here (spec Decision 16): the grant stays and can
+    // be revoked, and the person starts again from their client.
+    if let Err(error) = oauth.pending.remove(pending_id).await {
+        return server_error(&error, &brand);
+    }
     // Creating the grant bumped admin_generation, so this loads it into the
     // key cache before the client's token request can arrive.
     if let Err(error) = app.poll().await {
@@ -1029,11 +1126,7 @@ async fn finish(
         .await
         .unwrap_or(false);
     if !stored {
-        return consent::error_page(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "The server is busy. Start again from your client in a minute.",
-            &brand,
-        );
+        return consent::error_page(StatusCode::SERVICE_UNAVAILABLE, BUSY, &brand);
     }
     decision.accept();
     back_to_client(
@@ -1074,17 +1167,20 @@ async fn consent_as_user(
         return consent::error_page(StatusCode::BAD_REQUEST, EXPIRED, &brand);
     };
     // Every refusal below ends the request: the page cannot be trusted again.
-    let refuse = |message| {
-        oauth.pending.remove(&form.pending);
-        consent::error_page(StatusCode::BAD_REQUEST, message, &brand)
+    // The closure returns `ending`'s future, which the caller awaits; `move`
+    // copies the references it uses into it.
+    let brand = &brand;
+    let refuse = move |message| {
+        let refused = consent::error_page(StatusCode::BAD_REQUEST, message, brand);
+        ending(oauth, &form.pending, brand, refused)
     };
     let Some(session_id) = cookie(headers, COOKIE) else {
-        return refuse(SIGNED_OUT);
+        return refuse(SIGNED_OUT).await;
     };
     let user = match signed_in_user(app, headers).await {
         Ok(Some(user)) if user.id == consent.user_id => user,
-        Ok(_) => return refuse(SIGNED_OUT),
-        Err(error) => return server_error(&error, &brand),
+        Ok(_) => return refuse(SIGNED_OUT).await,
+        Err(error) => return server_error(&error, brand),
     };
     let chosen = match chosen_levels(&form.choices, &consent.offered) {
         Ok(chosen) => chosen,
@@ -1094,7 +1190,7 @@ async fn consent_as_user(
                 pending,
                 &user.name,
                 Some(NOTHING_CHOSEN),
-                &brand,
+                brand,
             );
         }
         Err(Choice::Tampered) => {
@@ -1104,7 +1200,7 @@ async fn consent_as_user(
                 { user = %user.name, client = %pending.client.client_id, },
                 "refused a consent outside the offered choices"
             );
-            return refuse(TAMPERED);
+            return refuse(TAMPERED).await;
         }
     };
     let default_catalog = form
@@ -1117,7 +1213,7 @@ async fn consent_as_user(
             pending,
             &user.name,
             Some(DEFAULT_NOT_CHOSEN),
-            &brand,
+            brand,
         );
     }
     let new = NewSelfIssuedGrant {
@@ -1141,12 +1237,12 @@ async fn consent_as_user(
         match grant_rows::create_self_issued(app.pool(), &new, &audit, app.clock().now()).await {
             Ok(grant_id) => grant_id,
             // Signed out, reset or deleted since the check above.
-            Err(OkfError::Unauthenticated { .. }) => return refuse(SIGNED_OUT),
+            Err(OkfError::Unauthenticated { .. }) => return refuse(SIGNED_OUT).await,
             // The ceiling shrank, or a chosen catalog was deleted, meanwhile.
             Err(OkfError::Refused { .. } | OkfError::CatalogNotSelected { .. }) => {
-                return refuse(CHANGED)
+                return refuse(CHANGED).await
             }
-            Err(error) => return server_error(&error, &brand),
+            Err(error) => return server_error(&error, brand),
         };
     split_event!(
         info,
@@ -1157,7 +1253,16 @@ async fn consent_as_user(
     finish(app, oauth, &form.pending, pending, grant_id).await
 }
 
-/// A 500 error page; the details go to the log only.
+/// The page for a failure; the details go to the log only.
+///
+/// # Arguments
+/// * `error` - what failed.
+/// * `brand` - for the page.
+///
+/// # Returns
+/// The busy page (503, "try again") for [`OkfError::Busy`]: a Redis failure
+/// (spec Decision 16) or a database deadlock, as on the rest of the HTTP
+/// API. A 500 page for anything else.
 #[tracing::instrument(level = "trace", skip_all)]
 fn server_error(error: &OkfError, brand: &Brand) -> Response {
     split_event!(
@@ -1166,6 +1271,9 @@ fn server_error(error: &OkfError, brand: &Brand) -> Response {
         { %error, },
         "consent failed"
     );
+    if matches!(error, OkfError::Busy { .. }) {
+        return consent::error_page(StatusCode::SERVICE_UNAVAILABLE, BUSY, brand);
+    }
     consent::error_page(
         StatusCode::INTERNAL_SERVER_ERROR,
         "The server could not complete sign-in.",
@@ -2621,5 +2729,341 @@ mod tests {
                 "{tampered:?}"
             );
         }
+    }
+
+    /// Task 8: pending authorizations in Redis, across two replicas.
+    mod replicas {
+        use std::collections::BTreeMap;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::{Duration, Instant};
+
+        use axum::http::StatusCode;
+
+        use super::super::{consent_change, ConsentForm, BAD_CODE, BUSY, EXPIRED};
+        use super::{oauth_grants, param, signed_in, user_page, READ_MAIN};
+        use crate::db::redis_support::TestRedis;
+        use crate::oauth::state::MAX_FAILED_ATTEMPTS;
+        use crate::oauth::testing::{
+            authorize_query, exchange_for_tokens, form, forwarded, hidden, oauth_replica_pair_on,
+            send, send_on, sign_in_code,
+        };
+        use crate::shared::ephemeral::Keyspace;
+        use crate::shared::hashed;
+        use crate::store::keys::Access;
+
+        /// Every body's bound (`lessons.md`: every wait is bounded).
+        const BOUND: Duration = Duration::from_secs(120);
+
+        /// The sign-in code step's form for `pending`.
+        fn code_form(pending: &str, csrf: &str, code: &str) -> String {
+            form(&[
+                ("pending", pending),
+                ("csrf", csrf),
+                ("action", "code"),
+                ("sign_in_code", code),
+            ])
+        }
+
+        async fn consent_started_on_one_replica_is_approved_on_the_other_and_exchanged_on_the_first(
+            server: TestRedis,
+        ) {
+            let (a, b, _server) = oauth_replica_pair_on(server).await;
+            let code = sign_in_code(&a, Access::Read).await;
+            let (status, _, page) = send(
+                &a,
+                "GET",
+                &format!("/oauth/authorize?{}", authorize_query()),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{page}");
+            let (pending, csrf) = (hidden(&page, "pending"), hidden(&page, "csrf"));
+
+            let (status, _, summary) = send_on(
+                &b,
+                "POST",
+                "/oauth/authorize",
+                Some(code_form(&pending, &csrf, &code)),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "B shows step 2: {summary}");
+            let approval = form(&[
+                ("pending", &pending),
+                ("csrf", &csrf),
+                ("summary", &hidden(&summary, "summary")),
+                ("action", "approve"),
+            ]);
+            let (status, headers, answer) =
+                send_on(&b, "POST", "/oauth/authorize", Some(approval), None).await;
+            let issued = param(&forwarded(status, &headers, &answer), "code").expect("a code");
+
+            // `exchange_for_tokens` asserts the 200.
+            let (access, refresh) = exchange_for_tokens(&a, &issued).await;
+
+            assert!(!access.is_empty() && !refresh.is_empty());
+        }
+
+        async fn a_consent_page_approves_once_across_replicas(server: TestRedis) {
+            let (a, b, _server) = oauth_replica_pair_on(server).await;
+            let alice = signed_in(&a, "alice", &[("main", Access::Read)]).await;
+            // Several rounds, so a nonce that is not spent atomically (both
+            // read it unspent) is caught even if one round serializes.
+            for round in 0..4 {
+                let page = user_page(&a, &alice).await;
+                let posted = super::consent_form(&page, READ_MAIN);
+
+                // `join!` polls both on this task, so the two reads overlap.
+                let (on_a, on_b) = tokio::join!(
+                    send_on(
+                        &a.app,
+                        "POST",
+                        "/oauth/authorize",
+                        Some(posted.clone()),
+                        Some(&alice)
+                    ),
+                    send_on(&b, "POST", "/oauth/authorize", Some(posted), Some(&alice)),
+                );
+
+                let mut statuses = [on_a.0, on_b.0];
+                statuses.sort();
+                assert_eq!(
+                    statuses,
+                    [StatusCode::OK, StatusCode::BAD_REQUEST],
+                    "round {round}: one approves: {} / {}",
+                    on_a.2,
+                    on_b.2
+                );
+                let refused = if on_a.0 == StatusCode::OK {
+                    on_b.2
+                } else {
+                    on_a.2
+                };
+                assert!(refused.contains(EXPIRED), "round {round}: {refused}");
+            }
+            assert_eq!(oauth_grants(&a).await, 4, "one grant per page");
+        }
+
+        async fn wrong_codes_count_across_replicas(server: TestRedis) {
+            let (a, b, _server) = oauth_replica_pair_on(server).await;
+            let (_, _, page) = send(
+                &a,
+                "GET",
+                &format!("/oauth/authorize?{}", authorize_query()),
+                None,
+            )
+            .await;
+            let (pending, csrf) = (hidden(&page, "pending"), hidden(&page, "csrf"));
+
+            for attempt in 1..=MAX_FAILED_ATTEMPTS {
+                let replica = if attempt % 2 == 1 { &b } else { &a.app };
+                let (status, _, answer) = send_on(
+                    replica,
+                    "POST",
+                    "/oauth/authorize",
+                    Some(code_form(&pending, &csrf, "okfsc_wrong")),
+                    None,
+                )
+                .await;
+                if attempt < MAX_FAILED_ATTEMPTS {
+                    assert_eq!(status, StatusCode::OK, "attempt {attempt}: {answer}");
+                    assert!(answer.contains(BAD_CODE), "attempt {attempt}: {answer}");
+                } else {
+                    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+                    assert!(answer.contains("Too many wrong sign-in codes."), "{answer}");
+                }
+            }
+
+            let code = sign_in_code(&a, Access::Read).await;
+            for replica in [&a.app, &b] {
+                let (status, _, answer) = send_on(
+                    replica,
+                    "POST",
+                    "/oauth/authorize",
+                    Some(code_form(&pending, &csrf, &code)),
+                    None,
+                )
+                .await;
+
+                assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+                assert!(answer.contains(EXPIRED), "the request is gone: {answer}");
+            }
+        }
+
+        async fn an_expired_pending_authorization_is_refused(server: TestRedis) {
+            let (a, b, server) = oauth_replica_pair_on(server).await;
+            let code = sign_in_code(&a, Access::Read).await;
+            let (_, _, page) = send(
+                &a,
+                "GET",
+                &format!("/oauth/authorize?{}", authorize_query()),
+                None,
+            )
+            .await;
+            let (pending, csrf) = (hidden(&page, "pending"), hidden(&page, "csrf"));
+            let handle = crate::shared::testing::connect(&server).await;
+            let space = Keyspace::OauthPending.name();
+            // The raw id is never a key name (spec Decision 7): only its hash.
+            let raw: bool = redis::cmd("EXISTS")
+                .arg(handle.key(space, &pending))
+                .query_async(&mut handle.connection())
+                .await
+                .expect("EXISTS");
+            assert!(!raw, "no key is named by the raw pending id");
+            let expiring: bool = redis::cmd("PEXPIRE")
+                .arg(handle.key(space, &hashed(&pending)))
+                .arg(1)
+                .query_async(&mut handle.connection())
+                .await
+                .expect("PEXPIRE");
+            assert!(expiring, "the request is stored under the id's hash");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            for replica in [&b, &a.app] {
+                let (status, _, answer) = send_on(
+                    replica,
+                    "POST",
+                    "/oauth/authorize",
+                    Some(code_form(&pending, &csrf, &code)),
+                    None,
+                )
+                .await;
+
+                assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+                assert!(answer.contains(EXPIRED), "{answer}");
+            }
+        }
+
+        /// The consent POST's change, rerun after another replica wrote
+        /// between its read and its write, still spends the page's nonce
+        /// (`lessons.md`: a closure passed to `update` may run twice).
+        async fn a_lost_race_reruns_the_consent_change_on_a_fresh_copy(server: TestRedis) {
+            let (a, b, _server) = oauth_replica_pair_on(server).await;
+            let alice = signed_in(&a, "alice", &[("main", Access::Read)]).await;
+            let page = user_page(&a, &alice).await;
+            let pending_id = hidden(&page, "pending");
+            let posted = ConsentForm {
+                pending: pending_id.clone(),
+                csrf: hidden(&page, "csrf"),
+                action: "consent".to_string(),
+                sign_in_code: None,
+                summary: Some(hidden(&page, "summary")),
+                default_catalog: None,
+                choices: BTreeMap::new(),
+            };
+            // Two replicas, two Redis handles: A's update, B's interference.
+            let mine = &a.app.oauth().expect("OAuth is on").pending;
+            let theirs = &b.oauth().expect("OAuth is on").pending;
+            let runs = AtomicUsize::new(0);
+            let mut change = consent_change(&posted, Some("fresh-nonce".to_string()));
+
+            let decided = mine
+                .update(&pending_id, Instant::now(), |pending| {
+                    if runs.fetch_add(1, Ordering::SeqCst) == 0 {
+                        // B writes between this run's read and its write.
+                        // `block_in_place` lets this sync closure wait on
+                        // async code (multi-thread runtime only).
+                        tokio::task::block_in_place(|| {
+                            tokio::runtime::Handle::current().block_on(theirs.update(
+                                &pending_id,
+                                Instant::now(),
+                                |pending| pending.query.push_str("&changed=on-b"),
+                            ))
+                        })
+                        .expect("B's write")
+                        .expect("the request is live on B");
+                    }
+                    change(pending)
+                })
+                .await
+                .expect("Redis answers")
+                .expect("the request is live");
+
+            assert_eq!(runs.load(Ordering::SeqCst), 2, "the change ran again");
+            let (snapshot, _, claimed) = decided.expect("the CSRF token matches");
+            assert!(claimed, "the rerun still spends the page's nonce");
+            assert!(snapshot.query.ends_with("&changed=on-b"), "on B's copy");
+            assert_eq!(
+                snapshot.consent.expect("the user path").nonce,
+                "fresh-nonce",
+                "the stored nonce is the replacement"
+            );
+        }
+
+        async fn a_redis_outage_answers_the_busy_page(server: TestRedis) {
+            let (a, b, server) = oauth_replica_pair_on(server).await;
+            let code = sign_in_code(&a, Access::Read).await;
+            let (_, _, page) = send(
+                &a,
+                "GET",
+                &format!("/oauth/authorize?{}", authorize_query()),
+                None,
+            )
+            .await;
+            let (pending, csrf) = (hidden(&page, "pending"), hidden(&page, "csrf"));
+            if server.stop().await.is_none() {
+                eprintln!("skipped: a shared Redis (TEST_REDIS_URL) cannot be stopped");
+                return;
+            }
+
+            let (started, _, start_page) = send(
+                &a,
+                "GET",
+                &format!("/oauth/authorize?{}", authorize_query()),
+                None,
+            )
+            .await;
+            let (stepped, _, step_page) = send_on(
+                &b,
+                "POST",
+                "/oauth/authorize",
+                Some(code_form(&pending, &csrf, &code)),
+                None,
+            )
+            .await;
+
+            assert_eq!(started, StatusCode::SERVICE_UNAVAILABLE, "{start_page}");
+            assert!(start_page.contains(BUSY), "{start_page}");
+            assert_eq!(stepped, StatusCode::SERVICE_UNAVAILABLE, "{step_page}");
+            assert!(step_page.contains(BUSY), "{step_page}");
+        }
+
+        // `macro_rules!` writes a standalone and a cluster `#[tokio::test]`
+        // for every body named (Python: a parametrized test).
+        macro_rules! in_both_modes {
+            ($($name:ident),* $(,)?) => {
+                mod standalone {
+                    $(
+                        #[tokio::test(flavor = "multi_thread")]
+                        async fn $name() {
+                            let server = super::TestRedis::start().await;
+                            tokio::time::timeout(super::BOUND, super::$name(server))
+                                .await
+                                .expect(concat!(stringify!($name), " finished within the bound"));
+                        }
+                    )*
+                }
+                mod cluster {
+                    $(
+                        #[tokio::test(flavor = "multi_thread")]
+                        async fn $name() {
+                            let server = super::TestRedis::start_cluster().await;
+                            tokio::time::timeout(super::BOUND, super::$name(server))
+                                .await
+                                .expect(concat!(stringify!($name), " finished within the bound"));
+                        }
+                    )*
+                }
+            };
+        }
+
+        in_both_modes!(
+            consent_started_on_one_replica_is_approved_on_the_other_and_exchanged_on_the_first,
+            a_consent_page_approves_once_across_replicas,
+            wrong_codes_count_across_replicas,
+            an_expired_pending_authorization_is_refused,
+            a_lost_race_reruns_the_consent_change_on_a_fresh_copy,
+            a_redis_outage_answers_the_busy_page,
+        );
     }
 }

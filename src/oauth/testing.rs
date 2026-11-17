@@ -176,6 +176,23 @@ pub(crate) async fn authorization_code_for(test: &TestApp, query: &str) -> Strin
 /// # Panics
 /// If a step before Approve does not answer as expected.
 pub(crate) async fn approve(test: &TestApp, query: &str) -> (StatusCode, HeaderMap, String) {
+    let approval = approval_form(test, query).await;
+    send(test, "POST", "/oauth/authorize", Some(approval)).await
+}
+
+/// Runs authorize and the sign-in code step, and returns the summary
+/// page's Approve form, unsent (to post it later, or on another replica).
+///
+/// # Arguments
+/// * `test` - the app.
+/// * `query` - the authorize request's query string, without the `?`.
+///
+/// # Returns
+/// The form body.
+///
+/// # Panics
+/// If a step does not answer as expected.
+pub(crate) async fn approval_form(test: &TestApp, query: &str) -> String {
     let code = sign_in_code(test, Access::Read).await;
     let (_, _, page) = send(test, "GET", &format!("/oauth/authorize?{query}"), None).await;
     let (pending, csrf) = (hidden(&page, "pending"), hidden(&page, "csrf"));
@@ -191,18 +208,12 @@ pub(crate) async fn approve(test: &TestApp, query: &str) -> (StatusCode, HeaderM
         ])),
     )
     .await;
-    send(
-        test,
-        "POST",
-        "/oauth/authorize",
-        Some(form(&[
-            ("pending", &pending),
-            ("csrf", &csrf),
-            ("summary", &hidden(&summary, "summary")),
-            ("action", "approve"),
-        ])),
-    )
-    .await
+    form(&[
+        ("pending", &pending),
+        ("csrf", &csrf),
+        ("summary", &hidden(&summary, "summary")),
+        ("action", "approve"),
+    ])
 }
 
 /// [`oauth_app`] as two replicas over one database and one Redis

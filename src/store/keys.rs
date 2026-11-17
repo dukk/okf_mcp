@@ -15,8 +15,22 @@ use crate::store::users;
 /// derived `Ord` (`Read < Write < Admin`, the declaration order) answers
 /// "at least write?".
 // `clap::ValueEnum` lets the command line parse `--access read|write|admin`
-// straight into this enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
+// straight into this enum. `Serialize, Deserialize` (serde) store it in
+// Redis inside a pending authorization's offered ceiling (M16 Task 8);
+// `rename_all = "lowercase"` gives the spellings of [`Access::as_str`].
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    clap::ValueEnum,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
 pub enum Access {
     /// The read tools and export.
     Read,
@@ -1808,6 +1822,20 @@ mod tests {
 
     fn now() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 11, 2, 12, 0, 0).unwrap()
+    }
+
+    /// The JSON spelling (Redis, M16 Task 8) is the stored spelling.
+    #[test]
+    fn access_json_is_its_stored_spelling() {
+        for access in [Access::Read, Access::Write, Access::Admin] {
+            let json = serde_json::to_value(access).expect("serializes");
+
+            assert_eq!(json, serde_json::json!(access.as_str()));
+            assert_eq!(
+                serde_json::from_value::<Access>(json).expect("deserializes"),
+                access
+            );
+        }
     }
 
     fn new_key<'a>(name: &'a str, grants: Grants<'a>, default: Option<&'a str>) -> NewKey<'a> {

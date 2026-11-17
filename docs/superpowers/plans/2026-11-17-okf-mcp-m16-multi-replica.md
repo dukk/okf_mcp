@@ -1923,6 +1923,16 @@ let pending = oauth.pending.update(&form.pending, now, |pending| {
 - Check every other closure against the `lessons.md` rule (Task 2).
 - Write a unit test that drives `Ephemeral::update` through a forced retry (the second test of Step 2 does this). Then revert the `.clone()` and see it fail.
 
+> **Corrected (issue #561, 2026-11-17).** What shipped differs in small ways; read `src/oauth/authorize.rs`.
+> - **The consent page's `server_error` rendered 500 for every error.** It now renders the busy page (503, "The server is busy. Start again from your client in a minute.", the `BUSY` constant, shared with the code insert's page) for `OkfError::Busy`, a Redis failure or a database deadlock; anything else stays 500.
+> - The `:762` closure is built by `consent_change(&form, fresh) -> impl FnMut(&mut PendingAuthorization) -> Option<Decided>` (`move`, owns `fresh`, clones it inside), so a test can drive the real closure through a forced rerun. It also refuses a request whose `failed_attempts` reached `MAX_FAILED_ATTEMPTS`: such an entry is normally removed already, but a failed `remove` (or, in memory, the gap between the count and the remove) must not let one more code be tried. Unreachable otherwise, so the memory tests are unchanged.
+> - Every `remove` is awaited, and a Redis `Err` answers the busy page rather than the page that says the request ended: `ending(oauth, id, brand, answer)` for Deny, the too-many-codes page and `consent_as_user`'s refusals; `finish` returns the busy page before minting when its `remove` fails (the grant stays and can be revoked, as when the code insert fails). The GET's insert answers `Ok(false)` with the existing "Too many sign-ins" page and `Err` with the busy page.
+> - **No per-actor index.** Pending authorizations have no per-actor cap today (only `MAX_PENDING`, kept in memory and dropped in Redis per spec Decision 8, and the per-instance `consent_limit` bucket), so no `Index` is added; the GET leaves nothing behind before sign-in, as before.
+> - The pending id is hashed by `Ephemeral` (`oauth:pending:<hashed(id)>`); the expiry test also checks that no key is named by the raw id.
+> - Tests (`authorize::tests::replicas::{standalone,cluster}::*`): the four above, plus `a_lost_race_reruns_the_consent_change_on_a_fresh_copy` (B writes the entry from inside A's first run, through `block_in_place`; with `fresh.take()` the rerun refuses) and `a_redis_outage_answers_the_busy_page` (the GET and a code step answer 503 with Redis stopped). The approve-once test runs 4 rounds.
+> - Task 7's `a_redis_outage_fails_closed` now walks the consent up to Approve before Redis stops (pending authorizations need Redis too), through a new helper `oauth::testing::approval_form(test, query)`, which `approve` now uses.
+> - Serde: `Access` and `ClientKind` serialize as their `as_str` spellings (`rename_all = "lowercase"`), with tests; `ClientRecord` and a whole `PendingAuthorization` have round-trip tests.
+
 - [ ] **Step 4: Gates, changelog, commit**
 
 `feat: OAuth pending authorizations in shared state (M16 Task 8)`.
