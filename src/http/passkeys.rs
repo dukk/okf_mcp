@@ -12,10 +12,12 @@
 //! and is taken once across all of them (`GETDEL`). A Redis failure answers
 //! 503; nothing falls back to memory.
 //!
-//! No raw console session id is stored, in memory or in Redis: a
-//! registration started from a console session keeps only the session id's
-//! hash, and finishes only in the request whose own session hashes to it
-//! (spec Decision 7).
+//! No raw console session id or setup token is stored, in memory or in
+//! Redis (spec Decision 7). A registration keeps only the hash of what
+//! started it: the console session id, or the emailed setup token. It
+//! finishes only in a request whose own session, or whose presented token,
+//! hashes to that value (compared in constant time), and then uses that
+//! request's own id or token.
 //!
 //! A sign-in checks the assertion and starts the session in one
 //! transaction that holds the user's row and the passkey's row
@@ -37,6 +39,7 @@ use axum::{Extension, Json, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
 use webauthn_rs::prelude::{
     CredentialID, DiscoverableAuthentication, Passkey, PasskeyRegistration, PublicKeyCredential,
     RegisterPublicKeyCredential, Url, Uuid, Webauthn, WebauthnBuilder, WebauthnError,
@@ -148,8 +151,7 @@ impl Passkeys {
     }
 }
 
-/// A ceremony in progress. No `Debug`: it holds the challenges and, for a
-/// setup link, the emailed token. `Serialize`/`Deserialize` (webauthn-rs'
+/// A ceremony in progress. No `Debug`: it holds the challenges. `Serialize`/`Deserialize` (webauthn-rs'
 /// `danger-allow-state-serialisation`) let the Redis store keep it as JSON,
 /// server-side; it is never sent to a client, logged or put in a span.
 #[derive(Serialize, Deserialize)]
@@ -182,8 +184,10 @@ struct Pending {
 /// Who asked for a registration.
 #[derive(Serialize, Deserialize)]
 enum RegisterVia {
-    /// The setup page, with the emailed token (used at finish).
-    Setup { token: String },
+    /// The setup page. Only the emailed token's SHA-256 ([`keys::hash`], the
+    /// form Postgres stores) is kept, never the token (spec Decision 7): the
+    /// finish must present the token again, and redeems the presented one.
+    Setup { token_hash: [u8; 32] },
     /// A signed-in session, whose other sessions end unless kept. Only the
     /// session id's hash ([`session_hash`]) is kept, never the id (spec
     /// Decision 7): the finish compares it with the finishing request's own
@@ -641,10 +645,22 @@ async fn setup_start(
         email_tokens::peek(app.pool(), &body.token, Purpose::Setup, app.clock().now()).await?;
     let pending = Pending {
         name,
-        via: RegisterVia::Setup { token: body.token },
+        via: RegisterVia::Setup {
+            token_hash: keys::hash(&body.token),
+        },
         return_to: safe_return_to(body.return_to.as_deref()),
     };
     Ok(begin_registration(&app, passkeys, &parts.headers, &user, pending).await?)
+}
+
+/// `POST /auth/passkey/setup/finish`'s body: the setup token again (the
+/// ceremony keeps only its hash) and the new credential. No `Debug`: it
+/// holds the token.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetupFinish {
+    token: String,
+    credential: RegisterPublicKeyCredential,
 }
 
 /// `POST /auth/passkey/setup/finish`: stores the passkey, uses the link and
@@ -653,14 +669,14 @@ async fn setup_start(
 /// `{"redirect": <return_to>}`.
 ///
 /// # Errors
-/// 403 from another site; 410 for an expired ceremony or a used link; 422
-/// for a credential that does not verify; 409 for a passkey already
-/// registered.
+/// 403 from another site; 410 for an expired ceremony, a used link, or a
+/// token other than the one the ceremony started with; 422 for a credential
+/// that does not verify; 409 for a passkey already registered.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn setup_finish(
     State(app): State<Arc<App>>,
     parts: Parts,
-    Json(credential): Json<RegisterPublicKeyCredential>,
+    Json(body): Json<SetupFinish>,
 ) -> Result<Response, AppError> {
     let passkeys = enabled(&app)?;
     if let Some(refusal) = screen(&app, &parts, false) {
@@ -671,12 +687,20 @@ async fn setup_finish(
         pending,
         user_id,
         clear: mut headers,
-    } = finish_registration(&app, passkeys, &parts.headers, &credential).await?;
-    let RegisterVia::Setup { token } = pending.via else {
+    } = finish_registration(&app, passkeys, &parts.headers, &body.credential).await?;
+    let RegisterVia::Setup { token_hash } = pending.via else {
         return Err(expired().into());
     };
+    // The ceremony holds only the token's hash: the presented token must hash
+    // to it (constant time), and only the presented token is redeemed below.
+    if !keys::matches(&token_hash, &body.token) {
+        return Err(OkfError::Gone {
+            reason: LINK_EXPIRED.to_string(),
+        }
+        .into());
+    }
     let set_up = SetUp {
-        token: &token,
+        token: &body.token,
         user_id: &user_id,
         passkey: &passkey,
         name: &pending.name,
@@ -1004,8 +1028,15 @@ async fn register_finish(
         return Err(expired().into());
     };
     // The ceremony holds only its session's hash: this request's own session
-    // must hash to it, and only this request's own id is used below.
-    if owner != user_id || started_in != session_hash(&session.id) {
+    // must hash to it (constant time: `ct_eq` gives a `Choice`, which
+    // `bool::from` reads once the comparison is done), and only this
+    // request's own id is used below.
+    let same_session = bool::from(
+        started_in
+            .as_bytes()
+            .ct_eq(session_hash(&session.id).as_bytes()),
+    );
+    if owner != user_id || !same_session {
         return Err(OkfError::Forbidden {
             reason: "this passkey request belongs to another session".to_string(),
         }
@@ -1122,6 +1153,18 @@ mod tests {
         soft: &mut SoftPasskey,
         token: &str,
     ) -> Reply {
+        let credential = setup_registration(start_on, browser, soft, token).await;
+        finish_setup(finish_on, browser, token, credential).await
+    }
+
+    /// Starts a setup-link registration on `start_on` and has `soft` answer
+    /// it; the credential is returned unsent.
+    async fn setup_registration(
+        start_on: &Arc<App>,
+        browser: &mut Browser,
+        soft: &mut SoftPasskey,
+        token: &str,
+    ) -> serde_json::Value {
         let body = json!({ "token": token, "name": "Laptop" });
         let start = browser
             .send_to(
@@ -1147,13 +1190,23 @@ mod tests {
         let credential = soft
             .do_registration(origin(), challenge)
             .expect("the authenticator registers");
-        let credential = serde_json::to_value(&credential).expect("the credential as JSON");
+        serde_json::to_value(&credential).expect("the credential as JSON")
+    }
+
+    /// Finishes a setup-link registration on `app`, presenting `token` with
+    /// the credential, as `passkey.js` does.
+    async fn finish_setup(
+        app: &Arc<App>,
+        browser: &mut Browser,
+        token: &str,
+        credential: serde_json::Value,
+    ) -> Reply {
         browser
             .send_to(
-                finish_on,
+                app,
                 "POST",
                 "/auth/passkey/setup/finish",
-                Payload::Json(credential),
+                Payload::Json(json!({ "token": token, "credential": credential })),
             )
             .await
     }
@@ -1480,7 +1533,7 @@ mod tests {
                 &test,
                 "POST",
                 "/auth/passkey/setup/finish",
-                Payload::Json(credential),
+                Payload::Json(json!({ "token": "any", "credential": credential })),
             )
             .await;
         assert_eq!(crossed.status, StatusCode::GONE, "{}", crossed.text());
@@ -1533,7 +1586,10 @@ mod tests {
                 &test,
                 "POST",
                 "/auth/passkey/setup/finish",
-                Payload::Json(serde_json::to_value(&credential).expect("json")),
+                Payload::Json(json!({
+                    "token": token,
+                    "credential": serde_json::to_value(&credential).expect("json"),
+                })),
             )
             .await;
 
@@ -1629,7 +1685,12 @@ mod tests {
                 json!({ "token": token, "name": "Laptop" }),
             )
             .await,
-            cross_site_post(&test, "/auth/passkey/setup/finish", credential).await,
+            cross_site_post(
+                &test,
+                "/auth/passkey/setup/finish",
+                json!({ "token": token, "credential": credential }),
+            )
+            .await,
             cross_site_post(&test, "/auth/passkey/signin/start", json!({})).await,
             cross_site_post(&test, "/auth/passkey/signin/finish", assertion).await,
         ];
@@ -2676,6 +2737,100 @@ mod tests {
         );
     }
 
+    async fn no_raw_setup_token_reaches_redis(redis: crate::db::redis_support::TestRedis) {
+        let pair = replicas(redis).await;
+        let alice = alice_on_both(&pair).await;
+        let token = setup_token(&pair.a, &alice).await;
+        let mut browser = Browser::default();
+
+        let credential = setup_registration(
+            &pair.a.app,
+            &mut browser,
+            &mut SoftPasskey::new(true),
+            &token,
+        )
+        .await;
+
+        let contents = redis_contents(&pair.a.app).await;
+        assert_eq!(
+            keys_of(&contents, &pair.a.app, "passkey:ceremony").len(),
+            1,
+            "{contents:?}"
+        );
+        for (name, value) in &contents {
+            assert!(!name.contains(&token), "a key holds the setup token");
+            assert!(!value.contains(&token), "a value holds the setup token");
+        }
+        // The hash it keeps still finishes, on the other replica.
+        let done = finish_setup(&pair.b, &mut browser, &token, credential).await;
+        assert_eq!(done.status, StatusCode::OK, "{}", done.text());
+    }
+
+    /// A setup-link registration finishes only with the token it started
+    /// with: a finish presenting the user's newer link, or another user's,
+    /// is refused, stores nothing and leaves that link usable.
+    async fn a_setup_finish_presenting_another_token_is_refused_on(
+        test: &TestApp,
+        start_on: &Arc<App>,
+        finish_on: &Arc<App>,
+    ) {
+        let alice = user_with_password(test, "alice", "alice@example.com", None).await;
+        let bob = user_with_password(test, "bob", "bob@example.com", None).await;
+        finish_on.poll().await.expect("poll the finishing app");
+        let mut soft = SoftPasskey::new(true);
+        let old_link = setup_token(test, &alice).await;
+        let mut browser = Browser::default();
+        let credential = setup_registration(start_on, &mut browser, &mut soft, &old_link).await;
+        // The link is sent again meanwhile, which deletes the old one.
+        let new_link = setup_token(test, &alice).await;
+        let bobs_link = setup_token(test, &bob).await;
+        let mut bobs_browser = Browser::default();
+        let bobs_credential =
+            setup_registration(start_on, &mut bobs_browser, &mut soft, &bobs_link).await;
+
+        let newer = finish_setup(finish_on, &mut browser, &new_link, credential).await;
+        let crossed = finish_setup(finish_on, &mut bobs_browser, &old_link, bobs_credential).await;
+
+        for (refused, what) in [
+            (&newer, "the newer link"),
+            (&crossed, "another user's link"),
+        ] {
+            assert_eq!(
+                refused.status,
+                StatusCode::GONE,
+                "{what}: {}",
+                refused.text()
+            );
+            assert_eq!(refused.json()["message"], LINK_EXPIRED, "{what}");
+        }
+        for user in [&alice, &bob] {
+            let stored = passkey_rows::list(test.app.pool(), &user.id)
+                .await
+                .expect("list");
+            assert!(stored.is_empty(), "no passkey stored");
+            assert_eq!(sessions_of(test, user).await, 0, "no session");
+        }
+        for link in [&new_link, &bobs_link] {
+            let usable =
+                email_tokens::peek(test.app.pool(), link, Purpose::Setup, Utc::now()).await;
+            assert!(usable.is_ok(), "the presented link is untouched");
+        }
+    }
+
+    async fn a_setup_finish_presenting_another_token_is_refused(
+        redis: crate::db::redis_support::TestRedis,
+    ) {
+        let pair = replicas(redis).await;
+        a_setup_finish_presenting_another_token_is_refused_on(&pair.a, &pair.a.app, &pair.b).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_setup_finish_presenting_another_token_is_refused_in_memory() {
+        let test = login_app().await;
+        let app = Arc::clone(&test.app);
+        a_setup_finish_presenting_another_token_is_refused_on(&test, &app, &app).await;
+    }
+
     async fn one_sessions_registrations_hold_one_ceremony_across_replicas(
         redis: crate::db::redis_support::TestRedis,
     ) {
@@ -2823,6 +2978,8 @@ mod tests {
         a_ceremony_cannot_be_finished_twice_across_replicas,
         a_session_registration_finishes_only_in_the_session_that_started_it,
         no_raw_session_id_reaches_redis,
+        no_raw_setup_token_reaches_redis,
+        a_setup_finish_presenting_another_token_is_refused,
         one_sessions_registrations_hold_one_ceremony_across_replicas,
         a_redis_outage_fails_passkey_steps_closed,
     );

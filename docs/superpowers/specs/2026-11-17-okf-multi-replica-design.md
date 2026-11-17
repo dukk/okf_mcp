@@ -141,6 +141,11 @@ The last two are not part of this milestone.
    as in memory today: PKCE verifiers, nonces, CSRF tokens, WebAuthn
    state, but never a raw console session id. So Redis is a secret store, with the same trust as Postgres:
    password-protected, private network, TLS where it crosses hosts.
+   > **Corrected (issue #563, 2026-11-17).** The passkey setup-link token
+   > is not stored either: a setup registration keeps only the token's
+   > SHA-256 (the form Postgres keeps), and the finish presents the token
+   > again, which must hash to it (constant time) and is the one redeemed.
+   > So reading Redis does not give anyone a setup link.
 8. **The global caps go; the per-actor caps stay.**
    - `MAX_PENDING`, `MAX_AUTHORIZATION_CODES`, `MAX_FLOWS` and
      `MAX_CEREMONIES` protect one process's memory, and they stay in the
