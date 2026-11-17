@@ -1581,6 +1581,8 @@ export function named(label, slug) {
 - [ ] **Step 2: Implement.**
   - The listing SELECT also reads `ap.display_name`. Email is not snapshotted, so the person label is `user_label(&display_name, None)` (an email fallback is unavailable in audit, by design).
   - The view gains `person_label: Option<String>` and `target_label: Option<String>`.
+
+    > **Corrected (issue #610).** The fields are on the nested objects: `actor.person_label` (`ActorView::Known`) and `target.person_label` and `target.target_label` (`TargetView`), next to the `person` and `name` they label, so every existing field keeps its shape. `audit::list` and `audit::export_lines` take a `&Labels` (the routes pass `app.keys().labels()`; `okf-mcp audit` calls `Labels::load`). `target_label` is set for `catalog` targets and shared `team` targets only (`null` for a personal team). The export gains the fields inside its JSON objects rather than a trailing column, since it is JSON Lines.
   - In `audit.js:34-58`, show `person_label ?? person ?? label` and `target_label ?? target_name`.
   - The filters (`:119-124`) keep matching slugs.
   - The export format keeps its columns and appends `person_label` last. If the export has a fixed schema test, update it.

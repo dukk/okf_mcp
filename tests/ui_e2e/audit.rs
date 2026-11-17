@@ -58,12 +58,15 @@ async fn an_admin_filters_the_log_by_action_and_exports_it() {
         ui.open("/users");
         ui.click("#user-new");
         ui.fill("#user-form input[name=name]", "alice");
+        ui.fill("#user-form input[name=display_name]", "Alice Example");
         ui.click("#user-form button[type=submit]");
         ui.wait_visible("[data-test=user-alice]");
         ui.open("/audit");
         ui.wait_text("#audit-table", "user.created");
         ui.select("#audit-action", "user.created");
-        ui.wait_text("#audit-table", "alice");
+        // The person column shows the label, not the slug; the link keeps
+        // the slug, which the filters match.
+        ui.wait_text("#audit-table", "Alice Example");
         ui.wait_text_gone("#audit-table", "catalog.created");
         // The user links to its drawer, which lists its sign-ins.
         ui.click("#audit-table a[href='#/users/detail/alice']");
@@ -88,8 +91,9 @@ async fn an_admin_filters_the_log_by_action_and_exports_it() {
         assert!(
             entries
                 .iter()
-                .any(|entry| entry["target"]["person"] == "alice"),
-            "alice's user.created is not in the export: {text}"
+                .any(|entry| entry["target"]["person"] == "alice"
+                    && entry["target"]["person_label"] == "Alice Example"),
+            "alice's user.created is not in the export, labelled: {text}"
         );
         ui.wait_hidden("#audit-error");
     })
@@ -105,18 +109,18 @@ async fn a_user_named_unassigned_opens_its_own_drawer_from_the_log() {
         &admin,
         "POST",
         "/api/v1/users",
-        json!({"name": "unassigned"}),
+        json!({"name": "unassigned", "display_name": "Unassigned Person"}),
     )
     .await;
     drive(server.base.clone(), move |ui| {
         ui.login(&admin);
         ui.open("/audit");
         ui.select("#audit-action", "user.created");
-        ui.wait_text("#audit-table", "user unassigned");
-        // The link by its text, whatever route it names.
+        ui.wait_text("#audit-table", "user Unassigned Person");
+        // The link by its text (the label), whatever route it names.
         let clicked = ui.eval(
             "() => { const link = [...document.querySelectorAll('#audit-table a')] \
-             .find(a => a.textContent === 'unassigned'); link?.click(); return !!link; }",
+             .find(a => a.textContent === 'Unassigned Person'); link?.click(); return !!link; }",
             Value::Null,
         );
         assert_eq!(clicked, json!(true), "no link to the user unassigned");
@@ -125,6 +129,33 @@ async fn a_user_named_unassigned_opens_its_own_drawer_from_the_log() {
         ui.wait_visible("#users-table");
         // Not the view of what has no user or owner.
         assert_eq!(ui.text("#unassigned"), "");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_label_with_markup_is_drawn_as_text() {
+    let server = server().await;
+    let admin = server.key("console-admin", Access::Admin, &[], None).await;
+    let hostile = "<img src=x id=pwned>";
+    call(
+        &server,
+        &admin,
+        "POST",
+        "/api/v1/users",
+        json!({"name": "mallory", "display_name": hostile}),
+    )
+    .await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/audit");
+        ui.select("#audit-action", "user.created");
+        ui.wait_text("#audit-table", hostile);
+        let injected = ui.eval(
+            "() => document.querySelectorAll('#audit-table img, #pwned').length",
+            Value::Null,
+        );
+        assert_eq!(injected, json!(0), "the label became markup");
     })
     .await;
 }
