@@ -23,14 +23,30 @@ export function picker(attrs, names, selected = null, labelOf = null) {
 
 // The visible text of each option. Labels are not unique (display names
 // repeat, and every unnamed user or team shares one placeholder), so an
-// option whose label another option shares gets its slug appended, "Unnamed
-// user (alice)"; a label that is alone stays as it is.
+// option whose text another option shares gets its slug appended, "Unnamed
+// user (alice)"; a text that is alone stays as it is. Uniqueness is checked
+// on the final texts, not the labels: a display name may itself read
+// "Unnamed user (alice)", so the check repeats until no two texts match.
+// It ends because a suffixed text ends in its own slug, and slugs differ:
+// after a round, the only texts still shared are a suffixed one and a
+// plain one, and the plain one is suffixed next.
 function optionTexts(names, labelOf) {
     if (!labelOf) return names;
-    const labels = names.map(labelOf);
-    const seen = new Map();
-    for (const label of labels) seen.set(label, (seen.get(label) ?? 0) + 1);
-    return labels.map((label, index) => (seen.get(label) > 1 ? `${label} (${names[index]})` : label));
+    const texts = names.map(labelOf);
+    const suffixed = names.map(() => false);
+    for (let changed = true; changed;) {
+        changed = false;
+        const seen = new Map();
+        for (const text of texts) seen.set(text, (seen.get(text) ?? 0) + 1);
+        texts.forEach((text, index) => {
+            if (seen.get(text) > 1 && !suffixed[index]) {
+                texts[index] = `${text} (${names[index]})`;
+                suffixed[index] = true;
+                changed = true;
+            }
+        });
+    }
+    return texts;
 }
 
 // A picker plus a button that calls `assign(name)`: the Assign or Change user

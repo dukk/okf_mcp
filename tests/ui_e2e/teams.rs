@@ -758,9 +758,14 @@ async fn the_teams_table_and_drawer_show_labels_and_a_shared_team_is_renamed() {
 async fn pickers_tell_users_with_the_same_label_apart_and_keep_slugs_as_values() {
     let server = server().await;
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
-    // Two users share the default label, a third is named; every one is a
-    // candidate in the New team owner picker.
-    for (name, display) in [("alice", ""), ("bob", ""), ("carol", "Carol Example")] {
+    // Two users share the default label, a third is named like alice's suffixed
+    // text, a fourth is plain; each is a candidate in the New team owner picker.
+    for (name, display) in [
+        ("alice", ""),
+        ("bob", ""),
+        ("carol", "Unnamed user (alice)"),
+        ("dave", "Dave Example"),
+    ] {
         let user = NewUser {
             name,
             display_name: &okf_mcp::labels::DisplayName::parse(display).expect("a name"),
@@ -792,7 +797,9 @@ async fn pickers_tell_users_with_the_same_label_apart_and_keep_slugs_as_values()
         // The slugs stay the values; colliding labels carry their slug.
         assert_eq!(text("alice"), "Unnamed user (alice)");
         assert_eq!(text("bob"), "Unnamed user (bob)");
-        assert_eq!(text("carol"), "Carol Example");
+        // A display name that reads like a suffixed label is told apart too.
+        assert_eq!(text("carol"), "Unnamed user (alice) (carol)");
+        assert_eq!(text("dave"), "Dave Example");
         let mut texts: Vec<&String> = options.iter().map(|(_, text)| text).collect();
         texts.sort();
         texts.dedup();
