@@ -459,7 +459,7 @@ back to memory, because that would split the state between replicas.
 | What | The answer |
 |---|---|
 | An MCP request (the binding check, a restore, `initialize`'s binding, a `DELETE`) | 503. The client retries, or initializes again |
-| The consent page and its form | 503, the busy page ("The server is busy. Start again from your client in a minute.") |
+| The consent page and its form | 503, the busy page ("The server is busy. Start again from your client in a minute."), on a failed read, update or removal alike. A Deny or Approve whose removal of the pending entry fails answers 503: no denial is forwarded and no code is minted |
 | The token endpoint | 503 `server_error` (body "internal error"). If Redis fails after a code was marked used, the token family is revoked and the client starts again |
 | An OIDC start or callback, or a link | 503 ("Sign-in is unavailable right now; try again shortly." on the callback). The flow cookie is kept, so a reload once Redis answers can finish the flow |
 | A passkey step | 503 |
