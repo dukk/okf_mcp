@@ -248,7 +248,28 @@ pub(crate) async fn replica_pair(
     catalogs_and_files: &[(&str, &[(&str, &str)])],
     config: Config,
 ) -> (TestApp, Arc<App>, TestRedis) {
-    let redis = TestRedis::start().await;
+    replica_pair_on(catalogs_and_files, config, TestRedis::start().await).await
+}
+
+/// [`replica_pair`] over a Redis the test already started (a cluster, for
+/// one).
+///
+/// # Arguments
+/// * `catalogs_and_files` - `(catalog name, its files)` pairs, in creation order.
+/// * `config` - the server's settings (its `[redis]` and `poll_interval` are
+///   replaced).
+/// * `redis` - the server both apps connect to.
+///
+/// # Returns
+/// As [`replica_pair`].
+///
+/// # Panics
+/// If the database, Redis or a load fails: a broken test setup.
+pub(crate) async fn replica_pair_on(
+    catalogs_and_files: &[(&str, &[(&str, &str)])],
+    config: Config,
+    redis: TestRedis,
+) -> (TestApp, Arc<App>, TestRedis) {
     let mut config = redis_config(config, &redis);
     config.poll_interval = std::time::Duration::from_secs(3600);
     let db = seed(catalogs_and_files, Utc::now()).await;
