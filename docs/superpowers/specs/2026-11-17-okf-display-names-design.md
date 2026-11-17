@@ -185,10 +185,13 @@ moves to a muted secondary "ID: m-7b1e…" line or tooltip.
 
 ### Catalog content and exports
 
-- A new catalog's root `index.md` heading is `# <catalog label>`, falling
-  back to `# Catalog` when the catalog has neither display name nor
-  description. Existing catalogs keep their heading: content is never
-  rewritten after the fact.
+- A new catalog's root `index.md` heading is `# <display name>`, falling
+  back to `# Catalog` when the catalog has no display name. Existing
+  catalogs keep their heading: content is never rewritten after the fact.
+
+  > **Corrected (issue #606).** The first draft used the catalog label,
+  > which falls back to the description. The description is already the
+  > paragraph beneath the heading, so the heading would have repeated it.
 - The export filename becomes `<slugified label>-<slug>.tar.gz`, still
   unique and now recognisable.
 

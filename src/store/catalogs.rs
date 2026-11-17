@@ -7,6 +7,7 @@ use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::error::OkfError;
 use crate::labels::DisplayName;
+use crate::okf::ops::replay::ROOT_HEADING;
 use crate::okf::ops::starter_files;
 use crate::okf::snapshot::Snapshot;
 use crate::okf::workspace::{MemWorkspace, StoredFile};
@@ -183,7 +184,8 @@ pub async fn create(
 ///
 /// # Arguments
 /// * `conn` - the creating transaction's connection.
-/// * `catalog` - the new row (its name and description fill the index).
+/// * `catalog` - the new row (its display name, else "Catalog", is the
+///   index's heading, and its description the paragraph).
 /// * `actor` - recorded as `updated_by` and the revisions' `actor`.
 /// * `now` - the creation time.
 ///
@@ -196,7 +198,12 @@ async fn write_starter_files(
     actor: &str,
     now: DateTime<Utc>,
 ) -> Result<(), OkfError> {
-    let files = starter_files(&catalog.name, &catalog.description, now);
+    let heading = if catalog.display_name.is_empty() {
+        ROOT_HEADING
+    } else {
+        &catalog.display_name
+    };
+    let files = starter_files(heading, &catalog.description, now);
     // The derived columns (kind, title) come from a snapshot, as an
     // import's do; two small files, so building it inline is cheap.
     let workspace =
@@ -1238,6 +1245,42 @@ pub(crate) mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn a_new_catalogs_heading_is_its_display_name_else_catalog() {
+        let db = test_db().await;
+        let named = DisplayName::parse("Work notes").unwrap();
+        let mut headings = Vec::new();
+        for (name, display_name) in [("named", &named), ("plain", &DisplayName::default())] {
+            let catalog = create(
+                &db.pool,
+                &NewCatalog {
+                    name,
+                    display_name,
+                    description: "About it.",
+                    owner_team: TEST_TEAM,
+                },
+                &AuditActor::cli(),
+                now(),
+            )
+            .await
+            .unwrap();
+            let rows = documents::published(&db.pool, catalog.id).await.unwrap();
+            let index = rows.iter().find(|row| row.path == "index.md").unwrap();
+            headings.push(String::from_utf8(index.content.clone()).unwrap());
+        }
+
+        assert!(
+            headings[0].contains("# Work notes\n\nAbout it.\n"),
+            "{}",
+            headings[0]
+        );
+        assert!(
+            headings[1].contains("# Catalog\n\nAbout it.\n"),
+            "{}",
+            headings[1]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_new_catalog_holds_its_starter_files_at_generation_0() {
         let db = test_db().await;
 
@@ -1260,7 +1303,7 @@ pub(crate) mod tests {
             .iter()
             .map(|row| (row.path.as_str(), row.content.as_slice(), row.revision))
             .collect();
-        let starter = starter_files("pg", "pgrace's catalog", now());
+        let starter = starter_files("Catalog", "pgrace's catalog", now());
         assert_eq!(
             stored,
             [
@@ -1268,7 +1311,7 @@ pub(crate) mod tests {
                 ("log.md", starter[1].1.as_bytes(), 1),
             ]
         );
-        assert!(starter[0].1.contains("# pg\n\npgrace's catalog\n"));
+        assert!(starter[0].1.contains("# Catalog\n\npgrace's catalog\n"));
         assert_eq!(pg.generation, 0);
         // The derived columns are filled in, as an import's are.
         let kinds: Vec<(String, Option<String>)> =
