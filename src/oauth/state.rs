@@ -1,8 +1,11 @@
-//! What the authorization server keeps in memory between requests (spec
-//! "In memory"): pending authorizations (a consent page in progress) and
-//! authorization codes (minted on Approve, exchanged once at `/oauth/token`).
+//! What the authorization server keeps between requests (spec "In
+//! memory"): pending authorizations (a consent page in progress) and
+//! authorization codes (minted on Approve, exchanged once at `/oauth/token`;
+//! kept in Redis with `[redis]`).
 
 use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
 
 use crate::store::ceiling::Ceiling;
 use crate::store::oauth::clients::ClientRecord;
@@ -142,8 +145,12 @@ impl std::fmt::Debug for UserConsent {
 }
 
 /// An authorization code's binding, keyed in `OAuth::codes` by the hex
-/// SHA-256 of the `okfac_` code (the code itself is never stored).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// SHA-256 of the `okfac_` code (the code itself is never stored). With
+/// `[redis]` it is stored there as JSON, so every replica can exchange it
+/// (spec Decision 5); it holds no secret, only bindings and flags.
+// `Serialize, Deserialize` (serde) write the JSON encoding and decoding,
+// like a Python dataclass with `asdict` and a matching constructor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorizationCode {
     /// The grant the approval created.
     pub grant_id: String,
@@ -157,7 +164,7 @@ pub struct AuthorizationCode {
     pub resource: String,
     /// The token family its tokens join.
     pub family_id: String,
-    /// Whether it was exchanged. A used code stays in the map until it
+    /// Whether it was exchanged. A used code stays in the store until it
     /// expires, so presenting it again is seen as a replay (RFC 6749
     /// section 4.1.2: Task 6 then revokes its family).
     pub used: bool,

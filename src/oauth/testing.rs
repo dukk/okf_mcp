@@ -15,7 +15,7 @@ use crate::db::redis_support::TestRedis;
 use crate::http::api::testing::{Browser, MAIN};
 use crate::http::console_session::COOKIE;
 use crate::http::router;
-use crate::mcp::testing::{app_with, app_with_metrics, replica_pair, TestApp};
+use crate::mcp::testing::{app_with, app_with_metrics, replica_pair_on, TestApp};
 use crate::store::keys::{Access, Grants};
 use crate::store::oauth::clients::ClientKind;
 use crate::store::oauth::codes::{self as code_rows, insert_test_client, NewSignInCode};
@@ -154,6 +154,28 @@ pub(crate) async fn authorization_code(test: &TestApp) -> String {
 /// # Panics
 /// If a step does not answer as expected.
 pub(crate) async fn authorization_code_for(test: &TestApp, query: &str) -> String {
+    let (status, headers, page) = approve(test, query).await;
+    forwarded(status, &headers, &page)
+        .query_pairs()
+        .find(|(key, _)| key == "code")
+        .map(|(_, value)| value.into_owned())
+        .expect("a code")
+}
+
+/// Runs authorize and consent on the sign-in code path up to Approve, and
+/// returns Approve's answer unread (a forwarding page with the code, or an
+/// error page).
+///
+/// # Arguments
+/// * `test` - the app.
+/// * `query` - the authorize request's query string, without the `?`.
+///
+/// # Returns
+/// Approve's status, headers and body.
+///
+/// # Panics
+/// If a step before Approve does not answer as expected.
+pub(crate) async fn approve(test: &TestApp, query: &str) -> (StatusCode, HeaderMap, String) {
     let code = sign_in_code(test, Access::Read).await;
     let (_, _, page) = send(test, "GET", &format!("/oauth/authorize?{query}"), None).await;
     let (pending, csrf) = (hidden(&page, "pending"), hidden(&page, "csrf"));
@@ -169,7 +191,7 @@ pub(crate) async fn authorization_code_for(test: &TestApp, query: &str) -> Strin
         ])),
     )
     .await;
-    let (status, headers, page) = send(
+    send(
         test,
         "POST",
         "/oauth/authorize",
@@ -180,12 +202,7 @@ pub(crate) async fn authorization_code_for(test: &TestApp, query: &str) -> Strin
             ("action", "approve"),
         ])),
     )
-    .await;
-    forwarded(status, &headers, &page)
-        .query_pairs()
-        .find(|(key, _)| key == "code")
-        .map(|(_, value)| value.into_owned())
-        .expect("a code")
+    .await
 }
 
 /// [`oauth_app`] as two replicas over one database and one Redis
@@ -198,9 +215,25 @@ pub(crate) async fn authorization_code_for(test: &TestApp, query: &str) -> Strin
 /// # Panics
 /// If the database, Redis or the insert fails: a broken test setup.
 pub(crate) async fn oauth_replica_pair() -> (TestApp, Arc<App>, TestRedis) {
-    let (first, second, redis) = replica_pair(
+    oauth_replica_pair_on(TestRedis::start().await).await
+}
+
+/// [`oauth_replica_pair`] over a Redis the test already started (a
+/// cluster, for one).
+///
+/// # Arguments
+/// * `redis` - the server both replicas connect to.
+///
+/// # Returns
+/// As [`oauth_replica_pair`].
+///
+/// # Panics
+/// As [`oauth_replica_pair`].
+pub(crate) async fn oauth_replica_pair_on(redis: TestRedis) -> (TestApp, Arc<App>, TestRedis) {
+    let (first, second, redis) = replica_pair_on(
         &[("main", MAIN), ("other", &[("index.md", "# Other\n")])],
         oauth_config(PUBLIC_URL),
+        redis,
     )
     .await;
     insert_test_client(first.app.pool(), CLIENT_ID, ClientKind::Dcr, REDIRECT_URI).await;
@@ -350,6 +383,31 @@ pub(crate) async fn send_as(
     body: Option<String>,
     session: Option<&Browser>,
 ) -> (StatusCode, HeaderMap, String) {
+    send_on(&test.app, method, uri, body, session).await
+}
+
+/// As [`send_as`], to any app (the second of [`oauth_replica_pair`], for
+/// one).
+///
+/// # Arguments
+/// * `app` - the app whose router answers.
+/// * `method` - `GET` or `POST`.
+/// * `uri` - the path and query.
+/// * `body` - a form body, if any.
+/// * `session` - a signed-in browser whose session cookie to send, if any.
+///
+/// # Returns
+/// The status, the headers and the body as text.
+///
+/// # Panics
+/// If the request cannot be built or the body cannot be read.
+pub(crate) async fn send_on(
+    app: &Arc<App>,
+    method: &str,
+    uri: &str,
+    body: Option<String>,
+    session: Option<&Browser>,
+) -> (StatusCode, HeaderMap, String) {
     let mut request = Request::builder().method(method).uri(uri);
     if body.is_some() {
         request = request.header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
@@ -362,7 +420,7 @@ pub(crate) async fn send_as(
     let request = request
         .body(body.map_or_else(Body::empty, Body::from))
         .expect("request");
-    let response = router(Arc::clone(&test.app), &CancellationToken::new())
+    let response = router(Arc::clone(app), &CancellationToken::new())
         .oneshot(request)
         .await
         .expect("response");

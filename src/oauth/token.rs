@@ -365,18 +365,27 @@ async fn exchange_code(
     // the map as of the same instant, so the code expiring meanwhile does not
     // hide a replay.
     let started = Instant::now();
-    // Marking the code used under the map's lock makes the exchange
-    // single-use even for two racing requests. A used code stays in the map
-    // until it expires, so a replay is recognized and revokes its family.
-    let taken = oauth.codes.update(&key, started, |stored| {
-        if stored.used {
-            stored.replayed = true;
-            Err(stored.family_id.clone())
-        } else {
-            stored.used = true;
-            Ok(stored.clone())
-        }
-    });
+    // Marking the code used atomically makes the exchange single-use even
+    // for two racing requests, on one replica (the map's lock) or on two
+    // (Redis's compare-and-set: only one write of `used` from `false` lands,
+    // and the loser reruns this closure on the stored copy, sees `used` and
+    // is the replay). A used code stays until it expires, so a replay is
+    // recognized and revokes its family. The closure reads and changes only
+    // `stored`, so a rerun on a fresh copy answers the same (`lessons.md`).
+    // A Redis failure (`?`) answers 503 and never falls back to memory
+    // (spec Decision 16): the code is neither spent nor exchanged.
+    let taken = oauth
+        .codes
+        .update(&key, started, |stored| {
+            if stored.used {
+                stored.replayed = true;
+                Err(stored.family_id.clone())
+            } else {
+                stored.used = true;
+                Ok(stored.clone())
+            }
+        })
+        .await?;
     let stored: AuthorizationCode = match taken {
         None => {
             return Err(OAuthError::InvalidGrant(
@@ -428,15 +437,16 @@ async fn exchange_code(
     tx.commit().await.map_err(OkfError::from)?;
     // The lock covers a revocation that starts while this transaction
     // holds it. A replay can also revoke the family before this exchange
-    // took the lock, before these tokens existed. The flag is set under the map's
-    // lock before that revocation, so either this sees it, or the replay's
-    // revocation ran after the commit and caught these tokens. A code gone
-    // from the map (pruned once expired) cannot vouch for itself: revoke.
-    let replayed = oauth
+    // took the lock, before these tokens existed. The flag is set atomically
+    // (the map's lock, or Redis's compare-and-set) before that revocation,
+    // so either this sees it, or the replay's revocation ran after the
+    // commit and caught these tokens. The read is an `update` that changes
+    // nothing, so it sees the latest stored copy.
+    let answer = oauth
         .codes
         .update(&key, started, |stored| stored.replayed)
-        .unwrap_or(true);
-    if replayed {
+        .await;
+    if !vouches_unreplayed(&answer) {
         revoke_family(app, oauth, &stored.family_id).await?;
         return Err(OAuthError::InvalidGrant(
             "the code was used twice".to_string(),
@@ -444,6 +454,32 @@ async fn exchange_code(
     }
     app.metrics().oauth_token_issued(Grant::AuthorizationCode);
     Ok(remember(oauth, minted))
+}
+
+/// Whether the replay check after an exchange's commit proves the code was
+/// not presented again. Only a stored code with `replayed` unset does. A
+/// code gone from the store (expired, or Redis lost it) cannot vouch for
+/// itself, and neither can a Redis failure: an exchange that cannot prove
+/// it was not replayed must not keep its tokens, so both fail closed and
+/// revoke the family (spec Decision 16).
+///
+/// # Arguments
+/// * `answer` - the check's answer: `Ok(Some(replayed))` from a stored
+///   code, `Ok(None)` for a missing one, `Err` for a Redis failure.
+///
+/// # Returns
+/// `true` only for `Ok(Some(false))`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "pure predicate on a value: a span would record nothing new"
+    )
+)]
+fn vouches_unreplayed(answer: &Result<Option<bool>, OkfError>) -> bool {
+    // `matches!` tests a value against a pattern, like a structural
+    // `match` with one arm that answers `true`.
+    matches!(answer, Ok(Some(false)))
 }
 
 /// `grant_type=refresh_token`.
@@ -676,6 +712,8 @@ mod tests {
             .update(&code_key(&code), Instant::now(), |stored| {
                 stored.replayed = true;
             })
+            .await
+            .unwrap()
             .expect("the code is stored");
 
         let (status, _, body) = token(&test, exchange(&code)).await;
@@ -911,53 +949,10 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn an_exchange_on_the_other_replica_catches_up_on_its_grant() {
-        // Codes are per instance until Task 7, so A's stored code is copied
-        // into B's map by hand; the exchange on B must then catch up on the
-        // grant A's consent made (spec Decision 14) instead of refusing it.
-        let (a, b, _redis) = crate::oauth::testing::oauth_replica_pair().await;
-        let code = authorization_code(&a).await;
-        let key = code_key(&code);
-        let now = Instant::now();
-        let stored = a
-            .app
-            .oauth()
-            .expect("OAuth is on")
-            .codes
-            .update(&key, now, |stored| stored.clone())
-            .expect("A holds the code");
-        let grant = stored.grant_id.clone();
-        let b_oauth = b.oauth().expect("OAuth is on");
-        assert!(b_oauth.codes.insert(key, stored, now), "B takes the copy");
-        assert!(b.keys().find_grant(&grant).is_none(), "B lacks the grant");
-        let request = TokenForm {
-            grant_type: Some("authorization_code".to_string()),
-            code: Some(code),
-            client_id: Some(CLIENT_ID.to_string()),
-            redirect_uri: Some(REDIRECT_URI.to_string()),
-            code_verifier: Some(VERIFIER.to_string()),
-            resource: Some(RESOURCE.to_string()),
-            ..TokenForm::default()
-        };
-
-        let answer = super::exchange_code(&b, b_oauth, &request).await;
-
-        let tokens = answer.unwrap_or_else(|error| panic!("B issues tokens: {error:?}"));
-        assert!(b.keys().find_grant(&grant).is_some(), "B learned the grant");
-        let principal = b_oauth
-            .access
-            .verify(&b, RESOURCE, &tokens.access_token)
-            .await
-            .expect("verify answers")
-            .expect("the issued access token verifies on B");
-        assert_eq!(principal.key_id, grant);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
     async fn a_refresh_on_the_other_replica_catches_up_on_its_grant() {
-        // The code is exchanged on A (codes are per instance until Task 7);
-        // the refresh token lives in Postgres, so B can rotate it, once it
-        // has caught up on the grant A's consent made (spec Decision 14).
+        // The code is exchanged on A; the refresh token lives in Postgres,
+        // so B can rotate it, once it has caught up on the grant A's consent
+        // made (spec Decision 14).
         let (a, b, _redis) = crate::oauth::testing::oauth_replica_pair().await;
         let code = authorization_code(&a).await;
         let (_, refresh_token) = crate::oauth::testing::exchange_for_tokens(&a, &code).await;
@@ -1130,5 +1125,242 @@ mod tests {
 
         assert!(!printed.contains(secret), "{printed}");
         assert!(printed.contains("authorization_code"));
+    }
+
+    #[test]
+    fn the_replay_check_vouches_only_for_a_stored_unreplayed_code() {
+        let busy = || {
+            Err(crate::error::OkfError::Busy {
+                reason: "Redis failed".into(),
+            })
+        };
+
+        assert!(super::vouches_unreplayed(&Ok(Some(false))));
+        assert!(!super::vouches_unreplayed(&Ok(Some(true))), "replayed");
+        assert!(!super::vouches_unreplayed(&Ok(None)), "gone from the store");
+        assert!(!super::vouches_unreplayed(&busy()), "Redis failed: revoke");
+    }
+
+    /// Codes across two replicas over one Redis (spec Decision 5). Each
+    /// body runs on standalone Redis and on a one-node cluster.
+    mod replicas {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use axum::http::StatusCode;
+
+        use super::{exchange, text};
+        use crate::app::App;
+        use crate::db::redis_support::TestRedis;
+        use crate::oauth::state::{code_key, AuthorizationCode};
+        use crate::oauth::testing::{
+            approve, authorization_code, authorize_query, oauth_replica_pair_on, send_on,
+        };
+        use crate::shared::ephemeral::Keyspace;
+        use crate::shared::hashed;
+
+        /// Every body's bound (`lessons.md`: every wait is bounded).
+        const BOUND: Duration = Duration::from_secs(120);
+
+        /// Exchanges `code` on `app` through its router.
+        async fn exchange_on(app: &Arc<App>, code: &str) -> (StatusCode, serde_json::Value) {
+            let (status, _, body) =
+                send_on(app, "POST", "/oauth/token", Some(exchange(code)), None).await;
+            (status, serde_json::from_str(&body).expect("JSON"))
+        }
+
+        /// Whether `access` authenticates on `app`.
+        async fn works_on(app: &App, access: &str) -> bool {
+            let oauth = app.oauth().expect("OAuth is on");
+            oauth
+                .access
+                .verify(app, &oauth.settings.resource, access)
+                .await
+                .expect("verify answers")
+                .is_some()
+        }
+
+        /// The stored code, read through `app`'s store.
+        async fn stored_on(app: &App, code: &str) -> Option<AuthorizationCode> {
+            app.oauth()
+                .expect("OAuth is on")
+                .codes
+                .update(&code_key(code), std::time::Instant::now(), |stored| {
+                    stored.clone()
+                })
+                .await
+                .expect("Redis answers")
+        }
+
+        async fn a_code_minted_on_one_replica_is_exchanged_on_the_other_once(server: TestRedis) {
+            let (a, b, _server) = oauth_replica_pair_on(server).await;
+            let code = authorization_code(&a).await;
+            let grant = stored_on(&a.app, &code)
+                .await
+                .expect("A stored the code")
+                .grant_id;
+            // B runs no subscriber in a lib pair, so it has not heard of the
+            // grant: the exchange must catch up on it (spec Decision 14).
+            assert!(b.keys().find_grant(&grant).is_none(), "B lacks the grant");
+
+            let (status, first) = exchange_on(&b, &code).await;
+
+            assert_eq!(status, StatusCode::OK, "B exchanges A's code: {first}");
+            let access = text(&first, "access_token");
+            assert!(works_on(&b, &access).await, "the token works on B");
+            assert!(works_on(&a.app, &access).await, "and on A");
+            let spent = stored_on(&a.app, &code).await.expect("still stored");
+            assert!(spent.used && !spent.replayed, "A sees it used");
+
+            let (status, again) = exchange_on(&a.app, &code).await;
+
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{again}");
+            assert_eq!(again["error"], "invalid_grant");
+            assert_eq!(again["error_description"], "the code was already used");
+            assert!(
+                !works_on(&a.app, &access).await,
+                "the family is revoked on A"
+            );
+            assert!(!works_on(&b, &access).await, "and on B, which cached it");
+        }
+
+        async fn two_replicas_racing_one_code_leave_no_usable_token(server: TestRedis) {
+            let (a, b, _server) = oauth_replica_pair_on(server).await;
+            // Several rounds, so a store that is not compare-and-set (both
+            // read `used = false`) is caught even if one round serializes.
+            for round in 0..4 {
+                let code = authorization_code(&a).await;
+
+                // `join!` polls both on this task: each sends its read before
+                // either answer is handled, so the two reads overlap.
+                let (on_a, on_b) = tokio::join!(exchange_on(&a.app, &code), exchange_on(&b, &code));
+
+                let answers = [on_a, on_b];
+                let succeeded = answers
+                    .iter()
+                    .filter(|(status, _)| *status == StatusCode::OK)
+                    .count();
+                assert!(
+                    succeeded <= 1,
+                    "round {round}: at most one 200: {answers:?}"
+                );
+                for (status, body) in answers
+                    .iter()
+                    .filter(|(status, _)| *status != StatusCode::OK)
+                {
+                    assert_eq!(*status, StatusCode::BAD_REQUEST, "round {round}: {body}");
+                    assert_eq!(body["error"], "invalid_grant", "round {round}");
+                }
+                // One exchange marked it used; the other found it used and
+                // is the one replay.
+                let replays = answers
+                    .iter()
+                    .filter(|(_, body)| body["error_description"] == "the code was already used")
+                    .count();
+                assert_eq!(replays, 1, "round {round}: exactly one replay: {answers:?}");
+                let stored = stored_on(&a.app, &code).await.expect("still stored");
+                assert!(stored.used && stored.replayed, "round {round}: {stored:?}");
+                for (_, body) in answers
+                    .iter()
+                    .filter(|(status, _)| *status == StatusCode::OK)
+                {
+                    let access = text(body, "access_token");
+                    assert!(
+                        !works_on(&a.app, &access).await,
+                        "round {round}: refused on A"
+                    );
+                    assert!(!works_on(&b, &access).await, "round {round}: refused on B");
+                }
+            }
+            let live: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM oauth_tokens WHERE revoked_at IS NULL")
+                    .fetch_one(a.app.pool())
+                    .await
+                    .expect("count live tokens");
+            assert_eq!(live, 0, "no minted token is live");
+        }
+
+        async fn an_expired_code_is_refused_on_either_replica(server: TestRedis) {
+            let (a, b, server) = oauth_replica_pair_on(server).await;
+            let code = authorization_code(&a).await;
+            let handle = crate::shared::testing::connect(&server).await;
+            // `Ephemeral` hashes the key it is given, and `code_key` is a
+            // hash already: the name is `oauth:code:<hashed(code_key)>`.
+            let key = handle.key(Keyspace::OauthCode.name(), &hashed(&code_key(&code)));
+            let expiring: bool = redis::cmd("PEXPIRE")
+                .arg(&key)
+                .arg(1)
+                .query_async(&mut handle.connection())
+                .await
+                .expect("PEXPIRE");
+            assert!(expiring, "the code is stored under that key");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            for app in [&b, &a.app] {
+                let (status, body) = exchange_on(app, &code).await;
+
+                assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+                assert_eq!(body["error"], "invalid_grant");
+                assert_eq!(body["error_description"], "unknown or expired code");
+            }
+        }
+
+        async fn a_redis_outage_fails_closed(server: TestRedis) {
+            let (a, b, server) = oauth_replica_pair_on(server).await;
+            let code = authorization_code(&a).await;
+            if server.stop().await.is_none() {
+                eprintln!("skipped: a shared Redis (TEST_REDIS_URL) cannot be stopped");
+                return;
+            }
+
+            let (status, body) = exchange_on(&b, &code).await;
+            let (approve_status, _, page) = approve(&a, &authorize_query()).await;
+
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+            assert_eq!(body["error"], "server_error");
+            assert_eq!(approve_status, StatusCode::SERVICE_UNAVAILABLE, "{page}");
+            assert!(page.contains("The server is busy"), "the busy page: {page}");
+            let live: i64 = sqlx::query_scalar("SELECT count(*) FROM oauth_tokens")
+                .fetch_one(a.app.pool())
+                .await
+                .expect("count tokens");
+            assert_eq!(live, 0, "nothing was minted, from memory or otherwise");
+        }
+
+        // `macro_rules!` writes a standalone and a cluster `#[tokio::test]`
+        // for every body named (Python: a parametrized test).
+        macro_rules! in_both_modes {
+            ($($name:ident),* $(,)?) => {
+                mod standalone {
+                    $(
+                        #[tokio::test(flavor = "multi_thread")]
+                        async fn $name() {
+                            let server = super::TestRedis::start().await;
+                            tokio::time::timeout(super::BOUND, super::$name(server))
+                                .await
+                                .expect(concat!(stringify!($name), " finished within the bound"));
+                        }
+                    )*
+                }
+                mod cluster {
+                    $(
+                        #[tokio::test(flavor = "multi_thread")]
+                        async fn $name() {
+                            let server = super::TestRedis::start_cluster().await;
+                            tokio::time::timeout(super::BOUND, super::$name(server))
+                                .await
+                                .expect(concat!(stringify!($name), " finished within the bound"));
+                        }
+                    )*
+                }
+            };
+        }
+
+        in_both_modes!(
+            a_code_minted_on_one_replica_is_exchanged_on_the_other_once,
+            two_replicas_racing_one_code_leave_no_usable_token,
+            an_expired_code_is_refused_on_either_replica,
+            a_redis_outage_fails_closed,
+        );
     }
 }

@@ -1767,6 +1767,8 @@ Revert `config.session_store = ...`, and the cross-replica test fails with 404. 
    The exchange's own catch-up (`token.rs:411`) is tested in Task 7, once a code can cross instances.
 
    > **Corrected (issue #559, 2026-11-17).** Task 6 tests it too (review of PR #579): `an_exchange_on_the_other_replica_catches_up_on_its_grant` in `token.rs` copies A's stored `AuthorizationCode` into B's per-instance map and exchanges on B.
+   >
+   > **Corrected (issue #560, 2026-11-17).** That copy test is gone; Task 7's `a_code_minted_on_one_replica_is_exchanged_on_the_other_once` covers the exchange's catch-up with a real shared code.
 
 - [ ] **Step 2: Implement**
 
@@ -1853,6 +1855,15 @@ The seed is a random non-negative `i64` below `2^62`, from `rand`, or from the b
 - [ ] **Step 3: Revert-check, gates, changelog, commit**
 
 `feat: OAuth authorization codes in shared state (M16 Task 7)`.
+
+> **Corrected (issue #560, 2026-11-17).** What shipped differs in small ways; read `src/oauth/token.rs` and `src/oauth/error.rs`.
+> - **A token-endpoint Redis failure answers 503** (spec Decision 16). `OAuthError::Server(OkfError::Busy { .. })` now maps to 503 in `OAuthError::status` (`src/oauth/error.rs`, not in the file list above); every other `Server` error stays 500. The body is still `server_error` / "internal error". A database deadlock (also `Busy`) now answers 503 there too, as on the rest of the HTTP API.
+> - The post-commit replay check is `vouches_unreplayed(&answer)`: only `Ok(Some(false))` keeps the tokens; a missing code and a Redis `Err` revoke. It has its own unit test, `the_replay_check_vouches_only_for_a_stored_unreplayed_code`.
+> - `Ephemeral::insert` takes `key: &str`, so the insert is `oauth.codes.insert(&code_key(&code), ..).await.unwrap_or(false)`; `false` and `Err` both answer the busy page.
+> - The race test asserts more than "at most one 200": over 4 rounds, exactly one answer is the replay ("the code was already used"), the stored code ends `used && replayed`, no token minted by either verifies on either replica, and no token row is live. With the compare-and-set reverted to a plain write, round 0 gets two 200s.
+> - Extra test: `a_redis_outage_fails_closed` (stop Redis: the exchange answers 503 `server_error`, Approve answers the 503 busy page, nothing is minted). All four Redis tests run in both modes (`token::tests::replicas::{standalone,cluster}::*`).
+> - Task 6's `an_exchange_on_the_other_replica_catches_up_on_its_grant` (the code copied by hand into B's map) is removed: `a_code_minted_on_one_replica_is_exchanged_on_the_other_once` exchanges a real shared code on B, and fails with "the grant was revoked" if `find_grant` is reverted to `app.keys().find_grant`.
+> - New test helpers in `oauth::testing`: `oauth_replica_pair_on(redis)` (a cluster, for one), `send_on(app, method, uri, body, session)` (any `Arc<App>`'s router, so B can be driven over HTTP), and `approve(test, query)` (`authorization_code_for` up to Approve, returning the answer unread). Task 8's two-replica consent tests can use `send_on` for B.
 
 ---
 
