@@ -2,6 +2,8 @@
 //! `2026-11-17-okf-multi-replica-design.md`): one Redis connection and the
 //! key names every component uses. Nothing here runs without `[redis]`.
 
+pub mod announce;
+
 use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;

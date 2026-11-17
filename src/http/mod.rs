@@ -587,6 +587,12 @@ pub async fn serve(
 ) -> std::io::Result<()> {
     let router = router(Arc::clone(&app), &shutdown);
     let poller = tokio::spawn(Arc::clone(&app).poll_until(shutdown.clone()));
+    // Reloads the key cache on every `admin_generation` announcement; ends
+    // at once without `[redis]`.
+    let announcements = tokio::spawn(crate::shared::announce::listen(
+        Arc::clone(&app),
+        shutdown.clone(),
+    ));
     let clock_checker = tokio::spawn(Arc::clone(&app).check_clock_until(shutdown.clone()));
     // The mail worker (Task 6), unless this process only enqueues.
     // `bool::then` runs the closure only for `true`, giving an `Option`.
@@ -616,6 +622,14 @@ pub async fn serve(
             {},
             { %error, },
             "the poll loop panicked"
+        );
+    }
+    if let Err(error) = announcements.await {
+        split_event!(
+            error,
+            {},
+            { %error, },
+            "the announcement subscriber panicked"
         );
     }
     if let Err(error) = clock_checker.await {
