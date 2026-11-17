@@ -53,7 +53,9 @@ base64 = "0.23.1"
 # Sizes with units in the configuration ("64MiB").
 bytesize = { version = "2.7.0", features = ["serde"] }
 # Wall-clock timestamps for catalog stamps (UTC only; no local-time database needed).
-chrono = { version = "0.4.45", default-features = false, features = ["now"] }
+# `serde`: an OAuth client record (its timestamps) is stored in Redis inside a
+# pending authorization (M16 Task 8).
+chrono = { version = "0.4.45", default-features = false, features = ["now", "serde"] }
 # The command line (`okf-mcp migrate | catalog | key | import | export`);
 # `env` lets DATABASE_URL fill `--database-url`.
 clap = { version = "4.6.7", features = ["derive", "env"] }

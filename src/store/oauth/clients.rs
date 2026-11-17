@@ -2,12 +2,16 @@
 //! Client ID Metadata Documents. Task 2 reads and prunes; Task 3 writes.
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
 use crate::error::OkfError;
 
 /// How a client got its id.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// `Serialize, Deserialize` (serde): stored in Redis inside a pending
+// authorization (M16 Task 8), spelled as [`ClientKind::as_str`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ClientKind {
     /// Registered at `POST /oauth/register`; its id is a UUID.
     Dcr,
@@ -58,8 +62,10 @@ impl ClientKind {
 }
 
 /// One client.
-// `PartialEq` but not `Eq`: `serde_json::Value` holds floats.
-#[derive(Debug, Clone, PartialEq)]
+// `PartialEq` but not `Eq`: `serde_json::Value` holds floats. `Serialize,
+// Deserialize`: a pending authorization holds it, in Redis with `[redis]`
+// (M16 Task 8); the timestamps use chrono's `serde` feature (RFC 3339).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClientRecord {
     /// Its id (a UUID, or the metadata document's URL).
     pub client_id: String,
@@ -336,6 +342,42 @@ mod tests {
 
     fn now() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 11, 11, 12, 0, 0).unwrap()
+    }
+
+    /// The JSON spelling (Redis, M16 Task 8) is the stored spelling.
+    #[test]
+    fn client_kind_json_is_its_stored_spelling() {
+        for kind in [ClientKind::Dcr, ClientKind::Cimd] {
+            let json = serde_json::to_value(kind).expect("serializes");
+
+            assert_eq!(json, serde_json::json!(kind.as_str()));
+            assert_eq!(
+                serde_json::from_value::<ClientKind>(json).expect("deserializes"),
+                kind
+            );
+        }
+    }
+
+    /// A record survives a JSON round trip, timestamps included.
+    #[test]
+    fn a_client_record_round_trips_through_json() {
+        let record = ClientRecord {
+            client_id: "https://client.example.com/client.json".into(),
+            kind: ClientKind::Cimd,
+            client_name: Some("Example Client".into()),
+            redirect_uris: vec!["https://client.example.com/callback".into()],
+            metadata: serde_json::json!({"client_name": "Example Client"}),
+            fetched_at: Some(now()),
+            cache_expires_at: Some(now() + TimeDelta::hours(1)),
+            created_at: now(),
+        };
+
+        let json = serde_json::to_vec(&record).expect("serializes");
+
+        assert_eq!(
+            serde_json::from_slice::<ClientRecord>(&json).expect("deserializes"),
+            record
+        );
     }
 
     async fn insert_dcr_row(pool: &PgPool, client_id: &str, created_at: DateTime<Utc>) {
