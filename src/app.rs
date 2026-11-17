@@ -96,6 +96,11 @@ pub struct App {
     // The `admin_generation` the key cache was loaded at. Written only under
     // `polling`, so `Relaxed` ordering is enough.
     admin_generation: AtomicI64,
+    // The last `admin_generation` this instance published over Redis (or the
+    // one it started at). Tracked apart from `admin_generation` so a reload
+    // that only loaded a change (and did not announce) cannot make the next
+    // announcing reload skip it. Written only under `polling`.
+    announced_generation: AtomicI64,
     // The effective sign-in policy (`[auth]` with `server_settings`
     // overrides), reloaded with the key cache whenever `admin_generation`
     // moves. As with `catalogs`, the lock is held only to clone or swap.
@@ -280,6 +285,7 @@ impl App {
             write_queue: KeyedLocks::new(),
             catalogs: RwLock::new(Arc::new(loaded)),
             admin_generation: AtomicI64::new(admin_generation),
+            announced_generation: AtomicI64::new(admin_generation),
             settings: RwLock::new(Arc::new(settings)),
             polling: tokio::sync::Mutex::new(broken),
             clock_status: RwLock::new(None),
@@ -695,7 +701,7 @@ impl App {
         // it (`*broken`, like a reference) the pass reads and replaces the
         // broken catalogs.
         let mut broken = self.polling.lock().await;
-        self.reload_keys_if_changed().await;
+        self.reload_keys_if_changed(true).await;
         // Before the catalog list, whose `?` would skip it on a failure.
         self.prune_empty_changesets().await;
         self.prune_oauth().await;
@@ -783,14 +789,83 @@ impl App {
     }
 
     /// Reloads the key cache and the settings if `admin_generation` moved
-    /// since they were loaded.
+    /// since they were loaded, serialized with poll passes through `polling`.
+    /// This is the announcement path: a subscriber calls it on a message or
+    /// a resubscribe, and a caller about to refuse a credential calls it
+    /// through [`App::catch_up_keys`].
+    ///
+    /// # Arguments
+    /// * `announce` - publish the loaded generation if it was not announced
+    ///   yet: `false` when this reload answers an announcement (the
+    ///   announcer already told everyone).
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn reload_keys_now(&self, announce: bool) {
+        let _pass = self.polling.lock().await;
+        self.reload_keys_if_changed(announce).await;
+    }
+
+    /// Before refusing a credential whose row is live but whose grant is not
+    /// in the key cache (spec Decision 14): reloads if `admin_generation`
+    /// moved. A no-op without Redis, where one replica polls after its own
+    /// changes.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn catch_up_keys(&self) {
+        if self.redis.is_some() {
+            self.reload_keys_now(false).await;
+        }
+    }
+
+    /// The `admin_generation` the key cache was loaded at.
+    ///
+    /// # Returns
+    /// The generation.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line accessor: a span would record nothing"
+        )
+    )]
+    pub fn loaded_admin_generation(&self) -> i64 {
+        self.admin_generation.load(Ordering::Relaxed)
+    }
+
+    /// Reloads the key cache and the settings if `admin_generation` moved
+    /// since they were loaded, then, when `announce` is set, publishes the
+    /// loaded generation if it differs from the last one announced.
     /// Called only under `polling`.
     ///
     /// Failing to read the counter or to reload is logged, not returned: the
     /// stored counter stays as it was, so the next pass tries again, and the
     /// caller's catalog changes go ahead regardless.
+    ///
+    /// Announcing is tracked apart from loading. A reload that loads a change
+    /// without announcing it (the subscriber's resubscribe, `catch_up_keys`)
+    /// must not make the `settle` poll that follows find nothing to publish,
+    /// so the announce step runs whether or not this call reloaded.
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn reload_keys_if_changed(&self) {
+    async fn reload_keys_if_changed(&self, announce: bool) {
+        self.reload_moved_keys().await;
+        if !announce {
+            return;
+        }
+        let Some(redis) = &self.redis else {
+            return;
+        };
+        let loaded = self.admin_generation.load(Ordering::Relaxed);
+        // Under `polling`, so no other reload moves either counter meanwhile.
+        if loaded != self.announced_generation.load(Ordering::Relaxed) {
+            shared::announce::publish(redis, Some(loaded)).await;
+            // Stored even if the publish failed: the failure is counted, and
+            // the poll loop covers a lost announcement (spec Decision 12).
+            self.announced_generation.store(loaded, Ordering::Relaxed);
+        }
+    }
+
+    /// The reload half of [`App::reload_keys_if_changed`]. Called only under
+    /// `polling`.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn reload_moved_keys(&self) {
         let admin_generation = match catalogs::admin_generation(&self.pool).await {
             Ok(admin_generation) => admin_generation,
             Err(error) => {
