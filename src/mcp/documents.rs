@@ -29,7 +29,7 @@ pub struct GetConceptParams {
     /// The concept: `/infra/time-server.md`, `infra/time-server` or
     /// `/infra/time-server`.
     pub path: String,
-    /// The catalog (default: the first selected catalog that has it).
+    /// The catalog id (the `name` from `list_catalogs`; default: the first selected catalog that has it).
     pub catalog: Option<String>,
     /// Also return its resolved outbound links and its backlinks.
     // `#[serde(default)]` makes the field optional: absent means `false`.
@@ -84,8 +84,10 @@ pub struct InboundLink {
 // No `Eq`: `serde_json::Value` is only `PartialEq` (it can hold floats).
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct Concept {
-    /// The catalog it came from.
+    /// The catalog it came from (id).
     pub catalog: String,
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
     /// `/`-prefixed path.
     pub path: String,
     /// Its title.
@@ -134,7 +136,7 @@ pub struct ReadDocumentParams {
     /// An `index.md` (any folder's), `log.md` or `AGENTS.md`; default
     /// `/index.md`. Use `get_concept` for concepts.
     pub path: Option<String>,
-    /// The catalog (default: the first selected catalog that has it).
+    /// The catalog id (the `name` from `list_catalogs`; default: the first selected catalog that has it).
     pub catalog: Option<String>,
     /// Read through this changeset's drafts (its handle); its catalog must be one this call reads.
     pub changeset: Option<String>,
@@ -143,8 +145,10 @@ pub struct ReadDocumentParams {
 /// `read_document`'s result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Document {
-    /// The catalog it came from.
+    /// The catalog it came from (id).
     pub catalog: String,
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
     /// `/`-prefixed path.
     pub path: String,
     /// The file verbatim.
@@ -209,6 +213,7 @@ fn frontmatter_json(doc: &SnapshotDoc) -> (serde_json::Value, Option<String>) {
 #[tracing::instrument(level = "trace", skip_all)]
 fn concept(
     catalog: &str,
+    catalog_label: &str,
     snapshot: &Snapshot,
     doc: &SnapshotDoc,
     params: &GetConceptParams,
@@ -276,6 +281,7 @@ fn concept(
     });
     Ok(Concept {
         catalog: catalog.to_string(),
+        catalog_label: catalog_label.to_string(),
         path: format!("/{}", doc.path()),
         title: doc.title().map(str::to_string),
         frontmatter,
@@ -333,7 +339,14 @@ pub(crate) async fn get_concept(
                     .get(&path)
                     .expect("resolve_concept returns only paths the snapshot holds");
                 let limit = ctx.app().config().concept_outline_chars;
-                return concept(state.name(), snapshot, doc, &params, limit);
+                return concept(
+                    state.name(),
+                    &ctx.catalog_label(state.name()),
+                    snapshot,
+                    doc,
+                    &params,
+                    limit,
+                );
             }
             Err(OkfError::NotFound { .. }) => {}
             // Keep looking, but report this if nothing better turns up.
@@ -467,6 +480,7 @@ pub(crate) async fn read_document(
         if let Some(doc) = view.snapshot().get(&path) {
             return Ok(Document {
                 catalog: state.name().to_string(),
+                catalog_label: ctx.catalog_label(state.name()),
                 path: format!("/{path}"),
                 text: doc.raw(),
             });

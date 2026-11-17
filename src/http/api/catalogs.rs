@@ -892,7 +892,8 @@ mod tests {
                 .cloned()
                 .unwrap_or_else(|| panic!("{name} in {body}"))
         };
-        let marked = json!({ "team": SUSPENDED_TEAM, "notice": SUSPENSION_NOTICE });
+        let marked =
+            json!({ "team": SUSPENDED_TEAM, "team_label": "Family", "notice": SUSPENSION_NOTICE });
 
         let (_, readers) = send(&test, "GET", "/api/v1/catalogs", Some(&keys.read), None).await;
         let (_, roots) = send(&test, "GET", "/api/v1/catalogs", Some(&root), None).await;

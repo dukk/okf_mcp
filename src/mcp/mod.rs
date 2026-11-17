@@ -14,6 +14,8 @@ pub(crate) mod documents;
 // public item is never flagged as dead code meanwhile.
 pub mod context;
 pub(crate) mod history;
+#[cfg(test)]
+mod labels_tests;
 pub(crate) mod maintenance;
 #[cfg(test)]
 mod reference;
@@ -57,7 +59,9 @@ pub const INSTRUCTIONS: &str = "Open Knowledge Format catalogs: concepts (markdo
     frontmatter) about systems, projects, people and decisions. Start with `search`, then \
     `get_concept`. Paths look like /infra/time-server.md (the leading slash and .md are \
     optional). Without a `catalog` argument, tools use this connection's catalogs \
-    (`list_catalogs` shows them). To write, call `open_changeset` first and pass the handle it \
+    (`list_catalogs` shows them). Catalogs, users and teams each have an id (`name`) and a human \
+    `label`. Say the label when talking to people, pass the id in tool calls, and never ask a \
+    person to type an id. To write, call `open_changeset` first and pass the handle it \
     returns as `changeset` to every edit, `publish`, `discard`, `revert` and `pending_changes`; \
     reads take it too to see its drafts, and `list_changesets` finds a lost one. Nothing is \
     visible to others until `publish`.";
