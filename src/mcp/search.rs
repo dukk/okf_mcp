@@ -35,7 +35,7 @@ pub struct SearchParams {
     /// description or body; free text matches tags by substring. Empty
     /// matches every concept that passes the filters.
     pub query: String,
-    /// The catalogs to search (default: this connection's catalogs).
+    /// The catalog ids to search (the `name`s from `list_catalogs`; default: this connection's catalogs).
     pub catalogs: Option<Vec<String>>,
     /// Only concepts of this `type` (case-insensitive).
     // `type` is a Rust keyword, so the field has another name and serde
@@ -63,18 +63,30 @@ pub struct SearchParams {
 pub struct SearchResult {
     /// Best first: concepts holding the whole query in a better field
     /// first, deprecated concepts last, then catalog order, then path.
-    pub hits: Vec<CatalogHit>,
+    pub hits: Vec<LabeledHit>,
     /// Catalogs left out because the `changeset` read through does not
     /// apply over their published files; every other catalog still
     /// answered. Empty when every catalog was searched.
     pub skipped: Vec<SkippedCatalog>,
 }
 
+/// One hit, with its catalog's label beside the catalog id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct LabeledHit {
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
+    /// The hit and its catalog id; `flatten` writes its fields beside `catalog_label`.
+    #[serde(flatten)]
+    pub hit: CatalogHit,
+}
+
 /// A catalog `search` left out, and why.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct SkippedCatalog {
-    /// The catalog.
+    /// The catalog (id).
     pub catalog: String,
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
     /// The error, as a failed call would report it (`error`, `message`
     /// and what it concerns).
     pub error: serde_json::Value,
@@ -128,6 +140,7 @@ pub(crate) async fn run(ctx: &ToolContext, params: SearchParams) -> Result<Searc
                 tracing::warn!(catalog = %state.name(), kind = error.kind(), "search skipped a catalog");
                 skipped.push(SkippedCatalog {
                     catalog: state.name().to_string(),
+                    catalog_label: ctx.catalog_label(state.name()),
                     error: error.to_json(),
                 });
             }
@@ -147,6 +160,17 @@ pub(crate) async fn run(ctx: &ToolContext, params: SearchParams) -> Result<Searc
         search_catalogs(&catalogs, &query)
     })
     .await;
+    let labels = ctx.labels();
+    let hits = hits
+        .into_iter()
+        .map(|hit| LabeledHit {
+            catalog_label: labels
+                .catalog(&hit.catalog)
+                .unwrap_or(&hit.catalog)
+                .to_string(),
+            hit,
+        })
+        .collect();
     Ok(SearchResult { hits, skipped })
 }
 
@@ -269,7 +293,11 @@ mod tests {
         let found_in_pg = run(&ctx, only_pg).await.unwrap();
 
         let names = |result: &SearchResult| -> Vec<String> {
-            result.hits.iter().map(|hit| hit.catalog.clone()).collect()
+            result
+                .hits
+                .iter()
+                .map(|hit| hit.hit.catalog.clone())
+                .collect()
         };
         assert_eq!(names(&found), ["work", "pg"]);
         // The `catalogs` argument narrows the connection's catalogs.
@@ -307,7 +335,11 @@ mod tests {
 
         let found = run(&ctx, through).await.unwrap();
 
-        let catalogs: Vec<&str> = found.hits.iter().map(|hit| hit.catalog.as_str()).collect();
+        let catalogs: Vec<&str> = found
+            .hits
+            .iter()
+            .map(|hit| hit.hit.catalog.as_str())
+            .collect();
         assert_eq!(catalogs, ["work"]);
         assert_eq!(found.skipped.len(), 1);
         assert_eq!(found.skipped[0].catalog, "pg");
@@ -401,9 +433,9 @@ mod tests {
         let tools = OkfServer::search_router().list_all();
         let tool = tools.iter().find(|tool| tool.name == "search").unwrap();
         let output = tool.output_schema.as_ref().expect("an output schema");
-        // schemars puts `CatalogHit` (with `SearchHit` flattened in) under
+        // schemars puts `LabeledHit` (with `CatalogHit` and `SearchHit` flattened in) under
         // `$defs`, and lists non-`Option` fields as required.
-        let hit = &output["$defs"]["CatalogHit"];
+        let hit = &output["$defs"]["LabeledHit"];
 
         for field in ["lines", "chars"] {
             let property = &hit["properties"][field];
@@ -440,7 +472,8 @@ mod tests {
         let published = run(&ctx, params("routes", &[])).await.unwrap();
         let drafted = run(&ctx, through).await.unwrap();
 
-        let size = |result: &SearchResult| (result.hits[0].hit.lines, result.hits[0].hit.chars);
+        let size =
+            |result: &SearchResult| (result.hits[0].hit.hit.lines, result.hits[0].hit.hit.chars);
         assert_eq!(
             size(&published),
             (TAGGED.lines().count(), TAGGED.chars().count())

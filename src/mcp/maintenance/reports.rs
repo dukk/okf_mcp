@@ -15,7 +15,7 @@ use super::{actor, evidence_paths, finding_paths, pin_path, MaintenanceResult};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MaintenanceListRunsParams {
-    /// Required authorized catalog name; connection defaults do not apply.
+    /// Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.
     pub catalog: String,
     /// Exclusive last-row ID from the previous page in this catalog; omit for the first page.
     pub after: Option<String>,
@@ -27,7 +27,7 @@ pub struct MaintenanceListRunsParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MaintenanceGetRunParams {
-    /// Required authorized catalog name; connection defaults do not apply.
+    /// Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.
     pub catalog: String,
     /// Opaque run ID belonging to the named catalog.
     pub run_id: String,
@@ -36,7 +36,7 @@ pub struct MaintenanceGetRunParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MaintenanceListFindingsParams {
-    /// Required authorized catalog name; connection defaults do not apply.
+    /// Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.
     pub catalog: String,
     /// Exclusive last-row ID from the previous page in this catalog; omit for the first page.
     pub after: Option<String>,
@@ -48,7 +48,7 @@ pub struct MaintenanceListFindingsParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MaintenanceGetFindingParams {
-    /// Required authorized catalog name; connection defaults do not apply.
+    /// Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.
     pub catalog: String,
     /// Opaque finding ID belonging to the named catalog.
     pub finding_id: String,
@@ -72,7 +72,7 @@ mod dispose_params {
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
     #[serde(deny_unknown_fields)]
     pub struct MaintenanceDisposeParams {
-        /// Required authorized catalog name; connection defaults do not apply.
+        /// Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.
         pub catalog: String,
         /// Opaque finding ID belonging to the named catalog.
         pub finding_id: String,
