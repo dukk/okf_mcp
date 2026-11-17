@@ -234,3 +234,7 @@ pre.diff .del { color: var(--error); }
 /* Settings (M12 Task 15): a setting's value control, and inputs in an inline form */
 .settings-input { width: auto; margin: 0; padding: .25rem .5rem; font-family: var(--font-mono); font-size: .85rem; }
 .inline-form input { margin: 0; }
+
+/* Display names (M17 Task 10a): a label with its id beneath */
+.named { display: flex; flex-direction: column; }
+.id-line { font-size: 0.8em; font-family: var(--pico-font-family-monospace); }

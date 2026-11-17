@@ -7,6 +7,7 @@
 
 use chrono::{TimeDelta, Utc};
 use okf_mcp::config::Config;
+use okf_mcp::labels::UNNAMED_USER;
 use okf_mcp::store::audit::AuditActor;
 use okf_mcp::store::keys::{self as key_rows, Access, Grants};
 use okf_mcp::store::oauth::clients;
@@ -163,7 +164,7 @@ async fn assigning_the_signed_in_key_from_the_unassigned_view_updates_the_shell_
         ui.click("[data-test=assign-key-legacy-admin] button");
         ui.wait_text("#unassigned-empty", "Nothing is unassigned");
         // The shell follows without a reload.
-        ui.wait_text("#whoami", &format!("{OWNER} / legacy-admin"));
+        ui.wait_text("#whoami", &format!("{UNNAMED_USER} / legacy-admin"));
         ui.open("/users");
         ui.wait_text(&format!("[data-test=user-{OWNER}]"), "you");
     })

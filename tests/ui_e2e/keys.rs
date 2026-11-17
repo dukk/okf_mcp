@@ -5,6 +5,7 @@
 
 use chrono::{TimeDelta, Utc};
 use okf_mcp::config::Config;
+use okf_mcp::labels::UNNAMED_USER;
 use okf_mcp::store::audit::AuditActor;
 use okf_mcp::store::keys::{self as key_rows, Access, Grants};
 use okf_mcp::store::oauth::clients;
@@ -264,7 +265,7 @@ async fn an_admin_changes_a_keys_user_and_assigns_a_legacy_key() {
     let ran = drive(server.base.clone(), move |ui| {
         ui.login(&admin);
         // The shell names the signed-in key's user.
-        ui.wait_text("#whoami", &format!("{OWNER} / console-admin"));
+        ui.wait_text("#whoami", &format!("{UNNAMED_USER} / console-admin"));
         ui.open("/keys");
         ui.wait_text("[data-test=key-user-laptop]", OWNER);
         ui.click("[data-test=key-laptop]");
@@ -348,7 +349,7 @@ async fn reassigning_the_signed_in_key_updates_the_shell_identity() {
     alice(&server).await;
     drive(server.base.clone(), move |ui| {
         ui.login(&admin);
-        ui.wait_text("#whoami", &format!("{OWNER} / console-admin"));
+        ui.wait_text("#whoami", &format!("{UNNAMED_USER} / console-admin"));
         ui.open("/keys");
         ui.click("[data-test=key-console-admin]");
         ui.wait_text("#key-assign", "Change user");
@@ -357,7 +358,7 @@ async fn reassigning_the_signed_in_key_updates_the_shell_identity() {
         ui.wait_text("[data-test=key-user-console-admin]", "alice");
         // The shell follows without a reload: the identity line, and the
         // Users page's "you" marker.
-        ui.wait_text("#whoami", "alice / console-admin");
+        ui.wait_text("#whoami", "Alice Example / console-admin");
         ui.click("#drawer-close");
         ui.open("/users");
         ui.wait_text("[data-test=user-alice]", "you");

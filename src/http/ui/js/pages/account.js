@@ -11,7 +11,9 @@ import { h, fill, fact } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { toast } from '../core/toast.js';
 import { ago, when } from '../core/format.js';
-import { freshAccount, requireSession, signedOut } from '../core/shell.js';
+import { freshAccount, refreshIdentity, requireSession, signedOut } from '../core/shell.js';
+import { catalogLabel, named, teamLabel } from '../core/labels.js';
+import { guard, once } from '../core/pending.js';
 import { listTable } from '../components/list-table.js';
 import { confirmDialog } from '../components/confirm.js';
 import { accessPill } from '../components/levels.js';
@@ -25,6 +27,8 @@ export async function render(main) {
             h('p', { class: 'muted' }, 'How you sign in, where you are signed in, and what your account may reach.'))));
     if (!requireSession(main, 'account-denied')) return;
     const profile = section('account-profile', 'Profile');
+    const owned = section('account-owned-teams', 'Teams you own',
+        'Rename the shared teams you own. Everyone who sees a team sees this name.');
     const ceiling = section('account-ceiling', 'Your ceiling',
         'The most a key or OAuth grant you create can reach: the catalogs of your teams, at each catalog\'s '
         + 'member access, and the catalogs an admin entitled you to; where both apply, the higher level. '
@@ -34,26 +38,78 @@ export async function render(main) {
     const identities = section('account-identities', 'Linked accounts', 'Sign in through another identity provider.');
     const sessions = section('account-sessions', 'Where you are signed in');
     const signIns = section('account-sign-ins', 'Recent sign-ins');
-    main.append(profile.el, ceiling.el, password.el, passkeys.el, identities.el, sessions.el, signIns.el);
+    main.append(profile.el, owned.el, ceiling.el, password.el, passkeys.el, identities.el, sessions.el, signIns.el);
 
     async function drawAccount() {
         let account;
         try { account = await freshAccount(); } catch { return; /* toasted */ }
         if (!main.isConnected) return;
         fill(profile.body, h('dl', { class: 'facts', id: 'account-facts' },
-            fact('Name', h('code', {}, account.user)),
-            fact('Display name', account.display_name || '-'),
+            fact('Display name', displayNameForm(account)),
             fact('Email', account.email ?? 'none'),
-            fact('Teams', account.teams.length ? account.teams.join(', ') : '-'),
+            fact('Teams', account.teams.length ? account.teams.map(teamLabel).join(', ') : '-'),
             fact('Admin', account.admin ? 'yes: you sign in to the full console' : 'no')));
+        // The slug stays visible as an id, never as the person's name.
+        profile.body.append(h('p', { id: 'account-id', class: 'muted id-line' },
+            'Account ID: ', h('code', {}, account.user)));
+        fill(owned.body, ownedTeams(account.owned_team_details ?? []));
+        owned.el.hidden = !(account.owned_team_details ?? []).length;
         const table = listTable([
             { key: 'catalog', label: 'Catalog', sort: row => row.catalog,
-              render: row => h('code', { dataset: { test: `ceiling-${row.catalog}` } }, row.catalog) },
+              render: row => h('span', { dataset: { test: `ceiling-${row.catalog}` } },
+                  named(catalogLabel(row.catalog), row.catalog)) },
             { key: 'access', label: 'Access', render: row => accessPill(row.access) },
         ], account.ceiling, { empty: 'Your account reaches no catalog yet. Ask an admin.' });
         table.id = 'ceiling-table';
         fill(ceiling.body, table);
         fill(password.body, passwordForm(account));
+    }
+
+    // The display-name editor: the label is user text, shown in an input's
+    // value (never markup). The server answers a too-long or control-
+    // character name with its reason (toasted by api.js).
+    function displayNameForm(account) {
+        const key = 'account:display-name';
+        const input = h('input', { id: 'account-display-name', maxlength: '80', autocomplete: 'off',
+                                   'aria-label': 'Display name', value: account.display_name,
+                                   placeholder: account.label });
+        const save = guard(h('button', { type: 'button', id: 'account-display-name-save' }, 'Save'), key);
+        save.addEventListener('click', () => once(key, async () => {
+            try { await api.patch('/me', { display_name: input.value }); } catch { return; /* toasted */ }
+            toast('Display name saved', 'ok');
+            // The header and every label come from the identity read.
+            try { await refreshIdentity(); } catch { /* the next load shows it */ }
+            if (main.isConnected) await drawAccount();
+        }));
+        return h('div', { class: 'inline-form' }, input, save);
+    }
+
+    // One row per team the user owns: an editor for a shared team, a note
+    // for the personal one (whose label follows the user). The Teams page
+    // is admin-only, so this is how an owner who is not an admin renames.
+    function ownedTeams(details) {
+        return h('ul', { class: 'grant-list', id: 'account-owned-list' }, details.map(team => {
+            if (team.personal) {
+                return h('li', { dataset: { test: `owned-team-${team.name}` } },
+                    h('span', {}, team.label), ' ', h('span', { class: 'muted small' }, 'Named after you'));
+            }
+            const key = `account:team:${team.name}`;
+            const input = h('input', { id: `account-team-${team.name}`, maxlength: '80', autocomplete: 'off',
+                                       'aria-label': `Display name of ${team.name}`, value: team.display_name,
+                                       placeholder: team.label });
+            const save = guard(h('button', { type: 'button', id: `account-team-${team.name}-save` }, 'Save'), key);
+            save.addEventListener('click', () => once(key, async () => {
+                try {
+                    await api.patch(`/teams/${enc(team.name)}`, { display_name: input.value });
+                } catch { return; /* toasted */ }
+                toast('Team name saved', 'ok');
+                try { await refreshIdentity(); } catch { /* the next load shows it */ }
+                if (main.isConnected) await drawAccount();
+            }));
+            return h('li', { dataset: { test: `owned-team-${team.name}` } },
+                h('div', { class: 'inline-form' }, input, save),
+                h('span', { class: 'id-line muted' }, team.name));
+        }));
     }
 
     function passwordForm(account) {
