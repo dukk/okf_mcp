@@ -60,6 +60,7 @@ use crate::http::pages::safe_return_to;
 use crate::http::signin::{audit, cross_site, notify_method_added, start_in, SignIn, LINK_EXPIRED};
 use crate::http::{timeout_layer, AppError};
 use crate::keys;
+use crate::labels::user_label;
 // The one form a console session id takes when stored (OIDC link flows use
 // it too).
 use crate::oidc::session_hash;
@@ -537,12 +538,14 @@ async fn begin_registration(
         .map(|(_, passkey)| passkey.cred_id().clone())
         .collect();
     let account = user.email.as_deref().unwrap_or(&user.name);
+    // `user.name` stays the account; the display name is the label.
+    let display = user_label(&user.display_name, user.email.as_deref());
     let (mut challenge, state) = passkeys
         .webauthn
         .start_passkey_registration(
             handle,
             account,
-            &user.name,
+            &display,
             (!existing.is_empty()).then_some(existing),
         )
         .map_err(|error| registration_refused(&error))?;
@@ -2101,6 +2104,53 @@ mod tests {
             .send(&test, "GET", "/api/v1/session", Payload::Empty)
             .await;
         assert_eq!(kept.status, StatusCode::OK);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_registration_options_show_the_label_and_keep_the_email_as_the_account() {
+        let test = login_app().await;
+        user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
+        let mut browser = Browser::signed_in(&test, "alice@example.com", PASSWORD).await;
+        let mut options = Vec::new();
+        for display_name in ["Alice Example", "", "<b>x</b>"] {
+            sqlx::query("UPDATE users SET display_name = $1 WHERE name = 'alice'")
+                .bind(display_name)
+                .execute(test.app.pool())
+                .await
+                .expect("display name");
+            // The signed-in user comes from the key cache, which reloads on
+            // a bump of the generation, as any real label change does.
+            sqlx::query("UPDATE server_state SET admin_generation = admin_generation + 1")
+                .execute(test.app.pool())
+                .await
+                .expect("bump");
+            test.app.poll().await.expect("poll");
+
+            let start = browser
+                .send(
+                    &test,
+                    "POST",
+                    "/api/v1/me/passkeys/register/start",
+                    Payload::Json(json!({ "name": "Phone" })),
+                )
+                .await;
+
+            assert_eq!(start.status, StatusCode::OK, "{}", start.text());
+            options.push(start.json()["publicKey"]["user"].clone());
+        }
+
+        let names: Vec<_> = options.iter().map(|user| user["name"].clone()).collect();
+        let displays: Vec<_> = options
+            .iter()
+            .map(|user| user["displayName"].clone())
+            .collect();
+        assert_eq!(
+            names, ["alice@example.com"; 3],
+            "the account stays the email"
+        );
+        // The label, the email's local part when unset (never the slug as a
+        // name), and hostile text as plain data (it is JSON, not markup).
+        assert_eq!(displays, ["Alice Example", "alice", "<b>x</b>"]);
     }
 
     /// Starts a registration from `browser`'s session and has `soft` answer

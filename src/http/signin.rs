@@ -30,6 +30,7 @@ use crate::http::limits::ip_key;
 use crate::http::pages::{self, escape, safe_return_to};
 use crate::http::ui::CONTENT_SECURITY_POLICY;
 use crate::http::{timeout_layer, AppError};
+use crate::labels::user_label;
 use crate::mail::queue as mail_queue;
 use crate::mail::{self, Template, RESET_PATH, SETUP_PATH};
 use crate::store::email_tokens::{self, Purpose};
@@ -910,7 +911,7 @@ async fn setup_page(State(app): State<Arc<App>>, Query(query): Query<TokenQuery>
         Ok(user) => setup_response(
             StatusCode::OK,
             &SetupView {
-                user: &user.name,
+                user: &user_label(&user.display_name, user.email.as_deref()),
                 token: &query.token,
                 return_to: &return_to,
                 error: None,
@@ -1809,6 +1810,55 @@ mod tests {
             (&events[0].method, &events[0].outcome),
             (Method::Setup, Outcome::Ok)
         ));
+    }
+
+    /// The setup page's HTML for a user `alice` with `display_name` set.
+    async fn setup_page_for(display_name: &str) -> String {
+        let test = login_app().await;
+        let alice = user_with_password(&test, "alice", "alice@example.com", None).await;
+        sqlx::query("UPDATE users SET display_name = $1 WHERE name = 'alice'")
+            .bind(display_name)
+            .execute(test.app.pool())
+            .await
+            .expect("display name");
+        let token = email_tokens::issue(
+            test.app.pool(),
+            &alice.id,
+            Purpose::Setup,
+            Duration::from_secs(3600),
+            Utc::now(),
+        )
+        .await
+        .expect("issue a setup token");
+        let page = Browser::default()
+            .send(
+                &test,
+                "GET",
+                &format!("/account/setup?token={token}"),
+                Payload::Empty,
+            )
+            .await;
+        assert_eq!(page.status, StatusCode::OK);
+        page.text().to_string()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_setup_page_welcomes_the_display_name_and_escapes_it() {
+        let named = setup_page_for("Alice Example").await;
+        let hostile = setup_page_for("<b>x</b>").await;
+        let unset = setup_page_for("").await;
+
+        assert!(
+            named.contains("Welcome, <strong>Alice Example</strong>"),
+            "{named}"
+        );
+        assert!(
+            hostile.contains("Welcome, <strong>&lt;b&gt;x&lt;/b&gt;</strong>"),
+            "{hostile}"
+        );
+        assert!(!hostile.contains("<b>x</b>"), "{hostile}");
+        // No display name: the email's local part, never a slug as a name.
+        assert!(unset.contains("Welcome, <strong>alice</strong>"), "{unset}");
     }
 
     #[tokio::test(flavor = "multi_thread")]
