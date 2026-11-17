@@ -919,6 +919,69 @@ mod tests {
         assert_eq!(testing::error_count(&rendered, "set"), 1, "{rendered}");
     }
 
+    /// A value whose `Serialize` fails when `poison` is set (a type bug).
+    #[derive(Debug, PartialEq, Deserialize)]
+    struct Fragile {
+        n: u32,
+        poison: bool,
+    }
+
+    // Hand-written so it can fail: `serde::ser::Error::custom` is how a
+    // `Serialize` impl reports an error.
+    impl Serialize for Fragile {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            use serde::ser::SerializeStruct;
+            if self.poison {
+                return Err(serde::ser::Error::custom("poisoned"));
+            }
+            let mut fields = serializer.serialize_struct("Fragile", 2)?;
+            fields.serialize_field("n", &self.n)?;
+            fields.serialize_field("poison", &self.poison)?;
+            fields.end()
+        }
+    }
+
+    /// A value that does not encode answers `Busy`, counts one `decode`, and
+    /// writes nothing: no key on insert, the old bytes kept on update.
+    async fn a_value_that_does_not_encode_is_busy_and_writes_nothing(server: TestRedis) {
+        let (_provider, metrics, registry) = crate::mcp::testing::local_metrics();
+        let redis = Redis::connect(&testing::config(&server), &server.env(), &metrics)
+            .await
+            .expect("connect to the test redis");
+        let store = Ephemeral::<Fragile>::new(Some(&redis), Keyspace::OauthCode, TTL, 10);
+        let key = redis.key(Keyspace::OauthCode.name(), &hashed("k"));
+        let poisoned = Fragile { n: 1, poison: true };
+        let error = store
+            .insert("k", poisoned, Instant::now())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, OkfError::Busy { .. }), "{error:?}");
+        let decode = |registry: &prometheus::Registry| {
+            testing::error_count(&crate::mcp::testing::render(registry), "decode")
+        };
+        assert_eq!(decode(&registry), 1);
+        let exists: i64 = raw(&redis, redis::cmd("EXISTS").arg(&key)).await;
+        assert_eq!(exists, 0, "a failed encode wrote the key");
+
+        let healthy = Fragile {
+            n: 1,
+            poison: false,
+        };
+        store.insert("k", healthy, Instant::now()).await.unwrap();
+        let before: Vec<u8> = raw(&redis, redis::cmd("GET").arg(&key)).await;
+        let error = store
+            .update("k", Instant::now(), |value| {
+                value.n = 2;
+                value.poison = true;
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(error, OkfError::Busy { .. }), "{error:?}");
+        assert_eq!(decode(&registry), 2);
+        let after: Vec<u8> = raw(&redis, redis::cmd("GET").arg(&key)).await;
+        assert_eq!(after, before, "a failed encode changed the stored bytes");
+    }
+
     /// The change closure reruns on a fresh copy when another writer gets in
     /// between its read and its write (the `lessons.md` rule).
     async fn a_lost_race_reruns_the_change_on_a_fresh_copy(server: TestRedis) {
@@ -1058,5 +1121,6 @@ mod tests {
         a_redis_outage_is_busy_and_counted,
         a_lost_race_reruns_the_change_on_a_fresh_copy,
         an_update_that_always_loses_is_busy_after_eight_attempts,
+        a_value_that_does_not_encode_is_busy_and_writes_nothing,
     );
 }
