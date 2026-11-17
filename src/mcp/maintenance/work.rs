@@ -15,7 +15,7 @@ use super::{actor, lease_path, missing_record, MaintenanceResult};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MaintenanceClaimParams {
-    /// Required authorized catalog name; connection defaults do not apply.
+    /// Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.
     pub catalog: String,
     /// Caller-chosen retry key (1..=128 non-whitespace ASCII bytes); reuse only for identical input.
     pub idempotency_key: String,
@@ -27,7 +27,7 @@ pub struct MaintenanceClaimParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MaintenanceRenewParams {
-    /// Required authorized catalog name; connection defaults do not apply.
+    /// Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.
     pub catalog: String,
     /// Opaque work ID returned by maintenance_claim.
     pub work_id: String,
@@ -40,7 +40,7 @@ pub struct MaintenanceRenewParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MaintenanceReadRevisionParams {
-    /// Required authorized catalog name; connection defaults do not apply.
+    /// Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.
     pub catalog: String,
     /// Published concept path in this catalog; never an unpublished changeset path.
     pub path: String,
@@ -52,7 +52,7 @@ pub struct MaintenanceReadRevisionParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MaintenanceSubmitParams {
-    /// Required authorized catalog name; connection defaults do not apply.
+    /// Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.
     pub catalog: String,
     /// Opaque work ID returned by maintenance_claim.
     pub work_id: String,
@@ -82,7 +82,7 @@ mod close_params {
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
     #[serde(deny_unknown_fields)]
     pub struct MaintenanceCloseParams {
-        /// Required authorized catalog name; connection defaults do not apply.
+        /// Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.
         pub catalog: String,
         /// Opaque run ID belonging to the named catalog.
         pub run_id: String,
