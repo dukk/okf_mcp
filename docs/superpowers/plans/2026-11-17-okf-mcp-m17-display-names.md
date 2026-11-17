@@ -1584,6 +1584,8 @@ export function named(label, slug) {
   - `keys.js:50-63`, `:165-171`, `:276`, `:323-330`, `my-keys.js:151-172`, and `my-grants.js` → `userLabel` for users and `catalogLabel` for the default catalog and grants.
 
   URLs (`#/browse/<slug>/…`) are not touched.
+
+  > **Corrected (issue #609, 2026-11-17).** (1) `GET /changesets` already reuses `ListedChangeset`, which carries `catalog_label` and `actor_label`, so no Rust change was needed; the page reads those fields. (2) The run view has no `actor_label`, so `runs.js` keeps the actor as is and labels only the catalog in its heading. (3) `components/levels.js` (the catalog levels cell of my-keys and my-grants) now shows `catalogLabel`. (4) Since #606 the server names an export `<export_stem(label)>-<slug>.tar.gz`; `transfer.js` takes the download name from the response's `Content-Disposition` (`exportFilename`), falling back to `<slug>.tar.gz`. (5) Pickers fed by `components/picker.js` (user and team pickers) are left to Task 10b. Unlocks and keys show the user with `userLabel`; the keys pages do not use `named`, to keep one line per cell.
 - [ ] **Step 3: Gates (with `test-ui`), changelog `m17-task-10c-console-pages`, commit** `feat(console): labels across the remaining pages`.
 
 ---

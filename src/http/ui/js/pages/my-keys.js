@@ -9,6 +9,7 @@
 import { h, pill, fact } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
+import { catalogLabel } from '../core/labels.js';
 import { toast } from '../core/toast.js';
 import { drawerTicket } from '../core/drawer.js';
 import { count, when } from '../core/format.js';
@@ -42,7 +43,7 @@ const COLUMNS = [
     { key: 'name', label: 'Name', sort: key => key.name,
       render: key => h('span', { class: 'key-name', dataset: { test: `my-key-${key.name}` } }, key.name) },
     { key: 'catalogs', label: 'Catalogs', render: key => levelsCell(key, store.session?.ceiling) },
-    { key: 'default_catalog', label: 'Default', class: 'mono' },
+    { key: 'default_catalog', label: 'Default', render: row => (row.default_catalog ? catalogLabel(row.default_catalog) : '-') },
     { key: 'created_at', label: 'Created', sort: key => key.created_at, render: key => when(key.created_at) },
     { key: 'expires_at', label: 'Expires', sort: key => key.expires_at ?? '9999',
       render: key => key.expires_at ? when(key.expires_at) : 'never' },
@@ -140,8 +141,8 @@ function newKey(main, account, reload) {
         h('div', { class: 'inline-form', dataset: { test: `my-key-catalog-${catalog}` } },
             h('label', {},
                 h('input', { type: 'checkbox', name: 'catalog', value: catalog }), ' ',
-                h('span', { class: 'mono' }, catalog)),
-            h('select', { name: `level-${catalog}`, 'aria-label': `Access to ${catalog}` },
+                h('span', {}, catalogLabel(catalog))),
+            h('select', { name: `level-${catalog}`, 'aria-label': `Access to ${catalogLabel(catalog)}` },
                 levelsUpTo(access).map(level => h('option', { value: level }, level)))));
     const form = h('form', { id: 'my-key-form' },
         h('label', {}, 'Name',
@@ -150,7 +151,7 @@ function newKey(main, account, reload) {
         h('label', {}, 'Default catalog',
             h('select', { name: 'default_catalog' },
                 h('option', { value: '' }, 'None'),
-                account.ceiling.map(({ catalog }) => h('option', { value: catalog }, catalog)))),
+                account.ceiling.map(({ catalog }) => h('option', { value: catalog }, catalogLabel(catalog))))),
         h('label', {}, 'Expires', h('select', { name: 'expires_in' }, expiryOptions(account.limits))),
         h('button', { type: 'submit' }, 'Create key'));
     form.addEventListener('submit', async event => {
@@ -200,7 +201,7 @@ function showKey(main, key, reload, ticket = drawerTicket(main)) {
         fact('Id', h('code', {}, key.id)),
         fact('Actor', h('code', {}, key.actor)),
         fact('Catalogs', levelsCell(key, store.session?.ceiling)),
-        fact('Default', key.default_catalog ?? '-'),
+        fact('Default', key.default_catalog ? catalogLabel(key.default_catalog) : '-'),
         fact('Made by', key.self_issued ? 'you' : 'an admin (not capped by your ceiling)'),
         fact('Created', when(key.created_at)),
         fact('Expires', key.expires_at ? when(key.expires_at) : 'never'),

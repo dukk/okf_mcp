@@ -89,7 +89,7 @@ async fn a_refused_admin_unlocks_main_reads_it_and_ends_the_unlock() {
         ui.wait_text("#unlocks-table", "staff");
         ui.click("[data-test=unlock-end-main]");
         ui.click("#confirm-ok");
-        ui.wait_text("#toasts", "Ended the unlock of main");
+        ui.wait_text("#toasts", "Ended the unlock of Untitled catalog");
         ui.wait_text("#unlocks-table", "ended");
         ui.open("/browse/main");
         ui.wait_visible("#browse-locked");
@@ -326,7 +326,7 @@ async fn an_unlock_is_sent_once_its_refusals_stay_and_a_late_read_never_draws() 
         ui.fail_next("GET", "/unlocks", 503, "the server is unavailable");
         ui.click("[data-test=unlock-end-main]");
         ui.click("#confirm-ok");
-        ui.wait_text("#toasts", "Ended the unlock of main");
+        ui.wait_text("#toasts", "Ended the unlock of Untitled catalog");
         ui.wait_text("#unlocks-table", "ended");
         ui.wait_hidden("[data-test^=unlock-error-]");
         ui.release_held();

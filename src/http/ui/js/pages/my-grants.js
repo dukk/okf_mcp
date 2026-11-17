@@ -7,6 +7,7 @@
 import { h, pill, fact } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
+import { catalogLabel } from '../core/labels.js';
 import { toast } from '../core/toast.js';
 import { drawerTicket } from '../core/drawer.js';
 import { when } from '../core/format.js';
@@ -25,7 +26,7 @@ const COLUMNS = [
     { key: 'client_name', label: 'Client', sort: grant => grant.client_name ?? '',
       render: grant => h('span', { class: 'key-name', dataset: { test: `my-grant-${grant.name}` } }, CLIENT(grant)) },
     { key: 'catalogs', label: 'Catalogs', render: grant => levelsCell(grant, store.session?.ceiling) },
-    { key: 'default_catalog', label: 'Default', class: 'mono' },
+    { key: 'default_catalog', label: 'Default', render: row => (row.default_catalog ? catalogLabel(row.default_catalog) : '-') },
     { key: 'self_issued', label: 'From', render: ORIGIN },
     { key: 'created_at', label: 'Approved', sort: grant => grant.created_at, render: grant => when(grant.created_at) },
 ];
@@ -75,7 +76,7 @@ function showGrant(main, grant, reload) {
         h('dl', { class: 'facts' },
             fact('Id', h('code', {}, grant.id)),
             fact('Catalogs', levelsCell(grant, store.session?.ceiling)),
-            fact('Default', grant.default_catalog ?? '-'),
+            fact('Default', grant.default_catalog ? catalogLabel(grant.default_catalog) : '-'),
             fact('From', ORIGIN(grant)),
             fact('Approved', when(grant.created_at)),
             fact('State', pill('active', 'ok'))),

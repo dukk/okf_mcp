@@ -3,6 +3,7 @@
 import { h, pill } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
+import { catalogLabel } from '../core/labels.js';
 import { openDrawer, closeDrawer } from '../core/drawer.js';
 import { ago, when } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
@@ -83,7 +84,7 @@ export async function render(main, rest) {
     refreshFindingsBadge();
     main.append(h('header', { class: 'page-head' },
         h('div', {}, h('h1', {}, 'Runs'),
-            h('p', { class: 'muted' }, catalog ? `Maintenance runs in ${catalog}, newest first.` : 'No catalog selected.'))));
+            h('p', { class: 'muted' }, catalog ? `Maintenance runs in ${catalogLabel(catalog)}, newest first.` : 'No catalog selected.'))));
     if (!catalog) return;
     const table = listTable(columns(), [], { onRow: run => openRun(main, catalog, run.id), empty: 'No maintenance runs yet.' });
     table.id = 'runs-table';
