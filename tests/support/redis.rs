@@ -160,7 +160,9 @@ impl TestRedis {
         Some(())
     }
 
-    /// Starts a stopped container again on the same host port.
+    /// Starts a stopped container again. Docker may map it to a different host
+    /// port, so [`TestRedis::url`] can be stale afterwards: a test that
+    /// needs its clients to reconnect cannot rely on this.
     ///
     /// # Panics
     /// If Docker refuses the start.

@@ -266,7 +266,11 @@ async fn revoke_on_a(a: &TestServer, key: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_subscriber_whose_connection_is_killed_catches_up_when_it_resubscribes() {
+// Whether B hears the revoke from the resubscribed stream or from its
+// `Subscribed` reload depends on timing; the missed-announcement ordering is
+// pinned by `shared::announce::catch_up_tests`. This one checks the whole
+// server keeps announcing to a subscriber whose connection was killed.
+async fn a_subscriber_whose_connection_is_killed_still_learns_of_a_revoke() {
     let redis = TestRedis::start().await;
     let (a, b, _admin) = pair(&redis).await;
     let key = a.key("reader", Access::Read, &[], None).await;
