@@ -539,9 +539,11 @@ two). What `[redis]` does not share:
   Deployment, that means a second, single-replica Deployment of the same image
   with its own ConfigMap (`worker = true`), and `worker = false` in the
   serving Deployment's.
-- **Pruning.** Every replica's poll loop prunes the OAuth tables, sign-in
-  events and emailed-link tokens (hourly) and the audit log (daily). The
-  deletes are idempotent, so this wastes a little work and does nothing wrong.
+- **Pruning.** Every replica's poll loop prunes the OAuth tables, unbound
+  registered clients, console sessions, mail jobs, sign-in events and
+  emailed-link tokens (hourly), the audit log (daily) and empty changesets
+  (every pass). The deletes are idempotent, so this wastes a little work and
+  does nothing wrong.
 - **`okf_mcp_sessions_active`** counts the sessions each replica holds. A
   session restored on a second replica counts there too, so the sum over
   replicas can exceed the number of live sessions.
@@ -1141,7 +1143,7 @@ on its own task), so find a call by its tool span, not by the request's trace.
 | `okf.archive.export` and `okf.archive.import` | `okf.catalog` (only for a catalog that exists), `okf.archive.size` (bytes, on success), `okf.outcome` |
 | `okf.mail.job` | `okf.mail.template`, `okf.mail.provider`, `okf.outcome`. Never the address |
 | `okf.oauth.token` | `okf.oauth.grant` |
-| Redis calls: `connect` and `subscribe` (at `info`), then `publish`, `admits`, `bind`, `release`, `load_state`, `store_state`, `delete_state`, `run_counter` and the stored-state operations (at `debug`, off by default) | `db.system.name` (`redis`), `db.operation.name` (the same set as `okf_redis_errors_total`'s `operation`). Never a key name, a session or flow id, a value or the URL |
+| Redis calls: `connect` and `subscribe` (at `info`), then `publish`, `admits`, `bind`, `release`, `load_state`, `store_state`, `delete_state`, `run_counter` and the stored-state operations (at `debug`, off by default) | `db.system.name` (`redis`), `db.operation.name` (the same set as `okf_redis_errors_total`'s `operation`, except `decode`, which is a metric label only). Never a key name, a session or flow id, a value or the URL |
 | Everything else (store, handlers) | Function spans at `debug` and `trace`, off by default; they carry safe ids only |
 
 An event logged inside a span is exported as a log record carrying the span's
