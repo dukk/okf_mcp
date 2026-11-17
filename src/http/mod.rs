@@ -907,7 +907,9 @@ mod tests {
     fn suspended_is_403() {
         let suspended = AppError(OkfError::Suspended {
             catalog: "shared".to_string(),
+            catalog_label: "shared".to_string(),
             team: "family".to_string(),
+            team_label: "family".to_string(),
             notice: None,
         });
         assert_eq!(suspended.status(), StatusCode::FORBIDDEN);

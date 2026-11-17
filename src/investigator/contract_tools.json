@@ -14,7 +14,7 @@
           "type": "string"
         },
         "catalog": {
-          "description": "The catalog (default: the first selected catalog that has it).",
+          "description": "The catalog id (the `name` from `list_catalogs`; default: the first selected catalog that has it).",
           "type": [
             "string",
             "null"
@@ -177,6 +177,7 @@
       },
       "required": [
         "catalog",
+        "catalog_label",
         "path",
         "frontmatter",
         "lines",
@@ -186,7 +187,11 @@
       "type": "object",
       "properties": {
         "catalog": {
-          "description": "The catalog it came from.",
+          "description": "The catalog it came from (id).",
+          "type": "string"
+        },
+        "catalog_label": {
+          "description": "The catalog's label: say this to people, pass `catalog` in calls.",
           "type": "string"
         },
         "path": {
@@ -313,7 +318,7 @@
           "type": "string"
         },
         "catalog": {
-          "description": "The catalog (default: the first selected catalog with any revision of it).",
+          "description": "The catalog id (the `name` from `list_catalogs`; default: the first selected catalog with any revision of it).",
           "type": [
             "string",
             "null"
@@ -351,6 +356,13 @@
               "description": "Who made it.",
               "type": "string"
             },
+            "actor_label": {
+              "description": "The actor's label, when the actor is a user; null for a key or OAuth actor.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "message": {
               "description": "The publish message (`import` for an import).",
               "type": "string"
@@ -371,13 +383,18 @@
       },
       "required": [
         "catalog",
+        "catalog_label",
         "path",
         "revisions"
       ],
       "type": "object",
       "properties": {
         "catalog": {
-          "description": "The catalog it came from.",
+          "description": "The catalog it came from (id).",
+          "type": "string"
+        },
+        "catalog_label": {
+          "description": "The catalog's label: say this to people, pass `catalog` in calls.",
           "type": "string"
         },
         "path": {
@@ -414,7 +431,7 @@
       "type": "object",
       "properties": {
         "catalog": {
-          "description": "Required authorized catalog name; connection defaults do not apply.",
+          "description": "Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.",
           "type": "string"
         },
         "idempotency_key": {
@@ -543,7 +560,7 @@
       "type": "object",
       "properties": {
         "catalog": {
-          "description": "Required authorized catalog name; connection defaults do not apply.",
+          "description": "Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.",
           "type": "string"
         },
         "run_id": {
@@ -676,7 +693,7 @@
       "type": "object",
       "properties": {
         "catalog": {
-          "description": "Required authorized catalog name; connection defaults do not apply.",
+          "description": "Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.",
           "type": "string"
         },
         "run_id": {
@@ -943,7 +960,7 @@
       "type": "object",
       "properties": {
         "catalog": {
-          "description": "Required authorized catalog name; connection defaults do not apply.",
+          "description": "Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.",
           "type": "string"
         },
         "path": {
@@ -1029,7 +1046,7 @@
       "type": "object",
       "properties": {
         "catalog": {
-          "description": "Required authorized catalog name; connection defaults do not apply.",
+          "description": "Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.",
           "type": "string"
         },
         "work_id": {
@@ -1255,7 +1272,7 @@
       "type": "object",
       "properties": {
         "catalog": {
-          "description": "Required authorized catalog name; connection defaults do not apply.",
+          "description": "Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.",
           "type": "string"
         },
         "work_id": {
@@ -1397,7 +1414,7 @@
           "type": "string"
         },
         "catalogs": {
-          "description": "The catalogs to search (default: this connection's catalogs).",
+          "description": "The catalog ids to search (the `name`s from `list_catalogs`; default: this connection's catalogs).",
           "type": [
             "array",
             "null"
@@ -1450,10 +1467,14 @@
     "outputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "$defs": {
-        "CatalogHit": {
-          "description": "One hit of a search across catalogs.",
+        "LabeledHit": {
+          "description": "One hit, with its catalog's label beside the catalog id.",
           "type": "object",
           "properties": {
+            "catalog_label": {
+              "description": "The catalog's label: say this to people, pass `catalog` in calls.",
+              "type": "string"
+            },
             "catalog": {
               "description": "The catalog holding the concept.",
               "type": "string"
@@ -1497,6 +1518,7 @@
             }
           },
           "required": [
+            "catalog_label",
             "catalog",
             "path",
             "lines",
@@ -1508,7 +1530,11 @@
           "type": "object",
           "properties": {
             "catalog": {
-              "description": "The catalog.",
+              "description": "The catalog (id).",
+              "type": "string"
+            },
+            "catalog_label": {
+              "description": "The catalog's label: say this to people, pass `catalog` in calls.",
               "type": "string"
             },
             "error": {
@@ -1517,6 +1543,7 @@
           },
           "required": [
             "catalog",
+            "catalog_label",
             "error"
           ]
         }
@@ -1531,7 +1558,7 @@
           "description": "Best first: concepts holding the whole query in a better field\nfirst, deprecated concepts last, then catalog order, then path.",
           "type": "array",
           "items": {
-            "$ref": "#/$defs/CatalogHit"
+            "$ref": "#/$defs/LabeledHit"
           }
         },
         "skipped": {

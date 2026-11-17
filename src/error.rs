@@ -154,12 +154,16 @@ pub enum OkfError {
     /// export works until the operator lifts it.
     // `.catalog`, `.team` and `.notice` name the variant's fields inside
     // `#[error]`; `.as_deref()` turns `&Option<String>` into `Option<&str>`.
-    #[error("{}", suspended_message(.catalog, .team, .notice.as_deref()))]
+    #[error("{}", suspended_message(.catalog, .catalog_label, .team, .team_label, .notice.as_deref()))]
     Suspended {
-        /// The catalog asked for.
+        /// The catalog asked for (its id).
         catalog: String,
-        /// Its owner team.
+        /// The catalog's label.
+        catalog_label: String,
+        /// Its owner team (its id).
         team: String,
+        /// The owner team's label.
+        team_label: String,
         /// The operator's notice, if any.
         notice: Option<String>,
     },
@@ -458,6 +462,7 @@ impl OkfError {
                 catalog,
                 team,
                 notice,
+                ..
             } => {
                 body["catalog"] = catalog.as_str().into();
                 body["team"] = team.as_str().into();
@@ -482,21 +487,32 @@ impl OkfError {
     }
 }
 
-/// The text of [`OkfError::Suspended`]: the catalog, the team, then the
-/// notice as its own sentence.
+/// The text of [`OkfError::Suspended`]: the catalog's label and id, the
+/// team's label and id, then the notice as its own sentence.
 ///
 /// # Arguments
-/// * `catalog` - the catalog asked for.
-/// * `team` - its owner team.
+/// * `catalog` - the catalog asked for (its id).
+/// * `catalog_label` - its label.
+/// * `team` - its owner team (its id).
+/// * `team_label` - the team's label.
 /// * `notice` - the operator's notice, if any.
 ///
 /// # Returns
-/// The message, e.g. `catalog "shared" is unavailable: its team "family" is
-/// suspended. Contact the operator.`
+/// The message, e.g. `catalog "Family notes" (shared) is unavailable: its
+/// team "The Family" (family) is suspended. Contact the operator.`
 #[tracing::instrument(level = "trace", skip_all)]
-fn suspended_message(catalog: &str, team: &str, notice: Option<&str>) -> String {
-    // `{catalog:?}` is the `Debug` form: the name in double quotes, escaped.
-    let mut message = format!("catalog {catalog:?} is unavailable: its team {team:?} is suspended");
+fn suspended_message(
+    catalog: &str,
+    catalog_label: &str,
+    team: &str,
+    team_label: &str,
+    notice: Option<&str>,
+) -> String {
+    // `{catalog_label:?}` is the `Debug` form: the label in double quotes, escaped.
+    let mut message = format!(
+        "catalog {catalog_label:?} ({catalog}) is unavailable: its team {team_label:?} \
+         ({team}) is suspended"
+    );
     if let Some(notice) = notice {
         message.push_str(". ");
         message.push_str(notice);
@@ -627,7 +643,9 @@ mod tests {
     fn suspended_names_the_catalog_team_and_notice() {
         let error = OkfError::Suspended {
             catalog: "shared".to_string(),
+            catalog_label: "Family notes".to_string(),
             team: "family".to_string(),
+            team_label: "The Family".to_string(),
             notice: Some("Contact the operator.".to_string()),
         };
 
@@ -641,8 +659,8 @@ mod tests {
         assert_eq!(body["notice"], "Contact the operator.");
         assert_eq!(
             body["message"],
-            "catalog \"shared\" is unavailable: its team \"family\" is suspended. \
-             Contact the operator."
+            "catalog \"Family notes\" (shared) is unavailable: its team \"The Family\" \
+             (family) is suspended. Contact the operator."
         );
     }
 
@@ -650,7 +668,9 @@ mod tests {
     fn suspended_without_a_notice_has_a_null_notice() {
         let error = OkfError::Suspended {
             catalog: "shared".to_string(),
+            catalog_label: "shared".to_string(),
             team: "family".to_string(),
+            team_label: "family".to_string(),
             notice: None,
         };
 
@@ -661,7 +681,8 @@ mod tests {
         assert_eq!(body.get("notice"), Some(&serde_json::Value::Null));
         assert_eq!(
             body["message"],
-            "catalog \"shared\" is unavailable: its team \"family\" is suspended"
+            "catalog \"shared\" (shared) is unavailable: its team \"family\" (family) \
+             is suspended"
         );
     }
 
