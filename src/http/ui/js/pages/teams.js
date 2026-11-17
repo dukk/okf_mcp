@@ -14,7 +14,8 @@ import { ago, count, when } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
 import { confirmDialog } from '../components/confirm.js';
 import { namesOf, picker } from '../components/picker.js';
-import { canAdministerPeople } from '../core/shell.js';
+import { named, userLabel } from '../core/labels.js';
+import { canAdministerPeople, refreshIdentity } from '../core/shell.js';
 import { guard, once } from '../core/pending.js';
 
 const ROLES = ['member', 'owner'];
@@ -32,14 +33,13 @@ export async function render(main) {
     }
     const manager = canAdministerPeople();
     const columns = [
-        { key: 'name', label: 'Name', sort: team => team.name,
-          render: team => h('code', { dataset: { test: `team-${team.name}` } }, team.name,
+        { key: 'name', label: 'Name', sort: team => team.label.toLowerCase(),
+          render: team => h('span', { dataset: { test: `team-${team.name}` } },
+              named(team.label, team.name),
               team.personal_of ? [' ', pill('personal', 'muted')] : null,
               team.suspended_at
                   ? [' ', h('span', { dataset: { test: `team-suspended-${team.name}` } }, pill('suspended', 'error'))]
                   : null) },
-        { key: 'display_name', label: 'Display name',
-          render: team => team.display_name || h('span', { class: 'muted' }, '-') },
         { key: 'members', label: 'Members', sort: team => team.members.length,
           render: team => count(team.members.length, 'member') },
         { key: 'catalogs', label: 'Catalogs',
@@ -171,7 +171,7 @@ export async function render(main) {
                     role.value = member.role;   // refused (the last owner): show the role it kept
                     return;
                 }
-                await changed(team.name, answer.team, { message: `${member.user} is now ${role.value} of ${team.name}.` });
+                await changed(team.name, answer.team, { message: `${member.label} is now ${role.value} of ${team.label}.` });
             });
             const personal = member.user === team.personal_of;
             const remove = h('button', {
@@ -181,10 +181,10 @@ export async function render(main) {
                 onclick: async () => {
                     let updated;
                     try { updated = await api.del(`${base}/${enc(member.user)}`); } catch { return; }
-                    await changed(team.name, updated, { message: `Removed ${member.user} from ${team.name}.` });
+                    await changed(team.name, updated, { message: `Removed ${member.label} from ${team.label}.` });
                 },
             }, 'Remove');
-            return h('li', {}, h('span', { class: 'mono' }, member.user), role, remove);
+            return h('li', {}, named(member.label, member.user), role, remove);
         }));
         const candidates = users.filter(user => !team.members.some(member => member.user === user));
         const add = h('form', { id: 'member-form', class: 'inline-form' },
@@ -199,7 +199,7 @@ export async function render(main) {
             try { answer = await api.put(`${base}/${enc(user)}`, { role: String(data.get('role') ?? 'member') }); } catch {
                 return;
             }
-            await changed(team.name, answer.team, { message: `Added ${user} to ${team.name}.` });
+            await changed(team.name, answer.team, { message: `Added ${userLabel(user)} to ${team.label}.` });
         });
         const suspension = suspensionSection(team, refusal);
         const reason = team.personal_of
@@ -209,23 +209,25 @@ export async function render(main) {
             type: 'button', id: 'team-delete', class: 'danger', disabled: !manager || !!reason,
             onclick: async () => {
                 const ok = await confirmDialog({
-                    title: `Delete team ${team.name}?`,
+                    title: `Delete team ${team.label}?`,
                     message: 'Its memberships are deleted with it. This cannot be undone.',
                     action: 'Delete',
                 });
                 if (!ok) return;
                 try { await api.del(`/teams/${enc(team.name)}`); } catch { return; }
-                toast(`Deleted team ${team.name}.`, 'ok');
+                toast(`Deleted team ${team.label}.`, 'ok');
                 ticket.close();
                 if (main.isConnected) await load();
             },
         }, 'Delete team');
-        ticket.open(team.name, team.display_name || (team.personal_of ? 'Personal team' : 'Team'),
+        ticket.open(team.label, team.personal_of ? 'Personal team' : 'Team',
             teamStale || usersStale ? h('p', { id: 'team-stale', class: 'error small', role: 'status' },
                 teamStale
                     ? 'Could not read this team again, so what is shown may be out of date.'
                     : 'Could not read the users again, so the users to add may be out of date.') : null,
+            nameSection(team),
             h('dl', { class: 'facts', id: 'team-detail' },
+                h('dt', {}, 'Team ID'), h('dd', {}, h('code', {}, team.name)),
                 h('dt', {}, 'Catalogs'), h('dd', {}, team.catalogs.length ? team.catalogs.join(', ') : '-'),
                 h('dt', {}, 'Created'), h('dd', {}, when(team.created_at))),
             h('section', {},
@@ -238,6 +240,36 @@ export async function render(main) {
                 h('h3', {}, 'Delete'),
                 remove,
                 reason ? h('p', { id: 'team-delete-reason', class: 'muted small' }, reason) : null));
+    }
+
+    // The drawer's display-name field. A personal team is named after its
+    // user, so it has none. Saving is a pending write keyed by the team
+    // (core/pending.js); the list, the drawer and every label on screen are
+    // read again once it settles, a refusal's reason staying in the drawer.
+    function nameSection(team) {
+        if (team.personal_of) {
+            return h('p', { id: 'team-named-after', class: 'muted small' }, 'Named after its user.');
+        }
+        const key = `team:${team.name}:display-name`;
+        const input = guard(h('input', { id: 'team-display-name', name: 'display_name', maxlength: 80,
+            value: team.display_name, autocomplete: 'off', 'aria-label': 'Display name' }), key, manager);
+        const save = guard(h('button', { type: 'submit', id: 'team-display-name-save' }, 'Save'), key, manager);
+        const form = h('form', { id: 'team-display-name-form', class: 'inline-form' }, input, save);
+        form.addEventListener('submit', event => {
+            event.preventDefault();
+            once(key, async () => {
+                let answer = null;
+                let refused = null;
+                try {
+                    answer = await api.patch(`/teams/${enc(team.name)}`, { display_name: input.value.trim() });
+                } catch (error) {
+                    refused = error.message;   // already toasted by api.js
+                }
+                await refreshIdentity().catch(() => {});
+                await changed(team.name, answer, { message: refused ? null : 'Display name saved.', refusal: refused });
+            });
+        });
+        return h('section', {}, h('h3', {}, 'Display name'), form);
     }
 
     // The drawer's Suspension section. A suspended team's catalogs refuse

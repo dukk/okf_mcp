@@ -677,7 +677,7 @@ async fn a_member_edits_their_display_name_and_an_over_long_one_is_refused() {
 /// A non-admin `bob` who owns the shared team `acme` ("Acme", with a
 /// catalog so he reaches one) and a plain member `carol` of it. Both sign
 /// in with [`PASSWORD`] and `<name>@example.com`.
-async fn acme_with_owner_and_member(server: &TestServer) {
+pub(crate) async fn acme_with_owner_and_member(server: &TestServer) {
     let pool = &server.db.pool;
     server
         .user_with_password("bob", "bob@example.com", PASSWORD)

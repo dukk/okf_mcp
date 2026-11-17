@@ -90,7 +90,7 @@ async fn an_admin_creates_and_deletes_a_catalog_and_the_switcher_follows() {
         ui.click("#catalog-create-form button[type=submit]");
         // The page rebuilds the switcher before it redraws the table.
         ui.wait_visible("[data-catalog=scratch]");
-        ui.wait_text("[data-test=catalog-owner-scratch]", OWNER);
+        ui.wait_text("[data-test=catalog-owner-scratch]", "'s team");
         assert_eq!(switcher(ui), ["main", "scratch"]);
 
         ui.click("[data-catalog=scratch]");
@@ -129,7 +129,7 @@ async fn an_admin_changes_a_catalogs_owner_and_a_scoped_admin_cannot() {
         // A scoped admin sees the owner, but the control is disabled.
         ui.login(&scoped);
         ui.open("/catalogs");
-        ui.wait_text("[data-test=catalog-owner-main]", OWNER);
+        ui.wait_text("[data-test=catalog-owner-main]", "'s team");
         ui.click("[data-catalog=main]");
         ui.wait_visible("#catalog-owner-select[disabled]");
         ui.wait_visible("#catalog-owner-save[disabled]");
@@ -145,7 +145,7 @@ async fn an_admin_changes_a_catalogs_owner_and_a_scoped_admin_cannot() {
         ui.wait_text("#catalog-owner-save", "Change owner");
         ui.select("#catalog-owner-select", "family");
         ui.click("#catalog-owner-save");
-        ui.wait_text("[data-test=catalog-owner-main]", "family");
+        ui.wait_text("[data-test=catalog-owner-main]", "Unnamed team");
     })
     .await;
     if !ran {
@@ -607,6 +607,121 @@ async fn a_scoped_admin_cannot_change_member_access() {
         ui.wait_text("#catalog-member-access", "every catalog");
         // The page itself carries no stray "null" under the table.
         assert!(!ui.text("#main").contains("null"));
+    })
+    .await;
+}
+
+/// The value of the input `selector`.
+fn input_value(ui: &Ui, selector: &str) -> serde_json::Value {
+    ui.eval(
+        "(selector) => document.querySelector(selector).value",
+        json!(selector),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_admin_edits_a_catalogs_display_name_and_description_together() {
+    let server = server().await;
+    let root = server.key("console-root", Access::Admin, &[], None).await;
+    crate::account::acme_with_owner_and_member(&server).await;
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&root);
+        ui.open("/catalogs");
+        // The label heads the cell with the slug beneath; Owner is the team's label.
+        let cell = ui.wait_text("[data-catalog=acme-notes]", "acme-notes");
+        assert!(cell.contains("acme-notes"), "{cell}");
+        ui.wait_text("[data-test=catalog-owner-acme-notes]", "Acme");
+        ui.click("[data-catalog=acme-notes]");
+        ui.wait_visible("#catalog-display-name");
+        ui.fill("#catalog-display-name", "Notes");
+        ui.fill("#catalog-description", "Shared notes");
+        ui.click("#catalog-save");
+        ui.wait_text("#toasts", "Saved Notes");
+        ui.wait_text("[data-catalog=acme-notes]", "Notes");
+        ui.wait_text("#catalog-select", "Notes");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let row = okf_mcp::store::catalogs::find(&server.db.pool, "acme-notes")
+        .await
+        .expect("the catalog");
+    assert_eq!(row.display_name, "Notes");
+    assert_eq!(row.description, "Shared notes");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_non_admin_team_owner_renames_their_catalog_and_a_member_sees_no_editor() {
+    let server = login_server().await;
+    crate::account::acme_with_owner_and_member(&server).await;
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password("carol@example.com", PASSWORD);
+        ui.open("/catalogs");
+        ui.click("[data-catalog=acme-notes]");
+        ui.wait_visible("#catalog-maintenance-section");
+        assert!(!ui
+            .page
+            .is_visible("#catalog-display-name")
+            .expect("visible"));
+        assert!(!ui.page.is_visible("#catalog-save").expect("visible"));
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password("bob@example.com", PASSWORD);
+        ui.open("/catalogs");
+        ui.click("[data-catalog=acme-notes]");
+        ui.wait_visible("#catalog-display-name");
+        // No team picker, member access or Delete: the admin's alone.
+        assert!(!ui
+            .page
+            .is_visible("#catalog-owner-select")
+            .expect("visible"));
+        assert!(!ui
+            .page
+            .is_visible("#catalog-member-access")
+            .expect("visible"));
+        assert!(!ui.page.is_visible("#catalog-delete").expect("visible"));
+        assert_eq!(input_value(ui, "#catalog-display-name"), "");
+        ui.fill("#catalog-display-name", "Acme Notes");
+        ui.click("#catalog-save");
+        ui.wait_text("#toasts", "Saved Acme Notes");
+        ui.wait_text("[data-catalog=acme-notes]", "Acme Notes");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let row = okf_mcp::store::catalogs::find(&server.db.pool, "acme-notes")
+        .await
+        .expect("the catalog");
+    assert_eq!(row.display_name, "Acme Notes");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_delete_dialog_still_asks_for_the_slug_of_a_labelled_catalog() {
+    let server = server().await;
+    let root = server.key("console-root", Access::Admin, &[], None).await;
+    crate::account::acme_with_owner_and_member(&server).await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&root);
+        ui.open("/catalogs");
+        ui.click("[data-catalog=acme-notes]");
+        ui.wait_visible("#catalog-display-name");
+        ui.fill("#catalog-display-name", "Notes");
+        ui.click("#catalog-save");
+        ui.wait_text("[data-catalog=acme-notes]", "Notes");
+        ui.click("[data-catalog=acme-notes]");
+        ui.click("#catalog-delete");
+        ui.wait_text("dialog.confirm", "Delete Notes?");
+        ui.wait_text("dialog.confirm", "acme-notes");
+        ui.fill("#confirm-typed", "Notes");
+        assert_eq!(disabled(ui, &["#confirm-ok"]), [true]);
+        ui.fill("#confirm-typed", "acme-notes");
+        assert_eq!(disabled(ui, &["#confirm-ok"]), [false]);
     })
     .await;
 }
