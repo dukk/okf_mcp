@@ -911,6 +911,49 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn an_exchange_on_the_other_replica_catches_up_on_its_grant() {
+        // Codes are per instance until Task 7, so A's stored code is copied
+        // into B's map by hand; the exchange on B must then catch up on the
+        // grant A's consent made (spec Decision 14) instead of refusing it.
+        let (a, b, _redis) = crate::oauth::testing::oauth_replica_pair().await;
+        let code = authorization_code(&a).await;
+        let key = code_key(&code);
+        let now = Instant::now();
+        let stored = a
+            .app
+            .oauth()
+            .expect("OAuth is on")
+            .codes
+            .update(&key, now, |stored| stored.clone())
+            .expect("A holds the code");
+        let grant = stored.grant_id.clone();
+        let b_oauth = b.oauth().expect("OAuth is on");
+        assert!(b_oauth.codes.insert(key, stored, now), "B takes the copy");
+        assert!(b.keys().find_grant(&grant).is_none(), "B lacks the grant");
+        let request = TokenForm {
+            grant_type: Some("authorization_code".to_string()),
+            code: Some(code),
+            client_id: Some(CLIENT_ID.to_string()),
+            redirect_uri: Some(REDIRECT_URI.to_string()),
+            code_verifier: Some(VERIFIER.to_string()),
+            resource: Some(RESOURCE.to_string()),
+            ..TokenForm::default()
+        };
+
+        let answer = super::exchange_code(&b, b_oauth, &request).await;
+
+        let tokens = answer.unwrap_or_else(|error| panic!("B issues tokens: {error:?}"));
+        assert!(b.keys().find_grant(&grant).is_some(), "B learned the grant");
+        let principal = b_oauth
+            .access
+            .verify(&b, RESOURCE, &tokens.access_token)
+            .await
+            .expect("verify answers")
+            .expect("the issued access token verifies on B");
+        assert_eq!(principal.key_id, grant);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_refresh_on_the_other_replica_catches_up_on_its_grant() {
         // The code is exchanged on A (codes are per instance until Task 7);
         // the refresh token lives in Postgres, so B can rotate it, once it
