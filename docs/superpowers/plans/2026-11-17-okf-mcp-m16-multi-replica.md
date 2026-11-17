@@ -853,6 +853,8 @@ impl redis::aio::ConnectionLike for RedisConnection {
 - `Redis::connection()` returns `RedisConnection`. Task 1's call sites (`connect`'s `PING`, the tests) compile unchanged apart from the type.
 - `Redis::client()` is removed. Its only caller was the pub/sub plan for Task 3, which Step 5 replaces. Keep whatever the handle needs to open a subscription connection later: the `redis::Client` (standalone) or the `ClusterClient` (cluster), in a private enum.
 
+> **Corrected (issue #570, 2026-11-17).** `Redis` keeps the parsed `redis::ConnectionInfo` (in an `Arc`) and its `RedisMode`, not a `Client` or `ClusterClient`: `subscribe` builds its own RESP3 client from the info in either mode. `redis::cluster::ClusterClientBuilder` is the builder's path in redis 1.8.2.
+
 - [ ] **Step 4: `connect` by mode**
 
 - Standalone: as Task 1.
@@ -907,7 +909,9 @@ impl Redis {
 - [ ] **Step 7: Tests** (each wait bounded)
 
 - Cluster connect and `PING` work, and `App::load_with_redis` builds with `mode = "cluster"`.
-- On the cluster container, a two-key script over two `Redis::key` names runs, and the same script over two untagged names fails with `CROSSSLOT` (this proves the container is a real cluster).
+- On the cluster container, a two-key script over two `Redis::key` names runs, and the same script over two untagged names fails with a `CrossSlot` error (this proves the client is cluster-aware).
+
+> **Corrected (issue #570, 2026-11-17).** The cluster client refuses a cross-slot script itself, before sending it, so the error reads `CrossSlot: Keys in request don't hash to the same slot` and not the server's `CROSSSLOT`. The test accepts either spelling.
 - In both modes: `subscribe` yields `Subscribed`, then a `PUBLISH` on the main connection yields `Message` with the payload.
 - In both modes: `CLIENT KILL TYPE pubsub` from the main connection makes the subscription yield `Disconnected` (or skip straight to it) and then `Subscribed` again, and a message published afterwards arrives. That is the resubscribe the announcement subscriber relies on (Task 3).
 - The existing Task 1 tests pass in standalone mode unchanged, apart from the names' braces.

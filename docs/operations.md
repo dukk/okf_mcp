@@ -21,6 +21,15 @@ changesets and the routes in detail.
   not find it. Publishing is safe across processes (a Postgres advisory lock
   orders publishes of a catalog). Milestone 16 adds `[redis]` to share that
   state. Don't scale it out until then.
+- **`[redis]` (milestone 16, in progress):** `url_env` names the variable
+  holding the URL (`redis://` or `rediss://`; a password never goes in the
+  file), and `key_prefix` (default `okf:`, no braces) names the deployment.
+  `mode = "standalone"` (default) talks to one Redis or Valkey primary.
+  `mode = "cluster"` uses a cluster-aware client, for ElastiCache Serverless
+  (which runs only in cluster mode and requires TLS, so use a `rediss://` URL)
+  and other clusters. In both modes every key and channel carries one hash tag,
+  `{<key_prefix>}`, so a script over several keys stays on one slot. The full
+  section arrives with the rest of the milestone.
 - **Routes:**
 
   | Route | Access | Does |

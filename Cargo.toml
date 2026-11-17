@@ -132,7 +132,7 @@ tar = "0.4.46"
 # 2026-11-17-okf-multi-replica-design.md). Pinned exactly: 1.8.2 is the newest
 # stable release (2.0 is a release candidate). Default features off; we use the
 # tokio connection manager, Lua scripts and rustls TLS (`rediss://`).
-redis = { version = "=1.8.2", default-features = false, features = ["tokio-comp", "connection-manager", "script", "tokio-rustls-comp"] }
+redis = { version = "=1.8.2", default-features = false, features = ["tokio-comp", "connection-manager", "cluster-async", "script", "tokio-rustls-comp"] }
 # `StreamExt::next` on the pub/sub message stream (already in the lock via redis).
 futures-util = { version = "0.3", default-features = false }
 # Only to install ring as the process CryptoProvider before a `rediss://`

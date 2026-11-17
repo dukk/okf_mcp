@@ -14,7 +14,7 @@ use chrono::Utc;
 use okf_mcp::app::App;
 use okf_mcp::archive::Files;
 use okf_mcp::clock::SystemClock;
-use okf_mcp::config::{Config, RedisConfig};
+use okf_mcp::config::{Config, RedisConfig, RedisMode};
 use okf_mcp::okf::workspace::StoredFile;
 use okf_mcp::shared::Redis;
 use okf_mcp::store::audit::AuditActor;
@@ -632,6 +632,11 @@ pub fn redis_config(server: &TestRedis) -> RedisConfig {
     RedisConfig {
         url_env: URL_VAR.to_string(),
         key_prefix: server.prefix.clone(),
+        mode: if server.cluster {
+            RedisMode::Cluster
+        } else {
+            RedisMode::Standalone
+        },
     }
 }
 

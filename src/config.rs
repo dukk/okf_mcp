@@ -578,6 +578,19 @@ fn default_key_prefix() -> String {
     "okf:".to_string()
 }
 
+/// Which Redis client `[redis]` uses (spec Decision 20).
+// `rename_all = "lowercase"` makes the TOML spelling `"standalone"` or
+// `"cluster"`; anything else is a parse error (Python: an Enum lookup).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RedisMode {
+    /// One Redis or Valkey primary (`ConnectionManager`).
+    #[default]
+    Standalone,
+    /// A cluster, including ElastiCache Serverless (`ClusterClient`).
+    Cluster,
+}
+
 /// The `[redis]` table (spec Decision 1). Absent: every short-lived state stays
 /// in memory and one replica is required. Present: `serve` keeps it in Redis.
 // `deny_unknown_fields` makes a misspelt key (or a `url = ...` that would put a
@@ -592,6 +605,11 @@ pub struct RedisConfig {
     /// deployments. Default `"okf:"`.
     #[serde(default = "default_key_prefix")]
     pub key_prefix: String,
+    /// `"standalone"` (default) or `"cluster"` (ElastiCache Serverless and
+    /// other clusters). Every key and channel carries one hash tag in both
+    /// modes (spec Decision 20).
+    #[serde(default)]
+    pub mode: RedisMode,
 }
 
 impl RedisConfig {
@@ -603,7 +621,8 @@ impl RedisConfig {
     /// # Errors
     /// A message naming the bad key: `url_env` that is empty or has a
     /// character outside `[A-Za-z0-9_]`; `key_prefix` that is empty, over 64
-    /// bytes, or holds whitespace or a control character.
+    /// bytes, or holds whitespace, a control character or a brace (the prefix
+    /// goes inside the hash tag `{<prefix>}`).
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -626,10 +645,12 @@ impl RedisConfig {
         let prefix = &self.key_prefix;
         if prefix.is_empty()
             || prefix.len() > MAX_REDIS_KEY_PREFIX_BYTES
-            || prefix.chars().any(|c| c.is_whitespace() || c.is_control())
+            || prefix
+                .chars()
+                .any(|c| c.is_whitespace() || c.is_control() || c == '{' || c == '}')
         {
             return Err(format!(
-                "redis.key_prefix must be 1 to {MAX_REDIS_KEY_PREFIX_BYTES} bytes with no whitespace or control characters"
+                "redis.key_prefix must be 1 to {MAX_REDIS_KEY_PREFIX_BYTES} bytes with no whitespace, control characters or braces"
             ));
         }
         Ok(())
@@ -1134,7 +1155,18 @@ mod tests {
         let redis = config.redis.clone().expect("a [redis] table");
         assert_eq!(redis.url_env, "OKF_REDIS_URL");
         assert_eq!(redis.key_prefix, "okf:");
+        assert_eq!(redis.mode, RedisMode::Standalone);
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn redis_mode_parses_cluster_and_refuses_anything_else() {
+        let config = Config::from_toml("[redis]\nurl_env = \"X\"\nmode = \"cluster\"\n").unwrap();
+        assert_eq!(config.redis.expect("a table").mode, RedisMode::Cluster);
+        let config =
+            Config::from_toml("[redis]\nurl_env = \"X\"\nmode = \"standalone\"\n").unwrap();
+        assert_eq!(config.redis.expect("a table").mode, RedisMode::Standalone);
+        assert!(Config::from_toml("[redis]\nurl_env = \"X\"\nmode = \"sentinel\"\n").is_err());
     }
 
     #[test]
@@ -1156,6 +1188,14 @@ mod tests {
             ),
             (
                 "[redis]\nurl_env = \"X\"\nkey_prefix = \"a b\"\n".to_string(),
+                "redis.key_prefix",
+            ),
+            (
+                "[redis]\nurl_env = \"X\"\nkey_prefix = \"a{b\"\n".to_string(),
+                "redis.key_prefix",
+            ),
+            (
+                "[redis]\nurl_env = \"X\"\nkey_prefix = \"a}\"\n".to_string(),
                 "redis.key_prefix",
             ),
             (long_prefix, "redis.key_prefix"),
