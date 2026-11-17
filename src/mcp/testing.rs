@@ -324,9 +324,45 @@ pub(crate) async fn app_with_redis(config: Config) -> (TestApp, TestRedis) {
 /// # Panics
 /// If the database or the load fails: a broken test setup.
 pub(crate) async fn app_on_redis(config: Config, redis: TestRedis) -> (TestApp, TestRedis) {
+    app_on_redis_with(config, redis, &Metrics::global()).await
+}
+
+/// [`app_on_redis`] with the Redis handle counting on `metrics` (a test's
+/// [`local_metrics`]), so a test can read `okf.redis.errors`.
+///
+/// # Arguments
+/// * `config` - the server's settings (its `[redis]` is replaced).
+/// * `redis` - the server the app connects to.
+/// * `metrics` - where the app's Redis handle counts its errors.
+///
+/// # Returns
+/// The app and `redis`.
+///
+/// # Panics
+/// If the database, Redis or the load fails: a broken test setup.
+pub(crate) async fn app_on_redis_with(
+    config: Config,
+    redis: TestRedis,
+    metrics: &Metrics,
+) -> (TestApp, TestRedis) {
     let config = redis_config(config, &redis);
     let db = seed(&[], Utc::now()).await;
-    let app = load_shared(&db, config, &redis).await;
+    let handle = crate::shared::Redis::connect(
+        config.redis.as_ref().expect("[redis] was just set"),
+        &redis.env(),
+        metrics,
+    )
+    .await
+    .expect("connect to the test redis");
+    let app = App::load_with_redis(
+        db.pool.clone(),
+        config,
+        Arc::new(SystemClock),
+        Metrics::global(),
+        Some(handle),
+    )
+    .await
+    .expect("load the app");
     (
         TestApp {
             app,

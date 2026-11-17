@@ -314,7 +314,7 @@ fn mcp_service(
     // The same switch for the later POSTs of a session (`tools/list`, ...):
     // rmcp reads it from the session config, not from the HTTP config.
     sessions.session_config.sse_retry = None;
-    let config = StreamableHttpServerConfig::default()
+    let mut config = StreamableHttpServerConfig::default()
         .with_allowed_hosts(app.config().allowed_hosts.iter().cloned())
         // No SSE priming event on the `initialize` reply. For protocol
         // versions before 2026-07-28 rmcp streams every POST reply and, when
@@ -326,6 +326,13 @@ fn mcp_service(
         // A child token: cancelling `shutdown` cancels it too, and rmcp
         // cancelling its own copy never reaches `shutdown`.
         .with_cancellation_token(shutdown.child_token());
+    // With `[redis]`, rmcp persists each session's `initialize` so another
+    // replica can restore it (spec Decision 9). The same value holds the
+    // bindings `bind_session` checks; `Arc<RedisSessions>` coerces to the
+    // trait object `Arc<dyn SessionStore>` here.
+    if let Some(store) = app.sessions().store() {
+        config.session_store = Some(store);
+    }
     let app = Arc::clone(app);
     // The factory runs once per session; `move` gives the closure its own
     // `Arc` (like a Python closure capturing `app`, but by explicit transfer).
