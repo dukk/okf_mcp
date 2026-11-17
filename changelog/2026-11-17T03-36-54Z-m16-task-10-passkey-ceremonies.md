@@ -63,7 +63,11 @@ Decisions 3-8 and 16).
 
 ## Notes
 
-- The memory tests are unchanged apart from `.await`.
+- The memory tests are unchanged apart from `.await` and the setup finish's
+  new request body: every existing test that posts to
+  `/auth/passkey/setup/finish` now wraps the credential in
+  `{ "token", "credential" }` (through the `register_by_setup` helper, and
+  directly in the cross-kind, hostile `return_to` and cross-site tests).
 - Reading Redis gives no one a setup link or a console session: the
   ceremony keeps only their hashes (the maintainer, on review of PR #577).
 - Revert-checked: dropping the token-hash check fails the other-token test
