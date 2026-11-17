@@ -21,7 +21,7 @@ import { count } from '../core/format.js';
 import { guard, once } from '../core/pending.js';
 import { confirmDialog } from './confirm.js';
 import { picker } from './picker.js';
-import { userLabel } from '../core/labels.js';
+import { catalogLabel, userLabel } from '../core/labels.js';
 import { sessionTable, signInTable } from './activity.js';
 
 const LEVELS = ['read', 'write'];
@@ -132,7 +132,7 @@ function entitlementSection(name, entitlements, catalogs, { act, pending, manage
     });
     const held = new Set(entitlements.map(entry => entry.catalog));
     const addable = catalogs.filter(catalog => !held.has(catalog));
-    const catalog = picker({ name: 'catalog', required: true, 'aria-label': 'Catalog to entitle', disabled: !manager }, addable);
+    const catalog = picker({ name: 'catalog', required: true, 'aria-label': 'Catalog to entitle', disabled: !manager }, addable, null, catalogLabel);
     const level = h('select', { name: 'access', 'aria-label': 'Access', disabled: !manager },
         LEVELS.map(value => h('option', { value }, value)));
     const submit = guard(h('button', { type: 'submit' }, 'Entitle'), pending('entitle'), manager);

@@ -10,19 +10,22 @@ export async function namesOf(kind) {
 
 // A <select> over `names`, with `selected` chosen. Without one, a disabled
 // empty first option is chosen, so a `required` picker refuses to submit
-// until someone picks a name.
-export function picker(attrs, names, selected = null) {
+// until someone picks a name. Each option's value is the name (the slug);
+// its text is `labelOf(name)` when given (`userLabel`, `teamLabel` or
+// `catalogLabel` from core/labels.js), else the name itself.
+export function picker(attrs, names, selected = null, labelOf = null) {
     return h('select', attrs,
         h('option', { value: '', disabled: true, selected: !selected }, 'Choose...'),
-        names.map(name => h('option', { value: name, selected: name === selected }, name)));
+        names.map(name => h('option', { value: name, selected: name === selected }, labelOf ? labelOf(name) : name)));
 }
 
 // A picker plus a button that calls `assign(name)`: the Assign or Change user
 // (or owner) control of a drawer or the unassigned view. The button is
 // enabled only while the picker names someone other than `current`, and
-// only when `allowed`. `ids` gives the select's and the button's ids, if any.
-export function assignControl({ names, current = null, label, allowed = true, ids = {}, assign }) {
-    const select = picker({ id: ids.select ?? null, 'aria-label': label, disabled: !allowed }, names, current);
+// only when `allowed`. `ids` gives the select's and the button's ids, if any;
+// `labelOf` is picker's.
+export function assignControl({ names, current = null, label, allowed = true, ids = {}, labelOf = null, assign }) {
+    const select = picker({ id: ids.select ?? null, 'aria-label': label, disabled: !allowed }, names, current, labelOf);
     const button = h('button', { type: 'button', id: ids.button ?? null, disabled: true }, label);
     const sync = () => { button.disabled = !allowed || !select.value || select.value === current; };
     select.addEventListener('change', sync);

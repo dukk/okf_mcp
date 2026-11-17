@@ -84,7 +84,7 @@ export async function render(main) {
                 h('input', { name: 'name', required: true, pattern: '[a-z0-9-]+', autocomplete: 'off',
                              placeholder: 'lowercase letters, digits and -' })),
             h('label', {}, 'Display name', h('input', { name: 'display_name', autocomplete: 'off' })),
-            h('label', {}, 'Owner', picker({ name: 'owner', required: true }, users)),
+            h('label', {}, 'Owner', picker({ name: 'owner', required: true }, users, null, userLabel)),
             h('button', { type: 'submit' }, 'Create team'));
         form.addEventListener('submit', async event => {
             event.preventDefault();
@@ -188,7 +188,7 @@ export async function render(main) {
         }));
         const candidates = users.filter(user => !team.members.some(member => member.user === user));
         const add = h('form', { id: 'member-form', class: 'inline-form' },
-            picker({ name: 'user', required: true, 'aria-label': 'User to add', disabled: !manager }, candidates),
+            picker({ name: 'user', required: true, 'aria-label': 'User to add', disabled: !manager }, candidates, null, userLabel),
             roleSelect({ name: 'role', 'aria-label': 'Role', disabled: !manager }, 'member'),
             h('button', { type: 'submit', disabled: !manager || !candidates.length }, 'Add member'));
         add.addEventListener('submit', async event => {

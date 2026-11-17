@@ -16,7 +16,7 @@ import { ago, when } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
 import { confirmDialog } from '../components/confirm.js';
 import { assignControl, namesOf } from '../components/picker.js';
-import { named } from '../core/labels.js';
+import { named, teamLabel, userLabel } from '../core/labels.js';
 import { accountSections, loadAccount } from '../components/user-account.js';
 import { canAdministerPeople, keyUserChanged, refreshIdentity, refreshUnassigned } from '../core/shell.js';
 
@@ -294,26 +294,26 @@ async function renderUnassigned(main) {
                 users, async user => {
                     await api.put(`/keys/${enc(key.id)}/user`, { user });
                     await keyUserChanged(key.id);
-                }, `${key.name} now belongs to`)),
+                }, `${key.name} now belongs to`, userLabel)),
             ...rows.codes.map(code => assignRow(`code-${code.name}`,
                 ['Sign-in code ', h('code', {}, code.name), ' ', pill(code.state)],
-                users, user => api.put(`/oauth/codes/${enc(code.id)}/user`, { user }), `${code.name} now belongs to`)),
+                users, user => api.put(`/oauth/codes/${enc(code.id)}/user`, { user }), `${code.name} now belongs to`, userLabel)),
             ...rows.catalogs.map(name => assignRow(`catalog-${name}`,
                 ['Catalog ', h('code', {}, name)],
-                teams, team => api.put(`/catalogs/${enc(name)}/owner`, { team }), `${name} is now owned by`)),
+                teams, team => api.put(`/catalogs/${enc(name)}/owner`, { team }), `${name} is now owned by`, teamLabel)),
         ];
         body.replaceChildren(items.length
             ? h('ul', { class: 'grant-list' }, items)
             : h('p', { id: 'unassigned-empty', class: 'muted' }, 'Nothing is unassigned.'));
     }
 
-    function assignRow(test, label, names, assign, done) {
+    function assignRow(test, label, names, assign, done, labelOf) {
         return h('li', { dataset: { test: `assign-${test}` } }, label,
             assignControl({
-                names, label: 'Assign',
+                names, label: 'Assign', labelOf,
                 assign: async name => {
                     try { await assign(name); } catch { return; /* toasted */ }
-                    toast(`${done} ${name}.`, 'ok');
+                    toast(`${done} ${labelOf(name)}.`, 'ok');
                     await refreshUnassigned();
                     if (main.isConnected) await draw();
                 },

@@ -14,7 +14,7 @@ import { confirmDialog } from '../components/confirm.js';
 import { namesOf, picker, assignControl } from '../components/picker.js';
 import { canAdministerPeople, freshAccount, refreshIdentity, refreshUnassigned } from '../core/shell.js';
 import { guard, once, recheck } from '../core/pending.js';
-import { named } from '../core/labels.js';
+import { named, teamLabel } from '../core/labels.js';
 
 export async function render(main) {
     const admin = store.can('admin');
@@ -68,7 +68,7 @@ export async function render(main) {
                 h('input', { name: 'name', required: true, pattern: '[a-z0-9-]+', autocomplete: 'off',
                              placeholder: 'lowercase letters, digits and -' })),
             h('label', {}, 'Description', h('textarea', { name: 'description', rows: '3' })),
-            h('label', {}, 'Owner team', picker({ name: 'owner', required: true }, teams)),
+            h('label', {}, 'Owner team', picker({ name: 'owner', required: true }, teams, null, teamLabel)),
             h('button', { type: 'submit' }, 'Create catalog'));
         form.addEventListener('submit', async event => {
             event.preventDefault();
@@ -93,7 +93,7 @@ export async function render(main) {
         const owner = h('section', {},
             h('h3', {}, 'Owner'),
             assignControl({
-                names: teams, current: row.owner_team, label: row.owner_team ? 'Change owner' : 'Assign',
+                names: teams, labelOf: teamLabel, current: row.owner_team, label: row.owner_team ? 'Change owner' : 'Assign',
                 allowed: creator, ids: { select: 'catalog-owner-select', button: 'catalog-owner-save' },
                 assign: async team => {
                     try {
