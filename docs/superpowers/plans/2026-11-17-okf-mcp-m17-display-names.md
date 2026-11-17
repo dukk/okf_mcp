@@ -1229,6 +1229,8 @@ Add the accessors, each a trivial-accessor `uninstrumented_fn` allow:
 
   Test in `src/auth.rs` tests: after `users::create` and `Keys::reload`, `keys.labels().user("alice")` is `Some("alice")` for a user with email `alice@example.com`.
 
+  > **Corrected (issue #601).** `users::NewUser` has no email, so the shipped test (`the_cache_loads_labels_and_reloads_them_after_a_create`) creates `alice` with display name "Alice Example" and a catalog "Team notes", reloads, and asserts the user, personal-team and catalog labels, the catalog owner and `teams_of`. The suspension test also asserts that `SuspendedCatalog.catalog_label` and `team_label` equal the directory's labels. `suspended_catalogs` fills both fields with the slugs; `KeyCache::read` overwrites them from the directory.
+
 - [ ] **Step 4: Suspension labels** (`src/store/teams.rs`). `SuspendedCatalog` gains `pub catalog_label: String` and `pub team_label: String`. `suspended_catalogs` keeps its query. `KeyCache::read` fills the two fields from the loaded `Labels` after the `try_join!`, falling back to the slugs only if a row is missing. The rows come from one load, so that happens only in a race, and the slug is honest then. Every `SuspendedCatalog { .. }` literal in tests gains the fields.
 - [ ] **Step 5: Run the tests, full gates, changelog `m17-task-04-label-directory`, commit** `feat(labels): the label directory, loaded with the key cache`.
 

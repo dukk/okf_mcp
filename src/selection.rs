@@ -376,6 +376,8 @@ mod tests {
                             crate::store::teams::SuspendedCatalog {
                                 team: "family".to_string(),
                                 notice: None,
+                                catalog_label: name.to_string(),
+                                team_label: "family".to_string(),
                             },
                         )
                     })

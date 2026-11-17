@@ -150,6 +150,10 @@ pub struct SuspendedCatalog {
     pub team: String,
     /// Its notice, if any.
     pub notice: Option<String>,
+    /// The catalog's label.
+    pub catalog_label: String,
+    /// The owner team's label.
+    pub team_label: String,
 }
 
 /// A team row without its members (they come from a second query).
@@ -836,7 +840,17 @@ pub async fn suspended_catalogs(
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(catalog, team, notice)| (catalog, SuspendedCatalog { team, notice }))
+        .map(|(catalog, team, notice)| {
+            // The slugs stand in until `KeyCache::read` fills in the labels
+            // from the directory it loads beside this map.
+            let suspended = SuspendedCatalog {
+                catalog_label: catalog.clone(),
+                team_label: team.clone(),
+                team,
+                notice,
+            };
+            (catalog, suspended)
+        })
         .collect())
 }
 
@@ -1730,6 +1744,9 @@ mod tests {
             Some(&SuspendedCatalog {
                 team: "family".to_string(),
                 notice: Some("Paused.".to_string()),
+                // Slugs until the key cache fills in the labels.
+                catalog_label: "shared".to_string(),
+                team_label: "family".to_string(),
             })
         );
     }
