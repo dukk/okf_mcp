@@ -519,5 +519,11 @@ async fn a_failing_health_probe_is_quiet_but_still_exported_as_an_error() {
         "{}",
         observed.stderr
     );
-    assert_eq!(observed.spans_named("GET /healthz").len(), 1);
+    let spans = observed.spans_named("GET /healthz");
+    assert_eq!(spans.len(), 1);
+    assert!(matches!(spans[0].status, Status::Error { .. }));
+    assert_eq!(
+        attribute(spans[0], "http.response.status_code"),
+        Some(&503.into())
+    );
 }
