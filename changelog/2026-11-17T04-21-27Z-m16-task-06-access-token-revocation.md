@@ -6,7 +6,7 @@
 - With Redis on, a cached entry is trusted for 60 s at most (`SHARED_MAX_AGE`, a monotonic `Instant` per entry), the backstop for a crash between a commit and its bump.
 - `oauth::access::find_grant(app, grant_id)`: the key cache's grant, after one `App::catch_up_keys` when it is missing (spec Decision 14). `verify` and the code exchange use it.
 - Test helpers in `oauth::testing`: `authorization_code` and `authorization_code_for` (moved from `token.rs`'s tests), `oauth_replica_pair` and `exchange_for_tokens`.
-- Tests: a token revoked on A is refused on B at once; a lost counter at 1 still clears B's cache; a reader that finds the counter missing clears its cache; a Redis failure skips the cache and answers from Postgres (a revoked cached copy refused, a live token admitted, nothing cached); the 60 s backstop; a token minted on A accepted on B before any announcement; a refresh on B catches up on A's grant; the counter scripts in standalone and cluster mode; the seed's range.
+- Tests: a token revoked on A is refused on B at once; a lost counter at 1 still clears B's cache; a reader that finds the counter missing clears its cache; a Redis failure skips the cache and answers from Postgres (a revoked cached copy refused, a live token admitted, nothing cached); the 60 s backstop; a token minted on A accepted on B before any announcement; a refresh on B catches up on A's grant; an exchange on B of a code copied from A catches up on the grant; the counter scripts in standalone and cluster mode; the seed's range.
 
 ## Changed
 - `AccessTokens::new(redis: Option<Redis>)`, `OAuth::new(config, redis: Option<&Redis>)`; `App::load_with_redis` passes its handle.
@@ -17,4 +17,4 @@
 - Without `[redis]` nothing changes: no counter, no age limit, and `catch_up_keys` is a no-op.
 - `forget` does not record the counter value its own bump returned as seen: another instance's bump can fall between, and recording a value this instance did not read would hide that revocation.
 - A Redis error on `verify` neither reads nor fills the cache; the database answers.
-- The exchange's own catch-up is tested in Task 7, once a code can cross instances.
+- The exchange's catch-up is tested here by copying A's stored code into B's per-instance map (review of PR #579); Task 7's cross-instance exchange covers it again once codes are shared.

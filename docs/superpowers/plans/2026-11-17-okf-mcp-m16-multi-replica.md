@@ -1766,6 +1766,8 @@ Revert `config.session_store = ...`, and the cross-replica test fails with 404. 
 
    The exchange's own catch-up (`token.rs:411`) is tested in Task 7, once a code can cross instances.
 
+   > **Corrected (issue #559, 2026-11-17).** Task 6 tests it too (review of PR #579): `an_exchange_on_the_other_replica_catches_up_on_its_grant` in `token.rs` copies A's stored `AuthorizationCode` into B's per-instance map and exchanges on B.
+
 - [ ] **Step 2: Implement**
 
 ```rust
@@ -1814,7 +1816,7 @@ The seed is a random non-negative `i64` below `2^62`, from `rand`, or from the b
 > - `forget` does not store the value its own bump returned as seen: another instance's bump may fall between, and storing a value this instance never read would hide it.
 > - The catch-up is one helper, `oauth::access::find_grant(app, grant_id)` (`pub(crate)`), used by `verify` and the exchange (`token.rs`'s "the grant was revoked" check). The refresh path does not catch up in place: it rolls its transaction back, calls `catch_up_keys`, and runs the refresh once more, so it never waits on `polling` while holding the token rows' locks.
 > - `authorization_code` and `authorization_code_for` moved from `token.rs`'s tests to `oauth::testing`, beside the new `oauth_replica_pair()` (`replica_pair` with OAuth and the DCR client) and `exchange_for_tokens(test, code)`. Task 7's tests can use them.
-> - Extra tests: a refresh on B catches up on A's grant (`token.rs`), and the counter scripts in standalone and cluster mode.
+> - Extra tests: a refresh on B, and an exchange on B of a code copied from A, catch up on A's grant (`token.rs`), and the counter scripts in standalone and cluster mode.
 
 - [ ] **Step 3: Revert-check, gates, changelog, commit**
 
