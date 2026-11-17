@@ -11,8 +11,10 @@ completion line at DEBUG instead of INFO.
   are unchanged. Other routes, including catalog health endpoints, still log
   at INFO. The query string is not part of the matched route, so
   `/healthz?x=1` is covered.
-- A health probe's completion line is now also absent from the OTLP log
-  export at the default `info` filter; the filters themselves are unchanged.
+- OTLP log export is unchanged: the completion line's target is
+  `tower_http::trace::on_response`, which the OTLP allow-list
+  (`otlp_cap`, `src/telemetry/subscriber.rs`) already excluded at every
+  level (see `dependency_events_never_reach_otlp`).
 - Tests: `health_probes_write_no_completion_line_to_the_console`,
   `other_routes_keep_their_completion_line`,
   `a_failing_health_probe_is_quiet_but_still_exported_as_an_error`.
