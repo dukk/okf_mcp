@@ -90,8 +90,10 @@ them such as a team's members or a user's teams) gains a computed
 When two catalogs reachable by the same person share a label, surfaces
 that list them together (the console catalog selector, the consent
 page) disambiguate with the owner team's label: "Personal memory (Acme
-team)". The disambiguation is computed server-side alongside the
-listing.
+team)". If that still leaves two identical (two catalogs of one team, or
+owner teams that share a label), each of those also shows its id:
+"Notes (Acme, m-7b1e…)". Every choice shown is therefore distinct. The
+disambiguation is computed server-side alongside the listing.
 
 ## Part 2: Editing endpoints and permissions
 
@@ -153,8 +155,10 @@ moves to a muted secondary "ID: m-7b1e…" line or tooltip.
   transfer, unlocks, keys, my-keys, my-grants, audit) show labels for
   catalogs, teams, actors and people.
 - **Audit page:** people are shown through the label rule applied to the
-  `audit_people.display_name` snapshot (stored today but never read), so
-  a deleted user keeps their last label.
+  `audit_people.display_name` snapshot (stored today but never read).
+  Deleting a user blanks that snapshot (existing anonymisation), so a
+  deleted user's entries show "Unnamed user", never the slug or their old
+  name.
 - **URLs** (`#/browse/<slug>/…`, REST paths) keep the slug.
 
 ### Emails

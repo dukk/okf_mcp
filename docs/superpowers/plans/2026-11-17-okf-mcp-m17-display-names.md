@@ -799,7 +799,12 @@ The function body follows `update_description` and `set_maintenance`:
 7. If either changed, run `bump_admin_generation` and commit; otherwise drop `tx`.
 8. Return `Details`.
 
-The `not_owner` text is `"this needs admin on catalog {name:?}, or an owner of its team signed in to the console"`. Update the CLI's `catalog update` call to `update_details` with `display_name: None, description: Some(&description), owner: None`, so it prints what it printed before.
+The `not_owner` text is `"this needs admin on catalog {name:?}, or an owner of its team signed in to the console"`. **Port every existing caller in this task**, so Task 3 compiles and passes its gates on its own (`grep -rn update_description src tests`):
+- the CLI's `catalog update` calls `update_details` with `display_name: None, description: Some(&description), owner: None`, and prints what it printed before;
+- the REST handler `update_catalog` (`src/http/api/catalogs.rs:300`) does the same, using `previous.description` as its `previous`; its body, permission check and answer stay exactly as they are until Task 5;
+- the poll test at `src/app.rs:1526` and any other test call do the same.
+
+> **Corrected (PR #596 review).** The first draft ported only the CLI, which left the REST handler and `src/app.rs`'s test calling a removed function until Task 5.
 
 - [ ] **Step 5: `users::set_display_name`** follows `set_email` (`src/store/users.rs:639-698`):
   1. Lock the target with `lock_target(&mut tx, name, RowLock::Update, actor)`.
@@ -877,6 +882,70 @@ mod tests {
         assert_eq!(choices[1].1, "Personal memory (Acme)");
         let alone = labels.catalog_choices(["m-2"]);
         assert_eq!(alone[0].1, "Personal memory");
+    }
+
+    #[test]
+    fn same_owner_duplicates_fall_back_to_the_id() {
+        let labels = Labels::from_rows(
+            vec![],
+            vec![TeamRow { name: "acme".into(), display_name: "Acme".into(), personal_of: None }],
+            vec![
+                CatalogRow { name: "m-1".into(), display_name: "Notes".into(), description: "".into(), owner_team: Some("acme".into()) },
+                CatalogRow { name: "m-2".into(), display_name: "Notes".into(), description: "".into(), owner_team: Some("acme".into()) },
+            ],
+            vec![],
+        );
+        let choices = labels.catalog_choices(["m-1", "m-2"]);
+        assert_eq!(choices[0].1, "Notes (Acme, m-1)");
+        assert_eq!(choices[1].1, "Notes (Acme, m-2)");
+    }
+
+    #[test]
+    fn owner_teams_sharing_a_label_fall_back_to_the_id() {
+        let labels = Labels::from_rows(
+            vec![],
+            vec![
+                TeamRow { name: "acme-1".into(), display_name: "Acme".into(), personal_of: None },
+                TeamRow { name: "acme-2".into(), display_name: "Acme".into(), personal_of: None },
+            ],
+            vec![
+                CatalogRow { name: "m-1".into(), display_name: "Notes".into(), description: "".into(), owner_team: Some("acme-1".into()) },
+                CatalogRow { name: "m-2".into(), display_name: "Notes".into(), description: "".into(), owner_team: Some("acme-2".into()) },
+                CatalogRow { name: "m-3".into(), display_name: "Other".into(), description: "".into(), owner_team: Some("acme-1".into()) },
+            ],
+            vec![],
+        );
+        let choices = labels.catalog_choices(["m-1", "m-2", "m-3"]);
+        assert_eq!(choices[0].1, "Notes (Acme, m-1)");
+        assert_eq!(choices[1].1, "Notes (Acme, m-2)");
+        assert_eq!(choices[2].1, "Other");
+    }
+
+    #[hegel::test]
+    fn catalog_choices_are_always_distinct(tc: hegel::TestCase) {
+        use hegel::generators;
+        // Few distinct labels and teams, so collisions are common.
+        let count = tc.draw(generators::integers::<usize>().min_value(1).max_value(8));
+        let rows: Vec<CatalogRow> = (0..count)
+            .map(|i| {
+                let label = tc.draw(generators::integers::<u8>().max_value(2));
+                let team = tc.draw(generators::integers::<u8>().max_value(1));
+                CatalogRow {
+                    name: format!("m-{i}"),
+                    display_name: format!("L{label}"),
+                    description: String::new(),
+                    owner_team: Some(format!("t-{team}")),
+                }
+            })
+            .collect();
+        let teams = (0..2)
+            .map(|t| TeamRow { name: format!("t-{t}"), display_name: "Same".into(), personal_of: None })
+            .collect();
+        let slugs: Vec<String> = rows.iter().map(|row| row.name.clone()).collect();
+        let labels = Labels::from_rows(vec![], teams, rows, vec![]);
+        let choices = labels.catalog_choices(slugs.iter().map(String::as_str));
+        let distinct: std::collections::HashSet<&str> = choices.iter().map(|(_, label)| label.as_str()).collect();
+        assert_eq!(distinct.len(), choices.len());
     }
 
     #[test]
@@ -1049,7 +1118,13 @@ Add the accessors, each a trivial-accessor `uninstrumented_fn` allow:
 - `actor(&self, actor) -> Option<&str>` (= `self.user(actor)`; doc comment cites plan Decision 5);
 - `catalog_owner(&self, slug) -> Option<&str>`;
 - `teams_of(&self, user) -> impl Iterator<Item = &str>`;
-- `catalog_choices<'a>(&self, slugs: impl IntoIterator<Item = &'a str>) -> Vec<(String, String)>`. It counts labels among the given slugs and suffixes duplicates with ` ({owner team label})`. An unknown slug is returned with the slug as its label: it is a catalog created since the last load, and showing its id beats hiding it.
+- `catalog_choices<'a>(&self, slugs: impl IntoIterator<Item = &'a str>) -> Vec<(String, String)>` returns `(slug, shown text)` in the input order, every shown text distinct, in two passes:
+  1. Count the labels among the given slugs. A label that occurs once is shown as is; a duplicate becomes `{label} ({owner team label})`, or `{label} (no team)` for an unassigned catalog.
+  2. Count the results of pass 1. Any text that still occurs more than once becomes `{label} ({owner team label}, {slug})`. Slugs are unique, so the result is too. This covers two catalogs of one team, and owner teams that share a label.
+
+  An unknown slug is returned with the slug as its text: it is a catalog created since the last load, and showing its id beats hiding it.
+
+  > **Corrected (PR #596 review).** The first draft stopped at the owner-team suffix, which does not separate two catalogs of one team or teams that share a label.
 
 - [ ] **Step 3: Load it with the key cache** (`src/auth.rs`)
   - `KeyCache` gains `labels: Arc<Labels>` (default empty).
@@ -1146,7 +1221,9 @@ Mount it with `.route("/labels", get(labels))`. Test the scope as Step 1 says.
        - else a `Session { user_id }` → owner path, which first refuses a suspended catalog (`if let Some(s) = principal.suspension(&catalog) { return Err(OkfError::Suspended { .. }) }`, built as `Principal::require` builds it; plan Decision 6), then `owner = Some(user_id)`;
        - else → the original refusal.
     3. Call `update_details`.
-    4. The answer, `DetailsChanged { name, previous: Details, display_name, description, label }`, is a superset of the old `DescriptionChanged` fields except `previous`, which becomes an object. **Check `okf-mcp`'s own HTTP clients** (`grep -rn "previous" src/cli*`) and the parity tests (`tests/parity*`, `tests/admin_parity.rs`): if anything reads `previous` as a string, keep `previous: String` (the old description) and add `previous_display_name: String` instead. Fix the plan inline with what you chose.
+    4. The answer is `DetailsChanged { name, previous, description, previous_display_name, display_name, label }`. It is a strict superset of today's `DescriptionChanged`: `name`, `previous` (still the old **description**, as a string) and `description` keep their names, types and meaning, and the three new fields are added. External clients of this public route may read `previous`, so its shape never changes (plan Decision 2).
+
+       > **Corrected (PR #596 review).** The first draft allowed `previous` to become an object when no in-repo reader used it; absence of in-repo readers says nothing about external clients.
   - **`POST /catalogs`** passes `display_name` (Task 2 already parsed it).
   - **`PROVISIONER_ROUTES`** gains `("PATCH", "/api/v1/users/{name}")`, `("PATCH", "/api/v1/teams/{name}")` and `("PATCH", "/api/v1/catalogs/{catalog}")`. The provisioner arm of the catalog PATCH is explicit (step 2 above); it cannot reach catalog content, and this route touches only the row.
 - [ ] **Step 5: Run the tests, full gates, changelog `m17-task-05-rest-labels`, commit** `feat(api): labels on views, GET /labels, display-name edits`.
@@ -1447,8 +1524,8 @@ export function named(label, slug) {
 - `TeamDisplayNameChange` (3) → 5, 6.
 - `SuspendedCatalog.catalog_label` and `.team_label` (4) → 7.
 
-**Spec corrections this plan makes:** Decision 3 (the heading, Task 9), Decision 4 (audit details record the length, Task 3), and the `previous` shape note (Task 5, if needed).
+**Spec corrections this plan makes:** Decision 3 (the heading, Task 9), Decision 4 (audit details record the length, Task 3), and the audit-page wording for deleted users (the spec said they keep their last label; deletion blanks the snapshot, so they show the placeholder).
 
 ## Open questions for the maintainer
 
-None blocking. One judgement call is flagged for review in Task 5: whether `PATCH /catalogs/{catalog}`'s answer may change `previous` from a string to an object. The task checks the in-repo readers and keeps the old shape if any exist.
+None.
