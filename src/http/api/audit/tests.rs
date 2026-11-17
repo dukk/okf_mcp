@@ -563,3 +563,75 @@ async fn the_export_carries_the_labels() {
     assert_eq!(records[0]["target"]["person"], "alice");
     assert_eq!(records[0]["target"]["person_label"], "Alice Example");
 }
+
+/// The audit export's JSON Lines for `query`, as `key`.
+async fn export(test: &TestApp, key: &str, query: &str) -> Vec<Value> {
+    let request = axum::http::Request::builder()
+        .uri(format!("/api/v1/audit/export?{query}"))
+        .header("authorization", format!("Bearer {key}"))
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = tower::ServiceExt::oneshot(
+        crate::http::router(
+            std::sync::Arc::clone(&test.app),
+            &tokio_util::sync::CancellationToken::new(),
+        ),
+        request,
+    )
+    .await
+    .unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    lines(std::str::from_utf8(&bytes).unwrap())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_team_or_catalog_recreated_under_an_old_name_never_lends_its_label_to_the_old_entries() {
+    let test = app().await;
+    let root = every_catalog_admin(&test).await;
+    let team = |label: &str| json!({"name": "family", "display_name": label, "owner": TEST_USER});
+    let catalog = |label: &str| json!({"name": "work", "display_name": label, "owner": "family"});
+    let steps = [
+        ("POST", "/api/v1/teams", Some(team("Old family"))),
+        ("POST", "/api/v1/catalogs", Some(catalog("Old work"))),
+        ("DELETE", "/api/v1/catalogs/work", None),
+        ("DELETE", "/api/v1/teams/family", None),
+        ("POST", "/api/v1/teams", Some(team("New family"))),
+        ("POST", "/api/v1/catalogs", Some(catalog("New work"))),
+    ];
+    for (method, uri, body) in steps {
+        let (status, answer) = send(&test, method, uri, Some(&root), body).await;
+        assert!(status.is_success(), "{method} {uri}: {status} {answer}");
+    }
+
+    let listed = entries(&test, &root, "limit=200").await;
+    let exported = export(&test, &root, "").await;
+
+    for records in [listed, exported] {
+        // Oldest first: the old team's and catalog's entries, then the new.
+        let labels = |kind: &str, action: &str| -> Vec<Value> {
+            let name = if kind == "team" { "family" } else { "work" };
+            records
+                .iter()
+                .rev()
+                .filter(|entry| {
+                    entry["target"]["kind"] == kind
+                        && entry["target"]["name"] == name
+                        && entry["action"] == action
+                })
+                .map(|entry| entry["target"].get("target_label").cloned().unwrap())
+                .collect()
+        };
+        assert_eq!(
+            labels("team", "team.created"),
+            [Value::Null, json!("New family")]
+        );
+        assert_eq!(labels("team", "team.deleted"), [Value::Null]);
+        assert_eq!(
+            labels("catalog", "catalog.created"),
+            [Value::Null, json!("New work")]
+        );
+        assert_eq!(labels("catalog", "catalog.deleted"), [Value::Null]);
+    }
+}

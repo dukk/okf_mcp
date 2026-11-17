@@ -1419,7 +1419,12 @@ const LIST_SQL: &str = "\
            COALESCE(e.target_name, tt.name, ttp.name, tc.credential_id, 'credential #' || tc.id) \
                AS target_name, \
            tp.name AS target_person, tp.display_name AS target_display_name, \
-           tt.name AS target_team, e.target_operator, \
+           CASE WHEN EXISTS (SELECT 1 FROM teams lt WHERE lt.id = tt.team_id) \
+                THEN tt.name END AS target_team, \
+           CASE WHEN e.target_kind = 'catalog' AND EXISTS ( \
+                    SELECT 1 FROM catalogs lc WHERE lc.name = e.target_name AND lc.created_at <= e.at) \
+                THEN e.target_name END AS target_catalog, \
+           e.target_operator, \
            ARRAY(SELECT COALESCE(t.name, p.name) \
                  FROM unnest(e.teams) WITH ORDINALITY AS r (id, n) \
                  JOIN audit_teams t ON t.id = r.id \
@@ -1471,8 +1476,14 @@ struct ListedRow {
     target_name: Option<String>,
     target_person: Option<String>,
     target_display_name: Option<String>,
-    // The slug of a shared team target (`None` for a personal team).
+    // The slug of a shared team target while the same team (by `teams.id`)
+    // still exists; `None` for a personal team or a deleted one, even when a
+    // new team has taken its slug.
     target_team: Option<String>,
+    // The name of a catalog target while that catalog still exists: the log
+    // keeps no catalog id, so a catalog created after the entry is another
+    // one reusing the name.
+    target_catalog: Option<String>,
     target_operator: bool,
     teams: Vec<String>,
     details: serde_json::Value,
@@ -1502,8 +1513,8 @@ fn snapshot_label(person: &Option<String>, display_name: &Option<String>) -> Opt
 ///
 /// # Arguments
 /// * `kind` - the target's kind.
-/// * `name` - its stored name (a catalog's slug).
-/// * `team` - a shared team target's slug.
+/// * `name` - the slug of a catalog target that still exists.
+/// * `team` - the slug of a shared team target that still exists.
 /// * `labels` - the directory.
 ///
 /// # Returns
@@ -1576,7 +1587,7 @@ impl ListedRow {
             TargetView {
                 target_label: target_label(
                     &self.target_kind,
-                    self.target_name.as_deref(),
+                    self.target_catalog.as_deref(),
                     self.target_team.as_deref(),
                     labels,
                 ),
