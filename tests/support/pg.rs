@@ -53,7 +53,7 @@ use testcontainers_modules::testcontainers::bollard::query_parameters::{
 use testcontainers_modules::testcontainers::bollard::Docker;
 use testcontainers_modules::testcontainers::runners::AsyncRunner;
 use testcontainers_modules::testcontainers::{
-    ContainerAsync, ContainerRequest, ImageExt, TestcontainersError,
+    ContainerAsync, ContainerRequest, Image, ImageExt, TestcontainersError,
 };
 use tokio::sync::OnceCell;
 
@@ -520,19 +520,20 @@ pub fn postgres_17() -> ContainerRequest<Postgres> {
 ///
 /// # Panics
 /// If every attempt fails (the last error is reported).
-pub async fn start_with_retry(
-    request: impl Fn() -> ContainerRequest<Postgres>,
-) -> ContainerAsync<Postgres> {
+pub async fn start_with_retry<I: Image>(
+    request: impl Fn() -> ContainerRequest<I>,
+) -> ContainerAsync<I> {
     let mut attempt = 1;
     loop {
         let labelled = request().with_startup_timeout(STARTUP_TIMEOUT);
+        let image = labelled.image().name().to_string();
         match start_labelled(labelled, &unique_start_label()).await {
             Ok(container) => return container,
             Err(error) if attempt < START_ATTEMPTS => {
-                tracing::warn!("postgres container start failed, retrying: {error}");
+                tracing::warn!("{image} container start failed, retrying: {error}");
                 attempt += 1;
             }
-            Err(error) => panic!("start a postgres container (is docker reachable?): {error}"),
+            Err(error) => panic!("start a {image} container (is docker reachable?): {error}"),
         }
     }
 }
@@ -558,10 +559,10 @@ pub fn unique_start_label() -> String {
 /// # Errors
 /// The start's error, or, if the cleanup also failed, that error wrapped as
 /// [`TestcontainersError::Other`] (naming both).
-pub async fn start_labelled(
-    request: ContainerRequest<Postgres>,
+pub async fn start_labelled<I: Image>(
+    request: ContainerRequest<I>,
     label: &str,
-) -> Result<ContainerAsync<Postgres>, TestcontainersError> {
+) -> Result<ContainerAsync<I>, TestcontainersError> {
     let start_error = match request.with_label(START_LABEL, label).start().await {
         Ok(container) => return Ok(container),
         Err(error) => error,

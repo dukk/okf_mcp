@@ -177,17 +177,7 @@ pub struct AuthorizationCode {
 /// 64 lowercase hex characters.
 #[tracing::instrument(level = "debug", skip_all)]
 pub fn code_key(code: &str) -> String {
-    // `fold` with `write!` appends each byte's two hex digits to one
-    // preallocated `String` (Python: `hashlib.sha256(...).hexdigest()`),
-    // with no `String` per byte.
-    use std::fmt::Write as _;
-    crate::keys::hash(code)
-        .iter()
-        .fold(String::with_capacity(64), |mut hex, byte| {
-            // Writing to a `String` cannot fail.
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        })
+    crate::shared::hashed(code)
 }
 
 #[cfg(test)]

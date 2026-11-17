@@ -128,6 +128,17 @@ subtle = "2.6.1"
 tempfile = "3.27.0"
 # Catalog archives: .tar.gz import and export (with flate2).
 tar = "0.4.46"
+# Optional shared state for multi-replica serve (src/shared, spec
+# 2026-11-17-okf-multi-replica-design.md). Pinned exactly: 1.8.2 is the newest
+# stable release (2.0 is a release candidate). Default features off; we use the
+# tokio connection manager, Lua scripts and rustls TLS (`rediss://`).
+redis = { version = "=1.8.2", default-features = false, features = ["tokio-comp", "connection-manager", "script", "tokio-rustls-comp"] }
+# `StreamExt::next` on the pub/sub message stream (already in the lock via redis).
+futures-util = { version = "0.3", default-features = false }
+# Only to install ring as the process CryptoProvider before a `rediss://`
+# connect: the lock builds rustls with both ring and aws-lc-rs, and rustls then
+# refuses to guess (rustls 0.23 `crypto/mod.rs`).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 # Postgres access with runtime-checked queries, and the schema migrations
 # embedded at compile time (`migrate!` needs `macros`). `json`: the
 # `changeset_entries.replay` jsonb column as `serde_json::Value`.
@@ -190,7 +201,7 @@ aws-credential-types = "1.3.1"
 rcgen = "0.14.10"
 # Throwaway Postgres containers for the database tests (needs Docker). Only
 # the modules crate: it re-exports the testcontainers version it supports.
-testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
+testcontainers-modules = { version = "0.15.0", features = ["postgres", "redis"] }
 # `test-util`: paused time (`start_paused`), so a test of the 120-second
 # request timeout runs at once.
 tokio = { version = "1.54", features = ["test-util"] }

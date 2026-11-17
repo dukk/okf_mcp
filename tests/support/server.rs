@@ -14,12 +14,14 @@ use chrono::Utc;
 use okf_mcp::app::App;
 use okf_mcp::archive::Files;
 use okf_mcp::clock::SystemClock;
-use okf_mcp::config::Config;
+use okf_mcp::config::{Config, RedisConfig};
 use okf_mcp::okf::workspace::StoredFile;
+use okf_mcp::shared::Redis;
 use okf_mcp::store::audit::AuditActor;
 use okf_mcp::store::import::{import, ImportOptions, ImportScope};
 use okf_mcp::store::keys::{self, Access, Grants, NewKey};
 use okf_mcp::store::{catalogs, users};
+use okf_mcp::telemetry::metrics::Metrics;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::RunningService;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
@@ -30,6 +32,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use super::pg::TestDb;
+use super::redis::{TestRedis, URL_VAR};
 
 /// The task running `http::serve`.
 type Served = JoinHandle<std::io::Result<()>>;
@@ -622,4 +625,22 @@ pub fn structured(result: &CallToolResult) -> &serde_json::Value {
         .structured_content
         .as_ref()
         .expect("structured content")
+}
+
+/// The `[redis]` table that points at `server`, with its random prefix.
+pub fn redis_config(server: &TestRedis) -> RedisConfig {
+    RedisConfig {
+        url_env: URL_VAR.to_string(),
+        key_prefix: server.prefix.clone(),
+    }
+}
+
+/// Connects to `server` through `Redis::connect`.
+///
+/// # Panics
+/// If Redis does not answer: a broken test setup.
+pub async fn redis_connect(server: &TestRedis) -> Redis {
+    Redis::connect(&redis_config(server), &server.env(), &Metrics::global())
+        .await
+        .expect("connect to the test redis")
 }
