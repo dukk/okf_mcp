@@ -18,6 +18,7 @@ use crate::auth::{Admission, Principal};
 use crate::error::OkfError;
 use crate::http::requester::Requester;
 use crate::http::{timeout_layer_after, AppError, REQUEST_TIMEOUT};
+use crate::labels::export_stem;
 use crate::mcp::blocking;
 use crate::store::audit::{AccessKind, AuditActor};
 use crate::store::export::{export, ExportOptions};
@@ -400,8 +401,20 @@ async fn export_catalog(
         admission,
         AccessKind::Export,
     );
-    // `name` is a catalog that exists, so it is `[a-z0-9-]+` and safe in a header.
-    let disposition = format!("attachment; filename=\"{name}.tar.gz\"");
+    // The stem is ASCII letters, digits and '-', and `name` is `[a-z0-9-]+`:
+    // both are safe in a header.
+    let stem = app
+        .keys()
+        .labels()
+        .catalog(&name)
+        .map(export_stem)
+        .unwrap_or_default();
+    let file = if stem.is_empty() {
+        name.clone()
+    } else {
+        format!("{stem}-{name}")
+    };
+    let disposition = format!("attachment; filename=\"{file}.tar.gz\"");
     let headers = [
         (header::CONTENT_TYPE, "application/gzip".to_string()),
         (header::CONTENT_DISPOSITION, disposition),
@@ -1010,6 +1023,57 @@ mod tests {
             .await
             .expect("a body")
             .to_vec()
+    }
+
+    /// The `Content-Disposition` of `pg`'s export after its display name is
+    /// set to `display_name`, once the key cache has reloaded.
+    async fn export_disposition(display_name: &str) -> String {
+        let test = crate::mcp::testing::app_with(&[("pg", &[])], Config::default()).await;
+        let name = crate::labels::DisplayName::parse(display_name).unwrap();
+        let change = catalogs::DetailsChange {
+            catalog: "pg",
+            display_name: Some(&name),
+            description: None,
+            owner: None,
+        };
+        catalogs::update_details(
+            test.app.pool(),
+            &change,
+            &AuditActor::cli(),
+            test.app.clock().now(),
+        )
+        .await
+        .unwrap();
+        test.app.reload_keys_now(false).await;
+        let exported = router(&test, admin())
+            .oneshot(
+                Request::get("/catalogs/pg/export")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(exported.status(), StatusCode::OK);
+        exported.headers()[header::CONTENT_DISPOSITION]
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_export_filename_carries_the_label_stem_and_the_slug() {
+        assert_eq!(
+            export_disposition("Work notes").await,
+            "attachment; filename=\"work-notes-pg.tar.gz\""
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_label_with_no_ascii_letters_leaves_the_slug_alone() {
+        assert_eq!(
+            export_disposition("\u{30ce}\u{30fc}\u{30c8}").await,
+            "attachment; filename=\"pg.tar.gz\""
+        );
     }
 
     #[tokio::test]

@@ -313,7 +313,7 @@ async fn export_gives_a_reachable_catalog_as_a_tarball() {
     assert_eq!(response.headers()["content-type"], "application/gzip");
     assert_eq!(
         response.headers()["content-disposition"],
-        "attachment; filename=\"pg.tar.gz\""
+        "attachment; filename=\"untitled-catalog-pg.tar.gz\""
     );
     let bytes = response.bytes().await.unwrap();
     let exported = okf_mcp::archive::read_tarball(&bytes[..], 1 << 20).unwrap();
