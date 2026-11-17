@@ -967,7 +967,7 @@ async fn setup_post(
     };
     if let Err(problem) = check_new_password(&form.password, &form.confirm) {
         let view = SetupView {
-            user: &user.name,
+            user: &user_label(&user.display_name, user.email.as_deref()),
             token: &form.token,
             return_to: &return_to,
             error: Some(&problem),
@@ -1874,6 +1874,10 @@ mod tests {
         )
         .await
         .expect("issue a setup token");
+        sqlx::query("UPDATE users SET display_name = 'Alice Example' WHERE name = 'alice'")
+            .execute(test.app.pool())
+            .await
+            .expect("display name");
         let post = |password: &str, confirm: &str| {
             Payload::Form(vec![
                 ("token", token.clone()),
@@ -1897,6 +1901,14 @@ mod tests {
         assert_eq!(short.status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(mismatch.status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(mismatch.text().contains("do not match"));
+        // The page drawn again after a refusal welcomes the label too.
+        assert!(
+            mismatch
+                .text()
+                .contains("Welcome, <strong>Alice Example</strong>"),
+            "{}",
+            mismatch.text()
+        );
         assert!(
             !mismatch.text().contains(PASSWORD),
             "never echoes a password"
