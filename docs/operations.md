@@ -417,7 +417,7 @@ session id: the keys and values that refer to one hold its hash.
 | `{p}mcp:state:h(session)` | What a replica needs to restore the MCP session (rmcp's session state) | `session_idle_timeout`, renewed on every admitted request |
 | `{p}mcp:bind:h(session)` | The id of the API key that opened the session | The same, renewed with it |
 | `{p}oauth:pending:h(id)` | A consent page in progress | 10 minutes, fixed |
-| `{p}oauth:code:<hash of the code>` | An authorization code | 60 seconds, fixed. A used code stays until then, so a second use is seen as a replay and the token family is revoked |
+| `{p}oauth:code:h(h(code))` (the server's own hash of the code, hashed again by the store) | An authorization code | 60 seconds, fixed. A used code stays until then, so a second use is seen as a replay and the token family is revoked |
 | `{p}oauth:access-revocations` | A counter of access-token revocations | None |
 | `{p}oidc:flow:h(cookie)` | An OIDC sign-in or link flow | 10 minutes, fixed |
 | `{p}oidc:link:<hash of the console session id>` | Which flow that console session has in progress | 10 minutes, renewed on use |
