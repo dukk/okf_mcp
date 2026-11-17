@@ -2536,6 +2536,7 @@ pub(crate) mod tests {
         let db = test_db().await;
         seed(&db.pool, "pg").await;
         let owner = join_test_team(&db.pool, "olive", Role::Owner).await;
+        let limit = std::time::Duration::from_secs(30);
         // Hold the catalog row: the rename takes the owner's membership row
         // (`lock_owner`), then waits here.
         let mut holder = db.pool.begin().await.unwrap();
@@ -2559,7 +2560,9 @@ pub(crate) mod tests {
             };
             update_details(&pool, &change, &actor, now()).await
         });
-        until_locks_are_awaited(&db.pool, 1).await;
+        tokio::time::timeout(limit, until_locks_are_awaited(&db.pool, 1))
+            .await
+            .expect("the rename waits on the catalog row");
         let pool = db.pool.clone();
         let demotion = tokio::spawn(async move {
             let membership = Membership {
@@ -2569,11 +2572,12 @@ pub(crate) mod tests {
             };
             teams::set_member(&pool, &membership, &AuditActor::cli(), now()).await
         });
-        until_locks_are_awaited(&db.pool, 2).await;
+        tokio::time::timeout(limit, until_locks_are_awaited(&db.pool, 2))
+            .await
+            .expect("the demotion waits on the rename's membership hold");
 
         // Act
         holder.rollback().await.unwrap();
-        let limit = std::time::Duration::from_secs(30);
         let renamed = tokio::time::timeout(limit, rename)
             .await
             .expect("the rename finishes within 30 seconds")
@@ -2657,5 +2661,78 @@ pub(crate) mod tests {
         assert!(entries(&db.pool, "catalog.display_name_changed")
             .await
             .is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_owners_rename_of_a_catalog_moved_while_it_waits_is_refused() {
+        use crate::store::teams::Role;
+        // Arrange: olive owns the test team, which owns `pg`; `family` is
+        // another team.
+        let db = test_db().await;
+        seed(&db.pool, "pg").await;
+        family(&db.pool).await;
+        let owner = join_test_team(&db.pool, "olive", Role::Owner).await;
+        let limit = std::time::Duration::from_secs(30);
+        // Hold the catalog row: the rename passes `lock_owner` (olive owns
+        // the catalog's team now), then waits here.
+        let mut holder = db.pool.begin().await.unwrap();
+        sqlx::query("SELECT id FROM catalogs WHERE name = 'pg' FOR UPDATE")
+            .execute(&mut *holder)
+            .await
+            .unwrap();
+        let pool = db.pool.clone();
+        let rename = tokio::spawn(async move {
+            let actor = AuditActor {
+                user_id: Some(owner.clone()),
+                ..AuditActor::cli()
+            };
+            let display = DisplayName::parse("Mine").unwrap();
+            let change = DetailsChange {
+                catalog: "pg",
+                display_name: Some(&display),
+                description: Some("ours"),
+                owner: Some(&owner),
+            };
+            update_details(&pool, &change, &actor, now()).await
+        });
+        tokio::time::timeout(limit, until_locks_are_awaited(&db.pool, 1))
+            .await
+            .expect("the rename waits on the catalog row");
+        // The holder moves the catalog to `family` while the rename waits.
+        sqlx::query(
+            "UPDATE catalogs SET owner_team_id = (SELECT id FROM teams WHERE name = 'family') \
+             WHERE name = 'pg'",
+        )
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+        let before = admin_generation(&mut *holder).await.unwrap();
+
+        // Act
+        holder.commit().await.unwrap();
+        let renamed = tokio::time::timeout(limit, rename)
+            .await
+            .expect("the rename finishes within 30 seconds")
+            .unwrap();
+
+        // Assert: under the row lock the owner team is no longer olive's,
+        // so the old team's owner is refused and nothing is written.
+        assert!(
+            matches!(renamed, Err(OkfError::Forbidden { .. })),
+            "{renamed:?}"
+        );
+        let pg = find(&db.pool, "pg").await.unwrap();
+        assert_eq!(
+            (pg.display_name.as_str(), pg.description.as_str()),
+            ("", "")
+        );
+        assert_eq!(pg.owner_team.as_deref(), Some("family"));
+        assert_eq!(admin_generation(&db.pool).await.unwrap(), before);
+        for action in [
+            "catalog.display_name_changed",
+            "catalog.description_changed",
+        ] {
+            assert!(entries(&db.pool, action).await.is_empty(), "{action}");
+        }
     }
 }
