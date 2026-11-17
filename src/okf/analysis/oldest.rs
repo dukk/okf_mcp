@@ -40,7 +40,7 @@ use crate::okf::yaml::Value;
 /// The stamp fields, in the order `okf.py` prefers on a tie.
 const STAMP_FIELDS: [&str; 3] = ["generated", "verified", "reviewed"];
 
-/// One row of `oldest --json`, keys in `okf.py`'s order.
+/// One row of the `oldest` report.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct OldestRow {
     /// `/`-prefixed concept path.
@@ -57,7 +57,7 @@ pub struct OldestRow {
     pub age_days: Option<f64>,
     /// `stale_after` has passed.
     pub stale: bool,
-    /// Queued `open_questions`, each as Python's `str()`.
+    /// Queued `open_questions`, each as its text.
     pub open_questions: Vec<String>,
     /// The sort key (the Unix epoch when never touched); not serialized.
     // `#[serde(skip)]` leaves the field out of the JSON, like `okf.py`

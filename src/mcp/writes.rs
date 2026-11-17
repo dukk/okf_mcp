@@ -30,7 +30,7 @@ pub struct CreateConceptParams {
     pub body: String,
     /// List the concept in its folder's index.md with this summary, creating folder indexes as needed.
     pub index_summary: Option<String>,
-    /// The index.md section to list it under (default: where `okf.py index` puts it); needs `index_summary`.
+    /// The index.md section to list it under (default: the section the server chooses for it); needs `index_summary`.
     pub index_section: Option<String>,
     /// Who wrote it, for the `generated` stamp (default: the key's actor).
     pub by: Option<String>,
@@ -76,6 +76,13 @@ pub struct SetFrontmatterParams {
     // No `#[serde(default)]`: a missing `value` is a parameter error, so
     // forgetting the argument can never delete the key. `serde_json::Value`
     // is not an `Option`, so serde treats the field as required.
+    // `Value` publishes an any-value schema, which has no `type`; the
+    // extension names every JSON type the op accepts (issue #513), and the
+    // typed `items` keeps array schemas valid for the annotations test.
+    #[schemars(extend(
+        "type" = ["string", "number", "integer", "boolean", "array", "object", "null"],
+        "items" = {"type": ["string", "number", "integer", "boolean", "array", "object", "null"]}
+    ))]
     pub value: serde_json::Value,
     /// The changeset to write to: the handle `open_changeset` returned.
     pub changeset: String,
@@ -331,7 +338,7 @@ impl OkfServer {
 pub enum QuestionRef {
     /// Its 1-based position, as `open_questions` numbers it.
     Number(u64),
-    /// Its exact text (a string of digits is read as a position, as `okf.py` does).
+    /// Its exact text (a string of digits is read as a position).
     Text(String),
 }
 
@@ -397,6 +404,7 @@ pub struct UnquestionParams {
     /// The concept, with or without `.md`, e.g. `/infra/ntp` or `/infra/ntp.md`.
     pub path: String,
     /// The question to remove: its 1-based number in `open_questions`, or its exact text.
+    #[schemars(extend("type" = ["integer", "string"]))]
     pub question: QuestionRef,
     /// The changeset to write to: the handle `open_changeset` returned.
     pub changeset: String,
@@ -413,7 +421,7 @@ pub struct AddSourceParams {
     pub resource: String,
     /// Its title.
     pub title: Option<String>,
-    /// Its author, e.g. `human:pgrace`.
+    /// Its author, e.g. `human:alice`.
     pub author: Option<String>,
     /// The changeset to write to: the handle `open_changeset` returned.
     pub changeset: String,
@@ -436,6 +444,7 @@ pub struct LogParams {
     /// The entry; runs of whitespace become single spaces.
     pub text: String,
     /// Update, Creation, Change or Import (default Update).
+    #[schemars(extend("type" = ["string", "null"]))]
     pub kind: Option<LogKind>,
     /// The changeset to write to: the handle `open_changeset` returned.
     pub changeset: String,
@@ -737,7 +746,7 @@ impl OkfServer {
     /// The `stamp` tool.
     #[tool(
         title = "Stamp Concept",
-        description = "okf.py stamp: set a concept's `generated` (content written) or append to \
+        description = "Set a concept's `generated` (content written) or append to \
                        its `verified` (checked against the real system) with { by, at: now }, in \
                        the changeset `changeset` names (open one with open_changeset). `by` \
                        defaults to the key's actor. Write access.",
@@ -761,7 +770,7 @@ impl OkfServer {
     /// The `review` tool.
     #[tool(
         title = "Record Review",
-        description = "okf.py review: replace a concept's `reviewed` with { by, at: now, outcome, \
+        description = "Replace a concept's `reviewed` with { by, at: now, outcome, \
                        note } and queue any `questions` in open_questions, in the changeset \
                        `changeset` names (open one with open_changeset). `by` defaults to the \
                        key's actor. Write access.",
@@ -785,7 +794,7 @@ impl OkfServer {
     /// The `question` tool.
     #[tool(
         title = "Add Question",
-        description = "okf.py question: queue one question in a concept's open_questions without \
+        description = "Queue one question in a concept's open_questions without \
                        recording a review, in the changeset `changeset` names (open one with \
                        open_changeset). Write access.",
         annotations(
@@ -808,7 +817,7 @@ impl OkfServer {
     /// The `unquestion` tool.
     #[tool(
         title = "Resolve Question",
-        description = "okf.py unquestion: remove one queued question, by its 1-based number in \
+        description = "Remove one queued question, by its 1-based number in \
                        open_questions or its exact text, deleting the key when none are left, in \
                        the changeset `changeset` names (open one with open_changeset). Write \
                        access.",
@@ -832,7 +841,7 @@ impl OkfServer {
     /// The `add_source` tool.
     #[tool(
         title = "Add Source",
-        description = "okf.py source: append an entry (id, resource, title, author) to a \
+        description = "Append an entry (id, resource, title, author) to a \
                        concept's `sources`, refusing a duplicate id, in the changeset `changeset` \
                        names (open one with open_changeset). Write access.",
         annotations(
@@ -880,7 +889,7 @@ impl OkfServer {
     /// The `log` tool.
     #[tool(
         title = "Add Log Entry",
-        description = "okf.py log: add `* **<kind>:** <text>` under today's UTC date in log.md, \
+        description = "Add `* **<kind>:** <text>` under today's UTC date in log.md, \
                        the only way to write log.md, in the changeset `changeset` names (open one \
                        with open_changeset). Replayed at publish onto a log.md that changed \
                        meanwhile, so concurrent entries never conflict. Write access.",
@@ -904,7 +913,7 @@ impl OkfServer {
     /// The `index` tool.
     #[tool(
         title = "Add Index Entry",
-        description = "okf.py index: list a concept in its folder's index.md as `* \
+        description = "List a concept in its folder's index.md as `* \
                        [Title](name.md) - summary`, in the changeset `changeset` names (open one \
                        with open_changeset); nothing happens if it is already linked. Replayed at \
                        publish onto an index.md that changed meanwhile, unless a free edit of \
@@ -1118,6 +1127,25 @@ mod tests {
         assert_eq!(delete.value, serde_json::Value::Null);
         let required = tool.input_schema["required"].as_array().unwrap();
         assert!(required.iter().any(|name| name == "value"), "{required:?}");
+    }
+
+    #[test]
+    fn unquestion_question_has_a_direct_type_and_still_accepts_both_forms() {
+        let tools = OkfServer::bookkeeping_router().list_all();
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name == "unquestion")
+            .expect("unquestion is registered");
+        let question = &tool.input_schema["properties"]["question"];
+
+        assert_eq!(question["type"], serde_json::json!(["integer", "string"]));
+        assert!(question["description"].as_str().is_some(), "{question}");
+        assert_eq!(question["$ref"], "#/$defs/QuestionRef");
+
+        let number: QuestionRef = serde_json::from_value(serde_json::json!(2)).unwrap();
+        let text: QuestionRef = serde_json::from_value(serde_json::json!("Who owns it?")).unwrap();
+        assert_eq!(number, QuestionRef::Number(2));
+        assert_eq!(text, QuestionRef::Text("Who owns it?".to_string()));
     }
 
     #[test]
@@ -1448,6 +1476,46 @@ mod bookkeeping_tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn log_kind_takes_each_kind_null_or_nothing_and_refuses_the_rest() {
+        let parse = |kind: Option<serde_json::Value>| {
+            let mut args = serde_json::json!({"text": "x", "changeset": "h"});
+            if let Some(kind) = kind {
+                args["kind"] = kind;
+            }
+            serde_json::from_value::<LogParams>(args)
+        };
+
+        for (name, kind) in [
+            ("Update", LogKind::Update),
+            ("Creation", LogKind::Creation),
+            ("Change", LogKind::Change),
+            ("Import", LogKind::Import),
+        ] {
+            assert_eq!(parse(Some(name.into())).unwrap().kind, Some(kind));
+        }
+        assert_eq!(parse(Some(serde_json::Value::Null)).unwrap().kind, None);
+        assert_eq!(parse(None).unwrap().kind, None);
+        assert!(parse(Some("Delete".into())).is_err());
+    }
+
+    #[test]
+    fn the_log_kind_schema_has_a_direct_type_and_the_four_kinds() {
+        let schema = serde_json::to_value(schemars::schema_for!(LogParams)).unwrap();
+        let kind = &schema["properties"]["kind"];
+
+        assert_eq!(kind["type"], serde_json::json!(["string", "null"]));
+        let kinds = &schema["$defs"]["LogKind"];
+        let mut names: Vec<&str> = kinds["oneOf"]
+            .as_array()
+            .map_or(&[][..], Vec::as_slice)
+            .iter()
+            .filter_map(|variant| variant["const"].as_str())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, ["Change", "Creation", "Import", "Update"]);
     }
 
     #[test]
@@ -1817,5 +1885,61 @@ mod repair_tests {
         );
         assert!(curated_root.contains("Curated words.") && curated_infra.contains("Our systems."));
         assert_eq!(curated_root.matches("(a.md)").count(), 1, "{curated_root}");
+    }
+}
+
+#[cfg(test)]
+mod set_frontmatter_value_schema_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The published `value` schema names a direct type for every JSON type.
+    #[test]
+    fn the_published_value_schema_lists_every_json_type() {
+        let schema = schemars::schema_for!(SetFrontmatterParams);
+        let schema = serde_json::to_value(&schema).unwrap();
+        let kinds = &schema["properties"]["value"]["type"];
+        let mut listed: Vec<&str> = kinds
+            .as_array()
+            .expect("value has a type array")
+            .iter()
+            .filter_map(|k| k.as_str())
+            .collect();
+        listed.sort_unstable();
+        assert_eq!(
+            listed,
+            ["array", "boolean", "integer", "null", "number", "object", "string"]
+        );
+        assert!(schema["properties"]["value"]["items"]["type"].is_array());
+    }
+
+    /// Every kind the schema lists still deserializes, null included.
+    #[test]
+    fn every_listed_value_kind_still_deserializes() {
+        for value in [
+            json!("text"),
+            json!(3),
+            json!(1.5),
+            json!(true),
+            json!(["a", "b"]),
+            json!([{"k": ["nested"]}]),
+            json!({"by": "x", "n": {"deep": 1}}),
+            json!(null),
+        ] {
+            let params: SetFrontmatterParams = serde_json::from_value(
+                json!({"path": "/a", "key": "k", "value": value, "changeset": "c"}),
+            )
+            .expect("accepted kind deserializes");
+            assert_eq!(params.value, value);
+        }
+    }
+
+    /// A missing `value` stays a parameter error.
+    #[test]
+    fn a_missing_value_is_still_rejected() {
+        let missing = serde_json::from_value::<SetFrontmatterParams>(
+            json!({"path": "/a", "key": "k", "changeset": "c"}),
+        );
+        assert!(missing.is_err());
     }
 }

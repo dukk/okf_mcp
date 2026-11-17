@@ -1036,9 +1036,15 @@ mod tests {
                     .unwrap();
             }
             Meanwhile::Deleted => {
-                users::delete(pool, "staff", true, &AuditActor::cli(), now())
-                    .await
-                    .unwrap();
+                users::delete(
+                    pool,
+                    "staff",
+                    users::DeleteOptions::OPERATOR,
+                    &AuditActor::cli(),
+                    now(),
+                )
+                .await
+                .unwrap();
             }
         }
         let ended = end(
