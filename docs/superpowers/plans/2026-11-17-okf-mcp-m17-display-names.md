@@ -1422,6 +1422,12 @@ Mount it with `.route("/labels", get(labels))`. Test the scope as Step 1 says.
   - **`passkeys.rs:539-546`:** `let display = user_label(&user.display_name, user.email.as_deref());`, then pass `&display` as the third argument.
 - [ ] **Step 3: Gates, changelog `m17-task-08-rendered-labels`, commit** `feat: emails, sign-in, consent and passkeys name people and catalogs by label`.
 
+> **Corrected (issue #605).** What shipped differs from the steps above in four places, none of which affects a later task:
+> - `UserPage.user` was renamed `user_label` (nothing else read it), and `catalog_labels` is `&[(String, String)]` built by `Labels::catalog_choices` over the ceiling's keys. `user_consent_page` takes `(&UserAuth, &Labels)` instead of a name, so it can build the user's label and the catalog texts.
+> - `authorize::summary` takes `&Labels` and shows the user, the catalogs (as `catalog_choices` texts, so duplicates are told apart) and the default catalog by label. A slug the directory does not hold yet is shown as itself, as `catalog_choices` does.
+> - The unlock email's subject carries the catalog label, and a subject is one header line. `Template::Unlocked`'s subject in `src/mail/templates.rs` now turns any control character, U+2028 or U+2029 in the catalog into a space (a stored row can predate the display-name check).
+> - The existing consent test that expected `alice` as the signed-in name now expects `Unnamed user` (a user with no display name and no email), and the console journey in `tests/ui_e2e/consent.rs` sets display names and checks the labels.
+
 ---
 
 ### Task 9: The new catalog's heading and the export filename
@@ -1592,6 +1598,8 @@ export function named(label, slug) {
 - [ ] **Step 2: Implement.**
   - The listing SELECT also reads `ap.display_name`. Email is not snapshotted, so the person label is `user_label(&display_name, None)` (an email fallback is unavailable in audit, by design).
   - The view gains `person_label: Option<String>` and `target_label: Option<String>`.
+
+    > **Corrected (issue #610).** The fields are on the nested objects: `actor.person_label` (`ActorView::Known`) and `target.person_label` and `target.target_label` (`TargetView`), next to the `person` and `name` they label, so every existing field keeps its shape. `audit::list` and `audit::export_lines` take a `&Labels` (the routes pass `app.keys().labels()`; `okf-mcp audit` calls `Labels::load`). `target_label` is set for `catalog` targets and shared `team` targets only (`null` for a personal team), and only while the original still exists: a team by `audit_teams.team_id` against `teams.id`, a catalog by `catalogs.created_at <= entry.at` (the log keeps no catalog id), so a recreated name never lends its label to the old entries. The export gains the fields inside its JSON objects rather than a trailing column, since it is JSON Lines.
   - In `audit.js:34-58`, show `person_label ?? person ?? label` and `target_label ?? target_name`.
   - The filters (`:119-124`) keep matching slugs.
   - The export format keeps its columns and appends `person_label` last. If the export has a fixed schema test, update it.

@@ -124,7 +124,8 @@ async fn a_setup_link_sets_a_password_and_the_console_shows_the_user() {
             .goto(&link, GotoOptions::default())
             .expect("open the setup link");
         ui.wait_text("#setup-form", "Confirm the password");
-        ui.wait_text("main strong", "alice");
+        // The page welcomes the display name ("Alice"), not the slug.
+        ui.wait_text("main strong", "Alice");
         ui.fill("#setup-password", PASSWORD);
         ui.fill("#setup-confirm", PASSWORD);
         ui.click("#setup-submit");

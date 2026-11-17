@@ -274,7 +274,20 @@ pub fn render(template: &Template, brand: &Brand) -> (String, String, String) {
         } => {
             // The subject names the product, as every other one does, so an
             // inbox tells the products apart.
-            let subject = format!("An operator opened {catalog} in {name}");
+            // A label is free text and a subject is one header line: a line
+            // break (or any control character) in it would start a second
+            // header, so it becomes a space here, whatever the stored row says.
+            let one_line: String = catalog
+                .chars()
+                .map(|c| {
+                    if c.is_control() || c == '\u{2028}' || c == '\u{2029}' {
+                        ' '
+                    } else {
+                        c
+                    }
+                })
+                .collect();
+            let subject = format!("An operator opened {one_line} in {name}");
             let opened = format!(
                 "An operator of {name} opened your team's catalog {catalog} for {category} \
                  until {until} (UTC)."
@@ -314,6 +327,26 @@ mod tests {
         assert_eq!(
             link("http://127.0.0.1:8080", RESET_PATH, "abc"),
             "http://127.0.0.1:8080/account/reset?token=abc"
+        );
+    }
+
+    #[test]
+    fn a_line_break_in_the_unlocked_catalog_never_reaches_the_subject_header() {
+        let template = Template::Unlocked {
+            catalog: "Acme\r\nBcc: evil@example.com\u{2028}x".to_string(),
+            category: "support".to_string(),
+            until: "2026-11-13 14:00".to_string(),
+        };
+
+        let (subject, _, _) = render(&template, &Brand::default());
+
+        assert!(
+            !subject.chars().any(|c| c.is_control() || c == '\u{2028}'),
+            "{subject:?}"
+        );
+        assert!(
+            subject.contains("Acme  Bcc: evil@example.com x"),
+            "{subject:?}"
         );
     }
 

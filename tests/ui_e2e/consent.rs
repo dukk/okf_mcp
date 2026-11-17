@@ -264,6 +264,20 @@ async fn a_person_signs_in_on_the_way_and_approves_from_their_ceiling() {
         .await
         .expect("entitle");
     }
+    // Labels: a display name for alice and for `main`; the page must show
+    // them, not the slugs. A bump of the generation reloads the directory.
+    sqlx::query("UPDATE users SET display_name = 'Alice Example' WHERE name = 'alice'")
+        .execute(pool)
+        .await
+        .expect("user display name");
+    sqlx::query("UPDATE catalogs SET display_name = 'Acme Handbook' WHERE name = 'main'")
+        .execute(pool)
+        .await
+        .expect("catalog display name");
+    sqlx::query("UPDATE server_state SET admin_generation = admin_generation + 1")
+        .execute(pool)
+        .await
+        .expect("bump");
     journey.server.app.poll().await.expect("poll");
     let authorize = journey.authorize(&[]);
     let landing = journey.landing.clone();
@@ -279,8 +293,10 @@ async fn a_person_signs_in_on_the_way_and_approves_from_their_ceiling() {
         ui.fill("#signin-password", PASSWORD);
         ui.click("#signin-submit");
         // Signed in, back at the request: alice's own ceiling.
-        ui.wait_text("#consent-user", "alice");
+        ui.wait_text("#consent-user", "Alice Example");
         ui.wait_text("#consent-client", "Example Client");
+        // The catalog shows its label; the slug stays in the control's id.
+        assert!(ui.text("#consent-catalogs").contains("Acme Handbook"));
         ui.click("#consent-catalog-main");
         ui.select("#consent-level-main", "write");
         ui.select("#consent-default", "main");

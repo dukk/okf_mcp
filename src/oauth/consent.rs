@@ -267,10 +267,14 @@ pub fn summary_page(
 // `Debug` by hand: the consent nonce never reaches a log.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct UserPage<'a> {
-    /// The signed-in user's name.
-    pub user: &'a str,
+    /// The signed-in user's label (never its slug).
+    pub user_label: &'a str,
     /// The ceiling it offers: the catalogs and levels the user may grant.
     pub ceiling: &'a Ceiling,
+    /// `(slug, shown text)` for each catalog of the ceiling, in order, every
+    /// text distinct (`Labels::catalog_choices`). The slug stays in ids,
+    /// names and values; only the text is shown to the person.
+    pub catalog_labels: &'a [(String, String)],
     /// The page's consent nonce (the hidden `summary` input).
     pub nonce: &'a str,
     /// The "Use a sign-in code instead" link (same-origin, unescaped).
@@ -288,7 +292,7 @@ impl std::fmt::Debug for UserPage<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("UserPage")
-            .field("user", &self.user)
+            .field("user_label", &self.user_label)
             .field("ceiling", &self.ceiling)
             .field("nonce", &"<redacted>")
             .field("code_href", &self.code_href)
@@ -331,12 +335,18 @@ pub(crate) fn user_page_html(view: &PageView, user: &UserPage<'_>, error: Option
         );
     }
     // Catalog names are `[a-z0-9-]+` (a schema CHECK), so they are safe in
-    // ids and names; they are escaped anyway, as everything is.
+    // ids and names; they are escaped anyway, as everything is. The label
+    // is free text, so it is escaped as visible text and as an attribute
+    // value (`escape` covers both).
     let rows: String = user
-        .ceiling
+        .catalog_labels
         .iter()
-        .map(|(catalog, &allowed)| {
+        // `filter_map` skips a slug the ceiling no longer holds (never, as
+        // the caller builds both from one ceiling).
+        .filter_map(|(catalog, shown)| user.ceiling.get(catalog).map(|&allowed| (catalog, shown, allowed)))
+        .map(|(catalog, shown, allowed)| {
             let name = escape(catalog);
+            let label = escape(shown);
             let write = if allowed >= Access::Write {
                 r#"
                         <option value="write">write</option>"#
@@ -345,8 +355,8 @@ pub(crate) fn user_page_html(view: &PageView, user: &UserPage<'_>, error: Option
             };
             format!(
                 r#"                <div class="consent-catalog">
-                    <label><input type="checkbox" name="grant.{name}" value="on" id="consent-catalog-{name}"> {name}</label>
-                    <select name="level.{name}" id="consent-level-{name}" aria-label="Access to {name}">
+                    <label><input type="checkbox" name="grant.{name}" value="on" id="consent-catalog-{name}"> {label}</label>
+                    <select name="level.{name}" id="consent-level-{name}" aria-label="Access to {label}">
                         <option value="read">read</option>{write}
                     </select>
                 </div>
@@ -355,12 +365,13 @@ pub(crate) fn user_page_html(view: &PageView, user: &UserPage<'_>, error: Option
         })
         .collect();
     let defaults: String = user
-        .ceiling
-        .keys()
-        .map(|catalog| {
+        .catalog_labels
+        .iter()
+        .map(|(catalog, shown)| {
             let name = escape(catalog);
+            let label = escape(shown);
             format!(
-                r#"                    <option value="{name}">{name}</option>
+                r#"                    <option value="{name}">{label}</option>
 "#
             )
         })
@@ -387,7 +398,7 @@ pub(crate) fn user_page_html(view: &PageView, user: &UserPage<'_>, error: Option
         </form>
 {link}"#,
         client = client_block(view),
-        user = escape(user.user),
+        user = escape(user.user_label),
         name = escape(&view.client_name),
         error = error_line(error),
         hidden = hidden_fields(view),
@@ -543,7 +554,8 @@ mod tests {
     fn debug_never_prints_the_user_pages_nonce() {
         let ceiling = Ceiling::new();
         let user = UserPage {
-            user: "alice",
+            user_label: "alice",
+            catalog_labels: &[],
             ceiling: &ceiling,
             nonce: "consent-nonce-that-must-not-leak",
             code_href: "/oauth/authorize?a=1&signin=code",
@@ -691,8 +703,13 @@ mod tests {
     #[test]
     fn the_user_page_offers_each_catalog_at_most_at_its_ceiling() {
         let ceiling = ceiling();
+        let labels = [
+            ("main".to_string(), "Main <b>book</b>".to_string()),
+            ("other".to_string(), "Other".to_string()),
+        ];
         let user = UserPage {
-            user: "<alice>",
+            user_label: "<alice>",
+            catalog_labels: &labels,
             ceiling: &ceiling,
             nonce: "n1",
             code_href: "/oauth/authorize?a=1&signin=code",
@@ -703,6 +720,12 @@ mod tests {
         assert!(html.contains(r#"<strong id="consent-user">&lt;alice&gt;</strong>"#));
         assert!(html.contains(r#"name="grant.main""#));
         assert!(html.contains(r#"name="grant.other""#));
+        // The visible text is the escaped label; ids, names and values keep
+        // the slug.
+        assert!(html.contains(r#"id="consent-catalog-main"> Main &lt;b&gt;book&lt;/b&gt;</label>"#));
+        assert!(html.contains(r#"aria-label="Access to Main &lt;b&gt;book&lt;/b&gt;""#));
+        assert!(html.contains(r#"<option value="main">Main &lt;b&gt;book&lt;/b&gt;</option>"#));
+        assert!(!html.contains("<b>book"), "{html}");
         // `main` offers write, `other` only read.
         let other = &html[html.find(r#"name="level.other""#).expect("other's select")..];
         let other = &other[..other.find("</select>").expect("its end")];
@@ -721,7 +744,8 @@ mod tests {
     fn an_empty_ceiling_offers_only_deny_and_the_code_link() {
         let empty = Ceiling::new();
         let user = UserPage {
-            user: "alice",
+            user_label: "alice",
+            catalog_labels: &[],
             ceiling: &empty,
             nonce: "n1",
             code_href: "/oauth/authorize?a=1&signin=code",

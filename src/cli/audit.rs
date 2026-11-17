@@ -13,6 +13,7 @@ use std::borrow::Cow;
 use sqlx::PgPool;
 
 use super::{comma_list, tab_row, AuditArgs, AuditCommand};
+use crate::labels::directory::Labels;
 use crate::store::audit::{self, ActorView, AuditRecord, FilterText, TargetView, Viewer};
 
 /// Runs `okf-mcp audit ...`.
@@ -34,7 +35,7 @@ pub(super) async fn audit(pool: &PgPool, command: &AuditCommand) -> anyhow::Resu
     Ok(match command {
         AuditCommand::List(args) => {
             let query = audit::parse_filters(&filter_text(args))?;
-            audit::list(pool, &Viewer::Admin, &query)
+            audit::list(pool, &Viewer::Admin, &query, &Labels::load(pool).await?)
                 .await?
                 .iter()
                 .map(|record| format_record(record) + "\n")
@@ -42,7 +43,7 @@ pub(super) async fn audit(pool: &PgPool, command: &AuditCommand) -> anyhow::Resu
         }
         AuditCommand::Export(args) => {
             let query = audit::parse_filters(&filter_text(args))?;
-            audit::export_lines(pool, &Viewer::Admin, &query).await?
+            audit::export_lines(pool, &Viewer::Admin, &query, &Labels::load(pool).await?).await?
         }
     })
 }
@@ -403,9 +404,12 @@ mod tests {
             kind: kind.into(),
             name: name.map(Into::into),
             person: person.map(Into::into),
+            person_label: None,
+            target_label: None,
         };
         let known = |person: Option<&str>, credential: Option<&str>| ActorView::Known {
             person: person.map(Into::into),
+            person_label: None,
             credential: credential.map(Into::into),
             label: "api key".into(),
             operator: false,
