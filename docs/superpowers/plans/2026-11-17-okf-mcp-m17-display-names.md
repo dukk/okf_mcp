@@ -1330,6 +1330,12 @@ Mount it with `.route("/labels", get(labels))`. Test the scope as Step 1 says.
        > **Corrected (PR #596 review).** The first draft allowed `previous` to become an object when no in-repo reader used it; absence of in-repo readers says nothing about external clients.
   - **`POST /catalogs`** passes `display_name` (Task 2 already parsed it).
   - **`PROVISIONER_ROUTES`** gains `("PATCH", "/api/v1/users/{name}")`, `("PATCH", "/api/v1/teams/{name}")` and `("PATCH", "/api/v1/catalogs/{catalog}")`. The provisioner arm of the catalog PATCH is explicit (step 2 above); it cannot reach catalog content, and this route touches only the row.
+  > **Corrected (issue #602, 2026-11-17).** What shipped differs from the text above in these ways; none changes a later task's inputs:
+  > - `owned_team_details` is a `Vec<OwnedTeamView>` in `me.rs`. `teams::owned_names` was replaced by `teams::owned` (store type `OwnedTeam { name, display_name, personal }`), one query that gives both `owned_teams` and the details; the label is `team_label` over the user's own label. Task 10a reads `account.owned_team_details` exactly as described.
+  > - `Labels` gained `users()`, `teams()` and `catalog_slugs()` iterators, for the every-catalog admin's `GET /labels`.
+  > - The suspended-owner refusal calls `Principal::check_not_suspended` (it does not build `OkfError::Suspended` itself, so Task 7's new fields need no change here), and only when the session reaches the catalog or belongs to its owner team: a session outside both gets the store's `Forbidden`, so it cannot probe which catalogs are suspended.
+  > - `PATCH /me` answers 404 for a credential without a user (as `GET /me`) and 403 for a key or OAuth token that has one: a key is not the person's console session.
+  > - The route tests are in `src/http/api/labels_tests.rs` and `provisioner_tests.rs`, not in each handler file.
 - [ ] **Step 5: Run the tests, full gates, changelog `m17-task-05-rest-labels`, commit** `feat(api): labels on views, GET /labels, display-name edits`.
 
 ---

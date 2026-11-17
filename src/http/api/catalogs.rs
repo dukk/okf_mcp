@@ -19,7 +19,8 @@ use crate::catalog::CatalogState;
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
 use crate::http::{archives, AppError};
-use crate::labels::DisplayName;
+use crate::labels::directory::Labels;
+use crate::labels::{catalog_label, DisplayName};
 use crate::mcp::catalogs::SuspensionInfo;
 use crate::okf::ops::STARTER_FILE_COUNT;
 use crate::store::audit::AuditActor;
@@ -66,11 +67,18 @@ pub(crate) fn routes(app: &App) -> Router<Arc<App>> {
 pub(crate) struct CatalogSummary {
     /// Its name.
     pub name: String,
+    /// Its stored display name; empty when unset.
+    pub display_name: String,
+    /// What people are shown for it: its display name, else its
+    /// description (see [`catalog_label`]).
+    pub label: String,
     /// Its description.
     pub description: String,
     /// The name of the team that owns it; null for a catalog from before
     /// users and teams not yet assigned.
     pub owner_team: Option<String>,
+    /// The owner team's label; null when it has no owner team.
+    pub owner_team_label: Option<String>,
     /// How many files it holds (every stored file).
     pub files: usize,
     /// How many of them are concepts.
@@ -96,6 +104,7 @@ impl CatalogSummary {
     /// * `state` - its state.
     /// * `principal` - the caller, which must reach the catalog (its
     ///   suspension is shown only to those who do).
+    /// * `labels` - the key cache's directory, for the labels.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -103,15 +112,28 @@ impl CatalogSummary {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    fn of(name: &str, state: &CatalogState, principal: &Principal) -> Self {
+    fn of(name: &str, state: &CatalogState, principal: &Principal, labels: &Labels) -> Self {
         // `current()` is an `Arc` of the loaded snapshot: one consistent
         // generation, file count and concept count.
         let loaded = state.current();
+        let description = state.description();
+        let display_name = labels.catalog_display_name(name).unwrap_or_default();
+        // `as_deref` borrows the `Arc<str>` inside as a `&str`.
+        let owner_team = state.owner_team().as_deref().map(str::to_string);
         Self {
             name: name.to_string(),
-            description: state.description().to_string(),
-            // `as_deref` borrows the `Arc<str>` inside as a `&str`.
-            owner_team: state.owner_team().as_deref().map(str::to_string),
+            // A catalog loaded since the directory was: its label comes from
+            // what the state knows.
+            label: labels
+                .catalog(name)
+                .map_or_else(|| catalog_label(display_name, &description), str::to_string),
+            display_name: display_name.to_string(),
+            description: description.to_string(),
+            owner_team_label: owner_team
+                .as_deref()
+                .and_then(|team| labels.team(team))
+                .map(str::to_string),
+            owner_team,
             files: loaded.files(),
             concepts: loaded.snapshot().concepts().count(),
             generation: loaded.generation(),
@@ -146,23 +168,34 @@ struct NewCatalog {
     owner: String,
 }
 
-/// `PATCH /catalogs/{catalog}`'s body.
+/// `PATCH /catalogs/{catalog}`'s body: the fields to change, at least one.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct DescriptionChange {
-    /// The new description (empty is allowed).
-    description: String,
+struct DetailsBody {
+    /// The new display name, checked by [`DisplayName::parse`] (empty
+    /// clears it); left as it is when absent.
+    display_name: Option<String>,
+    /// The new description (empty is allowed); left as it is when absent.
+    description: Option<String>,
 }
 
-/// `PATCH /catalogs/{catalog}`'s answer, as `okf-mcp catalog update` prints it.
+/// `PATCH /catalogs/{catalog}`'s answer: a strict superset of the one this
+/// route gave when it changed only the description, so a client that reads
+/// `name`, `previous` and `description` is unaffected.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct DescriptionChanged {
+pub(crate) struct DetailsChanged {
     /// The catalog.
     pub name: String,
-    /// The description it had.
+    /// The description it had (always a string, whichever field changed).
     pub previous: String,
     /// The description it has now.
     pub description: String,
+    /// The display name it had; empty when unset.
+    pub previous_display_name: String,
+    /// The display name it has now; empty when unset.
+    pub display_name: String,
+    /// What people are shown for it now.
+    pub label: String,
 }
 
 /// `PUT /catalogs/{catalog}/owner`'s body.
@@ -211,10 +244,11 @@ async fn list_catalogs(
 ) -> Result<Json<CatalogListing>, AppError> {
     // Held in a local so the map outlives the iteration that borrows it.
     let loaded = app.catalogs();
+    let labels = app.keys().labels();
     let catalogs = loaded
         .iter()
         .filter(|(name, _)| principal.reaches(name))
-        .map(|(name, state)| CatalogSummary::of(name, state, &principal))
+        .map(|(name, state)| CatalogSummary::of(name, state, &principal, &labels))
         .collect();
     Ok(Json(CatalogListing { catalogs }))
 }
@@ -279,7 +313,13 @@ async fn create_catalog(
     // having loaded it.
     let summary = CatalogSummary {
         name: row.name,
+        label: catalog_label(&row.display_name, &row.description),
+        display_name: row.display_name,
         description: row.description,
+        owner_team_label: row
+            .owner_team
+            .as_deref()
+            .and_then(|team| app.keys().labels().team(team).map(str::to_string)),
         owner_team: row.owner_team,
         files: STARTER_FILE_COUNT,
         concepts: 0,
@@ -292,41 +332,119 @@ async fn create_catalog(
     Ok((StatusCode::CREATED, Json(summary)))
 }
 
-/// `PATCH /catalogs/{catalog}`: replaces the description (`admin` on the
-/// catalog), then polls so the listing shows it at once.
+/// Whether `principal`, a console session, may edit `catalog` as an owner
+/// of its team: refused while the team is suspended (plan Decision 6; the
+/// store does not check suspension).
+///
+/// The suspension is told only to a session that reaches the catalog or
+/// belongs to its team, so a session cannot probe which other catalogs are
+/// suspended. Anyone else goes on to the store, which refuses a non-owner.
+///
+/// # Arguments
+/// * `app` - the application, for the team memberships the key cache holds.
+/// * `principal` - the caller.
+/// * `catalog` - the catalog to edit.
 ///
 /// # Errors
-/// 404 for a catalog the key does not reach or that does not exist; 403
-/// below `admin`; 500 for a database failure.
+/// [`OkfError::Suspended`].
+#[tracing::instrument(level = "debug", skip_all)]
+fn refuse_suspended_owner(app: &App, principal: &Principal, catalog: &str) -> Result<(), OkfError> {
+    let Some(suspended) = principal.suspension(catalog) else {
+        return Ok(());
+    };
+    let labels = app.keys().labels();
+    let in_team = principal
+        .user
+        .as_deref()
+        .is_some_and(|user| labels.teams_of(user).any(|team| team == suspended.team));
+    if in_team || principal.reaches(catalog) {
+        principal.check_not_suspended(catalog)
+    } else {
+        Ok(())
+    }
+}
+
+/// `PATCH /catalogs/{catalog}`: replaces the display name, the description
+/// or both, then polls so the listing shows them at once.
+///
+/// Who may: a provisioner (it reaches no catalog content; this touches only
+/// the row), a key or session with `admin` on the catalog, or a console
+/// session of an owner of the catalog's owner team, refused while that team
+/// is suspended. The store checks the owner under its locks.
+///
+/// # Errors
+/// 403 for anyone else (a member who is not an owner, a key below `admin`,
+/// and for a session an unknown catalog too); 404 for a catalog a key does
+/// not reach or that does not exist; 403 with `Suspended` for an owner of a
+/// suspended team; 422 for a refused display name, an unknown field or a
+/// body with neither field; 500 for a database failure.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn update_catalog(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
     actor: AuditActor,
     Path(catalog): Path<String>,
-    Json(change): Json<DescriptionChange>,
-) -> Result<Json<DescriptionChanged>, AppError> {
-    principal.require(Access::Admin, &catalog)?;
+    Json(change): Json<DetailsBody>,
+) -> Result<Json<DetailsChanged>, AppError> {
+    if change.display_name.is_none() && change.description.is_none() {
+        return Err(OkfError::LimitExceeded {
+            limit: "body",
+            reason: "give display_name, description or both".to_string(),
+        }
+        .into());
+    }
+    let display_name = change
+        .display_name
+        .as_deref()
+        .map(DisplayName::parse)
+        .transpose()?;
+    // Who is asking decides whether the store checks an owner. A tuple match
+    // lists every combination: a provisioner and an admin pass as they are;
+    // a console session may still be an owner; any other credential gets
+    // the admin refusal.
+    let owner = match (
+        principal.provisioner,
+        principal.require(Access::Admin, &catalog),
+        &principal.kind,
+    ) {
+        (true, _, _) | (false, Ok(()), _) => None,
+        (false, Err(_), CredentialKind::Session { user_id }) => {
+            refuse_suspended_owner(&app, &principal, &catalog)?;
+            Some(user_id.as_str())
+        }
+        (false, Err(refusal), CredentialKind::ApiKey | CredentialKind::OAuth { .. }) => {
+            return Err(refusal.into())
+        }
+    };
     let details = catalog_rows::DetailsChange {
         catalog: &catalog,
-        display_name: None,
-        description: Some(&change.description),
-        owner: None,
+        display_name: display_name.as_ref(),
+        description: change.description.as_deref(),
+        owner,
     };
-    let previous = catalog_rows::update_details(app.pool(), &details, &actor, app.clock().now())
-        .await?
-        .description;
+    let previous =
+        catalog_rows::update_details(app.pool(), &details, &actor, app.clock().now()).await?;
     split_event!(
         info,
         { %catalog, },
         { key = %principal.key_id, actor = %principal.actor, },
-        "catalog description changed"
+        "catalog details changed"
     );
     settle(&app).await;
-    Ok(Json(DescriptionChanged {
+    let description = change
+        .description
+        .unwrap_or_else(|| previous.description.clone());
+    let display_name = display_name.map_or_else(
+        || previous.display_name.clone(),
+        |parsed| parsed.as_str().to_string(),
+    );
+    Ok(Json(DetailsChanged {
         name: catalog,
-        previous,
-        description: change.description,
+        previous: previous.description,
+        label: catalog_label(&display_name, &description),
+        description,
+        previous_display_name: previous.display_name,
+        display_name,
     }))
 }
 
@@ -1076,7 +1194,9 @@ mod tests {
         assert_eq!(
             changed,
             json!({ "name": "main", "previous": "",
-                                    "description": "The main catalog" })
+                                    "description": "The main catalog",
+                                    "previous_display_name": "", "display_name": "",
+                                    "label": "The main catalog" })
         );
         assert_eq!(listed["catalogs"][0]["description"], "The main catalog");
     }

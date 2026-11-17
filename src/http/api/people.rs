@@ -43,7 +43,7 @@ use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::app::App;
-use crate::auth::Principal;
+use crate::auth::{CredentialKind, Principal};
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
 use crate::http::api::keys::{manages, manages_grants, parse_access, KeyView};
@@ -53,7 +53,8 @@ use crate::http::api::{
     require_admin, require_every_catalog, require_manager, require_reader, settle,
 };
 use crate::http::AppError;
-use crate::labels::DisplayName;
+use crate::labels::directory::Labels;
+use crate::labels::{team_label, user_label, DisplayName};
 use crate::mail::invite;
 use crate::store::audit::AuditActor;
 use crate::store::ceiling::{self, Entitlement, NewEntitlement};
@@ -72,6 +73,9 @@ pub(crate) struct UserView {
     pub name: String,
     /// Free text, possibly empty.
     pub display_name: String,
+    /// What people are shown for it: its display name, else its email's
+    /// local part (see [`user_label`]).
+    pub label: String,
     /// When it was created (`2026-11-11T12:00:00Z`).
     pub created_at: String,
     /// How many keys, grants (live and revoked) and sign-in codes name it,
@@ -110,6 +114,7 @@ impl From<UserRecord> for UserView {
         } = record;
         Self {
             name,
+            label: user_label(&display_name, email.as_deref()),
             display_name,
             created_at: format_timestamp(created_at),
             credentials,
@@ -239,6 +244,8 @@ pub(crate) struct MemberView {
     pub user: String,
     /// `owner` or `member`.
     pub role: &'static str,
+    /// The user's label, as `GET /labels` gives it.
+    pub label: String,
 }
 
 /// One team as the API shows it.
@@ -248,6 +255,9 @@ pub(crate) struct TeamView {
     pub name: String,
     /// Free text, possibly empty.
     pub display_name: String,
+    /// What people are shown for it: "{user label}'s team" for a personal
+    /// team, else its display name (see [`team_label`]).
+    pub label: String,
     /// The user whose personal team this is (`None` for a shared team).
     pub personal_of: Option<String>,
     /// When it was created.
@@ -262,7 +272,15 @@ pub(crate) struct TeamView {
     pub suspension_notice: Option<String>,
 }
 
-impl From<TeamRecord> for TeamView {
+impl TeamView {
+    /// The view of a team record.
+    ///
+    /// The record cannot see the user a personal team is named after, so
+    /// the labels come from the directory the key cache holds.
+    ///
+    /// # Arguments
+    /// * `record` - the team.
+    /// * `labels` - the directory, read after the write's `settle`.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -270,7 +288,7 @@ impl From<TeamRecord> for TeamView {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    fn from(record: TeamRecord) -> Self {
+    pub(crate) fn of(record: TeamRecord, labels: &Labels) -> Self {
         let TeamRecord {
             name,
             display_name,
@@ -282,12 +300,22 @@ impl From<TeamRecord> for TeamView {
         } = record;
         Self {
             name,
+            label: team_label(
+                &display_name,
+                personal_of.as_deref().and_then(|user| labels.user(user)),
+            ),
             display_name,
             personal_of,
             created_at: format_timestamp(created_at),
             members: members
                 .into_iter()
                 .map(|member| MemberView {
+                    // A user created since the last load has no label yet:
+                    // show the slug rather than nothing.
+                    label: labels
+                        .user(&member.user)
+                        .unwrap_or(&member.user)
+                        .to_string(),
                     user: member.user,
                     role: member.role.as_str(),
                 })
@@ -418,7 +446,10 @@ struct EntitlementBody {
 pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/users", get(list_users).post(create_user))
-        .route("/users/{name}", get(user_detail).delete(delete_user))
+        .route(
+            "/users/{name}",
+            get(user_detail).patch(update_user).delete(delete_user),
+        )
         .route("/users/{name}/admin", put(set_admin))
         .route("/users/{name}/email", put(set_email))
         .route("/users/{name}/invite", post(invite_user))
@@ -433,7 +464,10 @@ pub(crate) fn routes() -> Router<Arc<App>> {
         .route("/users/{name}/sessions/{id_prefix}", delete(revoke_session))
         .route("/users/{name}/sign-ins", get(list_sign_ins))
         .route("/teams", get(list_teams).post(create_team))
-        .route("/teams/{name}", get(team_detail).delete(delete_team))
+        .route(
+            "/teams/{name}",
+            get(team_detail).patch(update_team).delete(delete_team),
+        )
         .route(
             "/teams/{name}/members/{user}",
             put(set_member).delete(remove_member),
@@ -906,10 +940,11 @@ async fn list_teams(
     Extension(principal): Extension<Arc<Principal>>,
 ) -> Result<Json<TeamList>, AppError> {
     require_reader(&principal)?;
+    let labels = app.keys().labels();
     let teams = teams::list(app.pool())
         .await?
         .into_iter()
-        .map(TeamView::from)
+        .map(|record| TeamView::of(record, &labels))
         .collect();
     Ok(Json(TeamList { teams }))
 }
@@ -939,7 +974,10 @@ async fn create_team(
     };
     let created = teams::create(app.pool(), &new, &actor, app.clock().now()).await?;
     settle(&app).await;
-    Ok((StatusCode::CREATED, Json(created.into())))
+    Ok((
+        StatusCode::CREATED,
+        Json(TeamView::of(created, &app.keys().labels())),
+    ))
 }
 
 /// `GET /teams/{name}`: one team, with its members and catalogs.
@@ -953,7 +991,8 @@ async fn team_detail(
     Path(name): Path<String>,
 ) -> Result<Json<TeamView>, AppError> {
     require_reader(&principal)?;
-    Ok(Json(teams::find(app.pool(), &name).await?.into()))
+    let record = teams::find(app.pool(), &name).await?;
+    Ok(Json(TeamView::of(record, &app.keys().labels())))
 }
 
 /// `DELETE /teams/{name}`: deletes a shared team that owns no catalog.
@@ -1004,7 +1043,7 @@ async fn set_member(
     settle(&app).await;
     Ok(Json(MembershipChanged {
         change: change_name(change),
-        team: teams::find(app.pool(), &team).await?.into(),
+        team: TeamView::of(teams::find(app.pool(), &team).await?, &app.keys().labels()),
     }))
 }
 
@@ -1027,7 +1066,8 @@ async fn remove_member(
     require_manager(&principal)?;
     teams::remove_member(app.pool(), &team, &user, &actor, app.clock().now()).await?;
     settle(&app).await;
-    Ok(Json(teams::find(app.pool(), &team).await?.into()))
+    let record = teams::find(app.pool(), &team).await?;
+    Ok(Json(TeamView::of(record, &app.keys().labels())))
 }
 
 /// `PUT /teams/{name}/suspension`: suspends the team (or replaces its
@@ -1061,7 +1101,84 @@ async fn set_suspension(
         teams::unsuspend(app.pool(), &name, &actor, now).await?
     };
     settle(&app).await;
-    Ok(Json(team.into()))
+    Ok(Json(TeamView::of(team, &app.keys().labels())))
+}
+
+/// `PATCH /users/{name}`'s and `PATCH /me`'s body: the new display name.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DisplayNameBody {
+    /// The new display name, checked by [`DisplayName::parse`]; empty
+    /// clears it.
+    pub display_name: String,
+}
+
+/// `PATCH /users/{name}`: sets the user's display name, then polls so the
+/// labels show it at once.
+///
+/// # Returns
+/// The user as it now is.
+///
+/// # Errors
+/// 403 unless the key is an admin reaching every catalog or a provisioner
+/// (which is also refused an admin user); 404 for an unknown user; 422 for
+/// a refused display name or a body that is not exactly `display_name`;
+/// 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn update_user(
+    State(app): State<Arc<App>>,
+    Extension(principal): Extension<Arc<Principal>>,
+    actor: AuditActor,
+    Path(name): Path<String>,
+    Json(body): Json<DisplayNameBody>,
+) -> Result<Json<UserView>, AppError> {
+    require_manager(&principal)?;
+    let display_name = DisplayName::parse(&body.display_name)?;
+    users::set_display_name(app.pool(), &name, &display_name, &actor, app.clock().now()).await?;
+    settle(&app).await;
+    Ok(Json(users::find(app.pool(), &name).await?.into()))
+}
+
+/// `PATCH /teams/{name}`: sets a shared team's display name, then polls so
+/// the labels show it at once. A manager (an admin reaching every catalog,
+/// or a provisioner) may rename any shared team; a console session may
+/// rename one it owns, which the store checks under its locks.
+///
+/// # Returns
+/// The team as it now is.
+///
+/// # Errors
+/// 403 for anyone else (a member who is not an owner, another user's team,
+/// a key); 404 for an unknown team asked by a manager; 409 for a personal
+/// team; 422 for a refused display name or a body that is not exactly
+/// `display_name`; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn update_team(
+    State(app): State<Arc<App>>,
+    Extension(principal): Extension<Arc<Principal>>,
+    actor: AuditActor,
+    Path(name): Path<String>,
+    Json(body): Json<DisplayNameBody>,
+) -> Result<Json<TeamView>, AppError> {
+    // A tuple match decides on both at once: a manager passes; a console
+    // session may still be an owner; any other credential gets the refusal.
+    let owner = match (require_manager(&principal), &principal.kind) {
+        (Ok(()), _) => None,
+        (Err(_), CredentialKind::Session { user_id }) => Some(user_id.as_str()),
+        (Err(refusal), CredentialKind::ApiKey | CredentialKind::OAuth { .. }) => {
+            return Err(refusal.into())
+        }
+    };
+    let display_name = DisplayName::parse(&body.display_name)?;
+    let change = teams::TeamDisplayNameChange {
+        team: &name,
+        display_name: &display_name,
+        owner,
+    };
+    teams::set_display_name(app.pool(), &change, &actor, app.clock().now()).await?;
+    settle(&app).await;
+    let record = teams::find(app.pool(), &name).await?;
+    Ok(Json(TeamView::of(record, &app.keys().labels())))
 }
 
 /// `GET /unassigned`: every key, grant, code and catalog without a user or
@@ -2065,7 +2182,7 @@ mod tests {
         assert_eq!(personal["personal_of"], "alice");
         assert_eq!(
             personal["members"],
-            json!([{"user": "alice", "role": "owner"}])
+            json!([{"user": "alice", "role": "owner", "label": "Alice Example"}])
         );
         assert_eq!(deleted.as_u16(), 204);
         assert_eq!(gone.as_u16(), 404);
@@ -2352,15 +2469,15 @@ mod tests {
         assert_eq!(
             detail["members"],
             json!([
-                {"user": "alice", "role": "owner"},
-                {"user": "test-user", "role": "member"},
+                {"user": "alice", "role": "owner", "label": "Unnamed user"},
+                {"user": "test-user", "role": "member", "label": "Unnamed user"},
             ])
         );
         assert_eq!(detail["personal_of"], serde_json::Value::Null);
         assert_eq!(removed.as_u16(), 200);
         assert_eq!(
             after["members"],
-            json!([{"user": "alice", "role": "owner"}])
+            json!([{"user": "alice", "role": "owner", "label": "Unnamed user"}])
         );
         assert_eq!(personal.as_u16(), 409, "a personal team goes with its user");
         assert_eq!(deleted.as_u16(), 204);

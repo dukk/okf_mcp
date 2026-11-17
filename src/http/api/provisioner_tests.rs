@@ -220,11 +220,8 @@ async fn a_provisioner_is_refused_every_other_route_and_every_catalog() {
         ("HEAD", "/api/v1/users?email=alice@example.com", None),
         ("GET", "/api/v1/catalogs", None),
         ("POST", "/api/v1/catalogs/main/import", None),
-        (
-            "PATCH",
-            "/api/v1/catalogs/main",
-            Some(json!({"description": "x"})),
-        ),
+        ("GET", "/api/v1/labels", None),
+        ("PATCH", "/api/v1/me", Some(json!({"display_name": "x"}))),
         (
             "POST",
             "/api/v1/changesets",
@@ -326,15 +323,18 @@ fn the_allow_list_is_the_specs_and_names_routes_by_template() {
         ("POST", "/api/v1/users"),
         ("PUT", "/api/v1/users/{name}/email"),
         ("POST", "/api/v1/users/{name}/invite"),
+        ("PATCH", "/api/v1/users/{name}"),
         ("DELETE", "/api/v1/users/{name}"),
         ("GET", "/api/v1/teams"),
         ("GET", "/api/v1/teams/{name}"),
         ("POST", "/api/v1/teams"),
         ("PUT", "/api/v1/teams/{name}/members/{user}"),
         ("DELETE", "/api/v1/teams/{name}/members/{user}"),
+        ("PATCH", "/api/v1/teams/{name}"),
         ("DELETE", "/api/v1/teams/{name}"),
         ("PUT", "/api/v1/teams/{name}/suspension"),
         ("POST", "/api/v1/catalogs"),
+        ("PATCH", "/api/v1/catalogs/{catalog}"),
         ("DELETE", "/api/v1/catalogs/{catalog}"),
         ("PUT", "/api/v1/catalogs/{catalog}/member-access"),
         ("GET", "/api/v1/audit"),
@@ -364,6 +364,10 @@ fn the_allow_list_is_the_specs_and_names_routes_by_template() {
         &axum::http::Method::GET,
         "/api/v1/unassigned"
     ));
+    // The three display-name edits, and nothing else new: not `/me`'s edit
+    // and not the labels read.
+    assert!(!provisioner_may(&axum::http::Method::PATCH, "/api/v1/me"));
+    assert!(!provisioner_may(&axum::http::Method::GET, "/api/v1/labels"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -472,4 +476,58 @@ async fn a_provisioner_deletes_a_user_unless_a_shared_team_member() {
         .is_some_and(|m| m.starts_with(crate::store::users::SHARED_MEMBER_REFUSAL)));
     assert_eq!(still.as_u16(), 200);
     assert_eq!(plain.as_u16(), 204, "without the parameter nothing changes");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_provisioner_sets_display_names_but_never_an_admins() {
+    let test = app().await;
+    let root = every_catalog_admin(&test).await;
+    let key = provisioner(&test).await;
+    let p = Some(key.as_str());
+    let name = |text: &str| Some(json!({"display_name": text}));
+    for (uri, body) in [
+        ("/api/v1/users", json!({"name": "alice"})),
+        ("/api/v1/users", json!({"name": "staff"})),
+        ("/api/v1/teams", json!({"name": "acme", "owner": "alice"})),
+    ] {
+        let (status, _) = send(&test, "POST", uri, Some(&root), Some(body)).await;
+        assert_eq!(status.as_u16(), 201, "{uri}");
+    }
+    send(
+        &test,
+        "PUT",
+        "/api/v1/users/staff/admin",
+        Some(&root),
+        Some(json!({"admin": true})),
+    )
+    .await;
+
+    let (user, user_view) = send(&test, "PATCH", "/api/v1/users/alice", p, name("Alice A")).await;
+    let (admin_user, _) = send(&test, "PATCH", "/api/v1/users/staff", p, name("Staff S")).await;
+    let (team, team_view) = send(&test, "PATCH", "/api/v1/teams/acme", p, name("Acme A")).await;
+    let (catalog, catalog_view) = send(
+        &test,
+        "PATCH",
+        "/api/v1/catalogs/main",
+        p,
+        Some(json!({"display_name": "Main", "description": "d"})),
+    )
+    .await;
+    let (_, staff) = send(&test, "GET", "/api/v1/users/staff", Some(&root), None).await;
+
+    assert_eq!(user.as_u16(), 200, "{user_view}");
+    assert_eq!(user_view["label"], "Alice A");
+    assert_eq!(
+        admin_user.as_u16(),
+        403,
+        "a provisioner never reaches an admin user"
+    );
+    assert_eq!(
+        staff["user"]["display_name"], "",
+        "the refused write changed nothing"
+    );
+    assert_eq!(team.as_u16(), 200, "{team_view}");
+    assert_eq!(team_view["label"], "Acme A");
+    assert_eq!(catalog.as_u16(), 200, "{catalog_view}");
+    assert_eq!(catalog_view["label"], "Main");
 }
