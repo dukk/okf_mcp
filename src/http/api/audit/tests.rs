@@ -406,3 +406,232 @@ async fn me_lists_the_teams_the_user_owns() {
         "not family, where bob is a member"
     );
 }
+
+/// The `entries` of `GET /api/v1/audit?{query}` as `key`.
+async fn entries(test: &TestApp, key: &str, query: &str) -> Vec<Value> {
+    let (status, page) = send(
+        test,
+        "GET",
+        &format!("/api/v1/audit?{query}"),
+        Some(key),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    page["entries"].as_array().unwrap().clone()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_person_shows_by_the_snapshot_label_and_a_deleted_user_by_the_placeholder() {
+    let test = app().await;
+    let root = every_catalog_admin(&test).await;
+    let (status, answer) = send(
+        &test,
+        "POST",
+        "/api/v1/users",
+        Some(&root),
+        Some(json!({"name": "alice", "display_name": "Alice Example"})),
+    )
+    .await;
+    assert!(status.is_success(), "{answer}");
+    let (status, answer) = send(
+        &test,
+        "POST",
+        "/api/v1/users",
+        Some(&root),
+        Some(json!({"name": "ghost"})),
+    )
+    .await;
+    assert!(status.is_success(), "{answer}");
+
+    let before = entries(&test, &root, "action=user.created").await;
+    let ghost_before = &before[0]["target"];
+    let alice = &before[1]["target"];
+    let (status, answer) = send(&test, "DELETE", "/api/v1/users/alice", Some(&root), None).await;
+    assert!(status.is_success(), "{answer}");
+    let after = entries(&test, &root, "action=user.created").await;
+
+    assert_eq!(alice["person"], "alice");
+    assert_eq!(alice["person_label"], "Alice Example");
+    // The acting key's user is a person too, labelled from its own snapshot.
+    assert_eq!(before[1]["actor"]["person"], TEST_USER);
+    assert!(before[1]["actor"]["person_label"].is_string());
+    assert_eq!(
+        ghost_before["person_label"], "Unnamed user",
+        "no display name, no email"
+    );
+    let forgotten = after
+        .iter()
+        .find(|entry| {
+            entry["target"]["person"]
+                .as_str()
+                .unwrap()
+                .starts_with("deleted user")
+        })
+        .expect("alice's entry names a deleted user");
+    assert_eq!(forgotten["target"]["person_label"], "Unnamed user");
+    assert!(
+        !forgotten.to_string().contains("Alice Example"),
+        "deletion blanks the snapshot: {forgotten}"
+    );
+    // The filters still match the slug a live person has.
+    assert_eq!(entries(&test, &root, "target=ghost").await.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_catalog_and_a_shared_team_target_show_their_label_while_they_exist() {
+    let test = app().await;
+    let root = every_catalog_admin(&test).await;
+    let steps = [
+        (
+            "POST",
+            "/api/v1/teams",
+            json!({"name": "family", "display_name": "The Family", "owner": TEST_USER}),
+        ),
+        (
+            "POST",
+            "/api/v1/catalogs",
+            json!({"name": "work", "display_name": "Work notes", "owner": "family"}),
+        ),
+    ];
+    for (method, uri, body) in steps {
+        let (status, answer) = send(&test, method, uri, Some(&root), Some(body)).await;
+        assert!(status.is_success(), "{method} {uri}: {status} {answer}");
+    }
+
+    let catalog = entries(&test, &root, "action=catalog.created").await;
+    let team = entries(&test, &root, "action=team.created").await;
+    let (status, answer) = send(&test, "DELETE", "/api/v1/catalogs/work", Some(&root), None).await;
+    assert!(status.is_success(), "{answer}");
+    let deleted = entries(&test, &root, "action=catalog.created").await;
+
+    assert_eq!(catalog[0]["target"]["target_label"], "Work notes");
+    assert_eq!(
+        catalog[0]["target"]["name"], "work",
+        "the slug stays for filters"
+    );
+    let family = team
+        .iter()
+        .find(|entry| entry["target"]["name"] == "family")
+        .expect("family's team.created");
+    assert_eq!(family["target"]["target_label"], "The Family");
+    assert_eq!(
+        deleted[0]["target"].get("target_label"),
+        Some(&Value::Null),
+        "a deleted catalog has no label"
+    );
+    assert_eq!(
+        entries(&test, &root, "target=work").await.len(),
+        2,
+        "the slug still filters"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_export_carries_the_labels() {
+    let test = app().await;
+    let root = every_catalog_admin(&test).await;
+    send(
+        &test,
+        "POST",
+        "/api/v1/users",
+        Some(&root),
+        Some(json!({"name": "alice", "display_name": "Alice Example"})),
+    )
+    .await;
+    let request = axum::http::Request::builder()
+        .uri("/api/v1/audit/export?action=user.created&target=alice")
+        .header("authorization", format!("Bearer {root}"))
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = tower::ServiceExt::oneshot(
+        crate::http::router(
+            std::sync::Arc::clone(&test.app),
+            &tokio_util::sync::CancellationToken::new(),
+        ),
+        request,
+    )
+    .await
+    .unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+
+    let records = lines(std::str::from_utf8(&bytes).unwrap());
+
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["target"]["person"], "alice");
+    assert_eq!(records[0]["target"]["person_label"], "Alice Example");
+}
+
+/// The audit export's JSON Lines for `query`, as `key`.
+async fn export(test: &TestApp, key: &str, query: &str) -> Vec<Value> {
+    let request = axum::http::Request::builder()
+        .uri(format!("/api/v1/audit/export?{query}"))
+        .header("authorization", format!("Bearer {key}"))
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = tower::ServiceExt::oneshot(
+        crate::http::router(
+            std::sync::Arc::clone(&test.app),
+            &tokio_util::sync::CancellationToken::new(),
+        ),
+        request,
+    )
+    .await
+    .unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    lines(std::str::from_utf8(&bytes).unwrap())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_team_or_catalog_recreated_under_an_old_name_never_lends_its_label_to_the_old_entries() {
+    let test = app().await;
+    let root = every_catalog_admin(&test).await;
+    let team = |label: &str| json!({"name": "family", "display_name": label, "owner": TEST_USER});
+    let catalog = |label: &str| json!({"name": "work", "display_name": label, "owner": "family"});
+    let steps = [
+        ("POST", "/api/v1/teams", Some(team("Old family"))),
+        ("POST", "/api/v1/catalogs", Some(catalog("Old work"))),
+        ("DELETE", "/api/v1/catalogs/work", None),
+        ("DELETE", "/api/v1/teams/family", None),
+        ("POST", "/api/v1/teams", Some(team("New family"))),
+        ("POST", "/api/v1/catalogs", Some(catalog("New work"))),
+    ];
+    for (method, uri, body) in steps {
+        let (status, answer) = send(&test, method, uri, Some(&root), body).await;
+        assert!(status.is_success(), "{method} {uri}: {status} {answer}");
+    }
+
+    let listed = entries(&test, &root, "limit=200").await;
+    let exported = export(&test, &root, "").await;
+
+    for records in [listed, exported] {
+        // Oldest first: the old team's and catalog's entries, then the new.
+        let labels = |kind: &str, action: &str| -> Vec<Value> {
+            let name = if kind == "team" { "family" } else { "work" };
+            records
+                .iter()
+                .rev()
+                .filter(|entry| {
+                    entry["target"]["kind"] == kind
+                        && entry["target"]["name"] == name
+                        && entry["action"] == action
+                })
+                .map(|entry| entry["target"].get("target_label").cloned().unwrap())
+                .collect()
+        };
+        assert_eq!(
+            labels("team", "team.created"),
+            [Value::Null, json!("New family")]
+        );
+        assert_eq!(labels("team", "team.deleted"), [Value::Null]);
+        assert_eq!(
+            labels("catalog", "catalog.created"),
+            [Value::Null, json!("New work")]
+        );
+        assert_eq!(labels("catalog", "catalog.deleted"), [Value::Null]);
+    }
+}
