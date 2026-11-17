@@ -6,6 +6,8 @@
 
 use std::borrow::Cow;
 
+pub mod directory;
+
 use crate::error::OkfError;
 
 /// The longest display name, in characters (Unicode scalar values, which

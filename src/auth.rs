@@ -31,6 +31,7 @@ use crate::error::OkfError;
 use crate::http::requester::Requester;
 use crate::http::AppError;
 use crate::keys;
+use crate::labels::directory::Labels;
 use crate::oauth::access::OAuthVerifier;
 use crate::store::audit::{AccessRecord, AuditActor};
 use crate::store::ceiling::{self, cap, Ceiling};
@@ -744,6 +745,9 @@ pub struct KeyCache {
     // Every user, by id: what a session principal is built from without a
     // query (admin flag, name, email).
     users: HashMap<String, UserAuth>,
+    // Every user's, team's and catalog's label, by slug (reloaded with the
+    // rest of the cache on every `admin_generation` bump).
+    labels: Arc<Labels>,
     // The suspended catalogs this cache's principals share.
     suspended: Arc<Suspensions>,
     // The access gates this cache's principals share.
@@ -902,6 +906,25 @@ impl KeyCache {
         self
     }
 
+    /// Adds the label directory.
+    ///
+    /// # Arguments
+    /// * `labels` - every label ([`Labels::load`]).
+    ///
+    /// # Returns
+    /// The cache with it.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn with_labels(mut self, labels: Labels) -> Self {
+        self.labels = Arc::new(labels);
+        self
+    }
+
     /// A user, by id.
     ///
     /// # Arguments
@@ -920,23 +943,34 @@ impl KeyCache {
         self.users.get(user_id)
     }
 
-    /// Reads every key, every ceiling, every user, every suspended catalog
-    /// and the access gates, and builds the cache.
+    /// Reads every key, every ceiling, every user, every suspended catalog,
+    /// every label and the access gates, and builds the cache.
     ///
     /// # Errors
     /// [`OkfError::Database`].
     #[tracing::instrument(level = "debug", skip_all)]
     async fn read(pool: &PgPool, now: DateTime<Utc>) -> Result<Self, OkfError> {
-        // All four at once, on four pooled connections (`try_join!` is
+        // All five at once, on pooled connections (`try_join!` is
         // `asyncio.gather` that stops at the first error). A change committed
         // between the reads also moved `admin_generation`, which every
         // caller reads first, so the next poll reloads again.
-        let (records, ceilings, users, suspended) = tokio::try_join!(
+        let (records, ceilings, users, mut suspended, labels) = tokio::try_join!(
             key_rows::list(pool),
             ceiling::ceilings(pool),
             users::auth_by_id(pool),
-            teams::suspended_catalogs(pool)
+            teams::suspended_catalogs(pool),
+            Labels::load(pool)
         )?;
+        // The suspension notices carry labels from the same load; a row
+        // missing from it (a race) keeps the slugs `suspended_catalogs` set.
+        for (catalog, suspension) in &mut suspended {
+            if let Some(label) = labels.catalog(catalog) {
+                suspension.catalog_label = label.to_string();
+            }
+            if let Some(label) = labels.team(&suspension.team) {
+                suspension.team_label = label.to_string();
+            }
+        }
         // After the keys and users, not beside them: `gates::load` creates
         // the audit rows of every credential and user read above, so each
         // principal of this load finds its audit ids (a key created since
@@ -944,7 +978,8 @@ impl KeyCache {
         let gates = Arc::new(gates::load(pool, now).await?);
         Ok(
             Self::from_records(records, ceilings, Arc::new(suspended), gates, now)
-                .with_users(users),
+                .with_users(users)
+                .with_labels(labels),
         )
     }
 
@@ -1087,6 +1122,15 @@ impl Keys {
             .expect("key cache lock poisoned")
             .user(user_id)
             .cloned()
+    }
+
+    /// The label directory, from the current cache.
+    ///
+    /// # Returns
+    /// The shared directory (a pointer copy, not a copy of the maps).
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn labels(&self) -> Arc<Labels> {
+        Arc::clone(&self.cache.read().expect("key cache lock poisoned").labels)
     }
 
     /// The suspended catalogs, from the current cache: what a console
@@ -2324,6 +2368,8 @@ mod tests {
                         SuspendedCatalog {
                             team: "family".to_string(),
                             notice: Some("Paused.".to_string()),
+                            catalog_label: catalog.to_string(),
+                            team_label: "family".to_string(),
                         },
                     )
                 })
@@ -2593,6 +2639,18 @@ mod tests {
         let writer = keys.find(&secret).expect("the key is live");
 
         assert_eq!(keys.suspensions().len(), 2, "both of the team's catalogs");
+        let labels = keys.labels();
+        let suspended = keys.suspensions();
+        let main = suspended.get("main").expect("main is suspended");
+        assert_eq!(Some(main.catalog_label.as_str()), labels.catalog("main"));
+        assert_eq!(
+            Some(main.team_label.as_str()),
+            labels.team(crate::db::TEST_TEAM)
+        );
+        assert_eq!(
+            main.catalog_label, "Untitled catalog",
+            "a label, not the slug"
+        );
         assert!(
             Arc::ptr_eq(&writer.suspended, &keys.suspensions()),
             "one shared map per load"
@@ -2618,6 +2676,49 @@ mod tests {
             writer.require(Access::Write, "main").is_ok(),
             "lifting restores the key exactly as it was"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_cache_loads_labels_and_reloads_them_after_a_create() {
+        use crate::store::{catalogs, users};
+        let db = crate::db::test_db().await;
+        let keys = Keys::load(&db.pool, Arc::new(crate::clock::SystemClock))
+            .await
+            .unwrap();
+        assert_eq!(keys.labels().user("alice"), None, "not created yet");
+
+        users::create(
+            &db.pool,
+            &users::NewUser {
+                name: "alice",
+                display_name: &crate::labels::DisplayName::parse("Alice Example").unwrap(),
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        catalogs::create(
+            &db.pool,
+            &catalogs::NewCatalog {
+                name: "notes",
+                display_name: &crate::labels::DisplayName::parse("Team notes").unwrap(),
+                description: "",
+                owner_team: "alice",
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        keys.reload(&db.pool).await.unwrap();
+
+        let labels = keys.labels();
+        assert_eq!(labels.user("alice"), Some("Alice Example"));
+        assert_eq!(labels.team("alice"), Some("Alice Example's team"));
+        assert_eq!(labels.catalog("notes"), Some("Team notes"));
+        assert_eq!(labels.catalog_owner("notes"), Some("alice"));
+        assert!(labels.teams_of("alice").any(|team| team == "alice"));
     }
 
     #[test]
