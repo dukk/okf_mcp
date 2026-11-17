@@ -101,7 +101,7 @@ manage OAuth sign-in codes and the grants they become (see
 Every key, grant and sign-in code belongs to a user (`--user`, required on
 create) and every catalog to a team (`--owner`); creating a user also
 creates its personal team of the same name. Ownership grants no access.
-`okf-mcp user create|list|delete`, `team create|list|add-member|set-role|remove-member|delete|suspend|unsuspend`,
+`okf-mcp user create|update|list|delete`, `team create|update|list|add-member|set-role|remove-member|delete|suspend|unsuspend`,
 `catalog set-owner`, `key assign` and `oauth code assign` manage them, and
 `okf-mcp unassigned` lists what predates users and teams and has neither
 (`docs/operations.md`, "Users and teams").
