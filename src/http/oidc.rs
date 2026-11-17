@@ -69,7 +69,8 @@ pub const SIGN_IN_RETRY: &str = "Sign-in failed; try again";
 pub const LINK_RETRY: &str = "Linking failed: sign in again and start it from your account page.";
 /// Discovery failed with nothing cached (503).
 const UNAVAILABLE: &str = "The sign-in provider cannot be reached right now; try again later.";
-/// The shared flow store failed (503): the flow is neither finished nor lost.
+/// The shared flow store failed (503): the flow is not finished, and its
+/// cookie is kept so a reload can finish it.
 const TRY_LATER: &str = "Sign-in is unavailable right now; try again shortly.";
 /// The identity cannot be linked (409): another user holds it, or the user
 /// already links another account at this provider.
@@ -309,18 +310,25 @@ async fn callback(
     let Some(oidc) = app.oidc() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    // Every answer clears the flow cookie: the flow is single use.
-    let mut headers = clear_flow(&app);
     let brand = app.settings().brand();
     let flow = match cookie(&parts.headers, FLOW_COOKIE) {
         Some(id) => oidc.flows.take(id, Instant::now()).await,
         None => Ok(None),
     };
-    // A Redis failure fails closed: the flow may still be there, so the
-    // page asks to try again rather than to start over.
+    // A Redis failure fails closed. The take may never have run, so the flow
+    // cookie is kept (no `Set-Cookie`): reloading this page once Redis is
+    // back can still finish the flow.
     let Ok(flow) = flow else {
-        return page(&brand, &headers, StatusCode::SERVICE_UNAVAILABLE, TRY_LATER);
+        return page(
+            &brand,
+            &HeaderMap::new(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            TRY_LATER,
+        );
     };
+    // Every answer after the take clears the flow cookie: the flow is
+    // single use, and it is gone now.
+    let mut headers = clear_flow(&app);
     let Some(Flow {
         provider: started_with,
         secrets,
@@ -673,7 +681,7 @@ mod tests {
     use super::{FLOW_COOKIE, LINKED_ELSEWHERE, LINK_RETRY, NO_ACCOUNT, SIGN_IN_RETRY, TRY_LATER};
     use crate::app::App;
     use crate::config::{AuthConfig, Config};
-    use crate::db::redis_support::TestRedis;
+    use crate::db::redis_support::{TestRedis, CLUSTER_URL_VAR, SERVER_URL_VAR};
     use crate::http::api::testing::{
         keys, login_config, user_with_password, Browser, Payload, Reply, MAIN, PASSWORD,
     };
@@ -1784,11 +1792,12 @@ mod tests {
         a_link_flow_finishes_only_in_the_session_that_started_it(&test, &app, &app, &idp).await;
     }
 
-    async fn a_redis_outage_fails_closed(redis: TestRedis) {
+    async fn a_redis_outage_fails_closed_and_keeps_the_flow_cookie(redis: TestRedis) {
         let idp = idp::start().await;
         let (a, b, redis) = oidc_pair(&idp, "OKF_TEST_OIDC_SECRET_OUTAGE", redis).await;
         let mut browser = Browser::default();
         let query = start_on(&a.app, &idp, &mut browser).await;
+        let flow = browser.cookie(FLOW_COOKIE).expect("a flow").to_string();
         if redis.stop().await.is_none() {
             // A shared server cannot be stopped for everyone.
             return;
@@ -1806,9 +1815,98 @@ mod tests {
             callback.text()
         );
         assert!(callback.text().contains(TRY_LATER));
+        assert!(
+            callback.set_cookie(FLOW_COOKIE).is_none(),
+            "the 503 keeps the flow cookie"
+        );
+        assert_eq!(browser.cookie(FLOW_COOKIE), Some(flow.as_str()));
         assert_eq!(browser.cookie(COOKIE), None);
         assert_eq!(started.status, StatusCode::SERVICE_UNAVAILABLE);
         assert!(started.set_cookie(FLOW_COOKIE).is_none());
+    }
+
+    /// Sets the `default` user's command permissions (`+@all` or `-@all`)
+    /// through `admin`, a connection of another user: with `-@all` every
+    /// command the apps send is refused (`NOPERM`) before it runs.
+    async fn default_user_may(admin: &mut redis::aio::MultiplexedConnection, rule: &str) {
+        let _: () = redis::cmd("ACL")
+            .arg("SETUSER")
+            .arg("default")
+            .arg(rule)
+            .query_async(admin)
+            .await
+            .expect("change the default user's permissions");
+    }
+
+    async fn a_flow_refused_by_redis_finishes_once_redis_answers_again(redis: TestRedis) {
+        let shared_server = [SERVER_URL_VAR, CLUSTER_URL_VAR]
+            .iter()
+            .any(|var| std::env::var(var).is_ok_and(|url| !url.is_empty()));
+        if shared_server {
+            // Revoking the default user would break every test sharing it.
+            return;
+        }
+        let idp = idp::start().await;
+        let (a, b, redis) = oidc_pair(&idp, "OKF_TEST_OIDC_SECRET_RECOVER", redis).await;
+        user_with_password(&a, "alice", "alice@example.com", Some(PASSWORD)).await;
+        idp.will_issue("sub-1", Some("alice@example.com"), Some(true));
+        let mut browser = Browser::default();
+        let query = start_on(&a.app, &idp, &mut browser).await;
+        let flow = browser.cookie(FLOW_COOKIE).expect("a flow").to_string();
+        // An admin user on its own connection (a plain one: the container
+        // has one node), so it can give the permissions back.
+        let client = redis::Client::open(redis.url.as_str()).expect("the test redis URL");
+        let mut admin = client
+            .get_multiplexed_async_connection()
+            .await
+            .expect("an admin connection");
+        let _: () = redis::cmd("ACL")
+            .arg("SETUSER")
+            .arg("okf-test-admin")
+            .arg("on")
+            .arg("nopass")
+            .arg("+@all")
+            .arg("~*")
+            .arg("&*")
+            .query_async(&mut admin)
+            .await
+            .expect("create the admin user");
+        let _: () = redis::cmd("AUTH")
+            .arg("okf-test-admin")
+            .arg("unused")
+            .query_async(&mut admin)
+            .await
+            .expect("authenticate as the admin user");
+        default_user_may(&mut admin, "-@all").await;
+
+        let refused = callback_on(&b, &mut browser, &query["state"]).await;
+        let kept = browser.cookie(FLOW_COOKIE).map(str::to_string);
+        default_user_may(&mut admin, "+@all").await;
+        let finished = callback_on(&b, &mut browser, &query["state"]).await;
+
+        assert_eq!(
+            refused.status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{}",
+            refused.text()
+        );
+        assert!(
+            refused.set_cookie(FLOW_COOKIE).is_none(),
+            "the cookie is kept"
+        );
+        assert_eq!(kept, Some(flow));
+        assert_eq!(
+            finished.status,
+            StatusCode::SEE_OTHER,
+            "{}",
+            finished.text()
+        );
+        assert_eq!(finished.location(), "/ui/#/keys");
+        assert!(
+            browser.cookie(COOKIE).is_some(),
+            "signed in after the refusal"
+        );
+        assert_eq!(browser.cookie(FLOW_COOKIE), None);
     }
 
     // `macro_rules!` writes a standalone and a cluster `#[tokio::test]` for
@@ -1845,6 +1943,7 @@ mod tests {
         a_link_flow_replaces_the_sessions_previous_one_across_replicas,
         no_raw_session_id_reaches_redis,
         a_link_flow_finishes_only_in_its_session_across_replicas,
-        a_redis_outage_fails_closed,
+        a_redis_outage_fails_closed_and_keeps_the_flow_cookie,
+        a_flow_refused_by_redis_finishes_once_redis_answers_again,
     );
 }
