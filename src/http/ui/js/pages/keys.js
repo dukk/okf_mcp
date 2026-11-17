@@ -150,7 +150,7 @@ function readGrants(data) {
 // The User picker both create forms share: required, with no default, so
 // every new credential's user is a deliberate choice.
 function userField(users) {
-    return h('label', {}, 'User', picker({ name: 'user', required: true }, users));
+    return h('label', {}, 'User', picker({ name: 'user', required: true }, users, null, userLabel));
 }
 
 // The Assign (unassigned) or Change user control of a key's or code's
@@ -163,7 +163,7 @@ function userAssign(main, users, { prefix, row, path, ticket, after }) {
     return h('section', {},
         h('h3', {}, 'User'),
         assignControl({
-            names: users, current: row.user, label: row.user ? 'Change user' : 'Assign',
+            names: users, labelOf: userLabel, current: row.user, label: row.user ? 'Change user' : 'Assign',
             ids: { select: `${prefix}-user-select`, button: `${prefix}-assign` },
             assign: async user => {
                 let updated;
