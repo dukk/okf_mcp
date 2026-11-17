@@ -381,6 +381,64 @@ mod tests {
         );
     }
 
+    /// The value of `okf_redis_errors_total{operation="<op>"}` in a scrape.
+    fn error_count(rendered: &str, op: &str) -> u64 {
+        let series = format!("okf_redis_errors_total{{operation=\"{op}\"}}");
+        rendered
+            .lines()
+            .find_map(|line| line.strip_prefix(series.as_str()))
+            .map_or(0, |value| {
+                // Prometheus renders a counter as a float: "1" or "1.0".
+                value.trim().parse::<f64>().expect("a numeric sample") as u64
+            })
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn failures_are_counted_by_operation_and_map_to_a_busy_without_the_driver_text() {
+        let server = crate::db::redis_support::TestRedis::start().await;
+        let (_provider, metrics, registry) = crate::mcp::testing::local_metrics();
+        let redis = tokio::time::timeout(
+            Duration::from_secs(60),
+            Redis::connect(&testing::config(&server), &server.env(), &metrics),
+        )
+        .await
+        .expect("connecting to the test redis within 60 s")
+        .expect("connect to the test redis");
+
+        let error = redis::RedisError::from((redis::ErrorKind::Io, "sentinel-secret"));
+        let mapped = redis.failed(RedisOp::Get, &error);
+        assert!(matches!(mapped, OkfError::Busy { .. }), "{mapped:?}");
+        assert!(!mapped.to_string().contains("sentinel-secret"), "{mapped}");
+        redis.count(RedisOp::Subscribe);
+        redis.undecodable("oauth:code");
+
+        let rendered = crate::mcp::testing::render(&registry);
+        for op in ["get", "subscribe", "decode"] {
+            assert_eq!(error_count(&rendered, op), 1, "{op}: {rendered}");
+        }
+        assert_eq!(error_count(&rendered, "set"), 0, "{rendered}");
+        // A connect that works counts nothing.
+        assert_eq!(error_count(&rendered, "connect"), 0, "{rendered}");
+    }
+
+    #[tokio::test]
+    async fn a_failed_connect_counts_one_connect_error() {
+        let (_provider, metrics, registry) = crate::mcp::testing::local_metrics();
+        let config = RedisConfig {
+            url_env: "OKF_TEST_REDIS_URL".into(),
+            key_prefix: "okf:".into(),
+        };
+        Redis::connect(
+            &config,
+            &|_| Some("redis://127.0.0.1:1/0".to_string()),
+            &metrics,
+        )
+        .await
+        .unwrap_err();
+        let rendered = crate::mcp::testing::render(&registry);
+        assert!(error_count(&rendered, "connect") >= 1, "{rendered}");
+    }
+
     #[test]
     fn hashed_is_the_hex_sha256() {
         assert_eq!(
