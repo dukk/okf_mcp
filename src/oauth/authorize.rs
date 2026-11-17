@@ -35,6 +35,8 @@ use crate::error::OkfError;
 use crate::http::console_session::{cookie, signed_in_user, COOKIE};
 use crate::http::signin::cross_site;
 use crate::keys;
+use crate::labels::directory::Labels;
+use crate::labels::user_label;
 use crate::maintenance::types::new_id;
 use crate::oauth::clients;
 use crate::oauth::consent::{self, GrantSummary, PageView, UserPage};
@@ -336,17 +338,47 @@ fn view(pending_id: &str, pending: &PendingAuthorization) -> PageView {
 
 /// What a sign-in code grants, as step 2 states it.
 #[tracing::instrument(level = "trace", skip_all)]
-fn summary(record: &SignInCodeRecord) -> GrantSummary {
+fn summary(record: &SignInCodeRecord, labels: &Labels) -> GrantSummary {
+    // A slug the directory does not hold yet (created since the last
+    // load) is shown as itself, as `catalog_choices` does for catalogs.
+    let user_shown = |slug: &String| labels.user(slug).unwrap_or(slug).to_string();
+    // The texts are built once, over the listed catalogs and the default,
+    // so the default is told apart from a same-label catalog exactly as
+    // the list does. An all-catalog grant lists none, so the default is
+    // shown by its own label alone. A default outside the list (not expected) joins the
+    // set, so it is still told apart.
+    let listed: &[String] = if record.all_catalogs {
+        &[]
+    } else {
+        &record.catalogs
+    };
+    let default = record.default_catalog.as_deref();
+    let choices = labels.catalog_choices(
+        listed
+            .iter()
+            .map(String::as_str)
+            .chain(default.filter(|slug| !listed.iter().any(|listed| listed == slug))),
+    );
+    let shown = |slug: &str| {
+        choices
+            .iter()
+            .find(|(candidate, _)| candidate == slug)
+            .map_or_else(|| slug.to_string(), |(_, text)| text.clone())
+    };
     GrantSummary {
         access: record.access.as_str(),
         catalogs: if record.all_catalogs {
             "every catalog".to_string()
         } else {
-            record.catalogs.join(", ")
+            listed
+                .iter()
+                .map(|slug| shown(slug))
+                .collect::<Vec<_>>()
+                .join(", ")
         },
         actor: record.actor.clone(),
-        user: record.user.clone(),
-        default_catalog: record.default_catalog.clone(),
+        user: record.user.as_ref().map(user_shown),
+        default_catalog: default.map(shown),
     }
 }
 
@@ -505,17 +537,21 @@ fn chosen_levels(
 fn user_consent_page(
     pending_id: &str,
     pending: &PendingAuthorization,
-    user: &str,
+    (user, labels): (&UserAuth, &Labels),
     error: Option<&str>,
     brand: &Brand,
 ) -> Response {
     let Some(consent) = pending.consent.as_ref() else {
         return consent::error_page(StatusCode::BAD_REQUEST, EXPIRED, brand);
     };
+    // The person sees labels; the slugs stay in the form's ids and values.
+    let user_label = user_label(&user.display_name, user.email.as_deref());
+    let catalog_labels = labels.catalog_choices(consent.offered.keys().map(String::as_str));
     consent::user_page(
         &view(pending_id, pending),
         &UserPage {
-            user,
+            user_label: &user_label,
+            catalog_labels: &catalog_labels,
             ceiling: &consent.offered,
             nonce: &consent.nonce,
             code_href: &code_href(&pending.query),
@@ -705,7 +741,13 @@ async fn authorize(
         query: query_string,
     };
     let page = match &user {
-        Some(user) => user_consent_page(&pending_id, &pending, &user.name, None, &brand),
+        Some(user) => user_consent_page(
+            &pending_id,
+            &pending,
+            (user, &app.keys().labels()),
+            None,
+            &brand,
+        ),
         None => consent::code_page(&view(&pending_id, &pending), None, &brand),
     };
     // `insert` is `false` when the bounded memory map is full: an
@@ -1021,7 +1063,7 @@ async fn check_code(
             decision.accept();
             consent::summary_page(
                 &view(pending_id, pending),
-                &summary(&record),
+                &summary(&record, &app.keys().labels()),
                 &summary_nonce,
                 &brand,
             )
@@ -1188,7 +1230,7 @@ async fn consent_as_user(
             return user_consent_page(
                 &form.pending,
                 pending,
-                &user.name,
+                (&user, &app.keys().labels()),
                 Some(NOTHING_CHOSEN),
                 brand,
             );
@@ -1211,7 +1253,7 @@ async fn consent_as_user(
         return user_consent_page(
             &form.pending,
             pending,
-            &user.name,
+            (&user, &app.keys().labels()),
             Some(DEFAULT_NOT_CHOSEN),
             brand,
         );
@@ -1296,6 +1338,8 @@ mod tests {
     use super::{chosen_levels, Choice};
     use crate::http::api::testing::Browser;
     use crate::http::console_session::COOKIE;
+    use crate::labels::directory::Labels;
+    use crate::labels::DisplayName;
     use crate::mcp::testing::TestApp;
     use crate::oauth::pkce;
     use crate::oauth::state::code_key;
@@ -1309,7 +1353,9 @@ mod tests {
     use crate::store::ceiling::{self, Ceiling};
     use crate::store::keys::{self as key_rows, Access, KeyKind};
     use crate::store::oauth::codes as code_rows;
+    use crate::store::oauth::codes::SignInCodeRecord;
     use crate::store::settings::{self, SettingKey};
+    use crate::store::teams::{self, NewTeam};
     use crate::store::user_sessions;
     use crate::store::users::{self, NewUser};
 
@@ -1647,11 +1693,13 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert!(summary.contains("<strong>write</strong> access to <strong>main</strong>"));
-        assert!(summary.contains(&format!(
-            "as <strong>{}</strong> (actor <strong>example-actor</strong>)",
-            crate::db::TEST_USER
-        )));
+        // The catalog and the user are shown by label (neither has a
+        // display name here), never by slug.
+        assert!(
+            summary.contains("<strong>write</strong> access to <strong>Untitled catalog</strong>")
+        );
+        assert!(summary
+            .contains("as <strong>Unnamed user</strong> (actor <strong>example-actor</strong>)"));
         assert!(headers["content-security-policy"]
             .to_str()
             .unwrap()
@@ -2216,7 +2264,9 @@ mod tests {
         let page = user_page(&test, &alice).await;
 
         assert!(page.contains("id=\"consent-user-form\""));
-        assert!(page.contains("<strong id=\"consent-user\">alice</strong>"));
+        // No display name and no email: a label, never the slug.
+        assert!(page.contains("<strong id=\"consent-user\">Unnamed user</strong>"));
+        assert!(!page.contains(">alice<"), "the slug is not shown as a name");
         assert!(page.contains("name=\"grant.main\""));
         assert!(
             !page.contains("grant.other"),
@@ -2232,6 +2282,234 @@ mod tests {
             user_authorize_query().replace('&', "&amp;")
         )));
         assert!(!hidden(&page, "summary").is_empty());
+    }
+
+    /// Sets display names straight in SQL and reloads the key cache the
+    /// way any label change does (a bump of `admin_generation`, then a poll).
+    async fn relabel(test: &TestApp, user: (&str, &str), catalogs: [(&str, &str); 2]) {
+        let pool = test.app.pool();
+        sqlx::query("UPDATE users SET display_name = $1 WHERE name = $2")
+            .bind(user.1)
+            .bind(user.0)
+            .execute(pool)
+            .await
+            .unwrap();
+        for (slug, display_name) in catalogs {
+            sqlx::query("UPDATE catalogs SET display_name = $1 WHERE name = $2")
+                .bind(display_name)
+                .bind(slug)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("UPDATE server_state SET admin_generation = admin_generation + 1")
+            .execute(pool)
+            .await
+            .unwrap();
+        test.app.poll().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_signed_in_page_shows_labels_but_keeps_slugs_in_ids_names_and_values() {
+        let test = oauth_app().await;
+        let alice = signed_in(
+            &test,
+            "alice",
+            &[("main", Access::Write), ("other", Access::Read)],
+        )
+        .await;
+        relabel(
+            &test,
+            ("alice", "Alice <b>Example</b>"),
+            [("main", "Acme \"Handbook\""), ("other", "Field Notes")],
+        )
+        .await;
+
+        let page = user_page(&test, &alice).await;
+
+        assert!(
+            page.contains(r#"<strong id="consent-user">Alice &lt;b&gt;Example&lt;/b&gt;</strong>"#),
+            "{page}"
+        );
+        assert!(
+            page.contains(
+                r#"<input type="checkbox" name="grant.main" value="on" id="consent-catalog-main"> Acme &quot;Handbook&quot;</label>"#
+            ),
+            "{page}"
+        );
+        assert!(
+            page.contains(r#"aria-label="Access to Acme &quot;Handbook&quot;""#),
+            "{page}"
+        );
+        assert!(page.contains(r#"name="level.other""#), "{page}");
+        assert!(
+            page.contains(r#"<option value="main">Acme &quot;Handbook&quot;</option>"#),
+            "{page}"
+        );
+        assert!(
+            page.contains(r#"<option value="other">Field Notes</option>"#),
+            "{page}"
+        );
+        assert!(!page.contains("<b>Example"), "markup is escaped: {page}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn catalogs_sharing_a_label_are_told_apart_by_their_owner_team() {
+        let test = oauth_app().await;
+        let alice = signed_in(
+            &test,
+            "alice",
+            &[("main", Access::Read), ("other", Access::Read)],
+        )
+        .await;
+        // `other` moves to a second team, so the shared label gets a suffix.
+        teams::create(
+            test.app.pool(),
+            &NewTeam {
+                name: "acme",
+                display_name: &DisplayName::parse("Acme Team").unwrap(),
+                owner: crate::db::TEST_USER,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE catalogs SET owner_team_id = (SELECT id FROM teams WHERE name = 'acme') \
+             WHERE name = 'other'",
+        )
+        .execute(test.app.pool())
+        .await
+        .unwrap();
+        relabel(
+            &test,
+            ("alice", "Alice"),
+            [("main", "Handbook"), ("other", "Handbook")],
+        )
+        .await;
+
+        let page = user_page(&test, &alice).await;
+
+        assert!(page.contains("Handbook (Acme Team)</option>"), "{page}");
+        let bare = page.matches("Handbook</option>").count();
+        assert_eq!(bare, 0, "no option shows the bare shared label: {page}");
+        assert!(page.contains(r#"value="main">Handbook ("#), "{page}");
+        assert!(page.contains(r#"name="grant.other""#), "{page}");
+    }
+
+    /// A live code record granting `catalogs` (or every catalog) with
+    /// `default_catalog`, for the pure `summary` tests.
+    fn code_record(
+        all_catalogs: bool,
+        catalogs: &[&str],
+        default_catalog: Option<&str>,
+    ) -> SignInCodeRecord {
+        SignInCodeRecord {
+            id: "c-1".to_string(),
+            name: "example".to_string(),
+            access: Access::Read,
+            all_catalogs,
+            catalogs: catalogs.iter().map(ToString::to_string).collect(),
+            default_catalog: default_catalog.map(ToString::to_string),
+            actor: "example-actor".to_string(),
+            created_at: Utc::now(),
+            expires_at: Utc::now(),
+            redeemed_at: None,
+            grant_id: None,
+            revoked_at: None,
+            user: None,
+        }
+    }
+
+    /// Two catalogs both labelled `Notes`, owned by teams `Acme` and `Other
+    /// team`.
+    fn notes_labels() -> Labels {
+        use crate::labels::directory::{CatalogRow, TeamRow};
+        let team = |name: &str, display: &str| TeamRow {
+            name: name.to_string(),
+            display_name: display.to_string(),
+            personal_of: None,
+        };
+        let catalog = |name: &str, owner: &str| CatalogRow {
+            name: name.to_string(),
+            display_name: "Notes".to_string(),
+            description: String::new(),
+            owner_team: Some(owner.to_string()),
+        };
+        Labels::from_rows(
+            Vec::new(),
+            vec![team("t-a", "Acme"), team("t-b", "Other team")],
+            vec![catalog("notes-a", "t-a"), catalog("notes-b", "t-b")],
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn the_summarys_default_catalog_is_told_apart_like_the_list() {
+        let labels = notes_labels();
+
+        let listed = super::summary(
+            &code_record(false, &["notes-a", "notes-b"], Some("notes-b")),
+            &labels,
+        );
+        let every = super::summary(&code_record(true, &[], Some("notes-b")), &labels);
+
+        assert_eq!(listed.catalogs, "Notes (Acme), Notes (Other team)");
+        assert_eq!(
+            listed.default_catalog.as_deref(),
+            Some("Notes (Other team)")
+        );
+        // An all-catalog grant lists none, so the default is shown alone,
+        // by its label (the fallback for a grant that names no catalogs).
+        assert_eq!(every.catalogs, "every catalog");
+        assert_eq!(every.default_catalog.as_deref(), Some("Notes"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_sign_in_code_summary_names_the_user_and_catalogs_by_label() {
+        let test = oauth_app().await;
+        relabel(
+            &test,
+            (crate::db::TEST_USER, "Tess <i>Tester</i>"),
+            [("main", "Acme Handbook"), ("other", "Field Notes")],
+        )
+        .await;
+        let code = sign_in_code(&test, Access::Read).await;
+        let (_, _, page) = send(
+            &test,
+            "GET",
+            &format!("/oauth/authorize?{}", authorize_query()),
+            None,
+        )
+        .await;
+
+        let (status, _, summary) = post(
+            &test,
+            &[
+                ("pending", &hidden(&page, "pending")),
+                ("csrf", &hidden(&page, "csrf")),
+                ("action", "code"),
+                ("sign_in_code", &code),
+            ],
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK, "{summary}");
+        assert!(
+            summary.contains("<strong>Acme Handbook</strong>"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("as <strong>Tess &lt;i&gt;Tester&lt;/i&gt;</strong>"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("default catalog <strong>Acme Handbook</strong>"),
+            "{summary}"
+        );
+        assert!(!summary.contains("<strong>main</strong>"), "{summary}");
+        assert!(!summary.contains("<i>Tester"), "{summary}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

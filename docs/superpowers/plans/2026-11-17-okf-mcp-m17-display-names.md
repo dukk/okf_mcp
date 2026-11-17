@@ -1422,6 +1422,12 @@ Mount it with `.route("/labels", get(labels))`. Test the scope as Step 1 says.
   - **`passkeys.rs:539-546`:** `let display = user_label(&user.display_name, user.email.as_deref());`, then pass `&display` as the third argument.
 - [ ] **Step 3: Gates, changelog `m17-task-08-rendered-labels`, commit** `feat: emails, sign-in, consent and passkeys name people and catalogs by label`.
 
+> **Corrected (issue #605).** What shipped differs from the steps above in four places, none of which affects a later task:
+> - `UserPage.user` was renamed `user_label` (nothing else read it), and `catalog_labels` is `&[(String, String)]` built by `Labels::catalog_choices` over the ceiling's keys. `user_consent_page` takes `(&UserAuth, &Labels)` instead of a name, so it can build the user's label and the catalog texts.
+> - `authorize::summary` takes `&Labels` and shows the user, the catalogs (as `catalog_choices` texts, so duplicates are told apart) and the default catalog by label. A slug the directory does not hold yet is shown as itself, as `catalog_choices` does.
+> - The unlock email's subject carries the catalog label, and a subject is one header line. `Template::Unlocked`'s subject in `src/mail/templates.rs` now turns any control character, U+2028 or U+2029 in the catalog into a space (a stored row can predate the display-name check).
+> - The existing consent test that expected `alice` as the signed-in name now expects `Unnamed user` (a user with no display name and no email), and the console journey in `tests/ui_e2e/consent.rs` sets display names and checks the labels.
+
 ---
 
 ### Task 9: The new catalog's heading and the export filename
