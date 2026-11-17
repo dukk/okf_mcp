@@ -50,7 +50,7 @@
   "editable": true,
   "graphTooltip": 1,
   "schemaVersion": 39,
-  "version": 3,
+  "version": 4,
   "time": {
     "from": "now-6h",
     "to": "now"
@@ -174,8 +174,8 @@
           "refId": "A",
           "expr": "max by (version) (okf_build_info{job=~\"$job\"})",
           "legendFormat": "{{version}}",
-          "range": true,
-          "instant": false
+          "range": false,
+          "instant": true
         }
       ],
       "fieldConfig": {
