@@ -60,6 +60,7 @@ setUnauthorizedHandler(() => {
     const hadKey = !!store.key;
     store.key = null;
     store.whoami = null;
+    store.labels = null;
     store.csrf = null;
     store.session = null;
     showLogin(hadKey ? 'The key was refused. Sign in again.' : 'Your session ended. Sign in again.');
@@ -106,6 +107,7 @@ async function endCookieSession() {
 function signedOut() {
     store.key = null;
     store.whoami = null;
+    store.labels = null;
     store.csrf = null;
     store.session = null;
     history.replaceState(null, '', '/ui/');

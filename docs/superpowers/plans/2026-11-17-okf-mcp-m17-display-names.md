@@ -1520,6 +1520,7 @@ export function named(label, slug) {
 
     > **Corrected (PR #596 review).** The first draft put the team editor only in the admin Teams drawer, which a non-admin owner cannot open.
   - Use the existing `api.patch` helper if `core/api.js` has one; otherwise add `patch` beside `put` in the same style.
+  > **Corrected (issue #607, 2026-11-17).** What shipped differs from the sketches above in three places. (1) `core/labels.js` looks a slug up with `Object.hasOwn`, so a slug such as `constructor` is not read off the object prototype. (2) `refreshIdentity` reads `/labels` with `{ quiet: true }` and falls back to no labels on failure, so the header shows slugs rather than the console failing to load. (3) `#account-id` is a paragraph under the profile facts (`Account ID: <code>alice</code>`), not a row in the `dl`. Both save buttons are guarded with `core/pending.js`. Read `src/http/ui/js/core/labels.js` and `pages/account.js`. Task 10b and 10c import `userLabel`, `teamLabel`, `catalogLabel` and `named` from `core/labels.js` unchanged.
 - [ ] **Step 5: CSS.** `.named { display: flex; flex-direction: column; }` and `.id-line { font-size: 0.8em; font-family: var(--pico-font-family-monospace); }`, using the existing tokens. No new colours.
 - [ ] **Step 6: `just test-ui` via `gate.sh test-ui`, plus the other gates; changelog `m17-task-10a-console-core`; commit** `feat(console): labels in the header and an editable display name`.
 

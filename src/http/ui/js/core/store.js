@@ -37,6 +37,9 @@ export const store = {
     // sends: the cookie carries the session across reloads, and boot reads
     // both again.
     session: null,
+    // GET /api/v1/labels' answer ({users, teams, catalogs}: slug -> label),
+    // read by core/labels.js. Memory only; null until the first read.
+    labels: null,
     get key() { return read(KEY); },
     set key(value) { write(KEY, value); },
     get catalog() { return read(CATALOG); },

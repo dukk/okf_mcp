@@ -6,6 +6,7 @@ use okf_mcp::store::keys::Access;
 use rustwright::GotoOptions;
 
 use crate::harness::drive;
+use crate::self_service::{console_base, login_server, member, EMAIL, PASSWORD};
 use crate::support::server::{files, TestServer};
 
 async fn server() -> TestServer {
@@ -169,6 +170,134 @@ async fn a_failed_start_with_a_stored_key_shows_the_login_card() {
         ui.wait_visible("#login");
         ui.wait_text("#login-error", "could not load");
         assert!(!ui.page.is_visible("#app").expect("visible"));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_header_shows_labels_and_the_catalog_option_keeps_the_slug() {
+    use chrono::Utc;
+    use okf_mcp::labels::DisplayName;
+    use okf_mcp::store::audit::AuditActor;
+    use okf_mcp::store::catalogs::{self, NewCatalog};
+    use okf_mcp::store::users;
+
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    let pool = &server.db.pool;
+    users::set_display_name(
+        pool,
+        "alice",
+        &DisplayName::parse("Alice Example").expect("a display name"),
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("name alice");
+    // alice's personal team owns it, so her ceiling reaches it.
+    catalogs::create(
+        pool,
+        &NewCatalog {
+            name: "notes",
+            display_name: &DisplayName::parse("Work Notes").expect("a display name"),
+            description: "",
+            owner_team: "alice",
+        },
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("create the catalog");
+    server.app.poll().await.expect("poll");
+    drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.wait_text("#whoami", "Alice Example - write");
+        ui.wait_text("#catalog-select", "Work Notes");
+        // Option text is the label; its value is the slug.
+        let options = ui.eval(
+            "() => [...document.querySelectorAll('#catalog-select option')] \
+             .map(option => [option.textContent, option.value])",
+            serde_json::json!(null),
+        );
+        assert!(
+            options
+                .as_array()
+                .expect("an array")
+                .contains(&serde_json::json!(["Work Notes", "notes"])),
+            "options were {options}"
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_labels_read_keeps_the_console_open_and_clears_stale_labels() {
+    use chrono::Utc;
+    use okf_mcp::labels::DisplayName;
+    use okf_mcp::store::audit::AuditActor;
+    use okf_mcp::store::catalogs::{self, NewCatalog};
+    use okf_mcp::store::users;
+
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    let pool = &server.db.pool;
+    users::set_display_name(
+        pool,
+        "alice",
+        &DisplayName::parse("Alice Example").expect("a display name"),
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("name alice");
+    // alice's personal team owns it, so her ceiling reaches it.
+    catalogs::create(
+        pool,
+        &NewCatalog {
+            name: "notes",
+            display_name: &DisplayName::parse("Work Notes").expect("a display name"),
+            description: "",
+            owner_team: "alice",
+        },
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("create the catalog");
+    server.app.poll().await.expect("poll");
+    drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.wait_text("#catalog-select", "Work Notes");
+        // The next /labels read fails with a 503; /session and /whoami
+        // still answer. The identity refresh must still finish, quietly.
+        ui.fail_next("GET", "/api/v1/labels", 503, "labels are away");
+        let done = ui.eval(
+            "async () => { \
+               const shell = await import('/ui/js/core/shell.js'); \
+               await shell.refreshIdentity(); \
+               return [...document.querySelectorAll('#catalog-select option')] \
+                 .map(option => [option.textContent, option.value]); }",
+            serde_json::json!(null),
+        );
+        // Stale labels are cleared, not kept: text is the slug, as is the value.
+        let options = done.as_array().expect("an array");
+        assert!(
+            options.contains(&serde_json::json!(["notes", "notes"])),
+            "options were {done}"
+        );
+        assert!(
+            !options.iter().any(|option| option[0] == "Work Notes"),
+            "the old label was kept: {done}"
+        );
+        // The header still names the person (whoami carries its own label).
+        assert!(ui.text("#whoami").contains("Alice Example - write"));
+        assert!(ui.page.is_visible("#app").expect("visible"));
+        // No error toast for the failed read.
+        assert!(
+            !ui.text("#toasts").contains("labels are away"),
+            "{}",
+            ui.text("#toasts")
+        );
     })
     .await;
 }
