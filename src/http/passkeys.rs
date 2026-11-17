@@ -60,6 +60,9 @@ use crate::http::pages::safe_return_to;
 use crate::http::signin::{audit, cross_site, notify_method_added, start_in, SignIn, LINK_EXPIRED};
 use crate::http::{timeout_layer, AppError};
 use crate::keys;
+// The one form a console session id takes when stored (OIDC link flows use
+// it too).
+use crate::oidc::session_hash;
 use crate::shared::ephemeral::{Ephemeral, Index, IndexSpace, Keyspace, Swap};
 use crate::shared::Redis;
 use crate::store::email_tokens::{self, Purpose};
@@ -189,26 +192,13 @@ enum RegisterVia {
     /// finish must present the token again, and redeems the presented one.
     Setup { token_hash: [u8; 32] },
     /// A signed-in session, whose other sessions end unless kept. Only the
-    /// session id's hash ([`session_hash`]) is kept, never the id (spec
+    /// session id's hash ([`crate::oidc::session_hash`]) is kept, never the id (spec
     /// Decision 7): the finish compares it with the finishing request's own
     /// session and then uses that request's id.
     Session {
         session_hash: String,
         keep_sessions: bool,
     },
-}
-
-/// A console session id's hash: the `URL_SAFE_NO_PAD` SHA-256, the form a
-/// session registration stores and `Passkeys::by_session` is keyed by.
-///
-/// # Arguments
-/// * `session_id` - the raw console session id.
-///
-/// # Returns
-/// 43 base64url characters.
-#[tracing::instrument(level = "trace", skip_all)]
-fn session_hash(session_id: &str) -> String {
-    URL_SAFE_NO_PAD.encode(keys::hash(session_id))
 }
 
 /// The open routes (no credential), merged only when passkeys are on.

@@ -439,8 +439,8 @@ impl Browser {
         self.send_to(&test.app, method, uri, payload).await
     }
 
-    /// [`Browser::send`] to a given app: one of two replicas, say, with the
-    /// same cookie jar.
+    /// [`Self::send`] to a given app: one replica of a pair
+    /// (`crate::mcp::testing::replica_pair`).
     pub(crate) async fn send_to(
         &mut self,
         app: &Arc<App>,

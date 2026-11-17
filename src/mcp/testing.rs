@@ -261,10 +261,10 @@ pub(crate) async fn replica_pair(
 /// * `redis` - the server both apps connect to.
 ///
 /// # Returns
-/// As [`replica_pair`], with `redis` handed back.
+/// As [`replica_pair`].
 ///
 /// # Panics
-/// If the database or a load fails: a broken test setup.
+/// If the database, Redis or a load fails: a broken test setup.
 pub(crate) async fn replica_pair_on(
     catalogs_and_files: &[(&str, &[(&str, &str)])],
     config: Config,

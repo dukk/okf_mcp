@@ -32,7 +32,8 @@ Decisions 3-8 and 16).
     run on one memory app).
 - Test support: `mcp::testing::replica_pair_on` (two replicas over a Redis
   the test started, so a cluster too) and `Browser::send_to` (a request to a
-  given replica).
+  given replica). Task 9 (PR #576) added the same two; one copy of each was
+  kept in the merge. The session hash is Task 9's `oidc::session_hash`.
 
 ## Changed
 
