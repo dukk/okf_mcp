@@ -18,15 +18,34 @@
 -- rewritten. Additive: an older replica ignores the new column.
 --
 -- Locks. sqlx runs a migration in one transaction, so every lock below is
--- held until it commits; the statements are ordered to take the blocking
--- ones last. The cleanup `UPDATE`s come first and take only ROW EXCLUSIVE
--- (other readers and writers carry on; only a changed row is locked). Each
--- `ADD CONSTRAINT` then takes ACCESS EXCLUSIVE on its table for the rest of
--- the transaction, so `catalogs` (which every MCP and REST request reads) is
--- locked last, by one `ALTER` whose column add is metadata only (a constant
--- default needs no rewrite) and whose CHECK scans the catalog rows. From the
--- first exclusive lock to the commit, the migration does three scans of
--- tables holding one row per user, team or catalog.
+-- held until it commits.
+--   * `LOCK TABLE users, teams IN SHARE ROW EXCLUSIVE MODE` comes first. It
+--     blocks inserts, updates and deletes on both tables (an older replica's
+--     user or team create waits), but not reads or `FOR SHARE`/`FOR UPDATE`
+--     row locks. Without it, a create from an older replica committed after
+--     a cleanup `UPDATE` took its snapshot would be neither cleaned nor
+--     refused: an 81-character name then fails `ADD CONSTRAINT` and rolls
+--     the whole migration back (the new replica cannot start), and a short
+--     name holding a control character survives unrepaired. A create that
+--     waited runs after the commit, against the CHECK. (An older replica
+--     still checks nothing itself, so until every replica is upgraded it
+--     can store a short name with a control character; only the length is
+--     enforced in SQL.) `users` comes first, the order `users::create`
+--     writes them in. Should an older writer hold `teams` and then want
+--     `users`, Postgres detects the deadlock and aborts one side; if that
+--     is the migration, the new replica fails to start until restarted.
+--   * The cleanup `UPDATE`s then run under that lock.
+--   * Each `ADD CONSTRAINT` takes ACCESS EXCLUSIVE on its table (reads wait
+--     too) until the commit, so they come last, and `catalogs` (which every
+--     MCP and REST request reads) is locked last of all, by one `ALTER`
+--     whose column add is metadata only (a constant default needs no
+--     rewrite) and whose CHECK scans the catalog rows.
+-- The tradeoff: user and team writes pause for the whole migration (two
+-- cleanup scans, three CHECK scans), and their reads for the CHECK scans;
+-- catalog reads and writes pause only for the last `ALTER` and the commit.
+-- Every scanned table holds one row per user, team or catalog.
+
+LOCK TABLE users, teams IN SHARE ROW EXCLUSIVE MODE;
 
 UPDATE users u SET display_name = n.display_name
 FROM (

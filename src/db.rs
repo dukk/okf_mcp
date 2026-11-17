@@ -473,6 +473,76 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn migration_0019_makes_a_concurrent_legacy_create_wait_for_the_checks() {
+        use crate::store::catalogs::tests::until_locks_are_awaited;
+        use std::time::Duration;
+        // How long each wait below may take before the test fails.
+        const WAIT: Duration = Duration::from_secs(30);
+
+        // Arrange: a database at 0018 with one dirty user, whose row another
+        // transaction holds (`FOR UPDATE`), so the migration stops inside
+        // its cleanup `UPDATE`: after taking its table locks, before the
+        // CHECKs.
+        let db = pg_support::TestDb::start().await;
+        MIGRATOR.run_to(18, &db.pool).await.unwrap();
+        sqlx::raw_sql(
+            "INSERT INTO users (name, display_name, created_at) VALUES ('ctrl', E'a\\tb', now());",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let mut holder = db.pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM users WHERE name = 'ctrl' FOR UPDATE")
+            .execute(&mut *holder)
+            .await
+            .unwrap();
+        // `tokio::spawn` runs each future concurrently, like a thread.
+        let pool = db.pool.clone();
+        let migrating = tokio::spawn(async move { MIGRATOR.run(&pool).await });
+        until_locks_are_awaited(&db.pool, 1).await;
+
+        // Act: what an older replica's `users::create` writes, with a name
+        // 0009 never refused. Without the migration's `LOCK TABLE` it
+        // commits at once, the cleanup's snapshot misses it, and the CHECK
+        // then fails the migration.
+        let pool = db.pool.clone();
+        let creating = tokio::spawn(async move {
+            sqlx::query(
+                "INSERT INTO users (name, display_name, created_at) \
+                 VALUES ('late', repeat('x', 81), now())",
+            )
+            .execute(&pool)
+            .await
+        });
+        // Two waiters: the migration on the held row, the create on the
+        // migration's table lock.
+        until_locks_are_awaited(&db.pool, 2).await;
+        holder.rollback().await.unwrap();
+
+        // Assert: the migration commits; the create, run after it, is
+        // refused by the CHECK rather than stored.
+        let migrated = tokio::time::timeout(WAIT, migrating)
+            .await
+            .expect("the migration should finish once the row is released")
+            .unwrap();
+        assert!(migrated.is_ok(), "{migrated:?}");
+        let created = tokio::time::timeout(WAIT, creating)
+            .await
+            .expect("the create should finish once the migration commits")
+            .unwrap();
+        assert_eq!(
+            broken(created).as_deref(),
+            Some("users_display_name_length")
+        );
+        let cleaned: String =
+            sqlx::query_scalar("SELECT display_name FROM users WHERE name = 'ctrl'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(cleaned, "a b");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn migration_0010_constraints_hold() {
         let db = test_db().await;
         sqlx::raw_sql("INSERT INTO catalogs (name, created_at) VALUES ('pg', now());")
