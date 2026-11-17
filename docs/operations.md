@@ -12,24 +12,34 @@ changesets and the routes in detail.
 
 ## 1. What runs
 
-- **One process**, `okf-mcp serve`, in **one replica**. Postgres is the only
-  state: catalogs, revisions, changesets and API keys all live in the database.
-  The pod needs no persistent volume.
-- **Why one replica:** short-lived state lives in the process's memory: MCP
-  sessions and their key bindings, OAuth consent pages and codes, OIDC and
-  passkey sign-ins in progress. A request that lands on another replica would
-  not find it. Publishing is safe across processes (a Postgres advisory lock
-  orders publishes of a catalog). Milestone 16 adds `[redis]` to share that
-  state. Don't scale it out until then.
-- **`[redis]` (milestone 16, in progress):** `url_env` names the variable
-  holding the URL (`redis://` or `rediss://`; a password never goes in the
-  file), and `key_prefix` (default `okf:`, no braces) names the deployment.
-  `mode = "standalone"` (default) talks to one Redis or Valkey primary.
-  `mode = "cluster"` uses a cluster-aware client, for ElastiCache Serverless
-  (which runs only in cluster mode and requires TLS, so use a `rediss://` URL)
-  and other clusters. In both modes every key and channel carries one hash tag,
-  `{<key_prefix>}`, so a script over several keys stays on one slot. The full
-  section arrives with the rest of the milestone.
+- **One process**, `okf-mcp serve`. Postgres holds the durable state:
+  catalogs, revisions, changesets, API keys, grants and accounts. The pod needs
+  no persistent volume. **One replica by default; several with `[redis]`.**
+- **Why one replica, without `[redis]`.** Publishing is not the reason: it is
+  safe across processes. A publish takes an in-process mutex, which orders
+  publishes within one process, and a per-catalog Postgres advisory lock inside
+  the publish transaction, which orders publishes, imports and deletes of a
+  catalog across every process. What breaks with a second replica is the
+  short-lived state each process keeps in its own memory:
+
+  | State | What fails on another replica |
+  |---|---|
+  | MCP sessions, and the key each is bound to | A request naming a session another replica opened gets 404; a restored session would have no binding for the key check |
+  | OAuth consent pages in progress, and authorization codes | The consent POST or the token exchange lands elsewhere: an unknown request or code |
+  | OIDC sign-in and link flows | The callback lands elsewhere and the flow is unknown |
+  | Passkey registration and sign-in ceremonies | Finishing on another replica fails |
+  | The key cache | A key revoked on one replica still works on another until its next poll |
+  | The OAuth access-token cache | A token revoked on one replica still works on another until it expires |
+  | Rate-limit buckets and the mail worker | Counted per replica (#357, #458); not fixed by `[redis]` |
+
+- **With `[redis]`, several replicas work.** Redis holds the first four rows'
+  short-lived state, and two caches learn of changes on every replica at
+  once: the key cache (pub/sub announcements of each `admin_generation` bump)
+  and the access-token cache (a revocation counter). Everything else stays as
+  it was. The Redis section below says what to run, what it holds and what
+  happens when it fails; "Several replicas: what stays per replica" lists the
+  caveats. Without the table nothing changes: no Redis code runs, no
+  connection is made, and one replica is still required.
 - **Routes:**
 
   | Route | Access | Does |
@@ -115,6 +125,9 @@ unknown keys are ignored, so one file serves every version.
 | `mail.smtp.host`, `mail.smtp.port`, `mail.smtp.starttls`, `mail.smtp.username`, `mail.smtp.password_env` | none, `587`, `true`, none, none | The SMTP relay. `starttls = true` requires STARTTLS; `false` is TLS from the first byte (port 465); there is no plain-text mode. `username` and `password_env` (the environment variable holding the password) go together |
 | `mail.postmark.token_env`, `mail.postmark.message_stream` | none, `"outbound"` | Postmark's server token (by environment variable) and message stream |
 | `mail.ses.region` | none | The AWS region SES sends in. Unset, the AWS SDK's own resolution decides (`AWS_REGION`, then the profile, then instance metadata). The `[mail.ses]` table is optional; there is no credential key ([Mail](#mail)) |
+| `redis.url_env` | none | The `[redis]` table turns on shared state for several replicas (the [Redis](#redis) section). `url_env` is required: the name of the environment variable holding the URL, `redis://` or `rediss://`, which may carry a password (so it never goes in the file). Unknown keys in this table are an error |
+| `redis.key_prefix` | `"okf:"` | Starts every key and channel, so one Redis can serve several deployments. 1 to 64 bytes, with no whitespace, control character or brace: it goes inside the hash tag `{<key_prefix>}` |
+| `redis.mode` | `"standalone"` | `"standalone"` for one Redis or Valkey primary (or a managed primary endpoint), `"cluster"` for a cluster-aware client: ElastiCache Serverless, which runs only in cluster mode, and other clusters |
 | `telemetry.service_name` | `"okf-mcp"` | The `service.name` that OTLP reports |
 | `telemetry.environment` | none | The `deployment.environment.name` that OTLP reports, such as `"production"` |
 | `telemetry.stderr.format` | `"text"` | stderr's line format: `"text"` (today's lines) or `"json"` (one object per line, with `trace_id` and `span_id`) |
@@ -138,6 +151,13 @@ lifetime, and a `public_url` that is not a URL, has a path, query or user
 info, is `http` on a host other than a loopback one, or whose host no
 `allowed_hosts` entry admits (an entry with a port must match the URL's
 port).
+
+For `[redis]` it refuses a `url_env` that is empty or holds a character
+other than a letter, digit or `_`, and a `key_prefix` that breaks the rule in
+the table. Unlike the rest of the file, the table refuses a key it does not
+know, so an inline `url` is an error. `serve` then refuses to start when the
+variable is unset or blank, its value is not a Redis URL, or Redis does not
+answer `PING`.
 
 For `[auth]` it refuses a zero duration or one over ten years,
 `max_keys_per_user` over 1000, and a `trusted_proxy_header` that is not a
@@ -258,6 +278,8 @@ top-level key: a top-level key written below one would land inside it.
 | `OKF_SENTRY_DSN` (any name) | A Sentry DSN, named by `telemetry.otlp.sentry_dsn_env` |
 | `OTEL_SDK_DISABLED` | `true` turns OTLP export off without editing the file |
 | `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_TRACES_SAMPLER`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_BSP_*` | Read by the OpenTelemetry SDK as it defines them ([Telemetry](#telemetry)). `OTEL_EXPORTER_OTLP_HEADERS` is merged over `headers_env`'s value |
+| `OKF_REDIS_URL` (any name) | The Redis URL, named by `redis.url_env`: `redis://` or `rediss://`, possibly with a password (`rediss://:password@redis.example.internal:6379`). It can hold a credential, so keep it in a Secret. It is never logged, recorded in a span or put in an error: errors name the variable and the Redis error's kind |
+| `SSL_CERT_FILE` | A CA bundle for `rediss://` to a Redis whose certificate a private CA signed (the system roots are read otherwise) |
 | `OKF_OIDC_EXAMPLE_SECRET` (any name) | An OIDC client secret, named by its provider's `client_secret_env` |
 | `OKF_SMTP_PASSWORD` (any name) | The SMTP password, named by `mail.smtp.password_env` |
 | `OKF_POSTMARK_TOKEN` (any name) | The Postmark server token, named by `mail.postmark.token_env` |
@@ -341,6 +363,192 @@ Backups belong to the database, not the server. With CloudNativePG, use the
 barman-cloud plugin: WAL archiving and base backups to the site's object
 store (section 9).
 
+## Redis
+
+Redis is optional. It is what lets `okf-mcp serve` run as several replicas
+behind one Service (section 1 says what it holds and why). Turn it on with a
+`[redis]` table (section 3); without the table none of this applies.
+
+```toml
+[redis]
+url_env = "OKF_REDIS_URL"   # the variable holds redis://... or rediss://...
+key_prefix = "okf:"         # the default; names this deployment's keys
+mode = "standalone"         # or "cluster"
+```
+
+- **What to run.** Redis 6.2 or later (the server uses `GETDEL` and Lua
+  scripts), or Valkey. Either:
+  - `mode = "standalone"`: one primary, or a managed service's single
+    endpoint. The client reconnects by itself.
+  - `mode = "cluster"`: a cluster-aware client that follows the cluster's
+    topology. **ElastiCache Serverless** (for Valkey) is the
+    example: it runs only in cluster mode and requires TLS, so use
+    `mode = "cluster"` and a `rediss://` URL, such as
+    `rediss://redis.example.internal:6379`. A self-run cluster works the same
+    way.
+  - Sentinel is not supported. Neither is spreading the keys over several
+    cluster slots: see "The hash tag" below.
+- **The hash tag.** Every key and channel is named `{<key_prefix>}<rest>`, for
+  example `{okf:}oauth:code:<hash>`, in both modes. The braces are a Redis
+  hash tag: Redis hashes only the text inside them, so every key the server
+  uses lands on one cluster slot. That is what lets a script that touches
+  several keys (the session binding scripts, the swap of a per-session index,
+  the compare-and-set) run on a cluster, where a command over keys in
+  different slots fails with `CROSSSLOT`. The cost is that all of okf-mcp's
+  keys sit on one shard. That is fine for short-lived sign-in state of a few
+  kilobytes per entry, and ElastiCache Serverless scales a slot's capacity
+  itself. It is also why `key_prefix` cannot contain a brace. A standalone
+  deployment has the same names.
+- **Start-up.** `serve` connects and sends `PING` before it listens. It
+  refuses to start when the variable is unset or blank, the value is not a
+  Redis URL, or Redis does not answer: the connection gives up after 5
+  seconds, and each command waits at most 2. The message names the variable
+  and the Redis error's kind, never the URL.
+
+### What Redis holds
+
+`{p}` stands for `{<key_prefix>}`, and `h(x)` for the hex SHA-256 of `x`. A
+session id, a flow cookie and a pending authorization id are credentials, so
+none appears in a key name as the client sent it. Neither does a raw console
+session id: the keys and values that refer to one hold its hash.
+
+| Key | Holds | TTL |
+|---|---|---|
+| `{p}mcp:state:h(session)` | What a replica needs to restore the MCP session (rmcp's session state) | `session_idle_timeout`, renewed on every admitted request |
+| `{p}mcp:bind:h(session)` | The id of the API key that opened the session | The same, renewed with it |
+| `{p}oauth:pending:h(id)` | A consent page in progress | 10 minutes, fixed |
+| `{p}oauth:code:h(h(code))` (the server's own hash of the code, hashed again by the store) | An authorization code | 60 seconds, fixed. A used code stays until then, so a second use is seen as a replay and the token family is revoked |
+| `{p}oauth:access-revocations` | A counter of access-token revocations | None |
+| `{p}oidc:flow:h(cookie)` | An OIDC sign-in or link flow | 10 minutes, fixed |
+| `{p}oidc:link:<hash of the console session id>` | Which flow that console session has in progress | 10 minutes, renewed on use |
+| `{p}passkey:ceremony:h(cookie)` | A passkey registration or sign-in ceremony | 5 minutes, fixed |
+| `{p}passkey:session:<hash of the console session id>` | Which ceremony that console session has in progress | 5 minutes, renewed on use |
+| channel `{p}admin-generation` | Announcements that the key cache is out of date (the new generation, or empty from the command line) | Not stored |
+
+- **Values** are JSON with a version. A value of another version, or one that
+  does not decode, counts as absent and is counted as a `decode` error. After
+  a rolling upgrade that changes a value's shape, a flow in progress starts
+  again; nothing is misread.
+- **Redis is a secret store.** Values hold what a flow needs for at most ten
+  minutes: PKCE verifiers, nonces, CSRF tokens and passkey ceremony state. It
+  has the same trust as Postgres: password-protected, on a private network,
+  with TLS wherever it crosses hosts.
+- **Single use across replicas.** A flow or ceremony is read and deleted in
+  one command, so it finishes once whichever replica takes it. A code or
+  pending authorization is changed by a compare-and-set that retries up to 8
+  times and then answers 503, so two replicas racing for one code produce one
+  exchange and one replay.
+- **The key cache** is announced, not stored. A replica that sees
+  `admin_generation` move publishes it, and every replica reloads its keys at
+  once, so a revoked key stops working everywhere without waiting for the
+  poll. This covers key revocation, user deletion, team suspension and grant
+  revocation. The command line announces too (an empty message) after each
+  successful command, so `okf-mcp key revoke` takes effect at once. A command
+  that cannot reach Redis logs a warning, and the replicas notice the change
+  within `poll_interval`.
+- **The access-token cache** checks the revocation counter on every lookup. A
+  revocation increments it, and a replica that sees a new value clears its
+  cache. A cached token is also trusted for at most 60 seconds, as a backstop
+  for a crash between the commit and the increment.
+
+### When Redis fails
+
+After start-up, the flows that depend on Redis **fail closed**. Nothing falls
+back to memory, because that would split the state between replicas.
+
+| What | The answer |
+|---|---|
+| An MCP request (the binding check, a restore, `initialize`'s binding, a `DELETE`) | 503. The client retries, or initializes again |
+| The consent page and its form | 503, the busy page ("The server is busy. Start again from your client in a minute."), on a failed read, update or removal alike. A Deny or Approve whose removal of the pending entry fails answers 503: no denial is forwarded and no code is minted |
+| The token endpoint | 503 `server_error` (body "internal error"). If Redis fails after a code was marked used, the token family is revoked and the client starts again |
+| An OIDC start or callback, or a link | 503 ("Sign-in is unavailable right now; try again shortly." on the callback). The flow cookie is kept, so a reload once Redis answers can finish the flow |
+| A passkey step | 503 |
+| `GET /healthz` | Still 200: `"redis": "unavailable"` (section 7) |
+| A catalog read or write | Unaffected: Postgres alone serves them |
+
+- **Key announcements.** A failed publish is counted and logged, and the poll
+  loop covers it within `poll_interval`. Each replica's subscriber reloads its
+  key cache whenever it (re)subscribes, since a message sent while it was
+  disconnected is lost. The client resubscribes by itself after a reconnect;
+  a subscription that stays disconnected for 10 seconds is replaced by a new
+  one, retried with a wait that grows from 1 to 30 seconds. So an outage costs
+  at most `poll_interval` of key-revocation delay once Redis is back, and
+  during it each replica still polls Postgres.
+- **The access-token cache** skips the cache on a Redis error: the lookup goes
+  to Postgres and caches nothing.
+- **An entry Redis lost** (evicted, or Redis restarted without persistence)
+  fails closed too: a 404 for a session, an unknown code, an expired flow. The
+  person starts again.
+- **Counting.** Every failure is counted in `okf_redis_errors_total` by
+  `operation` (the metric reference lists them) and logged with the operation
+  and the error's kind. The error text stays in the local log only; no URL,
+  key name or value is logged. Alert on the counter rising, not on
+  `/healthz`.
+
+### Sizing
+
+An entry is about 1 to 4 KB (an MCP session about 1 KB). Redis holds only live
+entries, which expire in minutes, apart from MCP sessions, which last until
+idle for `session_idle_timeout` (2 hours by default). Count one session per
+connected client and a few flows or ceremonies per person signing in. The
+anonymous entries are bounded by the per-address start limits times the number
+of replicas, and by Redis's own `maxmemory`: the in-memory caps on flows,
+ceremonies, codes and pending authorizations apply without `[redis]` only. Each person or
+console session holds at most one link flow and one passkey ceremony: starting
+another replaces the first.
+
+### Eviction
+
+Set `maxmemory-policy` to `noeviction` or a `volatile-*` policy
+(`volatile-lru`, for example), **not** an `allkeys-*` policy. The
+revocation counter has no TTL, so an `allkeys-*` policy may evict it. The
+server recreates a missing counter from a random seed, so a lost counter never
+repeats a value a replica has seen and every cache is cleared at its next
+lookup. Losing it costs a cache refill, not a missed revocation, but there is
+no reason to allow it. **On ElastiCache Serverless AWS manages
+`maxmemory` and eviction;** there is nothing to set. On a cluster or primary
+you run, set the policy yourself and leave headroom so `noeviction` does not
+start refusing writes (the server then answers 503 as above).
+
+### TLS and AUTH
+
+- Use `rediss://` wherever Redis is not on the pod's own host. It is required
+  for ElastiCache Serverless. The server reads the system's root certificates;
+  for a Redis whose certificate a private CA signed, point `SSL_CERT_FILE` at
+  the CA bundle (mount it from a ConfigMap or Secret).
+- Put the password in the URL (`rediss://:password@host:6379`) and the URL in
+  a Secret named by `url_env`. Do not put it in the config file.
+- Restrict the network: allow Redis from the okf-mcp pods only.
+
+### Several replicas: what stays per replica
+
+With `[redis]`, run as many replicas as you need (section 5's variant uses
+two). What `[redis]` does not share:
+
+- **`GET /mcp` streams.** A server-sent stream belongs to the replica that
+  opened it. A client that loses it reconnects and may land elsewhere; the
+  session carries on through Redis, but the stream does not resume.
+- **Catalog reads lag.** A publish on one replica shows on another within
+  `poll_interval` (10 seconds by default). Snapshots are not announced.
+- **Rate limits** (per address, per email, OIDC starts, OAuth) are counted per
+  replica, so the effective limit is the configured limit times the number of
+  replicas (#357). The shared Redis handle is the place to fix that.
+- **The mail worker.** Until #458 settles how it behaves with several
+  replicas, run it on one: `[mail] worker = false` turns it off for a replica,
+  which still enqueues mail in Postgres. Since one ConfigMap serves a
+  Deployment, that means a second, single-replica Deployment of the same image
+  with its own ConfigMap (`worker = true`), and `worker = false` in the
+  serving Deployment's.
+- **Pruning.** Every replica's poll loop prunes the OAuth tables, unbound
+  registered clients, console sessions, mail jobs, sign-in events and
+  emailed-link tokens (hourly), the audit log (daily) and empty changesets
+  (every pass). The deletes are idempotent, so this wastes a little work and
+  does nothing wrong.
+- **`okf_mcp_sessions_active`** counts the sessions each replica holds. A
+  session restored on a second replica counts there too, so the sum over
+  replicas can exceed the number of live sessions.
+- **No session affinity** is needed on the Service or the Ingress.
+
 ## 5. Kubernetes
 
 A complete, generic example. Apply it with `kubectl apply -n okf-mcp -f`, or
@@ -400,6 +608,9 @@ kind: Deployment
 metadata:
   name: okf-mcp
 spec:
+  # One replica because, without [redis], MCP sessions, consent pages, sign-in
+  # flows and key caches live in this process's memory (section 1). Recreate
+  # keeps two servers from running at once during an upgrade.
   replicas: 1
   strategy:
     type: Recreate
@@ -548,9 +759,13 @@ The objects for backups (`ObjectStore`, `ScheduledBackup`) are in section 9.
 
 **The Deployment, and why:**
 
-- **One replica and `Recreate`:** the old pod stops before the new one starts,
-  so two servers never publish at once (section 1). An upgrade has a short
-  outage.
+- **One replica and `Recreate`:** without `[redis]`, the short-lived state is
+  in the process's memory, so a second replica would not find a session, a
+  consent page or a flow that another one holds (section 1). The old pod stops
+  before the new one starts, which also means an upgrade has a short outage.
+  Publishing is not the reason: it is safe across processes.
+- **Several replicas:** with `[redis]`, use the variant below. The Service
+  needs no session affinity, and the Ingress needs no sticky annotation.
 - **Startup probe:** TCP on 8080, for up to 5 minutes (60 x 5 s). The server
   opens its port only after it has run the migrations and loaded every
   catalog's snapshot.
@@ -575,6 +790,48 @@ The objects for backups (`ObjectStore`, `ScheduledBackup`) are in section 9.
   all of it out, with the `[telemetry]` table, to run as before.
 - The `kubectl cp` in section 6 needs `tar` in the container, which the image
   has.
+
+**The variant with `[redis]`** (several replicas, a rolling upgrade). Add to the
+ConfigMap's `config.toml`:
+
+```toml
+[redis]
+url_env = "OKF_REDIS_URL"
+mode = "cluster"        # ElastiCache Serverless; "standalone" for one primary
+```
+
+`[redis]` needs the release that includes multi-replica serve (milestone 16) or
+a later one: an older image, such as the 0.20.0 above, does not support it.
+Set that image tag in the variant below, and change the Deployment (the Secret `okf-mcp-redis` holds the URL under the
+key `url`, for example `rediss://redis.example.internal:6379`; create it however
+your site manages secrets):
+
+```yaml
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    spec:
+      containers:
+        - name: okf-mcp
+          # The first release with multi-replica serve (milestone 16), not the
+          # 0.20.0 of the example above.
+          image: ghcr.io/hypotheosis/okf-mcp:<release with multi-replica serve>
+          env:
+            # ... the entries above, and:
+            - name: OKF_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: okf-mcp-redis
+                  key: url
+```
+
+The mail worker runs on every replica unless `[mail] worker = false`: see "Several
+replicas: what stays per replica".
 
 **The Service:** it sets no `ipFamilyPolicy`. On a dual-stack cluster the
 server listens on both families (`listen = "[::]:8080"`), so any policy works,
@@ -760,7 +1017,7 @@ which the ServiceMonitor sets (by default to the Service's name,
 `okf-mcp-metrics`); choose your installation there. If you relabel `job`, the
 dashboard follows it.
 `tests/grafana_dashboard.rs` checks that it names only metrics the server
-exports. The server stays single-replica, so there is one target.
+exports. Each replica serves its own `/metrics`; the metrics Service's endpoints are every pod, so the ServiceMonitor gets one target per replica.
 
 ### stderr
 
@@ -859,6 +1116,7 @@ the dotted originals.
 | `okf_catalog_concepts` | gauge | `catalog` | Concepts in the current snapshot |
 | `okf_catalog_generation` | gauge | `catalog` | The snapshot's generation |
 | `okf_keycache_reloads_total` | counter | `outcome` | Key cache and settings reloads |
+| `okf_redis_errors_total` | counter | `operation` | Failed Redis calls. `operation` is `connect`, `get`, `set`, `take`, `update`, `remove`, `index`, `admit`, `bind`, `publish`, `subscribe`, `counter` or `decode` (a stored value that would not decode). A failed or late `/healthz` `PING` counts as `get`. Only with `[redis]` |
 | `okf_auth_attempts_total` | counter | `method`, `outcome` | Sign-in attempts. `method` is `password`, `passkey`, `oidc` or `setup`; `outcome` is `ok`, `failed` or `locked` |
 | `okf_oauth_tokens_issued_total` | counter | `grant` | Token pairs issued: `authorization_code` or `refresh_token` |
 | `okf_ratelimit_rejections_total` | counter | `limiter` | Requests a limiter refused: `sign_in_per_ip`, `forgot_per_email`, `forgot_per_ip`, `link_starts`, `oauth_register`, `oauth_token` or `oauth_consent` |
@@ -890,6 +1148,7 @@ on its own task), so find a call by its tool span, not by the request's trace.
 | `okf.archive.export` and `okf.archive.import` | `okf.catalog` (only for a catalog that exists), `okf.archive.size` (bytes, on success), `okf.outcome` |
 | `okf.mail.job` | `okf.mail.template`, `okf.mail.provider`, `okf.outcome`. Never the address |
 | `okf.oauth.token` | `okf.oauth.grant` |
+| Redis calls: `connect` and `subscribe` (at `info`), then `publish`, `admits`, `bind`, `release`, `load_state`, `store_state`, `delete_state`, `run_counter` and the stored-state operations (at `debug`, off by default) | `db.system.name` (`redis`), `db.operation.name` (the same set as `okf_redis_errors_total`'s `operation`, except `decode`, which is a metric label only). Never a key name, a session or flow id, a value or the URL |
 | Everything else (store, handlers) | Function spans at `debug` and `trace`, off by default; they carry safe ids only |
 
 An event logged inside a span is exported as a log record carrying the span's
@@ -1397,9 +1656,11 @@ do; the command line needs only the database, as every subcommand does.
   is refused (409 `Refused`, a non-zero exit on the command line), leaving
   the team as it was. The console can't change a suspended team's notice
   without lifting it (#361); the CLI and REST can.
-- **Timing.** On the single replica the server runs as, the REST route
-  (which the console uses) polls before answering, so the next request sees
-  the change.
+- **Timing.** On the replica that took the request, the REST route (which
+  the console uses) polls before answering, so the next request there sees
+  the change. With `[redis]` that poll also announces the change, and the
+  other replicas reload at once; without it they follow within
+  `poll_interval`.
   If that poll fails the change is still committed and takes effect at the
   poll loop's next successful pass, within `poll_interval`. The command line
   writes the database only, so a running server picks it up within
@@ -1752,7 +2013,8 @@ to it with "Sign in with your account", carrying the page you were on.
   minutes (a token bucket: a burst of 30, refilled over 15 minutes), shared
   by password sign-in, passkey sign-in and OIDC starts; past it, 429. IPv6
   addresses count by their `/64`. The limit is in memory, per process
-  (sharing it across replicas is #357).
+  (sharing it across replicas is #357: with several replicas each counts its
+  own).
   Behind an ingress, set `auth.trusted_proxy_header`, or every request seems
   to come from the ingress and all of them share one limit.
 - **Other sites' forms are refused.** Every sign-in, forgot, setup and reset
@@ -3313,9 +3575,12 @@ variables, so a network policy that blocks the pod's direct outbound HTTPS
 breaks such clients. Clients that register themselves (dynamic client
 registration) need no egress.
 
-**State.** The server stays single-replica. Consent pages in progress and
-authorization codes not yet exchanged live in memory, so a restart interrupts
-at most a sign-in in progress. The person starts again from the client, with
+**State.** Without `[redis]` the server stays single-replica. Consent pages in
+progress and authorization codes not yet exchanged live in memory, so a
+restart interrupts at most a sign-in in progress. With `[redis]` they live in
+Redis, so any replica can take the next step and a restart interrupts nothing;
+when Redis fails the consent page and the token endpoint answer 503 and the
+person starts again from the client. The person starts again from the client, with
 the same code if they had not yet chosen Approve (a code is spent only by
 Approve). Grants, tokens, codes and clients are in the database.
 
@@ -3519,20 +3784,27 @@ All seven paths exist only while `public_url` is set; without it they are 404.
 Every response is `Cache-Control: no-store` (the discovery documents also
 carry `Access-Control-Allow-Origin: *`), and every JSON error is
 `{"error": ..., "error_description": ...}` with the OAuth error code:
-`invalid_client` is 401, `slow_down` 429, `server_error` 500 and the rest
-400.
+`invalid_client` is 401, `slow_down` 429, `server_error` 500 (503 when Redis
+fails: [Redis](#redis)) and the rest 400.
 
 ## 7. Health and time
 
 `GET /healthz` needs no key:
 
 ```json
-{"database": "ok", "catalogs": 2, "clock": {"ok": true, "checked_at": "2026-11-03T12:00:00Z", "offset_ms": 3, "stratum": 2}}
+{"database": "ok", "catalogs": 2, "clock": {"ok": true, "checked_at": "2026-11-03T12:00:00Z", "offset_ms": 3, "stratum": 2}, "redis": "ok"}
 ```
 
 - **Status:** 200 when the database answers `SELECT 1` within 2 seconds;
   otherwise 503 with `"database": "unreachable"`. Nothing else changes it.
 - **`catalogs`:** how many catalogs are loaded (a count, never names).
+- **`redis`:** `"ok"` when Redis answers `PING` within 2 seconds, `"unavailable"`
+  when it fails or is late, and `null` without `[redis]`. **It never changes
+  the status code.** A Redis outage would otherwise mark every replica unready
+  at once and empty the Service, when the replicas can still serve catalog
+  reads and writes. A failed probe is counted in `okf_redis_errors_total`
+  (as `get`). The body never names the Redis host or URL. Alert on `"redis":
+  "unavailable"` or on that counter, not on the status.
 - **`clock`:** the last clock check, or `null` without a `time_server` (or
   before the first check). It is coarse on purpose, since the route is
   public:
@@ -3568,7 +3840,9 @@ take the server out of service. Alert on the `error` log line, not on
 2. Change the image tag in the Deployment (in your GitOps repository, if you
    use one).
 3. The Deployment recreates the pod: the old one stops, the new one runs any
-   new migrations, loads the catalogs and becomes ready.
+   new migrations, loads the catalogs and becomes ready. With `[redis]` and
+   `RollingUpdate` (section 5), the new pod starts beside the old ones and
+   each pod is replaced once the new one is ready.
 
 - **Migrations are forward-only.** Once a new version has migrated the
   database, an older binary refuses to start against it. To roll back past a
@@ -3577,7 +3851,9 @@ take the server out of service. Alert on the `error` log line, not on
 - **Release notes** are the `changelog/` directory: one dated entry per change,
   and one per milestone.
 - **Changesets survive** an upgrade: they are in the database. Open MCP
-  sessions do not; clients reconnect and carry on with the same handles.
+  sessions do not without `[redis]`; clients reconnect and carry on with the
+  same handles. With `[redis]` they do: another replica restores the session
+  from Redis, though a `GET /mcp` stream is lost and reopens.
 - **0.12.0 (web console)** adds no migration and no setting. It serves
   `/ui/` and `/api/v1/` on the existing port, and `/` now redirects to
   `/ui/` (it was 404). The ingress above routes them with no change. A proxy
