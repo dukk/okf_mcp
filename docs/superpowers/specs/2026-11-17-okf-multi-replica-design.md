@@ -123,13 +123,18 @@ The last two are not part of this milestone.
    one that does not decode, counts as absent and is counted as an error
    (`decode`). After a rolling deploy that changes a value's shape, the
    flow in progress restarts; nothing is misread.
-7. **No credential in a Redis key name, and none in an index value.** Every
+7. **No credential in a Redis key name, and none in an index value.**
+   No raw console session id is stored at all (the maintainer,
+   2026-11-17). A passkey registration or an OIDC link flow started from a
+   console session stores the session id's hash. It finishes only if the
+   finishing request's own session cookie hashes to it, and then uses that
+   request's own id. Every
    id a client presents (MCP session id, pending authorization id, flow
    cookie, ceremony cookie) is hashed (hex SHA-256) before it becomes part
    of a key, as authorization codes already are. Per-actor indexes store
    the hash of the entry they point to. Values hold what the flow needs,
    as in memory today: PKCE verifiers, nonces, CSRF tokens, WebAuthn
-   state. So Redis is a secret store, with the same trust as Postgres:
+   state, but never a raw console session id. So Redis is a secret store, with the same trust as Postgres:
    password-protected, private network, TLS where it crosses hosts.
 8. **The global caps go; the per-actor caps stay.**
    - `MAX_PENDING`, `MAX_AUTHORIZATION_CODES`, `MAX_FLOWS` and
@@ -210,7 +215,7 @@ The last two are not part of this milestone.
     - Session bindings are not removed on revocation: `require_key` refuses
       the revoked key on every instance once its cache has reloaded, and
       the bindings expire.
-13. **The CLI announces too.** A CLI command (`okf-mcp key revoke`, `user
+13. **The CLI announces too** (confirmed by the maintainer, 2026-11-17). A CLI command (`okf-mcp key revoke`, `user
     delete`, ...) changes Postgres directly. With `[redis]` set and its
     variable present, every command except `serve` publishes an empty
     announcement after it succeeds. Each instance then checks
@@ -272,6 +277,13 @@ The last two are not part of this milestone.
     - The two-instance tests run two `App`s, or two `TestServer`s, over one
       Postgres database and one Redis, with `poll_interval = 1h`. Anything
       that passes was carried by Redis, not by the poll.
+
+19. **`/healthz` reports Redis without changing its status** (the
+    maintainer, 2026-11-17). The body gains `"redis": "ok" | "unavailable"`,
+    or `null` without `[redis]`. It is probed with `PING` beside the database
+    probe, under the same deadline. The status code still follows the
+    database alone: a Redis outage would otherwise mark every replica unready
+    at once and empty the Service.
 
 ## Architecture
 

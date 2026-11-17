@@ -52,7 +52,7 @@
   - Every wait is bounded with `tokio::time::timeout` (`lessons.md`).
 - **Changelog.** One entry per task, `changelog/<UTC ts>-m16-task-<NN>-<slug>.md`, with `## Added`, `## Changed` and `## Notes`.
   - Take the timestamp from `date -u +%Y-%m-%dT%H-%M-%SZ`.
-  - Task 12 also writes the milestone changelog.
+  - Task 13 also writes the milestone changelog.
 - **The code in this plan has not been compiled.** If an implementation has to differ, fix this plan in the same PR (inline, or with a dated `> **Corrected (issue #N).**` note), then grep later tasks for the changed symbol. The exception is the Redis command snippets marked "(ran)" in Verified facts: they come from a probe crate that compiled and ran against Redis 7.4.
 - **Placeholders only** in tests and docs: `example.com`, `redis.example.internal`, `alice`. No real hostnames, registries, names or keys.
 - **Commit messages** end with the attribution line the coordinator gives.
@@ -198,7 +198,10 @@ Run with `Script::new(..).key(k).arg(expected).arg(new).invoke_async(&mut con)`,
 4. **OAuth access-token cache: a revocation counter in Redis, checked on every lookup** (the maintainer's first option). The counter is seeded randomly whenever it is missing, so losing it cannot repeat a value an instance has seen (review of PR #552). The backstop is a 60 s cache age while Redis is on. Pub/sub alone was rejected: messages are lost while a subscriber reconnects, and a revoked token must not survive that.
 5. **The 5-PR split, made finer** (the maintainer). The foundation is three tasks (1, 2, 3) and OAuth is three (6, 7, 8). The async conversion of `authorize.rs` gets its own task (8), and the CLI announcement too (4).
 6. **CAS `update` for `pending` and `codes`**, keeping `used`/`replayed`. **Per-actor caps as index keys.** **The idle TTL refreshed in `bind_session`** (the maintainer; spec Decisions 5, 8 and 11).
-7. **The plan PR is merged by the coordinator** after review. The epic and the sub-issues are filed after that, with the maintainer's acceptance.
+7. **Passkeys and OIDC link flows store only a hash of the console session id** (the maintainer, 2026-11-17). Redis never holds the raw console session id. A registration or a link flow started from a console session finishes only if the finishing request's own session cookie hashes to the stored value. It then uses that request's own session id: to keep it when the others end, or to identify it to the store. Tasks 9 and 10.
+8. **`/healthz` reports Redis without changing its status code** (the maintainer, 2026-11-17). The body gains a `redis` field: `"ok"`, `"unavailable"`, or `null` without `[redis]`. The status still follows the database alone, so a Redis outage does not mark every replica unready. It gets its own task, Task 11, since it is code with its own tests and the docs task is documentation only.
+9. **Every CLI command announces, as planned** (the maintainer, 2026-11-17), read-only ones included. Each instance then reads `admin_generation` once and reloads only if it moved. A list of mutating commands was rejected: it goes stale when commands are added. Task 4.
+10. **The plan PR is merged by the coordinator** after review. The epic and the sub-issues are filed after that, with the maintainer's acceptance.
 
 ## Simplifications and deviations relative to the issue
 
@@ -207,8 +210,8 @@ The spec already reflects each of these.
 - **Codes use `update`, not `take`.** `GETDEL` would drop the used code, and with it the replay detection that revokes the token family.
 - **Global caps are dropped in Redis**, kept in memory (spec Decision 8).
 - **Session bindings are not deleted on revocation.** The pub/sub reload makes `require_key` refuse the key on every instance (spec Decision 12). Deleting bindings per key would need a key-to-sessions index kept in step with every revocation path.
-- **Raw console session ids leave Redis values.** `LinkRequest.session_id` becomes the session's hash (Task 9), and the passkey `RegisterVia::Session` keeps its raw id only where `keep_sessions` needs it (Task 10; see the open question in Task 10).
-- **No Deployment under `examples/kubernetes/`** exists. The issue's "`examples/kubernetes`" Deployment is the one in `docs/operations.md`, which Task 11 changes.
+- **Raw console session ids leave Redis values.** `LinkRequest.session_id` (Task 9) and the passkey `RegisterVia::Session.session_id` (Task 10) become the session's hash. The finish matches the finishing request's cookie against it (Decision 7).
+- **No Deployment under `examples/kubernetes/`** exists. The issue's "`examples/kubernetes`" Deployment is the one in `docs/operations.md`, which Task 12 changes.
 - **`src/catalog.rs:177`'s comment is already right** and is not changed.
 
 ## Scope
@@ -225,19 +228,19 @@ The spec already reflects each of these.
 | 8 | OAuth pending authorizations on `Ephemeral` (the `authorize.rs` async conversion, idempotent closures); serde on `PendingAuthorization` and what it holds; the two-instance consent test |
 | 9 | OIDC flows and link flows on `Ephemeral`/`Index`; the hashed link session id; the two-instance callback test |
 | 10 | Passkey ceremonies and `by_session` on `Ephemeral`/`Index`; webauthn state serialization; two-instance registration and sign-in tests |
-| 11 | `docs/operations.md` (why one replica, Redis, multi-replica caveats, the Deployment), the server design note, the #357 note |
-| 12 | The two-process smoke test, README, milestone changelog |
+| 11 | `/healthz` reports Redis (`"redis": "ok" \| "unavailable" \| null`) without changing its status code |
+| 12 | `docs/operations.md` (why one replica, Redis, multi-replica caveats, the Deployment, the `/healthz` field), the server design note, the #357 note |
+| 13 | The two-process smoke test, README, milestone changelog |
 
 **Deliberately deferred**
 
 | Item | Where it goes |
 |---|---|
-| Shared rate limits (per-address, per-email, OIDC `link_starts`, OAuth buckets) | #357; Task 11 comments there that `shared::Redis` is the place |
+| Shared rate limits (per-address, per-email, OIDC `link_starts`, OAuth buckets) | #357; Task 12 comments there that `shared::Redis` is the place |
 | The mail worker with N replicas | #458 |
 | Pub/sub invalidation of catalog snapshots (read lag up to `poll_interval`) | not planned; documented |
 | SSE resumption (`EventStore`) | not planned |
 | Redis Cluster or Sentinel | not planned; documented as unsupported |
-| A Redis field in `/healthz` | open question (end of plan) |
 
 ## File map
 
@@ -253,7 +256,7 @@ The spec already reflects each of these.
 | `src/telemetry/metrics.rs` | 1 (`okf.redis.errors`, `RedisOp`) |
 | `src/app.rs` | 1 (`redis` field, `load_with_redis`), 3 (`reload_keys_now`, `catch_up_keys`, announce flag), 5 (`sessions` type), 6 (`OAuth::new` arg), 9 (`OidcProviders::new` arg), 10 (`Passkeys::new` arg) |
 | `src/cli.rs` | 1 (crypto provider install in `serve`), 4 (announce in `dispatch`) |
-| `src/http/mod.rs` | 3 (spawn the subscriber in `serve`), 5 (`mcp_service` session store) |
+| `src/http/mod.rs` | 3 (spawn the subscriber in `serve`), 5 (`mcp_service` session store), 11 (`/healthz`) |
 | `src/http/sessions.rs` | 5 |
 | `src/oauth/mod.rs` | 6 (`AccessTokens::new(redis)`, `OAuth::new(config, redis)`), 7 (`codes`), 8 (`pending`) |
 | `src/oauth/access.rs` | 6 |
@@ -272,10 +275,10 @@ The spec already reflects each of these.
 | `tests/server.rs` | 5 (use the moved helpers) |
 | `tests/multi_replica.rs` | 3 (create), 5 |
 | `tools/agentic/lessons.md` | 2 |
-| `docs/operations.md` | 1 ("Why one replica" correction), 11 |
-| `docs/superpowers/specs/2026-10-26-okf-mcp-server-design.md` | 11 |
+| `docs/operations.md` | 1 ("Why one replica" correction), 12 |
+| `docs/superpowers/specs/2026-10-26-okf-mcp-server-design.md` | 12 |
 | `docs/superpowers/specs/2026-11-17-okf-multi-replica-design.md` | any task that corrects it |
-| `README.md`, `changelog/*-m16-milestone.md` | 12 |
+| `README.md`, `changelog/*-m16-milestone.md` | 13 |
 | `changelog/` | every task |
 
 ## Task dependencies
@@ -284,12 +287,12 @@ Each line is `task (the tasks it needs)`. A task starts when every task in its p
 
 ```
 wave 1:  1 ()
-wave 2:  2 (1)        3 (1)
+wave 2:  2 (1)        3 (1)        11 (1)
 wave 3:  4 (3)   5 (2, 3)   6 (3)   9 (2)   10 (2)
 wave 4:  7 (2, 6)
 wave 5:  8 (7)
-wave 6:  11 (2, 3, 4, 5, 6, 7, 8, 9, 10)
-wave 7:  12 (all)
+wave 6:  12 (2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+wave 7:  13 (all)
 ```
 
 Why each edge, and the shared files to merge with care:
@@ -303,7 +306,8 @@ Why each edge, and the shared files to merge with care:
 - **9 and 10 need 2** (`Ephemeral`, `Index`). They are lib-level two-`App` tests (Task 1's helper), so they don't need 3. 9 and 10 both change one constructor line in `src/app.rs`: keep both.
 - **7 needs 2 and 6.** It needs `Ephemeral`, and its cross-instance exchange relies on 6's grant catch-up. 6 and 7 both edit `src/oauth/mod.rs` and `token.rs`.
 - **8 needs 7.** Both edit `src/oauth/authorize.rs` and `src/oauth/state.rs`, and 8's consent test exchanges a code across instances.
-- **11 needs every feature task,** so the docs describe what shipped. **12 is last.**
+- **11 needs only 1** (`App::redis`). It edits `healthz` in `src/http/mod.rs`, which 3 and 5 also edit (`serve`, `mcp_service`): different functions, so keep both sides.
+- **12 needs every feature task,** so the docs describe what shipped. **13 is last.**
 
 ---
 
@@ -760,13 +764,13 @@ pub(crate) async fn replica_pair(
 ) -> (TestApp, Arc<App>, crate::db::redis_support::TestRedis)
 ```
 
-The first `TestApp` owns the database. The second `App` gets its own pool on `db.url`, through `App::load_with_redis(.., Some(redis.connect(..)))` for each. Also add `TestApp::app_with_redis(config)`, a single app with Redis.
+The first `TestApp` owns the database. The second `App` gets its own pool on `db.url`, through `App::load_with_redis(.., Some(redis.connect(..)))` for each. Also add `app_with_redis(config: Config) -> (TestApp, TestRedis)`, a single app with Redis (its `TestRedis` returned for the test to hold, or to stop).
 
 - [ ] **Step 10: `serve` and the docs correction**
 
 `src/cli.rs` `serve` needs no change: `App::load` connects. Check that a `[redis]` failure surfaces as `load the catalogs: [redis]: ...`.
 
-In `docs/operations.md:18-20`, replace the publish-lock sentence: "**Why one replica:** short-lived state lives in the process's memory: MCP sessions and their key bindings, OAuth consent pages and codes, OIDC and passkey sign-ins in progress. A request that lands on another replica would not find it. Publishing is safe across processes (a Postgres advisory lock orders publishes of a catalog). Milestone 16 adds `[redis]` to share that state." Task 11 rewrites the section fully.
+In `docs/operations.md:18-20`, replace the publish-lock sentence: "**Why one replica:** short-lived state lives in the process's memory: MCP sessions and their key bindings, OAuth consent pages and codes, OIDC and passkey sign-ins in progress. A request that lands on another replica would not find it. Publishing is safe across processes (a Postgres advisory lock orders publishes of a catalog). Milestone 16 adds `[redis]` to share that state." Task 12 rewrites the section fully.
 
 - [ ] **Step 11: Gates, changelog, commit**
 
@@ -1727,12 +1731,16 @@ let pending = oauth.pending.update(&form.pending, now, |pending| {
 - `a_flow_finishes_once_across_replicas`: replay the same callback on A after B → refused.
 - `a_link_flow_replaces_the_sessions_previous_one_across_replicas`: start link flows for one session on A, then on B. The first flow's callback fails, and the index is one key.
 - `no_raw_session_id_reaches_redis`: after a link start, scan the prefix's keys and values (`KEYS`, `GET`). None contains the raw console session id.
+- `a_link_flow_finishes_only_in_the_session_that_started_it`: start a link flow in session S1, then send the callback with S1's flow cookie but another session S2's console cookie, on the other replica. It is refused, and nothing is linked. With S1's cookie it links, and S1 is the session kept. Also run this test on memory: the hash comparison replaces the raw comparison on both variants.
 - The existing `flows.len()` test (`src/http/oidc.rs:1025`) stays on memory.
 
 - [ ] **Step 2: Implement**
 
 - `Flow`, `FlowSecrets` and `LinkRequest` derive `Serialize, Deserialize`, keeping their redacting `Debug`.
-- **`LinkRequest.session_id` becomes `session_hash`.** The callback compares `URL_SAFE_NO_PAD.encode(keys::hash(cookie))` with it, and ends the other sessions by hash. Check `user_sessions`' API. If it needs the raw id to keep one session, find it by hash (sessions are stored hashed); if that is impossible, stop and report.
+- **`LinkRequest.session_id` becomes `session_hash`** (Decision 7): `URL_SAFE_NO_PAD.encode(keys::hash(session_id))`, the same form `by_session` and `link_flows` already use as keys.
+  - The callback reads the finishing request's own console session. It refuses the flow unless that session's id hashes to `session_hash`, with the same refusal as today's mismatch.
+  - It then passes that request's raw session id, not a stored one, wherever the store needs it (keeping it when the others end).
+  - This is the same mechanism as Task 10's.
 - `flows` becomes `Ephemeral<Flow>` (`Keyspace::OidcFlow`, `FLOW_TTL`, `MAX_FLOWS`), and `link_flows` becomes `Index` (`IndexSpace::OidcLink`).
 - `store_flow` becomes `async` and returns `Result<bool, OkfError>`. A `Swap::Swapped(Some(stale))` is removed with `flows.remove_stale`, and `Swap::Full` removes the new flow and returns `false`, as today.
 - `OidcProviders::new(config, env, redis: Option<&Redis>)`.
@@ -1753,6 +1761,12 @@ let pending = oauth.pending.update(&form.pending, now, |pending| {
 - `a_registration_begun_on_one_replica_finishes_on_the_other`: register by setup link (`register_by_setup`, `:1052`), with the start on A and the finish on B. The passkey is stored and signs in.
 - `a_sign_in_begun_on_one_replica_finishes_on_the_other`: `alice_with_passkey`, then the start on A and the finish on B → session.
 - `a_ceremony_cannot_be_finished_twice_across_replicas`: finish on B, then post the same assertion with the same cookie to A → 410 `CEREMONY_EXPIRED`.
+- `a_session_registration_finishes_only_in_the_session_that_started_it`:
+  1. Start a registration in console session S1 on A.
+  2. Finish on B with S1's ceremony cookie but session S2's console cookie: 403, "this passkey request belongs to another session", no passkey stored, and S2's ceremony is not consumed for S1.
+  3. Restart in S1 and finish with S1's cookie: 201, and with `keep_sessions: false` every session but S1 ends.
+  4. Run it on memory too.
+- `no_raw_session_id_reaches_redis`: after a session registration starts, no Redis key or value contains the raw console session id.
 - `one_sessions_registrations_hold_one_ceremony_across_replicas`: start registrations for one console session on A, then on B. The first ceremony's finish fails, and the prefix holds one `passkey:ceremony:*` and one `passkey:session:*` key.
 - The memory tests (`one_actors_repeated_starts_hold_one_ceremony`, `:1648`, and the expiry test, `:1320`) stay on memory, unchanged apart from `.await`.
 
@@ -1763,7 +1777,11 @@ let pending = oauth.pending.update(&form.pending, now, |pending| {
 - `ceremonies` becomes `Ephemeral<Ceremony>` (`Keyspace::PasskeyCeremony`, `CEREMONY_TTL`, `MAX_CEREMONIES`), and `by_session` becomes `Index` (`IndexSpace::PasskeySession`).
 - `remember` and `take_ceremony` become `async` with `Result`, and their call sites (`:513, :539, :726, :834`) gain `.await`. `take_ceremony` uses `take` (`GETDEL`).
 - `Passkeys::new(config, redis: Option<&Redis>)`.
-- **Open question for this task:** `RegisterVia::Session { session_id }` is the raw console session id, used at finish to keep that session when the others end. Prefer a hash, as in Task 9. If the finish needs the raw id, keep it, document it in the spec's Privacy section, and add it to the end-of-plan open questions.
+- **`RegisterVia::Session { session_id }` becomes `session_hash`** (Decision 7): `URL_SAFE_NO_PAD.encode(keys::hash(session_id))`, the form `session_key` (`:366-373`) already computes for `by_session`.
+  - `session_key` returns the stored hash directly.
+  - At finish (`:946-958`), the check `session_id != session.id` becomes `session_hash != URL_SAFE_NO_PAD.encode(keys::hash(&session.id))`. `session` is the finishing request's own console session, from `signed_in`.
+  - `SessionRegistration.session_id` is then `&session.id`, the request's own raw id, never a stored one.
+  - No raw console session id is stored, in memory or in Redis.
 
 - [ ] **Step 3: Gates, changelog, commit**
 
@@ -1771,7 +1789,59 @@ let pending = oauth.pending.update(&form.pending, now, |pending| {
 
 ---
 
-### Task 11: Operations docs for multi-replica serve
+### Task 11: `/healthz` reports Redis
+
+**Files:** Modify `src/http/mod.rs` (`Health`, `healthz`, its tests).
+
+- [ ] **Step 1: Write the failing tests** (`src/http/mod.rs` tests)
+
+```rust
+#[tokio::test(flavor = "multi_thread")]
+async fn healthz_without_redis_reports_null_and_keeps_its_status() {
+    let test = app_with(&[("pg", &[])], Config::default()).await;
+    let router = router(Arc::clone(&test.app), &CancellationToken::new());
+    let response = router.oneshot(Request::get("/healthz").body(Body::empty()).expect("request")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    // The key is present and null (lessons.md: check the key, not `body["redis"]`).
+    assert_eq!(body.get("redis"), Some(&serde_json::Value::Null));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn healthz_reports_redis_without_changing_its_status() {
+    let (test, redis) = app_with_redis(Config::default()).await; // Task 1's helper
+    let router = router(Arc::clone(&test.app), &CancellationToken::new());
+    let get = || Request::get("/healthz").body(Body::empty()).expect("request");
+    let up = json_body(router.clone().oneshot(get()).await.unwrap()).await;
+    assert_eq!(up["redis"], "ok");
+    if redis.stop().await.is_none() {
+        eprintln!("shared TEST_REDIS_URL: the outage half of this test is skipped");
+        return;
+    }
+    let response = router.oneshot(get()).await.unwrap();
+    // A Redis outage never makes the replica unready: the database decides.
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json_body(response).await["redis"], "unavailable");
+}
+```
+
+- Update the existing exact-body test (`healthz_reports_an_unreachable_database_as_503`, `:1107-1122`) to include `"redis": null`.
+- Run `gate.sh narrow --lib -- http::tests::healthz`. Expect failures.
+
+- [ ] **Step 2: Implement**
+
+- `Health` gains `redis: Option<&'static str>`, documented as "`"ok"` or `"unavailable"`; `null` without `[redis]`. It never changes the status."
+- `healthz` probes with `PING` under the same `HEALTH_TIMEOUT` as the database. Run the two probes concurrently with `tokio::join!`, so the route's deadline is unchanged.
+- A failed or late `PING` is `"unavailable"`, counted as `RedisOp::Get` through `redis.failed` (rename the operation if a `Ping` variant reads better, and fix Task 1's list).
+- The status code still follows the database alone, and the doc comment says so.
+
+- [ ] **Step 3: Gates, changelog, commit**
+
+`feat: /healthz reports Redis without changing its status (M16 Task 11)`.
+
+---
+
+### Task 12: Operations docs for multi-replica serve
 
 **Files:** Modify `docs/operations.md`, `docs/superpowers/specs/2026-10-26-okf-mcp-server-design.md`.
 
@@ -1800,6 +1870,7 @@ let pending = oauth.pending.update(&form.pending, now, |pending| {
   - `replicas: 1` gets a comment naming the real reason;
   - a second, commented variant with `[redis]`: `replicas: 2`, `strategy: RollingUpdate`, the `OKF_REDIS_URL` env from a Secret;
   - a note that the Service needs no session affinity.
+- **Health (section 7)** documents the `redis` field, and that it never changes the status code (Decision 8).
 - **The metric reference** gains `okf.redis.errors`, and the span reference the Redis spans.
 
 - [ ] **Step 2: The server design**
@@ -1812,11 +1883,11 @@ Comment on #357: the shared Redis handle (`shared::Redis`, `App::redis`) exists 
 
 - [ ] **Step 4: Gates, changelog, commit**
 
-`docs: running several replicas with Redis (M16 Task 11)`.
+`docs: running several replicas with Redis (M16 Task 12)`.
 
 ---
 
-### Task 12: Smoke test, README, milestone changelog
+### Task 13: Smoke test, README, milestone changelog
 
 **Files:** Modify `README.md`; create `changelog/<ts>-m16-milestone.md`.
 
@@ -1842,7 +1913,7 @@ Summarise the tasks, the decisions, the deviations (including every `Corrected` 
 
 - [ ] **Step 4: Gates, commit**
 
-`docs: multi-replica serve close-out (M16 Task 12)`.
+`docs: multi-replica serve close-out (M16 Task 13)`.
 
 ---
 
@@ -1856,7 +1927,8 @@ Summarise the tasks, the decisions, the deviations (including every `Corrected` 
   - Decision 16: Tasks 2, 3, 5 and 6, and the outage tests.
   - Decision 17: Tasks 1 and 2, and every Redis call's span.
   - Decision 18: Task 1.
-  - Docs: Tasks 1 and 11.
+  - Decision 19 (`/healthz`): Task 11.
+  - Docs: Tasks 1 and 12.
 - **The issue's acceptance criteria.**
   - Unchanged without `[redis]`: every task's memory tests.
   - The two-instance MCP session: Task 5.
@@ -1868,7 +1940,7 @@ Summarise the tasks, the decisions, the deviations (including every `Corrected` 
   - Expiry: Tasks 2, 5, 7 and 8.
   - Start-up refusal without the URL in the message: Task 1.
   - Testcontainers Redis: Task 1.
-  - Docs: Task 11.
+  - Docs: Task 12.
   - The gates: every task.
 - **Names used across tasks:**
   - `shared::Redis` (`connect`, `key`, `channel`, `connection`, `client`, `failed`, `undecodable`, `count`) and `shared::hashed`;
@@ -1880,8 +1952,4 @@ Summarise the tasks, the decisions, the deviations (including every `Corrected` 
 
 ## Open questions for the maintainer
 
-1. **Passkey registration and the raw session id (Task 10).** If finishing a session-started registration needs the raw console session id, it sits in a Redis value for up to 5 minutes. Accept that, or require the finish to work from the hash?
-2. **`/healthz` and Redis.** Should `/healthz` report Redis (`"redis": "ok" | "unavailable"`)? It is not in this plan.
-   - If it also made the pod unready, a Redis outage would take every replica out of the Service, including for clients that could still be served after a re-initialize.
-   - The recommendation is to report it without affecting the status code, as a small follow-up.
-3. **The CLI announces after every command** (Task 4), read-only ones included. Each instance then does one `admin_generation` read. The alternative is a list of mutating commands, which goes stale when commands are added. Keep it simple, as planned?
+None. The three questions raised during planning were answered on 2026-11-17 and are recorded as Decisions 7, 8 and 9 above.
