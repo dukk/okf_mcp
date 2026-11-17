@@ -3943,15 +3943,17 @@ It rejects non-stable or non-increasing versions and existing local or remote
 version tags before changing versioned files. cargo-release bumps `Cargo.toml`
 and `Cargo.lock`; its hook updates the four pinned image version mentions in
 this document, writes `changelog/<UTC-timestamp>-release-v<version>.md` from
-committed history since the latest reachable stable tag, and runs `just fmt`,
-`just lint`, and `just test`. These checks respect `RUST_TEST_THREADS` if set.
+committed history since the latest reachable stable tag. It runs no checks:
+preparation is local and publishes nothing, and shipping runs them on the same
+tree.
 One local `chore: Release v<version>` commit and a marked annotated version tag
 are created. Nothing is pushed or published to crates.io.
 
 Shipping checks that `HEAD` is that prepared, single-parent commit and its
 annotated tag matches the package version. A published tag is always refused.
-Before opening or reusing `release/v<version>`'s PR, it reruns the three local
-checks. **There is no PR CI configured:** this is local validation, not a claim
+Before opening or reusing `release/v<version>`'s PR, it runs `just fmt`,
+`just lint`, and `just test`, the only checks a release gets (they respect
+`RUST_TEST_THREADS` if set). **There is no PR CI configured:** this is local validation, not a claim
 that absent CI passed. The script does not wait for nonexistent checks. A
 conflicting remote release branch, ambiguous/closed PR, API failure, or main
 moving before merge stops shipping without cleanup. Branch creation uses an
