@@ -17,6 +17,9 @@ Issue #607, part of epic #597.
 - Browser tests: the header label and the option text versus value
   (`login.rs`), the display-name edit and an 81-character refusal, and
   the owner and plain-member views of "Teams you own" (`account.rs`).
+- A failed `/labels` refresh (503) after a successful read: the console stays
+  open, no error toast, and the catalog options fall back to the slug for
+  text and value, so stale labels are cleared (`login.rs`).
 
 ## Changed
 
