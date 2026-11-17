@@ -106,7 +106,7 @@ async fn a_user_deleted_on_one_replica_loses_access_on_the_other() {
     let (a, b, admin) = pair(&redis).await;
     let user = NewUser {
         name: "alice",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
     };
     users::create(&a.db.pool, &user, &AuditActor::cli(), Utc::now())
         .await

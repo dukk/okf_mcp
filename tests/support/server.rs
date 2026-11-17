@@ -59,7 +59,7 @@ pub async fn migrate_with_owner(pool: &PgPool) {
     okf_mcp::db::migrate(pool).await.expect("migrations");
     let owner = users::NewUser {
         name: OWNER,
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
     };
     users::create(pool, &owner, &AuditActor::cli(), Utc::now())
         .await
@@ -236,6 +236,7 @@ impl TestServer {
                 &db.pool,
                 &okf_mcp::store::catalogs::NewCatalog {
                     name,
+                    display_name: &okf_mcp::labels::DisplayName::default(),
                     description: "",
                     owner_team: OWNER,
                 },
@@ -426,7 +427,7 @@ impl TestServer {
             pool,
             &users::NewUser {
                 name,
-                display_name: "",
+                display_name: &okf_mcp::labels::DisplayName::default(),
             },
             &AuditActor::cli(),
             Utc::now(),

@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::error::OkfError;
+use crate::labels::DisplayName;
 use crate::okf::ops::starter_files;
 use crate::okf::snapshot::Snapshot;
 use crate::okf::workspace::{MemWorkspace, StoredFile};
@@ -29,6 +30,8 @@ pub struct Catalog {
     pub id: i64,
     /// Unique name, `[a-z0-9-]+`.
     pub name: String,
+    /// Its display name; empty when unset.
+    pub display_name: String,
     /// Free text.
     pub description: String,
     /// Bumped by every publish and import.
@@ -44,7 +47,7 @@ pub struct Catalog {
 // each query's tail at compile time; see `select_users!` in users.rs).
 macro_rules! select_catalogs {
     () => {
-        "SELECT c.id, c.name, c.description, c.generation, c.created_at, \
+        "SELECT c.id, c.name, c.display_name, c.description, c.generation, c.created_at, \
                 (SELECT t.name FROM teams t WHERE t.id = c.owner_team_id) AS owner_team \
          FROM catalogs c"
     };
@@ -70,6 +73,9 @@ pub fn is_valid_name(name: &str) -> bool {
 pub struct NewCatalog<'a> {
     /// The new catalog's name, `[a-z0-9-]+`.
     pub name: &'a str,
+    /// Its display name (empty when unset), validated by
+    /// [`DisplayName::parse`].
+    pub display_name: &'a DisplayName,
     /// Free text.
     pub description: &'a str,
     /// The name of the team that owns it.
@@ -105,6 +111,7 @@ pub async fn create(
 ) -> Result<Catalog, OkfError> {
     let NewCatalog {
         name,
+        display_name,
         description,
         owner_team,
     } = *new;
@@ -131,15 +138,17 @@ pub async fn create(
     // new row, but the owner's name is the one just resolved: hand it back
     // as `$5`.
     let inserted = sqlx::query_as::<_, Catalog>(
-        "INSERT INTO catalogs (name, description, created_at, owner_team_id) \
-         VALUES ($1, $2, $3, $4) \
-         RETURNING id, name, description, generation, created_at, $5::text AS owner_team",
+        "INSERT INTO catalogs (name, description, created_at, owner_team_id, display_name) \
+         VALUES ($1, $2, $3, $4, $6) \
+         RETURNING id, name, display_name, description, generation, created_at, \
+                   $5::text AS owner_team",
     )
     .bind(name)
     .bind(description)
     .bind(now)
     .bind(&team_id)
     .bind(owner_team)
+    .bind(display_name.as_str())
     // `&mut *tx` borrows the transaction's connection: the query runs inside it.
     .fetch_one(&mut *tx)
     .await;
@@ -963,6 +972,77 @@ pub(crate) mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn create_stores_the_display_name_and_find_reads_it() {
+        // Arrange
+        let db = test_db().await;
+        let display = DisplayName::parse("Work notes").unwrap();
+
+        // Act
+        let row = create(
+            &db.pool,
+            &NewCatalog {
+                name: "m-0000000000000001",
+                display_name: &display,
+                description: "",
+                owner_team: TEST_TEAM,
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+
+        // Assert: both the `RETURNING` row and a later read carry it.
+        assert_eq!(row.display_name, "Work notes");
+        let found = find(&db.pool, "m-0000000000000001").await.unwrap();
+        assert_eq!(found.display_name, "Work notes");
+        let listed = list(&db.pool).await.unwrap();
+        assert_eq!(listed[0].display_name, "Work notes");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_database_refuses_an_over_long_display_name_on_every_table() {
+        // Arrange: a user and its personal team (the fixture), and a catalog.
+        let db = test_db().await;
+        create(
+            &db.pool,
+            &NewCatalog {
+                name: "pg",
+                display_name: &DisplayName::default(),
+                description: "",
+                owner_team: TEST_TEAM,
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+
+        // `AssertSqlSafe`: `table` is one of the literals below.
+        for table in ["users", "teams", "catalogs"] {
+            // Act and assert: 80 characters fit (`char_length` counts
+            // characters, so 80 two-byte ones do too); 81 are refused.
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE {table} SET display_name = repeat('\u{e9}', 80)"
+            )))
+            .execute(&db.pool)
+            .await
+            .unwrap_or_else(|error| panic!("{table}: 80 characters should fit: {error}"));
+            let refused = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE {table} SET display_name = repeat('x', 81)"
+            )))
+            .execute(&db.pool)
+            .await;
+            let error = refused.expect_err("the CHECK should refuse 81 characters");
+            assert_eq!(
+                error.as_database_error().and_then(|e| e.constraint()),
+                Some(format!("{table}_display_name_length").as_str()),
+                "{table}"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn create_list_and_find() {
         let db = test_db().await;
         // Read first: the fixture user already bumped the generation.
@@ -972,6 +1052,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "pgrace's catalog",
                 owner_team: TEST_TEAM,
             },
@@ -984,6 +1065,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "aa-work",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1020,6 +1102,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "pgrace's catalog",
                 owner_team: TEST_TEAM,
             },
@@ -1081,6 +1164,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1104,6 +1188,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: "nobody",
             },
@@ -1125,7 +1210,7 @@ pub(crate) mod tests {
         let db = test_db().await;
         let alice = crate::store::users::NewUser {
             name: "alice",
-            display_name: "",
+            display_name: &DisplayName::default(),
         };
         crate::store::users::create(&db.pool, &alice, &AuditActor::cli(), now())
             .await
@@ -1134,6 +1219,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1193,6 +1279,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1231,6 +1318,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "copy",
                 owner_team: TEST_TEAM,
             },
@@ -1272,6 +1360,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "start",
                 owner_team: TEST_TEAM,
             },
@@ -1337,6 +1426,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1353,6 +1443,7 @@ pub(crate) mod tests {
                         &db.pool,
                         &NewCatalog {
                             name,
+                            display_name: &DisplayName::default(),
                             description: "",
                             owner_team: TEST_TEAM
                         },
@@ -1369,6 +1460,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1392,6 +1484,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1441,6 +1534,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1473,6 +1567,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1555,7 +1650,7 @@ pub(crate) mod tests {
         let db = test_db().await;
         let family = crate::store::teams::NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &DisplayName::default(),
             owner: crate::db::TEST_USER,
         };
         crate::store::teams::create(&db.pool, &family, &AuditActor::cli(), now())
@@ -1574,6 +1669,7 @@ pub(crate) mod tests {
                 &pool,
                 &NewCatalog {
                     name: "pg",
+                    display_name: &DisplayName::default(),
                     description: "",
                     owner_team: "family",
                 },
@@ -1604,6 +1700,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1644,6 +1741,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1703,6 +1801,7 @@ pub(crate) mod tests {
     async fn seed(pool: &PgPool, name: &str) -> Catalog {
         let new = NewCatalog {
             name,
+            display_name: &DisplayName::default(),
             description: "",
             owner_team: TEST_TEAM,
         };
@@ -1713,7 +1812,7 @@ pub(crate) mod tests {
     async fn family(pool: &PgPool) {
         let team = crate::store::teams::NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &DisplayName::default(),
             owner: crate::db::TEST_USER,
         };
         crate::store::teams::create(pool, &team, &AuditActor::cli(), now())
@@ -1869,6 +1968,7 @@ pub(crate) mod tests {
         let actor = AuditActor::cli();
         let new = NewCatalog {
             name: "other",
+            display_name: &DisplayName::default(),
             description: "",
             owner_team: TEST_TEAM,
         };
@@ -1925,7 +2025,7 @@ pub(crate) mod tests {
     async fn join_test_team(pool: &PgPool, name: &str, role: crate::store::teams::Role) -> String {
         let user = crate::store::users::NewUser {
             name,
-            display_name: "",
+            display_name: &DisplayName::default(),
         };
         crate::store::users::create(pool, &user, &AuditActor::cli(), now())
             .await

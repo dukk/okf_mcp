@@ -2038,7 +2038,7 @@ mod tests {
             test.app.pool(),
             &NewUser {
                 name,
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             },
             &AuditActor::cli(),
             Utc::now(),

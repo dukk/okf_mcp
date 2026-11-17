@@ -242,8 +242,12 @@ mod tests {
         use crate::store::catalogs::{self, NewCatalog};
         let db = test_db().await;
         let cli = AuditActor::cli();
+        // A local the closure borrows: a temporary made inside it would be
+        // dropped when it returns, leaving the struct's reference dangling.
+        let unset = crate::labels::DisplayName::default();
         let main = |owner_team| NewCatalog {
             name: "main",
+            display_name: &unset,
             description: "",
             owner_team,
         };
@@ -252,7 +256,7 @@ mod tests {
             .unwrap();
         let bob = crate::store::users::NewUser {
             name: "bob",
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
         };
         crate::store::users::create(&db.pool, &bob, &cli, chrono::Utc::now())
             .await
@@ -301,6 +305,7 @@ mod tests {
         for name in ["main", "quiet"] {
             let new = NewCatalog {
                 name,
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: TEST_USER,
             };
@@ -309,7 +314,7 @@ mod tests {
         for name in ["bob", "staff"] {
             let user = NewUser {
                 name,
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             };
             users::create(&db.pool, &user, &cli, now).await.unwrap();
         }

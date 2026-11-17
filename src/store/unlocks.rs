@@ -837,7 +837,7 @@ mod tests {
     async fn admin(pool: &PgPool, name: &str) {
         let user = NewUser {
             name,
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
         };
         users::create(pool, &user, &AuditActor::cli(), now())
             .await
@@ -861,6 +861,7 @@ mod tests {
             .unwrap();
         let main = NewCatalog {
             name: "main",
+            display_name: &crate::labels::DisplayName::default(),
             description: "",
             owner_team: TEST_TEAM,
         };

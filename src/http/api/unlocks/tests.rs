@@ -19,7 +19,7 @@ async fn admin_user_key(test: &TestApp, user: &str, name: &str, grants: Grants<'
     if users::find(pool, user).await.is_err() {
         let new = NewUser {
             name: user,
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
         };
         users::create(pool, &new, &AuditActor::cli(), Utc::now())
             .await

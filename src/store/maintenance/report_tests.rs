@@ -427,6 +427,7 @@ async fn maintenance_report_pages_are_catalog_scoped() {
         &db.pool,
         &crate::store::catalogs::NewCatalog {
             name: "foreign",
+            display_name: &crate::labels::DisplayName::default(),
             description: "",
             owner_team: crate::db::TEST_TEAM,
         },

@@ -844,6 +844,7 @@ mod tests {
                 &db.pool,
                 &crate::store::catalogs::NewCatalog {
                     name,
+                    display_name: &crate::labels::DisplayName::default(),
                     description: "",
                     owner_team: crate::db::TEST_TEAM,
                 },
@@ -1493,6 +1494,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "main",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -1744,7 +1746,7 @@ mod tests {
         let db = test_db().await;
         let alice = users::NewUser {
             name: "alice",
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
         };
         users::create(&db.pool, &alice, &AuditActor::cli(), now())
             .await

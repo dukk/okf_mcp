@@ -53,6 +53,7 @@ use crate::http::api::{
     require_admin, require_every_catalog, require_manager, require_reader, settle,
 };
 use crate::http::AppError;
+use crate::labels::DisplayName;
 use crate::mail::invite;
 use crate::store::audit::AuditActor;
 use crate::store::ceiling::{self, Entitlement, NewEntitlement};
@@ -337,7 +338,8 @@ pub(crate) struct UnassignedView {
 struct CreateUserBody {
     /// `[a-z0-9-]+`, not taken by a user or team.
     name: String,
-    /// Free text; empty when left out.
+    /// Its display name, checked by [`DisplayName::parse`]; empty when left
+    /// out.
     #[serde(default)]
     display_name: String,
 }
@@ -348,7 +350,8 @@ struct CreateUserBody {
 struct CreateTeamBody {
     /// `[a-z0-9-]+`, not taken by a user or team.
     name: String,
-    /// Free text; empty when left out.
+    /// Its display name, checked by [`DisplayName::parse`]; empty when left
+    /// out.
     #[serde(default)]
     display_name: String,
     /// The user who is its first owner (required; must exist).
@@ -495,7 +498,9 @@ async fn list_users(
 ///
 /// # Errors
 /// 403 unless the key is an admin reaching every catalog; 409 for an invalid
-/// or taken name; 422 for a body without `name`; 500 for a database failure.
+/// or taken name; 422 for a body without `name` or a refused `display_name`
+/// (over 80 characters, or holding a control character or line break); 500
+/// for a database failure.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn create_user(
     State(app): State<Arc<App>>,
@@ -504,9 +509,12 @@ async fn create_user(
     Json(body): Json<CreateUserBody>,
 ) -> Result<(StatusCode, Json<UserView>), AppError> {
     require_manager(&principal)?;
+    // Validated before the store sees it: a refused name is a 422 that
+    // writes nothing.
+    let display_name = DisplayName::parse(&body.display_name)?;
     let new = NewUser {
         name: &body.name,
-        display_name: &body.display_name,
+        display_name: &display_name,
     };
     let created = users::create(app.pool(), &new, &actor, app.clock().now()).await?;
     settle(&app).await;
@@ -914,7 +922,7 @@ async fn list_teams(
 /// # Errors
 /// 403 unless the key is an admin reaching every catalog; 404 for an unknown
 /// owner; 409 for an invalid or taken name; 422 for a body without `name` or
-/// `owner`; 500 for a database failure.
+/// `owner`, or a refused `display_name`; 500 for a database failure.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn create_team(
     State(app): State<Arc<App>>,
@@ -923,9 +931,10 @@ async fn create_team(
     Json(body): Json<CreateTeamBody>,
 ) -> Result<(StatusCode, Json<TeamView>), AppError> {
     require_manager(&principal)?;
+    let display_name = DisplayName::parse(&body.display_name)?;
     let new = NewTeam {
         name: &body.name,
-        display_name: &body.display_name,
+        display_name: &display_name,
         owner: &body.owner,
     };
     let created = teams::create(app.pool(), &new, &actor, app.clock().now()).await?;
@@ -1975,6 +1984,50 @@ mod tests {
             let (status, answer) = send(&test, method, &uri, Some(&root), body).await;
             assert_eq!(status.as_u16(), 404, "{method} {uri}: {answer}");
         }
+    }
+
+    #[tokio::test]
+    async fn user_and_team_creates_parse_the_display_name() {
+        // Arrange
+        let test = app().await;
+        let root = every_catalog_admin(&test).await;
+        let too_long = "x".repeat(81);
+
+        // Act: a name the rule trims, then one too long for each create.
+        let (created, user) = send(
+            &test,
+            "POST",
+            "/api/v1/users",
+            Some(&root),
+            Some(json!({"name": "alice", "display_name": " Alice Example\t"})),
+        )
+        .await;
+        let (user_refused, user_error) = send(
+            &test,
+            "POST",
+            "/api/v1/users",
+            Some(&root),
+            Some(json!({"name": "bob", "display_name": too_long})),
+        )
+        .await;
+        let (team_refused, team_error) = send(
+            &test,
+            "POST",
+            "/api/v1/teams",
+            Some(&root),
+            Some(json!({"name": "family", "display_name": too_long, "owner": "alice"})),
+        )
+        .await;
+        let (no_bob, _) = send(&test, "GET", "/api/v1/users/bob", Some(&root), None).await;
+        let (no_family, _) = send(&test, "GET", "/api/v1/teams/family", Some(&root), None).await;
+
+        // Assert: stored trimmed; each refusal is a 422 that wrote nothing.
+        assert_eq!(created.as_u16(), 201, "{user}");
+        assert_eq!(user["display_name"], "Alice Example");
+        assert_eq!(user_refused.as_u16(), 422, "{user_error}");
+        assert_eq!(team_refused.as_u16(), 422, "{team_error}");
+        assert_eq!(no_bob.as_u16(), 404);
+        assert_eq!(no_family.as_u16(), 404);
     }
 
     #[tokio::test]

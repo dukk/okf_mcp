@@ -37,6 +37,7 @@ async fn credential_audit_changes_noops_refusals_and_scopes() {
             &db.pool,
             &catalogs::NewCatalog {
                 name,
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -325,6 +326,7 @@ async fn assert_snapshot_mismatch_refuses_revoke(change: SnapshotChange) {
             &db.pool,
             &catalogs::NewCatalog {
                 name,
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -561,6 +563,7 @@ async fn grant_and_ungrant_by_id_name_an_oauth_grant_as_a_grant() {
             &db.pool,
             &catalogs::NewCatalog {
                 name,
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },

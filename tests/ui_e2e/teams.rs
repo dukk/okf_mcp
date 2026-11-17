@@ -268,14 +268,14 @@ async fn a_grant_a_code_and_a_catalog_are_assigned_from_the_unassigned_view() {
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
     let alice = NewUser {
         name: "alice",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
     };
     users::create(&server.db.pool, &alice, &AuditActor::cli(), Utc::now())
         .await
         .expect("create alice");
     let family = NewTeam {
         name: "family",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
         owner: "alice",
     };
     teams::create(
@@ -648,7 +648,7 @@ async fn a_write_settling_for_one_team_never_cancels_opening_another() {
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
     let family = NewTeam {
         name: "family",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
         owner: OWNER,
     };
     teams::create(

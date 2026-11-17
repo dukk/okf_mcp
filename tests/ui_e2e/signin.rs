@@ -64,7 +64,7 @@ async fn a_setup_link_sets_a_password_and_the_console_shows_the_user() {
         pool,
         &users::NewUser {
             name: "alice",
-            display_name: "Alice",
+            display_name: &okf_mcp::labels::DisplayName::parse("Alice").unwrap(),
         },
         &AuditActor::cli(),
         Utc::now(),
@@ -396,7 +396,7 @@ async fn a_setup_link_registers_a_passkey_that_then_signs_in_from_the_sign_in_pa
         pool,
         &users::NewUser {
             name: "alice",
-            display_name: "Alice",
+            display_name: &okf_mcp::labels::DisplayName::parse("Alice").unwrap(),
         },
         &AuditActor::cli(),
         Utc::now(),

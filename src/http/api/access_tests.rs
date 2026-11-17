@@ -58,7 +58,7 @@ async fn catalog_id(test: &TestApp, name: &str) -> i64 {
 async fn family(test: &TestApp) {
     let team = NewTeam {
         name: "family",
-        display_name: "",
+        display_name: &crate::labels::DisplayName::default(),
         owner: TEST_USER,
     };
     teams::create(test.app.pool(), &team, &AuditActor::cli(), Utc::now())
@@ -199,6 +199,7 @@ async fn a_read_of_a_catalog_deleted_or_replaced_before_it_is_written_keeps_its_
     .unwrap();
     let replacement = NewCatalog {
         name: "main",
+        display_name: &crate::labels::DisplayName::default(),
         description: "",
         owner_team: "family",
     };
@@ -289,14 +290,14 @@ async fn replace_main_for_acme(test: &TestApp) {
     let cli = AuditActor::cli();
     let bob = crate::store::users::NewUser {
         name: "bob",
-        display_name: "",
+        display_name: &crate::labels::DisplayName::default(),
     };
     crate::store::users::create(pool, &bob, &cli, Utc::now())
         .await
         .unwrap();
     let acme = NewTeam {
         name: "acme",
-        display_name: "",
+        display_name: &crate::labels::DisplayName::default(),
         owner: "bob",
     };
     teams::create(pool, &acme, &cli, Utc::now()).await.unwrap();
@@ -305,6 +306,7 @@ async fn replace_main_for_acme(test: &TestApp) {
         .unwrap();
     let main = NewCatalog {
         name: "main",
+        display_name: &crate::labels::DisplayName::default(),
         description: "",
         owner_team: "acme",
     };
@@ -470,6 +472,7 @@ async fn a_search_refused_after_one_catalog_passes_queues_no_read() {
         .unwrap();
     let other = NewCatalog {
         name: "other",
+        display_name: &crate::labels::DisplayName::default(),
         description: "",
         owner_team: TEST_TEAM,
     };

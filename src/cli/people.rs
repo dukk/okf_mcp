@@ -19,6 +19,7 @@ use sqlx::PgPool;
 use super::{comma_list, labelled, tab_row, TeamCommand, UserCommand};
 use crate::clock::format_timestamp;
 use crate::config::Config;
+use crate::labels::DisplayName;
 use crate::mail::invite;
 use crate::store::audit::AuditActor;
 use crate::store::catalogs;
@@ -60,6 +61,7 @@ pub(super) async fn user(
 ) -> anyhow::Result<String> {
     Ok(match command {
         UserCommand::Create { name, display_name } => {
+            let display_name = DisplayName::parse(&display_name)?;
             let new = NewUser {
                 name: &name,
                 display_name: &display_name,
@@ -200,6 +202,7 @@ pub(super) async fn team(
             display_name,
             owner,
         } => {
+            let display_name = DisplayName::parse(&display_name)?;
             let new = NewTeam {
                 name: &name,
                 display_name: &display_name,
@@ -668,6 +671,51 @@ mod tests {
              0 open changeset(s) discarded)\n"
         );
         assert!(!after.contains("alice"), "{after}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn user_and_team_create_parse_the_display_name() {
+        // Arrange
+        let db = test_db().await;
+        let too_long = "x".repeat(81);
+
+        // Act: a name the rule trims, then one too long for each command.
+        okf(
+            &db,
+            &["user", "create", "alice", "--display-name", " Alice "],
+        )
+        .await
+        .unwrap();
+        let user = okf(&db, &["user", "create", "bob", "--display-name", &too_long]).await;
+        let team = okf(
+            &db,
+            &[
+                "team",
+                "create",
+                "family",
+                "--display-name",
+                &too_long,
+                "--owner",
+                "alice",
+            ],
+        )
+        .await;
+
+        // Assert: stored trimmed; both refusals name the rule and wrote nothing.
+        assert_eq!(
+            users::find(&db.pool, "alice").await.unwrap().display_name,
+            "Alice"
+        );
+        for refused in [user, team] {
+            let error = refused.expect_err("81 characters are refused");
+            assert!(
+                error.to_string().contains("display name refused"),
+                "{error}"
+            );
+        }
+        let listed = okf(&db, &["user", "list"]).await.unwrap();
+        assert!(!listed.contains("bob"), "{listed}");
+        assert!(teams::find(&db.pool, "family").await.is_err());
     }
 
     #[tokio::test(flavor = "multi_thread")]
