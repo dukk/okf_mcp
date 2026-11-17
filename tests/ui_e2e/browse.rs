@@ -347,3 +347,23 @@ async fn the_export_link_uses_the_filename_the_server_chose() {
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_export_filename_falls_back_to_the_slug_without_a_usable_header() {
+    let (server, key) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&key);
+        let names = ui.eval(
+            "async () => { const { exportFilename } = await import('/ui/js/pages/transfer.js'); \
+             return [exportFilename('attachment; filename=\"a-main.tar.gz\"', 'main'), \
+             exportFilename(null, 'main'), exportFilename('attachment', 'main'), \
+             exportFilename('attachment; filename=\"../x.tar.gz\"', 'main')]; }",
+            json!(null),
+        );
+        assert_eq!(
+            names,
+            json!(["a-main.tar.gz", "main.tar.gz", "main.tar.gz", "main.tar.gz"])
+        );
+    })
+    .await;
+}
