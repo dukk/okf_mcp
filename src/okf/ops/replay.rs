@@ -328,9 +328,10 @@ pub(crate) fn folder_heading(folder: &str) -> String {
 /// entries under (`okf-catalog-template`'s `install/skeleton/log.md`).
 pub(crate) const LOG_TEMPLATE: &str = "# Knowledge Catalog Update Log\n";
 
-/// The heading of a root `index.md` that `repair_indexes` (or its replay)
-/// creates, which knows no catalog name.
-const ROOT_HEADING: &str = "Catalog";
+/// The heading of a root `index.md` with no display name to use: one that
+/// `repair_indexes` (or its replay) creates, and a new catalog's with no
+/// display name.
+pub(crate) const ROOT_HEADING: &str = "Catalog";
 
 /// The placeholder line of a root `index.md` with nothing to say yet.
 pub(crate) const ROOT_TODO: &str = "TODO: say what this catalog holds.";
