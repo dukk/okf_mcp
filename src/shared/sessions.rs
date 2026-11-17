@@ -8,6 +8,8 @@
 //! request. Both live under the one hash tag every key carries, so the
 //! scripts below, which name both in `KEYS`, also run on a cluster.
 
+use std::cell::Cell;
+use std::future::Future;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -48,6 +50,53 @@ const BIND: &str = "if redis.call('EXISTS', KEYS[2]) == 0 then return 0 end\n\
 // computed lazily). A `Script` holds its SHA-1 for `EVALSHA`.
 static ADMIT_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| redis::Script::new(ADMIT));
 static BIND_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| redis::Script::new(BIND));
+
+// A value per task (Python: a `contextvars.ContextVar`), set only inside
+// `watch_restore`. rmcp calls `load` on the task that runs the request, so the
+// middleware's scope is visible there.
+tokio::task_local! {
+    /// Set by `load` when Redis failed during a restore in this request.
+    static RESTORE_FAILED: Cell<bool>;
+}
+
+/// Runs `future` (rmcp's handling of one request) and reports whether a
+/// restore in it failed on Redis. `load` cannot say so itself: an error would
+/// reach rmcp, which logs it with the session id, so it answers `Ok(None)`
+/// (rmcp's 404) and sets this request-scoped flag for the middleware.
+///
+/// # Arguments
+/// * `future` - the rest of the request.
+///
+/// # Returns
+/// The future's output, and `true` when a restore in it failed on Redis (the
+/// request should answer 503, not rmcp's 404).
+#[tracing::instrument(level = "trace", skip_all)]
+pub async fn watch_restore<F: Future>(future: F) -> (F::Output, bool) {
+    RESTORE_FAILED
+        .scope(Cell::new(false), async move {
+            let output = future.await;
+            (output, RESTORE_FAILED.with(Cell::get))
+        })
+        .await
+}
+
+/// The error a request answers when the shared session store fails: 503,
+/// retryable.
+///
+/// # Returns
+/// [`OkfError::Busy`].
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial constructor: builds a value from its arguments"
+    )
+)]
+pub fn unavailable() -> OkfError {
+    OkfError::Busy {
+        reason: "the shared session store is unavailable".to_string(),
+    }
+}
 
 /// What `MGET bind state` answers: each key's bytes, `None` when missing.
 type BoundState = (Option<Vec<u8>>, Option<Vec<u8>>);
@@ -158,9 +207,7 @@ impl RedisSessions {
         }
         self.redis.count(RedisOp::Bind);
         tracing::warn!("an MCP session's state was not persisted; refusing to bind it");
-        Err(OkfError::Busy {
-            reason: "the shared session store is unavailable".to_string(),
-        })
+        Err(unavailable())
     }
 
     /// Forgets a session (its `DELETE /mcp`): removes both keys.
@@ -202,9 +249,11 @@ impl RedisSessions {
         let (binding, stored) = match fetched {
             Ok(pair) => pair,
             Err(error) => {
-                // Counted and logged without the id; the client initializes
-                // again.
+                // Counted and logged without the id. The session may exist,
+                // so the middleware answers 503 rather than rmcp's 404
+                // (`watch_restore`); outside its scope there is no flag to set.
                 let _ = self.redis.failed(RedisOp::Get, &error);
+                let _ = RESTORE_FAILED.try_with(|failed| failed.set(true));
                 return None;
             }
         };
@@ -468,7 +517,12 @@ mod tests {
             )
             .await;
 
-            assert!(sessions.load("s4").await.expect("load").is_none());
+            let (loaded, restore_failed) = watch_restore(sessions.load("s4")).await;
+            assert!(loaded.expect("load").is_none());
+            assert!(
+                !restore_failed,
+                "an undecodable state is absent, not an outage"
+            );
             let rendered = crate::mcp::testing::render(&registry);
             assert_eq!(testing::error_count(&rendered, "decode"), 1, "{rendered}");
         })
@@ -490,7 +544,9 @@ mod tests {
                 return;
             }
 
-            assert!(sessions.load("s5").await.expect("load").is_none());
+            let (loaded, restore_failed) = watch_restore(sessions.load("s5")).await;
+            assert!(loaded.expect("load").is_none());
+            assert!(restore_failed, "the middleware learns of the failure");
             sessions.store("s5", &state()).await.expect("store");
             sessions.delete("s5").await.expect("delete");
             for refused in [

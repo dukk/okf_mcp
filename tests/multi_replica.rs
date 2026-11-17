@@ -582,3 +582,94 @@ async fn redis_down_answers_503_not_a_fallback() {
 
     assert_eq!(status, 503);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rejected_delete_leaves_the_session_in_place() {
+    let redis = TestRedis::start().await;
+    let (a, b, key) = session_pair(&redis, Config::default()).await;
+    let handle = support::server::redis_connect(&redis).await;
+    let session = open_ready(&a.mcp_url(), &key).await;
+    let (bind, state) = session_keys(&handle, &session);
+
+    // The owner's DELETE passes the binding check, then rmcp refuses its
+    // `Host` (DNS-rebinding protection) before closing anything.
+    let rejected = reqwest::Client::new()
+        .delete(b.mcp_url())
+        .header("host", "evil.example")
+        .header("mcp-session-id", &session)
+        .header("mcp-protocol-version", "2025-11-25")
+        .bearer_auth(&key)
+        .send()
+        .await
+        .expect("the server answers")
+        .status();
+    let left = existing(&handle, &[&bind, &state]).await;
+    let on_a = tools_list(&a.mcp_url(), &key, &session).await;
+    let on_b = tools_list(&b.mcp_url(), &key, &session).await;
+
+    assert_eq!(rejected, 403);
+    assert_eq!(left, 2, "a rejected DELETE releases nothing");
+    assert_eq!(on_a, 200);
+    assert_eq!(on_b, 200);
+}
+
+/// Sets the `default` user's permission `rule` (`-mget`, `+mget`) through an
+/// admin user on its own connection, so the rule can be lifted again.
+async fn default_user_may(redis: &TestRedis, rule: &str) {
+    let client = redis::Client::open(redis.url.as_str()).expect("the test redis URL");
+    let mut admin = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("an admin connection");
+    let _: () = redis::cmd("ACL")
+        .arg("SETUSER")
+        .arg("okf-test-admin")
+        .arg("on")
+        .arg("nopass")
+        .arg("+@all")
+        .arg("~*")
+        .arg("&*")
+        .query_async(&mut admin)
+        .await
+        .expect("create the admin user");
+    let _: () = redis::cmd("AUTH")
+        .arg("okf-test-admin")
+        .arg("unused")
+        .query_async(&mut admin)
+        .await
+        .expect("authenticate as the admin user");
+    let _: () = redis::cmd("ACL")
+        .arg("SETUSER")
+        .arg("default")
+        .arg(rule)
+        .query_async(&mut admin)
+        .await
+        .expect("change the default user's permissions");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_redis_failure_after_admission_answers_503_not_404() {
+    let shared_server = [
+        support::redis::SERVER_URL_VAR,
+        support::redis::CLUSTER_URL_VAR,
+    ]
+    .iter()
+    .any(|var| std::env::var(var).is_ok_and(|url| !url.is_empty()));
+    if shared_server {
+        // Changing the default user would break every test sharing it.
+        return;
+    }
+    let redis = TestRedis::start().await;
+    let (a, b, key) = session_pair(&redis, Config::default()).await;
+    let session = open_ready(&a.mcp_url(), &key).await;
+
+    // ADMIT (a script of GET, EXISTS and PEXPIRE) still runs; the restore's
+    // MGET on B, which holds no local copy, is refused with NOPERM.
+    default_user_may(&redis, "-mget").await;
+    let failed = tools_list(&b.mcp_url(), &key, &session).await;
+    default_user_may(&redis, "+mget").await;
+    let retried = tools_list(&b.mcp_url(), &key, &session).await;
+
+    assert_eq!(failed, 503, "retryable, not rmcp's 404");
+    assert_eq!(retried, 200, "the session was there all along");
+}

@@ -25,7 +25,7 @@ use crate::auth::Principal;
 use crate::error::OkfError;
 use crate::http::AppError;
 use crate::selection::SESSION_HEADER;
-use crate::shared::sessions::RedisSessions;
+use crate::shared::sessions::{unavailable, watch_restore, RedisSessions};
 use crate::shared::Redis;
 
 /// The body rmcp answers an unknown session with; a refused key gets the
@@ -280,11 +280,12 @@ impl SessionBindings {
 ///   request never reaches rmcp's store.
 /// - A response that issues a session (`Mcp-Session-Id` on the answer to a
 ///   request that named none) binds it to the request's key.
-/// - A `DELETE` releases the binding: in memory after rmcp closed the
-///   session; in Redis before rmcp runs, so it works on a replica that never
-///   held the session (rmcp restores only for POST and GET).
-/// - With Redis, a Redis failure (or a session whose state rmcp failed to
-///   store) answers 503: nothing falls back to memory (spec Decision 16).
+/// - A `DELETE` that rmcp accepted releases the binding. rmcp accepts it
+///   even on a replica that never held the session, so with Redis it ends
+///   the session on every replica.
+/// - With Redis, a Redis failure (during the check, the bind, the release or
+///   rmcp's restore), or a session whose state rmcp failed to store, answers
+///   503: nothing falls back to memory (spec Decision 16).
 ///
 /// # Arguments
 /// * `app` - the shared state ([`App::sessions`]).
@@ -320,13 +321,21 @@ pub async fn bind_session(State(app): State<Arc<App>>, request: Request, next: N
             }
             Err(error) => return AppError::from(error).into_response(),
         }
-        if closing && shared {
-            if let Err(error) = app.sessions().release(session).await {
-                return AppError::from(error).into_response();
-            }
-        }
     }
-    let response = next.run(request).await;
+    let response = if shared {
+        // `watch_restore` runs rmcp with a request-scoped flag that
+        // `RedisSessions::load` sets when Redis failed during a restore: rmcp
+        // then answers 404, but the session may well exist, so the client
+        // gets a retryable 503 instead (spec Decision 16). The flag carries
+        // no session id.
+        let (response, restore_failed) = watch_restore(next.run(request)).await;
+        if restore_failed {
+            return AppError::from(unavailable()).into_response();
+        }
+        response
+    } else {
+        next.run(request).await
+    };
     match (&session, &key_id) {
         (None, Some(key)) => {
             if let Some(issued) = response.headers().get(SESSION_HEADER) {
@@ -338,14 +347,18 @@ pub async fn bind_session(State(app): State<Arc<App>>, request: Request, next: N
                 }
             }
         }
-        (Some(session), _) if closing && !shared && response.status().is_success() => {
+        // Only after rmcp accepted the `DELETE`: a refused one (a disallowed
+        // `Host`, say) must leave the session in place. rmcp answers 202 even
+        // on a replica that holds no local copy, so in Redis mode this works
+        // on any replica.
+        (Some(session), _) if closing && response.status().is_success() => {
             if let Err(error) = app.sessions().release(session).await {
+                // The keys stay; the client can repeat the `DELETE`.
                 return AppError::from(error).into_response();
             }
         }
-        // A request on a bound session (already refreshed by `admits`), a
-        // Redis `DELETE` (released above), or one without a key (only a
-        // router without `require_key`).
+        // A request on a bound session (already refreshed by `admits`), or
+        // one without a key (only a router without `require_key`).
         _ => {}
     }
     response
