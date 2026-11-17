@@ -287,7 +287,22 @@ pub(crate) async fn replica_pair(
 /// # Panics
 /// If the database, Redis or the load fails: a broken test setup.
 pub(crate) async fn app_with_redis(config: Config) -> (TestApp, TestRedis) {
-    let redis = TestRedis::start().await;
+    app_on_redis(config, TestRedis::start().await).await
+}
+
+/// [`app_with_redis`] over a Redis the test already started (a cluster, for
+/// one).
+///
+/// # Arguments
+/// * `config` - the server's settings (its `[redis]` is replaced).
+/// * `redis` - the server the app connects to.
+///
+/// # Returns
+/// The app and `redis`.
+///
+/// # Panics
+/// If the database or the load fails: a broken test setup.
+pub(crate) async fn app_on_redis(config: Config, redis: TestRedis) -> (TestApp, TestRedis) {
     let config = redis_config(config, &redis);
     let db = seed(&[], Utc::now()).await;
     let app = load_shared(&db, config, &redis).await;
