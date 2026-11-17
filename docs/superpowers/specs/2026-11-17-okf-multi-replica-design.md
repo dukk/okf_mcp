@@ -170,9 +170,17 @@ The last two are not part of this milestone.
     middleware runs on every request, so it is where the TTL slides.
 12. **Key revocation reaches every instance at once: `admin_generation`
     bumps are announced over Redis pub/sub** (the maintainer, 2026-11-17).
-    - Channel `<prefix>admin-generation`. When an instance's key reload
-      moves its generation, and the reload was not itself triggered by an
-      announcement, it publishes the new generation.
+    - Channel `<prefix>admin-generation`. Each instance tracks the last
+      generation it announced, apart from the one it loaded. An announcing
+      reload (the poll, `settle`, the consent approval's poll) publishes
+      whenever the loaded generation differs from the announced one,
+      whether or not that reload moved it.
+      - This matters when a non-announcing reload (an announcement received,
+        a resubscribe, a catch-up) loads a local change before the
+        `settle` that would announce it. If only a moving reload published,
+        that change would never be announced (review of PR #552).
+      - The cost is one extra message per instance per bump. Receivers
+        already at that generation ignore it.
     - The API's `settle` (which polls after every administrative change),
       the consent approval's poll and the poll loop all go through that
       reload, so the instance that made a change announces it before its
@@ -217,8 +225,13 @@ The last two are not part of this milestone.
     - As a backstop for a crash between the commit and the `INCR`, or a
       lost counter, entries cached while Redis is on are dropped after
       60 s.
-    - The counter has no TTL. Instances compare it with `!=`, not `>`, so a
-      counter that Redis lost and restarted at 1 still clears every cache.
+    - The counter has no TTL, and instances compare it with `!=`. A
+      counter that restarted at 1 could equal a value an instance has
+      already seen, and that instance would keep a revoked token cached
+      (review of PR #552). So whoever finds it missing, reader or writer,
+      first recreates it inside a Lua script from a random seed below
+      2^62. A lost counter therefore never repeats a value an instance has
+      seen, and every cache is cleared at its next lookup.
 16. **When Redis fails after start-up, auth flows fail closed.**
     - An MCP request answers 503.
     - A consent page, a token exchange, an OIDC callback or a passkey step

@@ -195,7 +195,7 @@ Run with `Script::new(..).key(k).arg(expected).arg(new).invoke_async(&mut con)`,
 1. **Milestone 16, from issue #551.** The design is the spec above; the maintainer accepted the split analysis on #551 and decided the points below. Labels: `epic`, `milestone-16`.
 2. **Redis is optional** (`[redis]` with `url_env` and `key_prefix`). Without it, behaviour is unchanged and one replica is still required (the maintainer).
 3. **Key revocation: every `admin_generation` bump is published over Redis pub/sub**, and every instance reloads its key cache at once. This covers key revoke, user delete, team suspension and grant revoke (the maintainer). This plan publishes from the reload that observes the bump (spec Decision 12), not from each of the ~35 bump sites: one place, after commit, and it also covers paths that nobody would remember to hook. The CLI publishes an empty announcement (Task 4).
-4. **OAuth access-token cache: a revocation counter in Redis, checked on every lookup** (the maintainer's first option). The backstop is a 60 s cache age while Redis is on. Pub/sub alone was rejected: messages are lost while a subscriber reconnects, and a revoked token must not survive that.
+4. **OAuth access-token cache: a revocation counter in Redis, checked on every lookup** (the maintainer's first option). The counter is seeded randomly whenever it is missing, so losing it cannot repeat a value an instance has seen (review of PR #552). The backstop is a 60 s cache age while Redis is on. Pub/sub alone was rejected: messages are lost while a subscriber reconnects, and a revoked token must not survive that.
 5. **The 5-PR split, made finer** (the maintainer). The foundation is three tasks (1, 2, 3) and OAuth is three (6, 7, 8). The async conversion of `authorize.rs` gets its own task (8), and the CLI announcement too (4).
 6. **CAS `update` for `pending` and `codes`**, keeping `used`/`replayed`. **Per-actor caps as index keys.** **The idle TTL refreshed in `bind_session`** (the maintainer; spec Decisions 5, 8 and 11).
 7. **The plan PR is merged by the coordinator** after review. The epic and the sub-issues are filed after that, with the maintainer's acceptance.
@@ -285,7 +285,7 @@ Each line is `task (the tasks it needs)`. A task starts when every task in its p
 ```
 wave 1:  1 ()
 wave 2:  2 (1)        3 (1)
-wave 3:  4 (3)   5 (3)   6 (3)   9 (2)   10 (2)
+wave 3:  4 (3)   5 (2, 3)   6 (3)   9 (2)   10 (2)
 wave 4:  7 (2, 6)
 wave 5:  8 (7)
 wave 6:  11 (2, 3, 4, 5, 6, 7, 8, 9, 10)
@@ -297,7 +297,7 @@ Why each edge, and the shared files to merge with care:
 - **2 and 3 are independent.** 2 is `shared/ephemeral.rs` alone, and 3 is `shared/announce.rs`, `app.rs` and `http/mod.rs`. Both add a `pub mod` line to `src/shared/mod.rs`: keep both.
 - **4, 5 and 6 need 3.**
   - 4 extends `announce.rs`.
-  - 5's revocation test needs the announcements, and its test harness is 3's `TestServer::sibling`.
+  - 5's revocation test needs the announcements, and its test harness is 3's `TestServer::sibling`. **5 also needs 2:** `RedisSessions` stores its state in Task 2's `Envelope`, which Task 5 makes `pub(crate)`.
   - 6's catch-up is `App::catch_up_keys` (3).
   - 5 and 3 both edit `src/http/mod.rs`, and 5 and 6 both edit `src/app.rs` (different lines): keep both.
 - **9 and 10 need 2** (`Ephemeral`, `Index`). They are lib-level two-`App` tests (Task 1's helper), so they don't need 3. 9 and 10 both change one constructor line in `src/app.rs`: keep both.
@@ -1055,6 +1055,12 @@ More tests in the same file, each ending with `eventually(..)` on B:
 - `a_user_deleted_on_one_replica_loses_access_on_the_other`: `DELETE /api/v1/users/{name}` on A; B's cache no longer finds the user's key.
 - `a_team_suspended_on_one_replica_closes_its_catalogs_on_the_other`: `PUT /api/v1/teams/{name}/suspension` on A. A member's `get_concept` on B is refused as suspended. Use an rmcp client on B's URL; the session is opened on B, so this test needs no Task 5.
 - `a_grant_revoked_on_one_replica_is_refused_on_the_other`: create a self-issued grant, revoke it through the `me` API on A; `b.app.keys().find_grant(..)` becomes `None`.
+- `a_change_still_announces_after_a_non_announcing_reload_saw_it_first` (the forced interleaving from the review of PR #552):
+  1. Revoke a key through the store on A, as the CLI would, so nothing settles yet.
+  2. Call `a.app.catch_up_keys().await`. A's reload doesn't announce, but A now holds the new generation.
+  3. Call `a.app.poll().await`, as `settle` does.
+  4. B refuses the key within `WAIT`.
+  5. Revert the separate `announced_generation` and the test fails: B keeps the key for an hour.
 - `a_subscriber_that_lost_redis_catches_up_when_it_reconnects`:
   1. `redis.stop()`, then revoke on A (A's announcement is lost and counted), then `redis.start_again()`.
   2. B's subscriber resubscribes, reloads, and refuses the key within `WAIT`.
@@ -1091,15 +1097,31 @@ pub async fn catch_up_keys(&self) {
 pub fn loaded_admin_generation(&self) -> i64 { self.admin_generation.load(Ordering::Relaxed) }
 ```
 
-`reload_keys_if_changed(&self, announce: bool)`: the poll pass calls it with `true`. After a successful reload that stored a new generation:
+`reload_keys_if_changed(&self, announce: bool)`: the poll pass calls it with `true`.
+
+**Announcing is tracked apart from loading** (review of PR #552). Publishing only when an announcing reload moves the loaded generation loses an announcement. Here is how:
+1. A commits a revocation.
+2. Before A's `settle`, a non-announcing reload on A (`catch_up_keys`, or the subscriber's resubscribe) loads the new generation without publishing.
+3. The `settle` poll then finds nothing moved.
+
+So `App` gains `announced_generation: AtomicI64`, initialised to the generation loaded at start-up and written only under `polling`. At the end of every `reload_keys_if_changed(true)`, whether or not this call reloaded:
 
 ```rust
 if announce {
     if let Some(redis) = &self.redis {
-        crate::shared::announce::publish(redis, Some(admin_generation)).await;
+        let loaded = self.admin_generation.load(Ordering::Relaxed);
+        // Under `polling`, so no other reload moves either counter meanwhile.
+        if loaded != self.announced_generation.load(Ordering::Relaxed) {
+            crate::shared::announce::publish(redis, Some(loaded)).await;
+            // Stored even if the publish failed: the failure is counted, and
+            // the poll loop covers a lost announcement (spec Decision 12).
+            self.announced_generation.store(loaded, Ordering::Relaxed);
+        }
     }
 }
 ```
+
+So an instance that loaded a generation from an announcement re-announces it once, at its next announcing reload. That costs one message per instance per bump, and every receiver already at that generation ignores it. The spec accepts that cost for a rule that never loses a local change's announcement.
 
 - [ ] **Step 4: `src/shared/announce.rs`**
 
@@ -1500,12 +1522,15 @@ Revert `config.session_store = ...`, and the cross-replica test fails with 404. 
    3. Revoke it through A's `/oauth/revoke`.
    4. Verify on B again. It must be `None` at once, with no wait.
 2. `a_lost_counter_still_clears_every_cache`:
-   1. Cache on B, then `DEL <prefix>oauth:access-revocations`.
-   2. Revoke on A. The `INCR` gives 1, which differs from B's seen value.
-   3. B refuses.
-3. `a_redis_failure_skips_the_cache_and_still_answers_from_postgres`: stop Redis; verify on B queries the database and returns the principal (live token); nothing is cached (`cache.tokens.len()` unchanged).
-4. `an_entry_cached_with_redis_is_rechecked_after_60_s`: use `remember` with an explicit `cached_at` 61 s ago, and verify reads the database (count the queries, or revoke the row directly in SQL without `forget` and see `None`).
-5. `a_token_minted_on_one_replica_is_accepted_on_the_other_before_any_announcement`:
+   1. Set the counter to 1 by hand (`SET <prefix>oauth:access-revocations 1`), the case the review of PR #552 named.
+   2. Cache the token on B, so B has seen 1.
+   3. `DEL` the counter, then revoke on A. The counter is recreated from a random seed, not from 0, so it is not 1 again.
+   4. B refuses at once.
+   5. Revert the seeding (plain `INCR`) and the test fails: B sees 1 again and serves the cached token.
+3. `a_missing_counter_seen_by_a_reader_clears_its_cache`: cache on B, then `DEL` the counter, with no revocation. B's next verify seeds a new counter, finds it differs, and clears its cache, so the next verify goes to the database.
+4. `a_redis_failure_skips_the_cache_and_still_answers_from_postgres`: stop Redis; verify on B queries the database and returns the principal (live token); nothing is cached (`cache.tokens.len()` unchanged).
+5. `an_entry_cached_with_redis_is_rechecked_after_60_s`: use `remember` with an explicit `cached_at` 61 s ago, and verify reads the database (count the queries, or revoke the row directly in SQL without `forget` and see `None`).
+6. `a_token_minted_on_one_replica_is_accepted_on_the_other_before_any_announcement`:
    1. Approve and exchange on A. The codes are still per instance until Task 7, so both happen on A.
    2. Verify the new access token on B. Lib apps run no `http::serve`, so no subscriber has told B about the grant, and B's key cache does not hold it yet.
    3. `verify` on B succeeds through `catch_up_keys`.
@@ -1520,17 +1545,33 @@ Revert `config.session_store = ...`, and the cross-replica test fails with 404. 
 const REVOCATIONS: &str = "oauth:access-revocations";
 /// With Redis on, how long a cached token is trusted without a database look.
 const SHARED_MAX_AGE: Duration = Duration::from_secs(60);
+
+/// Reads the counter, creating it first from `ARGV[1]` (a random seed) if it
+/// is missing. A counter Redis lost therefore never restarts at a value an
+/// instance has already seen (review of PR #552).
+const READ_REVISIONS: &str = "if redis.call('EXISTS', KEYS[1]) == 0 then\n\
+        redis.call('SET', KEYS[1], ARGV[1])\n\
+    end\n\
+    return redis.call('GET', KEYS[1])";
+
+/// Bumps the counter, seeding it the same way first.
+const BUMP_REVISIONS: &str = "if redis.call('EXISTS', KEYS[1]) == 0 then\n\
+        redis.call('SET', KEYS[1], ARGV[1])\n\
+    end\n\
+    return redis.call('INCR', KEYS[1])";
 ```
+
+The seed is a random non-negative `i64` below `2^62`, from `rand`, or from the bytes `keys::generate_with` already draws. Either leaves room to `INCR`. Two instances seeding at once is harmless: `SET` runs inside the script, and Redis runs scripts one at a time. A collision with a value an instance saw before has a chance of about 2^-62.
 
 - `AccessTokens::new(redis: Option<Redis>)` and `OAuth::new(config, redis: Option<&Redis>)`. `App::load_with_redis` passes `redis.as_ref()`.
 - `Cache` gains `seen_revisions: Option<i64>`. Each cached entry gains `cached_at: Instant`, through a small wrapper struct in the map.
 - `verify`, when Redis is on:
-  - `GET <prefix>oauth:access-revocations` (absent counts as 0).
+  - Run `READ_REVISIONS` (a missing counter is seeded, never read as 0). The result is parsed as `i64`.
   - If the counter differs from `seen_revisions`: clear `tokens`, bump `generation`, and set `seen_revisions`.
   - On a Redis error: count it, and look the token up in the database without `remember`.
   - A hit older than `SHARED_MAX_AGE` is treated as a miss.
   - Without Redis, everything is as today.
-- `forget` becomes `pub async fn forget(&self, hashes: &[[u8; 32]])`. It does the local forget as today, then, with Redis, `INCR` (an error is counted). Update its callers at `token.rs:273, 530` and `access.rs:300, 381, 409` with `.await`.
+- `forget` becomes `pub async fn forget(&self, hashes: &[[u8; 32]])`. It does the local forget as today, then, with Redis, runs `BUMP_REVISIONS` (an error is counted). Update its callers at `token.rs:273, 530` and `access.rs:300, 381, 409` with `.await`.
 - Grant catch-up:
   - In `verify`: if `app.keys().find_grant(&live.grant_id)` is `None` and `app.redis().is_some()`, call `app.catch_up_keys().await` and look again.
   - Do the same at `token.rs:411` (exchange) and in the refresh path's grant lookup (`token.rs:281`).
