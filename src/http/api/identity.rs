@@ -49,6 +49,9 @@ pub(crate) struct WhoAmI {
     pub client_name: Option<String>,
     /// The user it belongs to (`None` when unassigned, or the row vanished).
     pub user: Option<String>,
+    /// That user's label (`None` without a user, or one created since the
+    /// key cache last loaded).
+    pub user_label: Option<String>,
     /// That user's teams, sorted (empty without a user, or once the user
     /// is deleted).
     pub teams: Vec<String>,
@@ -177,6 +180,9 @@ async fn whoami(
         CredentialKind::OAuth { client_name, .. } => ("oauth", client_name.clone()),
         CredentialKind::Session { .. } => ("session", None),
     };
+    let user_label = user
+        .as_deref()
+        .and_then(|name| app.keys().labels().user(name).map(str::to_string));
     Ok(Json(WhoAmI {
         key_id: principal.key_id.clone(),
         name,
@@ -189,6 +195,7 @@ async fn whoami(
         kind,
         client_name,
         user,
+        user_label,
         teams,
         user_admin,
     }))

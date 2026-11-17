@@ -179,6 +179,57 @@ impl Labels {
         self.users.get(slug).map(|label| &**label)
     }
 
+    /// Every user and its label, for the one reader that may see them all
+    /// (`GET /labels` for an every-catalog admin).
+    ///
+    /// # Returns
+    /// `(slug, label)` pairs in no particular order.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn users(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.users
+            .iter()
+            .map(|(slug, label)| (slug.as_str(), &**label))
+    }
+
+    /// Every team and its label.
+    ///
+    /// # Returns
+    /// `(slug, label)` pairs in no particular order.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn teams(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.teams
+            .iter()
+            .map(|(slug, label)| (slug.as_str(), &**label))
+    }
+
+    /// The slug of every catalog.
+    ///
+    /// # Returns
+    /// The slugs in no particular order; show them with
+    /// [`Labels::catalog_choices`].
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn catalog_slugs(&self) -> impl Iterator<Item = &str> {
+        self.catalogs.keys().map(String::as_str)
+    }
+
     /// A team's label.
     ///
     /// # Arguments
