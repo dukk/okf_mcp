@@ -1417,6 +1417,7 @@ takes effect at once.
 | Command | Does |
 |---|---|
 | `okf-mcp user create NAME [--display-name TEXT]` | Creates the user and its personal team `NAME` |
+| `okf-mcp user update NAME --display-name TEXT` | Sets (or, with `""`, clears) the user's display name; its personal team's label follows. Prints `updated user NAME display name: "old" -> "new"` |
 | `okf-mcp user list [--email ADDRESS]` | One tab-separated line per user: name, `credentials N` (keys, grants and codes naming it, revoked ones included), `email E` (`-` when unset), `admin yes\|no`, `teams a,b`, then the display name. `--email` prints only the user with that email, in any letter case, and nothing when no user has it |
 | `okf-mcp user delete NAME` | Deletes a user with its credentials, sessions and personal team, discarding its open changesets; catalogs and history stay. Prints what went (see below) |
 | `okf-mcp user set-admin NAME --on\|--off` | Gives or takes the admin flag: an admin user's console session acts as an admin that reaches every catalog. A change signs the user out of every console session. `--off` for the last admin user is allowed here (operator access), refused over REST |
@@ -1428,6 +1429,7 @@ takes effect at once.
 | `okf-mcp user revoke-sessions NAME` | Signs the user out of every console session; keys and grants keep working. Prints `revoked N sessions of NAME` |
 | `okf-mcp user sign-ins NAME [--limit N]` | The user's recent sign-in attempts (20 by default), newest first: time, method, outcome, `ip A` |
 | `okf-mcp team create NAME [--display-name TEXT] --owner USER` | Creates a shared team with `USER` as its first owner |
+| `okf-mcp team update NAME --display-name TEXT` | Sets (or clears) a shared team's display name; a personal team is refused (change its user's) |
 | `okf-mcp team list` | One line per team: name, `personal U` (`-` for a shared team), `members u(role),...`, `catalogs c,...` (`-` for none), `suspended TIME` (`-` when active), then the display name |
 | `okf-mcp team add-member TEAM USER [--role owner\|member]` | Adds a member (`member` by default), or gives a member that role |
 | `okf-mcp team set-role TEAM USER --role owner\|member` | Changes a member's role, adding the user if it is not a member |
@@ -1435,7 +1437,8 @@ takes effect at once.
 | `okf-mcp team delete NAME` | Deletes a shared team that owns no catalog; its memberships go with it |
 | `okf-mcp team suspend NAME [--notice TEXT]` | Suspends the team: its catalogs refuse every non-admin credential except export (see [Suspending a team](#suspending-a-team)). Prints `suspended team NAME`. Repeating it replaces the notice (none when `--notice` is left out) and keeps the first suspension time |
 | `okf-mcp team unsuspend NAME` | Lifts the suspension. Prints `lifted the suspension of team NAME`; no change when the team is active |
-| `okf-mcp catalog create NAME --owner TEAM [--description TEXT]` | `--owner` is required |
+| `okf-mcp catalog create NAME --owner TEAM [--display-name TEXT] [--description TEXT]` | `--owner` is required |
+| `okf-mcp catalog update NAME [--display-name TEXT] [--description TEXT]` | At least one flag is required; prints one `updated catalog NAME <field>: "old" -> "new"` line per flag given |
 | `okf-mcp catalog repair-indexes [NAME...] [--missing-only] [--dry-run] [--actor ACTOR]` | Adds the root `index.md`, `log.md`, folder indexes and listings the named catalogs are missing, and publishes them at once. `--missing-only` keeps only catalogs without a root `index.md` (every such catalog when none is named); `--dry-run` writes nothing. Prints, per catalog, its summary, the files written and a note per created file and `TODO` placeholder, then `repaired N of M catalog(s)`. A failing catalog does not stop the others; the command then exits non-zero naming it. Revisions record `ACTOR` (default `okf-mcp/repair-indexes`) and the message `repair indexes` |
 | `okf-mcp catalog set-owner NAME --team TEAM` | Moves a catalog to another team, or gives a legacy catalog its first owner. Prints `catalog C: owner OLD -> NEW` (`(none)` for a legacy catalog) |
 | `okf-mcp catalog set-member-access NAME --access none\|read\|write` | What members of the owner team reach through their own keys and grants (default `write`). Prints `catalog C: member access OLD -> NEW` |
@@ -1686,10 +1689,12 @@ the test checks the flag exists.
 | CLI | REST | Console |
 |---|---|---|
 | `okf-mcp user create` | `POST /api/v1/users` | Users → New user |
+| `okf-mcp user update` | `PATCH /api/v1/users/{name}` | Users → user → Display name |
 | `okf-mcp user list` | `GET /api/v1/users` | Users |
 | `okf-mcp user list --email` | `GET /api/v1/users` | Users → the filter box |
 | `okf-mcp user delete` | `DELETE /api/v1/users/{name}` | Users → user → Delete user |
 | `okf-mcp team create` | `POST /api/v1/teams` | Teams → New team |
+| `okf-mcp team update` | `PATCH /api/v1/teams/{name}` | Teams → team → Display name |
 | `okf-mcp team list` | `GET /api/v1/teams` | Teams |
 | `okf-mcp team add-member` | `PUT /api/v1/teams/{name}/members/{user}` | Teams → team → Add member |
 | `okf-mcp team set-role` | `PUT /api/v1/teams/{name}/members/{user}` | Teams → team → a member's role |

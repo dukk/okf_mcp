@@ -1352,6 +1352,8 @@ Mount it with `.route("/labels", get(labels))`. Test the scope as Step 1 says.
   - Everything calls the Task 3 store functions with `AuditActor::cli()` and `owner: None`, and parses with `DisplayName::parse`.
 - [ ] **Step 3: Gates, changelog `m17-task-06-cli`, commit** `feat(cli): update display names`.
 
+> **Corrected (issue #603, 2026-11-17).** The store's `users::set_display_name` and `teams::set_display_name` return `()`, so the CLI reads the old value with `users::find` / `teams::find` just before the write to print `"" -> "Alice Example"`. `catalog update` prints through a pure `describe_details_change` in `src/cli.rs` so the lines are testable; the catalog tests assert stored state plus that function's exact text. Tests live in `src/cli.rs` and `src/cli/people.rs`.
+
 ---
 
 ### Task 7: MCP surface
