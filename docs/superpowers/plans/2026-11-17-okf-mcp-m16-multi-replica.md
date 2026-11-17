@@ -1372,7 +1372,7 @@ The test `a_subscriber_that_lost_redis_catches_up_when_it_reconnects` may break 
 
 - [ ] **Step 1: Write the failing test** (`src/cli.rs` tests)
 
-Start a `TestRedis`, subscribe to `<prefix>admin-generation` with a raw `redis::Client`, then run `dispatch` for `key revoke` with `config.redis = Some(crate::shared::testing::config(&server))` and `server.env()` as the reader. The subscriber receives one message (payload empty) within 5 s.
+Start a `TestRedis`, subscribe to `<prefix>admin-generation` with `Redis::subscribe` (a raw client cannot talk to the cluster container), then run `dispatch` for `key revoke` with `config.redis = Some(crate::shared::testing::config(&server))` and `server.env()` as the reader. The subscriber receives one message (payload empty) within a `tokio::time::timeout`, in both modes (`TestRedis::start` and `start_cluster`).
 
 A second test: with the variable unset, the command still succeeds and logs `announcement skipped` at `warn` (capture with the existing test subscriber helper, if there is one; otherwise assert only success).
 
@@ -1395,7 +1395,9 @@ pub async fn announce_from_cli(config: &Config, env: &dyn Fn(&str) -> Option<Str
 }
 ```
 
-In `dispatch`, every arm except `Serve` runs it after `Ok`, once, after the match. Run it for read-only commands too: an empty announcement makes each instance read one row, and a list of mutating commands would go stale.
+In `dispatch`, every arm except `Serve` runs it after `Ok`, once, after the match.
+
+> **Corrected (issue #557, 2026-11-17).** `dispatch` takes a fifth parameter, `env: &dyn Fn(&str) -> Option<String>` (`run` passes the process environment, `run_in_tests` too), so a test can inject the Redis URL as `Redis::connect` requires. The `Serve` arm ends with `return Ok(())`, so the single announcement after the match runs for every other command and never for a failed one. `announce_from_cli` logs only `error.kind()`. The tests also cover a read-only command (`key list`), an unset variable and an unreachable Redis (both `warn`, the URL never logged), using `telemetry::subscriber::capture::Capture`. Run it for read-only commands too: an empty announcement makes each instance read one row, and a list of mutating commands would go stale.
 
 - [ ] **Step 3: Gates, changelog, commit**
 
