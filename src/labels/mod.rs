@@ -264,6 +264,37 @@ mod tests {
         assert_eq!(export_stem("!!!"), "");
     }
 
+    #[test]
+    fn export_stem_stops_at_forty_bytes() {
+        assert_eq!(export_stem(&"A".repeat(40)), "a".repeat(40));
+        assert_eq!(export_stem(&"A".repeat(41)), "a".repeat(40));
+        // A separator that lands on the cutoff is trimmed, not kept.
+        assert_eq!(
+            export_stem(&format!("{} b", "a".repeat(39))),
+            "a".repeat(39)
+        );
+    }
+
+    #[test]
+    fn a_refused_display_name_names_its_limit() {
+        match DisplayName::parse("a\nb") {
+            Err(OkfError::LimitExceeded { limit, .. }) => assert_eq!(limit, "display_name"),
+            other => panic!("expected LimitExceeded, got {other:?}"),
+        }
+    }
+
+    #[hegel::test]
+    fn an_export_stem_is_short_ascii_without_edge_hyphens(tc: hegel::TestCase) {
+        use hegel::generators;
+        let label: String = tc.draw(generators::text());
+        let stem = export_stem(&label);
+        assert!(stem.len() <= 40, "{stem:?}");
+        assert!(stem
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'));
+        assert!(!stem.starts_with('-') && !stem.ends_with('-'), "{stem:?}");
+    }
+
     #[hegel::test]
     fn labels_are_never_empty(tc: hegel::TestCase) {
         use hegel::generators;
