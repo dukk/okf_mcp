@@ -8,5 +8,6 @@ tag-message = "Release v{{version}}\n\nokf-release-prepare-v1"
 pre-release-hook = ["python3", "scripts/release.py", "hook", "{{prev_version}}", "{{version}}"]
 publish = false
 push = false
-# The hook runs the repository's checks instead of cargo publish verification.
+# release-ship runs the repository's checks (scripts/release.py) instead of cargo publish
+# verification; the hook only bumps examples and writes the notes.
 verify = false

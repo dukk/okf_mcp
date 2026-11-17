@@ -16,7 +16,7 @@
 - **`App` owns `Option<shared::Redis>`.** `App::load_with_redis` builds every component from it, so tests can run two `App`s (or two `TestServer`s) over one Postgres and one Redis.
 
 **Tech Stack:** Rust 2021 with the existing axum 0.8 / sqlx 0.9 / rmcp 3.8 / tokio stack. New dependencies:
-- `redis = "=1.8.2"` (`default-features = false`; `tokio-comp`, `connection-manager`, `script`, `tokio-rustls-comp`);
+- `redis = "=1.8.2"` (`default-features = false`; `tokio-comp`, `connection-manager`, `script`, `tokio-rustls-comp`, and `cluster-async` from Task 1b);
 - `futures-util = "0.3"`, for `StreamExt` on the pub/sub stream; already in the lock;
 - `rustls = "0.23"` with `ring`, to install the process `CryptoProvider`;
 - `chrono` gains its `serde` feature;
@@ -118,6 +118,24 @@ Run with `Script::new(..).key(k).arg(expected).arg(new).invoke_async(&mut con)`,
 - redis builds its config with `rustls::ClientConfig::builder()` (`src/connection.rs:1255`). That uses the process-default `CryptoProvider`, and **panics** when none is installed and the crate features name more than one (`R/rustls-0.23.46/src/crypto/mod.rs:243-257`).
 - okf-mcp's lock builds rustls 0.23.46 with both `aws-lc-rs` and `ring` (`Cargo.lock`, the `rustls` entry). So `Redis::connect` first calls `rustls::crypto::ring::default_provider().install_default()` and ignores the `Err` that means one is already installed.
 
+### Cluster mode (probed 2026-11-17, for Task 1b)
+
+Production's cache is ElastiCache Serverless for Valkey, which runs only in cluster mode and requires TLS (spec Decision 20). AWS documents that a client that is not cluster-aware can get `MOVED` there, and that a Lua script's keys must hash to one slot.
+
+**One-node Valkey cluster in a container (ran, `docker` with `valkey-cli`)**
+- `docker run -d -p 127.0.0.1::6379 valkey/valkey:8.1-alpine valkey-server --cluster-enabled yes --cluster-config-file nodes.conf --appendonly no --save ""` starts Valkey 8.1.11 in cluster mode.
+- After start, `CONFIG SET cluster-announce-ip 127.0.0.1`, `CONFIG SET cluster-announce-port <mapped port>` and `CLUSTER ADDSLOTSRANGE 0 16383` answer `OK`. `CLUSTER INFO` shows `cluster_state:ok` within a second, and `CLUSTER SLOTS` then names `127.0.0.1:<mapped port>` for slots 0-16383. So a cluster client on the host follows the topology to the mapped port.
+- `HELLO 3` answers `proto 3`, `mode cluster`.
+- `EVAL "redis.call('SET',KEYS[1],1); return redis.call('GET',KEYS[2])" 2 '{okf:}a' '{okf:}b'` runs. The same script on `okf:a` and `okf:b` fails with `CROSSSLOT Keys in request don't hash to the same slot`. That is the reason for the hash tag, and a test can use it to prove the container really is a cluster.
+- The image pulled with plain `docker pull`. If testcontainers' own pull answers 401 (as for Redis, below), `docker pull valkey/valkey:8.1-alpine` first.
+
+**redis 1.8.2 cluster API (read, not run)**
+- `cluster-async = ["aio", "cluster", "dep:log", "dep:futures-channel"]` (`R/redis-1.8.2/Cargo.toml:67-72`). With `tokio-rustls-comp`, the cluster client takes TLS from a `rediss://` URL; `ClusterClientBuilder::tls(TlsMode)` is at `src/cluster_handling/client.rs:595`.
+- `ClusterClientBuilder::use_protocol(ProtocolVersion)` is at `client.rs:750`, `push_sender` at `:802`, and `ClusterClient::get_async_connection()` at `:983`.
+- The async `ClusterConnection` implements `aio::ConnectionLike` (`src/cluster_handling/async_connection/mod.rs:1777`), so `AsyncCommands` and `Script::invoke_async` work on it. `subscribe` (`:367`) and `ssubscribe` (`:437`) need RESP3 (`check_resp3!`). Its docs say subscriptions are resubscribed automatically after a disconnection, and the user then receives further `Subscribe` pushes.
+- Standalone: `ConnectionManagerConfig::set_push_sender` (`src/aio/connection_manager.rs:234`) and `set_automatic_resubscription` (`:240`) give the same behaviour on a `ConnectionManager`.
+- `PushInfo { kind: PushKind, data: Vec<Value> }` (`src/types.rs:2633`). The kinds used are `Subscribe` (`:364`), `Message`, and `Disconnection` (`:346`, sent by the library when a connection closes).
+
 ### testcontainers-modules 0.15.0
 - The `redis` feature exists (`R/testcontainers-modules-0.15.0/Cargo.toml:96`). It provides `testcontainers_modules::redis::{Redis, REDIS_PORT}` (`src/redis/mod.rs`), and `REDIS_PORT` is 6379.
 - **`Redis::default()` is tag `5.0`** (`src/redis/standalone.rs:3-4`), which has no `GETDEL` (Redis 6.2+). Tests use `.with_tag("7.4-alpine")`. Readiness is `WaitFor::message_on_stdout("Ready to accept connections")` (`:53-54`).
@@ -202,6 +220,7 @@ Run with `Script::new(..).key(k).arg(expected).arg(new).invoke_async(&mut con)`,
 8. **`/healthz` reports Redis without changing its status code** (the maintainer, 2026-11-17). The body gains a `redis` field: `"ok"`, `"unavailable"`, or `null` without `[redis]`. The status still follows the database alone, so a Redis outage does not mark every replica unready. It gets its own task, Task 11, since it is code with its own tests and the docs task is documentation only.
 9. **Every CLI command announces, as planned** (the maintainer, 2026-11-17), read-only ones included. Each instance then reads `admin_generation` once and reloads only if it moved. A list of mutating commands was rejected: it goes stale when commands are added. Task 4.
 10. **The plan PR is merged by the coordinator** after review. The epic and the sub-issues are filed after that, with the maintainer's acceptance.
+11. **Cluster mode for ElastiCache Serverless** (the maintainer, 2026-11-17, after Task 1 merged). Production's cache is ElastiCache Serverless for Valkey, cluster mode only, TLS required. `[redis] mode = "standalone" | "cluster"`, one hash tag on every key and channel in both modes, and RESP3 push pub/sub in both modes (spec Decision 20). Supporting only cluster mode was rejected: plain standalone Redis and Valkey should keep working. Task 1b, which Tasks 2 and 3 now wait on.
 
 ## Simplifications and deviations relative to the issue
 
@@ -210,7 +229,7 @@ The spec already reflects each of these.
 - **Codes use `update`, not `take`.** `GETDEL` would drop the used code, and with it the replay detection that revokes the token family.
 - **Global caps are dropped in Redis**, kept in memory (spec Decision 8).
 - **Session bindings are not deleted on revocation.** The pub/sub reload makes `require_key` refuse the key on every instance (spec Decision 12). Deleting bindings per key would need a key-to-sessions index kept in step with every revocation path.
-- **Raw console session ids leave Redis values.** `LinkRequest.session_id` (Task 9) and the passkey `RegisterVia::Session.session_id` (Task 10) become the session's hash. The finish matches the finishing request's cookie against it (Decision 7).
+- **Raw console session ids leave Redis values.** `LinkRequest.session_id` (Task 9) and the passkey `RegisterVia::Session.session_id` (Task 10) become the session's hash. The finish matches the finishing request's cookie against it (Decision 7). The passkey setup-link token (`RegisterVia::Setup`) becomes its hash too, and the finish presents the token again (Task 10, corrected for issue #563).
 - **No Deployment under `examples/kubernetes/`** exists. The issue's "`examples/kubernetes`" Deployment is the one in `docs/operations.md`, which Task 12 changes.
 - **`src/catalog.rs:177`'s comment is already right** and is not changed.
 
@@ -219,6 +238,7 @@ The spec already reflects each of these.
 | Task | Delivers |
 |---|---|
 | 1 | `[redis]` config and validation; `shared::Redis` (connect, start-up checks, key names, error counting, spans); `okf.redis.errors`; `App::redis`, `App::load_with_redis`; `tests/support/redis.rs`; the lib two-`App` helper; "Why one replica" corrected |
+| 1b | `[redis] mode` (standalone or cluster); `shared::RedisConnection`; the `{<key_prefix>}` hash tag on every key and channel; `Redis::subscribe` (RESP3 pushes, automatic resubscription) and `Subscription`; `TestRedis::start_cluster` (one-node Valkey cluster) |
 | 2 | `shared::ephemeral`: `Ephemeral<V>` and `Index`, memory and Redis, the versioned envelope, the CAS script; the `lessons.md` rule on re-run closures |
 | 3 | `admin_generation` announcements: publish after a reload, the subscriber task, `App::reload_keys_now`, `App::catch_up_keys`; `TestServer::start_shared` / `sibling`; two-instance revocation tests |
 | 4 | The CLI announcement after every successful command |
@@ -240,7 +260,7 @@ The spec already reflects each of these.
 | The mail worker with N replicas | #458 |
 | Pub/sub invalidation of catalog snapshots (read lag up to `poll_interval`) | not planned; documented |
 | SSE resumption (`EventStore`) | not planned |
-| Redis Cluster or Sentinel | not planned; documented as unsupported |
+| Redis Sentinel; spreading okf-mcp's keys over several cluster slots | not planned; documented (cluster mode itself is Task 1b) |
 
 ## File map
 
@@ -248,11 +268,11 @@ The spec already reflects each of these.
 |---|---|
 | `Cargo.toml`, `Cargo.lock` | 1 (`redis`, `futures-util`, `rustls`, dev `testcontainers-modules` `redis`), 8 (`chrono` `serde`), 10 (`webauthn-rs` feature) |
 | `src/lib.rs` | 1 (`pub mod shared;`) |
-| `src/shared/mod.rs` | 1 (create), 2 (`pub mod ephemeral`), 3 (`pub mod announce`), 5 (`pub mod sessions`) |
+| `src/shared/mod.rs` | 1 (create), 1b (`RedisConnection`, hash-tagged names, `subscribe`), 2 (`pub mod ephemeral`), 3 (`pub mod announce`), 5 (`pub mod sessions`) |
 | `src/shared/ephemeral.rs` | 2 (create) |
 | `src/shared/announce.rs` | 3 (create), 4 |
 | `src/shared/sessions.rs` | 5 (create) |
-| `src/config.rs` | 1 (`RedisConfig`, validation) |
+| `src/config.rs` | 1 (`RedisConfig`, validation), 1b (`RedisMode`, no braces in `key_prefix`) |
 | `src/telemetry/metrics.rs` | 1 (`okf.redis.errors`, `RedisOp`) |
 | `src/app.rs` | 1 (`redis` field, `load_with_redis`), 3 (`reload_keys_now`, `catch_up_keys`, announce flag), 5 (`sessions` type), 6 (`OAuth::new` arg), 9 (`OidcProviders::new` arg), 10 (`Passkeys::new` arg) |
 | `src/cli.rs` | 1 (crypto provider install in `serve`), 4 (announce in `dispatch`) |
@@ -269,7 +289,7 @@ The spec already reflects each of these.
 | `src/http/passkeys.rs` | 10 |
 | `src/mcp/testing.rs` | 1 (`TestApp::sibling`, `app_with_redis`) |
 | `tests/support/pg.rs` | 1 (generic `start_labelled`/`start_with_retry`) |
-| `tests/support/redis.rs`, `tests/support/mod.rs` | 1 (create) |
+| `tests/support/redis.rs`, `tests/support/mod.rs` | 1 (create), 1b (`start_cluster`) |
 | `tests/support/server.rs` | 3 (`start_shared`, `sibling`) |
 | `tests/support/mcp_raw.rs` | 5 (create, moved from `tests/server.rs`) |
 | `tests/server.rs` | 5 (use the moved helpers) |
@@ -287,13 +307,16 @@ Each line is `task (the tasks it needs)`. A task starts when every task in its p
 
 ```
 wave 1:  1 ()
-wave 2:  2 (1)        3 (1)        11 (1)
-wave 3:  4 (3)   5 (2, 3)   6 (3)   9 (2)   10 (2)
-wave 4:  7 (2, 6)
-wave 5:  8 (7)
-wave 6:  12 (2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
-wave 7:  13 (all)
+wave 2:  1b (1)       11 (1)
+wave 3:  2 (1b)       3 (1b)
+wave 4:  4 (3)   5 (2, 3)   6 (3)   9 (2)   10 (2)
+wave 5:  7 (2, 6)
+wave 6:  8 (7)
+wave 7:  12 (1b, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+wave 8:  13 (all)
 ```
+
+> **Corrected (2026-11-17, cluster mode).** Task 1b was added after Task 1 merged. Every task that talks to Redis after Task 1 builds on its `RedisConnection`, its key names and its `subscribe`, so 2 and 3 wait on it (and everything after them through them). 11 only `PING`s and keeps its edge to 1; if 1b merges first, 11 merges it and uses `RedisConnection`.
 
 Why each edge, and the shared files to merge with care:
 - **Everything needs 1** (`shared::Redis`, `RedisConfig`, `App::load_with_redis`, the Redis test support).
@@ -625,6 +648,8 @@ pub async fn load_with_redis(
 - `load_with_metrics` connects when `config.redis` is set, then delegates:
   `let redis = match &config.redis { Some(table) => Some(shared::Redis::connect(table, &|name| std::env::var(name).ok(), &metrics).await?), None => None };`
   The body of today's `load_with_metrics` moves into `load_with_redis`, which stores `redis` in the struct. Later tasks pass `redis.as_ref()` to the constructors.
+
+> **Corrected (issue #554).** `load_with_metrics` delegates with `Box::pin(Self::load_with_redis(..)).await`, not a bare `.await`: the extra un-boxed async level pushed `tests/investigator.rs`'s `acceptance::server()` future past rustc's layout recursion limit (`queries overflow the depth limit`). `src/cli.rs` needed no change, as Step 10 says. Task 1 also adds three lib tests to `src/shared/mod.rs` (two replicas share one Redis and `app_with_redis` has one; `App::load` refuses an unset `[redis]` variable) so `replica_pair` and `app_with_redis` are used, as the `dead_code` lint requires.
 - `App::load`'s `# Errors` doc gains the `[redis]` failures.
 
 - [ ] **Step 7: Start-up tests** (`src/shared/mod.rs` tests; `Redis::connect` with an injected `env`)
@@ -778,7 +803,132 @@ In `docs/operations.md:18-20`, replace the publish-lock sentence: "**Why one rep
 
 ---
 
+### Task 1b: Cluster mode (ElastiCache Serverless): `[redis] mode`, hash-tagged names, RESP3 pub/sub
+
+Added 2026-11-17 after Task 1 merged (Decision 11 above, spec Decision 20). Builds on Task 1's `shared::Redis`.
+
+**Files:**
+- Modify: `Cargo.toml`, `Cargo.lock` (`redis` feature `cluster-async`), `src/config.rs`, `src/shared/mod.rs`, `src/mcp/testing.rs` if its helpers need the mode, `tests/support/redis.rs`, `docs/operations.md` (one paragraph; Task 12 writes the full section), the spec if anything differs.
+
+- [ ] **Step 1: Config** (`src/config.rs`)
+
+```rust
+/// Which Redis client `[redis]` uses (spec Decision 20).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RedisMode {
+    /// One Redis or Valkey primary (`ConnectionManager`).
+    #[default]
+    Standalone,
+    /// A cluster, including ElastiCache Serverless (`ClusterClient`).
+    Cluster,
+}
+```
+
+- `RedisConfig` gains `#[serde(default)] pub mode: RedisMode`.
+- `RedisConfig::validate` also refuses a `key_prefix` holding `{` or `}`: the prefix goes inside the hash tag.
+- Tests: `mode` defaults to standalone, `"cluster"` parses, `"sentinel"` is refused (`deny_unknown_fields` stays), and a prefix with a brace is refused with a message naming `key_prefix`.
+
+- [ ] **Step 2: Names** (`src/shared/mod.rs`)
+
+`Redis::key(space, id)` returns `{<prefix>}<space>:<id>` and `Redis::channel(name)` returns `{<prefix>}<name>`. Store the tagged form once at connect (`prefix: Arc<str>` holds `{okf:}`), so no call site formats braces. Update Task 1's tests of `key`/`channel`, and add one that two keys and a channel from one handle share a slot (`redis::cluster_routing::get_slot`, if public; otherwise compare the hash-tag substring).
+
+- [ ] **Step 3: `RedisConnection`**
+
+```rust
+/// The instance's connection: standalone or cluster (spec Decision 20). Cheap
+/// to clone; both arms multiplex one or more sockets and reconnect by
+/// themselves.
+#[derive(Clone)]
+pub enum RedisConnection {
+    Standalone(redis::aio::ConnectionManager),
+    Cluster(redis::cluster_async::ClusterConnection),
+}
+
+impl redis::aio::ConnectionLike for RedisConnection {
+    // req_packed_command, req_packed_commands and get_db delegate to the arm.
+}
+```
+
+- `Redis::connection()` returns `RedisConnection`. Task 1's call sites (`connect`'s `PING`, the tests) compile unchanged apart from the type.
+- `Redis::client()` is removed. Its only caller was the pub/sub plan for Task 3, which Step 5 replaces. Keep whatever the handle needs to open a subscription connection later: the `redis::Client` (standalone) or the `ClusterClient` (cluster), in a private enum.
+
+> **Corrected (issue #570, 2026-11-17).** `Redis` keeps the parsed `redis::ConnectionInfo` (in an `Arc`) and its `RedisMode`, not a `Client` or `ClusterClient`: `subscribe` builds its own RESP3 client from the info in either mode. `redis::cluster::ClusterClientBuilder` is the builder's path in redis 1.8.2.
+
+- [ ] **Step 4: `connect` by mode**
+
+- Standalone: as Task 1.
+- Cluster: `ClusterClientBuilder::new(vec![url])` with `connection_timeout(CONNECT_TIMEOUT)` and `response_timeout(RESPONSE_TIMEOUT)`, then `get_async_connection()`, then the same `PING` check. Install the rustls provider first, as Task 1 does.
+- Errors keep Task 1's rule: the message names the variable and the error's `kind()`, never the URL. Add a test that a cluster connect to an unreachable `redis://:s3cretpw@127.0.0.1:1` fails without `s3cretpw` or the host in the message, as Task 1's standalone test does.
+
+- [ ] **Step 5: `Redis::subscribe`**
+
+```rust
+/// One event from a subscription (spec Decision 20).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubscriptionEvent {
+    /// The server confirmed the subscription: the first time, and again after
+    /// every automatic resubscribe. Messages sent before it may be lost.
+    Subscribed,
+    /// A message on the channel, its payload's bytes.
+    Message(Vec<u8>),
+    /// The library lost the connection; a `Subscribed` follows when it is back.
+    Disconnected,
+}
+
+/// A live subscription; dropping it closes its connection.
+pub struct Subscription { /* the dedicated connection, and the push receiver */ }
+
+impl Subscription {
+    /// The next event, or `None` once the connection is gone for good.
+    pub async fn next(&mut self) -> Option<SubscriptionEvent>
+}
+
+impl Redis {
+    /// Opens a dedicated RESP3 connection with a push sender and automatic
+    /// resubscription, and subscribes it to `channel` (a name from
+    /// [`Redis::channel`]).
+    pub async fn subscribe(&self, channel: &str) -> RedisResult<Subscription>
+}
+```
+
+- Standalone: a new `ConnectionManager` over the stored client with RESP3 (`ProtocolVersion::RESP3`, set on the connection info or with the URL's `protocol=resp3`), `set_push_sender(tx)` and `set_automatic_resubscription()`, then `subscribe(channel)`.
+- Cluster: a new `ClusterClient` built like Step 4's with `use_protocol(ProtocolVersion::RESP3)` and `push_sender(tx)`, then `get_async_connection()` and `subscribe(channel)`.
+- The push receiver maps `PushKind::Subscribe` to `Subscribed`, `Message` to `Message(payload)` (the payload is the last element of `data`), and `Disconnection` to `Disconnected`. Other kinds are skipped.
+- Use an unbounded `tokio::sync::mpsc` channel only if the crate's `AsyncPushSender` needs it; a bounded one that drops on overflow would lose a `Subscribed`.
+- Each subscription is its own connection, so two subscribers in one process (two `App`s in a test) never share pushes.
+
+- [ ] **Step 6: Test support** (`tests/support/redis.rs`)
+
+- `TestRedis::start_cluster()` starts `valkey/valkey:8.1-alpine` as a one-node cluster, as Verified facts "Cluster mode" ran it: start with `--cluster-enabled yes`, read the mapped port, `CONFIG SET cluster-announce-ip 127.0.0.1` and `cluster-announce-port <port>`, `CLUSTER ADDSLOTSRANGE 0 16383`, then wait (bounded, `tokio::time::timeout`) for `cluster_state:ok`.
+- `TEST_REDIS_CLUSTER_URL` reuses a running cluster, as `TEST_REDIS_URL` does a standalone server.
+- `TestRedis` records its mode, and `redis_config(&TestRedis)` sets `mode` from it, so a test picks the mode only by how it starts the server.
+- The per-test random prefix stays.
+- The lib-test side (`shared::testing`) gets the same `start_cluster` if the lib tests need one.
+
+- [ ] **Step 7: Tests** (each wait bounded)
+
+- Cluster connect and `PING` work, and `App::load_with_redis` builds with `mode = "cluster"`.
+- On the cluster container, a two-key script over two `Redis::key` names runs, and the same script over two untagged names fails with a `CrossSlot` error (this proves the client is cluster-aware).
+
+> **Corrected (issue #570, 2026-11-17).** The cluster client refuses a cross-slot script itself, before sending it, so the error reads `CrossSlot: Keys in request don't hash to the same slot` and not the server's `CROSSSLOT`. The test accepts either spelling.
+- In both modes: `subscribe` yields `Subscribed`, then a `PUBLISH` on the main connection yields `Message` with the payload.
+- In both modes: `CLIENT KILL TYPE pubsub` from the main connection makes the subscription yield `Disconnected` (or skip straight to it) and then `Subscribed` again, and a message published afterwards arrives. That is the resubscribe the announcement subscriber relies on (Task 3).
+- The existing Task 1 tests pass in standalone mode unchanged, apart from the names' braces.
+
+- [ ] **Step 8: Docs**
+
+One paragraph in `docs/operations.md` under the `[redis]` config: `mode`, `"cluster"` for ElastiCache Serverless and other clusters, `rediss://` (Serverless requires TLS), and that every key shares one hash tag. Task 12 writes the full section.
+
+- [ ] **Step 9: Gates, changelog, commit**
+
+Changelog `changelog/<ts>-m16-task-01b-cluster-mode.md`. `feat: [redis] cluster mode for ElastiCache Serverless (M16 Task 1b)`.
+
+---
+
 ### Task 2: `shared::ephemeral`: short-lived keyed state in memory or Redis
+
+> **Corrected (2026-11-17, cluster mode).** Task 1b comes first. Use `Redis::connection()` (a `RedisConnection`) for every command and script, name every key a script touches in `KEYS`, and run the Redis-variant tests in both modes (`TestRedis::start` and `TestRedis::start_cluster`).
 
 **Files:** Create `src/shared/ephemeral.rs`. Modify `src/shared/mod.rs` (`pub mod ephemeral;`), `src/oauth/expiring.rs` (module docs: it is now also `Ephemeral`'s memory variant), `tools/agentic/lessons.md`.
 
@@ -964,6 +1114,13 @@ const UPDATE_ATTEMPTS: usize = 8;
   - `actor_key` is already a hash (callers pass today's `URL_SAFE_NO_PAD` SHA-256 of the session id).
 - **Encoding.** `serde_json::to_vec(&Envelope { v: space.version(), d: value })`. Decoding refuses `v != space.version()`.
 - **Bounds and spans.** `V: Serialize + DeserializeOwned + Send + Sync + 'static`. Every Redis call gets a span: `#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "redis", db.operation.name = "<op>"))]`.
+
+> **Corrected (issue #555, 2026-11-17).** What shipped differs in small ways; read `src/shared/ephemeral.rs`.
+> - `insert`, `take`, `update`, `remove` take `key: &str`. `IndexSpace` has `name()` (`oidc:link`, `passkey:session`).
+> - Running out of `UPDATE_ATTEMPTS` also counts `okf.redis.errors{operation="update"}`; its `Busy` reason is "the entry is changing too fast". A value that fails to serialize (a type bug) answers `Busy` and counts `decode`.
+> - `Envelope<T>` encodes from `&V` (no clone) and decodes to `V`; it is still private (Task 5 makes it `pub(crate)`).
+> - Tests: there is no `stores(ttl) -> (Vec<_>, TestRedis)` helper. Each Redis body is an `async fn(TestRedis)` run by an `in_both_modes!` macro in `tests::standalone` and `tests::cluster`, so filters look like `shared::ephemeral::tests::cluster::...`. The 16-update test retries a `Busy` (as a client retries the 503) and checks that the 16 stored runs saw the distinct values 1..=16; with 16 contenders some do run out of 8 attempts. Two tests were added: a forced lost race (`a_lost_race_reruns_the_change_on_a_fresh_copy`, which writes from inside the closure with `block_in_place`) and `an_update_that_always_loses_is_busy_after_eight_attempts`.
+> - `shared::testing::error_count(rendered, op)` reads one `okf_redis_errors_total` series; later tasks can use it.
 
 - [ ] **Step 4: `lessons.md`**
 
@@ -1191,6 +1348,16 @@ pub async fn listen(app: Arc<App>, shutdown: CancellationToken) {
 ```
 
 - `subscribe` gets `client().get_async_pubsub()`, subscribes to `redis.channel(CHANNEL)`, and returns `into_on_message()`.
+
+> **Corrected (2026-11-17, cluster mode).** `Redis::client()` is gone (Task 1b). `listen` calls `redis.subscribe(&redis.channel(CHANNEL))` and loops over `Subscription::next()`:
+- on `Subscribed` (the first time and after each automatic resubscribe), `app.reload_keys_now(false)` and reset the backoff;
+- on `Message(payload)`, parse it as an `i64` and reload unless it equals `app.loaded_admin_generation()`;
+- on `Disconnected`, `redis.count(RedisOp::Subscribe)`;
+- on `None` or a `subscribe` error, count it, back off and subscribe again, as above.
+
+The test `a_subscriber_that_lost_redis_catches_up_when_it_reconnects` may break the subscription with `CLIENT KILL TYPE pubsub` instead of restarting Redis, which also works on a shared server. Run one announcement test in cluster mode as well.
+> **Corrected (issue #556).** What shipped differs from the sketches above in small ways: `TestServer::start_shared` and `sibling` share one private `start_inner`/`serve_app(pool, ..)` taking `Option<&TestRedis>`; `Sibling` also has `stop()`. The grant test makes a real OAuth grant through the consent flow (`OAuthClient`) and revokes it with `keys::revoke_by_id` plus `a.app.poll()` (what `settle` does), because the `me` API refuses a bearer caller. `a.key(..)` already polls A, so the tests need no separate poll after it. The deterministic catch-up test is a lib test, `shared::announce::catch_up_tests` (B's subscriber starts only after A announced, so the message is lost for certain, and B must reload on its first `Subscribed`); `tests/multi_replica.rs` keeps a `CLIENT KILL TYPE pubsub` test that the server still learns of a revoke. `listen` also replaces a subscription that stays `Disconnected` for `RESUBSCRIBE_GRACE` (10 s) with a fresh `subscribe`, since the driver gives up after a few failed reconnects (`run` takes an injectable `Source` and grace so a lib test scripts the outage). The restart test was dropped: `TestRedis::start_again` brings the container back on a different host port, so a restart test cannot reconnect.
+
 - `http::serve` spawns `tokio::spawn(crate::shared::announce::listen(Arc::clone(&app), shutdown.clone()))` beside the poller and awaits it like the poller, logging a panic.
 
 - [ ] **Step 5: Run the tests, gates, changelog, commit**
@@ -1205,7 +1372,7 @@ pub async fn listen(app: Arc<App>, shutdown: CancellationToken) {
 
 - [ ] **Step 1: Write the failing test** (`src/cli.rs` tests)
 
-Start a `TestRedis`, subscribe to `<prefix>admin-generation` with a raw `redis::Client`, then run `dispatch` for `key revoke` with `config.redis = Some(crate::shared::testing::config(&server))` and `server.env()` as the reader. The subscriber receives one message (payload empty) within 5 s.
+Start a `TestRedis`, subscribe to `<prefix>admin-generation` with `Redis::subscribe` (a raw client cannot talk to the cluster container), then run `dispatch` for `key revoke` with `config.redis = Some(crate::shared::testing::config(&server))` and `server.env()` as the reader. The subscriber receives one message (payload empty) within a `tokio::time::timeout`, in both modes (`TestRedis::start` and `start_cluster`).
 
 A second test: with the variable unset, the command still succeeds and logs `announcement skipped` at `warn` (capture with the existing test subscriber helper, if there is one; otherwise assert only success).
 
@@ -1228,7 +1395,9 @@ pub async fn announce_from_cli(config: &Config, env: &dyn Fn(&str) -> Option<Str
 }
 ```
 
-In `dispatch`, every arm except `Serve` runs it after `Ok`, once, after the match. Run it for read-only commands too: an empty announcement makes each instance read one row, and a list of mutating commands would go stale.
+In `dispatch`, every arm except `Serve` runs it after `Ok`, once, after the match.
+
+> **Corrected (issue #557, 2026-11-17).** `dispatch` takes a fifth parameter, `env: &dyn Fn(&str) -> Option<String>` (`run` passes the process environment, `run_in_tests` too), so a test can inject the Redis URL as `Redis::connect` requires. The `Serve` arm ends with `return Ok(())`, so the single announcement after the match runs for every other command and never for a failed one. `announce_from_cli` logs only `error.kind()`. The tests also cover a read-only command (`key list`), an unset variable and an unreachable Redis (both `warn`, the URL never logged), using `telemetry::subscriber::capture::Capture`. Run it for read-only commands too: an empty announcement makes each instance read one row, and a list of mutating commands would go stale.
 
 - [ ] **Step 3: Gates, changelog, commit**
 
@@ -1237,6 +1406,18 @@ In `dispatch`, every arm except `Serve` runs it after `Ok`, once, after the matc
 ---
 
 ### Task 5: MCP sessions and their bindings in Redis
+
+> **Corrected (2026-11-17, cluster mode).** The admit, bind and release scripts take both the state key and the binding key in `KEYS`. Task 1b's hash tag puts them in one slot. Run the scripts' tests and one two-instance session test in cluster mode as well.
+
+> **Corrected (issue #558, 2026-11-17).** What shipped differs from the sketches below in small ways; read `src/shared/sessions.rs` and `src/http/sessions.rs`.
+> - **One `RedisSessions` serves both sides.** `SessionBindings::Redis` holds an `Arc<RedisSessions>`, and `mcp_service` sets `config.session_store = app.sessions().store()` (the same `Arc`, coerced to `Arc<dyn SessionStore>`) instead of building a second `RedisSessions` from `app.redis()`. So the `fail_next_store` test hook reaches the store rmcp calls. `SessionBindings::new(redis: Option<&Redis>, idle)` picks the arm. Assigning the public `session_store` field compiles (Step 5).
+> - **The `SessionStore` methods are thin delegates** (with a reason-bearing `uninstrumented_fn` allow) to instrumented private methods, `load_state`, `store_state` and `delete_state`, which return no `Result` at all: the "never an error to rmcp" rule is in their types.
+> - **`DELETE` releases after rmcp's success in both modes, not before rmcp runs** (review of PR #580). rmcp's `LocalSessionManager::close_session` is `Ok` for a session it does not hold, so rmcp answers 202 on any replica and releasing afterwards still ends the session everywhere. Releasing first destroyed the session even when rmcp then refused the `DELETE` (a disallowed `Host` answers 403). Step 4's numbered list is superseded: admit, run rmcp, release on a 2xx.
+> - **A Redis failure during rmcp's restore answers 503** (review of PR #580). `load` still answers `Ok(None)` (no error reaches rmcp), but it also sets a request-scoped flag, a `tokio::task_local!` that `bind_session` scopes around rmcp with `shared::sessions::watch_restore`; the middleware turns a set flag into 503. An undecodable state does not set it (that stays 404). `shared::sessions::unavailable()` builds the 503 error.
+> - **`load` reads both keys with one `MGET`**, and `millis` is Task 2's `shared::ephemeral::millis`, now `pub(crate)` like `Envelope`.
+> - **The failed-state-write test is a lib test**, `http::sessions::tests::a_session_whose_state_write_failed_is_never_bound`, on `mcp::testing::app_on_redis_with` (new: `app_on_redis` with the Redis handle on a test's `local_metrics`). It also checks that the next `initialize` succeeds.
+> - **`tests/support/mcp_raw.rs`** also exports `TOOLS_LIST`; `post_on` takes the body as `&str`, and `notify_on` is `post_on` with `INITIALIZED`.
+> - **Script tests** (`shared::sessions::tests`) run in both modes; of the two-instance tests, `a_session_opened_on_one_replica_serves_tools_on_the_other` also runs in cluster mode.
 
 **Files:**
 - Create: `src/shared/sessions.rs`, `tests/support/mcp_raw.rs`.
@@ -1595,6 +1776,10 @@ Revert `config.session_store = ...`, and the cross-replica test fails with 404. 
 
    The exchange's own catch-up (`token.rs:411`) is tested in Task 7, once a code can cross instances.
 
+   > **Corrected (issue #559, 2026-11-17).** Task 6 tests it too (review of PR #579): `an_exchange_on_the_other_replica_catches_up_on_its_grant` in `token.rs` copies A's stored `AuthorizationCode` into B's per-instance map and exchanges on B.
+   >
+   > **Corrected (issue #560, 2026-11-17).** That copy test is gone; Task 7's `a_code_minted_on_one_replica_is_exchanged_on_the_other_once` covers the exchange's catch-up with a real shared code.
+
 - [ ] **Step 2: Implement**
 
 ```rust
@@ -1611,11 +1796,14 @@ const READ_REVISIONS: &str = "if redis.call('EXISTS', KEYS[1]) == 0 then\n\
     end\n\
     return redis.call('GET', KEYS[1])";
 
-/// Bumps the counter, seeding it the same way first.
+/// Bumps the counter, seeding it the same way first. The value goes back
+/// through `GET`: Lua holds `INCR`'s integer reply as a double, which rounds
+/// above 2^53 (corrected, issue #559).
 const BUMP_REVISIONS: &str = "if redis.call('EXISTS', KEYS[1]) == 0 then\n\
         redis.call('SET', KEYS[1], ARGV[1])\n\
     end\n\
-    return redis.call('INCR', KEYS[1])";
+    redis.call('INCR', KEYS[1])\n\
+    return redis.call('GET', KEYS[1])";
 ```
 
 The seed is a random non-negative `i64` below `2^62`, from `rand`, or from the bytes `keys::generate_with` already draws. Either leaves room to `INCR`. Two instances seeding at once is harmless: `SET` runs inside the script, and Redis runs scripts one at a time. A collision with a value an instance saw before has a chance of about 2^-62.
@@ -1633,6 +1821,15 @@ The seed is a random non-negative `i64` below `2^62`, from `rand`, or from the b
   - In `verify`: if `app.keys().find_grant(&live.grant_id)` is `None` and `app.redis().is_some()`, call `app.catch_up_keys().await` and look again.
   - Do the same at `token.rs:411` (exchange) and in the refresh path's grant lookup (`token.rs:281`).
 
+> **Corrected (issue #559, 2026-11-17).** What shipped differs in small ways; read `src/oauth/access.rs`.
+> - Names: the scripts are `READ_REVOCATIONS` and `BUMP_REVOCATIONS`, the field is `Cache::seen_revocations`, and the key is `redis.key("oauth", "access-revocations")`. The seed is `getrandom::u64() >> 2`.
+> - **`BUMP_REVOCATIONS` must not return `INCR`'s reply.** Redis hands a command's integer reply to Lua as a double, so `return redis.call('INCR', ...)` rounds a counter above 2^53 (a seed below 2^62 almost always is): the test saw `...527445 + 1` come back as `...527616`. The script runs `INCR`, then `return redis.call('GET', KEYS[1])`, a string parsed as `i64` exactly.
+> - `remember` keeps its signature and stamps `cached_at: Instant::now()` itself; the 60 s test ages the entry in place.
+> - `forget` does not store the value its own bump returned as seen: another instance's bump may fall between, and storing a value this instance never read would hide it.
+> - The catch-up is one helper, `oauth::access::find_grant(app, grant_id)` (`pub(crate)`), used by `verify` and the exchange (`token.rs`'s "the grant was revoked" check). The refresh path does not catch up in place: it rolls its transaction back, calls `catch_up_keys`, and runs the refresh once more, so it never waits on `polling` while holding the token rows' locks.
+> - `authorization_code` and `authorization_code_for` moved from `token.rs`'s tests to `oauth::testing`, beside the new `oauth_replica_pair()` (`replica_pair` with OAuth and the DCR client) and `exchange_for_tokens(test, code)`. Task 7's tests can use them.
+> - Extra tests: a refresh on B, and an exchange on B of a code copied from A, catch up on A's grant (`token.rs`), and the counter scripts in standalone and cluster mode.
+
 - [ ] **Step 3: Revert-check, gates, changelog, commit**
 
 `feat: access-token revocation and grant catch-up across replicas (M16 Task 6)`.
@@ -1644,6 +1841,8 @@ The seed is a random non-negative `i64` below `2^62`, from `rand`, or from the b
 **Files:** Modify `src/oauth/mod.rs`, `src/oauth/state.rs`, `src/oauth/token.rs`, `src/oauth/authorize.rs` (the insert at `:1010` only).
 
 - [ ] **Step 1: Write the failing tests** (`src/oauth/token.rs` tests, `replica_pair` with OAuth)
+
+> **Corrected (issue #559, 2026-11-17).** Task 6 shipped `oauth::testing::{authorization_code, oauth_replica_pair, exchange_for_tokens}`; use them for the two-replica tests. The exchange's catch-up is `oauth::access::find_grant` in `token.rs`'s `exchange_code`; to revert-check it, replace that call with `app.keys().find_grant`. `AccessTokens::forget` is `async`.
 
 - `a_code_minted_on_one_replica_is_exchanged_on_the_other_once`: approve on A, then exchange on B (200). B has no subscriber in a lib pair, so this also covers the exchange's grant catch-up (Task 6, `token.rs:411`): revert it, and the answer is "the grant was revoked". Then exchange again on A → `invalid_grant` "already used", and the family is revoked: the access token from the first exchange is refused by `verify` on both.
 - `two_replicas_racing_one_code_leave_no_usable_token`: `tokio::join!` the exchange on A and B.
@@ -1666,6 +1865,15 @@ The seed is a random non-negative `i64` below `2^62`, from `rand`, or from the b
 - [ ] **Step 3: Revert-check, gates, changelog, commit**
 
 `feat: OAuth authorization codes in shared state (M16 Task 7)`.
+
+> **Corrected (issue #560, 2026-11-17).** What shipped differs in small ways; read `src/oauth/token.rs` and `src/oauth/error.rs`.
+> - **A token-endpoint Redis failure answers 503** (spec Decision 16). `OAuthError::Server(OkfError::Busy { .. })` now maps to 503 in `OAuthError::status` (`src/oauth/error.rs`, not in the file list above); every other `Server` error stays 500. The body is still `server_error` / "internal error". A database deadlock (also `Busy`) now answers 503 there too, as on the rest of the HTTP API.
+> - The post-commit replay check is a three-way `match` on the `update` answer. `Ok(Some(false))` keeps the tokens. `Ok(Some(true))` or `Ok(None)` (replayed, or gone) revokes the family and answers `invalid_grant` "the code was used twice". A Redis `Err` also revokes, then answers that error, 503 `server_error`, not a replay (review of PR #581). The test `a_redis_failure_after_the_commit_revokes_and_answers_503` holds the family's advisory lock (`tokens::lock_family`) so the exchange waits after marking the code used, stops Redis, then releases the lock.
+> - `Ephemeral::insert` takes `key: &str`, so the insert is `oauth.codes.insert(&code_key(&code), ..).await.unwrap_or(false)`; `false` and `Err` both answer the busy page.
+> - The race test asserts more than "at most one 200": over 4 rounds, exactly one answer is the replay ("the code was already used"), the stored code ends `used && replayed`, no token minted by either verifies on either replica, and no token row is live. With the compare-and-set reverted to a plain write, round 0 gets two 200s.
+> - Extra tests: `a_redis_outage_fails_closed` (stop Redis: the exchange answers 503 `server_error`, Approve answers the 503 busy page, nothing is minted) and the post-commit failure test above. All five Redis tests run in both modes (`token::tests::replicas::{standalone,cluster}::*`).
+> - Task 6's `an_exchange_on_the_other_replica_catches_up_on_its_grant` (the code copied by hand into B's map) is removed: `a_code_minted_on_one_replica_is_exchanged_on_the_other_once` exchanges a real shared code on B, and fails with "the grant was revoked" if `find_grant` is reverted to `app.keys().find_grant`.
+> - New test helpers in `oauth::testing`: `oauth_replica_pair_on(redis)` (a cluster, for one), `send_on(app, method, uri, body, session)` (any `Arc<App>`'s router, so B can be driven over HTTP), and `approve(test, query)` (`authorization_code_for` up to Approve, returning the answer unread). Task 8's two-replica consent tests can use `send_on` for B.
 
 ---
 
@@ -1715,6 +1923,17 @@ let pending = oauth.pending.update(&form.pending, now, |pending| {
 - Check every other closure against the `lessons.md` rule (Task 2).
 - Write a unit test that drives `Ephemeral::update` through a forced retry (the second test of Step 2 does this). Then revert the `.clone()` and see it fail.
 
+> **Corrected (issue #561, 2026-11-17).** What shipped differs in small ways; read `src/oauth/authorize.rs`.
+> - **The consent page's `server_error` rendered 500 for every error.** It now renders the busy page (503, "The server is busy. Start again from your client in a minute.", the `BUSY` constant, shared with the code insert's page) for `OkfError::Busy`, a Redis failure or a database deadlock; anything else stays 500.
+> - The `:762` closure is built by `consent_change(&form, fresh) -> impl FnMut(&mut PendingAuthorization) -> Option<Decided>` (`move`, owns `fresh`, clones it inside), so a test can drive the real closure through a forced rerun. It also refuses a request whose `failed_attempts` reached `MAX_FAILED_ATTEMPTS`: such an entry is normally removed already, but a failed `remove` (or, in memory, the gap between the count and the remove) must not let one more code be tried. Unreachable otherwise, so the memory tests are unchanged.
+> - Every `remove` is awaited, and a Redis `Err` answers the busy page rather than the page that says the request ended: `ending(oauth, id, brand, answer)` for Deny, the too-many-codes page and `consent_as_user`'s refusals; `finish` returns the busy page before minting when its `remove` fails (the grant stays and can be revoked, as when the code insert fails). The GET's insert answers `Ok(false)` with the existing "Too many sign-ins" page and `Err` with the busy page.
+> - **No per-actor index.** Pending authorizations have no per-actor cap today (only `MAX_PENDING`, kept in memory and dropped in Redis per spec Decision 8, and the per-instance `consent_limit` bucket), so no `Index` is added; the GET leaves nothing behind before sign-in, as before.
+> - The pending id is hashed by `Ephemeral` (`oauth:pending:<hashed(id)>`); the expiry test also checks that no key is named by the raw id.
+> - Tests (`authorize::tests::replicas::{standalone,cluster}::*`): the four above, plus `a_lost_race_reruns_the_consent_change_on_a_fresh_copy` (B writes the entry from inside A's first run, through `block_in_place`; with `fresh.take()` the rerun refuses) and `a_redis_outage_answers_the_busy_page` (the GET and a code step answer 503 with Redis stopped). The approve-once test runs 4 rounds.
+> - Review of PR #582 added two tests. `a_request_with_its_wrong_codes_spent_is_refused_untouched` is a unit test of `consent_change`: with `failed_attempts == MAX_FAILED_ATTEMPTS` the result is `None`, and the nonce and the accepted code are unchanged; one attempt fewer is allowed. `a_failed_removal_answers_the_busy_page`, run in both modes, takes `DEL` from the `default` ACL user (`-del`, so it answers `NOPERM`) after the first update. Deny then answers 503 and forwards no denial, and Approve answers 503 and stores no `oauth:code:*` key.
+> - Task 7's `a_redis_outage_fails_closed` now walks the consent up to Approve before Redis stops (pending authorizations need Redis too), through a new helper `oauth::testing::approval_form(test, query)`, which `approve` now uses.
+> - Serde: `Access` and `ClientKind` serialize as their `as_str` spellings (`rename_all = "lowercase"`), with tests; `ClientRecord` and a whole `PendingAuthorization` have round-trip tests.
+
 - [ ] **Step 4: Gates, changelog, commit**
 
 `feat: OAuth pending authorizations in shared state (M16 Task 8)`.
@@ -1745,6 +1964,13 @@ let pending = oauth.pending.update(&form.pending, now, |pending| {
 - `store_flow` becomes `async` and returns `Result<bool, OkfError>`. A `Swap::Swapped(Some(stale))` is removed with `flows.remove_stale`, and `Swap::Full` removes the new flow and returns `false`, as today.
 - `OidcProviders::new(config, env, redis: Option<&Redis>)`.
 - `link_starts` (a rate limit) stays per instance (#357).
+
+> **Corrected (issue #562, 2026-11-17).** What shipped; read `src/oidc.rs` and `src/http/oidc.rs`.
+> - The hash form is a public helper, `crate::oidc::session_hash(session_id)` (`URL_SAFE_NO_PAD` SHA-256). Task 10 may use it for `RegisterVia::Session`'s `session_hash` instead of repeating the expression.
+> - `linking_user` returns `(UserAuth, &str)`: the user and the finishing request's own cookie id, which `finish_link` passes as `SessionLink.session_id`. The hash is compared in constant time, as the raw id was.
+> - A Redis failure in the callback's `take` answers a 503 page, "Sign-in is unavailable right now; try again shortly." (`TRY_LATER`), not the provider-unreachable text; a failure in `store_flow` is `Busy`, so the start page is the existing 503 and the link route a 503 JSON. That 503 keeps the flow cookie (no `Set-Cookie`): the take may never have run, so a reload once Redis answers can still finish the flow. Every answer after a take clears it, as before (review of PR #576).
+> - Tests: the first two named tests are one body, `a_sign_in_started_on_one_replica_completes_on_the_other_once` (the replay on A after B is refused, and signs nobody in). The session test is `a_link_flow_finishes_only_in_the_session_that_started_it`, a helper run across replicas (`a_link_flow_finishes_only_in_its_session_across_replicas`) and in memory (`a_link_flow_finishes_only_in_its_session_in_memory`); it also checks that S2 ended and S1 is the one session left. Added `a_redis_outage_fails_closed_and_keeps_the_flow_cookie` (the container stopped) and `a_flow_refused_by_redis_finishes_once_redis_answers_again`. The second test revokes the `default` user's commands with `ACL SETUSER default -@all` from an admin connection, so the `GETDEL` is refused before it runs. It then restores them, and the reload signs in. It does not restart the container: `TestRedis::start_again` brings the container back on a new host port, so the apps' URLs no longer reach it. Each Redis body runs in `tests::standalone` and `tests::cluster` (an `in_both_modes!` macro, as in Task 2).
+> - Test support for later tasks: `mcp::testing::replica_pair_on(catalogs, config, redis)` is `replica_pair` over a Redis the test started (`TestRedis::start_cluster` for cluster mode), and `Browser::send_to(&Arc<App>, ..)` is `Browser::send` to one replica of a pair.
 
 - [ ] **Step 3: Gates, changelog, commit**
 
@@ -1782,6 +2008,13 @@ let pending = oauth.pending.update(&form.pending, now, |pending| {
   - At finish (`:946-958`), the check `session_id != session.id` becomes `session_hash != URL_SAFE_NO_PAD.encode(keys::hash(&session.id))`. `session` is the finishing request's own console session, from `signed_in`.
   - `SessionRegistration.session_id` is then `&session.id`, the request's own raw id, never a stored one.
   - No raw console session id is stored, in memory or in Redis.
+
+> **Corrected (issue #563, 2026-11-17).** What shipped differs in small ways; read `src/http/passkeys.rs`.
+> - The hash is Task 9's `crate::oidc::session_hash(session_id)`, the one helper for the `URL_SAFE_NO_PAD` SHA-256 of a console session id: the start stores it, `session_key` returns the stored value, and the finish compares it with `session_hash(&session.id)`.
+> - `remember` swaps with `Index::replace` and drops what it replaced with `Ephemeral::remove_stale`. When the swap fails in Redis, it removes the ceremony it just stored (best effort) and returns the `Busy`; nothing falls back to memory.
+> - Test support: Task 10 uses `mcp::testing::replica_pair_on` and `Browser::send_to`, which Task 9 (PR #576) added too; one copy of each was kept when the branches merged.
+> - **The setup-link token is stored only as its hash too** (the maintainer, on review of PR #577; spec Decision 7). `RegisterVia::Setup { token }` became `token_hash: [u8; 32]` (`keys::hash`, the form `email_tokens` stores). `POST /auth/passkey/setup/finish` takes `{"token": .., "credential": ..}` (`SetupFinish`), and `passkey.js` sends the token again. The finish answers 410 (`LINK_EXPIRED`) unless `keys::matches(&token_hash, &token)` (constant time), then redeems the presented token. The session-hash comparison is constant time as well (`ct_eq`). Tests: `no_raw_setup_token_reaches_redis` and `a_setup_finish_presenting_another_token_is_refused` (both modes, plus `_in_memory`).
+> - Tests: the two-replica bodies run in `tests::standalone` and `tests::cluster` (an `in_both_modes!` macro, as in `shared::ephemeral`), so filters look like `http::passkeys::tests::cluster::...`. The session test is `a_session_registration_finishes_only_in_the_session_that_started_it` there and `..._in_memory` on one memory app. "S2's ceremony is not consumed" is checked by S2 finishing its own registration (with `keep_sessions: true`) after the refused attempt. The double finish also races the two replicas with `tokio::join!` (one 200, one 410). One test was added: `a_redis_outage_fails_passkey_steps_closed` (a finish and a start answer 503 once Redis stops).
 
 - [ ] **Step 3: Gates, changelog, commit**
 
@@ -1826,6 +2059,8 @@ async fn healthz_reports_redis_without_changing_its_status() {
 ```
 
 - Update the existing exact-body test (`healthz_reports_an_unreachable_database_as_503`, `:1107-1122`) to include `"redis": null`.
+> **Corrected (issue #564, 2026-11-17).** The probe is `redis_health` in `src/http/mod.rs`, run beside the database probe with `tokio::join!`. It keeps `RedisOp::Get` for a failed or late `PING`: no `Ping` variant was added, so `okf.redis.errors`' closed `operation` set is unchanged. `PING` goes through `Redis::connection()` and `redis::cmd("PING")`. The test waits are wrapped in `tokio::time::timeout`, and the up-half also asserts the body has no `redis://`.
+
 - Run `gate.sh narrow --lib -- http::tests::healthz`. Expect failures.
 
 - [ ] **Step 2: Implement**
@@ -1848,6 +2083,7 @@ async fn healthz_reports_redis_without_changing_its_status() {
 - [ ] **Step 1: `docs/operations.md`**
 
 - **Section 1, "Why one replica"**: rewrite it as the spec's "Docs" section says.
+- **Corrected (2026-11-17, cluster mode).** The Redis section also covers `mode`: `"cluster"` for ElastiCache Serverless (TLS required, so `rediss://`) and other clusters, the single hash tag and why, and that Serverless's eviction and `maxmemory` settings are managed by AWS.
   - Without `[redis]`: one replica, and why: the in-memory state table.
   - With `[redis]`: several replicas, and the caveats:
     - per-instance `GET /mcp` streams;
@@ -1873,6 +2109,8 @@ async fn healthz_reports_redis_without_changing_its_status() {
 - **Health (section 7)** documents the `redis` field, and that it never changes the status code (Decision 8).
 - **The metric reference** gains `okf.redis.errors`, and the span reference the Redis spans.
 
+> **Corrected (issue #565, 2026-11-17).** What shipped: the "Redis" section sits after section 4 in `docs/operations.md` (headings "What Redis holds", "When Redis fails", "Sizing", "Eviction", "TLS and AUTH", "Several replicas: what stays per replica"), not numbered. The "no Cluster" topology line above is superseded by cluster mode (Task 1b). The `/healthz` `redis` field and `okf_redis_errors_total` document `PING` failures as `get`, as Task 11 shipped. The doc describes pending authorizations from this plan and Task 8's note; PR #582 has merged since, so the text now matches the code.
+
 - [ ] **Step 2: The server design**
 
 Add a dated note at `:280-281` and at `:1335`: "(Corrected, M16, <date>.) Several replicas are supported with `[redis]`; see `2026-11-17-okf-multi-replica-design.md`."
@@ -1894,7 +2132,9 @@ Comment on #357: the shared Redis handle (`shared::Redis`, `App::redis`) exists 
 - [ ] **Step 1: Smoke test** (by hand, on this machine; never the kind smoke test)
 
 1. `docker run -d --rm -p 16379:6379 --name <unique-name> redis:7.4-alpine`, with a password set by `--requirepass` from a generated value. Never print it.
+   > **Corrected (2026-11-17, cluster mode).** Repeat the checks below once with `mode = "cluster"` on a one-node `valkey/valkey:8.1-alpine` cluster, set up as in Verified facts "Cluster mode".
 2. Run two `okf-mcp serve` processes on one Postgres (`scripts/test-pg.sh` or a container), with `[redis] url_env = "OKF_REDIS_URL"`, `listen` on two ports, `public_url` on the first.
+   > **Corrected (issue #566, 2026-11-17).** Keys are hash-tagged, so the scan is `--pattern '{okf:}*'` (your prefix inside the braces). Use a fixed host port for the standalone container (`-p 127.0.0.1:16379:6379`) so `docker start` keeps it, and give the cluster container a fixed port too. `CONFIG SET cluster-announce-port` does not survive `docker start`: after restarting the cluster container, set it again before expecting the servers to reconnect. A restarted Redis without persistence has lost every session, so check the restart with a new session. The reload is a `debug` span, so prove the resubscribe by effect: create and revoke a key with the CLI afterwards and see both servers follow (set `poll_interval = "1h"`). The results are in `changelog/2026-11-17T06-37-35Z-m16-milestone.md`.
 3. Check:
    - initialize on the first port and `tools/list` on the second;
    - revoke the key with `okf-mcp key revoke` (the CLI path), and see both refuse within 2 s;
@@ -1928,6 +2168,7 @@ Summarise the tasks, the decisions, the deviations (including every `Corrected` 
   - Decision 17: Tasks 1 and 2, and every Redis call's span.
   - Decision 18: Task 1.
   - Decision 19 (`/healthz`): Task 11.
+  - Decision 20 (cluster mode): Task 1b, with both-mode tests in Tasks 2, 3 and 5.
   - Docs: Tasks 1 and 12.
 - **The issue's acceptance criteria.**
   - Unchanged without `[redis]`: every task's memory tests.
@@ -1952,4 +2193,6 @@ Summarise the tasks, the decisions, the deviations (including every `Corrected` 
 
 ## Open questions for the maintainer
 
-None. The three questions raised during planning were answered on 2026-11-17 and are recorded as Decisions 7, 8 and 9 above.
+None. The three questions raised during planning were answered on 2026-11-17 and are recorded as Decisions 7, 8 and 9 above. The cache type was settled the same day (Decision 11).
+
+Still to check against the real cache once it is reachable from a deployment: that ElastiCache Serverless accepts RESP3 (`HELLO 3`) and the client's cluster discovery, as the one-node Valkey cluster does. Task 13's hand smoke test can't reach it, so the first deploy checks it.

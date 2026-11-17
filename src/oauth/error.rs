@@ -84,8 +84,10 @@ impl OAuthError {
         }
     }
 
-    /// The HTTP status: 401 for `invalid_client`, 429 for `slow_down`, 500
-    /// for `server_error`, else 400 (spec "Errors").
+    /// The HTTP status: 401 for `invalid_client`, 429 for `slow_down`, 503
+    /// for a `server_error` that is [`OkfError::Busy`] (a Redis failure or a
+    /// lost race: retry; multi-replica spec Decision 16), 500 for any other
+    /// `server_error`, else 400 (spec "Errors").
     ///
     /// # Returns
     /// The status.
@@ -100,6 +102,9 @@ impl OAuthError {
         match self {
             OAuthError::InvalidClient(_) => StatusCode::UNAUTHORIZED,
             OAuthError::SlowDown => StatusCode::TOO_MANY_REQUESTS,
+            // A pattern can look inside the wrapped error: this arm takes
+            // only a `Busy` one, the next every other.
+            OAuthError::Server(OkfError::Busy { .. }) => StatusCode::SERVICE_UNAVAILABLE,
             OAuthError::Server(_) => StatusCode::INTERNAL_SERVER_ERROR,
             OAuthError::InvalidRequest(_)
             | OAuthError::InvalidGrant(_)
@@ -215,6 +220,25 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(response.headers()["cache-control"], "no-store");
+        let body = axum::body::to_bytes(response.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"error": "server_error", "error_description": "internal error"})
+        );
+    }
+
+    #[tokio::test]
+    async fn a_busy_server_error_is_503_and_still_hides_its_detail() {
+        let busy = OAuthError::Server(OkfError::Busy {
+            reason: "a detail the client must not see".into(),
+        });
+
+        let response = busy.into_response();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body = axum::body::to_bytes(response.into_body(), 1 << 16)
             .await
             .unwrap();

@@ -50,7 +50,7 @@
   "editable": true,
   "graphTooltip": 1,
   "schemaVersion": 39,
-  "version": 4,
+  "version": 5,
   "time": {
     "from": "now-6h",
     "to": "now"
@@ -2185,7 +2185,7 @@
     {
       "type": "timeseries",
       "title": "Concepts per catalog",
-      "description": "Concept documents in each catalog's current snapshot.",
+      "description": "Concept documents in each catalog's current snapshot (max across replicas, which each report the same catalog).",
       "targets": [
         {
           "datasource": {
@@ -2193,7 +2193,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "refId": "A",
-          "expr": "sum by (catalog) (okf_catalog_concepts{job=~\"$job\",catalog=~\"$catalog\"})",
+          "expr": "max by (catalog) (okf_catalog_concepts{job=~\"$job\",catalog=~\"$catalog\"})",
           "legendFormat": "{{catalog}}",
           "range": true,
           "instant": false
@@ -2309,7 +2309,7 @@
     {
       "type": "timeseries",
       "title": "Open changesets",
-      "description": "Open changesets per catalog, as of the last poll pass.",
+      "description": "Open changesets per catalog, as of the last poll pass (max across replicas).",
       "targets": [
         {
           "datasource": {
@@ -2317,7 +2317,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "refId": "A",
-          "expr": "sum by (catalog) (okf_changesets_open{job=~\"$job\",catalog=~\"$catalog\"})",
+          "expr": "max by (catalog) (okf_changesets_open{job=~\"$job\",catalog=~\"$catalog\"})",
           "legendFormat": "{{catalog}}",
           "range": true,
           "instant": false
@@ -2645,7 +2645,7 @@
     {
       "type": "timeseries",
       "title": "Mail queue depth",
-      "description": "Mail jobs not yet sent, by status, as of the last poll.",
+      "description": "Mail jobs not yet sent, by status, as of the last poll (max across replicas, which count the same queue).",
       "targets": [
         {
           "datasource": {
@@ -2653,7 +2653,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "refId": "A",
-          "expr": "sum by (status) (okf_mail_queue_depth{job=~\"$job\"})",
+          "expr": "max by (status) (okf_mail_queue_depth{job=~\"$job\"})",
           "legendFormat": "{{status}}",
           "range": true,
           "instant": false
@@ -3215,6 +3215,68 @@
     },
     {
       "type": "timeseries",
+      "title": "Redis errors",
+      "description": "Failed Redis calls per interval, by operation (only with [redis]).",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "sum by (operation) (increase(okf_redis_errors_total{job=~\"$job\"}[$__rate_interval]))",
+          "legendFormat": "{{operation}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 153
+      },
+      "id": 53,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      }
+    },
+    {
+      "type": "timeseries",
       "title": "Telemetry export failures",
       "description": "OTLP exports that failed, by signal and reason.",
       "targets": [
@@ -3264,12 +3326,12 @@
         }
       },
       "gridPos": {
-        "h": 6,
-        "w": 24,
-        "x": 0,
+        "h": 8,
+        "w": 12,
+        "x": 12,
         "y": 153
       },
-      "id": 53,
+      "id": 54,
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"

@@ -470,3 +470,60 @@ async fn http_requests_are_measured_by_method_route_and_status() {
         "{text}"
     );
 }
+
+/// Sends each uri through the router under a console logger at `INFO` and
+/// returns the captured console text.
+async fn console_for(format: LogFormat, uris: &[&str]) -> String {
+    let test = app().await;
+    let observer = Observer::start("info", "off", "off", format);
+    for uri in uris {
+        fetch(&test, uri, None, &[]).await;
+    }
+    observer.finish().stderr
+}
+
+#[tokio::test]
+async fn health_probes_write_no_completion_line_to_the_console() {
+    for format in [LogFormat::Text, LogFormat::Json] {
+        let console = console_for(format, &["/healthz", "/healthz?probe=1", "/healthz"]).await;
+        assert!(
+            !console.contains("/healthz") && !console.contains("on_response"),
+            "{console}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn other_routes_keep_their_completion_line() {
+    for format in [LogFormat::Text, LogFormat::Json] {
+        let console = console_for(
+            format,
+            &["/healthz", "/api/v1/catalogs/main/health", "/healthz"],
+        )
+        .await;
+        assert!(console.contains("on_response"), "{console}");
+        assert_eq!(console.matches("on_response").count(), 1, "{console}");
+    }
+}
+
+#[tokio::test]
+async fn a_failing_health_probe_is_quiet_but_still_exported_as_an_error() {
+    let observer = Observer::start("info", "info", "off", LogFormat::Text);
+    let test = app().await;
+    test.app.pool().close().await;
+    let status = fetch(&test, "/healthz", None, &[]).await;
+    let observed = observer.finish();
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        !observed.stderr.contains("on_response"),
+        "{}",
+        observed.stderr
+    );
+    let spans = observed.spans_named("GET /healthz");
+    assert_eq!(spans.len(), 1);
+    assert!(matches!(spans[0].status, Status::Error { .. }));
+    assert_eq!(
+        attribute(spans[0], "http.response.status_code"),
+        Some(&503.into())
+    );
+}

@@ -14,6 +14,7 @@ use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
+use crate::app::App;
 use crate::config::Config;
 use crate::http::console_session::{start_session, COOKIE, CSRF_HEADER};
 use crate::http::router;
@@ -435,6 +436,18 @@ impl Browser {
         uri: &str,
         payload: Payload,
     ) -> Reply {
+        self.send_to(&test.app, method, uri, payload).await
+    }
+
+    /// [`Self::send`] to a given app: one replica of a pair
+    /// (`crate::mcp::testing::replica_pair`).
+    pub(crate) async fn send_to(
+        &mut self,
+        app: &Arc<App>,
+        method: &str,
+        uri: &str,
+        payload: Payload,
+    ) -> Reply {
         let mut request = Request::builder().method(method).uri(uri);
         if !self.cookies.is_empty() {
             let cookies: Vec<String> = self
@@ -465,7 +478,7 @@ impl Browser {
             }
         }
         .expect("a valid request");
-        let response = router(Arc::clone(&test.app), &CancellationToken::new())
+        let response = router(Arc::clone(app), &CancellationToken::new())
             .oneshot(request)
             .await
             .expect("the router answers");

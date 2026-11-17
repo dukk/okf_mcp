@@ -118,7 +118,8 @@ def hook(old, new):
         stream.write(f"# Release v{new} ({timestamp})\n\n"
                      f"Committed changes since {previous or 'the start of history'}:\n\n"
                      f"{history}\n")
-    checks()
+    # No checks here: preparation is local and pushes nothing, and ship runs fmt, lint and
+    # test on this exact tree right before anything is published.
     # cargo-release stages tracked updates only; explicitly include the new notes.
     git("add", "--", str(notes))
 
