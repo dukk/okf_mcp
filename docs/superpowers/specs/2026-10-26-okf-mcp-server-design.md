@@ -281,6 +281,10 @@ The server runs one replica. It notices changes made outside it (a CLI import) t
 the catalog's `generation` counter (see "Publish"). A second replica would need the same
 check before every read, or Postgres `LISTEN`/`NOTIFY`; that is not planned.
 
+> **Corrected (M16, 2026-11-17).** Several replicas are supported with `[redis]`; see
+> `2026-11-17-okf-multi-replica-design.md`. A publish on one replica is seen on another within
+> `poll_interval`, as above. Without `[redis]`, one replica is still required.
+
 ### Crate layout
 
 A library crate with a thin `main.rs`:
@@ -1332,4 +1336,5 @@ Raised in M2 reviews and filed as issues (label `milestone-3`):
 - An automated mirror of a catalog to git. Export on request covers it.
 - Admin MCP tools (catalog and key management stay subcommands and routes).
 - MCP resources and prompts (tools only for now).
-- More than one replica.
+- More than one replica. (Corrected, M16, 2026-11-17: several replicas are supported with
+  `[redis]`; see `2026-11-17-okf-multi-replica-design.md`.)
