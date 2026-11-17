@@ -441,45 +441,31 @@ async fn exchange_code(
     // (the map's lock, or Redis's compare-and-set) before that revocation,
     // so either this sees it, or the replay's revocation ran after the
     // commit and caught these tokens. The read is an `update` that changes
-    // nothing, so it sees the latest stored copy.
-    let answer = oauth
+    // nothing, so it sees the latest stored copy. Only a stored code with
+    // `replayed` unset keeps the tokens. A code gone from the store
+    // (expired, or Redis lost it) cannot vouch for itself, and neither can
+    // a Redis failure: an exchange that cannot prove it was not replayed
+    // must not keep its tokens, so both revoke (spec Decision 16). The
+    // failure is still answered as what it is, a 503 to retry, not a replay.
+    match oauth
         .codes
         .update(&key, started, |stored| stored.replayed)
-        .await;
-    if !vouches_unreplayed(&answer) {
-        revoke_family(app, oauth, &stored.family_id).await?;
-        return Err(OAuthError::InvalidGrant(
-            "the code was used twice".to_string(),
-        ));
+        .await
+    {
+        Ok(Some(false)) => {}
+        Ok(Some(true) | None) => {
+            revoke_family(app, oauth, &stored.family_id).await?;
+            return Err(OAuthError::InvalidGrant(
+                "the code was used twice".to_string(),
+            ));
+        }
+        Err(error) => {
+            revoke_family(app, oauth, &stored.family_id).await?;
+            return Err(OAuthError::Server(error));
+        }
     }
     app.metrics().oauth_token_issued(Grant::AuthorizationCode);
     Ok(remember(oauth, minted))
-}
-
-/// Whether the replay check after an exchange's commit proves the code was
-/// not presented again. Only a stored code with `replayed` unset does. A
-/// code gone from the store (expired, or Redis lost it) cannot vouch for
-/// itself, and neither can a Redis failure: an exchange that cannot prove
-/// it was not replayed must not keep its tokens, so both fail closed and
-/// revoke the family (spec Decision 16).
-///
-/// # Arguments
-/// * `answer` - the check's answer: `Ok(Some(replayed))` from a stored
-///   code, `Ok(None)` for a missing one, `Err` for a Redis failure.
-///
-/// # Returns
-/// `true` only for `Ok(Some(false))`.
-#[cfg_attr(
-    dylint_lib = "hyp_tracing",
-    allow(
-        uninstrumented_fn,
-        reason = "pure predicate on a value: a span would record nothing new"
-    )
-)]
-fn vouches_unreplayed(answer: &Result<Option<bool>, OkfError>) -> bool {
-    // `matches!` tests a value against a pattern, like a structural
-    // `match` with one arm that answers `true`.
-    matches!(answer, Ok(Some(false)))
 }
 
 /// `grant_type=refresh_token`.
@@ -1127,20 +1113,6 @@ mod tests {
         assert!(printed.contains("authorization_code"));
     }
 
-    #[test]
-    fn the_replay_check_vouches_only_for_a_stored_unreplayed_code() {
-        let busy = || {
-            Err(crate::error::OkfError::Busy {
-                reason: "Redis failed".into(),
-            })
-        };
-
-        assert!(super::vouches_unreplayed(&Ok(Some(false))));
-        assert!(!super::vouches_unreplayed(&Ok(Some(true))), "replayed");
-        assert!(!super::vouches_unreplayed(&Ok(None)), "gone from the store");
-        assert!(!super::vouches_unreplayed(&busy()), "Redis failed: revoke");
-    }
-
     /// Codes across two replicas over one Redis (spec Decision 5). Each
     /// body runs on standalone Redis and on a one-node cluster.
     mod replicas {
@@ -1327,6 +1299,57 @@ mod tests {
             assert_eq!(live, 0, "nothing was minted, from memory or otherwise");
         }
 
+        async fn a_redis_failure_after_the_commit_revokes_and_answers_503(server: TestRedis) {
+            let (a, b, server) = oauth_replica_pair_on(server).await;
+            let code = authorization_code(&a).await;
+            let family = stored_on(&a.app, &code)
+                .await
+                .expect("A stored the code")
+                .family_id;
+            // Hold the family's lock, so B's exchange stops after it marked
+            // the code used and before it mints; Redis fails while it waits,
+            // so only the check after the commit meets the failure.
+            let mut holder = a.app.pool().begin().await.expect("a transaction");
+            crate::store::oauth::tokens::lock_family(&mut holder, &family)
+                .await
+                .expect("hold the family's lock");
+            let exchanging = {
+                let b = Arc::clone(&b);
+                let code = code.clone();
+                // `tokio::spawn` runs the exchange as its own task (Python:
+                // `asyncio.create_task`); `async move` gives it owned copies.
+                tokio::spawn(async move { exchange_on(&b, &code).await })
+            };
+            crate::http::api::testing::wait_for_lock_waiters(a.app.pool(), 1).await;
+            let marked = stored_on(&a.app, &code).await.expect("still stored");
+            assert!(marked.used, "B marked the code used before the lock");
+            if server.stop().await.is_none() {
+                drop(holder);
+                let _ = exchanging.await;
+                eprintln!("skipped: a shared Redis (TEST_REDIS_URL) cannot be stopped");
+                return;
+            }
+
+            holder.rollback().await.expect("release the family's lock");
+            let (status, body) = tokio::time::timeout(BOUND, exchanging)
+                .await
+                .expect("the exchange finished after the lock was released")
+                .expect("the exchange task did not panic");
+
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+            assert_eq!(body["error"], "server_error");
+            let (minted, live): (i64, i64) = sqlx::query_as(
+                "SELECT count(*), count(*) FILTER (WHERE revoked_at IS NULL) \
+                   FROM oauth_tokens WHERE family_id = $1",
+            )
+            .bind(&family)
+            .fetch_one(a.app.pool())
+            .await
+            .expect("count the family's tokens");
+            assert!(minted > 0, "the exchange committed its tokens");
+            assert_eq!(live, 0, "and the family was revoked");
+        }
+
         // `macro_rules!` writes a standalone and a cluster `#[tokio::test]`
         // for every body named (Python: a parametrized test).
         macro_rules! in_both_modes {
@@ -1358,6 +1381,7 @@ mod tests {
 
         in_both_modes!(
             a_code_minted_on_one_replica_is_exchanged_on_the_other_once,
+            a_redis_failure_after_the_commit_revokes_and_answers_503,
             two_replicas_racing_one_code_leave_no_usable_token,
             an_expired_code_is_refused_on_either_replica,
             a_redis_outage_fails_closed,
