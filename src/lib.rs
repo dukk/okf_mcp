@@ -33,6 +33,7 @@ pub mod http;
 pub mod investigator;
 pub mod keyed_lock;
 pub mod keys;
+pub mod labels;
 pub mod maintenance;
 #[cfg(test)]
 mod maintenance_contract_tests {
