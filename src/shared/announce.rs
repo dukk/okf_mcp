@@ -12,8 +12,9 @@ use redis::AsyncCommands;
 use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
+use crate::config::Config;
 use crate::shared::{Redis, SubscriptionEvent};
-use crate::telemetry::metrics::RedisOp;
+use crate::telemetry::metrics::{Metrics, RedisOp};
 
 /// The channel's name under the prefix.
 pub const CHANNEL: &str = "admin-generation";
@@ -48,6 +49,34 @@ pub async fn publish(redis: &Redis, generation: Option<i64>) {
     if let Err(error) = published {
         // `failed` counts and logs; its 503 is for requests, not for here.
         let _ = redis.failed(RedisOp::Publish, &error);
+    }
+}
+
+/// After a CLI command that may have changed keys, users, teams or grants,
+/// tells every serving instance to check `admin_generation` (spec Decision
+/// 13). Best effort: the change is committed whatever happens here, so a
+/// missing variable or an unreachable Redis is a `warn`, never a failure.
+/// Nothing printed names the URL.
+///
+/// # Arguments
+/// * `config` - the loaded configuration; without `[redis]` nothing happens.
+/// * `env` - reads an environment variable (injectable for tests).
+/// * `metrics` - where `okf.redis.errors` is counted.
+#[tracing::instrument(level = "debug", skip_all)]
+pub async fn announce_from_cli(
+    config: &Config,
+    env: &dyn Fn(&str) -> Option<String>,
+    metrics: &Metrics,
+) {
+    let Some(table) = &config.redis else { return };
+    match Redis::connect(table, env, metrics).await {
+        Ok(redis) => publish(&redis, None).await,
+        // The error's text names the variable and a kind, never the URL, but
+        // only the kind is logged: the rest adds nothing a log reader needs.
+        Err(error) => tracing::warn!(
+            kind = error.kind(),
+            "announcement skipped; serving instances notice the change within poll_interval"
+        ),
     }
 }
 
