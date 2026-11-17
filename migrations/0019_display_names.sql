@@ -1,9 +1,9 @@
 -- Display names (spec 2026-11-17-okf-display-names-design.md). A slug
 -- (`name`) stays the permanent id; `display_name` is the human label, empty
 -- meaning unset. Catalogs gain the column. Users and teams have had it since
--- 0009, never validated, so existing values are normalised the way the
--- server's rule reads them (`labels::DisplayName::parse` and `bounded`)
--- before the CHECK goes on:
+-- 0009, never validated, so existing values are repaired until
+-- `labels::DisplayName::parse` accepts each one unchanged (where `parse`
+-- refuses a bad name, this rewrites it) before the CHECK goes on:
 --   1. every control character (Unicode Cc, U+0001-U+001F and U+007F-U+009F,
 --      what Rust's `char::is_control` matches) and U+2028/U+2029 becomes a
 --      space;
