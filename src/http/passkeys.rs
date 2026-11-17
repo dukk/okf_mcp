@@ -154,9 +154,10 @@ impl Passkeys {
     }
 }
 
-/// A ceremony in progress. No `Debug`: it holds the challenges. `Serialize`/`Deserialize` (webauthn-rs'
-/// `danger-allow-state-serialisation`) let the Redis store keep it as JSON,
-/// server-side; it is never sent to a client, logged or put in a span.
+/// A ceremony in progress. No `Debug`: it holds the challenges.
+/// `Serialize`/`Deserialize` (webauthn-rs' `danger-allow-state-serialisation`)
+/// let the Redis store keep it as JSON, server-side; it is never sent to a
+/// client, logged or put in a span.
 #[derive(Serialize, Deserialize)]
 enum Ceremony {
     /// Registering a passkey (boxed: much larger than a sign-in).
