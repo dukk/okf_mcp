@@ -10,10 +10,12 @@ use chrono::{TimeDelta, Utc};
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
+use crate::app::App;
+use crate::db::redis_support::TestRedis;
 use crate::http::api::testing::{Browser, MAIN};
 use crate::http::console_session::COOKIE;
 use crate::http::router;
-use crate::mcp::testing::{app_with, app_with_metrics, TestApp};
+use crate::mcp::testing::{app_with, app_with_metrics, replica_pair, TestApp};
 use crate::store::keys::{Access, Grants};
 use crate::store::oauth::clients::ClientKind;
 use crate::store::oauth::codes::{self as code_rows, insert_test_client, NewSignInCode};
@@ -123,6 +125,118 @@ pub(crate) async fn sign_in_code(test: &TestApp, access: Access) -> String {
     .await
     .expect("create a sign-in code")
     .code
+}
+
+/// Runs authorize and consent on the sign-in code path (code, then Approve
+/// from the summary), as the DCR client [`CLIENT_ID`].
+///
+/// # Arguments
+/// * `test` - the app ([`oauth_app`] or [`oauth_replica_pair`]'s first).
+///
+/// # Returns
+/// The `okfac_` code.
+///
+/// # Panics
+/// If a step does not answer as expected.
+pub(crate) async fn authorization_code(test: &TestApp) -> String {
+    authorization_code_for(test, &authorize_query()).await
+}
+
+/// [`authorization_code`] for the authorize request `query`.
+///
+/// # Arguments
+/// * `test` - the app.
+/// * `query` - the authorize request's query string, without the `?`.
+///
+/// # Returns
+/// The `okfac_` code.
+///
+/// # Panics
+/// If a step does not answer as expected.
+pub(crate) async fn authorization_code_for(test: &TestApp, query: &str) -> String {
+    let code = sign_in_code(test, Access::Read).await;
+    let (_, _, page) = send(test, "GET", &format!("/oauth/authorize?{query}"), None).await;
+    let (pending, csrf) = (hidden(&page, "pending"), hidden(&page, "csrf"));
+    let (_, _, summary) = send(
+        test,
+        "POST",
+        "/oauth/authorize",
+        Some(form(&[
+            ("pending", &pending),
+            ("csrf", &csrf),
+            ("action", "code"),
+            ("sign_in_code", &code),
+        ])),
+    )
+    .await;
+    let (status, headers, page) = send(
+        test,
+        "POST",
+        "/oauth/authorize",
+        Some(form(&[
+            ("pending", &pending),
+            ("csrf", &csrf),
+            ("summary", &hidden(&summary, "summary")),
+            ("action", "approve"),
+        ])),
+    )
+    .await;
+    forwarded(status, &headers, &page)
+        .query_pairs()
+        .find(|(key, _)| key == "code")
+        .map(|(_, value)| value.into_owned())
+        .expect("a code")
+}
+
+/// [`oauth_app`] as two replicas over one database and one Redis
+/// (`mcp::testing::replica_pair`, `poll_interval = 1h`). The client is
+/// registered after both loaded, which needs no key cache.
+///
+/// # Returns
+/// The first replica (it owns the database), the second, and their Redis.
+///
+/// # Panics
+/// If the database, Redis or the insert fails: a broken test setup.
+pub(crate) async fn oauth_replica_pair() -> (TestApp, Arc<App>, TestRedis) {
+    let (first, second, redis) = replica_pair(
+        &[("main", MAIN), ("other", &[("index.md", "# Other\n")])],
+        oauth_config(PUBLIC_URL),
+    )
+    .await;
+    insert_test_client(first.app.pool(), CLIENT_ID, ClientKind::Dcr, REDIRECT_URI).await;
+    (first, second, redis)
+}
+
+/// Exchanges `code` (from [`authorization_code`]) on `test` for tokens.
+///
+/// # Arguments
+/// * `test` - the app that issued the code.
+/// * `code` - the `okfac_` code.
+///
+/// # Returns
+/// The access token and the refresh token.
+///
+/// # Panics
+/// If the exchange does not answer 200 with both tokens.
+pub(crate) async fn exchange_for_tokens(test: &TestApp, code: &str) -> (String, String) {
+    let body = form(&[
+        ("grant_type", "authorization_code"),
+        ("code", code),
+        ("client_id", CLIENT_ID),
+        ("redirect_uri", REDIRECT_URI),
+        ("code_verifier", VERIFIER),
+        ("resource", RESOURCE),
+    ]);
+    let (status, _, text) = send(test, "POST", "/oauth/token", Some(body)).await;
+    assert_eq!(status, StatusCode::OK, "the exchange answers 200: {text}");
+    let tokens: serde_json::Value = serde_json::from_str(&text).expect("a JSON token response");
+    let field = |name: &str| {
+        tokens[name]
+            .as_str()
+            .unwrap_or_else(|| panic!("the response has {name}"))
+            .to_string()
+    };
+    (field("access_token"), field("refresh_token"))
 }
 
 /// A valid authorization request's query string on the sign-in code path

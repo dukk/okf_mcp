@@ -1780,11 +1780,14 @@ const READ_REVISIONS: &str = "if redis.call('EXISTS', KEYS[1]) == 0 then\n\
     end\n\
     return redis.call('GET', KEYS[1])";
 
-/// Bumps the counter, seeding it the same way first.
+/// Bumps the counter, seeding it the same way first. The value goes back
+/// through `GET`: Lua holds `INCR`'s integer reply as a double, which rounds
+/// above 2^53 (corrected, issue #559).
 const BUMP_REVISIONS: &str = "if redis.call('EXISTS', KEYS[1]) == 0 then\n\
         redis.call('SET', KEYS[1], ARGV[1])\n\
     end\n\
-    return redis.call('INCR', KEYS[1])";
+    redis.call('INCR', KEYS[1])\n\
+    return redis.call('GET', KEYS[1])";
 ```
 
 The seed is a random non-negative `i64` below `2^62`, from `rand`, or from the bytes `keys::generate_with` already draws. Either leaves room to `INCR`. Two instances seeding at once is harmless: `SET` runs inside the script, and Redis runs scripts one at a time. A collision with a value an instance saw before has a chance of about 2^-62.
@@ -1802,6 +1805,15 @@ The seed is a random non-negative `i64` below `2^62`, from `rand`, or from the b
   - In `verify`: if `app.keys().find_grant(&live.grant_id)` is `None` and `app.redis().is_some()`, call `app.catch_up_keys().await` and look again.
   - Do the same at `token.rs:411` (exchange) and in the refresh path's grant lookup (`token.rs:281`).
 
+> **Corrected (issue #559, 2026-11-17).** What shipped differs in small ways; read `src/oauth/access.rs`.
+> - Names: the scripts are `READ_REVOCATIONS` and `BUMP_REVOCATIONS`, the field is `Cache::seen_revocations`, and the key is `redis.key("oauth", "access-revocations")`. The seed is `getrandom::u64() >> 2`.
+> - **`BUMP_REVOCATIONS` must not return `INCR`'s reply.** Redis hands a command's integer reply to Lua as a double, so `return redis.call('INCR', ...)` rounds a counter above 2^53 (a seed below 2^62 almost always is): the test saw `...527445 + 1` come back as `...527616`. The script runs `INCR`, then `return redis.call('GET', KEYS[1])`, a string parsed as `i64` exactly.
+> - `remember` keeps its signature and stamps `cached_at: Instant::now()` itself; the 60 s test ages the entry in place.
+> - `forget` does not store the value its own bump returned as seen: another instance's bump may fall between, and storing a value this instance never read would hide it.
+> - The catch-up is one helper, `oauth::access::find_grant(app, grant_id)` (`pub(crate)`), used by `verify` and the exchange (`token.rs`'s "the grant was revoked" check). The refresh path does not catch up in place: it rolls its transaction back, calls `catch_up_keys`, and runs the refresh once more, so it never waits on `polling` while holding the token rows' locks.
+> - `authorization_code` and `authorization_code_for` moved from `token.rs`'s tests to `oauth::testing`, beside the new `oauth_replica_pair()` (`replica_pair` with OAuth and the DCR client) and `exchange_for_tokens(test, code)`. Task 7's tests can use them.
+> - Extra tests: a refresh on B catches up on A's grant (`token.rs`), and the counter scripts in standalone and cluster mode.
+
 - [ ] **Step 3: Revert-check, gates, changelog, commit**
 
 `feat: access-token revocation and grant catch-up across replicas (M16 Task 6)`.
@@ -1813,6 +1825,8 @@ The seed is a random non-negative `i64` below `2^62`, from `rand`, or from the b
 **Files:** Modify `src/oauth/mod.rs`, `src/oauth/state.rs`, `src/oauth/token.rs`, `src/oauth/authorize.rs` (the insert at `:1010` only).
 
 - [ ] **Step 1: Write the failing tests** (`src/oauth/token.rs` tests, `replica_pair` with OAuth)
+
+> **Corrected (issue #559, 2026-11-17).** Task 6 shipped `oauth::testing::{authorization_code, oauth_replica_pair, exchange_for_tokens}`; use them for the two-replica tests. The exchange's catch-up is `oauth::access::find_grant` in `token.rs`'s `exchange_code`; to revert-check it, replace that call with `app.keys().find_grant`. `AccessTokens::forget` is `async`.
 
 - `a_code_minted_on_one_replica_is_exchanged_on_the_other_once`: approve on A, then exchange on B (200). B has no subscriber in a lib pair, so this also covers the exchange's grant catch-up (Task 6, `token.rs:411`): revert it, and the answer is "the grant was revoked". Then exchange again on A → `invalid_grant` "already used", and the family is revoked: the access token from the first exchange is refused by `verify` on both.
 - `two_replicas_racing_one_code_leave_no_usable_token`: `tokio::join!` the exchange on A and B.

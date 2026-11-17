@@ -265,7 +265,7 @@ impl App {
                 tracing::warn!(catalog = %name, "default_catalog is not loaded (yet)");
             }
         }
-        let oauth = OAuth::new(&config)?;
+        let oauth = OAuth::new(&config, redis.as_ref())?;
         let sessions = SessionKeys::new(config.session_idle_timeout);
         let overlays = Overlays::new(config.session_idle_timeout, config.overlay_cache_size);
         let mailer = crate::mail::from_config(&config.mail).await?;
