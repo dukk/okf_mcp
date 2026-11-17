@@ -1,8 +1,9 @@
 //! Teams: the owners of catalogs (spec "Data model"). Every user has a
 //! personal team, made with it; shared teams have owners and members.
-//! Teams are addressed by name; ids stay inside SQL. Every write locks the
-//! team row `FOR UPDATE`, so changes to one team's membership run one at a
-//! time and the last-owner check cannot race.
+//! Teams are addressed by name; ids stay inside SQL. Every membership
+//! write locks the team row `FOR UPDATE`, so changes to one team's
+//! membership run one at a time and the last-owner check cannot race; a
+//! display-name change takes `FOR NO KEY UPDATE`, which still waits for them.
 
 use std::collections::HashMap;
 
@@ -561,6 +562,136 @@ pub async fn remove_member(
             team,
             person: Some(&user_id),
             details: serde_json::json!({}),
+        },
+        now,
+    )
+    .await?;
+    bump_admin_generation(&mut tx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// A change of a shared team's display name: [`set_display_name`]'s input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TeamDisplayNameChange<'a> {
+    /// The team's name.
+    pub team: &'a str,
+    /// The new display name (empty clears it).
+    pub display_name: &'a DisplayName,
+    /// `Some(users.id)` when the caller may make the change only as an
+    /// owner of the team (a console session that is neither a provisioner
+    /// nor an every-catalog admin): checked under the team's lock, so an
+    /// owner removed or demoted meanwhile is refused. `None` when the
+    /// caller is already allowed (an admin, a provisioner, the CLI).
+    pub owner: Option<&'a str>,
+}
+
+/// Sets a shared team's display name, records `team.display_name_changed`
+/// (its new length in characters, never the text) and bumps the
+/// administrative generation (the key cache's labels read it). The same
+/// text again is no change: it writes and records nothing. A personal
+/// team's label follows its user, so it is refused.
+///
+/// Lock order (`tools/agentic/lessons.md`): the users the entry resolves
+/// ([`audit::lock_people`]), then the team row (`FOR NO KEY UPDATE`: the
+/// column is no key, so a membership or catalog insert's foreign-key check
+/// need not wait for it), then, for an owner, its membership row, then
+/// `server_state`.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `change` - the team, its new display name, and the owner to check, if any.
+/// * `actor` - who, for the audit log.
+/// * `now` - the server clock.
+///
+/// # Errors
+/// [`OkfError::UnknownName`] (a malformed name included);
+/// [`OkfError::Refused`] for a personal team; [`OkfError::Forbidden`] when
+/// the owner check fails; [`OkfError::Database`], a failed audit write
+/// included.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.set_display_name"))]
+pub async fn set_display_name(
+    pool: &PgPool,
+    change: &TeamDisplayNameChange<'_>,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<(), OkfError> {
+    let TeamDisplayNameChange {
+        team,
+        display_name,
+        owner,
+    } = *change;
+    // As in `find`: a malformed name names no team (issue #339).
+    if !is_valid_name(team) {
+        return Err(unknown(team));
+    }
+    let mut tx = pool.begin().await?;
+    audit::lock_people(
+        &mut tx,
+        actor,
+        &People {
+            teams: &[team],
+            ..People::default()
+        },
+    )
+    .await?;
+    let (team_id, personal) = sqlx::query_as::<_, (String, bool)>(
+        "SELECT id, personal_of IS NOT NULL FROM teams WHERE name = $1 FOR NO KEY UPDATE",
+    )
+    .bind(team)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| unknown(team))?;
+    if personal {
+        return Err(OkfError::Refused {
+            reason: "a personal team's label follows its user; change the user's display name"
+                .to_string(),
+        });
+    }
+    if let Some(user_id) = owner {
+        // `FOR SHARE` holds the owner's membership row, so a concurrent
+        // removal or demotion waits for this change rather than racing it.
+        let is_owner: Option<i32> = sqlx::query_scalar(
+            "SELECT 1 FROM team_members \
+             WHERE team_id = $1 AND user_id = $2 AND role = 'owner' FOR SHARE",
+        )
+        .bind(&team_id)
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if is_owner.is_none() {
+            return Err(OkfError::Forbidden {
+                reason: format!(
+                    "this needs an owner of team {team:?} or an admin that reaches every catalog"
+                ),
+            });
+        }
+    }
+    // The subquery reads the old value (the row is already locked), so
+    // `changed` compares it with the new one in the same statement.
+    let changed = sqlx::query_scalar::<_, bool>(
+        "UPDATE teams t SET display_name = $2 \
+         FROM (SELECT id, display_name FROM teams WHERE id = $1) old \
+         WHERE t.id = old.id \
+         RETURNING old.display_name <> t.display_name",
+    )
+    .bind(&team_id)
+    .bind(display_name.as_str())
+    .fetch_one(&mut *tx)
+    .await?;
+    if !changed {
+        // Dropping `tx` rolls back the `UPDATE`, which wrote the same text.
+        return Ok(());
+    }
+    record_team(
+        &mut tx,
+        actor,
+        TeamEvent {
+            action: Action::TeamDisplayNameChanged,
+            team,
+            person: None,
+            // The length in characters, never the text.
+            details: serde_json::json!({"length": display_name.as_str().chars().count()}),
         },
         now,
     )
@@ -2391,5 +2522,224 @@ mod tests {
         by_bob.expect("the second reciprocal suspension commits while the audit row is held");
         let entries = audit::testing::entries(&db.pool, "team.suspended").await;
         assert_eq!(entries.len(), 2, "both actual suspensions are recorded");
+    }
+
+    // ---- Display names (M17 Task 3) ----
+
+    /// A change of `team`'s display name to `display_name`, checked as
+    /// `owner` if given.
+    fn rename<'a>(
+        team: &'a str,
+        display_name: &'a DisplayName,
+        owner: Option<&'a str>,
+    ) -> TeamDisplayNameChange<'a> {
+        TeamDisplayNameChange {
+            team,
+            display_name,
+            owner,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_display_name_changes_it_records_its_length_and_bumps() {
+        // Arrange
+        let db = test_db().await;
+        family(&db.pool).await;
+        let name = DisplayName::parse("Famïly").unwrap();
+        let cli = AuditActor::cli();
+        let before = crate::store::catalogs::admin_generation(&db.pool)
+            .await
+            .unwrap();
+
+        // Act: set it, then the same text again.
+        set_display_name(&db.pool, &rename("family", &name, None), &cli, now())
+            .await
+            .unwrap();
+        let after_change = crate::store::catalogs::admin_generation(&db.pool)
+            .await
+            .unwrap();
+        set_display_name(&db.pool, &rename("family", &name, None), &cli, now())
+            .await
+            .unwrap();
+
+        // Assert
+        assert_eq!(
+            find(&db.pool, "family").await.unwrap().display_name,
+            "Famïly"
+        );
+        assert_eq!(after_change, before + 1);
+        assert_eq!(
+            crate::store::catalogs::admin_generation(&db.pool)
+                .await
+                .unwrap(),
+            after_change,
+            "the same text bumps nothing"
+        );
+        let renamed = entries(&db.pool, "team.display_name_changed").await;
+        assert_eq!(
+            renamed.len(),
+            1,
+            "the same text records nothing: {renamed:?}"
+        );
+        assert_eq!(renamed[0].target.as_deref(), Some("family"));
+        assert_eq!(renamed[0].teams, ["family"]);
+        // Characters, not bytes; never the text.
+        assert_eq!(renamed[0].details, json!({"length": 6}));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_display_name_refuses_a_personal_team_and_an_unknown_one() {
+        // Arrange
+        let db = test_db().await;
+        seed_user(&db.pool, "alice").await;
+        let name = DisplayName::parse("x").unwrap();
+        let cli = AuditActor::cli();
+
+        // Act
+        let personal = set_display_name(&db.pool, &rename("alice", &name, None), &cli, now()).await;
+        let unknown = set_display_name(&db.pool, &rename("nope", &name, None), &cli, now()).await;
+        let malformed = set_display_name(&db.pool, &rename("a\0b", &name, None), &cli, now()).await;
+
+        // Assert
+        assert!(
+            matches!(personal, Err(OkfError::Refused { .. })),
+            "{personal:?}"
+        );
+        assert_eq!(find(&db.pool, "alice").await.unwrap().display_name, "");
+        for outcome in [unknown, malformed] {
+            assert!(
+                matches!(outcome, Err(OkfError::UnknownName { .. })),
+                "{outcome:?}"
+            );
+        }
+        assert!(entries(&db.pool, "team.display_name_changed")
+            .await
+            .is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_owner_may_rename_their_team_and_a_member_may_not() {
+        // Arrange: alice owns `family`, bob is a member of it.
+        let db = test_db().await;
+        family(&db.pool).await;
+        seed_user(&db.pool, "bob").await;
+        set_member(
+            &db.pool,
+            &membership("family", "bob", Role::Member),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        let (alice, bob) = (
+            user_id(&db.pool, "alice").await,
+            user_id(&db.pool, "bob").await,
+        );
+        let name = DisplayName::parse("Acme").unwrap();
+        let other = DisplayName::parse("Bob's").unwrap();
+
+        // Act
+        let by_owner = set_display_name(
+            &db.pool,
+            &rename("family", &name, Some(&alice)),
+            &session_of(&db.pool, "alice").await,
+            now(),
+        )
+        .await;
+        let by_member = set_display_name(
+            &db.pool,
+            &rename("family", &other, Some(&bob)),
+            &session_of(&db.pool, "bob").await,
+            now(),
+        )
+        .await;
+
+        // Assert
+        by_owner.expect("an owner may rename their team");
+        assert!(
+            matches!(by_member, Err(OkfError::Forbidden { .. })),
+            "{by_member:?}"
+        );
+        assert_eq!(find(&db.pool, "family").await.unwrap().display_name, "Acme");
+        assert_eq!(
+            entries(&db.pool, "team.display_name_changed").await.len(),
+            1
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_owner_demoted_while_their_rename_waits_is_refused() {
+        // Arrange: alice and bob both own `family`.
+        let db = test_db().await;
+        family(&db.pool).await;
+        seed_user(&db.pool, "bob").await;
+        set_member(
+            &db.pool,
+            &membership("family", "bob", Role::Owner),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        let bob = user_id(&db.pool, "bob").await;
+        let bob_session = session_of(&db.pool, "bob").await;
+        // Hold `server_state`: bob's demotion takes the team row and his
+        // membership, then waits here at its generation bump.
+        let mut holder = db.pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM server_state FOR UPDATE")
+            .execute(&mut *holder)
+            .await
+            .unwrap();
+        let pool = db.pool.clone();
+        let demotion = tokio::spawn(async move {
+            let demoted = membership("family", "bob", Role::Member);
+            set_member(&pool, &demoted, &AuditActor::cli(), now()).await
+        });
+        tokio::time::timeout(
+            LOCK_WAIT,
+            crate::store::catalogs::tests::until_locks_are_awaited(&db.pool, 1),
+        )
+        .await
+        .expect("the demotion waits on server_state");
+        // Bob's rename then waits on the team row the demotion holds.
+        let pool = db.pool.clone();
+        let renaming = tokio::spawn(async move {
+            let name = DisplayName::parse("Bob's").unwrap();
+            set_display_name(
+                &pool,
+                &rename("family", &name, Some(&bob)),
+                &bob_session,
+                now(),
+            )
+            .await
+        });
+        tokio::time::timeout(
+            LOCK_WAIT,
+            crate::store::catalogs::tests::until_locks_are_awaited(&db.pool, 2),
+        )
+        .await
+        .expect("the rename waits on the team row");
+
+        // Act
+        holder.rollback().await.unwrap();
+        let demoted = tokio::time::timeout(LOCK_WAIT, demotion)
+            .await
+            .expect("the demotion finishes once server_state is free")
+            .unwrap();
+        let renamed = tokio::time::timeout(LOCK_WAIT, renaming)
+            .await
+            .expect("the rename finishes once the demotion commits")
+            .unwrap();
+
+        // Assert: the rename read the membership after the demotion.
+        demoted.expect("the demotion commits");
+        assert!(
+            matches!(renamed, Err(OkfError::Forbidden { .. })),
+            "{renamed:?}"
+        );
+        assert_eq!(
+            find(&db.pool, "family").await.unwrap().display_name,
+            "The family"
+        );
     }
 }

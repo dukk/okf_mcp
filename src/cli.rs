@@ -1189,14 +1189,15 @@ async fn run_catalog(
             println!("created catalog {}", catalog.name);
         }
         CatalogCommand::Update { name, description } => {
-            let previous = catalogs::update_description(
-                pool,
-                &name,
-                &description,
-                &AuditActor::cli(),
-                clock.now(),
-            )
-            .await?;
+            let change = catalogs::DetailsChange {
+                catalog: &name,
+                display_name: None,
+                description: Some(&description),
+                owner: None,
+            };
+            let previous = catalogs::update_details(pool, &change, &AuditActor::cli(), clock.now())
+                .await?
+                .description;
             // `{:?}` quotes the text, so an empty description shows as `""`.
             println!("updated catalog {name} description: {previous:?} -> {description:?}");
         }

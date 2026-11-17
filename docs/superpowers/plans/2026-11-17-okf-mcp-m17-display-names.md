@@ -843,7 +843,9 @@ The function body follows `update_description` and `set_maintenance`:
    ```
 
    binding `display_name.map(DisplayName::as_str)` and `description`.
-5. `None` from the `UPDATE` → `CatalogNotSelected`.
+
+   > **Corrected (issue #600).** The `UPDATE` also returns `old.owner_team_id`, and an owner's change is refused (`not_owner()`) when it differs from the team `lock_owner` returned, as `set_maintenance` already does: a catalog moved to another team between the membership read and the row lock must not be renamed by the old team's owner. The shipped statement is in `src/store/catalogs.rs` (`update_details`).
+5. `None` from the `UPDATE` → `CatalogNotSelected` (or `not_owner()` when `owner` is set, so an unknown catalog reveals nothing).
 6. Record `CatalogDisplayNameChanged` with `{"length": n}` if the display name changed, and `CatalogDescriptionChanged` (as today) if the description changed.
 7. If either changed, run `bump_admin_generation` and commit; otherwise drop `tx`.
 8. Return `Details`.
@@ -868,7 +870,7 @@ The `not_owner` text is `"this needs admin on catalog {name:?}, or an owner of i
   2. Read `SELECT id, personal_of IS NOT NULL FROM teams WHERE name = $1 FOR NO KEY UPDATE`. None → `unknown(team)`; personal → `Refused { reason: "a personal team's label follows its user; change the user's display name" }`.
   3. If `owner` is set, run `SELECT 1 FROM team_members WHERE team_id = $1 AND user_id = $2 AND role = 'owner' FOR SHARE`. None → `Forbidden { reason: "this needs an owner of team {team:?} or an admin that reaches every catalog" }`.
   4. Run the update, `RETURNING old <> new`.
-  5. If it changed: `bump_admin_generation`, then `record_team(.., TeamEvent { action: TeamDisplayNameChanged, team, person: None, details: json!({"length": n}) }, now)`.
+  5. If it changed: `record_team(.., TeamEvent { action: TeamDisplayNameChanged, team, person: None, details: json!({"length": n}) }, now)`, then `bump_admin_generation`, the order of every other team writer (`suspend`, `set_member`). *(Corrected, issue #600: the draft bumped first.)*
 
   Lock order as in `lessons.md`: the people, then the team row, then the membership, then `server_state`.
 

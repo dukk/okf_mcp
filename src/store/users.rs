@@ -702,6 +702,72 @@ pub async fn set_email(
     Ok(())
 }
 
+/// Sets a user's display name, records `user.display_name_changed` (its
+/// new length in characters, never the text) and bumps the administrative
+/// generation (the key cache's labels read it). The same text again is no
+/// change: it writes and records nothing. The user's personal team keeps
+/// its own `display_name` column: its label follows the user's.
+///
+/// The user's row is locked (`FOR UPDATE`, which `set_admin` also takes)
+/// with the actor's rows before anything else (`audit::lock_people`), so a
+/// provisioner's refusal of an admin user cannot race a promotion.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `name` - the user's name.
+/// * `display_name` - the new display name (empty clears it).
+/// * `actor` - who, for the audit log; a provisioner is refused an admin.
+/// * `now` - the server clock.
+///
+/// # Errors
+/// [`OkfError::Forbidden`] for a provisioner and an admin user;
+/// [`OkfError::UnknownName`] (a malformed name included);
+/// [`OkfError::Database`], a failed audit write included.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.set_display_name"))]
+pub async fn set_display_name(
+    pool: &PgPool,
+    name: &str,
+    display_name: &DisplayName,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<(), OkfError> {
+    // A malformed name (a NUL, which Postgres refuses) names nobody.
+    if !is_valid_name(name) {
+        return Err(unknown(name));
+    }
+    let mut tx = pool.begin().await?;
+    let (user_id, is_admin) = lock_target(&mut tx, name, RowLock::Update, actor).await?;
+    audit::refuse_admin_target(actor, is_admin, name)?;
+    // The subquery reads the old value (the row is already locked), so
+    // `changed` compares it with the new one in the same statement.
+    let changed = sqlx::query_scalar::<_, bool>(
+        "UPDATE users u SET display_name = $2 \
+         FROM (SELECT id, display_name FROM users WHERE id = $1) old \
+         WHERE u.id = old.id \
+         RETURNING old.display_name <> u.display_name",
+    )
+    .bind(&user_id)
+    .bind(display_name.as_str())
+    .fetch_one(&mut *tx)
+    .await?;
+    if !changed {
+        // Dropping `tx` rolls back the `UPDATE`, which wrote the same text.
+        return Ok(());
+    }
+    bump_admin_generation(&mut tx).await?;
+    // The length in characters, never the text (spec "People in entries").
+    let details = json!({ "length": display_name.as_str().chars().count() });
+    audit::record(
+        &mut tx,
+        actor,
+        &user_entry(Action::UserDisplayNameChanged, &user_id, details),
+        now,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// What [`set_admin`] is asked to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdminChange {
@@ -3188,6 +3254,96 @@ pub(crate) mod tests {
             .await
             .is_empty());
         allowed.expect("a provisioner may set a non-admin's email");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_display_name_changes_it_records_its_length_and_bumps() {
+        // Arrange
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", Some("alice@example.com")).await;
+        let cli = AuditActor::cli();
+        let name = DisplayName::parse("Alice Exämple").unwrap();
+        let before = crate::store::catalogs::admin_generation(&db.pool)
+            .await
+            .unwrap();
+
+        // Act: set it, then the same text again.
+        set_display_name(&db.pool, "alice", &name, &cli, now())
+            .await
+            .unwrap();
+        let after_change = crate::store::catalogs::admin_generation(&db.pool)
+            .await
+            .unwrap();
+        set_display_name(&db.pool, "alice", &name, &cli, now())
+            .await
+            .unwrap();
+
+        // Assert
+        assert_eq!(
+            find(&db.pool, "alice").await.unwrap().display_name,
+            "Alice Exämple"
+        );
+        // The personal team's column is left alone: its label is derived.
+        let team: String = sqlx::query_scalar("SELECT display_name FROM teams WHERE name = $1")
+            .bind("alice")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(team, "");
+        assert_eq!(after_change, before + 1);
+        assert_eq!(
+            crate::store::catalogs::admin_generation(&db.pool)
+                .await
+                .unwrap(),
+            after_change,
+            "the same text bumps nothing"
+        );
+        let entries = entries_about(&db.pool, "user.display_name_changed", "alice").await;
+        assert_eq!(entries.len(), 1, "the same text records nothing");
+        assert!(entries[0].teams.is_empty());
+        // Characters, not bytes; never the text.
+        assert_eq!(entries[0].details, json!({"length": 13}));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_provisioner_may_not_rename_an_admin_user() {
+        // Arrange
+        let db = test_db().await;
+        seed_user(&db.pool, "staff", None).await;
+        seed_user(&db.pool, "alice", None).await;
+        set_admin(&db.pool, "staff", admin(true), &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        let name = DisplayName::parse("Renamed").unwrap();
+
+        // Act
+        let refused = set_display_name(&db.pool, "staff", &name, &provisioner(), now()).await;
+        let allowed = set_display_name(&db.pool, "alice", &name, &provisioner(), now()).await;
+        let unknown = set_display_name(&db.pool, "nobody", &name, &AuditActor::cli(), now()).await;
+        let malformed = set_display_name(&db.pool, "a\0b", &name, &AuditActor::cli(), now()).await;
+
+        // Assert
+        assert!(
+            matches!(refused, Err(OkfError::Forbidden { .. })),
+            "{refused:?}"
+        );
+        assert_eq!(find(&db.pool, "staff").await.unwrap().display_name, "");
+        assert!(
+            entries_about(&db.pool, "user.display_name_changed", "staff")
+                .await
+                .is_empty()
+        );
+        allowed.expect("a provisioner may rename a non-admin");
+        assert_eq!(
+            find(&db.pool, "alice").await.unwrap().display_name,
+            "Renamed"
+        );
+        for outcome in [unknown, malformed] {
+            assert!(
+                matches!(outcome, Err(OkfError::UnknownName { .. })),
+                "{outcome:?}"
+            );
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

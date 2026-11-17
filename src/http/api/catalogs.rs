@@ -307,14 +307,15 @@ async fn update_catalog(
     Json(change): Json<DescriptionChange>,
 ) -> Result<Json<DescriptionChanged>, AppError> {
     principal.require(Access::Admin, &catalog)?;
-    let previous = catalog_rows::update_description(
-        app.pool(),
-        &catalog,
-        &change.description,
-        &actor,
-        app.clock().now(),
-    )
-    .await?;
+    let details = catalog_rows::DetailsChange {
+        catalog: &catalog,
+        display_name: None,
+        description: Some(&change.description),
+        owner: None,
+    };
+    let previous = catalog_rows::update_details(app.pool(), &details, &actor, app.clock().now())
+        .await?
+        .description;
     split_event!(
         info,
         { %catalog, },
