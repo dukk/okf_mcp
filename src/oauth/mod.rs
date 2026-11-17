@@ -27,6 +27,7 @@ use axum::Router;
 use crate::app::App;
 use crate::config::Config;
 use crate::error::OkfError;
+use crate::shared::ephemeral::{Ephemeral, Keyspace};
 use crate::shared::Redis;
 
 /// Where the Protected Resource Metadata is served (RFC 9728), also with
@@ -78,8 +79,10 @@ pub struct OAuth {
     pub access: access::AccessTokens,
     /// Consent pages in progress, by pending id.
     pub pending: expiring::ExpiringMap<state::PendingAuthorization>,
-    /// Unexchanged authorization codes, by the hex SHA-256 of the code.
-    pub codes: expiring::ExpiringMap<state::AuthorizationCode>,
+    /// Authorization codes, by the hex SHA-256 of the code ([`state::code_key`]):
+    /// in memory, or in Redis with `[redis]` so any replica can exchange
+    /// them. A used code stays until it expires, so a replay is seen.
+    pub codes: Ephemeral<state::AuthorizationCode>,
     /// The Client ID Metadata Document fetcher.
     pub cimd: clients::CimdFetcher,
     /// `POST /oauth/register`'s limit.
@@ -96,7 +99,8 @@ impl OAuth {
     /// # Arguments
     /// * `config` - the server's settings.
     /// * `redis` - the shared Redis, with `[redis]`: access-token revocations
-    ///   are then counted there for every replica (spec Decision 15).
+    ///   are then counted there for every replica (spec Decision 15), and
+    ///   authorization codes are kept there (spec Decision 5).
     ///
     /// # Returns
     /// `None` without `public_url` (OAuth off), else the state.
@@ -138,7 +142,13 @@ impl OAuth {
             challenge,
             access: access::AccessTokens::new(redis.cloned()),
             pending: expiring::ExpiringMap::new(state::PENDING_TTL, state::MAX_PENDING),
-            codes: expiring::ExpiringMap::new(
+            // In Redis the key is `oauth:code:<hashed(code_key(code))>`:
+            // `Ephemeral` hashes every key it is given, and `code_key` is
+            // already a hash. Hashing twice is harmless, so it is not
+            // special-cased.
+            codes: Ephemeral::new(
+                redis,
+                Keyspace::OauthCode,
                 state::AUTHORIZATION_CODE_TTL,
                 state::MAX_AUTHORIZATION_CODES,
             ),

@@ -1005,22 +1005,29 @@ async fn finish(
         (Ok(code), Ok(family_id)) => (code, family_id),
         (Err(error), _) | (_, Err(error)) => return server_error(&error, &brand),
     };
-    // A full map refuses the code; the grant stays and can be revoked, and
-    // the person starts again from their client.
-    let stored = oauth.codes.insert(
-        code_key(&code),
-        AuthorizationCode {
-            grant_id,
-            client_id: pending.client.client_id.clone(),
-            redirect_uri: pending.redirect_uri.clone(),
-            code_challenge: pending.code_challenge.clone(),
-            resource: pending.resource.clone(),
-            family_id,
-            used: false,
-            replayed: false,
-        },
-        Instant::now(),
-    );
+    // A full map refuses the code, and so does a Redis failure (counted and
+    // logged by `Ephemeral`; never a fallback to memory, spec Decision 16):
+    // `unwrap_or(false)` sends an `Err` to the busy page, as a full map.
+    // The grant stays and can be revoked, and the person starts again from
+    // their client.
+    let stored = oauth
+        .codes
+        .insert(
+            &code_key(&code),
+            AuthorizationCode {
+                grant_id,
+                client_id: pending.client.client_id.clone(),
+                redirect_uri: pending.redirect_uri.clone(),
+                code_challenge: pending.code_challenge.clone(),
+                resource: pending.resource.clone(),
+                family_id,
+                used: false,
+                replayed: false,
+            },
+            Instant::now(),
+        )
+        .await
+        .unwrap_or(false);
     if !stored {
         return consent::error_page(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1377,6 +1384,8 @@ mod tests {
             .expect("oauth on")
             .codes
             .update(&code_key(&issued), Instant::now(), |code| code.clone())
+            .await
+            .unwrap()
             .expect("the code is stored");
         assert_eq!(stored.redirect_uri, LOOPBACK_ON_PORT, "kept with its port");
     }
@@ -1552,6 +1561,8 @@ mod tests {
         let waiting = oauth
             .codes
             .update(&code_key(&issued), Instant::now(), |code| code.clone())
+            .await
+            .unwrap()
             .expect("the code is stored");
         assert!(!waiting.used);
         assert!(pkce::verify(&waiting.code_challenge, VERIFIER));
@@ -1849,6 +1860,8 @@ mod tests {
         let waiting = oauth
             .codes
             .update(&code_key(&issued), Instant::now(), |code| code.clone())
+            .await
+            .unwrap()
             .expect("the code is stored");
         let principal = test
             .app
@@ -1992,7 +2005,7 @@ mod tests {
 
     /// The grant behind the authorization code `target` carries to the
     /// client.
-    fn grant_of(test: &TestApp, target: &url::Url) -> String {
+    async fn grant_of(test: &TestApp, target: &url::Url) -> String {
         let issued = param(target, "code").expect("a code");
         test.app
             .oauth()
@@ -2001,6 +2014,8 @@ mod tests {
             .update(&code_key(&issued), Instant::now(), |code| {
                 code.grant_id.clone()
             })
+            .await
+            .unwrap()
             .expect("the code is stored")
     }
 
@@ -2138,7 +2153,7 @@ mod tests {
         let target = forwarded(status, &headers, &body);
         assert!(target.as_str().starts_with(REDIRECT_URI));
         assert_eq!(param(&target, "state").as_deref(), Some("xyz"));
-        let grant = grant_of(&test, &target);
+        let grant = grant_of(&test, &target).await;
         let principal = test.app.keys().find_grant(&grant).expect("cached grant");
         assert_eq!(principal.user.as_deref(), Some("alice"));
         assert_eq!(principal.actor, "Example Client");
@@ -2172,7 +2187,7 @@ mod tests {
             ],
         )
         .await;
-        let grant = grant_of(&test, &forwarded(status, &headers, &body));
+        let grant = grant_of(&test, &forwarded(status, &headers, &body)).await;
         let granted = test
             .app
             .keys()
