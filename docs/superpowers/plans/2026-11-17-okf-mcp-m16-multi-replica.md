@@ -1986,6 +1986,8 @@ async fn healthz_reports_redis_without_changing_its_status() {
 ```
 
 - Update the existing exact-body test (`healthz_reports_an_unreachable_database_as_503`, `:1107-1122`) to include `"redis": null`.
+> **Corrected (issue #564, 2026-11-17).** The probe is `redis_health` in `src/http/mod.rs`, run beside the database probe with `tokio::join!`. It keeps `RedisOp::Get` for a failed or late `PING`: no `Ping` variant was added, so `okf.redis.errors`' closed `operation` set is unchanged. `PING` goes through `Redis::connection()` and `redis::cmd("PING")`. The test waits are wrapped in `tokio::time::timeout`, and the up-half also asserts the body has no `redis://`.
+
 - Run `gate.sh narrow --lib -- http::tests::healthz`. Expect failures.
 
 - [ ] **Step 2: Implement**
