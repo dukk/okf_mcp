@@ -625,6 +625,8 @@ pub async fn load_with_redis(
 - `load_with_metrics` connects when `config.redis` is set, then delegates:
   `let redis = match &config.redis { Some(table) => Some(shared::Redis::connect(table, &|name| std::env::var(name).ok(), &metrics).await?), None => None };`
   The body of today's `load_with_metrics` moves into `load_with_redis`, which stores `redis` in the struct. Later tasks pass `redis.as_ref()` to the constructors.
+
+> **Corrected (issue #554).** `load_with_metrics` delegates with `Box::pin(Self::load_with_redis(..)).await`, not a bare `.await`: the extra un-boxed async level pushed `tests/investigator.rs`'s `acceptance::server()` future past rustc's layout recursion limit (`queries overflow the depth limit`). `src/cli.rs` needed no change, as Step 10 says. Task 1 also adds three lib tests to `src/shared/mod.rs` (two replicas share one Redis and `app_with_redis` has one; `App::load` refuses an unset `[redis]` variable) so `replica_pair` and `app_with_redis` are used, as the `dead_code` lint requires.
 - `App::load`'s `# Errors` doc gains the `[redis]` failures.
 
 - [ ] **Step 7: Start-up tests** (`src/shared/mod.rs` tests; `Redis::connect` with an injected `env`)

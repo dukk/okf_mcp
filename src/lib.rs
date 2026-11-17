@@ -55,6 +55,7 @@ pub mod okf;
 pub mod overlay;
 pub mod render;
 pub mod selection;
+pub mod shared;
 pub mod store;
 pub mod telemetry;
 pub mod write;

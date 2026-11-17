@@ -9,6 +9,12 @@ use crate::error::OkfError;
 #[cfg(test)]
 #[path = "../tests/support/pg.rs"]
 pub(crate) mod pg_support;
+// The Redis helper's only sibling is `pg`, so alias it for `super::pg`.
+#[cfg(test)]
+pub(crate) use pg_support as pg;
+#[cfg(test)]
+#[path = "../tests/support/redis.rs"]
+pub(crate) mod redis_support;
 
 /// The schema migrations in `migrations/`, embedded at compile time.
 // `migrate!` reads the directory while compiling (`build.rs` makes cargo

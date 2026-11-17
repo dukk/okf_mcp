@@ -15,9 +15,12 @@ changesets and the routes in detail.
 - **One process**, `okf-mcp serve`, in **one replica**. Postgres is the only
   state: catalogs, revisions, changesets and API keys all live in the database.
   The pod needs no persistent volume.
-- **Why one replica:** `publish` takes each catalog's publish lock inside the
-  process, and the poll loop and snapshot cache are per process too. Two
-  replicas could publish to one catalog at the same time. Don't scale it out.
+- **Why one replica:** short-lived state lives in the process's memory: MCP
+  sessions and their key bindings, OAuth consent pages and codes, OIDC and
+  passkey sign-ins in progress. A request that lands on another replica would
+  not find it. Publishing is safe across processes (a Postgres advisory lock
+  orders publishes of a catalog). Milestone 16 adds `[redis]` to share that
+  state. Don't scale it out until then.
 - **Routes:**
 
   | Route | Access | Does |

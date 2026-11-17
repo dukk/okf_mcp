@@ -27,6 +27,7 @@ use crate::keyed_lock::KeyedLocks;
 use crate::oauth::OAuth;
 use crate::oidc::OidcProviders;
 use crate::overlay::Overlays;
+use crate::shared;
 use crate::store::audit::{self, AccessKind, AccessRecord};
 use crate::store::oauth::{
     clients as oauth_clients, codes as sign_in_codes, tokens as oauth_tokens,
@@ -82,6 +83,9 @@ pub struct App {
     keys: Arc<Keys>,
     // Which key opened each MCP session (M5 Decision 2).
     sessions: SessionKeys,
+    // The shared Redis (`[redis]`); `None` keeps every short-lived state in
+    // this process's memory (M16).
+    redis: Option<shared::Redis>,
     // Each open changeset's overlay, cached (M5 Decision 6).
     overlays: Overlays,
     // Each changeset's writers, queued in this process before they take a
@@ -159,6 +163,9 @@ impl App {
     /// The shared state.
     ///
     /// # Errors
+    /// [`OkfError::Config`] (path `[redis]`) from [`shared::Redis::connect`]
+    /// when `[redis]` is set and its variable is unset or blank, its value is
+    /// not a Redis URL, or Redis does not answer `PING`;
     /// [`OkfError::Database`] reading the counter, the keys, the settings or
     /// the list;
     /// [`OkfError::Config`] from [`OAuth::new`] or [`Passkeys::new`], or from
@@ -194,6 +201,40 @@ impl App {
         config: Config,
         clock: Arc<dyn Clock>,
         metrics: Metrics,
+    ) -> Result<Arc<Self>, OkfError> {
+        // `[redis]` set: connect now, so a bad URL or an unreachable Redis
+        // refuses start-up. The URL comes from the named variable only.
+        let redis = match &config.redis {
+            Some(table) => Some(
+                shared::Redis::connect(table, &|name| std::env::var(name).ok(), &metrics).await?,
+            ),
+            None => None,
+        };
+        // Boxed so this future holds a pointer, not the whole of the load's
+        // future: callers nest `App::load` inside big test futures, and the
+        // extra level pushed rustc's layout query past its recursion limit.
+        Box::pin(Self::load_with_redis(pool, config, clock, metrics, redis)).await
+    }
+
+    /// [`App::load_with_metrics`] with the Redis handle given (or none):
+    /// tests pass one handle to two apps, as two replicas share one Redis.
+    ///
+    /// # Arguments
+    /// * `pool`, `config`, `clock`, `metrics` - as for `load_with_metrics`.
+    /// * `redis` - the shared Redis; `None` keeps everything in memory.
+    ///
+    /// # Returns
+    /// The shared state.
+    ///
+    /// # Errors
+    /// As [`App::load`], except that no `[redis]` connection is made here.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn load_with_redis(
+        pool: PgPool,
+        config: Config,
+        clock: Arc<dyn Clock>,
+        metrics: Metrics,
+        redis: Option<shared::Redis>,
     ) -> Result<Arc<Self>, OkfError> {
         // Read the counter before the keys: a change committed between the
         // two moves it again, so the next poll reloads.
@@ -234,6 +275,7 @@ impl App {
             clock,
             keys,
             sessions,
+            redis,
             overlays,
             write_queue: KeyedLocks::new(),
             catalogs: RwLock::new(Arc::new(loaded)),
@@ -319,7 +361,16 @@ impl App {
         while writes.join_next().await.is_some() {}
     }
 
-    /// The metric instruments.
+    /// The shared Redis; `None` without `[redis]`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor")
+    )]
+    pub fn redis(&self) -> Option<&shared::Redis> {
+        self.redis.as_ref()
+    }
+
+    /// The instruments this app records on.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(uninstrumented_fn, reason = "one-line accessor")

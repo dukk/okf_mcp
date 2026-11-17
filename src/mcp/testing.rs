@@ -13,6 +13,7 @@ use crate::auth::{CredentialKind, Principal, Reach};
 use crate::clock::{Clock, SystemClock};
 use crate::config::Config;
 use crate::db::pg_support::TestDb;
+use crate::db::redis_support::TestRedis;
 use crate::mcp::context::ToolContext;
 use crate::store::audit::AuditActor;
 use crate::store::catalogs;
@@ -226,6 +227,98 @@ async fn create_catalog(db: &TestDb, name: &str, at: DateTime<Utc>) {
     catalogs::create(&db.pool, &new, &AuditActor::cli(), at)
         .await
         .expect("create the test catalog");
+}
+
+/// Two apps over one database and one Redis, as two replicas: `app_with`'s
+/// catalogs, `config` with `[redis]` and `poll_interval = 1h` (so a test
+/// that passes was carried by Redis, not by a poll).
+///
+/// # Arguments
+/// * `catalogs_and_files` - `(catalog name, its files)` pairs, in creation order.
+/// * `config` - the server's settings (its `[redis]` and `poll_interval` are
+///   replaced).
+///
+/// # Returns
+/// The first app (it owns the database), the second app (its own pool on the
+/// same database) and the Redis both share.
+///
+/// # Panics
+/// If the database, Redis or a load fails: a broken test setup.
+pub(crate) async fn replica_pair(
+    catalogs_and_files: &[(&str, &[(&str, &str)])],
+    config: Config,
+) -> (TestApp, Arc<App>, TestRedis) {
+    let redis = TestRedis::start().await;
+    let mut config = redis_config(config, &redis);
+    config.poll_interval = std::time::Duration::from_secs(3600);
+    let db = seed(catalogs_and_files, Utc::now()).await;
+    let first = load_shared(&db, config.clone(), &redis).await;
+    let second_pool = crate::db::connect(&db.url, config.database_max_connections)
+        .await
+        .expect("a second pool on the test database");
+    let second = App::load_with_redis(
+        second_pool,
+        config,
+        Arc::new(SystemClock),
+        Metrics::global(),
+        Some(crate::shared::testing::connect(&redis).await),
+    )
+    .await
+    .expect("load the second app");
+    (
+        TestApp {
+            app: first,
+            _meter: None,
+            _db: db,
+        },
+        second,
+        redis,
+    )
+}
+
+/// One app with Redis: [`app_with`] plus `[redis]`.
+///
+/// # Arguments
+/// * `config` - the server's settings (its `[redis]` is replaced).
+///
+/// # Returns
+/// The app and its Redis, which the test holds (or stops).
+///
+/// # Panics
+/// If the database, Redis or the load fails: a broken test setup.
+pub(crate) async fn app_with_redis(config: Config) -> (TestApp, TestRedis) {
+    let redis = TestRedis::start().await;
+    let config = redis_config(config, &redis);
+    let db = seed(&[], Utc::now()).await;
+    let app = load_shared(&db, config, &redis).await;
+    (
+        TestApp {
+            app,
+            _meter: None,
+            _db: db,
+        },
+        redis,
+    )
+}
+
+/// `config` with `[redis]` pointing at `redis` and no mail worker.
+fn redis_config(mut config: Config, redis: &TestRedis) -> Config {
+    config.redis = Some(crate::shared::testing::config(redis));
+    config.mail.worker = false;
+    config
+}
+
+/// Loads an app over `db` holding a fresh handle on `redis`.
+async fn load_shared(db: &TestDb, config: Config, redis: &TestRedis) -> Arc<App> {
+    App::load_with_redis(
+        db.pool.clone(),
+        config,
+        Arc::new(SystemClock),
+        Metrics::global(),
+        Some(crate::shared::testing::connect(redis).await),
+    )
+    .await
+    .expect("load the app")
 }
 
 /// Loads the app over `db` with `clock`.
