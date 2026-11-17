@@ -69,7 +69,13 @@ async fn an_admin_filters_the_log_by_action_and_exports_it() {
         ui.wait_text("#audit-table", "Alice Example");
         ui.wait_text_gone("#audit-table", "catalog.created");
         // The user links to its drawer, which lists its sign-ins.
-        ui.click("#audit-table a[href='#/users/detail/alice']");
+        // A long label wraps in the narrow column, so the link's centre can
+        // fall between its lines: click it from the page, not by a point.
+        let clicked = ui.eval(
+            "() => { const link = document.querySelector(\"#audit-table a[href='#/users/detail/alice']\"); link?.click(); return !!link; }",
+            Value::Null,
+        );
+        assert_eq!(clicked, json!(true), "no link to alice");
         ui.wait_visible("#drawer");
         ui.wait_text("#drawer", "alice");
         ui.click("#drawer-close");
