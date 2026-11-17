@@ -1813,7 +1813,7 @@ mod tests {
         let db = test_db().await;
         let family = NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
             owner: TEST_USER,
         };
         teams::create(&db.pool, &family, &AuditActor::cli(), now())
@@ -1849,7 +1849,7 @@ mod tests {
         let db = test_db().await;
         let new = NewUser {
             name: "alice",
-            display_name: "Alice Example",
+            display_name: &crate::labels::DisplayName::parse("Alice Example").unwrap(),
         };
         users::create(&db.pool, &new, &AuditActor::cli(), now())
             .await
@@ -1908,7 +1908,7 @@ mod tests {
         let db = test_db().await;
         let new = NewUser {
             name: "alice",
-            display_name: "Alice Example",
+            display_name: &crate::labels::DisplayName::parse("Alice Example").unwrap(),
         };
         users::create(&db.pool, &new, &AuditActor::cli(), now())
             .await
@@ -2004,7 +2004,7 @@ mod tests {
         let db = test_db().await;
         let new = NewUser {
             name: "alice",
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
         };
         users::create(&db.pool, &new, &AuditActor::cli(), now())
             .await
@@ -2048,7 +2048,7 @@ mod tests {
         let db = test_db().await;
         let new = NewUser {
             name: "alice",
-            display_name: "Alice Example",
+            display_name: &crate::labels::DisplayName::parse("Alice Example").unwrap(),
         };
         users::create(&db.pool, &new, &AuditActor::cli(), now())
             .await
@@ -2102,7 +2102,7 @@ mod tests {
         for name in ["staff", "alice"] {
             let new = NewUser {
                 name,
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             };
             users::create(&db.pool, &new, &AuditActor::cli(), now())
                 .await
@@ -2201,7 +2201,7 @@ mod tests {
         let db = test_db().await;
         let family = NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
             owner: TEST_USER,
         };
         teams::create(&db.pool, &family, &AuditActor::cli(), now())
@@ -2251,7 +2251,7 @@ mod tests {
         let db = test_db().await;
         let new = NewUser {
             name: "alice",
-            display_name: "Alice",
+            display_name: &crate::labels::DisplayName::parse("Alice").unwrap(),
         };
         users::create(&db.pool, &new, &AuditActor::cli(), now())
             .await
@@ -2559,6 +2559,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "main",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -2614,7 +2615,7 @@ mod tests {
             &db.pool,
             &NewTeam {
                 name: "family",
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
                 owner: TEST_USER,
             },
             &cli,
@@ -2622,8 +2623,12 @@ mod tests {
         )
         .await
         .unwrap();
+        // A local the closure borrows: a temporary made inside it would be
+        // dropped when it returns, leaving the struct's reference dangling.
+        let unset = crate::labels::DisplayName::default();
         let main = |owner_team| NewCatalog {
             name: "main",
+            display_name: &unset,
             description: "",
             owner_team,
         };
@@ -2712,7 +2717,7 @@ mod tests {
             &db.pool,
             &NewUser {
                 name: "staff",
-                display_name: "Staff Member",
+                display_name: &crate::labels::DisplayName::parse("Staff Member").unwrap(),
             },
             &AuditActor::cli(),
             now(),
@@ -2857,7 +2862,7 @@ mod tests {
             &db.pool,
             &NewUser {
                 name: "staff",
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),
@@ -2910,7 +2915,7 @@ mod tests {
             &db.pool,
             &NewUser {
                 name: "bob",
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),
@@ -2979,7 +2984,7 @@ mod tests {
         let db = test_db().await;
         let family = NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
             owner: TEST_USER,
         };
         teams::create(&db.pool, &family, &AuditActor::cli(), now())
@@ -2989,7 +2994,7 @@ mod tests {
             &db.pool,
             &NewUser {
                 name: "alice",
-                display_name: "Alice Example",
+                display_name: &crate::labels::DisplayName::parse("Alice Example").unwrap(),
             },
             &AuditActor::cli(),
             now(),
@@ -3068,16 +3073,19 @@ mod tests {
             &db.pool,
             &NewUser {
                 name: "bob",
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),
         )
         .await
         .unwrap();
+        // A local the closure borrows: a temporary made inside it would be
+        // dropped when it returns, leaving the struct's reference dangling.
+        let unset = crate::labels::DisplayName::default();
         let new_team = |owner: &'static str| NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &unset,
             owner,
         };
         teams::create(&db.pool, &new_team(TEST_USER), &AuditActor::cli(), now())

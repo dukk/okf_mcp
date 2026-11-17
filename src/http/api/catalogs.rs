@@ -19,6 +19,7 @@ use crate::catalog::CatalogState;
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
 use crate::http::{archives, AppError};
+use crate::labels::DisplayName;
 use crate::mcp::catalogs::SuspensionInfo;
 use crate::okf::ops::STARTER_FILE_COUNT;
 use crate::store::audit::AuditActor;
@@ -134,6 +135,10 @@ pub(crate) struct CatalogListing {
 struct NewCatalog {
     /// `[a-z0-9-]+`.
     name: String,
+    /// Its display name, checked by [`DisplayName::parse`]; empty when left
+    /// out.
+    #[serde(default)]
+    display_name: String,
     /// Free text; empty when left out, as with the CLI.
     #[serde(default)]
     description: String,
@@ -226,7 +231,8 @@ async fn list_catalogs(
 /// # Errors
 /// 403 for any other key; 404 ([`OkfError::UnknownName`]) for an unknown
 /// owner; 409 ([`OkfError::Refused`]) for an invalid or taken name; 422 for a
-/// body without `owner`; 500 for a database failure.
+/// body without `owner`, or a refused `display_name` ([`OkfError::LimitExceeded`]);
+/// 500 for a database failure.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn create_catalog(
     State(app): State<Arc<App>>,
@@ -236,10 +242,14 @@ async fn create_catalog(
     Json(new): Json<NewCatalog>,
 ) -> Result<(StatusCode, Json<CatalogSummary>), AppError> {
     crate::http::api::require_manager(&principal)?;
+    // Validated before the store sees it: a refused name is a 422 that
+    // writes nothing.
+    let display_name = DisplayName::parse(&new.display_name)?;
     let row = catalog_rows::create(
         app.pool(),
         &catalog_rows::NewCatalog {
             name: &new.name,
+            display_name: &display_name,
             description: &new.description,
             owner_team: &new.owner,
         },
@@ -924,6 +934,41 @@ mod tests {
         assert_eq!(created, StatusCode::CREATED, "{in_suspended}");
         assert_eq!(in_suspended["suspended"]["team"], SUSPENDED_TEAM);
         assert_eq!(in_active.get("suspended"), Some(&serde_json::Value::Null));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_stores_a_parsed_display_name_and_refuses_a_bad_one() {
+        // Arrange
+        let test = app().await;
+        let root = every_catalog_admin(&test).await;
+
+        // Act: one name the rule trims, one it refuses.
+        let (created, body) = send(
+            &test,
+            "POST",
+            "/api/v1/catalogs",
+            Some(&root),
+            Some(json!({ "name": "work", "display_name": "  Work notes ", "owner": TEST_TEAM })),
+        )
+        .await;
+        let (refused, error) = send(
+            &test,
+            "POST",
+            "/api/v1/catalogs",
+            Some(&root),
+            Some(json!({ "name": "bad", "display_name": "a\nb", "owner": TEST_TEAM })),
+        )
+        .await;
+
+        // Assert: stored trimmed; the refusal is a 422 that wrote nothing.
+        assert_eq!(created, StatusCode::CREATED, "{body}");
+        let row = catalog_rows::find(test.app.pool(), "work").await.unwrap();
+        assert_eq!(row.display_name, "Work notes");
+        assert_eq!(refused, StatusCode::UNPROCESSABLE_ENTITY, "{error}");
+        assert!(matches!(
+            catalog_rows::find(test.app.pool(), "bad").await,
+            Err(OkfError::CatalogNotSelected { .. })
+        ));
     }
 
     #[tokio::test(flavor = "multi_thread")]

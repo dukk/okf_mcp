@@ -109,7 +109,7 @@ async fn a_user_whose_only_key_is_revoked_is_deleted_from_the_console() {
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
     let alice = NewUser {
         name: "alice",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
     };
     users::create(&server.db.pool, &alice, &AuditActor::cli(), Utc::now())
         .await
@@ -151,7 +151,7 @@ async fn a_delete_clicked_again_while_it_runs_sends_one_request() {
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
     let alice = NewUser {
         name: "alice",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
     };
     users::create(&server.db.pool, &alice, &AuditActor::cli(), Utc::now())
         .await
@@ -225,7 +225,7 @@ async fn a_last_owner_or_an_owned_catalog_refuses_the_delete_until_cleared() {
     for name in ["alice", "bob", "carol"] {
         let user = NewUser {
             name,
-            display_name: "",
+            display_name: &okf_mcp::labels::DisplayName::default(),
         };
         users::create(pool, &user, &AuditActor::cli(), Utc::now())
             .await
@@ -233,7 +233,7 @@ async fn a_last_owner_or_an_owned_catalog_refuses_the_delete_until_cleared() {
     }
     let family = NewTeam {
         name: "family",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
         owner: "alice",
     };
     teams::create(
@@ -260,6 +260,7 @@ async fn a_last_owner_or_an_owned_catalog_refuses_the_delete_until_cleared() {
         pool,
         &okf_mcp::store::catalogs::NewCatalog {
             name: "bobs",
+            display_name: &okf_mcp::labels::DisplayName::default(),
             description: "",
             owner_team: "bob",
         },
@@ -383,7 +384,7 @@ async fn an_admin_sets_an_email_and_the_admin_flag_and_sends_a_setup_email() {
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
     let user = NewUser {
         name: "alice",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
     };
     users::create(&server.db.pool, &user, &AuditActor::cli(), Utc::now())
         .await
@@ -745,7 +746,7 @@ async fn a_write_that_settles_after_its_user_was_reopened_updates_the_new_drawer
     server.user_with_password("alice", EMAIL, PASSWORD).await;
     let bob = NewUser {
         name: "bob",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
     };
     users::create(&server.db.pool, &bob, &AuditActor::cli(), Utc::now())
         .await
@@ -807,7 +808,10 @@ async fn the_users_filter_matches_names_and_emails() {
     for (name, display_name) in [("alice", ""), ("bob", "Robert Example")] {
         users::create(
             pool,
-            &NewUser { name, display_name },
+            &NewUser {
+                name,
+                display_name: &okf_mcp::labels::DisplayName::parse(display_name).unwrap(),
+            },
             &AuditActor::cli(),
             Utc::now(),
         )

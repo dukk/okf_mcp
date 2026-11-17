@@ -288,7 +288,7 @@ async fn a_provisioners_detail_waits_for_a_live_admin_promotion() {
         test.app.pool(),
         &NewUser {
             name: "staff",
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
         },
         &AuditActor::cli(),
         chrono::Utc::now(),

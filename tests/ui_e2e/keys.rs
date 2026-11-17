@@ -18,7 +18,7 @@ use crate::support::server::{files, TestServer, OWNER};
 async fn alice(server: &TestServer) {
     let alice = NewUser {
         name: "alice",
-        display_name: "Alice Example",
+        display_name: &okf_mcp::labels::DisplayName::parse("Alice Example").unwrap(),
     };
     users::create(&server.db.pool, &alice, &AuditActor::cli(), Utc::now())
         .await

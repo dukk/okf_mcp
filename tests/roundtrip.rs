@@ -30,6 +30,7 @@ async fn round_trip(files: &Files) -> (Files, ImportReport) {
         &db.pool,
         &okf_mcp::store::catalogs::NewCatalog {
             name: "rt",
+            display_name: &okf_mcp::labels::DisplayName::default(),
             description: "",
             owner_team: support::server::OWNER,
         },

@@ -10,6 +10,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgPool};
 
 use crate::error::OkfError;
+use crate::labels::DisplayName;
 use crate::store::audit::{self, Action, AuditActor, Entry, People, RowLock, Target};
 use crate::store::catalogs::{bump_admin_generation, is_valid_name};
 use crate::store::users;
@@ -73,8 +74,9 @@ impl Role {
 pub struct NewTeam<'a> {
     /// `[a-z0-9-]+`, not taken by a user or team.
     pub name: &'a str,
-    /// Free text shown beside the name.
-    pub display_name: &'a str,
+    /// Its display name (empty when unset), validated by
+    /// [`DisplayName::parse`].
+    pub display_name: &'a DisplayName,
     /// The user who becomes its first owner.
     pub owner: &'a str,
 }
@@ -264,7 +266,7 @@ pub async fn create(
         "INSERT INTO teams (name, display_name, created_at) VALUES ($1, $2, $3) RETURNING id",
     )
     .bind(new.name)
-    .bind(new.display_name)
+    .bind(new.display_name.as_str())
     .bind(now)
     .fetch_one(&mut *tx)
     .await;
@@ -286,7 +288,7 @@ pub async fn create(
     tx.commit().await?;
     Ok(TeamRecord {
         name: new.name.to_string(),
-        display_name: new.display_name.to_string(),
+        display_name: new.display_name.as_str().to_string(),
         personal_of: None,
         created_at: now,
         members: vec![Member {
@@ -1066,7 +1068,7 @@ mod tests {
             pool,
             &NewUser {
                 name: "alice",
-                display_name: "",
+                display_name: &DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),
@@ -1077,7 +1079,7 @@ mod tests {
             pool,
             &NewTeam {
                 name: "family",
-                display_name: "The family",
+                display_name: &DisplayName::parse("The family").unwrap(),
                 owner: "alice",
             },
             &AuditActor::cli(),
@@ -1158,7 +1160,7 @@ mod tests {
             &db.pool,
             &NewTeam {
                 name: "x",
-                display_name: "",
+                display_name: &DisplayName::default(),
                 owner: "nobody",
             },
             &AuditActor::cli(),
@@ -1453,7 +1455,7 @@ mod tests {
             &db.pool,
             &NewUser {
                 name: "alice",
-                display_name: "",
+                display_name: &DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),
@@ -1688,6 +1690,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "shared",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: "family",
             },
@@ -1700,6 +1703,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "mine",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_USER,
             },
@@ -1745,7 +1749,7 @@ mod tests {
             pool,
             &NewUser {
                 name,
-                display_name: "",
+                display_name: &DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),
@@ -1995,7 +1999,7 @@ mod tests {
 
         let ops = NewTeam {
             name: "ops",
-            display_name: "",
+            display_name: &DisplayName::default(),
             owner: "alice",
         };
 
@@ -2037,7 +2041,7 @@ mod tests {
         let provisioner = provisioner();
         let owned_by_staff = NewTeam {
             name: "ops",
-            display_name: "",
+            display_name: &DisplayName::default(),
             owner: "staff",
         };
 
@@ -2168,6 +2172,7 @@ mod tests {
                 Recorded::CatalogForPersonalTeam => {
                     let new = crate::store::catalogs::NewCatalog {
                         name: "notes",
+                        display_name: &DisplayName::default(),
                         description: "",
                         owner_team: "alice",
                     };
@@ -2315,7 +2320,7 @@ mod tests {
         let bad = "fam\0ily";
         let owned_by_bad = NewTeam {
             name: "ops",
-            display_name: "",
+            display_name: &DisplayName::default(),
             owner: bad,
         };
 

@@ -1816,6 +1816,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -1901,6 +1902,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -2044,7 +2046,7 @@ mod tests {
             &db.pool,
             &users::NewUser {
                 name: "alice",
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             },
             &AuditActor::cli(),
             now,
@@ -2053,7 +2055,7 @@ mod tests {
         .unwrap();
         let team = teams::NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
             owner: "alice",
         };
         teams::create(
@@ -2068,6 +2070,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "shared",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: "family",
             },
@@ -2080,6 +2083,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "solo",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: "alice",
             },
@@ -2246,6 +2250,7 @@ mod tests {
         UserAuth {
             id: "9eaae459-441c-49c2-8613-e3996bdc96ee".to_string(),
             name: "alice".to_string(),
+            display_name: String::new(),
             email: Some("alice@example.com".to_string()),
             is_admin,
         }
@@ -2394,6 +2399,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "main",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -2539,6 +2545,7 @@ mod tests {
                 &db.pool,
                 &crate::store::catalogs::NewCatalog {
                     name,
+                    display_name: &crate::labels::DisplayName::default(),
                     description: "",
                     owner_team: crate::db::TEST_TEAM,
                 },

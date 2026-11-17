@@ -114,7 +114,7 @@ async fn an_admin_changes_a_catalogs_owner_and_a_scoped_admin_cannot() {
         .await;
     let family = NewTeam {
         name: "family",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
         owner: OWNER,
     };
     teams::create(
@@ -471,7 +471,7 @@ async fn member_access_read_makes_a_team_catalog_read_only_for_its_members() {
     let pool = &server.db.pool;
     let family = NewTeam {
         name: "family",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
         owner: OWNER,
     };
     teams::create(
@@ -498,6 +498,7 @@ async fn member_access_read_makes_a_team_catalog_read_only_for_its_members() {
         pool,
         &okf_mcp::store::catalogs::NewCatalog {
             name: "shared",
+            display_name: &okf_mcp::labels::DisplayName::default(),
             description: "",
             owner_team: "family",
         },

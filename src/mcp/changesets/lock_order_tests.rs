@@ -36,7 +36,7 @@ async fn user_context(test: &TestApp, name: &str, access: Access, admin: bool) -
     let cli = AuditActor::cli();
     let user = NewUser {
         name,
-        display_name: name,
+        display_name: &crate::labels::DisplayName::parse(name).unwrap(),
     };
     users::create(pool, &user, &cli, Utc::now())
         .await

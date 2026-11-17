@@ -122,7 +122,7 @@ async fn a_non_admin_users_admin_key_is_not_offered_unlock() {
     let pool = &server.db.pool;
     let helper = NewUser {
         name: "helper",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
     };
     users::create(pool, &helper, &AuditActor::cli(), Utc::now())
         .await

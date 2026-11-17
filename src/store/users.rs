@@ -9,6 +9,7 @@ use serde_json::json;
 use sqlx::{PgConnection, PgPool};
 
 use crate::error::OkfError;
+use crate::labels::DisplayName;
 use crate::store::audit::{self, Action, AuditActor, Entry, People, RowLock, Target};
 use crate::store::catalogs::{bump_admin_generation, is_unique_violation, is_valid_name};
 use crate::store::changesets::{self, ChangesetState};
@@ -21,8 +22,9 @@ use crate::store::user_sessions;
 pub struct NewUser<'a> {
     /// `[a-z0-9-]+`; also its personal team's name.
     pub name: &'a str,
-    /// Free text shown beside the name.
-    pub display_name: &'a str,
+    /// Its display name (empty when unset), validated by
+    /// [`DisplayName::parse`]; its personal team gets the same one.
+    pub display_name: &'a DisplayName,
 }
 
 /// A stored user.
@@ -56,6 +58,8 @@ pub struct UserAuth {
     pub id: String,
     /// Its name.
     pub name: String,
+    /// Its display name; empty when unset.
+    pub display_name: String,
     /// Its email address, if set.
     pub email: Option<String>,
     /// Whether its session acts as an admin.
@@ -85,7 +89,7 @@ macro_rules! select_users {
 // (`email_tokens`, `passwords`), which splice it into their own `concat!`.
 macro_rules! user_auth_columns {
     () => {
-        "u.id, u.name, u.email::text AS email, u.is_admin"
+        "u.id, u.name, u.display_name, u.email::text AS email, u.is_admin"
     };
 }
 pub(crate) use user_auth_columns;
@@ -219,7 +223,7 @@ pub async fn create(
         "INSERT INTO users (name, display_name, created_at) VALUES ($1, $2, $3) RETURNING id",
     )
     .bind(new.name)
-    .bind(new.display_name)
+    .bind(new.display_name.as_str())
     .bind(now)
     .fetch_one(&mut *tx)
     .await;
@@ -231,7 +235,7 @@ pub async fn create(
          VALUES ($1, $2, $3, $4) RETURNING id",
     )
     .bind(new.name)
-    .bind(new.display_name)
+    .bind(new.display_name.as_str())
     .bind(&user_id)
     .bind(now)
     .fetch_one(&mut *tx)
@@ -261,7 +265,7 @@ pub async fn create(
     tx.commit().await?;
     Ok(UserRecord {
         name: new.name.to_string(),
-        display_name: new.display_name.to_string(),
+        display_name: new.display_name.as_str().to_string(),
         created_at: now,
         credentials: 0,
         teams: vec![new.name.to_string()],
@@ -1269,6 +1273,7 @@ pub(crate) mod tests {
             pool,
             &crate::store::catalogs::NewCatalog {
                 name: "shared",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: team,
             },
@@ -1302,7 +1307,7 @@ pub(crate) mod tests {
             pool,
             &NewUser {
                 name,
-                display_name: "",
+                display_name: &DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),
@@ -1349,19 +1354,94 @@ pub(crate) mod tests {
             .with_timezone(&Utc)
     }
 
+    // `static` values live for the whole run, so the `NewUser<'static>`
+    // and `NewTeam<'static>` fixtures below can borrow them. `LazyLock`
+    // builds each on first use (`DisplayName::parse` is not a `const fn`),
+    // and `&ALICE_EXAMPLE` derefs to a `&DisplayName`.
+    static ALICE_EXAMPLE: std::sync::LazyLock<DisplayName> =
+        std::sync::LazyLock::new(|| DisplayName::parse("Alice Example").unwrap());
+    static UNSET: std::sync::LazyLock<DisplayName> = std::sync::LazyLock::new(DisplayName::default);
+
     fn alice() -> NewUser<'static> {
         NewUser {
             name: "alice",
-            display_name: "Alice Example",
+            display_name: &ALICE_EXAMPLE,
         }
     }
 
     fn family_owned_by_alice() -> teams::NewTeam<'static> {
         teams::NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &UNSET,
             owner: "alice",
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn user_auth_carries_the_display_name() {
+        // Arrange: a user with a display name and an email.
+        let db = test_db().await;
+        let display = DisplayName::parse("Alice Example").unwrap();
+        create(
+            &db.pool,
+            &NewUser {
+                name: "alice",
+                display_name: &display,
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        set_email(
+            &db.pool,
+            "alice",
+            Some("alice@example.com"),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+
+        // Act: two readers built from `user_auth_columns!`.
+        let by_email = find_by_email(&db.pool, "alice@example.com")
+            .await
+            .unwrap()
+            .unwrap();
+        let by_id = auth_by_id(&db.pool).await.unwrap();
+
+        // Assert
+        assert_eq!(by_email.display_name, "Alice Example");
+        assert_eq!(by_id[&by_email.id].display_name, "Alice Example");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_gives_the_personal_team_the_users_display_name() {
+        // Arrange
+        let db = test_db().await;
+        let display = DisplayName::parse("Alice Example").unwrap();
+
+        // Act
+        let created = create(
+            &db.pool,
+            &NewUser {
+                name: "alice",
+                display_name: &display,
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+
+        // Assert
+        assert_eq!(created.display_name, "Alice Example");
+        let team: String =
+            sqlx::query_scalar("SELECT display_name FROM teams WHERE name = 'alice'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(team, "Alice Example");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1950,7 +2030,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewUser {
                 name: "family",
-                display_name: "",
+                display_name: &DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),
@@ -1972,7 +2052,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewUser {
                 name: "Alice",
-                display_name: "",
+                display_name: &DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),
@@ -2025,7 +2105,7 @@ pub(crate) mod tests {
             .unwrap();
         let user = NewUser {
             name: "family",
-            display_name: "",
+            display_name: &DisplayName::default(),
         };
         let team = family_owned_by_alice();
 
@@ -2169,7 +2249,7 @@ pub(crate) mod tests {
         seed_user(&db.pool, "alice", Some("alice@example.com")).await;
         let family = teams::NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &DisplayName::default(),
             owner: crate::db::TEST_USER,
         };
         teams::create(&db.pool, &family, &AuditActor::cli(), now())
@@ -2451,7 +2531,7 @@ pub(crate) mod tests {
     fn family_owned_by_test_user() -> teams::NewTeam<'static> {
         teams::NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &UNSET,
             owner: crate::db::TEST_USER,
         }
     }
@@ -2501,7 +2581,7 @@ pub(crate) mod tests {
         seed_user(&db.pool, "alice", None).await;
         let family = teams::NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &DisplayName::default(),
             owner: "alice",
         };
         teams::create(&db.pool, &family, &AuditActor::cli(), now())
@@ -2722,6 +2802,7 @@ pub(crate) mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "shared",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -3054,7 +3135,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewUser {
                 name: "bob",
-                display_name: "",
+                display_name: &DisplayName::default(),
             },
             &cli,
             now(),
@@ -3332,7 +3413,7 @@ pub(crate) mod tests {
         let created = async move {
             let new = NewUser {
                 name: "dave",
-                display_name: "",
+                display_name: &DisplayName::default(),
             };
             create(&pool, &new, &actor, now()).await.map(|_| ())
         };

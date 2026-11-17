@@ -25,6 +25,7 @@ use crate::clock::{format_timestamp, Clock};
 use crate::config::Config;
 use crate::db;
 use crate::http;
+use crate::labels::DisplayName;
 use crate::shared::announce::announce_from_cli;
 use crate::store::audit::AuditActor;
 use crate::store::catalogs;
@@ -301,7 +302,8 @@ pub enum UserCommand {
     Create {
         /// Its name (`[a-z0-9-]+`); also its personal team's.
         name: String,
-        /// Free text shown beside the name.
+        /// Its display name, shown instead of the name: at most 80
+        /// characters, no control characters or line breaks.
         #[arg(long, default_value = "")]
         display_name: String,
     },
@@ -393,7 +395,8 @@ pub enum TeamCommand {
     Create {
         /// Its name (`[a-z0-9-]+`, not taken by a user or team).
         name: String,
-        /// Free text shown beside the name.
+        /// Its display name, shown instead of the name: at most 80
+        /// characters, no control characters or line breaks.
         #[arg(long, default_value = "")]
         display_name: String,
         /// The user who owns it first.
@@ -1178,6 +1181,7 @@ async fn run_catalog(
         } => {
             let new = catalogs::NewCatalog {
                 name: &name,
+                display_name: &DisplayName::default(),
                 description: &description,
                 owner_team: &owner,
             };
@@ -2213,6 +2217,7 @@ mod tests {
         let catalog = catalogs::Catalog {
             id: 1,
             name: "pg".to_string(),
+            display_name: String::new(),
             description: "Notes\tand more".to_string(),
             generation: 3,
             created_at: chrono::Utc::now(),
@@ -2583,6 +2588,7 @@ mod tests {
         for name in ["old", "other", "fresh"] {
             let new = catalogs::NewCatalog {
                 name,
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             };

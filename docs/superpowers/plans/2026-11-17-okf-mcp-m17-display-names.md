@@ -554,6 +554,8 @@ ALTER TABLE catalogs ADD CONSTRAINT catalogs_display_name_length CHECK (char_len
 
 > `\u2028` inside a Postgres regex is a regex escape, not a string escape: with `standard_conforming_strings` on (the default), `'[[:cntrl:]\u2028\u2029]'` reaches the regex engine as written, and the ARE syntax reads `\uXXXX`. Step 3's test checks this on a real row.
 
+> **Corrected (issue #599).** The SQL above did not match `DisplayName::parse`: `[[:cntrl:]]` depends on the database locale, `btrim` trims only ASCII spaces where Rust's `str::trim` trims all Unicode White_Space (U+00A0, U+3000, ...), and `left(.., 80)` can leave a trailing space that `labels::bounded` would trim. The shipped `migrations/0019_display_names.sql` uses explicit code-point classes (`[\u0001-\u001f\u007f-\u009f\u2028\u2029]` for the controls, the White_Space set for the trims), trims again after the cut, and rewrites only rows whose value changes (`UPDATE .. FROM (SELECT ..) n WHERE .. <> n.display_name`). Read that file, not this block.
+
 - [ ] **Step 3: A migration test on legacy data** (`src/db.rs` tests, beside `migration_0010_keeps_every_row_and_both_migrators_rerun_as_no_ops`, which is the pattern: `MIGRATOR.run_to(N, ..)`, seed with `sqlx::raw_sql`, then `MIGRATOR.run(..)`).
 
 ```rust
@@ -621,6 +623,8 @@ async fn migration_0019_normalises_legacy_display_names_and_adds_the_checks() {
 The expected `"Alice Example Smith"` relies on the migration's replace-then-trim order. The tab and U+2028 each become one space, and no run of spaces is collapsed: the source has exactly one character at each spot. If Step 2's SQL changes, change this expectation with it. The test also proves that adding the CHECKs succeeds on a database that held dirty data.
 
 > **Corrected (PR #596 review).** The first draft asserted only on an already-migrated, empty database, which would pass with the normalising `UPDATE`s deleted.
+
+> **Corrected (issue #599).** The shipped test (`src/db.rs`) seeds more rows, for the corrected SQL: Unicode-whitespace trims (`E'\u00a0Carol\u3000'` to `Carol`), a C1 control (`E'Dan\u009fEve'` to `Dan Eve`), the trim after the 80-character cut (`repeat('y', 79) || E' \u0085z'` to 79 `y`), an inner double space kept, and an empty value. It checks that the clean rows' `xmin` is unchanged (not rewritten), that every result re-parses unchanged with `DisplayName::parse`, and that each CHECK refuses by its constraint name on all three tables. Step 1's tests: there is no `seed_team` helper; the tests use `test_db()`'s fixture team `TEST_TEAM`, and the CHECK test covers all three tables by constraint name.
 
 - [ ] **Step 4: Rows and inputs**
   - `Catalog` gains `pub display_name: String` (doc: "Its display name; empty when unset."). Add `c.display_name` to `select_catalogs!`, to the `INSERT` (`$6`) and to its `RETURNING`.

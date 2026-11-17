@@ -954,6 +954,7 @@ mod open_tests {
         let user = crate::store::users::UserAuth {
             id: "9eaae459-441c-49c2-8613-e3996bdc96ee".to_string(),
             name: "alice".to_string(),
+            display_name: String::new(),
             email: None,
             is_admin: true,
         };
