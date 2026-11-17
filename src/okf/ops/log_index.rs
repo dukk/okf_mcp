@@ -358,7 +358,8 @@ pub const STARTER_FILE_COUNT: usize = 2;
 /// `okf-catalog-template`'s skeleton, without its people and projects.
 ///
 /// # Arguments
-/// * `name` - the catalog's name, the index's heading.
+/// * `heading` - the root index's heading: the catalog's display name, or
+///   `ROOT_HEADING` (the root index's default heading) when it has none.
 /// * `description` - the catalog's description, the index's paragraph (a
 ///   TODO line when blank).
 /// * `now` - the creation time; its UTC date heads the log entry.
@@ -371,14 +372,14 @@ pub const STARTER_FILE_COUNT: usize = 2;
 /// use chrono::{TimeZone, Utc};
 /// use okf_mcp::okf::ops::starter_files;
 /// let now = Utc.with_ymd_and_hms(2026, 11, 14, 12, 0, 0).unwrap();
-/// let files = starter_files("pg", "Systems.", now);
+/// let files = starter_files("Systems", "About systems.", now);
 /// assert_eq!(files[0].0, "index.md");
-/// assert!(files[0].1.contains("okf_version") && files[0].1.contains("# pg\n\nSystems.\n"));
+/// assert!(files[0].1.contains("okf_version") && files[0].1.contains("# Systems\n\nAbout systems.\n"));
 /// assert!(files[1].1.ends_with("## 2026-11-14\n\n* **Creation:** Created the catalog.\n"));
 /// ```
 #[tracing::instrument(level = "debug", skip_all)]
 pub fn starter_files(
-    name: &str,
+    heading: &str,
     description: &str,
     now: DateTime<Utc>,
 ) -> [(&'static str, String); STARTER_FILE_COUNT] {
@@ -386,7 +387,10 @@ pub fn starter_files(
     let bullet = format!("* **{}:** Created the catalog.", LogKind::Creation.as_str());
     let log = log_text(LOG_TEMPLATE, &date, &bullet)
         .expect("an empty log has no entry under any date yet");
-    [(ROOT_INDEX, root_index_text(name, description)), (LOG, log)]
+    [
+        (ROOT_INDEX, root_index_text(heading, description)),
+        (LOG, log),
+    ]
 }
 
 /// Creates whatever bookkeeping a catalog is missing, never changing what
@@ -1296,17 +1300,17 @@ mod tests {
     #[test]
     fn starter_files_are_a_titled_root_index_and_a_dated_log() {
         let [(index_path, index_text), (log_path, log_text)] =
-            starter_files("pg", "  Systems\n and   people. ", ctx().now);
-        let [(_, untitled), _] = starter_files("bare", " ", ctx().now);
+            starter_files("Systems", "  Systems\n and   people. ", ctx().now);
+        let [(_, untitled), _] = starter_files("Catalog", " ", ctx().now);
 
         assert_eq!((index_path, log_path), ("index.md", "log.md"));
         assert_eq!(
             index_text,
-            "---\nokf_version: \"0.2\"\n---\n\n# pg\n\nSystems and people.\n"
+            "---\nokf_version: \"0.2\"\n---\n\n# Systems\n\nSystems and people.\n"
         );
         assert_eq!(
             untitled,
-            "---\nokf_version: \"0.2\"\n---\n\n# bare\n\nTODO: say what this catalog holds.\n"
+            "---\nokf_version: \"0.2\"\n---\n\n# Catalog\n\nTODO: say what this catalog holds.\n"
         );
         assert_eq!(
             log_text,
