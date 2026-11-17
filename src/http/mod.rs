@@ -548,10 +548,26 @@ fn record_response<B>(response: &Response<B>, latency: Duration, span: &tracing:
     if status.is_server_error() {
         span.record("otel.status_code", "error");
     }
+    // A health probe's completion line is routine noise: it drops to DEBUG
+    // (the span and its status stay exported at their own filter).
+    let level = if response.extensions().get::<RoutineProbe>().is_some() {
+        Level::DEBUG
+    } else {
+        Level::INFO
+    };
     DefaultOnResponse::new()
-        .level(Level::INFO)
+        .level(level)
         .on_response(response, latency, span);
 }
+
+/// The route health probes poll; its completion line is logged at DEBUG.
+const HEALTH_ROUTE: &str = "/healthz";
+
+/// A response extension (a typed per-response map) that `request_telemetry`
+/// sets on a health probe's response so [`record_response`], which sees the
+/// response but not the request, can log its completion line at DEBUG.
+#[derive(Debug, Clone, Copy)]
+struct RoutineProbe;
 
 /// axum middleware inside `TraceLayer`: stores the request span in the
 /// request's extensions ([`RequestSpan`]) for the auth layers, and measures
@@ -593,13 +609,16 @@ async fn request_telemetry(
     // this future) still balances the counter.
     let _in_flight = app.metrics().http_in_flight(method, &route);
     let started = std::time::Instant::now();
-    let response = next.run(request).await;
+    let mut response = next.run(request).await;
     app.metrics().http_request(
         method,
         &route,
         response.status().as_u16(),
         started.elapsed(),
     );
+    if route == HEALTH_ROUTE {
+        response.extensions_mut().insert(RoutineProbe);
+    }
     response
 }
 
