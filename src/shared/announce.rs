@@ -8,12 +8,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures_util::{Stream, StreamExt};
 use redis::AsyncCommands;
 use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
-use crate::shared::Redis;
+use crate::shared::{Redis, SubscriptionEvent};
 use crate::telemetry::metrics::RedisOp;
 
 /// The channel's name under the prefix.
@@ -35,7 +34,9 @@ const BACKOFF_MAX: Duration = Duration::from_secs(30);
     fields(db.system.name = "redis", db.operation.name = "publish")
 )]
 pub async fn publish(redis: &Redis, generation: Option<i64>) {
-    let payload = generation.map(|value| value.to_string()).unwrap_or_default();
+    let payload = generation
+        .map(|value| value.to_string())
+        .unwrap_or_default();
     let published: redis::RedisResult<usize> = redis
         .connection()
         .publish(redis.channel(CHANNEL), payload)
@@ -46,39 +47,17 @@ pub async fn publish(redis: &Redis, generation: Option<i64>) {
     }
 }
 
-/// Opens a dedicated pub/sub connection subscribed to the channel.
-///
-/// # Arguments
-/// * `redis` - the shared Redis.
-///
-/// # Returns
-/// The stream of announcements; it ends when the connection does.
-///
-/// # Errors
-/// The driver's error when connecting or subscribing fails.
-#[tracing::instrument(
-    level = "debug",
-    skip_all,
-    fields(db.system.name = "redis", db.operation.name = "subscribe")
-)]
-async fn subscribe(redis: &Redis) -> redis::RedisResult<impl Stream<Item = redis::Msg>> {
-    let mut pubsub = redis.client().get_async_pubsub().await?;
-    pubsub.subscribe(redis.channel(CHANNEL)).await?;
-    Ok(pubsub.into_on_message())
-}
-
 /// The generation an announcement names, `None` for an empty or unreadable
 /// payload (the CLI's "check now").
 ///
 /// # Arguments
-/// * `message` - the received message.
+/// * `payload` - the message's bytes.
 ///
 /// # Returns
 /// The announced generation, if the payload holds one.
 #[tracing::instrument(level = "trace", skip_all)]
-fn announced_generation(message: &redis::Msg) -> Option<i64> {
-    message
-        .get_payload::<String>()
+fn announced_generation(payload: &[u8]) -> Option<i64> {
+    std::str::from_utf8(payload)
         .ok()
         .and_then(|text| text.parse::<i64>().ok())
 }
@@ -104,33 +83,32 @@ pub async fn listen(app: Arc<App>, shutdown: CancellationToken) {
     };
     let mut backoff = BACKOFF_MIN;
     while !shutdown.is_cancelled() {
-        match subscribe(&redis).await {
-            Ok(messages) => {
-                backoff = BACKOFF_MIN;
-                // Subscribed first, then reloaded: a bump between the two is
-                // announced to this subscription, and one before it is read.
-                app.reload_keys_now(false).await;
-                // `pin!` fixes the stream in place so `next()` can poll it.
-                tokio::pin!(messages);
-                loop {
-                    tokio::select! {
-                        () = shutdown.cancelled() => return,
-                        message = messages.next() => match message {
-                            Some(message) => {
-                                if announced_generation(&message)
-                                    != Some(app.loaded_admin_generation())
-                                {
-                                    app.reload_keys_now(false).await;
-                                }
-                            }
-                            None => {
-                                redis.count(RedisOp::Subscribe);
-                                break;
-                            }
-                        },
+        match redis.subscribe(&redis.channel(CHANNEL)).await {
+            Ok(mut subscription) => loop {
+                let event = tokio::select! {
+                    () = shutdown.cancelled() => return,
+                    event = subscription.next() => event,
+                };
+                match event {
+                    // The first subscribe and every automatic resubscribe:
+                    // messages sent before it may have been lost, so reload.
+                    Some(SubscriptionEvent::Subscribed) => {
+                        backoff = BACKOFF_MIN;
+                        app.reload_keys_now(false).await;
+                    }
+                    Some(SubscriptionEvent::Message(payload)) => {
+                        if announced_generation(&payload) != Some(app.loaded_admin_generation()) {
+                            app.reload_keys_now(false).await;
+                        }
+                    }
+                    // The library resubscribes by itself; a `Subscribed` follows.
+                    Some(SubscriptionEvent::Disconnected) => redis.count(RedisOp::Subscribe),
+                    None => {
+                        redis.count(RedisOp::Subscribe);
+                        break;
                     }
                 }
-            }
+            },
             Err(error) => {
                 let _ = redis.failed(RedisOp::Subscribe, &error);
             }
@@ -140,5 +118,18 @@ pub async fn listen(app: Arc<App>, shutdown: CancellationToken) {
             () = tokio::time::sleep(backoff) => {}
         }
         backoff = (backoff * 2).min(BACKOFF_MAX);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::announced_generation;
+
+    #[test]
+    fn a_payload_names_a_generation_only_when_it_is_a_number() {
+        assert_eq!(announced_generation(b"42"), Some(42));
+        assert_eq!(announced_generation(b""), None);
+        assert_eq!(announced_generation(b"not a number"), None);
+        assert_eq!(announced_generation(&[0xff, 0xfe]), None);
     }
 }
