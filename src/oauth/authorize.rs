@@ -2660,6 +2660,81 @@ mod tests {
         assert!(page.contains("id=\"consent-use-code\""));
     }
 
+    /// A signed-in Approve's form and a pending authorization it matches,
+    /// with `failed_attempts` wrong codes and an accepted code.
+    fn matching(failed_attempts: u8) -> (super::ConsentForm, super::PendingAuthorization) {
+        use crate::oauth::state::{AcceptedCode, UserConsent};
+        use crate::store::oauth::clients::{ClientKind, ClientRecord};
+        let form = super::ConsentForm {
+            pending: "pending-id".to_string(),
+            csrf: "csrf-token".to_string(),
+            action: "consent".to_string(),
+            sign_in_code: None,
+            summary: Some("page-nonce".to_string()),
+            default_catalog: None,
+            choices: BTreeMap::new(),
+        };
+        let pending = super::PendingAuthorization {
+            csrf: "csrf-token".to_string(),
+            client: ClientRecord {
+                client_id: CLIENT_ID.to_string(),
+                kind: ClientKind::Dcr,
+                client_name: None,
+                redirect_uris: vec![REDIRECT_URI.to_string()],
+                metadata: serde_json::json!({}),
+                fetched_at: None,
+                cache_expires_at: None,
+                created_at: Utc::now(),
+            },
+            redirect_uri: REDIRECT_URI.to_string(),
+            state: None,
+            code_challenge: "c".repeat(43),
+            resource: "https://okf.example.com/mcp".to_string(),
+            accepted: Some(AcceptedCode {
+                code_id: "code-id".to_string(),
+                summary_nonce: "summary-nonce".to_string(),
+            }),
+            failed_attempts,
+            consent: Some(UserConsent {
+                user_id: "user-id".to_string(),
+                nonce: "page-nonce".to_string(),
+                offered: Ceiling::new(),
+            }),
+            query: String::new(),
+        };
+        (form, pending)
+    }
+
+    /// A request whose wrong codes are spent (left behind by a failed
+    /// removal) is refused even with a matching CSRF token, and nothing in
+    /// it changes; one attempt fewer is still allowed.
+    #[test]
+    fn a_request_with_its_wrong_codes_spent_is_refused_untouched() {
+        use crate::oauth::state::MAX_FAILED_ATTEMPTS;
+        let (form, mut spent) = matching(MAX_FAILED_ATTEMPTS);
+        let before = (spent.accepted.clone(), spent.consent.clone());
+
+        let refused = super::consent_change(&form, Some("fresh".to_string()))(&mut spent);
+
+        assert!(refused.is_none(), "the spent request is refused");
+        assert_eq!((spent.accepted, spent.consent), before, "nothing changed");
+
+        let (form, mut live) = matching(MAX_FAILED_ATTEMPTS - 1);
+        let accepted = live.accepted.clone();
+
+        let allowed = super::consent_change(&form, Some("fresh".to_string()))(&mut live);
+
+        let (_, decided, claimed) = allowed.expect("one attempt fewer is allowed");
+        assert!(claimed, "the page's nonce is spent");
+        assert_eq!(
+            decided,
+            super::Approval::Stale,
+            "no summary token was posted"
+        );
+        assert_eq!(live.consent.expect("user path").nonce, "fresh");
+        assert_eq!(live.accepted, accepted);
+    }
+
     #[test]
     fn debug_never_prints_the_forms_secrets() {
         let posted = super::ConsentForm {
@@ -2741,7 +2816,7 @@ mod tests {
 
         use super::super::{consent_change, ConsentForm, BAD_CODE, BUSY, EXPIRED};
         use super::{oauth_grants, param, signed_in, user_page, READ_MAIN};
-        use crate::db::redis_support::TestRedis;
+        use crate::db::redis_support::{TestRedis, CLUSTER_URL_VAR, SERVER_URL_VAR};
         use crate::oauth::state::MAX_FAILED_ATTEMPTS;
         use crate::oauth::testing::{
             authorize_query, exchange_for_tokens, form, forwarded, hidden, oauth_replica_pair_on,
@@ -3028,6 +3103,142 @@ mod tests {
             assert!(step_page.contains(BUSY), "{step_page}");
         }
 
+        /// Sets the `default` user's command rule (`-del` or `+del`) through
+        /// `admin`, a connection of another user.
+        async fn default_user_may(admin: &mut redis::aio::MultiplexedConnection, rule: &str) {
+            let _: () = redis::cmd("ACL")
+                .arg("SETUSER")
+                .arg("default")
+                .arg(rule)
+                .query_async(admin)
+                .await
+                .expect("change the default user's permissions");
+        }
+
+        /// A connection to `server` as an admin user of its own, so a test can
+        /// take commands from the `default` user (the apps') and give them
+        /// back; `None` on a shared server, whose other tests use `default`.
+        async fn admin_of(server: &TestRedis) -> Option<redis::aio::MultiplexedConnection> {
+            let shared = [SERVER_URL_VAR, CLUSTER_URL_VAR]
+                .iter()
+                .any(|var| std::env::var(var).is_ok_and(|url| !url.is_empty()));
+            if shared {
+                return None;
+            }
+            // A plain connection: the container has one node in either mode.
+            let client = redis::Client::open(server.url.as_str()).expect("the test redis URL");
+            let mut admin = client
+                .get_multiplexed_async_connection()
+                .await
+                .expect("an admin connection");
+            let _: () = redis::cmd("ACL")
+                .arg("SETUSER")
+                .arg("okf-test-admin")
+                .arg("on")
+                .arg("nopass")
+                .arg("+@all")
+                .arg("~*")
+                .arg("&*")
+                .query_async(&mut admin)
+                .await
+                .expect("create the admin user");
+            let _: () = redis::cmd("AUTH")
+                .arg("okf-test-admin")
+                .arg("unused")
+                .query_async(&mut admin)
+                .await
+                .expect("authenticate as the admin user");
+            Some(admin)
+        }
+
+        /// When the removal after a successful update fails (`DEL` refused
+        /// with `NOPERM`, `GET` and the compare-and-set still allowed), Deny
+        /// and Approve answer the busy page: Deny does not forward the
+        /// denial, and Approve mints no authorization code.
+        async fn a_failed_removal_answers_the_busy_page(server: TestRedis) {
+            let Some(mut admin) = admin_of(&server).await else {
+                eprintln!("skipped: a shared Redis's default user cannot be restricted");
+                return;
+            };
+            let (a, b, _server) = oauth_replica_pair_on(server).await;
+            let start = || async {
+                let (_, _, page) = send(
+                    &a,
+                    "GET",
+                    &format!("/oauth/authorize?{}", authorize_query()),
+                    None,
+                )
+                .await;
+                (hidden(&page, "pending"), hidden(&page, "csrf"))
+            };
+            let (denied, denied_csrf) = start().await;
+            let (approved, approved_csrf) = start().await;
+            let code = sign_in_code(&a, Access::Read).await;
+            let (_, _, summary) = send_on(
+                &b,
+                "POST",
+                "/oauth/authorize",
+                Some(code_form(&approved, &approved_csrf, &code)),
+                None,
+            )
+            .await;
+            let deny = form(&[
+                ("pending", &denied),
+                ("csrf", &denied_csrf),
+                ("action", "deny"),
+            ]);
+            let approval = form(&[
+                ("pending", &approved),
+                ("csrf", &approved_csrf),
+                ("summary", &hidden(&summary, "summary")),
+                ("action", "approve"),
+            ]);
+            default_user_may(&mut admin, "-del").await;
+
+            let refused_deny =
+                send_on(&b, "POST", "/oauth/authorize", Some(deny.clone()), None).await;
+            let refused_approval =
+                send_on(&b, "POST", "/oauth/authorize", Some(approval), None).await;
+            let codes: Vec<String> = redis::cmd("KEYS")
+                .arg("*oauth:code:*")
+                .query_async(&mut admin)
+                .await
+                .expect("KEYS");
+            default_user_may(&mut admin, "+del").await;
+            let later_deny = send_on(&b, "POST", "/oauth/authorize", Some(deny), None).await;
+
+            assert_eq!(
+                refused_deny.0,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "{}",
+                refused_deny.2
+            );
+            assert!(refused_deny.2.contains(BUSY), "{}", refused_deny.2);
+            assert!(
+                !refused_deny.2.contains("access_denied"),
+                "no denial is forwarded"
+            );
+            assert_eq!(
+                refused_approval.0,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "{}",
+                refused_approval.2
+            );
+            assert!(refused_approval.2.contains(BUSY), "{}", refused_approval.2);
+            assert!(
+                !refused_approval.2.contains("code="),
+                "no code is forwarded"
+            );
+            assert!(
+                codes.is_empty(),
+                "no authorization code was stored: {codes:?}"
+            );
+            // The denied request stayed, so the Deny goes through once Redis
+            // accepts the removal again.
+            let target = forwarded(later_deny.0, &later_deny.1, &later_deny.2);
+            assert_eq!(param(&target, "error").as_deref(), Some("access_denied"));
+        }
+
         // `macro_rules!` writes a standalone and a cluster `#[tokio::test]`
         // for every body named (Python: a parametrized test).
         macro_rules! in_both_modes {
@@ -3064,6 +3275,7 @@ mod tests {
             an_expired_pending_authorization_is_refused,
             a_lost_race_reruns_the_consent_change_on_a_fresh_copy,
             a_redis_outage_answers_the_busy_page,
+            a_failed_removal_answers_the_busy_page,
         );
     }
 }
