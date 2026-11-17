@@ -77,8 +77,10 @@ pub struct OAuth {
     pub challenge: HeaderValue,
     /// Live access tokens (the resource side).
     pub access: access::AccessTokens,
-    /// Consent pages in progress, by pending id.
-    pub pending: expiring::ExpiringMap<state::PendingAuthorization>,
+    /// Consent pages in progress, by pending id: in memory, or in Redis
+    /// with `[redis]` (under the id's hash), so a consent started on one
+    /// replica can finish on another.
+    pub pending: Ephemeral<state::PendingAuthorization>,
     /// Authorization codes, by the hex SHA-256 of the code ([`state::code_key`]):
     /// in memory, or in Redis with `[redis]` so any replica can exchange
     /// them. A used code stays until it expires, so a replay is seen.
@@ -100,7 +102,8 @@ impl OAuth {
     /// * `config` - the server's settings.
     /// * `redis` - the shared Redis, with `[redis]`: access-token revocations
     ///   are then counted there for every replica (spec Decision 15), and
-    ///   authorization codes are kept there (spec Decision 5).
+    ///   pending authorizations and authorization codes are kept there (spec
+    ///   Decision 5).
     ///
     /// # Returns
     /// `None` without `public_url` (OAuth off), else the state.
@@ -141,7 +144,15 @@ impl OAuth {
             settings,
             challenge,
             access: access::AccessTokens::new(redis.cloned()),
-            pending: expiring::ExpiringMap::new(state::PENDING_TTL, state::MAX_PENDING),
+            // In Redis the key is `oauth:pending:<hashed(pending id)>`
+            // (spec Decision 7), and `MAX_PENDING` applies in memory only
+            // (spec Decision 8).
+            pending: Ephemeral::new(
+                redis,
+                Keyspace::OauthPending,
+                state::PENDING_TTL,
+                state::MAX_PENDING,
+            ),
             // In Redis the key is `oauth:code:<hashed(code_key(code))>`:
             // `Ephemeral` hashes every key it is given, and `code_key` is
             // already a hash. Hashing twice is harmless, so it is not

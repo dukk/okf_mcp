@@ -1126,7 +1126,7 @@ mod tests {
         use crate::db::redis_support::TestRedis;
         use crate::oauth::state::{code_key, AuthorizationCode};
         use crate::oauth::testing::{
-            approve, authorization_code, authorize_query, oauth_replica_pair_on, send_on,
+            approval_form, authorization_code, authorize_query, oauth_replica_pair_on, send_on,
         };
         use crate::shared::ephemeral::Keyspace;
         use crate::shared::hashed;
@@ -1280,13 +1280,17 @@ mod tests {
         async fn a_redis_outage_fails_closed(server: TestRedis) {
             let (a, b, server) = oauth_replica_pair_on(server).await;
             let code = authorization_code(&a).await;
+            // Pending authorizations live in Redis too (Task 8), so the
+            // consent is walked up to Approve before Redis stops.
+            let approval = approval_form(&a, &authorize_query()).await;
             if server.stop().await.is_none() {
                 eprintln!("skipped: a shared Redis (TEST_REDIS_URL) cannot be stopped");
                 return;
             }
 
             let (status, body) = exchange_on(&b, &code).await;
-            let (approve_status, _, page) = approve(&a, &authorize_query()).await;
+            let (approve_status, _, page) =
+                send_on(&a.app, "POST", "/oauth/authorize", Some(approval), None).await;
 
             assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
             assert_eq!(body["error"], "server_error");
