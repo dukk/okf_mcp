@@ -1505,11 +1505,13 @@ Revert `config.session_store = ...`, and the cross-replica test fails with 404. 
    3. B refuses.
 3. `a_redis_failure_skips_the_cache_and_still_answers_from_postgres`: stop Redis; verify on B queries the database and returns the principal (live token); nothing is cached (`cache.tokens.len()` unchanged).
 4. `an_entry_cached_with_redis_is_rechecked_after_60_s`: use `remember` with an explicit `cached_at` 61 s ago, and verify reads the database (count the queries, or revoke the row directly in SQL without `forget` and see `None`).
-5. `a_code_approved_on_one_replica_is_exchanged_on_the_other`:
-   1. Approve on A.
-   2. Block B's subscriber: hold B's `polling` lock in a task, then release it after the exchange starts. Simpler: use a pair with no subscriber running, since lib apps don't run `http::serve`.
-   3. The exchange on B succeeds through `catch_up_keys`.
-   4. Without it (revert), the answer is `invalid_grant` "the grant was revoked".
+5. `a_token_minted_on_one_replica_is_accepted_on_the_other_before_any_announcement`:
+   1. Approve and exchange on A. The codes are still per instance until Task 7, so both happen on A.
+   2. Verify the new access token on B. Lib apps run no `http::serve`, so no subscriber has told B about the grant, and B's key cache does not hold it yet.
+   3. `verify` on B succeeds through `catch_up_keys`.
+   4. Revert the catch-up and `verify` returns `None`.
+
+   The exchange's own catch-up (`token.rs:411`) is tested in Task 7, once a code can cross instances.
 
 - [ ] **Step 2: Implement**
 
@@ -1545,7 +1547,7 @@ const SHARED_MAX_AGE: Duration = Duration::from_secs(60);
 
 - [ ] **Step 1: Write the failing tests** (`src/oauth/token.rs` tests, `replica_pair` with OAuth)
 
-- `a_code_minted_on_one_replica_is_exchanged_on_the_other_once`: approve on A, exchange on B (200), then exchange again on A → `invalid_grant` "already used", and the family is revoked: the access token from the first exchange is refused by `verify` on both.
+- `a_code_minted_on_one_replica_is_exchanged_on_the_other_once`: approve on A, then exchange on B (200). B has no subscriber in a lib pair, so this also covers the exchange's grant catch-up (Task 6, `token.rs:411`): revert it, and the answer is "the grant was revoked". Then exchange again on A → `invalid_grant` "already used", and the family is revoked: the access token from the first exchange is refused by `verify` on both.
 - `two_replicas_racing_one_code_make_one_exchange_and_one_replay`: `tokio::join!` the exchange on A and B. Exactly one 200, and the other is `invalid_grant`. The family is revoked afterwards (the `replayed` flag path, `:433-437`), so the minted token is refused.
 - `an_expired_code_is_refused_on_either_replica`: `PEXPIRE <prefix>oauth:code:<code_key> 1`, then exchange → "unknown or expired code".
 - The existing memory tests (`a_replayed_code_is_refused_and_revokes_what_it_minted`, `:670-`) pass unchanged apart from `.await`.
