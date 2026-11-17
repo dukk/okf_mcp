@@ -294,3 +294,76 @@ async fn a_section_link_on_a_long_concept_loads_the_body_and_reaches_the_heading
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_suspended_view_names_the_catalog_and_its_team_by_label() {
+    let (server, key) = server().await;
+    server.set_catalog_label("main", "Work notes").await;
+    server.set_user_label("tester", "Tess").await;
+    okf_mcp::store::teams::suspend(
+        &server.db.pool,
+        "tester",
+        Some("Paused for review."),
+        &okf_mcp::store::audit::AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("suspend the owner team");
+    server.app.poll().await.expect("poll");
+    drive(server.base.clone(), move |ui| {
+        ui.login(&key);
+        ui.open("/browse/main");
+        ui.wait_text("#browse-suspended", "Work notes is unavailable");
+        let shown = ui.text("#browse-suspended");
+        assert!(
+            shown.contains("Its team Tess's team is suspended."),
+            "{shown}"
+        );
+        // URLs keep slugs.
+        ui.wait_visible("#browse-suspended a[href='#/transfer/main']");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_export_link_uses_the_filename_the_server_chose() {
+    let (server, key) = server().await;
+    server.set_catalog_label("main", "Work notes").await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&key);
+        ui.open("/transfer");
+        // The picker offers the label; its value stays the slug.
+        ui.wait_text("#transfer-catalog", "Work notes");
+        ui.click("#export-btn");
+        ui.wait_visible("#export-link");
+        let link = ui.eval(
+            "() => { const a = document.querySelector('#export-link'); \
+             return { download: a.download, text: a.textContent }; }",
+            json!(null),
+        );
+        assert_eq!(link["download"], "work-notes-main.tar.gz", "{link}");
+        let text = link["text"].as_str().expect("a link text");
+        assert!(text.contains("Save work-notes-main.tar.gz again"), "{link}");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_export_filename_falls_back_to_the_slug_without_a_usable_header() {
+    let (server, key) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&key);
+        let names = ui.eval(
+            "async () => { const { exportFilename } = await import('/ui/js/pages/transfer.js'); \
+             return [exportFilename('attachment; filename=\"a-main.tar.gz\"', 'main'), \
+             exportFilename(null, 'main'), exportFilename('attachment', 'main'), \
+             exportFilename('attachment; filename=\"../x.tar.gz\"', 'main')]; }",
+            json!(null),
+        );
+        assert_eq!(
+            names,
+            json!(["a-main.tar.gz", "main.tar.gz", "main.tar.gz", "main.tar.gz"])
+        );
+    })
+    .await;
+}

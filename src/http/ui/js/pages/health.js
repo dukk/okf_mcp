@@ -4,6 +4,7 @@
 import { h, clear, pill } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
+import { catalogLabel } from '../core/labels.js';
 import { ago, count } from '../core/format.js';
 import { go, browseHash } from '../core/router.js';
 import { listTable } from '../components/list-table.js';
@@ -119,7 +120,7 @@ async function loadTiles(catalog, tiles) {
 export async function render(main) {
     const catalog = store.catalog;
     main.append(h('header', { class: 'page-head' },
-        h('div', {}, h('h1', {}, 'Health'), h('p', { class: 'muted' }, catalog ? `Catalog ${catalog}` : 'No catalog selected.')),
+        h('div', {}, h('h1', {}, 'Health'), h('p', { class: 'muted' }, catalog ? `Catalog ${catalogLabel(catalog)}` : 'No catalog selected.')),
         catalog
             ? h('div', { class: 'actions' }, h('button', {
                 type: 'button', id: 'health-refresh', class: 'secondary',

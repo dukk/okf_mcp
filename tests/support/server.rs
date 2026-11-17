@@ -374,6 +374,52 @@ impl TestServer {
         key
     }
 
+    /// Sets a catalog's display name and reloads the label directory.
+    ///
+    /// # Arguments
+    /// * `slug` - the catalog's slug.
+    /// * `label` - its new display name.
+    ///
+    /// # Panics
+    /// If the update or the poll fails.
+    pub async fn set_catalog_label(&self, slug: &str, label: &str) {
+        sqlx::query("UPDATE catalogs SET display_name = $1 WHERE name = $2")
+            .bind(label)
+            .bind(slug)
+            .execute(&self.db.pool)
+            .await
+            .expect("set a catalog display name");
+        self.reload_labels().await;
+    }
+
+    /// Sets a user's display name (which names their personal team) and reloads the label directory.
+    ///
+    /// # Arguments
+    /// * `slug` - the user's slug.
+    /// * `label` - its new display name.
+    ///
+    /// # Panics
+    /// If the update or the poll fails.
+    pub async fn set_user_label(&self, slug: &str, label: &str) {
+        sqlx::query("UPDATE users SET display_name = $1 WHERE name = $2")
+            .bind(label)
+            .bind(slug)
+            .execute(&self.db.pool)
+            .await
+            .expect("set a user display name");
+        self.reload_labels().await;
+    }
+
+    /// Bumps the administrative generation and polls, so the label directory
+    /// reloads.
+    async fn reload_labels(&self) {
+        sqlx::query("UPDATE server_state SET admin_generation = admin_generation + 1")
+            .execute(&self.db.pool)
+            .await
+            .expect("bump the generation");
+        self.app.poll().await.expect("poll");
+    }
+
     /// Inserts a key called `name`, granted every catalog, with no user, as
     /// a key made before users existed is, then reloads the key cache. No
     /// store function makes one any more, so this writes the row itself,

@@ -179,7 +179,7 @@ async fn export_hands_the_browser_the_catalog_tarball() {
             link["href"].as_str().expect("an href").starts_with("blob:"),
             "{link}"
         );
-        assert_eq!(link["download"], "main.tar.gz");
+        assert_eq!(link["download"], "untitled-catalog-main.tar.gz");
         assert!(link["size"].as_u64().expect("a size") > 0);
         // A read key sees no import form.
         assert!(!ui.page.is_visible("#import-btn").expect("visible"));
@@ -343,7 +343,7 @@ async fn an_export_or_import_in_flight_locks_the_catalog_and_admits_no_second_im
             "() => document.querySelector('#export-link').download",
             json!(null),
         );
-        assert_eq!(download, json!("main.tar.gz"));
+        assert_eq!(download, json!("untitled-catalog-main.tar.gz"));
         assert_eq!(disabled(ui, &controls[..2]), [false, false]);
 
         // An import in flight: choosing another file does not unlock Import,

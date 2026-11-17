@@ -8,6 +8,7 @@
 import { $, h, clear, pill } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
+import { catalogLabel, teamLabel } from '../core/labels.js';
 import { go, browseHash, route } from '../core/router.js';
 import { openDrawer } from '../core/drawer.js';
 import { ago, when, count } from '../core/format.js';
@@ -84,8 +85,8 @@ export async function render(main, rest) {
 // "null": every child goes through h() (core/dom.js, issue #302).
 function showSuspended(view, catalog, body) {
     clear(view).append(h('div', { id: 'browse-suspended', class: 'notice', role: 'status' },
-        h('h2', {}, `${catalog} is unavailable`),
-        h('p', {}, `Its team ${body.team} is suspended.`),
+        h('h2', {}, `${catalogLabel(catalog)} is unavailable`),
+        h('p', {}, `Its team ${teamLabel(body.team)} is suspended.`),
         body.notice ? h('p', {}, body.notice) : h('p', { class: 'muted' }, 'Ask the server operator for details.'),
         h('p', {}, h('a', { href: `#/transfer/${enc(catalog)}` }, 'Export a copy'))));
 }
@@ -96,7 +97,7 @@ function showSuspended(view, catalog, body) {
 // showSuspended, every child goes through h() (core/dom.js, issue #302).
 function showLocked(view, catalog, body) {
     clear(view).append(h('div', { id: 'browse-locked', class: 'notice', role: 'status' },
-        h('h2', {}, `${catalog} is locked`),
+        h('h2', {}, `${catalogLabel(catalog)} is locked`),
         h('p', {}, body.message),
         canUnlock()
             ? h('button', { type: 'button', id: 'browse-unlock',
