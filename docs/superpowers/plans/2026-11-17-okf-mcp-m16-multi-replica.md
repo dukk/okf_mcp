@@ -1950,6 +1950,12 @@ let pending = oauth.pending.update(&form.pending, now, |pending| {
   - `SessionRegistration.session_id` is then `&session.id`, the request's own raw id, never a stored one.
   - No raw console session id is stored, in memory or in Redis.
 
+> **Corrected (issue #563, 2026-11-17).** What shipped differs in small ways; read `src/http/passkeys.rs`.
+> - `session_hash(session_id)` is the one helper for the `URL_SAFE_NO_PAD` SHA-256: the start stores it, `session_key` returns the stored value, and the finish compares it with `session_hash(&session.id)`.
+> - `remember` swaps with `Index::replace` and drops what it replaced with `Ephemeral::remove_stale`. When the swap fails in Redis, it removes the ceremony it just stored (best effort) and returns the `Busy`; nothing falls back to memory.
+> - Test support: `mcp::testing::replica_pair_on(catalogs, config, redis)` is `replica_pair` over a Redis the test started (a cluster, for one), and `Browser::send_to(&Arc<App>, ..)` is `Browser::send` to a given replica. Later two-replica lib tests (Task 9) can use both.
+> - Tests: the two-replica bodies run in `tests::standalone` and `tests::cluster` (an `in_both_modes!` macro, as in `shared::ephemeral`), so filters look like `http::passkeys::tests::cluster::...`. The session test is `a_session_registration_finishes_only_in_the_session_that_started_it` there and `..._in_memory` on one memory app. "S2's ceremony is not consumed" is checked by S2 finishing its own registration (with `keep_sessions: true`) after the refused attempt. The double finish also races the two replicas with `tokio::join!` (one 200, one 410). One test was added: `a_redis_outage_fails_passkey_steps_closed` (a finish and a start answer 503 once Redis stops).
+
 - [ ] **Step 3: Gates, changelog, commit**
 
 `feat: passkey ceremonies in shared state (M16 Task 10)`.

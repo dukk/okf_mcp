@@ -171,9 +171,12 @@ url = "2.5.8"
 # `SecretString` holds the OTLP header values and the Sentry DSN until the exporters take them.
 secrecy = "0.10.3"
 # Passkeys (Task 8), pure RustCrypto. `conditional-ui` enables
-# discoverable (username-less) sign-in. Ceremony state stays typed in
-# memory (Decision 13), so no state-serialisation feature is needed.
-webauthn-rs = { version = "0.6.2", features = ["conditional-ui"] }
+# discoverable (username-less) sign-in. `danger-allow-state-serialisation`
+# lets a ceremony's state be stored in Redis with `[redis]` (M16 Task 10),
+# so a ceremony begun on one replica finishes on another. The state goes
+# to Redis, server-side, and never to the client (the danger the feature's
+# name warns of); without `[redis]` it stays typed in memory.
+webauthn-rs = { version = "0.6.2", features = ["conditional-ui", "danger-allow-state-serialisation"] }
 # The WebAuthn types webauthn-rs' prelude does not re-export
 # (`ResidentKeyRequirement`, and `AllowCredentials` in the tests; Decision 13).
 # Pinned exactly, as webauthn-rs pins it.
