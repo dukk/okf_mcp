@@ -311,7 +311,9 @@ impl Principal {
             None => Ok(()),
             Some(suspended) => Err(OkfError::Suspended {
                 catalog: catalog.to_string(),
+                catalog_label: suspended.catalog_label.clone(),
                 team: suspended.team.clone(),
+                team_label: suspended.team_label.clone(),
                 notice: suspended.notice.clone(),
             }),
         }
@@ -2518,7 +2520,7 @@ mod tests {
 
         assert!(matches!(
             suspended,
-            Err(OkfError::Suspended { ref catalog, ref team, ref notice })
+            Err(OkfError::Suspended { ref catalog, ref team, ref notice, .. })
                 if catalog == "shared" && team == "family" && notice.as_deref() == Some("Paused.")
         ));
         assert!(

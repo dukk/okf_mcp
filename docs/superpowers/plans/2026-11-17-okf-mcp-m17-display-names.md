@@ -1381,6 +1381,8 @@ Mount it with `.route("/labels", get(labels))`. Test the scope as Step 1 says.
   - `suspended_message(catalog, catalog_label, team, team_label, notice)` writes `catalog {catalog_label:?} ({catalog}) is unavailable: its team {team_label:?} ({team}) is suspended`.
   - Every construction site fills the labels from `SuspendedCatalog` (`grep -rn "OkfError::Suspended {" src`).
   - The other messages in `error.rs` keep echoing only the caller's value or the slug (spec Part 4).
+> **Corrected (issue #604, 2026-11-17).** `SuspendedCatalog` already carried `catalog_label` and `team_label` from Task 4, so Step 6 only threads them into `OkfError::Suspended` (the JSON error body is unchanged). Search hits are wrapped as `LabeledHit { catalog_label, #[serde(flatten)] hit: CatalogHit }` in `src/mcp/search.rs`, so `okf::search` stays label-free. The `maintenance_*` results gain no `catalog_label`: the investigator client parses them with `deny_unknown_fields` and pins their schemas, so only their parameter descriptions change. The `publish`, `discard` and `pending_changes` results also gain `catalog_label`. The new tests live in `src/mcp/labels_tests.rs`.
+
 - [ ] **Step 7: Regenerate `docs/reference/tools.md`** with the generating test's documented command (see the doc comment at `src/mcp/mod.rs:65` and the test that compares it). Then run gates, write changelog `m17-task-07-mcp-labels`, and commit `feat(mcp): labels beside ids in tool outputs`.
 
 ---
