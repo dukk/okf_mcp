@@ -14,12 +14,26 @@ pub const SERVER_URL_VAR: &str = "TEST_REDIS_URL";
 /// The variable a test's `[redis] url_env` names; [`TestRedis::env`] answers it.
 pub const URL_VAR: &str = "OKF_TEST_REDIS_URL";
 
+/// A key prefix no other [`TestRedis`] shares, even on a persistent
+/// `TEST_REDIS_URL` server: `okftest:<pid>-<n>-<16 random hex digits>:`. The
+/// pid and counter only help a person reading the keys; the random part is
+/// what keeps runs in separate containers, or after a pid is reused, apart.
+///
+/// # Panics
+/// If the operating system has no randomness: a broken test machine.
+pub fn random_prefix() -> String {
+    let mut bytes = [0_u8; 8];
+    getrandom::fill(&mut bytes).expect("random bytes for the test key prefix");
+    let random: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("okftest:{}-{random}:", super::pg::unique_start_label())
+}
+
 /// One test's Redis: its URL, its key prefix, and the container if it
 /// started one (removed when this is dropped).
 pub struct TestRedis {
     /// `redis://127.0.0.1:<port>/0`.
     pub url: String,
-    /// `okftest:<pid>-<n>:`, unique to this value.
+    /// [`random_prefix`], unique to this value.
     pub prefix: String,
     container: Option<ContainerAsync<RedisImage>>,
 }
@@ -31,7 +45,7 @@ impl TestRedis {
     /// # Panics
     /// If Docker cannot start the container.
     pub async fn start() -> Self {
-        let prefix = format!("okftest:{}:", super::pg::unique_start_label());
+        let prefix = random_prefix();
         if let Some(url) = std::env::var(SERVER_URL_VAR)
             .ok()
             .filter(|url| !url.is_empty())
@@ -85,5 +99,29 @@ impl TestRedis {
             .await
             .expect("start the redis container");
         Some(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn random_prefixes_have_the_documented_shape_and_never_repeat() {
+        let first = random_prefix();
+        let second = random_prefix();
+        assert_ne!(first, second);
+        for prefix in [&first, &second] {
+            let body = prefix
+                .strip_prefix("okftest:")
+                .and_then(|rest| rest.strip_suffix(':'))
+                .expect("okftest:...: shape");
+            let random = body.rsplit('-').next().expect("a random part");
+            assert_eq!(random.len(), 16, "{prefix}");
+            assert!(random.bytes().all(|b| b.is_ascii_hexdigit()), "{prefix}");
+        }
+        // The random part differs even when the pid and counter could not.
+        let tail = |prefix: &str| prefix.rsplit('-').next().map(str::to_string);
+        assert_ne!(tail(&first), tail(&second));
     }
 }
