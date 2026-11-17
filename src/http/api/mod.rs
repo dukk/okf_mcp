@@ -32,6 +32,9 @@ mod changesets;
 mod health;
 mod identity;
 mod keys;
+mod labels;
+#[cfg(test)]
+mod labels_tests;
 mod mail;
 mod maintenance;
 mod me;
@@ -66,6 +69,7 @@ pub(crate) fn routes(app: &Arc<App>) -> Router<Arc<App>> {
     Router::new()
         .merge(identity::routes())
         .merge(keys::routes())
+        .merge(labels::routes())
         .merge(health::routes())
         .merge(browse::routes())
         .merge(search::routes())
@@ -188,15 +192,18 @@ pub(crate) const PROVISIONER_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/v1/users"),
     ("PUT", "/api/v1/users/{name}/email"),
     ("POST", "/api/v1/users/{name}/invite"),
+    ("PATCH", "/api/v1/users/{name}"),
     ("DELETE", "/api/v1/users/{name}"),
     ("GET", "/api/v1/teams"),
     ("GET", "/api/v1/teams/{name}"),
     ("POST", "/api/v1/teams"),
     ("PUT", "/api/v1/teams/{name}/members/{user}"),
     ("DELETE", "/api/v1/teams/{name}/members/{user}"),
+    ("PATCH", "/api/v1/teams/{name}"),
     ("DELETE", "/api/v1/teams/{name}"),
     ("PUT", "/api/v1/teams/{name}/suspension"),
     ("POST", "/api/v1/catalogs"),
+    ("PATCH", "/api/v1/catalogs/{catalog}"),
     ("DELETE", "/api/v1/catalogs/{catalog}"),
     ("PUT", "/api/v1/catalogs/{catalog}/member-access"),
     ("GET", "/api/v1/audit"),
