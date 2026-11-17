@@ -77,7 +77,7 @@ async fn create_team_add_member_create_owned_catalog_and_key_for_user() {
         ui.click("#key-form input[name=catalog][value=shared]");
         ui.click("#key-form button[type=submit]");
         ui.click("#key-secret-done");
-        ui.wait_text("[data-test=key-user-alice-laptop]", "alice");
+        ui.wait_text("[data-test=key-user-alice-laptop]", UNNAMED_USER);
     })
     .await;
 }
@@ -311,7 +311,7 @@ async fn a_grant_a_code_and_a_catalog_are_assigned_from_the_unassigned_view() {
         ui.open("/catalogs");
         ui.wait_text("[data-test=catalog-owner-orphan]", "family");
         ui.open("/keys");
-        ui.wait_text("[data-test=code-user-tablet]", "alice");
+        ui.wait_text("[data-test=code-user-tablet]", UNNAMED_USER);
         let users = ui.eval(
             "() => [...document.querySelectorAll('[data-test^=\"key-user-\"]')] \
              .map(cell => cell.textContent)",

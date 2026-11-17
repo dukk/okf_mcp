@@ -4,6 +4,7 @@
 import { h, clear, fill } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
+import { catalogLabel } from '../core/labels.js';
 import { toast } from '../core/toast.js';
 import { count } from '../core/format.js';
 import { fileDrop, upload } from '../components/upload.js';
@@ -54,6 +55,17 @@ function errorPanel(error) {
         problems.length ? h('ul', { id: 'import-problems', class: 'mono small' }, problems.map(p => h('li', {}, p))) : null);
 }
 
+// The name the server gives the export (`Content-Disposition: attachment;
+// filename="<label>-<slug>.tar.gz"`), else the slug's own name. A header
+// without a usable filename, or one that would escape a directory, is
+// ignored.
+export function exportFilename(disposition, slug) {
+    const fallback = `${slug}.tar.gz`;
+    const found = /filename="?([^";]+)"?/i.exec(disposition ?? '');
+    const name = found?.[1].trim();
+    return name && !/[\\/]/.test(name) ? name : fallback;
+}
+
 export async function render(main, rest) {
     forget();
     let catalogs;
@@ -71,7 +83,7 @@ export async function render(main, rest) {
     let busy = false;
     const current = () => catalogs.find(c => c.name === chosen);
 
-    const picker = h('select', { id: 'transfer-catalog' }, catalogs.map(c => h('option', { value: c.name }, c.name)));
+    const picker = h('select', { id: 'transfer-catalog' }, catalogs.map(c => h('option', { value: c.name }, catalogLabel(c.name))));
     picker.value = chosen;
     const generationLabel = h('span', { id: 'transfer-generation', class: 'mono small muted' });
     const generation = h('input', { type: 'number', id: 'import-generation', min: '0', step: '1' });
@@ -90,13 +102,14 @@ export async function render(main, rest) {
         try {
             const response = await api.get(`/catalogs/${enc(target)}/export`, { raw: true });
             const blob = await response.blob();
+            const filename = exportFilename(response.headers.get('Content-Disposition'), target);
             // Navigated away meanwhile: hand nothing over, and leave the
             // object URL slot to the newer render.
             if (!main.isConnected) return;
             forget();
             exportUrl = URL.createObjectURL(blob);
-            const link = h('a', { id: 'export-link', href: exportUrl, download: `${target}.tar.gz`,
-                                  dataset: { size: String(blob.size) } }, `Save ${target}.tar.gz again`);
+            const link = h('a', { id: 'export-link', href: exportUrl, download: filename,
+                                  dataset: { size: String(blob.size) } }, `Save ${filename} again`);
             exportOut.replaceChildren(link, h('span', { class: 'muted small' }, ` ${blob.size} bytes`));
             link.click();
         } catch { /* toasted */ } finally {

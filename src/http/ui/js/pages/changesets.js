@@ -4,6 +4,7 @@
 import { h, pill } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
+import { catalogLabel, named } from '../core/labels.js';
 import { toast } from '../core/toast.js';
 import { openDrawer, closeDrawer } from '../core/drawer.js';
 import { ago, when, count } from '../core/format.js';
@@ -13,9 +14,10 @@ import { confirmDialog } from '../components/confirm.js';
 const COLUMNS = [
     { key: 'changeset', label: 'Handle', class: 'mono',
       render: row => h('span', { class: 'changeset-handle', 'data-test': 'changeset-handle' }, row.changeset) },
-    { key: 'catalog', label: 'Catalog', class: 'mono', sort: row => row.catalog },
+    { key: 'catalog', label: 'Catalog', sort: row => row.catalog_label,
+      render: row => named(row.catalog_label, row.catalog) },
     { key: 'owner', label: 'Owner', sort: row => row.key_name ?? '',
-      render: row => [row.key_name ?? '(deleted key)', ' ', h('span', { class: 'muted small mono' }, row.actor)] },
+      render: row => [row.key_name ?? '(deleted key)', ' ', h('span', { class: 'muted small' }, row.actor_label ?? row.actor)] },
     { key: 'created', label: 'Opened', sort: row => row.created, render: row => when(row.created) },
     { key: 'last_change', label: 'Last change', sort: row => row.last_change, render: row => ago(row.last_change) },
     { key: 'files', label: 'Files', sort: row => row.paths.length, render: row => count(row.paths.length, 'file') },
@@ -32,7 +34,7 @@ export async function render(main) {
         h('header', { class: 'page-head' },
             h('div', {},
                 h('h1', {}, 'Changesets'),
-                h('p', { class: 'muted' }, `${scope} in ${catalog ?? 'every catalog'}. Idle ones have had no change within the idle timeout.`)),
+                h('p', { class: 'muted' }, `${scope} in ${catalog === null ? 'every catalog' : catalogLabel(catalog)}. Idle ones have had no change within the idle timeout.`)),
             h('div', { class: 'actions' },
                 h('button', { type: 'button', id: 'changesets-refresh', class: 'secondary', onclick: () => load() }, 'Refresh'))),
         table);
@@ -55,7 +57,7 @@ async function show(main, row, reload) {
         ? h('button', { type: 'button', id: 'changeset-discard', class: 'danger', onclick: () => discardOne(main, row, reload) }, 'Discard')
         : null;
     openDrawer(row.changeset,
-        `${row.catalog} - ${row.key_name ?? 'deleted key'} (${row.actor}) - last change ${ago(row.last_change)}`,
+        `${row.catalog_label} - ${row.key_name ?? 'deleted key'} (${row.actor_label ?? row.actor}) - last change ${ago(row.last_change)}`,
         row.idle ? h('p', {}, pill('idle', 'warn'), ' No change within the idle timeout.') : null,
         diff,
         h('div', { class: 'drawer-actions' }, discardButton));
@@ -78,7 +80,7 @@ async function show(main, row, reload) {
 async function discardOne(main, row, reload) {
     const ok = await confirmDialog({
         title: 'Discard this changeset?',
-        message: `${count(row.paths.length, 'pending file')} in ${row.catalog} will be dropped, and the handle ${row.changeset} closed for good. This cannot be undone.`,
+        message: `${count(row.paths.length, 'pending file')} in ${row.catalog_label} will be dropped, and the handle ${row.changeset} closed for good. This cannot be undone.`,
         action: 'Discard',
     });
     if (!ok) return;

@@ -14,6 +14,7 @@
 import { h, pill, fact } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
+import { catalogLabel, userLabel } from '../core/labels.js';
 import { guard, once } from '../core/pending.js';
 import { toast } from '../core/toast.js';
 import { drawerTicket } from '../core/drawer.js';
@@ -34,7 +35,7 @@ const EXPIRIES = [['1h', '1 hour'], ['24h', '24 hours'], ['3d', '3 days'], ['7d'
 // Keys and codes both carry all_catalogs and catalogs.
 function catalogsOf(grantee) {
     if (grantee.all_catalogs) return pill('all', 'info');
-    return grantee.catalogs.length ? grantee.catalogs.join(', ') : '-';
+    return grantee.catalogs.length ? grantee.catalogs.map(catalogLabel).join(', ') : '-';
 }
 
 function isMine(key) {
@@ -48,7 +49,7 @@ function isGrant(key) {
 // The User cell of both tables; `prefix` is 'key' or 'code'.
 function userCell(prefix, row) {
     return h('span', { 'data-test': `${prefix}-user-${row.name}`, class: row.user ? 'mono' : 'muted' },
-        row.user ?? 'unassigned');
+        row.user ? userLabel(row.user) : 'unassigned');
 }
 
 const COLUMNS = [
@@ -64,7 +65,7 @@ const COLUMNS = [
     { key: 'access', label: 'Access', sort: key => LEVELS.indexOf(key.access),
       render: key => pill(key.access, ACCESS_KIND[key.access]) },
     { key: 'catalogs', label: 'Catalogs', render: catalogsOf },
-    { key: 'default_catalog', label: 'Default', class: 'mono' },
+    { key: 'default_catalog', label: 'Default', render: row => (row.default_catalog ? catalogLabel(row.default_catalog) : '-') },
     { key: 'maintenance_report', label: 'Reporting',
       render: key => key.maintenance_report ? pill('reports', 'ok') : '-' },
     { key: 'created_at', label: 'Created', sort: key => key.created_at, render: key => when(key.created_at) },
@@ -82,7 +83,7 @@ const CODE_COLUMNS = [
     { key: 'access', label: 'Access', sort: code => LEVELS.indexOf(code.access),
       render: code => pill(code.access, ACCESS_KIND[code.access]) },
     { key: 'catalogs', label: 'Catalogs', render: catalogsOf },
-    { key: 'default_catalog', label: 'Default', class: 'mono' },
+    { key: 'default_catalog', label: 'Default', render: row => (row.default_catalog ? catalogLabel(row.default_catalog) : '-') },
     { key: 'expires_at', label: 'Expires', sort: code => code.expires_at, render: code => when(code.expires_at) },
     { key: 'state', label: 'State', sort: code => code.state,
       render: code => h('span', { 'data-test': `code-state-${code.name}` }, pill(code.state, CODE_STATE_KIND[code.state])) },
@@ -273,10 +274,10 @@ async function showKey(main, key, reload, ticket = drawerTicket(main), previous 
         fact('Kind', grant ? 'OAuth grant' : 'API key'),
         grant ? fact('Client', key.client_name ?? 'unknown client') : null,
         fact('Actor', h('code', {}, key.actor)),
-        fact('User', key.user ?? 'unassigned'),
+        fact('User', key.user ? userLabel(key.user) : 'unassigned'),
         fact('Access', pill(key.access, ACCESS_KIND[key.access])),
         fact('Catalogs', catalogsOf(key)),
-        fact('Default', key.default_catalog ?? '-'),
+        fact('Default', key.default_catalog ? catalogLabel(key.default_catalog) : '-'),
         fact('Reporting', key.maintenance_report ? 'may submit maintenance reports' : 'no'),
         fact('Created', when(key.created_at)),
         fact('Revoked', key.revoked_at ? when(key.revoked_at) : 'no'));
@@ -312,15 +313,15 @@ async function showKey(main, key, reload, ticket = drawerTicket(main), previous 
     } else {
         const grantable = me.catalogs.filter(name => !key.catalogs.includes(name));
         const select = h('select', { id: 'key-grant-select', 'aria-label': 'Catalog to grant' },
-            grantable.map(name => h('option', { value: name }, name)));
+            grantable.map(name => h('option', { value: name }, catalogLabel(name))));
         grants = h('section', {},
             h('h3', {}, 'Catalogs'),
             h('ul', { class: 'grant-list' }, key.catalogs.length
                 ? key.catalogs.map(name => h('li', {},
-                    h('span', { class: 'mono' }, name), ' ',
+                    h('span', {}, catalogLabel(name)), ' ',
                     h('button', {
                         type: 'button', class: 'text-btn', dataset: { ungrant: name },
-                        onclick: () => change(() => api.del(`${base}/catalogs/${enc(name)}`), `Removed ${name} from ${key.name}.`),
+                        onclick: () => change(() => api.del(`${base}/catalogs/${enc(name)}`), `Removed ${catalogLabel(name)} from ${key.name}.`),
                     }, 'Remove')))
                 : h('li', { class: 'muted' }, 'No catalogs: this key reaches nothing.')),
             grantable.length
@@ -440,10 +441,10 @@ async function showCode(main, code, reload, ticket = drawerTicket(main), previou
     const facts = h('dl', { class: 'facts' },
         fact('Id', h('code', {}, code.id)),
         fact('Actor', h('code', {}, code.actor)),
-        fact('User', code.user ?? 'unassigned'),
+        fact('User', code.user ? userLabel(code.user) : 'unassigned'),
         fact('Access', pill(code.access, ACCESS_KIND[code.access])),
         fact('Catalogs', catalogsOf(code)),
-        fact('Default', code.default_catalog ?? '-'),
+        fact('Default', code.default_catalog ? catalogLabel(code.default_catalog) : '-'),
         fact('State', pill(code.state, CODE_STATE_KIND[code.state])),
         fact('Created', when(code.created_at)),
         fact('Expires', when(code.expires_at)),
