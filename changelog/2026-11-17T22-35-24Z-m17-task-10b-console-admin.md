@@ -24,6 +24,10 @@ Issue #608, part of epic #597.
   editor (and the maintenance switch) to an owner of the catalog's team and
   only the switch to anyone else. The owner path reads no team list, which
   only an admin may read. The delete dialog still asks for the slug.
+- Pickers (`components/picker.js`): `picker` and `assignControl` take an
+  optional `labelOf`; options show the label and keep the slug as value.
+  Used for the team owner, member add, entitlement catalog, unassigned
+  assign and unlock catalog pickers.
 
 ## Tests
 
