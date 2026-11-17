@@ -1299,7 +1299,21 @@ async fn use_on_one_replica_keeps_the_session_alive_for_the_other() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn delete_ends_the_session_everywhere() {
-    // Open on A; DELETE on B -> 202; tools/list on A -> 404.
+    // Open on A. B has never received a POST or GET for this session, so it
+    // holds no local copy (review of PR #552). DELETE on B -> 202; both
+    // Redis keys are gone; tools/list on A -> 404, and on B -> 404.
+    // Then: another key's DELETE on B -> 404, and both keys are still there
+    // (the binding check still guards DELETE).
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_whose_state_write_failed_is_never_bound() {
+    // Lib-level, through `http::router` on an app with Redis: the
+    // `RedisSessions` test hook `fail_next_store` makes the next `store`
+    // swallow a simulated failure without writing. The initialize answers
+    // 503; no `mcp:bind:*` key exists; okf_redis_errors_total{operation="bind"}
+    // is 1. Revert the EXISTS check in BIND and the initialize answers 200
+    // with a binding that no other replica can restore.
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1345,6 +1359,13 @@ const ADMIT: &str = "local v = redis.call('GET', KEYS[1])\n\
     redis.call('PEXPIRE', KEYS[2], ARGV[2])\n\
     return 1";
 
+/// `KEYS[1]` binding, `KEYS[2]` state; `ARGV[1]` key id, `ARGV[2]` idle ms.
+/// Binds only a session whose state exists, and gives both keys the same TTL.
+const BIND: &str = "if redis.call('EXISTS', KEYS[2]) == 0 then return 0 end\n\
+    redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])\n\
+    redis.call('PEXPIRE', KEYS[2], ARGV[2])\n\
+    return 1";
+
 /// Sessions and bindings in Redis.
 #[derive(Debug, Clone)]
 pub struct RedisSessions { redis: Redis, idle: Duration }
@@ -1369,18 +1390,31 @@ impl RedisSessions {
         Ok(admitted == 1)
     }
 
-    /// Binds a session rmcp just issued: `SET bind key_id PX idle`.
+    /// Binds a session rmcp just issued, but only if rmcp's `store` really
+    /// persisted its state: `store` swallows its errors (it must, see `load`),
+    /// so a state write that failed would otherwise leave a binding that
+    /// restores nowhere (review of PR #552). Aligns both TTLs.
+    ///
+    /// # Errors
+    /// [`OkfError::Busy`] when Redis fails, or when the state is missing (the
+    /// request answers 503 and the client initializes again).
     #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "redis", db.operation.name = "bind"))]
     pub async fn bind(&self, session: &str, key_id: &str) -> Result<(), OkfError> {
-        let (bind, _) = keys(&self.redis, session);
-        let options = SetOptions::default().with_expiration(SetExpiry::PX(millis(self.idle)));
-        let _: Option<String> = self
-            .redis
-            .connection()
-            .set_options(bind, key_id, options)
+        let (bind, state) = keys(&self.redis, session);
+        let bound: i64 = redis::Script::new(BIND)
+            .key(bind)
+            .key(state)
+            .arg(key_id)
+            .arg(millis(self.idle))
+            .invoke_async(&mut self.redis.connection())
             .await
             .map_err(|error| self.redis.failed(RedisOp::Bind, &error))?;
-        Ok(())
+        if bound == 1 {
+            return Ok(());
+        }
+        self.redis.count(RedisOp::Bind);
+        tracing::warn!("an MCP session's state was not persisted; refusing to bind it");
+        Err(OkfError::Busy { reason: "the shared session store is unavailable".to_string() })
     }
 
     /// Forgets a session after its `DELETE`: `DEL bind state`.
@@ -1462,6 +1496,8 @@ impl SessionStore for RedisSessions {
 }
 ```
 
+Add a test hook to `RedisSessions`: `#[cfg(test)] fail_next_store: AtomicBool`. When it is set, `store` swallows a simulated failure (counted as `RedisOp::Set`) without writing, which is what `a_session_whose_state_write_failed_is_never_bound` needs. It is compiled only into tests.
+
 The state envelope reuses Task 2's `Envelope` with its own version constant, `SESSION_STATE_VERSION = 1`. Make `Envelope` and its fields `pub(crate)` in `ephemeral.rs`. `Envelope<T>` serializes a borrowed `&SessionState` as well as an owned one: `T: Serialize` holds for `&T`.
 
 Each `SessionStore` method gets a span. `#[tracing::instrument]` on an `#[async_trait]` method works when the attribute is placed below `#[async_trait]`'s expansion target, that is on the `async fn` inside the impl. If the lint or the macro order objects, delegate each method to an instrumented private method.
@@ -1483,8 +1519,14 @@ impl SessionBindings {
 
 `bind_session` uses it:
 - An `Err` from `admits` answers `AppError::from(error)` (503).
-- An `Err` from `bind` answers 503 instead of rmcp's response. The client then retries `initialize`, and the unbound local session idles out.
-- A `release` error is logged and the 2xx kept.
+- An `Err` from `bind` answers 503 instead of rmcp's response. That covers a Redis error, and a state that rmcp's `store` failed to persist (`BIND` checks it). The client then retries `initialize`, and the unbound local session idles out.
+- **`DELETE` in Redis mode does not depend on a local copy** (review of PR #552). rmcp restores a session only for POST and GET (`T/tower.rs:1911, 2047`). On a replica that never held the session, `DELETE` would get rmcp's not-found answer, today's middleware would release nothing, and the replica that opened the session would go on serving it. So with Redis, an admitted `DELETE`:
+  1. passes the same binding check as every request: another key gets 404, and nothing is released;
+  2. then `release`s both Redis keys, before rmcp runs;
+  3. then runs rmcp, which closes a local copy if there is one;
+  4. answers rmcp's 2xx, or `202 Accepted` when rmcp answered 404 because it held no copy.
+  A `release` error answers 503 and leaves the session in place for a retry. Every other replica's local copy is refused from then on, because its binding is gone, and it idles out.
+- Memory mode keeps today's order: release after a successful rmcp `DELETE`.
 
 `App.sessions` becomes `SessionBindings`: `Memory(SessionKeys::new(idle))` without Redis, `Redis(RedisSessions::new(redis.clone(), idle))` with it. The `SessionKeys` unit tests stay as they are.
 

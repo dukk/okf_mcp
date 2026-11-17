@@ -163,6 +163,17 @@ The last two are not part of this milestone.
       `RedisSessions::load` also refuses a state without a binding, so a
       restore can't happen even if the middleware were bypassed.
     - A Redis error answers 503, never a fallback to memory.
+    - **Binding checks the state exists.** rmcp's `store` swallows its
+      errors (Decision 9), so the binding script writes the binding only if
+      the session's state is in Redis. It gives both keys the same TTL.
+      Otherwise the `initialize` answers 503 and the client starts again,
+      instead of holding a session that only the instance that opened it
+      can serve (review of PR #552).
+    - **`DELETE` works on any instance.** rmcp restores a session only for
+      POST and GET. So with Redis, `bind_session` checks the binding and
+      releases both keys itself before rmcp runs. It answers 202 even when
+      this instance held no local copy. Other instances' local copies are
+      refused from then on, because the binding is gone.
 11. **The idle TTL is refreshed in `bind_session`.** rmcp calls `store`
     only after `initialize` and `delete` only on `DELETE /mcp`. It never
     refreshes an entry on use, and a session worker that idles out on one
