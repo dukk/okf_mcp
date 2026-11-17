@@ -60,7 +60,7 @@ and where this design provides it:
 | `WWW-Authenticate: Bearer resource_metadata="..."` on 401 | the bearer middleware |
 | Authorization Server Metadata (RFC 8414) | `GET /.well-known/oauth-authorization-server` |
 | PKCE, S256 only | `/oauth/authorize` requires it; `/oauth/token` verifies it |
-| Resource indicators (RFC 8707), audience check | `resource` required at authorize and token; stored on every token; checked on every request |
+| Resource indicators (RFC 8707), audience check | `resource` required at token, optional at authorize (absent means `/mcp`, 2026-11-17); stored on every token; checked on every request |
 | Client ID Metadata Documents | `client_id_metadata_document_supported: true`; HTTPS `client_id` fetched and validated |
 | Dynamic client registration (RFC 7591) | `POST /oauth/register` |
 | Authorization server issuer identification (RFC 9207) | `iss` on the authorization response |
