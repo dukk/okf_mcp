@@ -229,7 +229,7 @@ The spec already reflects each of these.
 - **Codes use `update`, not `take`.** `GETDEL` would drop the used code, and with it the replay detection that revokes the token family.
 - **Global caps are dropped in Redis**, kept in memory (spec Decision 8).
 - **Session bindings are not deleted on revocation.** The pub/sub reload makes `require_key` refuse the key on every instance (spec Decision 12). Deleting bindings per key would need a key-to-sessions index kept in step with every revocation path.
-- **Raw console session ids leave Redis values.** `LinkRequest.session_id` (Task 9) and the passkey `RegisterVia::Session.session_id` (Task 10) become the session's hash. The finish matches the finishing request's cookie against it (Decision 7).
+- **Raw console session ids leave Redis values.** `LinkRequest.session_id` (Task 9) and the passkey `RegisterVia::Session.session_id` (Task 10) become the session's hash. The finish matches the finishing request's cookie against it (Decision 7). The passkey setup-link token (`RegisterVia::Setup`) becomes its hash too, and the finish presents the token again (Task 10, corrected for issue #563).
 - **No Deployment under `examples/kubernetes/`** exists. The issue's "`examples/kubernetes`" Deployment is the one in `docs/operations.md`, which Task 12 changes.
 - **`src/catalog.rs:177`'s comment is already right** and is not changed.
 
@@ -1976,6 +1976,13 @@ let pending = oauth.pending.update(&form.pending, now, |pending| {
   - At finish (`:946-958`), the check `session_id != session.id` becomes `session_hash != URL_SAFE_NO_PAD.encode(keys::hash(&session.id))`. `session` is the finishing request's own console session, from `signed_in`.
   - `SessionRegistration.session_id` is then `&session.id`, the request's own raw id, never a stored one.
   - No raw console session id is stored, in memory or in Redis.
+
+> **Corrected (issue #563, 2026-11-17).** What shipped differs in small ways; read `src/http/passkeys.rs`.
+> - The hash is Task 9's `crate::oidc::session_hash(session_id)`, the one helper for the `URL_SAFE_NO_PAD` SHA-256 of a console session id: the start stores it, `session_key` returns the stored value, and the finish compares it with `session_hash(&session.id)`.
+> - `remember` swaps with `Index::replace` and drops what it replaced with `Ephemeral::remove_stale`. When the swap fails in Redis, it removes the ceremony it just stored (best effort) and returns the `Busy`; nothing falls back to memory.
+> - Test support: Task 10 uses `mcp::testing::replica_pair_on` and `Browser::send_to`, which Task 9 (PR #576) added too; one copy of each was kept when the branches merged.
+> - **The setup-link token is stored only as its hash too** (the maintainer, on review of PR #577; spec Decision 7). `RegisterVia::Setup { token }` became `token_hash: [u8; 32]` (`keys::hash`, the form `email_tokens` stores). `POST /auth/passkey/setup/finish` takes `{"token": .., "credential": ..}` (`SetupFinish`), and `passkey.js` sends the token again. The finish answers 410 (`LINK_EXPIRED`) unless `keys::matches(&token_hash, &token)` (constant time), then redeems the presented token. The session-hash comparison is constant time as well (`ct_eq`). Tests: `no_raw_setup_token_reaches_redis` and `a_setup_finish_presenting_another_token_is_refused` (both modes, plus `_in_memory`).
+> - Tests: the two-replica bodies run in `tests::standalone` and `tests::cluster` (an `in_both_modes!` macro, as in `shared::ephemeral`), so filters look like `http::passkeys::tests::cluster::...`. The session test is `a_session_registration_finishes_only_in_the_session_that_started_it` there and `..._in_memory` on one memory app. "S2's ceremony is not consumed" is checked by S2 finishing its own registration (with `keep_sessions: true`) after the refused attempt. The double finish also races the two replicas with `tokio::join!` (one 200, one 410). One test was added: `a_redis_outage_fails_passkey_steps_closed` (a finish and a start answer 503 once Redis stops).
 
 - [ ] **Step 3: Gates, changelog, commit**
 
