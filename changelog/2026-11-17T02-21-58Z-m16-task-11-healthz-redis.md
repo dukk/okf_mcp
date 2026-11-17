@@ -8,6 +8,6 @@
 - The exact-body tests (`src/http/mod.rs` and `tests/server.rs`) include `"redis": null`; the README row for `/healthz` names the field.
 
 ## Notes
-- The status code still follows the database alone, so a Redis outage does not mark every replica unready (Decision 6).
+- The status code still follows the database alone, so a Redis outage does not mark every replica unready (spec Decision 19).
 - The body never carries the Redis URL or host.
 - A failed or late `PING` is counted as `RedisOp::Get`; no new operation label was added.

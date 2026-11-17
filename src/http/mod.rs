@@ -1206,7 +1206,9 @@ mod tests {
             .unwrap();
         // A Redis outage never makes the replica unready: the database decides.
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(json_body(response).await["redis"], "unavailable");
+        let down = json_body(response).await;
+        assert_eq!(down["redis"], "unavailable");
+        assert!(!down.to_string().contains("redis://"), "{down}");
     }
 
     #[tokio::test(flavor = "multi_thread")]
