@@ -11,9 +11,14 @@
 //!
 //! Linking from the account page starts with `POST /api/v1/me/identities/
 //! {provider}/link` (a console session and its CSRF header), which records
-//! the session in the flow; the callback links only for a browser still
-//! holding that same live session, so neither another site nor another
-//! person's callback can link an identity to someone's account.
+//! the session's hash in the flow (never its raw id); the callback links
+//! only for a browser whose own live session hashes to it, so neither
+//! another site nor another person's callback can link an identity to
+//! someone's account.
+//!
+//! With `[redis]` the flows live there (spec Decisions 3-8): a callback may
+//! land on any instance, and the take is atomic, so a flow finishes once.
+//! A Redis failure fails closed with a 503 page, never a fallback to memory.
 //!
 //! No secret reaches a log line: the callback's query has no `Debug`, the
 //! request span records the path only (`http::router`), and the flow's
@@ -45,7 +50,7 @@ use crate::http::signin::{
 };
 use crate::http::{timeout_layer, AppError};
 use crate::keys;
-use crate::oidc::{Flow, Identity, LinkRequest, OidcError, OidcProviders, FLOW_TTL};
+use crate::oidc::{session_hash, Flow, Identity, LinkRequest, OidcError, OidcProviders, FLOW_TTL};
 use crate::store::identities::{self, OidcOutcome, OidcSignIn, SessionLink};
 use crate::store::settings::Brand;
 use crate::store::sign_in_events::{Method, Outcome};
@@ -64,6 +69,9 @@ pub const SIGN_IN_RETRY: &str = "Sign-in failed; try again";
 pub const LINK_RETRY: &str = "Linking failed: sign in again and start it from your account page.";
 /// Discovery failed with nothing cached (503).
 const UNAVAILABLE: &str = "The sign-in provider cannot be reached right now; try again later.";
+/// The shared flow store failed (503): the flow is not finished, and its
+/// cookie is kept so a reload can finish it.
+const TRY_LATER: &str = "Sign-in is unavailable right now; try again shortly.";
 /// The identity cannot be linked (409): another user holds it, or the user
 /// already links another account at this provider.
 pub const LINKED_ELSEWHERE: &str = "This account cannot be linked: it is linked to another user, \
@@ -168,8 +176,8 @@ struct NewFlow<'a> {
 ///
 /// # Errors
 /// [`OkfError::NotFound`] for an unknown provider; [`OkfError::Busy`] when
-/// discovery fails with nothing cached or too many flows are in progress;
-/// [`OkfError::Io`] from the random source.
+/// discovery fails with nothing cached, too many flows are in progress or
+/// Redis fails; [`OkfError::Io`] from the random source.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn begin(
     app: &App,
@@ -186,7 +194,7 @@ async fn begin(
         link: new.link,
     };
     let previous = cookie(headers, FLOW_COOKIE);
-    if !oidc.store_flow(&id, flow, previous, Instant::now()) {
+    if !oidc.store_flow(&id, flow, previous, Instant::now()).await? {
         return Err(OkfError::Busy {
             reason: "too many sign-ins in progress; try again shortly".to_string(),
         });
@@ -302,11 +310,25 @@ async fn callback(
     let Some(oidc) = app.oidc() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    // Every answer clears the flow cookie: the flow is single use.
-    let mut headers = clear_flow(&app);
     let brand = app.settings().brand();
-    let flow =
-        cookie(&parts.headers, FLOW_COOKIE).and_then(|id| oidc.flows.take(id, Instant::now()));
+    let flow = match cookie(&parts.headers, FLOW_COOKIE) {
+        Some(id) => oidc.flows.take(id, Instant::now()).await,
+        None => Ok(None),
+    };
+    // A Redis failure fails closed. The take may never have run, so the flow
+    // cookie is kept (no `Set-Cookie`): reloading this page once Redis is
+    // back can still finish the flow.
+    let Ok(flow) = flow else {
+        return page(
+            &brand,
+            &HeaderMap::new(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            TRY_LATER,
+        );
+    };
+    // Every answer after the take clears the flow cookie: the flow is
+    // single use, and it is gone now.
+    let mut headers = clear_flow(&app);
     let Some(Flow {
         provider: started_with,
         secrets,
@@ -479,24 +501,31 @@ async fn complete_sign_in(
     Ok(Some(cookie))
 }
 
-/// The user of this browser's console session, when it is the live session
-/// that started the link (same id, compared in constant time, and the same
-/// user).
+/// The user of this browser's console session and that session's raw id,
+/// when it is the live session that started the link: its id hashes to the
+/// flow's `session_hash` (compared in constant time), and it is the same
+/// user. The id returned is this request's own cookie, never a stored one.
 #[tracing::instrument(level = "debug", skip_all)]
-async fn linking_user(
+async fn linking_user<'a>(
     app: &App,
-    parts: &Parts,
+    parts: &'a Parts,
     link: &LinkRequest,
-) -> Result<Option<UserAuth>, OkfError> {
+) -> Result<Option<(UserAuth, &'a str)>, OkfError> {
     let Some(id) = cookie(&parts.headers, COOKIE) else {
         return Ok(None);
     };
-    if !bool::from(id.as_bytes().ct_eq(link.session_id.as_bytes())) {
+    if !bool::from(
+        session_hash(id)
+            .as_bytes()
+            .ct_eq(link.session_hash.as_bytes()),
+    ) {
         return Ok(None);
     }
     let idle = app.settings().console_session_idle;
     match user_sessions::touch(app.pool(), id, idle, app.clock().now()).await? {
-        Some(row) if row.user_id == link.user_id => session_user(app, &row.user_id).await,
+        Some(row) if row.user_id == link.user_id => Ok(session_user(app, &row.user_id)
+            .await?
+            .map(|user| (user, id))),
         _ => Ok(None),
     }
 }
@@ -513,13 +542,14 @@ async fn finish_link(
     identity: &Identity,
     link: LinkRequest,
 ) -> Result<Done, OkfError> {
-    let Some(user) = linking_user(app, parts, &link).await? else {
+    let Some((user, session_id)) = linking_user(app, parts, &link).await? else {
         return Ok(Done::Refused(StatusCode::BAD_REQUEST, LINK_RETRY));
     };
     let email = identity.email.as_deref().map(str::trim).unwrap_or_default();
     let request = SessionLink {
         user_id: &link.user_id,
-        session_id: &link.session_id,
+        // This request's own session, which hashed to the flow's.
+        session_id,
         provider,
         subject: &identity.subject,
         email,
@@ -629,7 +659,7 @@ async fn link(
         return_to: ACCOUNT_PAGE.to_string(),
         link: Some(LinkRequest {
             user_id,
-            session_id: session.id,
+            session_hash: session_hash(&session.id),
             keep_sessions: body.keep_sessions,
         }),
     };
@@ -640,6 +670,7 @@ async fn link(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
     use std::time::Duration;
 
     use axum::http::StatusCode;
@@ -647,14 +678,16 @@ mod tests {
     use serde_json::json;
     use sqlx::PgPool;
 
-    use super::{FLOW_COOKIE, LINKED_ELSEWHERE, LINK_RETRY, NO_ACCOUNT, SIGN_IN_RETRY};
+    use super::{FLOW_COOKIE, LINKED_ELSEWHERE, LINK_RETRY, NO_ACCOUNT, SIGN_IN_RETRY, TRY_LATER};
+    use crate::app::App;
     use crate::config::{AuthConfig, Config};
+    use crate::db::redis_support::{TestRedis, CLUSTER_URL_VAR, SERVER_URL_VAR};
     use crate::http::api::testing::{
         keys, login_config, user_with_password, Browser, Payload, Reply, MAIN, PASSWORD,
     };
     use crate::http::console_session::COOKIE;
     use crate::http::limits::SIGN_IN_PER_IP;
-    use crate::mcp::testing::{app_with, TestApp};
+    use crate::mcp::testing::{app_with, replica_pair_on, TestApp};
     use crate::oidc::testing::{self as idp, MockIdp, CLIENT_ID, SECRET};
     use crate::oidc::LINK_STARTS_PER_USER;
     use crate::store::audit::AuditActor;
@@ -667,20 +700,34 @@ mod tests {
     /// from the environment, as in production; each test names its own
     /// variable, so tests running at once never share one.
     async fn oidc_app(idp: &MockIdp, secret_env: &str) -> TestApp {
+        app_with(
+            &[("main", MAIN), ("other", &[("index.md", "# Other\n")])],
+            oidc_config(idp, secret_env),
+        )
+        .await
+    }
+
+    /// The settings with the mock provider as `example`, its secret set in
+    /// `secret_env`.
+    fn oidc_config(idp: &MockIdp, secret_env: &str) -> Config {
         // Edition 2021: `set_var` is a safe call.
         std::env::set_var(secret_env, SECRET);
-        let config = Config {
+        Config {
             auth: AuthConfig {
                 oidc: vec![idp::provider(idp, secret_env)],
                 ..AuthConfig::default()
             },
             ..login_config()
-        };
-        app_with(
-            &[("main", MAIN), ("other", &[("index.md", "# Other\n")])],
-            config,
-        )
-        .await
+        }
+    }
+
+    /// Two replicas over one database and `redis`, with the mock provider.
+    async fn oidc_pair(
+        idp: &MockIdp,
+        secret_env: &str,
+        redis: TestRedis,
+    ) -> (TestApp, Arc<App>, TestRedis) {
+        replica_pair_on(&[], oidc_config(idp, secret_env), redis).await
     }
 
     fn query_of(url: &str) -> HashMap<String, String> {
@@ -698,9 +745,18 @@ mod tests {
         idp: &MockIdp,
         browser: &mut Browser,
     ) -> HashMap<String, String> {
+        start_on(&test.app, idp, browser).await
+    }
+
+    /// [`start`] on one replica.
+    async fn start_on(
+        app: &Arc<App>,
+        idp: &MockIdp,
+        browser: &mut Browser,
+    ) -> HashMap<String, String> {
         let reply = browser
-            .send(
-                test,
+            .send_to(
+                app,
                 "GET",
                 "/auth/oidc/example/start?return_to=%2Fui%2F%23%2Fkeys",
                 Payload::Empty,
@@ -718,8 +774,13 @@ mod tests {
     }
 
     async fn callback(test: &TestApp, browser: &mut Browser, state: &str) -> Reply {
+        callback_on(&test.app, browser, state).await
+    }
+
+    /// [`callback`] on one replica.
+    async fn callback_on(app: &Arc<App>, browser: &mut Browser, state: &str) -> Reply {
         let uri = format!("/auth/oidc/example/callback?code=c&state={state}");
-        browser.send(test, "GET", &uri, Payload::Empty).await
+        browser.send_to(app, "GET", &uri, Payload::Empty).await
     }
 
     /// Starts linking from `browser`'s session and returns the authorize
@@ -730,9 +791,19 @@ mod tests {
         browser: &mut Browser,
         body: serde_json::Value,
     ) -> HashMap<String, String> {
+        start_link_on(&test.app, idp, browser, body).await
+    }
+
+    /// [`start_link`] on one replica.
+    async fn start_link_on(
+        app: &Arc<App>,
+        idp: &MockIdp,
+        browser: &mut Browser,
+        body: serde_json::Value,
+    ) -> HashMap<String, String> {
         let started = browser
-            .send(
-                test,
+            .send_to(
+                app,
                 "POST",
                 "/api/v1/me/identities/example/link",
                 Payload::Json(body),
@@ -1533,4 +1604,346 @@ mod tests {
         assert_eq!(without_csrf.status, StatusCode::FORBIDDEN);
         assert!(without_csrf.set_cookie(FLOW_COOKIE).is_none());
     }
+
+    // Two replicas (spec Decisions 3-8, plan Task 9). Each body runs on a
+    // standalone Redis and on a one-node cluster (`in_both_modes!` below).
+
+    /// The bound on every replica test (containers start inside it).
+    const BOUND: Duration = Duration::from_secs(180);
+
+    /// Every key under the test's prefix.
+    async fn redis_keys(app: &App, prefix: &str) -> Vec<String> {
+        let redis = app.redis().expect("the app's redis");
+        redis::cmd("KEYS")
+            .arg(format!("{{{prefix}}}*"))
+            .query_async(&mut redis.connection())
+            .await
+            .expect("list the keys")
+    }
+
+    /// How many of `keys` are in the key space `space` (`oidc:flow`).
+    fn in_space(keys: &[String], prefix: &str, space: &str) -> usize {
+        let start = format!("{{{prefix}}}{space}:");
+        keys.iter().filter(|key| key.starts_with(&start)).count()
+    }
+
+    async fn a_sign_in_started_on_one_replica_completes_on_the_other_once(redis: TestRedis) {
+        let idp = idp::start().await;
+        let (a, b, _redis) = oidc_pair(&idp, "OKF_TEST_OIDC_SECRET_REPLICA", redis).await;
+        user_with_password(&a, "alice", "alice@example.com", Some(PASSWORD)).await;
+        idp.will_issue("sub-1", Some("alice@example.com"), Some(true));
+        let mut browser = Browser::default();
+
+        let query = start_on(&a.app, &idp, &mut browser).await;
+        let flow = browser.cookie(FLOW_COOKIE).expect("a flow").to_string();
+        let done = callback_on(&b, &mut browser, &query["state"]).await;
+        let mut replay = Browser::with_cookie(FLOW_COOKIE, &flow);
+        let replayed = callback_on(&a.app, &mut replay, &query["state"]).await;
+
+        assert_eq!(done.status, StatusCode::SEE_OTHER, "{}", done.text());
+        assert_eq!(done.location(), "/ui/#/keys");
+        let session = browser
+            .send_to(&b, "GET", "/api/v1/session", Payload::Empty)
+            .await;
+        assert_eq!(session.json()["user"], "alice");
+        assert_eq!(
+            replayed.status,
+            StatusCode::BAD_REQUEST,
+            "{}",
+            replayed.text()
+        );
+        assert!(replayed.text().contains(SIGN_IN_RETRY));
+        assert_eq!(replay.cookie(COOKIE), None, "the replay signed nobody in");
+    }
+
+    async fn a_link_flow_replaces_the_sessions_previous_one_across_replicas(redis: TestRedis) {
+        let idp = idp::start().await;
+        let (a, b, redis) = oidc_pair(&idp, "OKF_TEST_OIDC_SECRET_REPLACE", redis).await;
+        let alice = user_with_password(&a, "alice", "alice@example.com", Some(PASSWORD)).await;
+        let signed_in = Browser::signed_in(&a, "alice@example.com", PASSWORD).await;
+        let session = signed_in.cookie(COOKIE).expect("a session").to_string();
+        idp.will_issue("sub-9", None, None);
+
+        // A script that never keeps the flow cookie: only the session's
+        // index can drop the first flow.
+        let mut first = Browser::with_cookie(COOKIE, &session);
+        first.csrf = signed_in.csrf.clone();
+        let first_query = start_link_on(&a.app, &idp, &mut first, json!({})).await;
+        let mut second = Browser::with_cookie(COOKIE, &session);
+        second.csrf = signed_in.csrf.clone();
+        let second_query = start_link_on(&b, &idp, &mut second, json!({})).await;
+
+        let keys = redis_keys(&a.app, &redis.prefix).await;
+        assert_eq!(in_space(&keys, &redis.prefix, "oidc:link"), 1, "{keys:?}");
+        assert_eq!(in_space(&keys, &redis.prefix, "oidc:flow"), 1, "{keys:?}");
+        let stale = callback_on(&a.app, &mut first, &first_query["state"]).await;
+        assert_eq!(stale.status, StatusCode::BAD_REQUEST, "{}", stale.text());
+        assert!(identities::list(a.app.pool(), &alice.id)
+            .await
+            .expect("list")
+            .is_empty());
+        let done = callback_on(&a.app, &mut second, &second_query["state"]).await;
+        assert_eq!(done.status, StatusCode::SEE_OTHER, "{}", done.text());
+        assert_eq!(
+            identities::list(a.app.pool(), &alice.id)
+                .await
+                .expect("list")
+                .len(),
+            1
+        );
+    }
+
+    async fn no_raw_session_id_reaches_redis(redis: TestRedis) {
+        let idp = idp::start().await;
+        let (a, _b, redis) = oidc_pair(&idp, "OKF_TEST_OIDC_SECRET_RAW", redis).await;
+        user_with_password(&a, "alice", "alice@example.com", Some(PASSWORD)).await;
+        let mut browser = Browser::signed_in(&a, "alice@example.com", PASSWORD).await;
+        let session = browser.cookie(COOKIE).expect("a session").to_string();
+
+        start_link_on(&a.app, &idp, &mut browser, json!({})).await;
+        let flow = browser.cookie(FLOW_COOKIE).expect("a flow").to_string();
+
+        let keys = redis_keys(&a.app, &redis.prefix).await;
+        assert_eq!(keys.len(), 2, "a flow and its session's pointer: {keys:?}");
+        let connection = &mut a.app.redis().expect("redis").connection();
+        for key in &keys {
+            let value: Vec<u8> = redis::cmd("GET")
+                .arg(key)
+                .query_async(connection)
+                .await
+                .expect("read a value");
+            let value = String::from_utf8_lossy(&value);
+            for secret in [session.as_str(), flow.as_str()] {
+                assert!(!key.contains(secret), "{key}");
+                assert!(!value.contains(secret), "{key} holds a raw id");
+            }
+            if in_space(std::slice::from_ref(key), &redis.prefix, "oidc:flow") == 1 {
+                assert!(value.contains(&super::session_hash(&session)), "{value}");
+            }
+        }
+    }
+
+    /// Links from session S1 on `start_on`, finishing on `finish_on`: with
+    /// S1's flow cookie but S2's session it is refused and links nothing;
+    /// with S1's own session it links and S1 is the session kept.
+    async fn a_link_flow_finishes_only_in_the_session_that_started_it(
+        test: &TestApp,
+        start_on: &Arc<App>,
+        finish_on: &Arc<App>,
+        idp: &MockIdp,
+    ) {
+        let alice = user_with_password(test, "alice", "alice@example.com", Some(PASSWORD)).await;
+        let mut s1 = Browser::signed_in(test, "alice@example.com", PASSWORD).await;
+        let mut s2 = Browser::signed_in(test, "alice@example.com", PASSWORD).await;
+        idp.will_issue("sub-9", None, None);
+
+        let query = start_link_on(start_on, idp, &mut s1, json!({})).await;
+        let flow = s1.cookie(FLOW_COOKIE).expect("a flow").to_string();
+        let mut crossed = Browser::with_cookie(COOKIE, s2.cookie(COOKIE).expect("S2"));
+        crossed.add_cookie(FLOW_COOKIE, &flow);
+        let refused = callback_on(finish_on, &mut crossed, &query["state"]).await;
+
+        assert_eq!(
+            refused.status,
+            StatusCode::BAD_REQUEST,
+            "{}",
+            refused.text()
+        );
+        assert!(refused.text().contains(LINK_RETRY));
+        assert!(identities::list(test.app.pool(), &alice.id)
+            .await
+            .expect("list")
+            .is_empty());
+
+        let query = start_link_on(start_on, idp, &mut s1, json!({})).await;
+        let done = callback_on(finish_on, &mut s1, &query["state"]).await;
+
+        assert_eq!(done.status, StatusCode::SEE_OTHER, "{}", done.text());
+        assert_eq!(done.location(), "/ui/#/account");
+        assert_eq!(
+            identities::list(test.app.pool(), &alice.id)
+                .await
+                .expect("list")
+                .len(),
+            1
+        );
+        let kept = s1
+            .send_to(finish_on, "GET", "/api/v1/session", Payload::Empty)
+            .await;
+        let ended = s2
+            .send_to(finish_on, "GET", "/api/v1/session", Payload::Empty)
+            .await;
+        assert_eq!(kept.status, StatusCode::OK, "S1 is the session kept");
+        assert_eq!(ended.status, StatusCode::UNAUTHORIZED, "S2 ended");
+        assert_eq!(sessions_of(test.app.pool(), &alice.id).await, 1);
+    }
+
+    async fn a_link_flow_finishes_only_in_its_session_across_replicas(redis: TestRedis) {
+        let idp = idp::start().await;
+        let (a, b, _redis) = oidc_pair(&idp, "OKF_TEST_OIDC_SECRET_OWN", redis).await;
+        a_link_flow_finishes_only_in_the_session_that_started_it(&a, &a.app, &b, &idp).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_link_flow_finishes_only_in_its_session_in_memory() {
+        let idp = idp::start().await;
+        let test = oidc_app(&idp, "OKF_TEST_OIDC_SECRET_OWN_MEMORY").await;
+        let app = Arc::clone(&test.app);
+        a_link_flow_finishes_only_in_the_session_that_started_it(&test, &app, &app, &idp).await;
+    }
+
+    async fn a_redis_outage_fails_closed_and_keeps_the_flow_cookie(redis: TestRedis) {
+        let idp = idp::start().await;
+        let (a, b, redis) = oidc_pair(&idp, "OKF_TEST_OIDC_SECRET_OUTAGE", redis).await;
+        let mut browser = Browser::default();
+        let query = start_on(&a.app, &idp, &mut browser).await;
+        let flow = browser.cookie(FLOW_COOKIE).expect("a flow").to_string();
+        if redis.stop().await.is_none() {
+            // A shared server cannot be stopped for everyone.
+            return;
+        }
+
+        let callback = callback_on(&b, &mut browser, &query["state"]).await;
+        let started = Browser::default()
+            .send_to(&a.app, "GET", "/auth/oidc/example/start", Payload::Empty)
+            .await;
+
+        assert_eq!(
+            callback.status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{}",
+            callback.text()
+        );
+        assert!(callback.text().contains(TRY_LATER));
+        assert!(
+            callback.set_cookie(FLOW_COOKIE).is_none(),
+            "the 503 keeps the flow cookie"
+        );
+        assert_eq!(browser.cookie(FLOW_COOKIE), Some(flow.as_str()));
+        assert_eq!(browser.cookie(COOKIE), None);
+        assert_eq!(started.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(started.set_cookie(FLOW_COOKIE).is_none());
+    }
+
+    /// Sets the `default` user's command permissions (`+@all` or `-@all`)
+    /// through `admin`, a connection of another user: with `-@all` every
+    /// command the apps send is refused (`NOPERM`) before it runs.
+    async fn default_user_may(admin: &mut redis::aio::MultiplexedConnection, rule: &str) {
+        let _: () = redis::cmd("ACL")
+            .arg("SETUSER")
+            .arg("default")
+            .arg(rule)
+            .query_async(admin)
+            .await
+            .expect("change the default user's permissions");
+    }
+
+    async fn a_flow_refused_by_redis_finishes_once_redis_answers_again(redis: TestRedis) {
+        let shared_server = [SERVER_URL_VAR, CLUSTER_URL_VAR]
+            .iter()
+            .any(|var| std::env::var(var).is_ok_and(|url| !url.is_empty()));
+        if shared_server {
+            // Revoking the default user would break every test sharing it.
+            return;
+        }
+        let idp = idp::start().await;
+        let (a, b, redis) = oidc_pair(&idp, "OKF_TEST_OIDC_SECRET_RECOVER", redis).await;
+        user_with_password(&a, "alice", "alice@example.com", Some(PASSWORD)).await;
+        idp.will_issue("sub-1", Some("alice@example.com"), Some(true));
+        let mut browser = Browser::default();
+        let query = start_on(&a.app, &idp, &mut browser).await;
+        let flow = browser.cookie(FLOW_COOKIE).expect("a flow").to_string();
+        // An admin user on its own connection (a plain one: the container
+        // has one node), so it can give the permissions back.
+        let client = redis::Client::open(redis.url.as_str()).expect("the test redis URL");
+        let mut admin = client
+            .get_multiplexed_async_connection()
+            .await
+            .expect("an admin connection");
+        let _: () = redis::cmd("ACL")
+            .arg("SETUSER")
+            .arg("okf-test-admin")
+            .arg("on")
+            .arg("nopass")
+            .arg("+@all")
+            .arg("~*")
+            .arg("&*")
+            .query_async(&mut admin)
+            .await
+            .expect("create the admin user");
+        let _: () = redis::cmd("AUTH")
+            .arg("okf-test-admin")
+            .arg("unused")
+            .query_async(&mut admin)
+            .await
+            .expect("authenticate as the admin user");
+        default_user_may(&mut admin, "-@all").await;
+
+        let refused = callback_on(&b, &mut browser, &query["state"]).await;
+        let kept = browser.cookie(FLOW_COOKIE).map(str::to_string);
+        default_user_may(&mut admin, "+@all").await;
+        let finished = callback_on(&b, &mut browser, &query["state"]).await;
+
+        assert_eq!(
+            refused.status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{}",
+            refused.text()
+        );
+        assert!(
+            refused.set_cookie(FLOW_COOKIE).is_none(),
+            "the cookie is kept"
+        );
+        assert_eq!(kept, Some(flow));
+        assert_eq!(
+            finished.status,
+            StatusCode::SEE_OTHER,
+            "{}",
+            finished.text()
+        );
+        assert_eq!(finished.location(), "/ui/#/keys");
+        assert!(
+            browser.cookie(COOKIE).is_some(),
+            "signed in after the refusal"
+        );
+        assert_eq!(browser.cookie(FLOW_COOKIE), None);
+    }
+
+    // `macro_rules!` writes a standalone and a cluster `#[tokio::test]` for
+    // every body named (Python: a parametrized test).
+    macro_rules! in_both_modes {
+        ($($name:ident),* $(,)?) => {
+            mod standalone {
+                $(
+                    #[tokio::test(flavor = "multi_thread")]
+                    async fn $name() {
+                        let server = crate::db::redis_support::TestRedis::start().await;
+                        tokio::time::timeout(super::BOUND, super::$name(server))
+                            .await
+                            .expect(concat!(stringify!($name), " finished within the bound"));
+                    }
+                )*
+            }
+            mod cluster {
+                $(
+                    #[tokio::test(flavor = "multi_thread")]
+                    async fn $name() {
+                        let server = crate::db::redis_support::TestRedis::start_cluster().await;
+                        tokio::time::timeout(super::BOUND, super::$name(server))
+                            .await
+                            .expect(concat!(stringify!($name), " finished within the bound"));
+                    }
+                )*
+            }
+        };
+    }
+
+    in_both_modes!(
+        a_sign_in_started_on_one_replica_completes_on_the_other_once,
+        a_link_flow_replaces_the_sessions_previous_one_across_replicas,
+        no_raw_session_id_reaches_redis,
+        a_link_flow_finishes_only_in_its_session_across_replicas,
+        a_redis_outage_fails_closed_and_keeps_the_flow_cookie,
+        a_flow_refused_by_redis_finishes_once_redis_answers_again,
+    );
 }

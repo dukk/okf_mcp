@@ -1915,6 +1915,13 @@ let pending = oauth.pending.update(&form.pending, now, |pending| {
 - `OidcProviders::new(config, env, redis: Option<&Redis>)`.
 - `link_starts` (a rate limit) stays per instance (#357).
 
+> **Corrected (issue #562, 2026-11-17).** What shipped; read `src/oidc.rs` and `src/http/oidc.rs`.
+> - The hash form is a public helper, `crate::oidc::session_hash(session_id)` (`URL_SAFE_NO_PAD` SHA-256). Task 10 may use it for `RegisterVia::Session`'s `session_hash` instead of repeating the expression.
+> - `linking_user` returns `(UserAuth, &str)`: the user and the finishing request's own cookie id, which `finish_link` passes as `SessionLink.session_id`. The hash is compared in constant time, as the raw id was.
+> - A Redis failure in the callback's `take` answers a 503 page, "Sign-in is unavailable right now; try again shortly." (`TRY_LATER`), not the provider-unreachable text; a failure in `store_flow` is `Busy`, so the start page is the existing 503 and the link route a 503 JSON. That 503 keeps the flow cookie (no `Set-Cookie`): the take may never have run, so a reload once Redis answers can still finish the flow. Every answer after a take clears it, as before (review of PR #576).
+> - Tests: the first two named tests are one body, `a_sign_in_started_on_one_replica_completes_on_the_other_once` (the replay on A after B is refused, and signs nobody in). The session test is `a_link_flow_finishes_only_in_the_session_that_started_it`, a helper run across replicas (`a_link_flow_finishes_only_in_its_session_across_replicas`) and in memory (`a_link_flow_finishes_only_in_its_session_in_memory`); it also checks that S2 ended and S1 is the one session left. Added `a_redis_outage_fails_closed_and_keeps_the_flow_cookie` (the container stopped) and `a_flow_refused_by_redis_finishes_once_redis_answers_again`. The second test revokes the `default` user's commands with `ACL SETUSER default -@all` from an admin connection, so the `GETDEL` is refused before it runs. It then restores them, and the reload signs in. It does not restart the container: `TestRedis::start_again` brings the container back on a new host port, so the apps' URLs no longer reach it. Each Redis body runs in `tests::standalone` and `tests::cluster` (an `in_both_modes!` macro, as in Task 2).
+> - Test support for later tasks: `mcp::testing::replica_pair_on(catalogs, config, redis)` is `replica_pair` over a Redis the test started (`TestRedis::start_cluster` for cluster mode), and `Browser::send_to(&Arc<App>, ..)` is `Browser::send` to one replica of a pair.
+
 - [ ] **Step 3: Gates, changelog, commit**
 
 `feat: OIDC flows in shared state (M16 Task 9)`.
