@@ -22,6 +22,15 @@ Two more caches learn about changes on every instance at once:
 **Without `[redis]` nothing changes.** Everything stays in memory, the
 code paths are today's, and one replica is still required.
 
+> **Corrected (2026-11-17, close-out).** Three small exceptions shipped, and
+> they apply without `[redis]` too:
+> - The token endpoint and the consent page answer 503 for
+>   `OkfError::Busy`, which includes a database deadlock (#581, #582); they
+>   answered 500 before.
+> - The passkey setup finish sends `{token, credential}` instead of the
+>   credential alone (#577), because the stored ceremony holds a hash of the
+>   token and the finish presents it again.
+
 ## Why one replica today
 
 `docs/operations.md` says "`publish` takes each catalog's publish lock
@@ -166,6 +175,12 @@ The last two are not part of this milestone.
      credential. So the implementation never returns an error: it counts
      it, logs it without the id, and answers `Ok(None)` or `Ok(())`. A failed
      `load` fails closed (404, and the client initializes again).
+
+   > **Corrected (2026-11-17, close-out).** A Redis failure during `load`'s
+   > restore answers 503, not 404: `load` sets a task-local restore flag
+   > (`watch_restore`, #580) that the middleware reads after rmcp answers, so
+   > the client retries the same session instead of initializing again. A state
+   > that cannot be decoded still answers 404.
 10. **Bindings move with the session, and an unbound session is never
     restored.**
     - The binding (the key id that opened the session) is stored under
@@ -192,6 +207,11 @@ The last two are not part of this milestone.
       releases both keys itself before rmcp runs. It answers 202 even when
       this instance held no local copy. Other instances' local copies are
       refused from then on, because the binding is gone.
+
+      > **Corrected (2026-11-17, close-out).** `bind_session` releases both
+      > keys only after rmcp answers 2xx (`src/http/sessions.rs:350-356`,
+      > #580), not before rmcp runs. A `DELETE` rmcp rejects (a disallowed
+      > `Host` answers 403) keeps the session, in Redis and in memory.
 11. **The idle TTL is refreshed in `bind_session`.** rmcp calls `store`
     only after `initialize` and `delete` only on `DELETE /mcp`. It never
     refreshes an entry on use, and a session worker that idles out on one
