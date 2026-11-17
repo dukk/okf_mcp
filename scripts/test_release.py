@@ -3,9 +3,11 @@
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
+import tomllib
 import unittest
 
 
@@ -92,6 +94,16 @@ class Releases(unittest.TestCase):
             destination = self.repo / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / name, destination)
+        # The copied guide pins the repository's current version; the fixture starts at
+        # 0.9.0, and the prepare hook rewrites exactly the four pinned mentions of it.
+        current = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"]
+        guide = self.repo / "docs/operations.md"
+        guide.write_text(re.sub(rf"(?<=[:v]){re.escape(current)}\b", "0.9.0", guide.read_text()))
+        # `just test` runs through scripts/test-pg.sh, which starts a real Postgres; the stub
+        # runs its command directly so the fake cargo answers.
+        stub = self.repo / "scripts/test-pg.sh"
+        stub.write_text('#!/bin/sh\n[ "$1" = run ] && shift\nexec "$@"\n')
+        stub.chmod(0o755)
         (self.repo / "src").mkdir()
         (self.repo / "src/lib.rs").write_text("pub fn example() {}\n")
         (self.repo / "changelog").mkdir()
@@ -188,11 +200,13 @@ class Releases(unittest.TestCase):
         self.prepare(ok=False)
         self.assertEqual(self.git("rev-parse", "HEAD"), self.base)
 
-    def test_failed_prepare_checks_preserve_changes(self):
-        self.prepare(FAIL_CHECK="test", ok=False)
-        self.assertEqual(self.git("rev-parse", "HEAD"), self.base)
-        self.assertIn('version = "0.9.1"', (self.repo / "Cargo.toml").read_text())
-        self.assertEqual(self.git("tag", "--list", "v0.9.1"), "")
+    def test_prepare_runs_no_checks(self):
+        # A failing check would stop preparation if it ran one; ship is the only gate.
+        self.prepare(FAIL_CHECK="test")
+        self.assertEqual(self.git("rev-list", "--count", f"{self.base}..HEAD"), "1")
+        self.assertEqual(self.git("cat-file", "-t", "v0.9.1"), "tag")
+        self.ship(FAIL_CHECK="test", ok=False)
+        self.assertFalse(Path(self.env["PR_STATE"]).exists())
 
     def test_failed_ship_checks_no_pr(self):
         self.prepared()
