@@ -1275,6 +1275,14 @@ async fn another_key_on_that_session_is_refused_on_either_replica() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_binding_without_its_state_is_refused_on_every_replica() {
+    // Open on A; DEL only <prefix>mcp:state:<hashed(session)> (as an eviction
+    // would). The owner's tools/list on A, which still holds a local worker,
+    // -> 404, and on a fresh B -> 404. Revert the EXISTS line in ADMIT and A
+    // answers 200 while B answers 404.
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_session_state_without_a_binding_is_never_restored() {
     // Open on A; DEL <prefix>mcp:bind:<hashed(session)> with a raw redis client;
     // the owner's tools/list on B -> 404, and on A -> 404 too (the binding is the check).
@@ -1352,9 +1360,12 @@ fn keys(redis: &Redis, session: &str) -> (String, String) {
 }
 
 /// `KEYS[1]` binding, `KEYS[2]` state; `ARGV[1]` key id, `ARGV[2]` idle ms.
-/// Admits only the binding's key, and only then slides both TTLs.
+/// Admits only the binding's key, and only while the state exists (an
+/// evicted state must fail closed on every replica, not only on one that has
+/// to restore it: review of PR #552). Only then does it slide both TTLs.
 const ADMIT: &str = "local v = redis.call('GET', KEYS[1])\n\
     if v == false or v ~= ARGV[1] then return 0 end\n\
+    if redis.call('EXISTS', KEYS[2]) == 0 then return 0 end\n\
     redis.call('PEXPIRE', KEYS[1], ARGV[2])\n\
     redis.call('PEXPIRE', KEYS[2], ARGV[2])\n\
     return 1";
@@ -1631,7 +1642,11 @@ The seed is a random non-negative `i64` below `2^62`, from `rand`, or from the b
 - [ ] **Step 1: Write the failing tests** (`src/oauth/token.rs` tests, `replica_pair` with OAuth)
 
 - `a_code_minted_on_one_replica_is_exchanged_on_the_other_once`: approve on A, then exchange on B (200). B has no subscriber in a lib pair, so this also covers the exchange's grant catch-up (Task 6, `token.rs:411`): revert it, and the answer is "the grant was revoked". Then exchange again on A → `invalid_grant` "already used", and the family is revoked: the access token from the first exchange is refused by `verify` on both.
-- `two_replicas_racing_one_code_make_one_exchange_and_one_replay`: `tokio::join!` the exchange on A and B. Exactly one 200, and the other is `invalid_grant`. The family is revoked afterwards (the `replayed` flag path, `:433-437`), so the minted token is refused.
+- `two_replicas_racing_one_code_leave_no_usable_token`: `tokio::join!` the exchange on A and B.
+  - At most one answers 200, and every other answer is `invalid_grant`.
+  - No token minted by either is usable: `verify` refuses it on both replicas.
+  - Both may fail. If B sets `replayed` before A's check after commit (`token.rs:427-440`), A revokes what it minted and refuses too. The protocol allows that, and the test must not weaken it (review of PR #552).
+  - The uncontended test above proves a single exchange succeeds.
 - `an_expired_code_is_refused_on_either_replica`: `PEXPIRE <prefix>oauth:code:<code_key> 1`, then exchange → "unknown or expired code".
 - The existing memory tests (`a_replayed_code_is_refused_and_revokes_what_it_minted`, `:670-`) pass unchanged apart from `.await`.
 

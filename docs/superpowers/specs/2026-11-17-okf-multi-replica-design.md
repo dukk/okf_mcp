@@ -159,6 +159,9 @@ The last two are not part of this milestone.
     - `bind_session` checks it in Redis on every request, before rmcp
       runs, with one Lua script. The script compares the key id and, only on
       a match, refreshes both keys' TTL to `session_idle_timeout`.
+    - The script also requires the state key to exist. An evicted state
+      fails closed on every instance, including one that still holds a
+      local worker (review of PR #552).
     - A missing binding or another key gets rmcp's 404, as today.
       `RedisSessions::load` also refuses a state without a binding, so a
       restore can't happen even if the middleware were bypassed.
