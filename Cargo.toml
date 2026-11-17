@@ -53,7 +53,9 @@ base64 = "0.23.1"
 # Sizes with units in the configuration ("64MiB").
 bytesize = { version = "2.7.0", features = ["serde"] }
 # Wall-clock timestamps for catalog stamps (UTC only; no local-time database needed).
-chrono = { version = "0.4.45", default-features = false, features = ["now"] }
+# `serde`: an OAuth client record (its timestamps) is stored in Redis inside a
+# pending authorization (M16 Task 8).
+chrono = { version = "0.4.45", default-features = false, features = ["now", "serde"] }
 # The command line (`okf-mcp migrate | catalog | key | import | export`);
 # `env` lets DATABASE_URL fill `--database-url`.
 clap = { version = "4.6.7", features = ["derive", "env"] }
@@ -128,6 +130,17 @@ subtle = "2.6.1"
 tempfile = "3.27.0"
 # Catalog archives: .tar.gz import and export (with flate2).
 tar = "0.4.46"
+# Optional shared state for multi-replica serve (src/shared, spec
+# 2026-11-17-okf-multi-replica-design.md). Pinned exactly: 1.8.2 is the newest
+# stable release (2.0 is a release candidate). Default features off; we use the
+# tokio connection manager, Lua scripts and rustls TLS (`rediss://`).
+redis = { version = "=1.8.2", default-features = false, features = ["tokio-comp", "connection-manager", "cluster-async", "script", "tokio-rustls-comp"] }
+# `StreamExt::next` on the pub/sub message stream (already in the lock via redis).
+futures-util = { version = "0.3", default-features = false }
+# Only to install ring as the process CryptoProvider before a `rediss://`
+# connect: the lock builds rustls with both ring and aws-lc-rs, and rustls then
+# refuses to guess (rustls 0.23 `crypto/mod.rs`).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 # Postgres access with runtime-checked queries, and the schema migrations
 # embedded at compile time (`migrate!` needs `macros`). `json`: the
 # `changeset_entries.replay` jsonb column as `serde_json::Value`.
@@ -160,9 +173,12 @@ url = "2.5.8"
 # `SecretString` holds the OTLP header values and the Sentry DSN until the exporters take them.
 secrecy = "0.10.3"
 # Passkeys (Task 8), pure RustCrypto. `conditional-ui` enables
-# discoverable (username-less) sign-in. Ceremony state stays typed in
-# memory (Decision 13), so no state-serialisation feature is needed.
-webauthn-rs = { version = "0.6.2", features = ["conditional-ui"] }
+# discoverable (username-less) sign-in. `danger-allow-state-serialisation`
+# lets a ceremony's state be stored in Redis with `[redis]` (M16 Task 10),
+# so a ceremony begun on one replica finishes on another. The state goes
+# to Redis, server-side, and never to the client (the danger the feature's
+# name warns of); without `[redis]` it stays typed in memory.
+webauthn-rs = { version = "0.6.2", features = ["conditional-ui", "danger-allow-state-serialisation"] }
 # The WebAuthn types webauthn-rs' prelude does not re-export
 # (`ResidentKeyRequirement`, and `AllowCredentials` in the tests; Decision 13).
 # Pinned exactly, as webauthn-rs pins it.
@@ -190,7 +206,7 @@ aws-credential-types = "1.3.1"
 rcgen = "0.14.10"
 # Throwaway Postgres containers for the database tests (needs Docker). Only
 # the modules crate: it re-exports the testcontainers version it supports.
-testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
+testcontainers-modules = { version = "0.15.0", features = ["postgres", "redis"] }
 # `test-util`: paused time (`start_paused`), so a test of the 120-second
 # request timeout runs at once.
 tokio = { version = "1.54", features = ["test-util"] }

@@ -22,6 +22,15 @@ Two more caches learn about changes on every instance at once:
 **Without `[redis]` nothing changes.** Everything stays in memory, the
 code paths are today's, and one replica is still required.
 
+> **Corrected (2026-11-17, close-out).** Three small exceptions shipped, and
+> they apply without `[redis]` too:
+> - The token endpoint and the consent page answer 503 for
+>   `OkfError::Busy`, which includes a database deadlock (#581, #582); they
+>   answered 500 before.
+> - The passkey setup finish sends `{token, credential}` instead of the
+>   credential alone (#577), because the stored ceremony holds a hash of the
+>   token and the finish presents it again.
+
 ## Why one replica today
 
 `docs/operations.md` says "`publish` takes each catalog's publish lock
@@ -65,9 +74,9 @@ The last two are not part of this milestone.
   stream belongs to one instance, and a client that loses it reconnects.
 - **Rate limits (#357) and the mail worker (#458).** The Redis connection
   added here is the natural home for shared rate limits; #357 gets a note.
-- **Redis Cluster and Sentinel.** One standalone Redis, or a managed
-  endpoint that behaves as one primary. The Lua scripts touch two keys
-  without hash tags, which a cluster would refuse.
+- **Redis Sentinel, and spreading okf-mcp's keys over a cluster.** A
+  cluster is supported since Decision 20, but every key carries one hash
+  tag, so all of okf-mcp's keys live in one slot.
 - **Running Redis.** The deployment supplies it; the docs say what it
   needs.
 
@@ -78,6 +87,8 @@ The last two are not part of this milestone.
    `key_prefix` (default `"okf:"`), and no other keys
    (`deny_unknown_fields`).
    - Without the table, no Redis code runs, and no Redis connection is made.
+   - `mode` (`"standalone"`, the default, or `"cluster"`) picks the client
+     (Decision 20, added 2026-11-17).
    - With it, `serve` refuses to start when the variable is unset or blank,
      the URL does not parse, or Redis does not answer `PING`.
    - No error message, log line or span ever carries the URL or its value.
@@ -88,6 +99,9 @@ The last two are not part of this milestone.
    newest stable release; 2.0 is still a release candidate. One
    `ConnectionManager`, which multiplexes and reconnects, serves the whole
    instance. Pub/sub uses one dedicated `aio::PubSub` connection.
+   > **Corrected (2026-11-17, Decision 20).** The features add
+   > `cluster-async`. Pub/sub uses a dedicated RESP3 connection with a push
+   > sender and automatic resubscription, in both modes, not `aio::PubSub`.
    - `fred` was considered. It has nothing this design needs that `redis`
      lacks, and `redis` is the more widely used client.
    - `rediss://` needs a process-wide rustls `CryptoProvider`, because the
@@ -136,6 +150,11 @@ The last two are not part of this milestone.
    as in memory today: PKCE verifiers, nonces, CSRF tokens, WebAuthn
    state, but never a raw console session id. So Redis is a secret store, with the same trust as Postgres:
    password-protected, private network, TLS where it crosses hosts.
+   > **Corrected (issue #563, 2026-11-17).** The passkey setup-link token
+   > is not stored either: a setup registration keeps only the token's
+   > SHA-256 (the form Postgres keeps), and the finish presents the token
+   > again, which must hash to it (constant time) and is the one redeemed.
+   > So reading Redis does not give anyone a setup link.
 8. **The global caps go; the per-actor caps stay.**
    - `MAX_PENDING`, `MAX_AUTHORIZATION_CODES`, `MAX_FLOWS` and
      `MAX_CEREMONIES` protect one process's memory, and they stay in the
@@ -156,6 +175,12 @@ The last two are not part of this milestone.
      credential. So the implementation never returns an error: it counts
      it, logs it without the id, and answers `Ok(None)` or `Ok(())`. A failed
      `load` fails closed (404, and the client initializes again).
+
+   > **Corrected (2026-11-17, close-out).** A Redis failure during `load`'s
+   > restore answers 503, not 404: `load` sets a task-local restore flag
+   > (`watch_restore`, #580) that the middleware reads after rmcp answers, so
+   > the client retries the same session instead of initializing again. A state
+   > that cannot be decoded still answers 404.
 10. **Bindings move with the session, and an unbound session is never
     restored.**
     - The binding (the key id that opened the session) is stored under
@@ -182,6 +207,11 @@ The last two are not part of this milestone.
       releases both keys itself before rmcp runs. It answers 202 even when
       this instance held no local copy. Other instances' local copies are
       refused from then on, because the binding is gone.
+
+      > **Corrected (2026-11-17, close-out).** `bind_session` releases both
+      > keys only after rmcp answers 2xx (`src/http/sessions.rs:350-356`,
+      > #580), not before rmcp runs. A `DELETE` rmcp rejects (a disallowed
+      > `Host` answers 403) keeps the session, in Redis and in memory.
 11. **The idle TTL is refreshed in `bind_session`.** rmcp calls `store`
     only after `initialize` and `delete` only on `DELETE /mcp`. It never
     refreshes an entry on use, and a session worker that idles out on one
@@ -208,6 +238,9 @@ The last two are not part of this milestone.
       cache unless it is already at the announced generation.
     - On every (re)subscribe it reloads too, since messages sent while it
       was disconnected are lost. Reconnects back off from 1 s to 30 s.
+      Since Decision 20 the client resubscribes by itself after a
+      reconnect, and the subscriber reloads on every subscribe
+      confirmation it receives, the first and each later one.
     - The poll loop stays as the fallback, so a lost announcement costs at
       most `poll_interval`.
     - This covers key revocation, user deletion, team suspension, grant
@@ -274,6 +307,8 @@ The last two are not part of this milestone.
     - Each test gets its own random `key_prefix`, so a shared server
       (`TEST_REDIS_URL`, like `TEST_PG_URL`) is safe to reuse.
     - The unit tests of the abstraction run against both variants.
+    - Cluster mode (Decision 20) is tested on `valkey/valkey:8.1-alpine`
+      run as a one-node cluster.
     - The two-instance tests run two `App`s, or two `TestServer`s, over one
       Postgres database and one Redis, with `poll_interval = 1h`. Anything
       that passes was carried by Redis, not by the poll.
@@ -285,11 +320,60 @@ The last two are not part of this milestone.
     database alone: a Redis outage would otherwise mark every replica unready
     at once and empty the Service.
 
+20. **Cluster mode, for ElastiCache Serverless** (the maintainer,
+    2026-11-17). Production's cache is ElastiCache Serverless for Valkey.
+    It runs only in cluster mode and requires TLS. A client that is not
+    cluster-aware can get `MOVED` there, and every key a script touches
+    must hash to one slot, or the command fails with `CROSSSLOT`.
+    - **`[redis] mode`**: `"standalone"` (the default) or `"cluster"`.
+      Standalone keeps the `ConnectionManager`. Cluster uses
+      `redis::cluster::ClusterClient` (feature `cluster-async`) and its
+      async `ClusterConnection`. `shared::Redis` hides which:
+      `Redis::connection()` returns `shared::RedisConnection`, an enum of
+      the two that implements `redis::aio::ConnectionLike`. So commands
+      (`AsyncCommands`) and `Script::invoke_async` are written once.
+    - **One hash tag on every key and channel, in both modes.** Names are
+      `{<key_prefix>}<rest>`, for example `{okf:}oauth:code:<hash>`.
+      - Every okf-mcp key then hashes to one slot. So every multi-key
+        script is legal on a cluster: the binding scripts, the `Index`
+        swap and the compare-and-set.
+      - The layout is the same in both modes.
+      - `key_prefix` may not contain `{` or `}`.
+      - The cost is that all of okf-mcp's keys sit on one shard. That is
+        fine for short-lived auth state of a few KB per flow, and
+        Serverless scales a slot's capacity by itself.
+    - **Scripts name every key they touch in `KEYS`**, never building a
+      key name inside Lua, as cluster routing requires.
+    - **Pub/sub uses RESP3 pushes in both modes.**
+      - `Redis::subscribe(channel)` opens a dedicated connection speaking
+        RESP3, with a push sender and automatic resubscription. It returns
+        a `Subscription` that yields `Subscribed`, `Message(payload)` and
+        `Disconnected` events.
+      - The announcement subscriber (Decision 12) reloads on every
+        `Subscribed`: the first subscribe, and each resubscribe after a
+        reconnect. It counts `subscribe` on `Disconnected`.
+      - Plain `PUBLISH` and `SUBSCRIBE` are used. Serverless runs them as
+        sharded pub/sub internally, and on a self-run cluster they reach
+        every node.
+    - **TLS** is `rediss://` in either mode. The cluster client takes TLS
+      from the URL, and Serverless requires it.
+    - **Tests** run cluster mode on `valkey/valkey:8.1-alpine` as a
+      one-node cluster: `--cluster-enabled yes`, then
+      `CLUSTER ADDSLOTSRANGE 0 16383` and a `CONFIG SET` of
+      `cluster-announce-ip 127.0.0.1` and the mapped port. Production's
+      engine is Valkey, so this tests Valkey too. The abstraction's own
+      tests run in both modes: `Ephemeral` and `Index`, the subscription,
+      and the binding scripts. So does one two-instance test per feature
+      that has scripts; the rest run standalone.
+    - **Without `[redis]` nothing changes,** as before. A standalone
+      deployment keeps working, and only its key names gain the braces.
+      No deployment holds M16 keys yet.
+
 ## Architecture
 
 ```
 src/shared/
-  mod.rs        Redis: the handle (ConnectionManager, prefix, metrics), connect, start-up checks, key names
+  mod.rs        Redis: the handle (standalone or cluster connection, prefix, metrics), connect, start-up checks, key names, subscribe
   ephemeral.rs  Ephemeral<V> and Index: memory or Redis, the envelope, the Lua compare-and-set
   sessions.rs   RedisSessions (rmcp SessionStore) and the binding admit/bind/release scripts
   announce.rs   admin_generation announcements: publish, the subscriber task, the CLI announcement
@@ -301,7 +385,8 @@ build two `App`s over one Redis.
 
 ### Key layout
 
-`<p>` is `key_prefix`, and `h(x)` is the hex SHA-256 of `x`.
+`<p>` is `{<key_prefix>}`, the prefix inside one hash tag (Decision 20), and
+`h(x)` is the hex SHA-256 of `x`.
 
 | Key | Value | TTL |
 |-----|-------|-----|

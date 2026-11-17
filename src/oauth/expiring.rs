@@ -1,6 +1,12 @@
 //! A bounded map whose entries expire: the in-memory pending
-//! authorizations and authorization codes (spec "In memory"). The server is
-//! single-replica, so a restart costs at most a consent page in progress.
+//! authorizations and authorization codes (spec "In memory"). Without
+//! `[redis]` the server is single-replica, so a restart costs at most a
+//! consent page in progress.
+//!
+//! It is also the memory variant of [`crate::shared::ephemeral::Ephemeral`]
+//! and [`crate::shared::ephemeral::Index`] (milestone 16): with `[redis]`
+//! unset they call this map directly, unchanged, so the memory path has no
+//! serialization and no Redis.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};

@@ -27,6 +27,8 @@ use axum::Router;
 use crate::app::App;
 use crate::config::Config;
 use crate::error::OkfError;
+use crate::shared::ephemeral::{Ephemeral, Keyspace};
+use crate::shared::Redis;
 
 /// Where the Protected Resource Metadata is served (RFC 9728), also with
 /// the resource's path appended (`.../mcp`).
@@ -75,10 +77,14 @@ pub struct OAuth {
     pub challenge: HeaderValue,
     /// Live access tokens (the resource side).
     pub access: access::AccessTokens,
-    /// Consent pages in progress, by pending id.
-    pub pending: expiring::ExpiringMap<state::PendingAuthorization>,
-    /// Unexchanged authorization codes, by the hex SHA-256 of the code.
-    pub codes: expiring::ExpiringMap<state::AuthorizationCode>,
+    /// Consent pages in progress, by pending id: in memory, or in Redis
+    /// with `[redis]` (under the id's hash), so a consent started on one
+    /// replica can finish on another.
+    pub pending: Ephemeral<state::PendingAuthorization>,
+    /// Authorization codes, by the hex SHA-256 of the code ([`state::code_key`]):
+    /// in memory, or in Redis with `[redis]` so any replica can exchange
+    /// them. A used code stays until it expires, so a replay is seen.
+    pub codes: Ephemeral<state::AuthorizationCode>,
     /// The Client ID Metadata Document fetcher.
     pub cimd: clients::CimdFetcher,
     /// `POST /oauth/register`'s limit.
@@ -94,6 +100,10 @@ impl OAuth {
     ///
     /// # Arguments
     /// * `config` - the server's settings.
+    /// * `redis` - the shared Redis, with `[redis]`: access-token revocations
+    ///   are then counted there for every replica (spec Decision 15), and
+    ///   pending authorizations and authorization codes are kept there (spec
+    ///   Decision 5).
     ///
     /// # Returns
     /// `None` without `public_url` (OAuth off), else the state.
@@ -103,7 +113,7 @@ impl OAuth {
     /// (`Config::validate` refuses such a URL first, so only a caller that
     /// skipped validation sees this).
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn new(config: &Config) -> Result<Option<Self>, OkfError> {
+    pub fn new(config: &Config, redis: Option<&Redis>) -> Result<Option<Self>, OkfError> {
         let Some(public_url) = config.public_url.as_deref() else {
             return Ok(None);
         };
@@ -133,9 +143,23 @@ impl OAuth {
         Ok(Some(Self {
             settings,
             challenge,
-            access: access::AccessTokens::new(),
-            pending: expiring::ExpiringMap::new(state::PENDING_TTL, state::MAX_PENDING),
-            codes: expiring::ExpiringMap::new(
+            access: access::AccessTokens::new(redis.cloned()),
+            // In Redis the key is `oauth:pending:<hashed(pending id)>`
+            // (spec Decision 7), and `MAX_PENDING` applies in memory only
+            // (spec Decision 8).
+            pending: Ephemeral::new(
+                redis,
+                Keyspace::OauthPending,
+                state::PENDING_TTL,
+                state::MAX_PENDING,
+            ),
+            // In Redis the key is `oauth:code:<hashed(code_key(code))>`:
+            // `Ephemeral` hashes every key it is given, and `code_key` is
+            // already a hash. Hashing twice is harmless, so it is not
+            // special-cased.
+            codes: Ephemeral::new(
+                redis,
+                Keyspace::OauthCode,
                 state::AUTHORIZATION_CODE_TTL,
                 state::MAX_AUTHORIZATION_CODES,
             ),
@@ -184,14 +208,14 @@ mod tests {
 
     #[test]
     fn oauth_is_off_without_public_url() {
-        assert!(OAuth::new(&Config::default()).unwrap().is_none());
+        assert!(OAuth::new(&Config::default(), None).unwrap().is_none());
     }
 
     #[test]
     fn settings_derive_from_public_url() {
         let config = crate::store::oauth::testing::oauth_config("https://okf.example.com/");
 
-        let oauth = OAuth::new(&config).unwrap().expect("on");
+        let oauth = OAuth::new(&config, None).unwrap().expect("on");
 
         assert_eq!(oauth.settings.issuer, "https://okf.example.com");
         assert_eq!(oauth.settings.resource, "https://okf.example.com/mcp");

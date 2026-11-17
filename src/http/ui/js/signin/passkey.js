@@ -57,6 +57,7 @@ if (setup) {
         const name = document.getElementById('setup-passkey-name').value;
         const challenge = await post('/auth/passkey/setup/start', { token, name, return_to: returnTo });
         const credential = await navigator.credentials.create(creationOptions(challenge));
-        return post('/auth/passkey/setup/finish', registrationJson(credential));
+        // The token again: the server keeps only its hash for the ceremony.
+        return post('/auth/passkey/setup/finish', { token, credential: registrationJson(credential) });
     });
 }

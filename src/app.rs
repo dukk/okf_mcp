@@ -22,11 +22,12 @@ use crate::config::Config;
 use crate::error::OkfError;
 use crate::http::limits::SignInLimits;
 use crate::http::passkeys::Passkeys;
-use crate::http::sessions::SessionKeys;
+use crate::http::sessions::SessionBindings;
 use crate::keyed_lock::KeyedLocks;
 use crate::oauth::OAuth;
 use crate::oidc::OidcProviders;
 use crate::overlay::Overlays;
+use crate::shared;
 use crate::store::audit::{self, AccessKind, AccessRecord};
 use crate::store::oauth::{
     clients as oauth_clients, codes as sign_in_codes, tokens as oauth_tokens,
@@ -81,7 +82,10 @@ pub struct App {
     clock: Arc<dyn Clock>,
     keys: Arc<Keys>,
     // Which key opened each MCP session (M5 Decision 2).
-    sessions: SessionKeys,
+    sessions: SessionBindings,
+    // The shared Redis (`[redis]`); `None` keeps every short-lived state in
+    // this process's memory (M16).
+    redis: Option<shared::Redis>,
     // Each open changeset's overlay, cached (M5 Decision 6).
     overlays: Overlays,
     // Each changeset's writers, queued in this process before they take a
@@ -92,6 +96,11 @@ pub struct App {
     // The `admin_generation` the key cache was loaded at. Written only under
     // `polling`, so `Relaxed` ordering is enough.
     admin_generation: AtomicI64,
+    // The last `admin_generation` this instance published over Redis (or the
+    // one it started at). Tracked apart from `admin_generation` so a reload
+    // that only loaded a change (and did not announce) cannot make the next
+    // announcing reload skip it. Written only under `polling`.
+    announced_generation: AtomicI64,
     // The effective sign-in policy (`[auth]` with `server_settings`
     // overrides), reloaded with the key cache whenever `admin_generation`
     // moves. As with `catalogs`, the lock is held only to clone or swap.
@@ -159,6 +168,9 @@ impl App {
     /// The shared state.
     ///
     /// # Errors
+    /// [`OkfError::Config`] (path `[redis]`) from [`shared::Redis::connect`]
+    /// when `[redis]` is set and its variable is unset or blank, its value is
+    /// not a Redis URL, or Redis does not answer `PING`;
     /// [`OkfError::Database`] reading the counter, the keys, the settings or
     /// the list;
     /// [`OkfError::Config`] from [`OAuth::new`] or [`Passkeys::new`], or from
@@ -195,6 +207,40 @@ impl App {
         clock: Arc<dyn Clock>,
         metrics: Metrics,
     ) -> Result<Arc<Self>, OkfError> {
+        // `[redis]` set: connect now, so a bad URL or an unreachable Redis
+        // refuses start-up. The URL comes from the named variable only.
+        let redis = match &config.redis {
+            Some(table) => Some(
+                shared::Redis::connect(table, &|name| std::env::var(name).ok(), &metrics).await?,
+            ),
+            None => None,
+        };
+        // Boxed so this future holds a pointer, not the whole of the load's
+        // future: callers nest `App::load` inside big test futures, and the
+        // extra level pushed rustc's layout query past its recursion limit.
+        Box::pin(Self::load_with_redis(pool, config, clock, metrics, redis)).await
+    }
+
+    /// [`App::load_with_metrics`] with the Redis handle given (or none):
+    /// tests pass one handle to two apps, as two replicas share one Redis.
+    ///
+    /// # Arguments
+    /// * `pool`, `config`, `clock`, `metrics` - as for `load_with_metrics`.
+    /// * `redis` - the shared Redis; `None` keeps everything in memory.
+    ///
+    /// # Returns
+    /// The shared state.
+    ///
+    /// # Errors
+    /// As [`App::load`], except that no `[redis]` connection is made here.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn load_with_redis(
+        pool: PgPool,
+        config: Config,
+        clock: Arc<dyn Clock>,
+        metrics: Metrics,
+        redis: Option<shared::Redis>,
+    ) -> Result<Arc<Self>, OkfError> {
         // Read the counter before the keys: a change committed between the
         // two moves it again, so the next poll reloads.
         let admin_generation = catalogs::admin_generation(&pool).await?;
@@ -219,13 +265,13 @@ impl App {
                 tracing::warn!(catalog = %name, "default_catalog is not loaded (yet)");
             }
         }
-        let oauth = OAuth::new(&config)?;
-        let sessions = SessionKeys::new(config.session_idle_timeout);
+        let oauth = OAuth::new(&config, redis.as_ref())?;
+        let sessions = SessionBindings::new(redis.as_ref(), config.session_idle_timeout);
         let overlays = Overlays::new(config.session_idle_timeout, config.overlay_cache_size);
         let mailer = crate::mail::from_config(&config.mail).await?;
-        let passkeys = Passkeys::new(&config)?;
+        let passkeys = Passkeys::new(&config, redis.as_ref())?;
         // A provider whose secret variable is unset fails start-up here.
-        let oidc = OidcProviders::new(&config, |name| std::env::var(name).ok())?;
+        let oidc = OidcProviders::new(&config, |name| std::env::var(name).ok(), redis.as_ref())?;
         // A failed count leaves the map empty until the first poll pass.
         let open_changesets = changesets::open_counts(&pool).await.unwrap_or_default();
         let app = Arc::new(Self {
@@ -234,10 +280,12 @@ impl App {
             clock,
             keys,
             sessions,
+            redis,
             overlays,
             write_queue: KeyedLocks::new(),
             catalogs: RwLock::new(Arc::new(loaded)),
             admin_generation: AtomicI64::new(admin_generation),
+            announced_generation: AtomicI64::new(admin_generation),
             settings: RwLock::new(Arc::new(settings)),
             polling: tokio::sync::Mutex::new(broken),
             clock_status: RwLock::new(None),
@@ -319,7 +367,16 @@ impl App {
         while writes.join_next().await.is_some() {}
     }
 
-    /// The metric instruments.
+    /// The shared Redis; `None` without `[redis]`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor")
+    )]
+    pub fn redis(&self) -> Option<&shared::Redis> {
+        self.redis.as_ref()
+    }
+
+    /// The instruments this app records on.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(uninstrumented_fn, reason = "one-line accessor")
@@ -464,7 +521,7 @@ impl App {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    pub fn sessions(&self) -> &SessionKeys {
+    pub fn sessions(&self) -> &SessionBindings {
         &self.sessions
     }
 
@@ -644,7 +701,7 @@ impl App {
         // it (`*broken`, like a reference) the pass reads and replaces the
         // broken catalogs.
         let mut broken = self.polling.lock().await;
-        self.reload_keys_if_changed().await;
+        self.reload_keys_if_changed(true).await;
         // Before the catalog list, whose `?` would skip it on a failure.
         self.prune_empty_changesets().await;
         self.prune_oauth().await;
@@ -732,14 +789,83 @@ impl App {
     }
 
     /// Reloads the key cache and the settings if `admin_generation` moved
-    /// since they were loaded.
+    /// since they were loaded, serialized with poll passes through `polling`.
+    /// This is the announcement path: a subscriber calls it on a message or
+    /// a resubscribe, and a caller about to refuse a credential calls it
+    /// through [`App::catch_up_keys`].
+    ///
+    /// # Arguments
+    /// * `announce` - publish the loaded generation if it was not announced
+    ///   yet: `false` when this reload answers an announcement (the
+    ///   announcer already told everyone).
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn reload_keys_now(&self, announce: bool) {
+        let _pass = self.polling.lock().await;
+        self.reload_keys_if_changed(announce).await;
+    }
+
+    /// Before refusing a credential whose row is live but whose grant is not
+    /// in the key cache (spec Decision 14): reloads if `admin_generation`
+    /// moved. A no-op without Redis, where one replica polls after its own
+    /// changes.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn catch_up_keys(&self) {
+        if self.redis.is_some() {
+            self.reload_keys_now(false).await;
+        }
+    }
+
+    /// The `admin_generation` the key cache was loaded at.
+    ///
+    /// # Returns
+    /// The generation.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line accessor: a span would record nothing"
+        )
+    )]
+    pub fn loaded_admin_generation(&self) -> i64 {
+        self.admin_generation.load(Ordering::Relaxed)
+    }
+
+    /// Reloads the key cache and the settings if `admin_generation` moved
+    /// since they were loaded, then, when `announce` is set, publishes the
+    /// loaded generation if it differs from the last one announced.
     /// Called only under `polling`.
     ///
     /// Failing to read the counter or to reload is logged, not returned: the
     /// stored counter stays as it was, so the next pass tries again, and the
     /// caller's catalog changes go ahead regardless.
+    ///
+    /// Announcing is tracked apart from loading. A reload that loads a change
+    /// without announcing it (the subscriber's resubscribe, `catch_up_keys`)
+    /// must not make the `settle` poll that follows find nothing to publish,
+    /// so the announce step runs whether or not this call reloaded.
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn reload_keys_if_changed(&self) {
+    async fn reload_keys_if_changed(&self, announce: bool) {
+        self.reload_moved_keys().await;
+        if !announce {
+            return;
+        }
+        let Some(redis) = &self.redis else {
+            return;
+        };
+        let loaded = self.admin_generation.load(Ordering::Relaxed);
+        // Under `polling`, so no other reload moves either counter meanwhile.
+        if loaded != self.announced_generation.load(Ordering::Relaxed) {
+            shared::announce::publish(redis, Some(loaded)).await;
+            // Stored even if the publish failed: the failure is counted, and
+            // the poll loop covers a lost announcement (spec Decision 12).
+            self.announced_generation.store(loaded, Ordering::Relaxed);
+        }
+    }
+
+    /// The reload half of [`App::reload_keys_if_changed`]. Called only under
+    /// `polling`.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn reload_moved_keys(&self) {
         let admin_generation = match catalogs::admin_generation(&self.pool).await {
             Ok(admin_generation) => admin_generation,
             Err(error) => {

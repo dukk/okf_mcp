@@ -1,8 +1,11 @@
-//! What the authorization server keeps in memory between requests (spec
-//! "In memory"): pending authorizations (a consent page in progress) and
+//! What the authorization server keeps between requests (spec "In
+//! memory"): pending authorizations (a consent page in progress) and
 //! authorization codes (minted on Approve, exchanged once at `/oauth/token`).
+//! With `[redis]` both are kept in Redis, so every replica sees them.
 
 use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
 
 use crate::store::ceiling::Ceiling;
 use crate::store::oauth::clients::ClientRecord;
@@ -16,16 +19,22 @@ pub const AUTHORIZATION_CODE_TTL: Duration = Duration::from_secs(60);
 /// Wrong sign-in codes a pending authorization survives.
 pub const MAX_FAILED_ATTEMPTS: u8 = 5;
 
-/// The most pending authorizations held at once (they are made by an
-/// unauthenticated GET, so the map is bounded).
+/// The most pending authorizations held at once in memory (they are made by
+/// an unauthenticated GET, so the map is bounded). Redis drops the global cap
+/// (multi-replica spec Decision 8).
 pub const MAX_PENDING: usize = 10_000;
 
 /// The most unexchanged authorization codes held at once.
 pub const MAX_AUTHORIZATION_CODES: usize = 10_000;
 
 /// A validated `GET /oauth/authorize`, waiting for the person's decision.
-/// Keyed in `OAuth::pending` by a random id the consent form carries.
-#[derive(Clone)]
+/// Keyed in `OAuth::pending` by a random id the consent form carries. With
+/// `[redis]` it is stored there as JSON under the id's hash (multi-replica
+/// spec Decision 7): it holds the CSRF token and nonces, so Redis is trusted
+/// as Postgres is.
+// `Serialize, Deserialize` (serde) write and read the JSON; `Debug` stays
+// hand-written below.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PendingAuthorization {
     /// The CSRF token every consent form must echo.
     pub csrf: String,
@@ -78,7 +87,7 @@ impl std::fmt::Debug for PendingAuthorization {
 /// shows it. Entering another code (in another copy of the step-1 form)
 /// replaces both, so an older summary's Approve no longer matches and
 /// cannot approve a code that page did not show.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AcceptedCode {
     /// The code's id (never the code).
     pub code_id: String,
@@ -107,9 +116,10 @@ impl std::fmt::Debug for AcceptedCode {
 
 /// A signed-in person's consent page: who it was shown to, what it
 /// offered, and the random token its Approve must echo. Each Approve spends
-/// the token (it is replaced under the pending map's lock), so one page
-/// approves at most once.
-#[derive(Clone, PartialEq, Eq)]
+/// the token (it is replaced in one atomic update of the pending
+/// authorization, a compare-and-set in Redis), so one page approves at most
+/// once, across every replica.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserConsent {
     /// The `users.id` the page was rendered for; the POST's session must
     /// still be this user.
@@ -142,8 +152,12 @@ impl std::fmt::Debug for UserConsent {
 }
 
 /// An authorization code's binding, keyed in `OAuth::codes` by the hex
-/// SHA-256 of the `okfac_` code (the code itself is never stored).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// SHA-256 of the `okfac_` code (the code itself is never stored). With
+/// `[redis]` it is stored there as JSON, so every replica can exchange it
+/// (spec Decision 5); it holds no secret, only bindings and flags.
+// `Serialize, Deserialize` (serde) write the JSON encoding and decoding,
+// like a Python dataclass with `asdict` and a matching constructor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorizationCode {
     /// The grant the approval created.
     pub grant_id: String,
@@ -157,7 +171,7 @@ pub struct AuthorizationCode {
     pub resource: String,
     /// The token family its tokens join.
     pub family_id: String,
-    /// Whether it was exchanged. A used code stays in the map until it
+    /// Whether it was exchanged. A used code stays in the store until it
     /// expires, so presenting it again is seen as a replay (RFC 6749
     /// section 4.1.2: Task 6 then revokes its family).
     pub used: bool,
@@ -177,17 +191,7 @@ pub struct AuthorizationCode {
 /// 64 lowercase hex characters.
 #[tracing::instrument(level = "debug", skip_all)]
 pub fn code_key(code: &str) -> String {
-    // `fold` with `write!` appends each byte's two hex digits to one
-    // preallocated `String` (Python: `hashlib.sha256(...).hexdigest()`),
-    // with no `String` per byte.
-    use std::fmt::Write as _;
-    crate::keys::hash(code)
-        .iter()
-        .fold(String::with_capacity(64), |mut hex, byte| {
-            // Writing to a `String` cannot fail.
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        })
+    crate::shared::hashed(code)
 }
 
 #[cfg(test)]
@@ -221,9 +225,9 @@ mod tests {
         assert!(printed.contains("user-id"), "{printed}");
     }
 
-    #[test]
-    fn debug_never_prints_the_csrf_token() {
-        let pending = PendingAuthorization {
+    /// A pending authorization with every field set.
+    fn sample_pending() -> PendingAuthorization {
+        PendingAuthorization {
             csrf: "csrf-value-that-must-not-leak".into(),
             client: ClientRecord {
                 client_id: "https://client.example.com/client.json".into(),
@@ -250,7 +254,37 @@ mod tests {
                 offered: Ceiling::new(),
             }),
             query: "state=state-that-stays-out".into(),
-        };
+        }
+    }
+
+    /// What Redis stores (M16 Task 8) reads back as the same value.
+    #[test]
+    fn a_pending_authorization_round_trips_through_json() {
+        let mut pending = sample_pending();
+        pending.state = Some("xyz".into());
+        pending.failed_attempts = 3;
+        pending.consent = Some(UserConsent {
+            user_id: "user-id".into(),
+            nonce: "nonce".into(),
+            offered: [("main".to_string(), crate::store::keys::Access::Write)]
+                .into_iter()
+                .collect(),
+        });
+
+        let json = serde_json::to_value(&pending).expect("serializes");
+        let back: PendingAuthorization = serde_json::from_value(json.clone()).expect("reads back");
+
+        assert_eq!(json["consent"]["offered"]["main"], "write");
+        assert_eq!(json["client"]["kind"], "cimd");
+        assert_eq!(serde_json::to_value(&back).expect("serializes"), json);
+        assert_eq!(back.accepted, pending.accepted);
+        assert_eq!(back.consent, pending.consent);
+        assert_eq!(back.client, pending.client);
+    }
+
+    #[test]
+    fn debug_never_prints_the_csrf_token() {
+        let pending = sample_pending();
 
         let printed = format!("{pending:?}");
 

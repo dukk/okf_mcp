@@ -14,12 +14,14 @@ use chrono::Utc;
 use okf_mcp::app::App;
 use okf_mcp::archive::Files;
 use okf_mcp::clock::SystemClock;
-use okf_mcp::config::Config;
+use okf_mcp::config::{Config, RedisConfig, RedisMode};
 use okf_mcp::okf::workspace::StoredFile;
+use okf_mcp::shared::Redis;
 use okf_mcp::store::audit::AuditActor;
 use okf_mcp::store::import::{import, ImportOptions, ImportScope};
 use okf_mcp::store::keys::{self, Access, Grants, NewKey};
 use okf_mcp::store::{catalogs, users};
+use okf_mcp::telemetry::metrics::Metrics;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::RunningService;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
@@ -30,6 +32,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use super::pg::TestDb;
+use super::redis::{TestRedis, URL_VAR};
 
 /// The task running `http::serve`.
 type Served = JoinHandle<std::io::Result<()>>;
@@ -165,6 +168,67 @@ impl TestServer {
         make_config: impl FnOnce(&str) -> Config,
         mail_worker: bool,
     ) -> Self {
+        Self::start_inner(catalogs_and_files, make_config, mail_worker, None).await
+    }
+
+    /// As [`TestServer::start_with`], with `[redis]` on `redis`, the first of
+    /// a group of replicas. `poll_interval` is forced to one hour, so what a
+    /// test sees change was carried by Redis, not by the poll loop. The
+    /// caller keeps the `TestRedis` alive for the test.
+    ///
+    /// # Arguments
+    /// * `catalogs_and_files` - as for `start`.
+    /// * `redis` - the Redis every replica of the test shares.
+    /// * `make_config` - builds the settings from `http://127.0.0.1:<port>`.
+    ///
+    /// # Returns
+    /// The running server.
+    ///
+    /// # Panics
+    /// As [`TestServer::start`], or if Redis does not answer.
+    pub async fn start_shared(
+        catalogs_and_files: Vec<(&str, Files)>,
+        redis: &TestRedis,
+        make_config: impl FnOnce(&str) -> Config,
+    ) -> Self {
+        Self::start_inner(catalogs_and_files, make_config, false, Some(redis)).await
+    }
+
+    /// Another replica: a new `App` (its own pool on the same database, its
+    /// own Redis connection) serving on its own port.
+    ///
+    /// # Arguments
+    /// * `redis` - the Redis the first replica uses.
+    /// * `make_config` - builds the settings from the new server's base URL.
+    ///
+    /// # Returns
+    /// The running replica; it does not own the database.
+    ///
+    /// # Panics
+    /// If the pool, Redis, the bind or the load fails.
+    pub async fn sibling(
+        &self,
+        redis: &TestRedis,
+        make_config: impl FnOnce(&str) -> Config,
+    ) -> Sibling {
+        let pool = okf_mcp::db::connect(&self.db.url, self.app.config().database_max_connections)
+            .await
+            .expect("a second pool on the test database");
+        let (base, app, shutdown, served) = serve_app(pool, make_config, false, Some(redis)).await;
+        Sibling {
+            base,
+            app,
+            shutdown,
+            served,
+        }
+    }
+
+    async fn start_inner(
+        catalogs_and_files: Vec<(&str, Files)>,
+        make_config: impl FnOnce(&str) -> Config,
+        mail_worker: bool,
+        redis: Option<&TestRedis>,
+    ) -> Self {
         let db = TestDb::start_migrated().await;
         migrate_with_owner(&db.pool).await;
         for (name, files) in catalogs_and_files {
@@ -193,7 +257,8 @@ impl TestServer {
                 .await
                 .expect("import");
         }
-        let (base, app, shutdown, served) = serve_app(&db, make_config, mail_worker).await;
+        let (base, app, shutdown, served) =
+            serve_app(db.pool.clone(), make_config, mail_worker, redis).await;
         Self {
             base,
             app,
@@ -227,7 +292,8 @@ impl TestServer {
             .expect("the old server stops")
             .expect("the old server's task")
             .expect("the old server serves without an I/O error");
-        let (base, app, shutdown, served) = serve_app(&self.db, move |_| config, false).await;
+        let (base, app, shutdown, served) =
+            serve_app(self.db.pool.clone(), move |_| config, false, None).await;
         self.base = base;
         self.app = app;
         self.shutdown = shutdown;
@@ -517,13 +583,56 @@ impl TestServer {
     }
 }
 
-/// Binds a free port, loads the app on `db` with settings built from the
+/// A replica started by [`TestServer::sibling`]; it does not own the
+/// database. Dropping it stops it.
+pub struct Sibling {
+    /// `http://127.0.0.1:<port>`.
+    pub base: String,
+    /// The replica's state.
+    pub app: Arc<App>,
+    shutdown: CancellationToken,
+    // Kept so the serving task is not detached from its handle.
+    served: Served,
+}
+
+impl Sibling {
+    /// The MCP endpoint.
+    ///
+    /// # Returns
+    /// `<base>/mcp`.
+    pub fn mcp_url(&self) -> String {
+        format!("{}/mcp", self.base)
+    }
+
+    /// Stops the replica and waits until it has.
+    ///
+    /// # Panics
+    /// If it does not stop within [`STOP_TIMEOUT`] or its task fails.
+    pub async fn stop(&mut self) {
+        self.shutdown.cancel();
+        tokio::time::timeout(STOP_TIMEOUT, &mut self.served)
+            .await
+            .expect("the replica stops")
+            .expect("the replica's task")
+            .expect("the replica serves without an I/O error");
+    }
+}
+
+impl Drop for Sibling {
+    fn drop(&mut self) {
+        self.shutdown.cancel();
+    }
+}
+
+/// Binds a free port, loads the app on `pool` with settings built from the
 /// port's URL, and serves it.
 ///
 /// # Arguments
-/// * `db` - the database, already migrated and imported.
+/// * `pool` - a pool on the database, already migrated and imported.
 /// * `make_config` - builds the settings from the base URL.
 /// * `mail_worker` - whether the settings' `mail.worker` stands.
+/// * `redis` - `[redis]` on this server, if any; `poll_interval` is then one
+///   hour.
 ///
 /// # Returns
 /// The base URL, the app, the token that stops the server, and the task
@@ -532,9 +641,10 @@ impl TestServer {
 /// # Panics
 /// If the bind fails or the app does not load.
 async fn serve_app(
-    db: &TestDb,
+    pool: PgPool,
     make_config: impl FnOnce(&str) -> Config,
     mail_worker: bool,
+    redis: Option<&TestRedis>,
 ) -> (String, Arc<App>, CancellationToken, Served) {
     // Port 0: the OS picks a free one. Bound first, so the settings can
     // name the server's own URL.
@@ -545,9 +655,23 @@ async fn serve_app(
     let mut config = make_config(&base);
     // Test servers only enqueue unless a test asks for the worker.
     config.mail.worker &= mail_worker;
-    let app = App::load(db.pool.clone(), config, Arc::new(SystemClock))
-        .await
-        .expect("app loads");
+    let shared = match redis {
+        Some(server) => {
+            config.redis = Some(redis_config(server));
+            config.poll_interval = Duration::from_secs(3600);
+            Some(redis_connect(server).await)
+        }
+        None => None,
+    };
+    let app = App::load_with_redis(
+        pool,
+        config,
+        Arc::new(SystemClock),
+        Metrics::global(),
+        shared,
+    )
+    .await
+    .expect("app loads");
     let shutdown = CancellationToken::new();
     let served = tokio::spawn(okf_mcp::http::serve(
         Arc::clone(&app),
@@ -622,4 +746,27 @@ pub fn structured(result: &CallToolResult) -> &serde_json::Value {
         .structured_content
         .as_ref()
         .expect("structured content")
+}
+
+/// The `[redis]` table that points at `server`, with its random prefix.
+pub fn redis_config(server: &TestRedis) -> RedisConfig {
+    RedisConfig {
+        url_env: URL_VAR.to_string(),
+        key_prefix: server.prefix.clone(),
+        mode: if server.cluster {
+            RedisMode::Cluster
+        } else {
+            RedisMode::Standalone
+        },
+    }
+}
+
+/// Connects to `server` through `Redis::connect`.
+///
+/// # Panics
+/// If Redis does not answer: a broken test setup.
+pub async fn redis_connect(server: &TestRedis) -> Redis {
+    Redis::connect(&redis_config(server), &server.env(), &Metrics::global())
+        .await
+        .expect("connect to the test redis")
 }

@@ -43,6 +43,59 @@ impl Outcome {
     }
 }
 
+/// What a Redis call was doing, the `operation` label of `okf.redis.errors`
+/// (a closed set: spec Decision 17).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedisOp {
+    /// Connecting, or the start-up `PING`.
+    Connect,
+    /// Reading a value.
+    Get,
+    /// Writing a value.
+    Set,
+    /// Reading and removing a value.
+    Take,
+    /// Changing a value in place (compare and set).
+    Update,
+    /// Deleting a value.
+    Remove,
+    /// Maintaining a per-actor index.
+    Index,
+    /// Admitting a request against a stored binding.
+    Admit,
+    /// Binding a session to a key.
+    Bind,
+    /// Publishing an announcement.
+    Publish,
+    /// Subscribing to announcements.
+    Subscribe,
+    /// Reading or bumping a counter.
+    Counter,
+    /// A stored value that would not decode.
+    Decode,
+}
+
+impl RedisOp {
+    /// The label value.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Connect => "connect",
+            Self::Get => "get",
+            Self::Set => "set",
+            Self::Take => "take",
+            Self::Update => "update",
+            Self::Remove => "remove",
+            Self::Index => "index",
+            Self::Admit => "admit",
+            Self::Bind => "bind",
+            Self::Publish => "publish",
+            Self::Subscribe => "subscribe",
+            Self::Counter => "counter",
+            Self::Decode => "decode",
+        }
+    }
+}
+
 /// What one catalog's turn in a poll pass came to: a closed set for the
 /// `result` label of `okf.catalog.refreshes`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,6 +197,7 @@ struct Instruments {
     poll_duration: Histogram<f64>,
     catalog_refreshes: Counter<u64>,
     keycache_reloads: Counter<u64>,
+    redis_errors: Counter<u64>,
     // Task 3: HTTP and MCP.
     http_duration: Histogram<f64>,
     http_active: UpDownCounter<i64>,
@@ -199,6 +253,7 @@ impl Metrics {
         "okf_poll_duration_seconds",
         "okf_catalog_refreshes_total",
         "okf_keycache_reloads_total",
+        "okf_redis_errors_total",
         "okf_auth_attempts_total",
         "okf_oauth_tokens_issued_total",
         "okf_ratelimit_rejections_total",
@@ -256,6 +311,10 @@ impl Metrics {
                 keycache_reloads: meter
                     .u64_counter("okf.keycache.reloads")
                     .with_description("Key cache and settings reloads, by outcome.")
+                    .build(),
+                redis_errors: meter
+                    .u64_counter("okf.redis.errors")
+                    .with_description("Failed Redis calls, by operation.")
                     .build(),
                 http_duration: seconds_histogram(
                     meter,
@@ -397,6 +456,17 @@ impl Metrics {
         self.inner
             .keycache_reloads
             .add(1, &[KeyValue::new("outcome", outcome.as_str())]);
+    }
+
+    /// Counts one failed Redis call.
+    ///
+    /// # Arguments
+    /// * `op` - what the call was doing.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn redis_error(&self, op: RedisOp) {
+        self.inner
+            .redis_errors
+            .add(1, &[KeyValue::new("operation", op.as_str())]);
     }
 
     /// Registers the catalog gauges: `okf.catalog.concepts`,
@@ -1074,6 +1144,7 @@ mod tests {
         metrics.poll(Outcome::Ok, elapsed);
         metrics.catalog_refresh("notes", RefreshResult::Reloaded);
         metrics.keycache_reload(Outcome::Ok);
+        metrics.redis_error(RedisOp::Get);
         metrics.http_request("GET", "/health", 200, elapsed);
         let _in_flight = metrics.http_in_flight("GET", "/health");
         metrics.tool_call("get_concept", "notes", Outcome::Ok, elapsed);

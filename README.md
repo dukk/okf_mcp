@@ -63,6 +63,15 @@ CloudNativePG and an ingress, the first catalog and keys, `/healthz` and the
 clock check, upgrades, backup and restore, and troubleshooting. The sections
 below cover local use.
 
+`okf-mcp serve` runs as one replica by default, because its short-lived state
+(MCP sessions, OAuth consent pages and codes, sign-ins in progress) lives in
+the process's memory. With a `[redis]` table that state moves to Redis or
+Valkey, and several replicas can run behind one Service; the key cache and the
+OAuth access-token cache learn of a revocation on every replica at once. Set
+`mode = "cluster"` for a cluster such as ElastiCache Serverless (which needs a
+`rediss://` URL). Without `[redis]` nothing changes. `docs/operations.md`
+("Redis") covers the `[redis]` settings, the caveats and what happens when Redis is down.
+
 ## Command line
 
     okf-mcp migrate
@@ -331,7 +340,7 @@ only).
 
 | Route | Key | Does |
 |---|---|---|
-| `GET /healthz` | none | `{"database": "ok", "catalogs": N, "clock": ...}`: 200, or 503 when the database does not answer within 2 s; `clock` is the last clock check (`docs/operations.md`, "Health and time") |
+| `GET /healthz` | none | `{"database": "ok", "catalogs": N, "clock": ..., "redis": ...}`: 200, or 503 when the database does not answer within 2 s; `clock` is the last clock check (`docs/operations.md`, "Health and time"); `redis` is `"ok"`, `"unavailable"` or `null` without `[redis]`, and never changes the status |
 | `POST/GET/DELETE /mcp` | any | MCP streamable HTTP |
 | `GET /catalogs/{name}/export` | `read` on the catalog | The catalog as `application/gzip`, `Content-Disposition: attachment; filename="<name>.tar.gz"` |
 | `POST /catalogs/{name}/import[?replace=true&only_machinery=true&expect_generation=N]` | `admin` on the catalog | Imports the uploaded `.tar.gz` and answers with the import report |

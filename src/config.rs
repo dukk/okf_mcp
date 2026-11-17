@@ -564,6 +564,99 @@ impl MailConfig {
     }
 }
 
+/// The longest `[redis] key_prefix` accepted, in bytes.
+const MAX_REDIS_KEY_PREFIX_BYTES: usize = 64;
+
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "serde default for a config key, read before the subscriber exists"
+    )
+)]
+fn default_key_prefix() -> String {
+    "okf:".to_string()
+}
+
+/// Which Redis client `[redis]` uses (spec Decision 20).
+// `rename_all = "lowercase"` makes the TOML spelling `"standalone"` or
+// `"cluster"`; anything else is a parse error (Python: an Enum lookup).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RedisMode {
+    /// One Redis or Valkey primary (`ConnectionManager`).
+    #[default]
+    Standalone,
+    /// A cluster, including ElastiCache Serverless (`ClusterClient`).
+    Cluster,
+}
+
+/// The `[redis]` table (spec Decision 1). Absent: every short-lived state stays
+/// in memory and one replica is required. Present: `serve` keeps it in Redis.
+// `deny_unknown_fields` makes a misspelt key (or a `url = ...` that would put a
+// password in the file) a parse error instead of being ignored silently.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RedisConfig {
+    /// The environment variable holding the Redis URL (`redis://` or
+    /// `rediss://`; it may carry a password, so it never goes in the file).
+    pub url_env: String,
+    /// Prepended to every key and channel, so one Redis can serve several
+    /// deployments. Default `"okf:"`.
+    #[serde(default = "default_key_prefix")]
+    pub key_prefix: String,
+    /// `"standalone"` (default) or `"cluster"` (ElastiCache Serverless and
+    /// other clusters). Every key and channel carries one hash tag in both
+    /// modes (spec Decision 20).
+    #[serde(default)]
+    pub mode: RedisMode,
+}
+
+impl RedisConfig {
+    /// Checks the variable name and the key prefix.
+    ///
+    /// # Returns
+    /// `Ok(())` when both are usable.
+    ///
+    /// # Errors
+    /// A message naming the bad key: `url_env` that is empty or has a
+    /// character outside `[A-Za-z0-9_]`; `key_prefix` that is empty, over 64
+    /// bytes, or holds whitespace, a control character or a brace (the prefix
+    /// goes inside the hash tag `{<prefix>}`).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "config check run once at start-up, like `Config::validate`"
+        )
+    )]
+    pub fn validate(&self) -> Result<(), String> {
+        if self.url_env.is_empty()
+            || !self
+                .url_env
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            return Err(
+                "redis.url_env must name an environment variable (letters, digits and _)"
+                    .to_string(),
+            );
+        }
+        let prefix = &self.key_prefix;
+        if prefix.is_empty()
+            || prefix.len() > MAX_REDIS_KEY_PREFIX_BYTES
+            || prefix
+                .chars()
+                .any(|c| c.is_whitespace() || c.is_control() || c == '{' || c == '}')
+        {
+            return Err(format!(
+                "redis.key_prefix must be 1 to {MAX_REDIS_KEY_PREFIX_BYTES} bytes with no whitespace, control characters or braces"
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Settings read from the configuration file.
 // `#[serde(default)]` fills every missing key from `Default::default()`.
 // serde ignores keys the struct does not name unless told otherwise
@@ -627,6 +720,9 @@ pub struct Config {
     pub mail: MailConfig,
     /// Logs, traces and metrics (`[telemetry]`).
     pub telemetry: TelemetryConfig,
+    /// Shared state for several `serve` replicas (`[redis]`); `None` keeps
+    /// everything in memory.
+    pub redis: Option<RedisConfig>,
 }
 
 impl Default for Config {
@@ -657,6 +753,7 @@ impl Default for Config {
             auth: AuthConfig::default(),
             mail: MailConfig::default(),
             telemetry: TelemetryConfig::default(),
+            redis: None,
         }
     }
 }
@@ -807,6 +904,9 @@ impl Config {
         self.auth.validate()?;
         self.mail.validate()?;
         self.telemetry.validate()?;
+        if let Some(redis) = &self.redis {
+            redis.validate()?;
+        }
         self.validate_metrics_listen()?;
         self.validate_oidc()?;
         self.validate_public_url()
@@ -1047,6 +1147,63 @@ fn is_loopback(host: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn redis_is_off_by_default_and_parses_with_defaults() {
+        assert_eq!(Config::default().redis, None);
+        let config = Config::from_toml("[redis]\nurl_env = \"OKF_REDIS_URL\"\n").unwrap();
+        let redis = config.redis.clone().expect("a [redis] table");
+        assert_eq!(redis.url_env, "OKF_REDIS_URL");
+        assert_eq!(redis.key_prefix, "okf:");
+        assert_eq!(redis.mode, RedisMode::Standalone);
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn redis_mode_parses_cluster_and_refuses_anything_else() {
+        let config = Config::from_toml("[redis]\nurl_env = \"X\"\nmode = \"cluster\"\n").unwrap();
+        assert_eq!(config.redis.expect("a table").mode, RedisMode::Cluster);
+        let config =
+            Config::from_toml("[redis]\nurl_env = \"X\"\nmode = \"standalone\"\n").unwrap();
+        assert_eq!(config.redis.expect("a table").mode, RedisMode::Standalone);
+        assert!(Config::from_toml("[redis]\nurl_env = \"X\"\nmode = \"sentinel\"\n").is_err());
+    }
+
+    #[test]
+    fn redis_rejects_unknown_keys_and_bad_values() {
+        assert!(Config::from_toml("[redis]\nurl_env = \"X\"\nurl = \"redis://h\"\n").is_err());
+        let long_prefix = format!(
+            "[redis]\nurl_env = \"X\"\nkey_prefix = \"{}\"\n",
+            "a".repeat(65)
+        );
+        for (toml, needle) in [
+            ("[redis]\nurl_env = \"\"\n".to_string(), "redis.url_env"),
+            (
+                "[redis]\nurl_env = \"HAS SPACE\"\n".to_string(),
+                "redis.url_env",
+            ),
+            (
+                "[redis]\nurl_env = \"X\"\nkey_prefix = \"\"\n".to_string(),
+                "redis.key_prefix",
+            ),
+            (
+                "[redis]\nurl_env = \"X\"\nkey_prefix = \"a b\"\n".to_string(),
+                "redis.key_prefix",
+            ),
+            (
+                "[redis]\nurl_env = \"X\"\nkey_prefix = \"a{b\"\n".to_string(),
+                "redis.key_prefix",
+            ),
+            (
+                "[redis]\nurl_env = \"X\"\nkey_prefix = \"a}\"\n".to_string(),
+                "redis.key_prefix",
+            ),
+            (long_prefix, "redis.key_prefix"),
+        ] {
+            let message = Config::from_toml(&toml).unwrap().validate().unwrap_err();
+            assert!(message.contains(needle), "{toml}: {message}");
+        }
+    }
     use super::*;
 
     #[test]
