@@ -73,6 +73,15 @@ pub(super) async fn user(
                 created.name, created.name
             )
         }
+        UserCommand::Update { name, display_name } => {
+            let display_name = DisplayName::parse(&display_name)?;
+            let previous = users::find(pool, &name).await?.display_name;
+            users::set_display_name(pool, &name, &display_name, &AuditActor::cli(), now).await?;
+            format!(
+                "updated user {name} display name: {previous:?} -> {:?}\n",
+                display_name.as_str()
+            )
+        }
         // `--email`: zero or one user; `Option::iter` yields it or nothing,
         // so both arms print through the same `lines(.. format_user)`.
         UserCommand::List { email: Some(email) } => lines(
@@ -210,6 +219,20 @@ pub(super) async fn team(
             };
             let created = teams::create(pool, &new, &AuditActor::cli(), now).await?;
             format!("created team {} (owner {owner})\n", created.name)
+        }
+        TeamCommand::Update { name, display_name } => {
+            let display_name = DisplayName::parse(&display_name)?;
+            let previous = teams::find(pool, &name).await?.display_name;
+            let change = teams::TeamDisplayNameChange {
+                team: &name,
+                display_name: &display_name,
+                owner: None,
+            };
+            teams::set_display_name(pool, &change, &AuditActor::cli(), now).await?;
+            format!(
+                "updated team {name} display name: {previous:?} -> {:?}\n",
+                display_name.as_str()
+            )
         }
         TeamCommand::List => lines(teams::list(pool).await?.iter().map(format_team)),
         // `|` matches either variant and binds the same names from both,
@@ -671,6 +694,62 @@ mod tests {
              0 open changeset(s) discarded)\n"
         );
         assert!(!after.contains("alice"), "{after}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn user_and_team_update_change_the_display_name() {
+        // Arrange
+        let db = test_db().await;
+        okf(&db, &["user", "create", "alice"]).await.unwrap();
+        okf(&db, &["team", "create", "acme", "--owner", "alice"])
+            .await
+            .unwrap();
+
+        // Act
+        let user = okf(
+            &db,
+            &["user", "update", "alice", "--display-name", "Alice Example"],
+        )
+        .await;
+        let team = okf(&db, &["team", "update", "acme", "--display-name", "Acme"]).await;
+        let personal = okf(&db, &["team", "update", "alice", "--display-name", "Nope"]).await;
+        let unknown = okf(&db, &["user", "update", "nobody", "--display-name", "X"]).await;
+        let long = okf(
+            &db,
+            &["user", "update", "alice", "--display-name", &"x".repeat(81)],
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            user.unwrap(),
+            "updated user alice display name: \"\" -> \"Alice Example\"\n"
+        );
+        assert_eq!(
+            team.unwrap(),
+            "updated team acme display name: \"\" -> \"Acme\"\n"
+        );
+        let refusal = personal
+            .expect_err("a personal team follows its user")
+            .to_string();
+        assert!(
+            refusal.contains("a personal team's label follows its user"),
+            "{refusal}"
+        );
+        assert!(unknown.is_err());
+        assert!(long
+            .expect_err("81 characters are refused")
+            .to_string()
+            .contains("display name refused"));
+        assert_eq!(
+            teams::find(&db.pool, "acme").await.unwrap().display_name,
+            "Acme"
+        );
+        // The refused personal-team update wrote nothing.
+        assert_eq!(
+            teams::find(&db.pool, "alice").await.unwrap().display_name,
+            ""
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
