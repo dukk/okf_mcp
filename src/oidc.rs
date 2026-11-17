@@ -192,9 +192,10 @@ pub struct LinkRequest {
     pub keep_sessions: bool,
 }
 
-/// The form a console session id is stored in by a link flow, and the key
-/// of its [`IndexSpace::OidcLink`] entry: the unpadded URL-safe base64 of
-/// its SHA-256.
+/// The form a console session id is stored in by a link flow or a passkey
+/// registration (`http::passkeys`), and the key of its
+/// [`IndexSpace::OidcLink`] or `IndexSpace::PasskeySession` entry: the
+/// unpadded URL-safe base64 of its SHA-256.
 ///
 /// # Arguments
 /// * `session_id` - the raw console session id (the cookie's value).
