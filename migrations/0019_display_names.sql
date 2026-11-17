@@ -16,8 +16,17 @@
 -- on (the default), `\uXXXX` reaches the regex engine as written, and the
 -- ARE syntax reads it as that code point. Only rows the rule changes are
 -- rewritten. Additive: an older replica ignores the new column.
-
-ALTER TABLE catalogs ADD COLUMN display_name text NOT NULL DEFAULT '';
+--
+-- Locks. sqlx runs a migration in one transaction, so every lock below is
+-- held until it commits; the statements are ordered to take the blocking
+-- ones last. The cleanup `UPDATE`s come first and take only ROW EXCLUSIVE
+-- (other readers and writers carry on; only a changed row is locked). Each
+-- `ADD CONSTRAINT` then takes ACCESS EXCLUSIVE on its table for the rest of
+-- the transaction, so `catalogs` (which every MCP and REST request reads) is
+-- locked last, by one `ALTER` whose column add is metadata only (a constant
+-- default needs no rewrite) and whose CHECK scans the catalog rows. From the
+-- first exclusive lock to the commit, the migration does three scans of
+-- tables holding one row per user, team or catalog.
 
 UPDATE users u SET display_name = n.display_name
 FROM (
@@ -51,6 +60,9 @@ FROM (
 ) n
 WHERE t.id = n.id AND t.display_name <> n.display_name;
 
-ALTER TABLE users    ADD CONSTRAINT users_display_name_length    CHECK (char_length(display_name) <= 80);
-ALTER TABLE teams    ADD CONSTRAINT teams_display_name_length    CHECK (char_length(display_name) <= 80);
-ALTER TABLE catalogs ADD CONSTRAINT catalogs_display_name_length CHECK (char_length(display_name) <= 80);
+ALTER TABLE users ADD CONSTRAINT users_display_name_length CHECK (char_length(display_name) <= 80);
+ALTER TABLE teams ADD CONSTRAINT teams_display_name_length CHECK (char_length(display_name) <= 80);
+
+ALTER TABLE catalogs
+    ADD COLUMN display_name text NOT NULL DEFAULT '',
+    ADD CONSTRAINT catalogs_display_name_length CHECK (char_length(display_name) <= 80);

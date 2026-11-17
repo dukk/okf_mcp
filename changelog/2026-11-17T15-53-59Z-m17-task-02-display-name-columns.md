@@ -12,5 +12,6 @@
 - The M17 plan's Task 2 SQL and tests are corrected (`> **Corrected (issue #599).**`).
 
 ## Notes
+- Locks: sqlx runs the migration in one transaction and holds each lock until commit, so the statements take the ACCESS EXCLUSIVE locks last: the cleanup `UPDATE`s first (ROW EXCLUSIVE only), then the `users` and `teams` CHECKs, then one `ALTER TABLE catalogs` that adds the column (metadata only) and its CHECK. Catalog reads on running replicas wait only for the final scans and the commit, not for the cleanup.
 - Additive: an older replica ignores the new catalog column (its inserts get the default). Its user and team creates do not check the length, so during a rolling upgrade one given more than 80 characters fails the CHECK, a database error (500), instead of storing it.
 - The CLI's `catalog create --display-name` is Task 6; it passes an empty name until then.
