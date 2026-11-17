@@ -1181,6 +1181,22 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn healthz_reports_redis_without_changing_its_status() {
         let (test, redis) = app_with_redis(Config::default()).await;
+        healthz_follows_redis(test, redis).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn healthz_reports_a_redis_cluster_without_changing_its_status() {
+        let cluster = crate::db::redis_support::TestRedis::start_cluster().await;
+        let (test, redis) = crate::mcp::testing::app_on_redis(Config::default(), cluster).await;
+        healthz_follows_redis(test, redis).await;
+    }
+
+    /// `/healthz` says `"ok"` while Redis is up and `"unavailable"` (still
+    /// 200) once it is stopped.
+    async fn healthz_follows_redis(
+        test: crate::mcp::testing::TestApp,
+        redis: crate::db::redis_support::TestRedis,
+    ) {
         let router = router(Arc::clone(&test.app), &CancellationToken::new());
         let get = || {
             Request::get("/healthz")
