@@ -2109,7 +2109,7 @@ async fn healthz_reports_redis_without_changing_its_status() {
 - **Health (section 7)** documents the `redis` field, and that it never changes the status code (Decision 8).
 - **The metric reference** gains `okf.redis.errors`, and the span reference the Redis spans.
 
-> **Corrected (issue #565, 2026-11-17).** What shipped: the "Redis" section sits after section 4 in `docs/operations.md` (headings "What Redis holds", "When Redis fails", "Sizing", "Eviction", "TLS and AUTH", "Several replicas: what stays per replica"), not numbered. The "no Cluster" topology line above is superseded by cluster mode (Task 1b). The `/healthz` `redis` field and `okf_redis_errors_total` document `PING` failures as `get`, as Task 11 shipped. The doc describes pending authorizations from this plan and Task 8's note (PR #582) until that merges.
+> **Corrected (issue #565, 2026-11-17).** What shipped: the "Redis" section sits after section 4 in `docs/operations.md` (headings "What Redis holds", "When Redis fails", "Sizing", "Eviction", "TLS and AUTH", "Several replicas: what stays per replica"), not numbered. The "no Cluster" topology line above is superseded by cluster mode (Task 1b). The `/healthz` `redis` field and `okf_redis_errors_total` document `PING` failures as `get`, as Task 11 shipped. The doc describes pending authorizations from this plan and Task 8's note; PR #582 has merged since, so the text now matches the code.
 
 - [ ] **Step 2: The server design**
 
