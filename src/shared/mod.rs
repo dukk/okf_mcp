@@ -2,6 +2,8 @@
 //! `2026-11-17-okf-multi-replica-design.md`): one Redis connection and the
 //! key names every component uses. Nothing here runs without `[redis]`.
 
+pub mod ephemeral;
+
 use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
@@ -467,10 +469,23 @@ pub(crate) mod testing {
             .await
             .expect("connect to the test redis")
     }
+
+    /// The value of `okf_redis_errors_total{operation="<op>"}` in a scrape.
+    pub(crate) fn error_count(rendered: &str, op: &str) -> u64 {
+        let series = format!("okf_redis_errors_total{{operation=\"{op}\"}}");
+        rendered
+            .lines()
+            .find_map(|line| line.strip_prefix(series.as_str()))
+            .map_or(0, |value| {
+                // Prometheus renders a counter as a float: "1" or "1.0".
+                value.trim().parse::<f64>().expect("a numeric sample") as u64
+            })
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::testing::error_count;
     use super::*;
 
     #[tokio::test]
@@ -588,18 +603,6 @@ mod tests {
             message.contains("OKF_TEST_REDIS_URL_NEVER_SET"),
             "{message}"
         );
-    }
-
-    /// The value of `okf_redis_errors_total{operation="<op>"}` in a scrape.
-    fn error_count(rendered: &str, op: &str) -> u64 {
-        let series = format!("okf_redis_errors_total{{operation=\"{op}\"}}");
-        rendered
-            .lines()
-            .find_map(|line| line.strip_prefix(series.as_str()))
-            .map_or(0, |value| {
-                // Prometheus renders a counter as a float: "1" or "1.0".
-                value.trim().parse::<f64>().expect("a numeric sample") as u64
-            })
     }
 
     #[tokio::test(flavor = "multi_thread")]

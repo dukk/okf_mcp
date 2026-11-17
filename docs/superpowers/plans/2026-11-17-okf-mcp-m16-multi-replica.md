@@ -1115,6 +1115,13 @@ const UPDATE_ATTEMPTS: usize = 8;
 - **Encoding.** `serde_json::to_vec(&Envelope { v: space.version(), d: value })`. Decoding refuses `v != space.version()`.
 - **Bounds and spans.** `V: Serialize + DeserializeOwned + Send + Sync + 'static`. Every Redis call gets a span: `#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "redis", db.operation.name = "<op>"))]`.
 
+> **Corrected (issue #555, 2026-11-17).** What shipped differs in small ways; read `src/shared/ephemeral.rs`.
+> - `insert`, `take`, `update`, `remove` take `key: &str`. `IndexSpace` has `name()` (`oidc:link`, `passkey:session`).
+> - Running out of `UPDATE_ATTEMPTS` also counts `okf.redis.errors{operation="update"}`; its `Busy` reason is "the entry is changing too fast". A value that fails to serialize (a type bug) answers `Busy` and counts `decode`.
+> - `Envelope<T>` encodes from `&V` (no clone) and decodes to `V`; it is still private (Task 5 makes it `pub(crate)`).
+> - Tests: there is no `stores(ttl) -> (Vec<_>, TestRedis)` helper. Each Redis body is an `async fn(TestRedis)` run by an `in_both_modes!` macro in `tests::standalone` and `tests::cluster`, so filters look like `shared::ephemeral::tests::cluster::...`. The 16-update test retries a `Busy` (as a client retries the 503) and checks that the 16 stored runs saw the distinct values 1..=16; with 16 contenders some do run out of 8 attempts. Two tests were added: a forced lost race (`a_lost_race_reruns_the_change_on_a_fresh_copy`, which writes from inside the closure with `block_in_place`) and `an_update_that_always_loses_is_busy_after_eight_attempts`.
+> - `shared::testing::error_count(rendered, op)` reads one `okf_redis_errors_total` series; later tasks can use it.
+
 - [ ] **Step 4: `lessons.md`**
 
 Under "Locks and races", add this rule: "**A closure passed to `Ephemeral::update` may run more than once** (a Redis compare-and-set that lost a race reruns it on a fresh copy). It must compute its result from the value alone: clone captured inputs inside it, never `Option::take` or move them out, and do no I/O. Test it by racing two updates of one entry through two Redis handles (milestone 16 plan, Task 2)."
