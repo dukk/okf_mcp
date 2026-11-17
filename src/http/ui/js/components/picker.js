@@ -12,11 +12,25 @@ export async function namesOf(kind) {
 // empty first option is chosen, so a `required` picker refuses to submit
 // until someone picks a name. Each option's value is the name (the slug);
 // its text is `labelOf(name)` when given (`userLabel`, `teamLabel` or
-// `catalogLabel` from core/labels.js), else the name itself.
+// `catalogLabel` from core/labels.js), else the name itself, with the name
+// added when two options would read the same.
 export function picker(attrs, names, selected = null, labelOf = null) {
+    const texts = optionTexts(names, labelOf);
     return h('select', attrs,
         h('option', { value: '', disabled: true, selected: !selected }, 'Choose...'),
-        names.map(name => h('option', { value: name, selected: name === selected }, labelOf ? labelOf(name) : name)));
+        names.map((name, index) => h('option', { value: name, selected: name === selected }, texts[index])));
+}
+
+// The visible text of each option. Labels are not unique (display names
+// repeat, and every unnamed user or team shares one placeholder), so an
+// option whose label another option shares gets its slug appended, "Unnamed
+// user (alice)"; a label that is alone stays as it is.
+function optionTexts(names, labelOf) {
+    if (!labelOf) return names;
+    const labels = names.map(labelOf);
+    const seen = new Map();
+    for (const label of labels) seen.set(label, (seen.get(label) ?? 0) + 1);
+    return labels.map((label, index) => (seen.get(label) > 1 ? `${label} (${names[index]})` : label));
 }
 
 // A picker plus a button that calls `assign(name)`: the Assign or Change user

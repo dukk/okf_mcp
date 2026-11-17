@@ -753,3 +753,50 @@ async fn the_teams_table_and_drawer_show_labels_and_a_shared_team_is_renamed() {
     let stored = teams::find(&server.db.pool, "acme").await.expect("acme");
     assert_eq!(stored.display_name, "Acme Ltd");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pickers_tell_users_with_the_same_label_apart_and_keep_slugs_as_values() {
+    let server = server().await;
+    let admin = server.key("console-admin", Access::Admin, &[], None).await;
+    // Two users share the default label, a third is named; every one is a
+    // candidate in the New team owner picker.
+    for (name, display) in [("alice", ""), ("bob", ""), ("carol", "Carol Example")] {
+        let user = NewUser {
+            name,
+            display_name: &okf_mcp::labels::DisplayName::parse(display).expect("a name"),
+        };
+        users::create(&server.db.pool, &user, &AuditActor::cli(), Utc::now())
+            .await
+            .expect("create a user");
+    }
+    server.app.poll().await.expect("poll");
+    drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/teams");
+        ui.click("#team-new");
+        ui.wait_visible("#team-form select[name=owner] option[value=bob]");
+        let options = ui.eval(
+            "() => [...document.querySelectorAll('#team-form select[name=owner] option')] \
+             .filter(option => option.value) \
+             .map(option => [option.value, option.textContent])",
+            json!(null),
+        );
+        let options: Vec<(String, String)> = serde_json::from_value(options).expect("options");
+        let text = |value: &str| {
+            options
+                .iter()
+                .find(|(slug, _)| slug == value)
+                .map(|(_, text)| text.clone())
+                .unwrap_or_default()
+        };
+        // The slugs stay the values; colliding labels carry their slug.
+        assert_eq!(text("alice"), "Unnamed user (alice)");
+        assert_eq!(text("bob"), "Unnamed user (bob)");
+        assert_eq!(text("carol"), "Carol Example");
+        let mut texts: Vec<&String> = options.iter().map(|(_, text)| text).collect();
+        texts.sort();
+        texts.dedup();
+        assert_eq!(texts.len(), options.len(), "every option reads differently");
+    })
+    .await;
+}
