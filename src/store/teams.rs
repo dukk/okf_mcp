@@ -403,22 +403,34 @@ pub async fn owned_by(
     .await?)
 }
 
-/// The names of the teams `user_id` owns, its personal team included: the
-/// teams whose audit log its console session can read.
+/// A team a user owns, as the account page lists it.
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub struct OwnedTeam {
+    /// The team's name.
+    pub name: String,
+    /// Its display name (may be empty).
+    pub display_name: String,
+    /// Whether it is a personal team (its label follows its user).
+    pub personal: bool,
+}
+
+/// The teams `user_id` owns, its personal team included: the teams whose
+/// audit log its console session can read, and the ones it may rename.
 ///
 /// # Arguments
 /// * `pool` - the database.
 /// * `user_id` - the user's `users.id`.
 ///
 /// # Returns
-/// The names, sorted.
+/// The teams, sorted by name.
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.owned_names"))]
-pub async fn owned_names(pool: &PgPool, user_id: &str) -> Result<Vec<String>, OkfError> {
-    Ok(sqlx::query_scalar(
-        "SELECT t.name FROM teams t JOIN team_members m ON m.team_id = t.id \
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.owned"))]
+pub async fn owned(pool: &PgPool, user_id: &str) -> Result<Vec<OwnedTeam>, OkfError> {
+    Ok(sqlx::query_as(
+        "SELECT t.name, t.display_name, t.personal_of IS NOT NULL AS personal \
+         FROM teams t JOIN team_members m ON m.team_id = t.id \
          WHERE m.user_id = $1 AND m.role = 'owner' ORDER BY t.name",
     )
     .bind(user_id)
