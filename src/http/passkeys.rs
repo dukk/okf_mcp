@@ -4,10 +4,20 @@
 //! and the origin is `public_url`; webauthn-rs always requires user
 //! verification.
 //!
-//! A ceremony's server-side state waits in memory for at most five
-//! minutes, keyed by a random id in the `okf_passkey` cookie, and is taken
-//! (single use) by the request that finishes it. Like pending consent
-//! pages, it is per process.
+//! A ceremony's server-side state waits for at most five minutes, keyed by
+//! a random id in the `okf_passkey` cookie, and is taken (single use) by the
+//! request that finishes it. Without `[redis]` it is held in this process's
+//! memory; with it, in Redis (`shared::Ephemeral`, M16 Task 10), under the
+//! cookie's hash, so a ceremony begun on one replica finishes on another
+//! and is taken once across all of them (`GETDEL`). A Redis failure answers
+//! 503; nothing falls back to memory.
+//!
+//! No raw console session id or setup token is stored, in memory or in
+//! Redis (spec Decision 7). A registration keeps only the hash of what
+//! started it: the console session id, or the emailed setup token. It
+//! finishes only in a request whose own session, or whose presented token,
+//! hashes to that value (compared in constant time), and then uses that
+//! request's own id or token.
 //!
 //! A sign-in checks the assertion and starts the session in one
 //! transaction that holds the user's row and the passkey's row
@@ -28,7 +38,8 @@ use axum::routing::post;
 use axum::{Extension, Json, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
 use webauthn_rs::prelude::{
     CredentialID, DiscoverableAuthentication, Passkey, PasskeyRegistration, PublicKeyCredential,
     RegisterPublicKeyCredential, Url, Uuid, Webauthn, WebauthnBuilder, WebauthnError,
@@ -49,7 +60,11 @@ use crate::http::pages::safe_return_to;
 use crate::http::signin::{audit, cross_site, notify_method_added, start_in, SignIn, LINK_EXPIRED};
 use crate::http::{timeout_layer, AppError};
 use crate::keys;
-use crate::oauth::expiring::ExpiringMap;
+// The one form a console session id takes when stored (OIDC link flows use
+// it too).
+use crate::oidc::session_hash;
+use crate::shared::ephemeral::{Ephemeral, Index, IndexSpace, Keyspace, Swap};
+use crate::shared::Redis;
 use crate::store::email_tokens::{self, Purpose};
 use crate::store::passkeys::{self as passkey_rows, SessionRegistration};
 use crate::store::sign_in_events::{Method, Outcome};
@@ -78,10 +93,11 @@ const CROSS_SITE: &str = "passkey requests can only come from this site";
 /// The WebAuthn relying party and the ceremonies in progress, held by `App`.
 pub struct Passkeys {
     webauthn: Webauthn,
-    ceremonies: ExpiringMap<Ceremony>,
-    // The ceremony id each console session's registration holds, keyed by
-    // the hash of the session id: a session has at most one at a time.
-    by_session: ExpiringMap<String>,
+    // In memory without `[redis]`, else in Redis under the cookie's hash.
+    ceremonies: Ephemeral<Ceremony>,
+    // The ceremony each console session's registration holds, keyed by the
+    // hash of the session id: a session has at most one at a time.
+    by_session: Index,
 }
 
 impl Passkeys {
@@ -89,6 +105,8 @@ impl Passkeys {
     ///
     /// # Arguments
     /// * `config` - the server's settings.
+    /// * `redis` - the instance's Redis, if `[redis]` is set: the ceremonies
+    ///   are then kept there, shared by every replica.
     ///
     /// # Returns
     /// `None` without `public_url`, or when its host is an address (WebAuthn
@@ -98,7 +116,7 @@ impl Passkeys {
     /// [`OkfError::Config`] if `public_url` does not parse or webauthn-rs
     /// refuses it.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn new(config: &Config) -> Result<Option<Self>, OkfError> {
+    pub fn new(config: &Config, redis: Option<&Redis>) -> Result<Option<Self>, OkfError> {
         let Some(public_url) = config.public_url.as_deref() else {
             return Ok(None);
         };
@@ -120,14 +138,27 @@ impl Passkeys {
             .map_err(|e| error(format!("WebAuthn refuses {public_url:?}: {e}")))?;
         Ok(Some(Self {
             webauthn,
-            ceremonies: ExpiringMap::new(CEREMONY_TTL, MAX_CEREMONIES),
-            by_session: ExpiringMap::new(CEREMONY_TTL, MAX_CEREMONIES),
+            ceremonies: Ephemeral::new(
+                redis,
+                Keyspace::PasskeyCeremony,
+                CEREMONY_TTL,
+                MAX_CEREMONIES,
+            ),
+            by_session: Index::new(
+                redis,
+                IndexSpace::PasskeySession,
+                CEREMONY_TTL,
+                MAX_CEREMONIES,
+            ),
         }))
     }
 }
 
-/// A ceremony in progress. No `Debug`: it holds the challenges and, for a
-/// setup link, the emailed token.
+/// A ceremony in progress. No `Debug`: it holds the challenges.
+/// `Serialize`/`Deserialize` (webauthn-rs' `danger-allow-state-serialisation`)
+/// let the Redis store keep it as JSON, server-side; it is never sent to a
+/// client, logged or put in a span.
+#[derive(Serialize, Deserialize)]
 enum Ceremony {
     /// Registering a passkey (boxed: much larger than a sign-in).
     Register(Box<Registration>),
@@ -139,6 +170,7 @@ enum Ceremony {
 }
 
 /// A registration's state and what to do once it finishes.
+#[derive(Serialize, Deserialize)]
 struct Registration {
     state: PasskeyRegistration,
     user_id: String,
@@ -146,6 +178,7 @@ struct Registration {
 }
 
 /// What a registration was started with.
+#[derive(Serialize, Deserialize)]
 struct Pending {
     name: String,
     via: RegisterVia,
@@ -153,12 +186,18 @@ struct Pending {
 }
 
 /// Who asked for a registration.
+#[derive(Serialize, Deserialize)]
 enum RegisterVia {
-    /// The setup page, with the emailed token (used at finish).
-    Setup { token: String },
-    /// A signed-in session, whose other sessions end unless kept.
+    /// The setup page. Only the emailed token's SHA-256 ([`keys::hash`], the
+    /// form Postgres stores) is kept, never the token (spec Decision 7): the
+    /// finish must present the token again, and redeems the presented one.
+    Setup { token_hash: [u8; 32] },
+    /// A signed-in session, whose other sessions end unless kept. Only the
+    /// session id's hash ([`crate::oidc::session_hash`]) is kept, never the id (spec
+    /// Decision 7): the finish compares it with the finishing request's own
+    /// session and then uses that request's id.
     Session {
-        session_id: String,
+        session_hash: String,
         keep_sessions: bool,
     },
 }
@@ -345,7 +384,8 @@ fn screen(app: &App, parts: &Parts, limited: bool) -> Option<Response> {
     (!admitted).then(too_many)
 }
 
-/// The 503 for a full ceremony map.
+/// The 503 for a full ceremony map (memory only; a Redis failure answers
+/// its own 503).
 #[cfg_attr(
     dylint_lib = "hyp_tracing",
     allow(
@@ -360,16 +400,14 @@ fn busy() -> OkfError {
 }
 
 /// The console session a registration ceremony belongs to, as the key of
-/// `Passkeys::by_session` (the hash, not the raw id).
+/// `Passkeys::by_session`: the stored hash (the ceremony holds no raw id).
 #[tracing::instrument(level = "trace", skip_all)]
 fn session_key(ceremony: &Ceremony) -> Option<String> {
     let Ceremony::Register(registration) = ceremony else {
         return None;
     };
     match &registration.pending.via {
-        RegisterVia::Session { session_id, .. } => {
-            Some(URL_SAFE_NO_PAD.encode(keys::hash(session_id)))
-        }
+        RegisterVia::Session { session_hash, .. } => Some(session_hash.clone()),
         RegisterVia::Setup { .. } => None,
     }
 }
@@ -390,10 +428,10 @@ fn session_key(ceremony: &Ceremony) -> Option<String> {
 /// * `now` - the current instant.
 ///
 /// # Errors
-/// [`OkfError::Busy`] when [`MAX_CEREMONIES`] are in progress;
-/// [`OkfError::Io`] from the random source.
+/// [`OkfError::Busy`] when [`MAX_CEREMONIES`] are in progress (memory) or
+/// Redis fails; [`OkfError::Io`] from the random source.
 #[tracing::instrument(level = "trace", skip_all)]
-fn remember(
+async fn remember(
     app: &App,
     passkeys: &Passkeys,
     headers: &HeaderMap,
@@ -401,31 +439,33 @@ fn remember(
     now: Instant,
 ) -> Result<HeaderMap, OkfError> {
     if let Some(old) = cookie(headers, CEREMONY_COOKIE) {
-        passkeys.ceremonies.remove(old);
+        passkeys.ceremonies.remove(old).await?;
     }
     let session = session_key(&ceremony);
     // A server-chosen random id, so no client can pick (or replace) another
     // browser's entry.
     let id = keys::generate_with("")?;
-    if !passkeys.ceremonies.insert(id.clone(), ceremony, now) {
+    if !passkeys.ceremonies.insert(&id, ceremony, now).await? {
         return Err(busy());
     }
     if let Some(session) = session {
-        // Find-or-create and swap under one lock (`std::mem::replace` puts
-        // the new id in and hands back the old one), so of two concurrent
-        // starts by one session each drops what it replaced and one
-        // ceremony is left.
-        let replaced = passkeys.by_session.update_or_insert_sliding(
-            &session,
-            now,
-            || id.clone(),
-            |held| std::mem::replace(held, id.clone()),
-        );
-        match replaced {
-            Some(previous) if previous != id => passkeys.ceremonies.remove(&previous),
-            Some(_) => {}
-            None => {
-                passkeys.ceremonies.remove(&id);
+        // One atomic swap (in memory under the map's lock, in Redis one
+        // `SET .. GET`) that hands back what the session held before, so of
+        // two concurrent starts by one session, on any replicas, each drops
+        // what it replaced and one ceremony is left.
+        let swapped = match passkeys.by_session.replace(&session, &id, now).await {
+            Ok(swapped) => swapped,
+            Err(error) => {
+                // Unreachable without its cookie, but not left behind.
+                let _ = passkeys.ceremonies.remove(&id).await;
+                return Err(error);
+            }
+        };
+        match swapped {
+            Swap::Swapped(Some(previous)) => passkeys.ceremonies.remove_stale(&previous).await?,
+            Swap::Swapped(None) => {}
+            Swap::Full => {
+                passkeys.ceremonies.remove(&id).await?;
                 return Err(busy());
             }
         }
@@ -450,16 +490,22 @@ fn remember(
 /// The ceremony and the header that clears its cookie.
 ///
 /// # Errors
-/// [`OkfError::Gone`] without a cookie or a live ceremony.
+/// [`OkfError::Gone`] without a cookie or a live ceremony;
+/// [`OkfError::Busy`] when Redis fails.
 #[tracing::instrument(level = "trace", skip_all)]
-fn take_ceremony(
+async fn take_ceremony(
     app: &App,
     passkeys: &Passkeys,
     headers: &HeaderMap,
     now: Instant,
 ) -> Result<(Ceremony, HeaderMap), OkfError> {
     let id = cookie(headers, CEREMONY_COOKIE).ok_or_else(expired)?;
-    let ceremony = passkeys.ceremonies.take(id, now).ok_or_else(expired)?;
+    // `GETDEL` in Redis: of two finishes racing on two replicas, one gets it.
+    let ceremony = passkeys
+        .ceremonies
+        .take(id, now)
+        .await?
+        .ok_or_else(expired)?;
     let mut clear = HeaderMap::new();
     clear.insert(
         header::SET_COOKIE,
@@ -510,7 +556,7 @@ async fn begin_registration(
         user_id: user.id.clone(),
         pending,
     }));
-    let cookie = remember(app, passkeys, headers, ceremony, Instant::now())?;
+    let cookie = remember(app, passkeys, headers, ceremony, Instant::now()).await?;
     Ok((cookie, Json(challenge)).into_response())
 }
 
@@ -528,15 +574,16 @@ struct Registered {
 ///
 /// # Errors
 /// [`OkfError::Gone`] without a live registration ceremony;
-/// [`OkfError::LimitExceeded`] (422) for a credential that does not verify.
+/// [`OkfError::LimitExceeded`] (422) for a credential that does not verify;
+/// [`OkfError::Busy`] when Redis fails.
 #[tracing::instrument(level = "trace", skip_all)]
-fn finish_registration(
+async fn finish_registration(
     app: &App,
     passkeys: &Passkeys,
     headers: &HeaderMap,
     credential: &RegisterPublicKeyCredential,
 ) -> Result<Registered, OkfError> {
-    let (ceremony, clear) = take_ceremony(app, passkeys, headers, Instant::now())?;
+    let (ceremony, clear) = take_ceremony(app, passkeys, headers, Instant::now()).await?;
     let Ceremony::Register(registration) = ceremony else {
         return Err(expired());
     };
@@ -589,10 +636,22 @@ async fn setup_start(
         email_tokens::peek(app.pool(), &body.token, Purpose::Setup, app.clock().now()).await?;
     let pending = Pending {
         name,
-        via: RegisterVia::Setup { token: body.token },
+        via: RegisterVia::Setup {
+            token_hash: keys::hash(&body.token),
+        },
         return_to: safe_return_to(body.return_to.as_deref()),
     };
     Ok(begin_registration(&app, passkeys, &parts.headers, &user, pending).await?)
+}
+
+/// `POST /auth/passkey/setup/finish`'s body: the setup token again (the
+/// ceremony keeps only its hash) and the new credential. No `Debug`: it
+/// holds the token.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetupFinish {
+    token: String,
+    credential: RegisterPublicKeyCredential,
 }
 
 /// `POST /auth/passkey/setup/finish`: stores the passkey, uses the link and
@@ -601,14 +660,14 @@ async fn setup_start(
 /// `{"redirect": <return_to>}`.
 ///
 /// # Errors
-/// 403 from another site; 410 for an expired ceremony or a used link; 422
-/// for a credential that does not verify; 409 for a passkey already
-/// registered.
+/// 403 from another site; 410 for an expired ceremony, a used link, or a
+/// token other than the one the ceremony started with; 422 for a credential
+/// that does not verify; 409 for a passkey already registered.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn setup_finish(
     State(app): State<Arc<App>>,
     parts: Parts,
-    Json(credential): Json<RegisterPublicKeyCredential>,
+    Json(body): Json<SetupFinish>,
 ) -> Result<Response, AppError> {
     let passkeys = enabled(&app)?;
     if let Some(refusal) = screen(&app, &parts, false) {
@@ -619,12 +678,20 @@ async fn setup_finish(
         pending,
         user_id,
         clear: mut headers,
-    } = finish_registration(&app, passkeys, &parts.headers, &credential)?;
-    let RegisterVia::Setup { token } = pending.via else {
+    } = finish_registration(&app, passkeys, &parts.headers, &body.credential).await?;
+    let RegisterVia::Setup { token_hash } = pending.via else {
         return Err(expired().into());
     };
+    // The ceremony holds only the token's hash: the presented token must hash
+    // to it (constant time), and only the presented token is redeemed below.
+    if !keys::matches(&token_hash, &body.token) {
+        return Err(OkfError::Gone {
+            reason: LINK_EXPIRED.to_string(),
+        }
+        .into());
+    }
     let set_up = SetUp {
-        token: &token,
+        token: &body.token,
         user_id: &user_id,
         passkey: &passkey,
         name: &pending.name,
@@ -723,7 +790,7 @@ async fn sign_in_start(
     challenge.mediation = None;
     let return_to = safe_return_to(body.return_to.as_deref());
     let ceremony = Ceremony::SignIn { state, return_to };
-    let headers = remember(&app, passkeys, &parts.headers, ceremony, Instant::now())?;
+    let headers = remember(&app, passkeys, &parts.headers, ceremony, Instant::now()).await?;
     Ok((headers, Json(challenge)).into_response())
 }
 
@@ -831,7 +898,8 @@ async fn sign_in_finish(
     if let Some(refusal) = screen(&app, &parts, true) {
         return Ok(refusal);
     }
-    let (ceremony, mut headers) = take_ceremony(&app, passkeys, &parts.headers, Instant::now())?;
+    let (ceremony, mut headers) =
+        take_ceremony(&app, passkeys, &parts.headers, Instant::now()).await?;
     let Ceremony::SignIn { state, return_to } = ceremony else {
         return Err(expired().into());
     };
@@ -910,7 +978,7 @@ async fn register_start(
     let pending = Pending {
         name,
         via: RegisterVia::Session {
-            session_id: session.id,
+            session_hash: session_hash(&session.id),
             keep_sessions: body.keep_sessions,
         },
         return_to: "/ui/#/account".to_string(),
@@ -942,15 +1010,24 @@ async fn register_finish(
         pending,
         user_id: owner,
         clear,
-    } = finish_registration(&app, passkeys, &headers, &credential)?;
+    } = finish_registration(&app, passkeys, &headers, &credential).await?;
     let RegisterVia::Session {
-        session_id,
+        session_hash: started_in,
         keep_sessions,
     } = pending.via
     else {
         return Err(expired().into());
     };
-    if owner != user_id || session_id != session.id {
+    // The ceremony holds only its session's hash: this request's own session
+    // must hash to it (constant time: `ct_eq` gives a `Choice`, which
+    // `bool::from` reads once the comparison is done), and only this
+    // request's own id is used below.
+    let same_session = bool::from(
+        started_in
+            .as_bytes()
+            .ct_eq(session_hash(&session.id).as_bytes()),
+    );
+    if owner != user_id || !same_session {
         return Err(OkfError::Forbidden {
             reason: "this passkey request belongs to another session".to_string(),
         }
@@ -958,7 +1035,7 @@ async fn register_finish(
     }
     let registration = SessionRegistration {
         user_id: &user_id,
-        session_id: &session_id,
+        session_id: &session.id,
         passkey: &passkey,
         name: &pending.name,
         keep_sessions,
@@ -1055,10 +1132,34 @@ mod tests {
         soft: &mut SoftPasskey,
         token: &str,
     ) -> Reply {
+        register_across(&test.app, &test.app, browser, soft, token).await
+    }
+
+    /// [`register_by_setup`], started on `start_on` and finished on `finish_on`
+    /// (two replicas, or one app twice).
+    async fn register_across(
+        start_on: &Arc<App>,
+        finish_on: &Arc<App>,
+        browser: &mut Browser,
+        soft: &mut SoftPasskey,
+        token: &str,
+    ) -> Reply {
+        let credential = setup_registration(start_on, browser, soft, token).await;
+        finish_setup(finish_on, browser, token, credential).await
+    }
+
+    /// Starts a setup-link registration on `start_on` and has `soft` answer
+    /// it; the credential is returned unsent.
+    async fn setup_registration(
+        start_on: &Arc<App>,
+        browser: &mut Browser,
+        soft: &mut SoftPasskey,
+        token: &str,
+    ) -> serde_json::Value {
         let body = json!({ "token": token, "name": "Laptop" });
         let start = browser
-            .send(
-                test,
+            .send_to(
+                start_on,
                 "POST",
                 "/auth/passkey/setup/start",
                 Payload::Json(body),
@@ -1080,13 +1181,23 @@ mod tests {
         let credential = soft
             .do_registration(origin(), challenge)
             .expect("the authenticator registers");
-        let credential = serde_json::to_value(&credential).expect("the credential as JSON");
+        serde_json::to_value(&credential).expect("the credential as JSON")
+    }
+
+    /// Finishes a setup-link registration on `app`, presenting `token` with
+    /// the credential, as `passkey.js` does.
+    async fn finish_setup(
+        app: &Arc<App>,
+        browser: &mut Browser,
+        token: &str,
+        credential: serde_json::Value,
+    ) -> Reply {
         browser
-            .send(
-                test,
+            .send_to(
+                app,
                 "POST",
                 "/auth/passkey/setup/finish",
-                Payload::Json(credential),
+                Payload::Json(json!({ "token": token, "credential": credential })),
             )
             .await
     }
@@ -1112,9 +1223,21 @@ mod tests {
         handle: &str,
         return_to: &str,
     ) -> serde_json::Value {
+        assertion_on(&test.app, browser, soft, owner, handle, return_to).await
+    }
+
+    /// [`assertion_as`], with the sign-in started on `app`.
+    async fn assertion_on(
+        app: &Arc<App>,
+        browser: &mut Browser,
+        soft: &mut SoftPasskey,
+        owner: &UserAuth,
+        handle: &str,
+        return_to: &str,
+    ) -> serde_json::Value {
         let start = browser
-            .send(
-                test,
+            .send_to(
+                app,
                 "POST",
                 "/auth/passkey/signin/start",
                 Payload::Json(json!({ "return_to": return_to })),
@@ -1126,7 +1249,7 @@ mod tests {
             challenge.get("mediation").is_none(),
             "a modal prompt, not autofill"
         );
-        let stored = passkey_rows::list(test.app.pool(), &owner.id)
+        let stored = passkey_rows::list(app.pool(), &owner.id)
             .await
             .expect("list");
         challenge["publicKey"]["allowCredentials"] =
@@ -1153,9 +1276,18 @@ mod tests {
     }
 
     async fn finish(test: &TestApp, browser: &mut Browser, assertion: serde_json::Value) -> Reply {
+        finish_on(&test.app, browser, assertion).await
+    }
+
+    /// [`finish`] on `app`.
+    async fn finish_on(
+        app: &Arc<App>,
+        browser: &mut Browser,
+        assertion: serde_json::Value,
+    ) -> Reply {
         browser
-            .send(
-                test,
+            .send_to(
+                app,
                 "POST",
                 "/auth/passkey/signin/finish",
                 Payload::Json(assertion),
@@ -1347,6 +1479,7 @@ mod tests {
                 ceremony(passkeys),
                 start,
             )
+            .await
             .expect("remember"),
         );
         let on_time = presenting(
@@ -1357,11 +1490,12 @@ mod tests {
                 ceremony(passkeys),
                 start,
             )
+            .await
             .expect("remember"),
         );
 
-        let after = take_ceremony(&test.app, passkeys, &late, start + CEREMONY_TTL);
-        let within = take_ceremony(&test.app, passkeys, &on_time, start + CEREMONY_TTL / 2);
+        let after = take_ceremony(&test.app, passkeys, &late, start + CEREMONY_TTL).await;
+        let within = take_ceremony(&test.app, passkeys, &on_time, start + CEREMONY_TTL / 2).await;
 
         assert!(matches!(after, Err(OkfError::Gone { .. })));
         let (taken, clear) = within.expect("a live ceremony");
@@ -1390,7 +1524,7 @@ mod tests {
                 &test,
                 "POST",
                 "/auth/passkey/setup/finish",
-                Payload::Json(credential),
+                Payload::Json(json!({ "token": "any", "credential": credential })),
             )
             .await;
         assert_eq!(crossed.status, StatusCode::GONE, "{}", crossed.text());
@@ -1443,7 +1577,10 @@ mod tests {
                 &test,
                 "POST",
                 "/auth/passkey/setup/finish",
-                Payload::Json(serde_json::to_value(&credential).expect("json")),
+                Payload::Json(json!({
+                    "token": token,
+                    "credential": serde_json::to_value(&credential).expect("json"),
+                })),
             )
             .await;
 
@@ -1539,7 +1676,12 @@ mod tests {
                 json!({ "token": token, "name": "Laptop" }),
             )
             .await,
-            cross_site_post(&test, "/auth/passkey/setup/finish", credential).await,
+            cross_site_post(
+                &test,
+                "/auth/passkey/setup/finish",
+                json!({ "token": token, "credential": credential }),
+            )
+            .await,
             cross_site_post(&test, "/auth/passkey/signin/start", json!({})).await,
             cross_site_post(&test, "/auth/passkey/signin/finish", assertion).await,
         ];
@@ -1969,9 +2111,19 @@ mod tests {
         soft: &mut SoftPasskey,
         body: serde_json::Value,
     ) -> serde_json::Value {
+        registration_on(&test.app, browser, soft, body).await
+    }
+
+    /// [`registration_from_session`], started on `app`.
+    async fn registration_on(
+        app: &Arc<App>,
+        browser: &mut Browser,
+        soft: &mut SoftPasskey,
+        body: serde_json::Value,
+    ) -> serde_json::Value {
         let start = browser
-            .send(
-                test,
+            .send_to(
+                app,
                 "POST",
                 "/api/v1/me/passkeys/register/start",
                 Payload::Json(body),
@@ -2218,8 +2370,12 @@ mod tests {
         assert!(!page.text().contains("signin-passkey"));
         assert!(!page.text().contains("<script"));
         assert!(page.text().contains("signin-form"), "passwords still work");
-        assert!(Passkeys::new(&login_config()).expect("a domain").is_some());
-        assert!(Passkeys::new(&Config::default()).expect("no url").is_none());
+        assert!(Passkeys::new(&login_config(), None)
+            .expect("a domain")
+            .is_some());
+        assert!(Passkeys::new(&Config::default(), None)
+            .expect("no url")
+            .is_none());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2256,4 +2412,566 @@ mod tests {
         assert_eq!(script.status, StatusCode::OK);
         assert!(script.text().contains("./webauthn.js"));
     }
+
+    // Two replicas (M16 Task 10): two `App`s over one database and one
+    // Redis, `poll_interval = 1h`, so what passes was carried by Redis.
+
+    /// Two replicas with `login_config` over `redis`, both knowing alice.
+    async fn replicas(redis: crate::db::redis_support::TestRedis) -> Replicas {
+        let (a, b, redis) = crate::mcp::testing::replica_pair_on(&[], login_config(), redis).await;
+        Replicas { a, b, redis }
+    }
+
+    /// What [`replicas`] starts; the test holds it until the end.
+    struct Replicas {
+        /// The first replica (it owns the database).
+        a: TestApp,
+        /// The second replica.
+        b: Arc<App>,
+        /// The Redis both share.
+        redis: crate::db::redis_support::TestRedis,
+    }
+
+    /// Alice with a password, known to both replicas' key caches.
+    async fn alice_on_both(pair: &Replicas) -> UserAuth {
+        let alice = user_with_password(&pair.a, "alice", "alice@example.com", Some(PASSWORD)).await;
+        pair.b.poll().await.expect("poll the second replica");
+        alice
+    }
+
+    /// Every key under the test's prefix with its value (all are strings).
+    async fn redis_contents(app: &App) -> Vec<(String, String)> {
+        let redis = app.redis().expect("redis is on");
+        let mut connection = redis.connection();
+        // `{<prefix>}*`: every key of this test's prefix.
+        let pattern = redis.channel("*");
+        let names: Vec<String> = redis::cmd("KEYS")
+            .arg(&pattern)
+            .query_async(&mut connection)
+            .await
+            .expect("list the keys");
+        let mut contents = Vec::with_capacity(names.len());
+        for name in names {
+            let value: String = redis::cmd("GET")
+                .arg(&name)
+                .query_async(&mut connection)
+                .await
+                .expect("read a key");
+            contents.push((name, value));
+        }
+        contents
+    }
+
+    /// The live keys of one space (`passkey:ceremony`, `passkey:session`).
+    fn keys_of<'a>(contents: &'a [(String, String)], app: &App, space: &str) -> Vec<&'a str> {
+        let prefix = app.redis().expect("redis is on").key(space, "");
+        contents
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .filter(|name| name.starts_with(&prefix))
+            .collect()
+    }
+
+    async fn a_registration_begun_on_one_replica_finishes_on_the_other(
+        redis: crate::db::redis_support::TestRedis,
+    ) {
+        let pair = replicas(redis).await;
+        let alice = alice_on_both(&pair).await;
+        let token = setup_token(&pair.a, &alice).await;
+        let mut soft = SoftPasskey::new(true);
+
+        let registered = register_across(
+            &pair.a.app,
+            &pair.b,
+            &mut Browser::default(),
+            &mut soft,
+            &token,
+        )
+        .await;
+
+        assert_eq!(registered.status, StatusCode::OK, "{}", registered.text());
+        let listed = passkey_rows::list(pair.b.pool(), &alice.id)
+            .await
+            .expect("list");
+        assert_eq!(listed.len(), 1, "the passkey is stored");
+        // And it signs in, here on the second replica alone.
+        let mut browser = Browser::default();
+        let signed =
+            assertion_on(&pair.b, &mut browser, &mut soft, &alice, &alice.id, "/ui/").await;
+        let reply = finish_on(&pair.b, &mut browser, signed).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+        assert!(browser.cookie(COOKIE).is_some());
+    }
+
+    async fn a_sign_in_begun_on_one_replica_finishes_on_the_other(
+        redis: crate::db::redis_support::TestRedis,
+    ) {
+        let pair = replicas(redis).await;
+        let (alice, mut soft) = alice_with_passkey(&pair.a, None).await;
+        pair.b.poll().await.expect("poll the second replica");
+        let mut browser = Browser::default();
+
+        let signed = assertion_on(
+            &pair.a.app,
+            &mut browser,
+            &mut soft,
+            &alice,
+            &alice.id,
+            "/ui/#/keys",
+        )
+        .await;
+        let reply = finish_on(&pair.b, &mut browser, signed).await;
+
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+        assert_eq!(
+            reply.json()["redirect"],
+            "/ui/#/keys",
+            "the start's return_to"
+        );
+        let session = browser
+            .send_to(&pair.b, "GET", "/api/v1/session", Payload::Empty)
+            .await;
+        assert_eq!(session.json()["user"], "alice");
+        assert_eq!(stored_counter(&pair.a, &alice).await, 1);
+    }
+
+    async fn a_ceremony_cannot_be_finished_twice_across_replicas(
+        redis: crate::db::redis_support::TestRedis,
+    ) {
+        let pair = replicas(redis).await;
+        let (alice, mut soft) = alice_with_passkey(&pair.a, None).await;
+        pair.b.poll().await.expect("poll the second replica");
+        let mut browser = Browser::default();
+        let signed = assertion_on(
+            &pair.a.app,
+            &mut browser,
+            &mut soft,
+            &alice,
+            &alice.id,
+            "/ui/",
+        )
+        .await;
+        let ceremony = browser
+            .cookie(CEREMONY_COOKIE)
+            .expect("a ceremony")
+            .to_string();
+        let mut on_a = Browser::with_cookie(CEREMONY_COOKIE, &ceremony);
+        let mut on_b = Browser::with_cookie(CEREMONY_COOKIE, &ceremony);
+
+        // Both replicas race the one ceremony: one takes it.
+        let (first, second) = tokio::join!(
+            finish_on(&pair.a.app, &mut on_a, signed.clone()),
+            finish_on(&pair.b, &mut on_b, signed.clone()),
+        );
+        let mut statuses = [first.status, second.status];
+        statuses.sort();
+        // Then the same assertion and cookie, sent again to the first.
+        let replayed = finish_on(
+            &pair.a.app,
+            &mut Browser::with_cookie(CEREMONY_COOKIE, &ceremony),
+            signed,
+        )
+        .await;
+
+        assert_eq!(statuses, [StatusCode::OK, StatusCode::GONE]);
+        assert_eq!(replayed.status, StatusCode::GONE, "{}", replayed.text());
+        assert_eq!(replayed.json()["message"], CEREMONY_EXPIRED);
+        // The setup link's session, and one passkey sign-in.
+        assert_eq!(sessions_of(&pair.a, &alice).await, 2, "one sign-in");
+    }
+
+    /// Registration from a console session, started on `start_on` and
+    /// finished on `finish_on`: it finishes only in the session that started
+    /// it, and then uses that request's own session.
+    async fn a_session_registration_finishes_only_in_its_own_session(
+        test: &TestApp,
+        start_on: &Arc<App>,
+        finish_on: &Arc<App>,
+    ) {
+        let alice = user_with_password(test, "alice", "alice@example.com", Some(PASSWORD)).await;
+        finish_on.poll().await.expect("poll the finishing app");
+        let mut one = Browser::signed_in(test, "alice@example.com", PASSWORD).await;
+        let mut two = Browser::signed_in(test, "alice@example.com", PASSWORD).await;
+        let (mut soft_one, mut soft_two) = (SoftPasskey::new(true), SoftPasskey::new(true));
+        let two_credential = registration_on(
+            start_on,
+            &mut two,
+            &mut soft_two,
+            json!({ "name": "Tablet", "keep_sessions": true }),
+        )
+        .await;
+        let one_credential = registration_on(
+            start_on,
+            &mut one,
+            &mut soft_one,
+            json!({ "name": "Phone" }),
+        )
+        .await;
+
+        // Session two presents session one's ceremony cookie.
+        let mut crossed = Browser::with_cookie(COOKIE, two.cookie(COOKIE).expect("a session"));
+        crossed.add_cookie(
+            CEREMONY_COOKIE,
+            one.cookie(CEREMONY_COOKIE).expect("a ceremony"),
+        );
+        crossed.csrf.clone_from(&two.csrf);
+        let refused = crossed
+            .send_to(
+                finish_on,
+                "POST",
+                "/api/v1/me/passkeys/register/finish",
+                Payload::Json(one_credential),
+            )
+            .await;
+        assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.text());
+        assert_eq!(
+            refused.json()["message"],
+            "forbidden: this passkey request belongs to another session"
+        );
+        let stored = passkey_rows::list(test.app.pool(), &alice.id)
+            .await
+            .expect("list");
+        assert!(stored.is_empty(), "no passkey stored");
+        // Session two's own ceremony was not consumed by the attempt.
+        let own = two
+            .send_to(
+                finish_on,
+                "POST",
+                "/api/v1/me/passkeys/register/finish",
+                Payload::Json(two_credential),
+            )
+            .await;
+        assert_eq!(own.status, StatusCode::CREATED, "{}", own.text());
+
+        // Session one starts again and finishes in its own session.
+        let again = registration_on(
+            start_on,
+            &mut one,
+            &mut soft_one,
+            json!({ "name": "Phone" }),
+        )
+        .await;
+        let done = one
+            .send_to(
+                finish_on,
+                "POST",
+                "/api/v1/me/passkeys/register/finish",
+                Payload::Json(again),
+            )
+            .await;
+
+        assert_eq!(done.status, StatusCode::CREATED, "{}", done.text());
+        assert_eq!(done.json()["name"], "Phone");
+        let kept = one
+            .send_to(finish_on, "GET", "/api/v1/session", Payload::Empty)
+            .await;
+        let ended = two
+            .send_to(finish_on, "GET", "/api/v1/session", Payload::Empty)
+            .await;
+        assert_eq!(kept.status, StatusCode::OK, "its own session is kept");
+        assert_eq!(ended.status, StatusCode::UNAUTHORIZED, "the others end");
+        assert_eq!(sessions_of(test, &alice).await, 1);
+    }
+
+    async fn a_session_registration_finishes_only_in_the_session_that_started_it(
+        redis: crate::db::redis_support::TestRedis,
+    ) {
+        let pair = replicas(redis).await;
+        a_session_registration_finishes_only_in_its_own_session(&pair.a, &pair.a.app, &pair.b)
+            .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_session_registration_finishes_only_in_the_session_that_started_it_in_memory() {
+        let test = login_app().await;
+        let app = Arc::clone(&test.app);
+        a_session_registration_finishes_only_in_its_own_session(&test, &app, &app).await;
+    }
+
+    async fn no_raw_session_id_reaches_redis(redis: crate::db::redis_support::TestRedis) {
+        let pair = replicas(redis).await;
+        alice_on_both(&pair).await;
+        let mut browser = Browser::signed_in(&pair.a, "alice@example.com", PASSWORD).await;
+        let session_id = browser.cookie(COOKIE).expect("a session").to_string();
+
+        registration_on(
+            &pair.a.app,
+            &mut browser,
+            &mut SoftPasskey::new(true),
+            json!({ "name": "Phone" }),
+        )
+        .await;
+
+        let ceremony = browser.cookie(CEREMONY_COOKIE).expect("a ceremony");
+        let contents = redis_contents(&pair.a.app).await;
+        let ceremonies = keys_of(&contents, &pair.a.app, "passkey:ceremony");
+        assert_eq!(ceremonies.len(), 1, "{contents:?}");
+        for (name, value) in &contents {
+            assert!(!name.contains(&session_id), "a key holds the session id");
+            assert!(!value.contains(&session_id), "a value holds the session id");
+            assert!(!name.contains(ceremony), "a key holds the ceremony cookie");
+        }
+        // The ceremony keeps the session's hash, which keys the index too.
+        let hash = session_hash(&session_id);
+        assert!(contents
+            .iter()
+            .any(|(name, value)| name.starts_with(ceremonies[0]) && value.contains(&hash)));
+        let index = keys_of(&contents, &pair.a.app, "passkey:session");
+        assert_eq!(
+            index,
+            [pair
+                .a
+                .app
+                .redis()
+                .expect("redis")
+                .key("passkey:session", &hash)]
+        );
+    }
+
+    async fn no_raw_setup_token_reaches_redis(redis: crate::db::redis_support::TestRedis) {
+        let pair = replicas(redis).await;
+        let alice = alice_on_both(&pair).await;
+        let token = setup_token(&pair.a, &alice).await;
+        let mut browser = Browser::default();
+
+        let credential = setup_registration(
+            &pair.a.app,
+            &mut browser,
+            &mut SoftPasskey::new(true),
+            &token,
+        )
+        .await;
+
+        let contents = redis_contents(&pair.a.app).await;
+        assert_eq!(
+            keys_of(&contents, &pair.a.app, "passkey:ceremony").len(),
+            1,
+            "{contents:?}"
+        );
+        for (name, value) in &contents {
+            assert!(!name.contains(&token), "a key holds the setup token");
+            assert!(!value.contains(&token), "a value holds the setup token");
+        }
+        // The hash it keeps still finishes, on the other replica.
+        let done = finish_setup(&pair.b, &mut browser, &token, credential).await;
+        assert_eq!(done.status, StatusCode::OK, "{}", done.text());
+    }
+
+    /// A setup-link registration finishes only with the token it started
+    /// with: a finish presenting the user's newer link, or another user's,
+    /// is refused, stores nothing and leaves that link usable.
+    async fn a_setup_finish_presenting_another_token_is_refused_on(
+        test: &TestApp,
+        start_on: &Arc<App>,
+        finish_on: &Arc<App>,
+    ) {
+        let alice = user_with_password(test, "alice", "alice@example.com", None).await;
+        let bob = user_with_password(test, "bob", "bob@example.com", None).await;
+        finish_on.poll().await.expect("poll the finishing app");
+        let mut soft = SoftPasskey::new(true);
+        let old_link = setup_token(test, &alice).await;
+        let mut browser = Browser::default();
+        let credential = setup_registration(start_on, &mut browser, &mut soft, &old_link).await;
+        // The link is sent again meanwhile, which deletes the old one.
+        let new_link = setup_token(test, &alice).await;
+        let bobs_link = setup_token(test, &bob).await;
+        let mut bobs_browser = Browser::default();
+        let bobs_credential =
+            setup_registration(start_on, &mut bobs_browser, &mut soft, &bobs_link).await;
+
+        let newer = finish_setup(finish_on, &mut browser, &new_link, credential).await;
+        let crossed = finish_setup(finish_on, &mut bobs_browser, &old_link, bobs_credential).await;
+
+        for (refused, what) in [
+            (&newer, "the newer link"),
+            (&crossed, "another user's link"),
+        ] {
+            assert_eq!(
+                refused.status,
+                StatusCode::GONE,
+                "{what}: {}",
+                refused.text()
+            );
+            assert_eq!(refused.json()["message"], LINK_EXPIRED, "{what}");
+        }
+        for user in [&alice, &bob] {
+            let stored = passkey_rows::list(test.app.pool(), &user.id)
+                .await
+                .expect("list");
+            assert!(stored.is_empty(), "no passkey stored");
+            assert_eq!(sessions_of(test, user).await, 0, "no session");
+        }
+        for link in [&new_link, &bobs_link] {
+            let usable =
+                email_tokens::peek(test.app.pool(), link, Purpose::Setup, Utc::now()).await;
+            assert!(usable.is_ok(), "the presented link is untouched");
+        }
+    }
+
+    async fn a_setup_finish_presenting_another_token_is_refused(
+        redis: crate::db::redis_support::TestRedis,
+    ) {
+        let pair = replicas(redis).await;
+        a_setup_finish_presenting_another_token_is_refused_on(&pair.a, &pair.a.app, &pair.b).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_setup_finish_presenting_another_token_is_refused_in_memory() {
+        let test = login_app().await;
+        let app = Arc::clone(&test.app);
+        a_setup_finish_presenting_another_token_is_refused_on(&test, &app, &app).await;
+    }
+
+    async fn one_sessions_registrations_hold_one_ceremony_across_replicas(
+        redis: crate::db::redis_support::TestRedis,
+    ) {
+        let pair = replicas(redis).await;
+        alice_on_both(&pair).await;
+        let mut first = Browser::signed_in(&pair.a, "alice@example.com", PASSWORD).await;
+        let mut soft = SoftPasskey::new(true);
+        let stale = registration_on(
+            &pair.a.app,
+            &mut first,
+            &mut soft,
+            json!({ "name": "Phone" }),
+        )
+        .await;
+        let stale_cookie = first
+            .cookie(CEREMONY_COOKIE)
+            .expect("a ceremony")
+            .to_string();
+        // The same session, without its ceremony cookie, starts on the other.
+        let mut second = Browser::with_cookie(COOKIE, first.cookie(COOKIE).expect("a session"));
+        second.csrf.clone_from(&first.csrf);
+        let fresh =
+            registration_on(&pair.b, &mut second, &mut soft, json!({ "name": "Phone" })).await;
+
+        let contents = redis_contents(&pair.a.app).await;
+        let mut old = Browser::with_cookie(COOKIE, first.cookie(COOKIE).expect("a session"));
+        old.add_cookie(CEREMONY_COOKIE, &stale_cookie);
+        old.csrf.clone_from(&first.csrf);
+        let replaced = old
+            .send_to(
+                &pair.a.app,
+                "POST",
+                "/api/v1/me/passkeys/register/finish",
+                Payload::Json(stale),
+            )
+            .await;
+        let done = second
+            .send_to(
+                &pair.a.app,
+                "POST",
+                "/api/v1/me/passkeys/register/finish",
+                Payload::Json(fresh),
+            )
+            .await;
+
+        assert_eq!(
+            keys_of(&contents, &pair.a.app, "passkey:ceremony").len(),
+            1,
+            "{contents:?}"
+        );
+        assert_eq!(
+            keys_of(&contents, &pair.a.app, "passkey:session").len(),
+            1,
+            "{contents:?}"
+        );
+        assert_eq!(replaced.status, StatusCode::GONE, "{}", replaced.text());
+        assert_eq!(done.status, StatusCode::CREATED, "{}", done.text());
+    }
+
+    async fn a_redis_outage_fails_passkey_steps_closed(redis: crate::db::redis_support::TestRedis) {
+        let pair = replicas(redis).await;
+        let (alice, mut soft) = alice_with_passkey(&pair.a, None).await;
+        let mut browser = Browser::default();
+        let signed = assertion_on(
+            &pair.a.app,
+            &mut browser,
+            &mut soft,
+            &alice,
+            &alice.id,
+            "/ui/",
+        )
+        .await;
+        if pair.redis.stop().await.is_none() {
+            // A shared server cannot be stopped for everyone.
+            return;
+        }
+
+        let finished = finish_on(&pair.b, &mut browser, signed).await;
+        let started = Browser::default()
+            .send_to(
+                &pair.a.app,
+                "POST",
+                "/auth/passkey/signin/start",
+                Payload::Json(json!({})),
+            )
+            .await;
+
+        assert_eq!(
+            finished.status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{}",
+            finished.text()
+        );
+        assert_eq!(
+            started.status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{}",
+            started.text()
+        );
+        // Only the setup link's session.
+        assert_eq!(sessions_of(&pair.a, &alice).await, 1, "no sign-in");
+        // Nothing fell back to memory.
+        let Some(passkeys) = pair.a.app.passkeys() else {
+            panic!("passkeys are on");
+        };
+        assert!(matches!(passkeys.ceremonies, Ephemeral::Redis { .. }));
+    }
+
+    /// The bound on every two-replica test (containers start inside it).
+    const REPLICA_BOUND: Duration = Duration::from_secs(180);
+
+    // Each two-replica body above runs twice: on a standalone Redis and on a
+    // one-node cluster. `macro_rules!` writes the two `#[tokio::test]`
+    // wrappers for every name (Python: a parametrized test).
+    macro_rules! in_both_modes {
+        ($($name:ident),* $(,)?) => {
+            mod standalone {
+                $(
+                    #[tokio::test(flavor = "multi_thread")]
+                    async fn $name() {
+                        let server = crate::db::redis_support::TestRedis::start().await;
+                        tokio::time::timeout(super::REPLICA_BOUND, super::$name(server))
+                            .await
+                            .expect(concat!(stringify!($name), " finished within the bound"));
+                    }
+                )*
+            }
+            mod cluster {
+                $(
+                    #[tokio::test(flavor = "multi_thread")]
+                    async fn $name() {
+                        let server = crate::db::redis_support::TestRedis::start_cluster().await;
+                        tokio::time::timeout(super::REPLICA_BOUND, super::$name(server))
+                            .await
+                            .expect(concat!(stringify!($name), " finished within the bound"));
+                    }
+                )*
+            }
+        };
+    }
+
+    in_both_modes!(
+        a_registration_begun_on_one_replica_finishes_on_the_other,
+        a_sign_in_begun_on_one_replica_finishes_on_the_other,
+        a_ceremony_cannot_be_finished_twice_across_replicas,
+        a_session_registration_finishes_only_in_the_session_that_started_it,
+        no_raw_session_id_reaches_redis,
+        no_raw_setup_token_reaches_redis,
+        a_setup_finish_presenting_another_token_is_refused,
+        one_sessions_registrations_hold_one_ceremony_across_replicas,
+        a_redis_outage_fails_passkey_steps_closed,
+    );
 }
