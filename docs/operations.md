@@ -800,7 +800,9 @@ url_env = "OKF_REDIS_URL"
 mode = "cluster"        # ElastiCache Serverless; "standalone" for one primary
 ```
 
-and change the Deployment (the Secret `okf-mcp-redis` holds the URL under the
+`[redis]` needs the release that includes multi-replica serve (milestone 16) or
+a later one: an older image, such as the 0.20.0 above, does not support it.
+Set that image tag in the variant below, and change the Deployment (the Secret `okf-mcp-redis` holds the URL under the
 key `url`, for example `rediss://redis.example.internal:6379`; create it however
 your site manages secrets):
 
@@ -816,6 +818,9 @@ spec:
     spec:
       containers:
         - name: okf-mcp
+          # The first release with multi-replica serve (milestone 16), not the
+          # 0.20.0 of the example above.
+          image: ghcr.io/hypotheosis/okf-mcp:<release with multi-replica serve>
           env:
             # ... the entries above, and:
             - name: OKF_REDIS_URL
