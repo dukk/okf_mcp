@@ -105,7 +105,7 @@
 | 1 | `src/labels/mod.rs`: `DisplayName`, `user_label`, `team_label`, `catalog_label`, `export_stem`; unit and property tests |
 | 2 | Migration 0019; `Catalog.display_name`; `NewCatalog.display_name`; `UserAuth.display_name` |
 | 3 | `users::set_display_name`, `teams::set_display_name`, `catalogs::update_details` (with the shared owner check); three audit actions |
-| 4 | `src/labels/directory.rs`: `Labels`, `Labels::load`, `disambiguate`; `Keys::labels()`; suspension labels |
+| 4 | `src/labels/directory.rs`: `Labels`, `Labels::load`, `catalog_choices`; `Keys::labels()`; suspension labels |
 | 5 | REST: `label` on views; `GET /labels`; `PATCH /me`, `/users/{name}`, `/teams/{name}`; the widened catalog PATCH and create; provisioner routes |
 | 6 | CLI: `user update`, `team update`, `catalog update --display-name`, `catalog create --display-name` |
 | 7 | MCP: label fields in outputs, `actor_label`, parameter descriptions, `INSTRUCTIONS`, the suspended error naming labels, regenerated `tools.md` |
@@ -1228,6 +1228,8 @@ Add the accessors, each a trivial-accessor `uninstrumented_fn` allow:
   - `Keys::labels(&self) -> Arc<Labels>` clones the `Arc` like `suspensions()` does.
 
   Test in `src/auth.rs` tests: after `users::create` and `Keys::reload`, `keys.labels().user("alice")` is `Some("alice")` for a user with email `alice@example.com`.
+
+  > **Corrected (issue #601, 2026-11-17).** `users::NewUser` has no email, so the shipped test (`the_cache_loads_labels_and_reloads_them_after_a_create`) creates `alice` with display name "Alice Example" and a catalog "Team notes", reloads, and asserts the user, personal-team and catalog labels, the catalog owner and `teams_of`. The suspension test also asserts that `SuspendedCatalog.catalog_label` and `team_label` equal the directory's labels. `suspended_catalogs` fills both fields with the slugs; `KeyCache::read` overwrites them from the directory.
 
 - [ ] **Step 4: Suspension labels** (`src/store/teams.rs`). `SuspendedCatalog` gains `pub catalog_label: String` and `pub team_label: String`. `suspended_catalogs` keeps its query. `KeyCache::read` fills the two fields from the loaded `Labels` after the `try_join!`, falling back to the slugs only if a row is missing. The rows come from one load, so that happens only in a race, and the slug is honest then. Every `SuspendedCatalog { .. }` literal in tests gains the fields.
 - [ ] **Step 5: Run the tests, full gates, changelog `m17-task-04-label-directory`, commit** `feat(labels): the label directory, loaded with the key cache`.
