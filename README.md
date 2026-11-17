@@ -331,7 +331,7 @@ only).
 
 | Route | Key | Does |
 |---|---|---|
-| `GET /healthz` | none | `{"database": "ok", "catalogs": N, "clock": ...}`: 200, or 503 when the database does not answer within 2 s; `clock` is the last clock check (`docs/operations.md`, "Health and time") |
+| `GET /healthz` | none | `{"database": "ok", "catalogs": N, "clock": ..., "redis": ...}`: 200, or 503 when the database does not answer within 2 s; `clock` is the last clock check (`docs/operations.md`, "Health and time"); `redis` is `"ok"`, `"unavailable"` or `null` without `[redis]`, and never changes the status |
 | `POST/GET/DELETE /mcp` | any | MCP streamable HTTP |
 | `GET /catalogs/{name}/export` | `read` on the catalog | The catalog as `application/gzip`, `Content-Disposition: attachment; filename="<name>.tar.gz"` |
 | `POST /catalogs/{name}/import[?replace=true&only_machinery=true&expect_generation=N]` | `admin` on the catalog | Imports the uploaded `.tar.gz` and answers with the import report |

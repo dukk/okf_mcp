@@ -44,6 +44,7 @@ use crate::error::OkfError;
 use crate::http::sessions::bind_session;
 use crate::mcp::OkfServer;
 use crate::oauth;
+use crate::telemetry::metrics::RedisOp;
 use crate::telemetry::subscriber::split_event;
 
 /// How long a request on any route but `/mcp` may take; for an import, how
@@ -198,11 +199,15 @@ struct Health {
     /// The last clock check (design "Time"); `null` without a `time_server`
     /// or before the first check. It never changes the status.
     clock: Option<ClockStatus>,
+    /// `"ok"` or `"unavailable"`; `null` without `[redis]`. It never changes
+    /// the status, and it never names the Redis URL or host.
+    redis: Option<&'static str>,
 }
 
 /// `GET /healthz`: 200 while the database answers within
-/// [`HEALTH_TIMEOUT`], else 503, with the last clock check, which never
-/// changes the status.
+/// [`HEALTH_TIMEOUT`], else 503, with the last clock check and the Redis
+/// state, neither of which changes the status: a Redis outage must not mark
+/// every replica unready.
 ///
 /// # Arguments
 /// * `app` - the shared state (axum's `State` extractor hands it over).
@@ -215,11 +220,15 @@ async fn healthz(State(app): State<Arc<App>>) -> Response {
     // `timeout` gives `Err` if the deadline passes first (waiting for a pool
     // connection included), else the query's own `Result`; only `Ok(Ok(_))`
     // means the database answered in time.
-    let reachable = matches!(tokio::time::timeout(HEALTH_TIMEOUT, probe).await, Ok(Ok(_)));
+    let database = async { matches!(tokio::time::timeout(HEALTH_TIMEOUT, probe).await, Ok(Ok(_))) };
+    // Both probes run at once, so the route's deadline is still one
+    // `HEALTH_TIMEOUT`, not two.
+    let (reachable, redis) = tokio::join!(database, redis_health(&app));
     let health = Health {
         database: if reachable { "ok" } else { "unreachable" },
         catalogs: app.catalogs().len(),
         clock: app.clock_status(),
+        redis,
     };
     let status = if reachable {
         StatusCode::OK
@@ -227,6 +236,37 @@ async fn healthz(State(app): State<Arc<App>>) -> Response {
         StatusCode::SERVICE_UNAVAILABLE
     };
     (status, Json(health)).into_response()
+}
+
+/// Probes the shared Redis with `PING` under [`HEALTH_TIMEOUT`].
+///
+/// # Arguments
+/// * `app` - the shared state.
+///
+/// # Returns
+/// `None` without `[redis]`, else `"ok"` or `"unavailable"`. A failed probe is
+/// counted through [`crate::shared::Redis::failed`] (its text stays local); a
+/// late one is counted without a driver error.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn redis_health(app: &App) -> Option<&'static str> {
+    let redis = app.redis()?;
+    let mut connection = redis.connection();
+    // The `Cmd` is bound to a name because `query_async` borrows it.
+    let command = redis::cmd("PING");
+    let ping = command.query_async::<String>(&mut connection);
+    match tokio::time::timeout(HEALTH_TIMEOUT, ping).await {
+        Ok(Ok(_)) => Some("ok"),
+        Ok(Err(error)) => {
+            // `failed` counts the error and logs it locally; the returned
+            // `Busy` is not needed here.
+            let _ = redis.failed(RedisOp::Get, &error);
+            Some("unavailable")
+        }
+        Err(_) => {
+            redis.count(RedisOp::Get);
+            Some("unavailable")
+        }
+    }
 }
 
 /// `GET /ui/brand.json`: the product name and support contact
@@ -813,7 +853,7 @@ mod tests {
 
     use crate::config::Config;
     use crate::error::LinkSource;
-    use crate::mcp::testing::app_with;
+    use crate::mcp::testing::{app_with, app_with_redis};
 
     /// A response's body as JSON.
     async fn json_body(response: Response) -> serde_json::Value {
@@ -1117,8 +1157,56 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
             json_body(response).await,
-            serde_json::json!({"database": "unreachable", "catalogs": 1, "clock": null})
+            serde_json::json!({"database": "unreachable", "catalogs": 1, "clock": null, "redis": null})
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn healthz_without_redis_reports_null_and_keeps_its_status() {
+        let test = app_with(&[("pg", &[])], Config::default()).await;
+        let router = router(Arc::clone(&test.app), &CancellationToken::new());
+        let request = Request::get("/healthz")
+            .body(Body::empty())
+            .expect("request");
+        let response = router.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        // The key is present and null (lessons.md: check the key itself).
+        assert_eq!(
+            json_body(response).await.get("redis"),
+            Some(&serde_json::Value::Null)
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn healthz_reports_redis_without_changing_its_status() {
+        let (test, redis) = app_with_redis(Config::default()).await;
+        let router = router(Arc::clone(&test.app), &CancellationToken::new());
+        let get = || {
+            Request::get("/healthz")
+                .body(Body::empty())
+                .expect("request")
+        };
+        let wait = Duration::from_secs(30);
+        let up = tokio::time::timeout(wait, router.clone().oneshot(get()))
+            .await
+            .expect("healthz answers while Redis is up")
+            .unwrap();
+        let up = json_body(up).await;
+        assert_eq!(up["redis"], "ok");
+        // The body never carries the Redis address.
+        assert!(!up.to_string().contains("redis://"), "{up}");
+        if redis.stop().await.is_none() {
+            eprintln!("shared TEST_REDIS_URL: the outage half of this test is skipped");
+            return;
+        }
+        let response = tokio::time::timeout(wait, router.oneshot(get()))
+            .await
+            .expect("healthz answers while Redis is down")
+            .unwrap();
+        // A Redis outage never makes the replica unready: the database decides.
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_body(response).await["redis"], "unavailable");
     }
 
     #[tokio::test(flavor = "multi_thread")]
