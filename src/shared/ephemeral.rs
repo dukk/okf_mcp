@@ -132,10 +132,15 @@ impl IndexSpace {
 
 /// The stored envelope (spec Decision 6). `T` is `&V` when encoding and `V`
 /// when decoding, so encoding borrows instead of cloning.
+///
+/// Crate-visible so `shared::sessions` stores rmcp's `SessionState` in the
+/// same shape, under its own version.
 #[derive(Serialize, Deserialize)]
-struct Envelope<T> {
-    v: u32,
-    d: T,
+pub(crate) struct Envelope<T> {
+    /// The stored shape's version.
+    pub(crate) v: u32,
+    /// The value.
+    pub(crate) d: T,
 }
 
 /// Values with a key and a lifetime fixed when they are stored.
@@ -212,7 +217,7 @@ pub enum Index {
         reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
     )
 )]
-fn millis(ttl: Duration) -> u64 {
+pub(crate) fn millis(ttl: Duration) -> u64 {
     u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX).max(1)
 }
 

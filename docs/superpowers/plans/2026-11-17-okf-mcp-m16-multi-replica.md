@@ -1409,6 +1409,16 @@ In `dispatch`, every arm except `Serve` runs it after `Ok`, once, after the matc
 
 > **Corrected (2026-11-17, cluster mode).** The admit, bind and release scripts take both the state key and the binding key in `KEYS`. Task 1b's hash tag puts them in one slot. Run the scripts' tests and one two-instance session test in cluster mode as well.
 
+> **Corrected (issue #558, 2026-11-17).** What shipped differs from the sketches below in small ways; read `src/shared/sessions.rs` and `src/http/sessions.rs`.
+> - **One `RedisSessions` serves both sides.** `SessionBindings::Redis` holds an `Arc<RedisSessions>`, and `mcp_service` sets `config.session_store = app.sessions().store()` (the same `Arc`, coerced to `Arc<dyn SessionStore>`) instead of building a second `RedisSessions` from `app.redis()`. So the `fail_next_store` test hook reaches the store rmcp calls. `SessionBindings::new(redis: Option<&Redis>, idle)` picks the arm. Assigning the public `session_store` field compiles (Step 5).
+> - **The `SessionStore` methods are thin delegates** (with a reason-bearing `uninstrumented_fn` allow) to instrumented private methods, `load_state`, `store_state` and `delete_state`, which return no `Result` at all: the "never an error to rmcp" rule is in their types.
+> - **`DELETE` releases after rmcp's success in both modes, not before rmcp runs** (review of PR #580). rmcp's `LocalSessionManager::close_session` is `Ok` for a session it does not hold, so rmcp answers 202 on any replica and releasing afterwards still ends the session everywhere. Releasing first destroyed the session even when rmcp then refused the `DELETE` (a disallowed `Host` answers 403). Step 4's numbered list is superseded: admit, run rmcp, release on a 2xx.
+> - **A Redis failure during rmcp's restore answers 503** (review of PR #580). `load` still answers `Ok(None)` (no error reaches rmcp), but it also sets a request-scoped flag, a `tokio::task_local!` that `bind_session` scopes around rmcp with `shared::sessions::watch_restore`; the middleware turns a set flag into 503. An undecodable state does not set it (that stays 404). `shared::sessions::unavailable()` builds the 503 error.
+> - **`load` reads both keys with one `MGET`**, and `millis` is Task 2's `shared::ephemeral::millis`, now `pub(crate)` like `Envelope`.
+> - **The failed-state-write test is a lib test**, `http::sessions::tests::a_session_whose_state_write_failed_is_never_bound`, on `mcp::testing::app_on_redis_with` (new: `app_on_redis` with the Redis handle on a test's `local_metrics`). It also checks that the next `initialize` succeeds.
+> - **`tests/support/mcp_raw.rs`** also exports `TOOLS_LIST`; `post_on` takes the body as `&str`, and `notify_on` is `post_on` with `INITIALIZED`.
+> - **Script tests** (`shared::sessions::tests`) run in both modes; of the two-instance tests, `a_session_opened_on_one_replica_serves_tools_on_the_other` also runs in cluster mode.
+
 **Files:**
 - Create: `src/shared/sessions.rs`, `tests/support/mcp_raw.rs`.
 - Modify: `src/shared/mod.rs`, `src/http/sessions.rs`, `src/http/mod.rs`, `src/app.rs`, `tests/server.rs`, `tests/multi_replica.rs`, `tests/support/mod.rs`.

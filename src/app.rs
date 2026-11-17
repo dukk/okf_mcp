@@ -22,7 +22,7 @@ use crate::config::Config;
 use crate::error::OkfError;
 use crate::http::limits::SignInLimits;
 use crate::http::passkeys::Passkeys;
-use crate::http::sessions::SessionKeys;
+use crate::http::sessions::SessionBindings;
 use crate::keyed_lock::KeyedLocks;
 use crate::oauth::OAuth;
 use crate::oidc::OidcProviders;
@@ -82,7 +82,7 @@ pub struct App {
     clock: Arc<dyn Clock>,
     keys: Arc<Keys>,
     // Which key opened each MCP session (M5 Decision 2).
-    sessions: SessionKeys,
+    sessions: SessionBindings,
     // The shared Redis (`[redis]`); `None` keeps every short-lived state in
     // this process's memory (M16).
     redis: Option<shared::Redis>,
@@ -266,7 +266,7 @@ impl App {
             }
         }
         let oauth = OAuth::new(&config, redis.as_ref())?;
-        let sessions = SessionKeys::new(config.session_idle_timeout);
+        let sessions = SessionBindings::new(redis.as_ref(), config.session_idle_timeout);
         let overlays = Overlays::new(config.session_idle_timeout, config.overlay_cache_size);
         let mailer = crate::mail::from_config(&config.mail).await?;
         let passkeys = Passkeys::new(&config, redis.as_ref())?;
@@ -521,7 +521,7 @@ impl App {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    pub fn sessions(&self) -> &SessionKeys {
+    pub fn sessions(&self) -> &SessionBindings {
         &self.sessions
     }
 
