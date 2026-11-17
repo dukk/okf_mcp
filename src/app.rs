@@ -266,7 +266,7 @@ impl App {
         let mailer = crate::mail::from_config(&config.mail).await?;
         let passkeys = Passkeys::new(&config)?;
         // A provider whose secret variable is unset fails start-up here.
-        let oidc = OidcProviders::new(&config, |name| std::env::var(name).ok())?;
+        let oidc = OidcProviders::new(&config, |name| std::env::var(name).ok(), redis.as_ref())?;
         // A failed count leaves the map empty until the first poll pass.
         let open_changesets = changesets::open_counts(&pool).await.unwrap_or_default();
         let app = Arc::new(Self {
