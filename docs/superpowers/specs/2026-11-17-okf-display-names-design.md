@@ -107,8 +107,13 @@ disambiguation is computed server-side alongside the listing.
 | `POST /api/v1/catalogs` (exists) | gains optional `display_name` | unchanged |
 
 Every route returns the updated view (with `label`) and writes an audit
-entry through the existing audit machinery, recording the old and new
-value.
+entry through the existing audit machinery, recording the new value's
+length in characters (`{"length": n}`), never the text, as
+`catalog.description_changed` does: a display name is personal data
+("People in entries").
+
+> **Corrected (issue #600).** This read "recording the old and new
+> value"; plan Decision 4 records only the length.
 
 **Team-owner check.** Session ceilings stop at `write`, so a team owner
 never holds `Access::Admin` on a catalog. The catalog PATCH therefore

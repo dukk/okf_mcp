@@ -1755,6 +1755,7 @@ of `docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`).
 | `user.deleted` | A user is deleted (`user delete`, `DELETE /api/v1/users/{name}`, the console). A refused deletion records nothing | `keys` (keys and grants deleted), `codes` (sign-in codes deleted), `changesets_discarded` |
 | `user.created` | A user is created (`user create`, `POST /api/v1/users`, the console). A refused create records nothing | none |
 | `user.email_changed` | A user's email is set or cleared (`user set-email`, `PUT /api/v1/users/{name}/email`). A change of letter case only, or clearing an email that is not set, records nothing | `cleared` (never the address) |
+| `user.display_name_changed` | A user's display name changes. A provisioner is refused an admin user; the same text again, and a refused change, record nothing | `length` (in characters; never the text) |
 | `user.admin_changed` | A user's admin flag changes (`user set-admin`, `PUT /api/v1/users/{name}/admin`). Setting the flag it already has records nothing | `from`, `to` |
 | `user.invited` | A setup email is queued (`user invite`, `POST /api/v1/users/{name}/invite`). A refused invite (no email, no `public_url`) records nothing | none |
 | `user.entitlement_set` | A user is given a catalog, or its level changes (`user entitle`, `PUT /api/v1/users/{name}/entitlements/{catalog}`). The entry belongs to the catalog's owner team. The level it already has records nothing | `catalog`, `access`, `previous` (`read`, `write`, or `null` for a new one) |
@@ -1767,11 +1768,13 @@ of `docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`).
 | `team.member_removed` | A member leaves a team (`team remove-member`, `DELETE /api/v1/teams/{name}/members/{user}`); its person is the user. A refused removal records nothing | none |
 | `team.deleted` | A shared team is deleted (`team delete`, `DELETE /api/v1/teams/{name}`), recorded before the row goes. A refused deletion records nothing | none |
 | `team.suspended` | A team is suspended or its notice changes (`team suspend`, `PUT /api/v1/teams/{name}/suspension`). Suspending a suspended team with the same notice, a refused notice and an unknown or malformed name record nothing | `notice` (whether there is one; never its text), `already` (it was suspended before) |
+| `team.display_name_changed` | A shared team's display name changes, by an admin, a provisioner or an owner of the team. A personal team is refused (its label follows its user); the same text again, and a refused change, record nothing | `length` (in characters; never the text) |
 | `team.unsuspended` | A suspension is lifted (`team unsuspend`, the same `PUT`). Lifting an active team's suspension records nothing | none |
 | **Catalogs** | | |
 | `catalog.created` | A catalog is created (`catalog create`, `POST /api/v1/catalogs`) | none |
 | `catalog.owner_changed` | A catalog gets another owner team (`catalog set-owner`, `PUT /api/v1/catalogs/{catalog}/owner`); the entry belongs to both teams. Giving it to the team that owns it records nothing | `from` (the old team's audit id, `null` for a catalog that had no owner), `to` |
 | `catalog.description_changed` | A catalog's description changes (`catalog update`, `PATCH /api/v1/catalogs/{catalog}`). The same text again records nothing | `length` (in characters; never the text) |
+| `catalog.display_name_changed` | A catalog's display name changes, by an admin on the catalog or an owner of its team. The same text again, and a refused change, record nothing | `length` (in characters; never the text) |
 | `catalog.member_access_changed` | A catalog's member access changes (`catalog set-member-access`, `PUT /api/v1/catalogs/{catalog}/member-access`). The same value again records nothing | `from`, `to` (`none`, `read` or `write`) |
 | `catalog.maintenance_changed` | A catalog's maintenance flag changes (`catalog set-maintenance`, `PUT /api/v1/catalogs/{catalog}/maintenance`), by an admin that reaches every catalog or an owner of its team signed in to the console. The same value again, and a refused change, record nothing | `from`, `to` (`on` or `off`) |
 | `catalog.deleted` | A catalog is deleted (`catalog delete`, `DELETE /api/v1/catalogs/{catalog}`), recorded before the row goes. A refused deletion records nothing | `forced` (unpublished changes were deleted with it), `generation` |

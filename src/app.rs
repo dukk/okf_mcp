@@ -1530,10 +1530,15 @@ mod tests {
         let pg = app.catalog("pg").unwrap();
         let before = pg.current();
 
-        catalogs::update_description(
+        let change = catalogs::DetailsChange {
+            catalog: "pg",
+            display_name: None,
+            description: Some("source of truth"),
+            owner: None,
+        };
+        catalogs::update_details(
             &db.pool,
-            "pg",
-            "source of truth",
+            &change,
             &crate::store::audit::AuditActor::cli(),
             chrono::Utc::now(),
         )
