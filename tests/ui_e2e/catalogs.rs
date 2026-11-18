@@ -864,20 +864,12 @@ fn options(ui: &Ui, selector: &str) -> serde_json::Value {
     )
 }
 
-/// Whether the options of `selector` hold `value` with text `text`. A `text`
-/// starting with `*` matches by suffix: a user or team created straight in
-/// the database may not have reached the console's label table yet, and
-/// then reads as its slug.
+/// Whether the options of `selector` hold `value` with exactly the text
+/// `text`.
 fn has_option(ui: &Ui, selector: &str, value: &str, text: &str) -> bool {
     options(ui, selector).as_array().is_some_and(|all| {
-        all.iter().any(|pair| {
-            let found = pair[1].as_str().unwrap_or("");
-            pair[0] == value
-                && match text.strip_prefix('*') {
-                    Some(suffix) => found.ends_with(suffix),
-                    None => found == text,
-                }
-        })
+        all.iter()
+            .any(|pair| pair == &serde_json::json!([value, text]))
     })
 }
 
@@ -886,8 +878,8 @@ async fn team_pickers_say_personal_team_or_team_and_still_send_the_bare_name() {
     let server = server().await;
     let root = server.key("console-root", Access::Admin, &[], None).await;
     let family = NewTeam {
-        name: "family",
-        display_name: &okf_mcp::labels::DisplayName::default(),
+        name: "acme",
+        display_name: &okf_mcp::labels::DisplayName::parse("Acme").expect("a display name"),
         owner: OWNER,
     };
     teams::create(
@@ -898,7 +890,10 @@ async fn team_pickers_say_personal_team_or_team_and_still_send_the_bare_name() {
     )
     .await
     .expect("create a team");
-    let personal_text = "* (personal team)".to_string();
+    // Give the fixture user a distinct display name (this also reloads the label
+    // table the console reads), so the full option texts are deterministic.
+    server.set_user_label(OWNER, "Alice Example").await;
+    let personal_text = "Alice Example (personal team)";
     let ran = drive(server.base.clone(), move |ui| {
         ui.login(&root);
         ui.open("/catalogs");
@@ -907,14 +902,14 @@ async fn team_pickers_say_personal_team_or_team_and_still_send_the_bare_name() {
         // The create form's picker: values are bare names, texts say the kind.
         ui.click("#catalog-create");
         ui.wait_visible("#catalog-create-form select[name=owner]");
-        ui.wait_text("#catalog-create-form select[name=owner]", "(team)");
+        ui.wait_text("#catalog-create-form select[name=owner]", "Acme (team)");
         let create_owner = "#catalog-create-form select[name=owner]";
         assert!(
-            has_option(ui, create_owner, OWNER, &personal_text),
+            has_option(ui, create_owner, OWNER, personal_text),
             "{}",
             options(ui, create_owner)
         );
-        assert!(has_option(ui, create_owner, "family", "* (team)"));
+        assert!(has_option(ui, create_owner, "acme", "Acme (team)"));
         ui.fill("#catalog-create-form input[name=name]", "scratch");
         ui.select("#catalog-create-form select[name=owner]", OWNER);
         ui.click("#catalog-create-form button[type=submit]");
@@ -922,32 +917,32 @@ async fn team_pickers_say_personal_team_or_team_and_still_send_the_bare_name() {
         // Change owner: the same labels, and the bare name is what is sent.
         ui.click("[data-catalog=scratch]");
         ui.wait_visible("#catalog-owner-select:not([disabled])");
-        ui.wait_text("#catalog-owner-select", "(team)");
+        ui.wait_text("#catalog-owner-select", "Acme (team)");
         assert!(has_option(
             ui,
             "#catalog-owner-select",
             OWNER,
-            &personal_text
+            personal_text
         ));
         assert!(has_option(
             ui,
             "#catalog-owner-select",
-            "family",
-            "* (team)"
+            "acme",
+            "Acme (team)"
         ));
-        ui.select("#catalog-owner-select", "family");
+        ui.select("#catalog-owner-select", "acme");
         ui.click("#catalog-owner-save");
-        ui.wait_text("[data-test=catalog-owner-scratch]", "Unnamed team");
+        ui.wait_text("[data-test=catalog-owner-scratch]", "Acme");
     })
     .await;
     if !ran {
         return;
     }
-    // Created with the bare personal team's name, then moved to "family".
+    // Created with the bare personal team's name, then moved to "acme".
     let row = okf_mcp::store::catalogs::find(&server.db.pool, "scratch")
         .await
         .expect("the catalog");
-    assert_eq!(row.owner_team.as_deref(), Some("family"));
+    assert_eq!(row.owner_team.as_deref(), Some("acme"));
     assert!(
         !teams::find(&server.db.pool, OWNER)
             .await

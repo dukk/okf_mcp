@@ -816,28 +816,28 @@ async fn the_unassigned_views_pickers_label_users_and_teams_and_send_bare_names(
         .execute(&server.db.pool)
         .await
         .expect("insert an unowned catalog");
+    // A distinct display name, reloaded into the label table the console
+    // reads, so the full option text is deterministic.
+    server.set_user_label(OWNER, "Alice Example").await;
     let ran = drive(server.base.clone(), move |ui| {
         ui.login(&admin);
         ui.open("/users/unassigned");
         let picker = "[data-test=assign-catalog-legacy] select";
-        ui.wait_text(picker, "(personal team)");
+        ui.wait_text(picker, "Alice Example (personal team)");
         let all = ui.eval(
             "(selector) => [...document.querySelector(selector).options].map(o => [o.value, o.text])",
             json!(picker),
         );
         assert!(
-            all.as_array().expect("options").iter().any(|pair| {
-                pair[0] == OWNER
-                    && pair[1]
-                        .as_str()
-                        .is_some_and(|text| text.ends_with(" (personal team)"))
-            }),
+            all.as_array()
+                .expect("options")
+                .contains(&json!([OWNER, "Alice Example (personal team)"])),
             "{all}"
         );
         ui.select(picker, OWNER);
         ui.click("[data-test=assign-catalog-legacy] button");
         ui.wait_text("#unassigned-empty", "Nothing is unassigned");
-        ui.wait_text("#toasts", "(personal team)");
+        ui.wait_text("#toasts", "Alice Example (personal team)");
     })
     .await;
     if !ran {
