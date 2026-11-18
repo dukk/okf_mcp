@@ -315,9 +315,16 @@ impl Fake {
         serde_json::from_slice(&std::fs::read(self.dir.path().join("record.json")).unwrap())
             .unwrap()
     }
+    /// True once the fake has written a complete `record.json`. A child killed
+    /// mid-write leaves a truncated file, which does not count as started.
+    fn has_record(&self) -> bool {
+        std::fs::read(self.dir.path().join("record.json"))
+            .ok()
+            .is_some_and(|bytes| serde_json::from_slice::<Value>(&bytes).is_ok())
+    }
     async fn started(&self) {
         for _ in 0..1000 {
-            if self.dir.path().join("record.json").exists() {
+            if self.has_record() {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -332,6 +339,37 @@ impl Fake {
         );
     }
 }
+/// Runs `run_process` against a fresh fake with a short deadline and returns the
+/// result once the child demonstrably started before the deadline fired.
+///
+/// The deadline covers spawning and interpreter start-up, so on a loaded machine a
+/// short deadline can expire before the fake wrote `record.json`. Then the run
+/// proves nothing about the stall, and `reaped` has no pid to read. In that case
+/// retry on a fresh fake with a longer deadline (issue #307). Returns the fake,
+/// the result and the number of attempts used.
+async fn run_timed_after_start(
+    scenario: Value,
+    args: Vec<String>,
+    prompt: Vec<u8>,
+) -> (Fake, Result<Vec<u8>, RunnerError>, usize) {
+    for (attempt, millis) in [200u64, 1_000, 5_000, 25_000].into_iter().enumerate() {
+        let fake = Fake::new(scenario.clone());
+        let result = run_process(
+            fake.config.claude_binary.clone(),
+            args.clone(),
+            None,
+            prompt.clone(),
+            CancellationToken::new(),
+            Duration::from_millis(millis),
+        )
+        .await;
+        if fake.has_record() {
+            return (fake, result, attempt + 1);
+        }
+    }
+    panic!("fake did not start within the longest deadline");
+}
+
 fn request() -> ModelRequest {
     ModelRequest {
         prompt: "PRIVATE prompt --tools shell --model attacker".into(),
@@ -637,49 +675,59 @@ fn investigator_claude_constructor_dedicated_key_only() {
 #[tokio::test]
 async fn investigator_claude_stdin_timeout_cancel_reap() {
     let _test = TEST_LOCK.lock().await;
-    for cancel_now in [false, true] {
-        let fake = Fake::new(json!({"stall":true}));
-        let cancel = CancellationToken::new();
-        let child_cancel = cancel.clone();
-        let binary = fake.config.claude_binary.clone();
-        let task = tokio::spawn(async move {
-            run_process(
-                binary,
-                vec!["--print".into()],
-                Some("synthetic".into()),
-                vec![b'x'; 131_072],
-                child_cancel,
-                Duration::from_millis(200),
-            )
-            .await
-        });
-        fake.started().await;
-        if cancel_now {
-            cancel.cancel();
-        }
-        assert_eq!(
-            task.await.unwrap().err(),
-            Some(if cancel_now {
-                RunnerError::Cancelled
-            } else {
-                RunnerError::Child
-            })
-        );
-        fake.reaped();
-    }
-    let fake = Fake::new(json!({"after_output_stall":true}));
-    assert_eq!(
+    // Timeout: a stdin write that never drains hits the deadline.
+    let (fake, result, _) = run_timed_after_start(
+        json!({"stall":true}),
+        vec!["--print".into()],
+        vec![b'x'; 131_072],
+    )
+    .await;
+    assert_eq!(result.err(), Some(RunnerError::Child));
+    fake.reaped();
+    // Cancel: the deadline is far away so only the cancel can end the run.
+    let fake = Fake::new(json!({"stall":true}));
+    let cancel = CancellationToken::new();
+    let child_cancel = cancel.clone();
+    let binary = fake.config.claude_binary.clone();
+    let task = tokio::spawn(async move {
         run_process(
-            fake.config.claude_binary.clone(),
-            vec![],
-            None,
-            vec![],
-            CancellationToken::new(),
-            Duration::from_millis(200)
+            binary,
+            vec!["--print".into()],
+            Some("synthetic".into()),
+            vec![b'x'; 131_072],
+            child_cancel,
+            Duration::from_secs(120),
         )
         .await
-        .err(),
-        Some(RunnerError::Child)
+    });
+    fake.started().await;
+    cancel.cancel();
+    let outcome = tokio::time::timeout(Duration::from_secs(30), task)
+        .await
+        .expect("cancelled run did not finish within 30 s");
+    assert_eq!(outcome.unwrap().err(), Some(RunnerError::Cancelled));
+    fake.reaped();
+    let (fake, result, _) =
+        run_timed_after_start(json!({"after_output_stall":true}), vec![], vec![]).await;
+    assert_eq!(result.err(), Some(RunnerError::Child));
+    fake.reaped();
+}
+
+/// A fake that starts later than the first deadline must not fail the timeout
+/// check: the helper retries once the child is known to have started.
+#[tokio::test]
+async fn investigator_claude_slow_start_is_retried_not_failed() {
+    let _test = TEST_LOCK.lock().await;
+    let (fake, result, attempts) = run_timed_after_start(
+        json!({"stall":true, "start_delay_ms":500}),
+        vec!["--print".into()],
+        vec![b'x'; 131_072],
+    )
+    .await;
+    assert!(
+        attempts > 1,
+        "a 500 ms start must outlast the 200 ms deadline"
     );
+    assert_eq!(result.err(), Some(RunnerError::Child));
     fake.reaped();
 }
