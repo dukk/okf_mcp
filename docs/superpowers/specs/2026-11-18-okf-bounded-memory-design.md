@@ -18,8 +18,9 @@ Concretely:
 - **Credentials and users are loaded on demand** into bounded caches. A
   change reloads only what it touched, never the whole key cache.
 - **Listing catalogs is a query**, not a scan of an in-memory map.
-- **Changes reach every replica through targeted invalidations** on the
-  existing Redis announce channel, with a TTL backstop on every entry.
+- **Changes reach every replica through targeted invalidations**, sent
+  with Postgres `NOTIFY` inside the transaction that makes the change,
+  with a TTL backstop on every entry.
 - **Cluster-wide housekeeping runs once per cluster** as apalis jobs, not
   on every replica's poll loop.
 - **Metric cardinality is bounded**: no series per catalog.
@@ -185,11 +186,29 @@ expiry is still checked on every request.
   a `settings` invalidation or after `credential_ttl`. `admin_generation`
   remains only as the settings version.
 
-### 10. Invalidations travel on the existing announce channel
+### 10. Invalidations are sent by the transaction that makes the change
 
-The Redis pub/sub channel `{prefix}announce` (`src/shared/announce.rs`)
-keeps its subscriber task, reconnects and failure metrics. Its payload
-becomes versioned JSON:
+> **Corrected (2026-11-18, planning).** The design first sent invalidations
+> on the Redis announce channel after commit. Planning found about 35 store
+> functions that change access state, called from HTTP handlers, the OAuth
+> consent flow and about 30 CLI commands, each bumping `admin_generation`
+> inside its own transaction. Publishing from every caller after commit
+> would be easy to forget, would lose the message on a crash between
+> commit and publish, and would leave CLI changes to the TTL. The
+> maintainer chose Postgres `NOTIFY` instead.
+
+Each store function that today calls `bump_admin_generation(conn)` calls
+`invalidate(conn, &[Invalidation])` instead, inside the same transaction.
+It runs `SELECT pg_notify('okf_invalidate', $1)` once per invalidation,
+so:
+
+- the message is delivered only if the transaction commits, and never on
+  rollback;
+- the CLI, the server and any other writer are covered with no separate
+  step;
+- it works with or without Redis.
+
+The payload is versioned JSON, well under `NOTIFY`'s 8000-byte limit:
 
 ```json
 {"v":1,"kind":"catalog","id":42,"generation":17}
@@ -197,21 +216,27 @@ becomes versioned JSON:
 
 Kinds and fields:
 
-| Kind | Fields | Sent on |
+| Kind | Fields | Sent by |
 |---|---|---|
-| `catalog` | `id`, `generation` | publish, import |
-| `catalog_meta` | `id`, `name` | create, delete, rename, description, owner, suspension, maintenance opt-out |
-| `credential` | `key_id` | key or grant create, edit, revoke |
-| `user` | `id` | membership, ceiling, admin flag, entitlement, unlock, profile change |
-| `team` | `id` | member access policy, membership, suspension (which also sends `catalog_meta` per owned catalog) |
-| `settings` | none | any settings change |
+| `catalog` | `id`, `generation` | publish, import, repair |
+| `catalog_meta` | `id`, `name` | create, delete, `update_details`, `set_owner`, `set_maintenance`, `set_member_access`, team suspend and unsuspend (one per owned catalog) |
+| `credential` | `key_id` | key or grant create, revoke, grant, ungrant, `set_user`, `set_maintenance_report`, OAuth code redeem, self-issued grant create |
+| `user` | `id` | user create, delete, `set_email`, `set_display_name`, `set_admin`, entitle, unentitle, unlock create and end |
+| `team` | `id` | team create, delete, `set_member`, `remove_member`, `set_display_name`, `set_member_access` (for the owner team) |
+| `settings` | none | settings set and reset |
 
-Every write path that commits one of these changes calls one helper,
-`Invalidations::send(&[Invalidation])`, **after commit**: the HTTP
-handlers, the MCP tools and the CLI (through today's `announce_from_cli`
-connection). The sending replica applies the invalidations to its own
-caches directly. A `credential` message carries the key id, never the key
-hash.
+`admin_generation` is still bumped by `invalidate`, so it remains a single
+counter of administrative changes; only the settings reload reads it.
+A `credential` message carries the key id, never the key hash.
+
+Every replica runs one listener task on its own connection
+(`PgListener`, `LISTEN okf_invalidate`) that applies each message to its
+caches. A replica applies its own transactions' messages the same way: the
+writer does not apply them by hand.
+
+`NOTIFY` serializes the commits of notifying transactions. At
+administrative and publish rates (tens per second) this costs nothing
+measurable; it is recorded so a much higher write rate is designed for.
 
 ### 11. Loads cannot resurrect stale data
 
@@ -224,61 +249,68 @@ that read an older generation is never cached.
 
 ### 12. Reconnects mark everything stale
 
-When the subscriber resubscribes after losing Redis, every cached entry is
-marked stale (not dropped): each is revalidated against Postgres on next
-use. Content stays warm, and no message lost during the gap is trusted.
+`NOTIFY` is not delivered to a listener while it is disconnected. When
+the listener reconnects, every cached entry is marked stale (not dropped):
+each is revalidated against Postgres on next use. Content stays warm, and
+no message lost during the gap is trusted.
 
-### 13. Without Redis, one replica, as today
+### 13. TTLs are the backstop, not the mechanism
 
-Write paths apply invalidations locally. Changes from the CLI (a separate
-process) arrive through the TTLs: 10s for catalogs (`catalog_ttl`) and
-credentials (`credential_ttl`), the same bound `poll_interval` gives
-today.
+Entries are revalidated after `catalog_ttl` and `credential_ttl` (10s
+each) even with no message, covering a listener that is up but missed a
+message for a reason not covered by Decision 12. With or without Redis,
+any number of replicas may run: the invalidation path no longer depends
+on Redis. Redis is still needed for multi-replica serve for what
+milestone 16 put there (MCP sessions, OAuth and sign-in state).
 
-### 14. Mixed versions during a rolling deploy are safe
+### 14. Rolling deploys with mixed versions
 
-- A new replica that receives an old integer payload treats it as
-  `settings` plus a drop of its credential and user caches.
-- An old replica that receives a JSON payload cannot parse a generation
-  from it, and its existing code reloads the key cache on an unreadable
-  payload.
+During the deploy, old replicas run the M16 poll loop and the
+`admin_generation` announcement over Redis. For one release, new replicas
+bridge both ways:
 
-The integer handling is removed one release later.
+- **New writes reach old replicas.** `invalidate` still bumps
+  `admin_generation` (Decision 10), so an old replica's poll sees every
+  change made by a new one, and a new replica that made a server-side
+  administrative change also publishes the M16 empty announcement when
+  `[redis]` is set, so old replicas reload at once.
+- **Old writes reach new replicas.** Old replicas send no `NOTIFY`. New
+  replicas keep subscribing to the M16 channel for one release and treat
+  any announcement as "mark credential, user and label caches and settings
+  stale". Catalog publishes on an old replica reach new replicas through
+  `catalog_ttl` (10s), the same bound the poll gives today.
+
+The bridge is removed one release later.
 
 ### 15. Housekeeping runs as apalis jobs, once per cluster
 
-Queue `housekeeping`, one job type per task:
+> **Corrected (2026-11-18, planning).** The design first used a
+> `housekeeping_schedule` table, a self-rescheduling job chain and a repair
+> sweep. apalis-postgres 1.1 has a unique index on
+> `(job_type, idempotency_key)`, which makes all three unnecessary.
+
+Queue `housekeeping`, one job type `Housekeeping { task, slot }`:
 
 | Task | Cadence | Work |
 |---|---|---|
 | `prune_changesets` | 5 min | empty changesets unchanged for 24h |
-| `prune_oauth` | hourly | expired tokens and codes, unbound clients, old sign-in events, expired emailed links, console sessions, old mail jobs |
+| `prune_oauth` | hourly | expired tokens and codes, unbound clients, old sign-in events, expired emailed links, console sessions, old mail jobs, done housekeeping jobs older than a day |
 | `prune_audit` | daily | entries past `audit_retention_days` plus the margin |
 | `prune_workers` | hourly | dead `apalis.workers` rows (#458) |
 | `cluster_stats` | 60s | open changesets total, mail queue depth by status |
 
-Scheduling uses a table of ours, leaving apalis's schema untouched:
+Scheduling: a ticker on every replica, once a minute, pushes for each task
+the job of the current slot (`slot` = the start of the current cadence
+window, as a Unix second) with idempotency key `"<task>:<slot>"`. Each push
+runs in its own statement with `ON CONFLICT DO NOTHING` semantics: a
+unique violation on the idempotency index means another replica already
+scheduled that slot and is ignored. So each slot runs once in the cluster,
+whichever replica's worker takes it, and a replica that is down simply
+does not push. A slot missed because every replica was down is not caught
+up; the next slot does the same work.
 
-```sql
-CREATE TABLE housekeeping_schedule (
-    task        text PRIMARY KEY,
-    next_run_at timestamptz NOT NULL,
-    job_id      text
-);
-```
-
-- **Seeding:** at startup each replica runs, per task, in one transaction,
-  `INSERT … ON CONFLICT DO NOTHING` and pushes the first job only if its
-  insert won. Concurrent starts create one job.
-- **Rescheduling:** a job does its work, then in one transaction sets
-  `next_run_at` and `job_id` and pushes its successor.
-- **Repair:** a sweep on each replica, once a minute, locks each row with
-  `FOR UPDATE SKIP LOCKED`; if the task is overdue by more than its grace
-  (twice its cadence, at least 2 min) and `job_id` is not `Pending` or
-  `Running` in `apalis.jobs`, it pushes a replacement. A killed job, or a
-  crash between commit and push, cannot stop a task for good.
-- **Failures** are retried by apalis (3 attempts), then logged and left to
-  the next scheduled run.
+Failures are retried by apalis (3 attempts), then logged; the next slot
+does the work again.
 
 ### 16. Database-wide gauges are reported identically by every replica
 
@@ -312,7 +344,8 @@ label and becomes one cluster total.
 `App::poll`, `poll_pass`, `poll_until`, the `polling` mutex and
 `poll_interval` go. `poll_interval` parses with a deprecation warning for
 one release. What remains on each replica is the once-a-minute housekeeping
-repair sweep (Decision 15) and the `cluster_stats` refresh (Decision 16).
+ticker (Decision 15), the invalidation listener (Decision 10) and the
+`cluster_stats` refresh (Decision 16).
 
 ### 19. Metrics have no per-catalog series
 
@@ -338,6 +371,24 @@ Added, labelled by `cache` (`catalog`, `overlay`, `directory`,
 A large catalog's load is still visible per catalog in traces: the
 `okf.catalog.load` span keeps its `okf.catalog` attribute.
 
+### 20. Audit rows are created with their entity
+
+`gates::load` creates any missing `audit_people`, `audit_credentials` and
+`audit_teams` row for every user, key and owner team on every reload.
+Per-request loading cannot do that. Instead:
+
+- the store functions that create a user, key, grant or team create its
+  audit row in the same transaction;
+- one migration backfills a row for every existing entity that lacks one;
+- the credential and user caches read the audit ids with the entity
+  (`AccessGates::people` and `credentials` become fields of the cached
+  entries), and the directory row carries the catalog's audit team id
+  (`CatalogScope`).
+
+An entity found without its audit row at request time (which the
+migration and the create paths rule out) is refused with
+`OkfError::Database`'s 503 and logged, rather than recorded without one.
+
 ## Architecture
 
 ```
@@ -349,12 +400,13 @@ request ──► auth: CredentialCache ─► UserCache ─► Principal
               ▼
         CatalogCache (weighed LRU, single-flight) ──► Arc<CatalogState> pinned per request
               ▲
-  Redis announce ──► Invalidations::apply (epoch bump, drop / mark stale)
-              ▲
-  write paths (HTTP, MCP, CLI) ──► Invalidations::send after commit
+  LISTEN okf_invalidate ──► Invalidations::apply (epoch bump, drop / mark stale)
+              ▲ delivered at commit
+  store functions (HTTP, MCP, CLI) ──► invalidate(conn, ..) = pg_notify in the tx
 
 apalis worker (every replica): send_mail, housekeeping
-  housekeeping_schedule ─► one job chain per task ─► cluster_stats row ─► gauges
+  ticker on every replica ─► push "<task>:<slot>" (idempotency key) ─► one run per slot
+  cluster_stats job ─► cluster_stats row ─► gauges on every replica
 ```
 
 New modules:
@@ -365,8 +417,8 @@ New modules:
 | `cache::directory` | `CatalogDirectory`: rows by name, absent entries, reach-driven listing queries |
 | `cache::credentials` | credential, user and label caches; principal assembly |
 | `cache::epoch` | per-key invalidation epochs and minimum generations, shared by every cache |
-| `invalidate` | the `Invalidation` enum, its JSON form, `send` and `apply` |
-| `housekeeping` | job types, scheduling table, repair sweep, `cluster_stats` |
+| `invalidate` | the `Invalidation` enum, its JSON form, `invalidate(conn, ..)`, the listener and `apply` |
+| `housekeeping` | the job type, the ticker, the tasks, `cluster_stats` |
 
 `App` holds the caches instead of `catalogs`, `keys`, `polling`,
 `broken`, `open_changesets`, `oauth_pruned` and `audit_pruned`.
@@ -394,12 +446,14 @@ Deprecated (parse with a warning for one release): `poll_interval`,
   request (503 or the tool error it maps to today) and not cached.
 - A catalog that fails to build is cached negatively per generation
   (Decision 2) and returns today's error.
-- A failed invalidation publish is counted and logged; the TTL bounds the
-  staleness. The write that triggered it still succeeds.
+- `invalidate` runs in the writer's transaction: if `pg_notify` fails, the
+  transaction fails, as any other statement in it would.
+- A listener that loses its connection reconnects with backoff and marks
+  every cache stale (Decision 12); the TTLs bound staleness meanwhile.
 - An unparseable invalidation payload is counted, logged at warn, and
   treated as a reconnect (Decision 12) for safety.
-- A housekeeping job failure is retried by apalis, then logged; the chain
-  continues at the next cadence (Decision 15).
+- A housekeeping job failure is retried by apalis, then logged; the next
+  slot does the work again (Decision 15).
 
 ## Privacy and security
 
@@ -422,16 +476,19 @@ Deprecated (parse with a warning for one release): `poll_interval`,
   once and not cached. A property test (hegel) interleaves loads and
   invalidations and checks the cache never holds a generation below the
   announced minimum.
-- **Invalidation coverage:** for every write path in the table of
-  Decision 10, a test asserts the right `Invalidation` is sent after
-  commit and not on rollback.
-- **Two-replica integration tests** (two `App`s, one Postgres, one Redis):
-  publish on A is served on B without waiting for a TTL; revoke on A is
-  refused on B; a dropped message is covered by the TTL; a reconnect marks
-  entries stale.
-- **Mixed-version tests** for both payload directions (Decision 14).
-- **Housekeeping:** concurrent seeding creates one job per task; a killed
-  job is repaired by the sweep; `prune_workers` removes a stale row and
+- **Invalidation coverage:** for every store function in the table of
+  Decision 10, a test listens on `okf_invalidate` and asserts the right
+  `Invalidation` arrives after commit and nothing arrives on rollback.
+- **Two-replica integration tests** (two `App`s, one Postgres, with TTLs
+  set to an hour so a pass proves `NOTIFY` carried the change): publish on
+  A is served on B; revoke on A is refused on B; a change made through the
+  CLI's store functions reaches both; a listener whose connection is
+  killed (`pg_terminate_backend`) marks entries stale on reconnect.
+- **Mixed-version tests** (Decision 14): an M16 announcement marks a new
+  replica's credential caches stale; a new replica's administrative change
+  publishes the M16 announcement when `[redis]` is set.
+- **Housekeeping:** two tickers pushing the same slot create one job;
+  each task's job does its work; `prune_workers` removes a stale row and
   keeps a live one; SIGTERM waits for an in-flight job.
 - **Scale test** (ignored by default, run in the milestone close-out):
   seed 1M catalog rows (tiny catalogs) and 1M users with keys; assert that
@@ -441,13 +498,14 @@ Deprecated (parse with a warning for one release): `poll_interval`,
 
 ## Rollout
 
-1. Ship with Redis on and the new defaults. Old and new replicas coexist
-   during the rolling deploy (Decision 14).
+1. Ship with the new defaults. Old and new replicas coexist during the
+   rolling deploy (Decision 14). Migration 20 (audit rows) runs before
+   the new binary serves.
 2. Watch `okf.cache.requests` hit ratios, `okf.cache.bytes`,
    `okf.cache.load.duration` and `okf.invalidations.lag`.
 3. Optionally enable ingress hashing on `Mcp-Session-Id` and compare cold
    loads.
-4. One release later: remove the integer payload handling and the
+4. One release later: remove the M16 announcement bridge and the
    deprecated settings.
 
 ## Docs
