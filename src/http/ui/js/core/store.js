@@ -48,15 +48,18 @@ export const store = {
     set theme(value) { write(THEME, value); },
     // Whether the signed-in identity has at least `level` here.
     can(level) {
-        return !!this.whoami && LEVELS.indexOf(this.levelHere()) >= LEVELS.indexOf(level);
+        return this.canOn(level, this.catalog);
     },
-    // The level on the selected catalog. A member signed in with an
-    // account has the ceiling's level, which differs per catalog (null on a
-    // catalog outside it, which `can` refuses); a key, or an admin user,
-    // has its one level.
-    levelHere() {
+    // Whether the signed-in identity has at least `level` on `catalog`.
+    canOn(level, catalog) {
+        return !!this.whoami && LEVELS.indexOf(this.levelOn(catalog)) >= LEVELS.indexOf(level);
+    },
+    // The level on `catalog`. A member signed in with an account has the
+    // ceiling's level, which differs per catalog (null on a catalog outside
+    // it, which `canOn` refuses); a key, or an admin user, has its one level.
+    levelOn(catalog) {
         const session = this.session;
-        if (session && !session.admin) return session.ceiling[this.catalog] ?? null;
+        if (session && !session.admin) return session.ceiling[catalog] ?? null;
         return this.whoami?.access ?? null;
     },
 };

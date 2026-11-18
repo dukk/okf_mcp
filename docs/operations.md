@@ -47,7 +47,7 @@ changesets and the routes in detail.
   | `GET /healthz` | none | The database's state, the catalog count and the last clock check (section 7) |
   | `POST/GET/DELETE /mcp` | any key (`read`, `write` or `admin`) | MCP streamable HTTP; each tool checks its own level and the key's catalog grants |
   | `GET /catalogs/{name}/export` | `read` on the catalog | The catalog as a `.tar.gz` |
-  | `POST /catalogs/{name}/import[?replace=true&only_machinery=true&expect_generation=N]` | `admin` on the catalog | Imports an uploaded `.tar.gz` |
+  | `POST /catalogs/{name}/import[?replace=true&only_machinery=true&expect_generation=N]` | `write` on the catalog | Imports an uploaded `.tar.gz` |
 
   Keys are bearer tokens (`Authorization: Bearer <key>`). Only `/healthz` is
   open, and it names no catalog, host or secret.
@@ -1687,7 +1687,7 @@ do; the command line needs only the database, as every subcommand does.
   Import & export, and the 403 shows its own message.
 - **Admins are exempt.** An `admin` key, or an admin user's console session,
   is not affected, so the operator can still inspect, export and repair the
-  catalogs. Import needs `admin` anyway, so only an admin can import into a
+  catalogs. Import is a write, so only an admin can import into a
   suspended catalog.
 - **Only credentials that reach the catalog learn of it.** Reach is checked
   first: a credential that doesn't reach the catalog still gets
@@ -3463,7 +3463,7 @@ curl -s -H "Authorization: Bearer $OKF_MCP_KEY" \
 | `PUT /api/v1/catalogs/{catalog}/maintenance` | admin, every catalog; or an owner of the catalog's team, signed in | Body `{maintenance: "on"\|"off"}`. Lets the maintenance runner in or keeps it out; answers `{name, previous, maintenance}`. 403 for anyone else (a non-owner's session also for an unknown catalog), 404 for an unknown catalog asked by an admin, 422 for another value or without `maintenance` |
 | `DELETE /api/v1/catalogs/{catalog}[?force=true]` | admin | Deletes the catalog with its documents, history, changesets and grants; answers `{name}`. 409 while an open changeset holds unpublished changes, unless `force=true` |
 | `GET /api/v1/catalogs/{catalog}/export` | read | The same handler and 120 s timeout as `/catalogs/{name}/export` |
-| `POST /api/v1/catalogs/{catalog}/import[?replace=true&only_machinery=true&expect_generation=N]` | admin | The same handler, body cap and upload deadline as `/catalogs/{name}/import` |
+| `POST /api/v1/catalogs/{catalog}/import[?replace=true&only_machinery=true&expect_generation=N]` | write | The same handler, body cap and upload deadline as `/catalogs/{name}/import` |
 
 A catalog the key does not reach, or that does not exist, is 404 on every
 route but the list, the create, the owner change, the member-access
@@ -3488,10 +3488,12 @@ The Catalogs page lists the catalogs with their owner team and counts. An
 admin opens a row to change its description or delete it (typing its name to
 confirm, with a force box for unpublished changes); an admin key that reaches
 every catalog also gets New catalog (with a required owner team) and the
-drawer's Change owner (Assign for an unassigned catalog). The Import & export page exports the selected catalog
-as a `.tar.gz` download, and, for an admin, uploads one with the import
-options, a progress bar and the import report (or the refusal and its
-problems). It pre-fills the expected generation from `GET /api/v1/catalogs`,
+drawer's Change owner (Assign for an unassigned catalog). The Import & export
+page sits in the main navigation, outside Administer, for anyone signed in.
+Its picker lists the catalogs the credential reaches; it exports the picked
+catalog as a `.tar.gz` download for `read` or more, and, for `write` or more
+on that catalog, uploads one with the import options, a progress bar and the
+import report (or the refusal and its problems). It pre-fills the expected generation from `GET /api/v1/catalogs`,
 so an import is refused if the catalog moved since the page loaded; clear the
 field to skip the check.
 
@@ -4266,7 +4268,7 @@ curl -sf -H "Authorization: Bearer $OKF_MCP_KEY" -o notes.tar.gz \
 | `user delete` is refused (409) | Its personal team owns a catalog, it is the last owner of a shared team, or (over REST and in the console) it is the last admin user. The message names the cause ([Deletion rules](#deletion-rules)) |
 | A tool returns `CatalogNotSelected` or `Forbidden` | The key is not granted that catalog, or its access level is too low (a `read` key calling a write tool). `okf-mcp key grant`, or a key with more access |
 | 404 on an archive route | The catalog doesn't exist or the key isn't granted it (never 403, so a key can't probe which catalogs exist) |
-| 403 on an archive route | The key reaches the catalog but its level is too low: import needs `admin` |
+| 403 on an archive route | The key reaches the catalog but its level is too low: import needs `write` (export needs only `read`). A `Suspended` 403 on import means the catalog's owner team is suspended: only an admin imports then |
 | 413 on import | The body is over `max_import_bytes` plus slack (a plain-text axum rejection), or, if the answer comes from nginx, over the ingress's `proxy-body-size`. Raise both together |
 | 409 on import | The catalog is not empty: add `?replace=true` (or `--replace` on the command line). Or, with `?expect_generation=N`, the catalog has moved since that export: export it again |
 | `/healthz` is 503 and the pod is not ready | The database did not answer within 2 seconds: check the `Cluster`'s state, the `okf-mcp-db-app` secret and network policies |

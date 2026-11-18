@@ -323,9 +323,12 @@ async fn export_gives_a_reachable_catalog_as_a_tarball() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn import_needs_admin_refuses_a_full_catalog_without_replace_and_is_read_at_once() {
+async fn import_needs_write_refuses_a_full_catalog_without_replace_and_is_read_at_once() {
     let server = TestServer::start(two_catalogs(), Config::default()).await;
     let reader = server.key("reader", Access::Read, &[], None).await;
+    // Import needs `write` on the catalog (issue #260), within the grants.
+    let writer = server.key("writer", Access::Write, &["work"], None).await;
+    let stranger = server.key("stranger", Access::Write, &["pg"], None).await;
     let admin = server.key("admin", Access::Admin, &[], Some("work")).await;
     let tarball = get_export(&server, "pg", &admin)
         .await
@@ -337,13 +340,16 @@ async fn import_needs_admin_refuses_a_full_catalog_without_replace_and_is_read_a
     let as_reader = post_import(&server, "work", &reader, "", tarball.clone())
         .await
         .status();
+    let elsewhere = post_import(&server, "work", &stranger, "", tarball.clone())
+        .await
+        .status();
     let unknown = post_import(&server, "nope", &admin, "", tarball.clone())
         .await
         .status();
-    let first = post_import(&server, "work", &admin, "", tarball.clone()).await;
+    let first = post_import(&server, "work", &writer, "", tarball.clone()).await;
     let first_status = first.status();
     let report: serde_json::Value = first.json().await.unwrap();
-    let again = post_import(&server, "work", &admin, "", tarball.clone()).await;
+    let again = post_import(&server, "work", &writer, "", tarball.clone()).await;
     let again_status = again.status();
     let conflict: serde_json::Value = again.json().await.unwrap();
     let replaced: serde_json::Value =
@@ -360,8 +366,9 @@ async fn import_needs_admin_refuses_a_full_catalog_without_replace_and_is_read_a
     let concept = call(&client, "get_concept", serde_json::json!({"path": "a"})).await;
 
     assert_eq!(as_reader, 403);
+    assert_eq!(elsewhere, 404, "a writer outside its grants");
     assert_eq!(unknown, 404);
-    assert_eq!(first_status, 200);
+    assert_eq!(first_status, 200, "a writer imports");
     assert_eq!(report["added"], serde_json::json!(["a.md", "index.md"]));
     assert_eq!(again_status, 409);
     assert!(conflict["message"]

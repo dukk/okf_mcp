@@ -347,7 +347,7 @@ only).
 | `GET /healthz` | none | `{"database": "ok", "catalogs": N, "clock": ..., "redis": ...}`: 200, or 503 when the database does not answer within 2 s; `clock` is the last clock check (`docs/operations.md`, "Health and time"); `redis` is `"ok"`, `"unavailable"` or `null` without `[redis]`, and never changes the status |
 | `POST/GET/DELETE /mcp` | any | MCP streamable HTTP |
 | `GET /catalogs/{name}/export` | `read` on the catalog | The catalog as `application/gzip`, `Content-Disposition: attachment; filename="<stem>-<name>.tar.gz"` (the stem is the sanitised label, see `docs/operations.md`, "Display names and labels"; `<name>.tar.gz` when it is empty) |
-| `POST /catalogs/{name}/import[?replace=true&only_machinery=true&expect_generation=N]` | `admin` on the catalog | Imports the uploaded `.tar.gz` and answers with the import report |
+| `POST /catalogs/{name}/import[?replace=true&only_machinery=true&expect_generation=N]` | `write` on the catalog | Imports the uploaded `.tar.gz` and answers with the import report |
 | `GET /` | none | Redirects (303) to the web console, `/ui/` |
 | `GET /ui/*` | none | The web console's static files ("Web console" below) |
 | `/api/v1/*` | a key, or a console session (each endpoint checks its level) | The console's JSON API (`docs/operations.md`, "Web console") |
@@ -411,9 +411,10 @@ blocked), so sign out on a shared machine; an account session is an
 The Health page shows lint, sprawl, link, staleness and open-question counts,
 with each report one click away.
 
-Catalogs can be created, described, deleted, imported and exported from the
-console's Administer group, with no archive piped through a shell on the
-server.
+Catalogs can be created, described and deleted from the console's
+Administer group. Import & export, in the main navigation, exports any
+catalog you can read and imports into any you can write, with no archive
+piped through a shell on the server.
 
 Maintenance findings can be triaged (accepted, dismissed, needs input,
 reopened) and runs inspected from the browser.

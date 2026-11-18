@@ -34,9 +34,9 @@ use crate::store::users;
 pub enum Access {
     /// The read tools and export.
     Read,
-    /// Read, plus the write tools and publish.
+    /// Read, plus the write tools, publish and import into granted catalogs.
     Write,
-    /// Write, plus import into granted catalogs and using any key's changeset.
+    /// Write, plus using any key's changeset.
     Admin,
 }
 

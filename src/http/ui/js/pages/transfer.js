@@ -117,7 +117,9 @@ export async function render(main, rest) {
         }
     });
 
-    // Import (admin only; the server checks anyway)
+    // Import: shown for `write` or more on the picked catalog (issue #260;
+    // the server checks anyway). A member's level differs per catalog, so
+    // the panel follows the picker.
     const result = h('div', { id: 'import-result' });
     const progress = h('progress', { id: 'import-progress', max: '100', value: '0', hidden: true });
     const replace = h('input', { type: 'checkbox', id: 'import-replace' });
@@ -171,6 +173,7 @@ export async function render(main, rest) {
 
     picker.addEventListener('change', () => {
         chosen = picker.value;
+        importPanel.hidden = !store.canOn('write', chosen);
         showGeneration();
         clear(result);
         exportOut.replaceChildren();
@@ -178,8 +181,17 @@ export async function render(main, rest) {
     });
     showGeneration();
 
-    // fill(), not native append: the import panel is null without admin
-    // (issue #302).
+    const importPanel = h('section', { class: 'panel', id: 'import-panel' },
+        h('h2', {}, 'Import'),
+        drop,
+        h('div', { class: 'options' },
+            h('label', {}, replace, ' Replace the catalog\'s contents'),
+            h('label', {}, machinery, ' Only machinery (AGENTS.md, tools/, ...)'),
+            h('label', {}, 'Expected generation ', generation)),
+        h('p', { class: 'muted small' }, 'The import is refused if the catalog has moved past the expected generation; clear the field to skip the check.'),
+        importButton, progress, result);
+    importPanel.hidden = !store.canOn('write', chosen);
+
     fill(main,
         h('div', { class: 'page-head' },
             h('div', {}, h('h1', {}, 'Import & export'),
@@ -189,15 +201,5 @@ export async function render(main, rest) {
             h('h2', {}, 'Export'),
             h('p', { class: 'muted small' }, 'The published documents, as the catalog stands now.'),
             exportButton, ' ', exportOut),
-        store.can('admin')
-            ? h('section', { class: 'panel', id: 'import-panel' },
-                h('h2', {}, 'Import'),
-                drop,
-                h('div', { class: 'options' },
-                    h('label', {}, replace, ' Replace the catalog\'s contents'),
-                    h('label', {}, machinery, ' Only machinery (AGENTS.md, tools/, ...)'),
-                    h('label', {}, 'Expected generation ', generation)),
-                h('p', { class: 'muted small' }, 'The import is refused if the catalog has moved past the expected generation; clear the field to skip the check.'),
-                importButton, progress, result)
-            : null);
+        importPanel);
 }

@@ -6,8 +6,9 @@ use base64::Engine as _;
 use chrono::Utc;
 use okf_mcp::archive::{write_tarball, ExportFile};
 use okf_mcp::config::Config;
+use okf_mcp::okf::workspace::Workspace as _;
 use okf_mcp::store::audit::AuditActor;
-use okf_mcp::store::ceiling::{self, MemberAccess};
+use okf_mcp::store::ceiling::{self, MemberAccess, NewEntitlement};
 use okf_mcp::store::keys::Access;
 use okf_mcp::store::teams::{self, NewTeam, Role};
 use okf_mcp::store::users::AdminChange;
@@ -157,6 +158,17 @@ async fn an_admin_changes_a_catalogs_owner_and_a_scoped_admin_cannot() {
     assert_eq!(owned.catalogs, ["main"]);
 }
 
+/// The admin-only navigation links (catalogs, API keys, users, teams,
+/// settings) that are showing.
+fn visible_admin_links(ui: &Ui) -> serde_json::Value {
+    ui.eval(
+        "() => ['catalogs', 'keys', 'users', 'teams', 'settings'] \
+         .filter(nav => [...document.querySelectorAll(`a[data-nav=${nav}]`)] \
+             .some(link => link.offsetParent !== null))",
+        json!(null),
+    )
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn export_hands_the_browser_the_catalog_tarball() {
     let server = server().await;
@@ -166,7 +178,12 @@ async fn export_hands_the_browser_the_catalog_tarball() {
     let browser_key = key.clone();
     drive(server.base.clone(), move |ui| {
         ui.login(&browser_key);
-        ui.open("/transfer");
+        // A read key reaches the page from the navigation (issue #260),
+        // while the Administer group stays hidden.
+        ui.wait_visible("a[data-nav=transfer]");
+        assert!(!ui.page.is_visible("[data-need=admin]").expect("visible"));
+        assert_eq!(visible_admin_links(ui), json!([]));
+        ui.click("a[data-nav=transfer]");
         ui.wait_visible("#export-btn");
         ui.click("#export-btn");
         ui.wait_visible("#export-link");
@@ -182,6 +199,7 @@ async fn export_hands_the_browser_the_catalog_tarball() {
         assert_eq!(link["download"], "untitled-catalog-main.tar.gz");
         assert!(link["size"].as_u64().expect("a size") > 0);
         // A read key sees no import form.
+        assert!(!ui.page.is_visible("#import-panel").expect("visible"));
         assert!(!ui.page.is_visible("#import-btn").expect("visible"));
     })
     .await;
@@ -202,8 +220,9 @@ async fn export_hands_the_browser_the_catalog_tarball() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_import_reports_its_counts_and_a_stale_generation_is_refused() {
     let server = server().await;
+    // A `write` key: import needs no more (issue #260).
     let key = server
-        .key("console-importer", Access::Admin, &["main"], Some("main"))
+        .key("console-importer", Access::Write, &["main"], Some("main"))
         .await;
     let generation = server
         .app
@@ -221,8 +240,13 @@ async fn an_import_reports_its_counts_and_a_stale_generation_is_refused() {
     ]);
     drive(server.base.clone(), move |ui| {
         ui.login(&key);
-        ui.open("/transfer");
+        ui.wait_visible("a[data-nav=transfer]");
+        assert_eq!(visible_admin_links(ui), json!([]));
+        ui.click("a[data-nav=transfer]");
         ui.wait_text("#transfer-generation", &format!("generation {generation}"));
+        // A writer exports too.
+        ui.click("#export-btn");
+        ui.wait_visible("#export-link");
         let prefilled = ui.eval(
             "() => document.querySelector('#import-generation').value",
             json!(null),
@@ -437,7 +461,17 @@ async fn an_admin_signed_in_with_a_password_imports_an_archive() {
             ui.eval("() => localStorage.getItem('okf.key')", json!(null)),
             serde_json::Value::Null
         );
-        ui.open("/transfer");
+        // An admin keeps the Administer group, and Import & export sits
+        // outside it.
+        ui.wait_visible("[data-need=admin]");
+        assert_eq!(
+            ui.eval(
+                "() => !!document.querySelector('[data-need=admin] a[data-nav=transfer]')",
+                json!(null)
+            ),
+            json!(false)
+        );
+        ui.click("a[data-nav=transfer]");
         ui.wait_text("#transfer-generation", &format!("generation {generation}"));
         ui.wait_visible("#upload-file");
         let chosen = ui.eval(
@@ -462,6 +496,100 @@ async fn an_admin_signed_in_with_a_password_imports_an_archive() {
     }
     let current = server.app.catalog("main").expect("main").current();
     assert_eq!(current.generation(), generation + 1);
+}
+
+/// Issue #260: a member signed in with an account, entitled to `main` at
+/// `write` and `other` at `read`, finds Import & export in the navigation
+/// (no Administer group), sees only those two catalogs in the picker (not
+/// `private`), gets the import form only on `main`, and imports there.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_imports_where_they_write_and_only_exports_where_they_read() {
+    let server = TestServer::start_with(
+        vec![
+            ("main", files(&[("index.md", "# Main\n")])),
+            ("other", files(&[("index.md", "# Other\n")])),
+            ("private", files(&[("index.md", "# Private\n")])),
+        ],
+        |base| Config {
+            public_url: Some(base.replace("127.0.0.1", "localhost")),
+            ..Config::default()
+        },
+    )
+    .await;
+    server.user_with_password("alice", EMAIL, PASSWORD).await;
+    for (catalog, access) in [("main", Access::Write), ("other", Access::Read)] {
+        ceiling::entitle(
+            &server.db.pool,
+            &NewEntitlement {
+                user: "alice",
+                catalog,
+                access,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("entitle");
+    }
+    server.app.poll().await.expect("poll");
+    let generation = |name: &str| server.app.catalog(name).expect(name).current().generation();
+    let (main_before, other_before) = (generation("main"), generation("other"));
+    let archive = tarball(&[("index.md", "# Main\n\nImported by a member.\n")]);
+
+    let ran = drive(console_base(&server), move |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.wait_visible("a[data-nav=transfer]");
+        assert!(!ui.page.is_visible("[data-need=admin]").expect("visible"));
+        assert_eq!(visible_admin_links(ui), json!([]));
+        ui.click("a[data-nav=transfer]");
+        ui.select("#transfer-catalog", "main");
+        let options = ui.eval(
+            "() => [...document.querySelectorAll('#transfer-catalog option')].map(o => o.value)",
+            json!(null),
+        );
+        assert_eq!(options, json!(["main", "other"]), "only reachable catalogs");
+        ui.wait_text("#transfer-generation", &format!("generation {main_before}"));
+        ui.wait_visible("#import-panel");
+        // Read-only on `other`: export, but no import form.
+        ui.select("#transfer-catalog", "other");
+        ui.wait_text(
+            "#transfer-generation",
+            &format!("generation {other_before}"),
+        );
+        ui.wait_hidden("#import-panel");
+        ui.click("#export-btn");
+        ui.wait_visible("#export-link");
+        // Back on `main`, the form returns, and the import goes through.
+        ui.select("#transfer-catalog", "main");
+        ui.wait_visible("#import-panel");
+        let chosen = ui.eval(
+            CHOOSE_FILE,
+            json!({ "name": "main.tar.gz", "data": STANDARD.encode(&archive) }),
+        );
+        assert_eq!(chosen, json!(1));
+        ui.wait_text("#upload-name", "main.tar.gz");
+        ui.click("#import-replace");
+        ui.click("#import-btn");
+        ui.wait_visible("#import-report");
+        assert_eq!(ui.text("#import-updated"), "1");
+        ui.wait_text(
+            "#transfer-generation",
+            &format!("generation {}", main_before + 1),
+        );
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    assert_eq!(generation("main"), main_before + 1);
+    assert_eq!(generation("other"), other_before, "nothing imported there");
+    let main = server.app.catalog("main").expect("main").current();
+    assert_eq!(
+        main.workspace()
+            .read_to_string("index.md")
+            .expect("index.md"),
+        "# Main\n\nImported by a member.\n"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
