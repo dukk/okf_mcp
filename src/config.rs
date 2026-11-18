@@ -53,6 +53,10 @@ pub const DEFAULT_ACCESS_TOKEN_TTL: Duration = Duration::from_secs(60 * 60);
 /// The default lifetime of an OAuth refresh token (restarted by each rotation).
 pub const DEFAULT_REFRESH_TOKEN_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
+/// The default idle period after which the poll loop revokes an OAuth grant
+/// that holds no live token.
+pub const DEFAULT_IDLE_GRANT_REVOKE_AFTER: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
 /// The default cap on a sign-in code's `--expires`.
 pub const DEFAULT_CODE_MAX_EXPIRY: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
@@ -85,6 +89,11 @@ pub struct OAuthConfig {
     /// each rotation issues a new one, so the lifetime slides.
     #[serde(with = "humantime_serde")]
     pub refresh_token_ttl: Duration,
+    /// How long an OAuth grant may go without a token being issued for it
+    /// before the poll loop revokes it (`"30d"`). A grant that still holds
+    /// a live token is never revoked, whatever this says.
+    #[serde(with = "humantime_serde")]
+    pub idle_grant_revoke_after: Duration,
     /// The longest `okf-mcp oauth code create --expires` accepts (`"7d"`).
     #[serde(with = "humantime_serde")]
     pub code_max_expiry: Duration,
@@ -107,6 +116,7 @@ impl Default for OAuthConfig {
         Self {
             access_token_ttl: DEFAULT_ACCESS_TOKEN_TTL,
             refresh_token_ttl: DEFAULT_REFRESH_TOKEN_TTL,
+            idle_grant_revoke_after: DEFAULT_IDLE_GRANT_REVOKE_AFTER,
             code_max_expiry: DEFAULT_CODE_MAX_EXPIRY,
             dcr_enabled: true,
             cimd_allow_private: false,
@@ -897,6 +907,10 @@ impl Config {
         for (name, value) in [
             ("oauth.access_token_ttl", self.oauth.access_token_ttl),
             ("oauth.refresh_token_ttl", self.oauth.refresh_token_ttl),
+            (
+                "oauth.idle_grant_revoke_after",
+                self.oauth.idle_grant_revoke_after,
+            ),
             ("oauth.code_max_expiry", self.oauth.code_max_expiry),
         ] {
             check_auth_duration(name, value)?;
@@ -1396,6 +1410,10 @@ mod tests {
             Duration::from_secs(30 * 24 * 60 * 60)
         );
         assert_eq!(
+            config.oauth.idle_grant_revoke_after,
+            Duration::from_secs(30 * 24 * 60 * 60)
+        );
+        assert_eq!(
             config.oauth.code_max_expiry,
             Duration::from_secs(7 * 24 * 60 * 60)
         );
@@ -1411,6 +1429,7 @@ mod tests {
                     [oauth]\n\
                     access_token_ttl = \"15m\"\n\
                     refresh_token_ttl = \"7d\"\n\
+                    idle_grant_revoke_after = \"60d\"\n\
                     code_max_expiry = \"2d\"\n\
                     dcr_enabled = false\n\
                     cimd_allow_private = true\n";
@@ -1425,6 +1444,10 @@ mod tests {
         assert_eq!(
             config.oauth.refresh_token_ttl,
             Duration::from_secs(7 * 24 * 60 * 60)
+        );
+        assert_eq!(
+            config.oauth.idle_grant_revoke_after,
+            Duration::from_secs(60 * 24 * 60 * 60)
         );
         assert_eq!(
             config.oauth.code_max_expiry,
@@ -1492,10 +1515,11 @@ mod tests {
     #[test]
     fn oauth_lifetimes_must_be_positive() {
         // Each closure is a plain `fn` pointer (it captures nothing), so the
-        // three share one type and fit in one array.
-        let changes: [fn(&mut OAuthConfig); 3] = [
+        // four share one type and fit in one array.
+        let changes: [fn(&mut OAuthConfig); 4] = [
             |oauth| oauth.access_token_ttl = Duration::ZERO,
             |oauth| oauth.refresh_token_ttl = Duration::ZERO,
+            |oauth| oauth.idle_grant_revoke_after = Duration::ZERO,
             |oauth| oauth.code_max_expiry = Duration::ZERO,
         ];
         for change in changes {

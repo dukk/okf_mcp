@@ -670,6 +670,48 @@ async fn the_my_keys_page_says_so_to_a_key() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_sees_when_each_grant_was_last_active() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    let grant = alices_grant(&server).await;
+    // A token issued two days ago (recent, so the poll loop's idle
+    // revocation leaves the grant alone), then a newer one: the newest
+    // issue time is the grant's last activity (issue #269).
+    let older = okf_mcp::clock::format_timestamp(Utc::now() - chrono::TimeDelta::days(3));
+    let newest = okf_mcp::clock::format_timestamp(Utc::now() - chrono::TimeDelta::days(2));
+    for (byte, issued) in [(1_u8, &older), (2_u8, &newest)] {
+        sqlx::query(
+            "INSERT INTO oauth_tokens \
+             (sha256, grant_id, kind, family_id, resource, created_at, expires_at) \
+             VALUES ($1, $2, 'refresh', 'family-1', 'https://okf.example.com/mcp', \
+                     $3::timestamptz, $3::timestamptz + interval '30 days')",
+        )
+        .bind([byte; 32].as_slice())
+        .bind(&grant)
+        .bind(issued)
+        .execute(&server.db.pool)
+        .await
+        .expect("insert a token");
+    }
+    drive(console_base(&server), move |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.open("/my-grants");
+        ui.wait_text("[data-test=my-grant-example-client]", "Example Client");
+        // The page shows times in the browser's locale: ask it for the
+        // spelling it gives the newest token's.
+        let shown = ui.eval("(iso) => new Date(iso).toLocaleString()", json!(newest));
+        let shown = shown.as_str().expect("a string").to_string();
+        assert_eq!(
+            ui.wait_text("[data-test=my-grant-active-example-client]", &shown),
+            shown
+        );
+        ui.click("[data-test=my-grant-example-client]");
+        ui.wait_text("#drawer dl.facts", &format!("Last active{shown}"));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_member_revokes_an_oauth_grant() {
     let server = login_server().await;
     member(&server, Access::Write).await;

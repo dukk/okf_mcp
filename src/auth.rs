@@ -1458,6 +1458,7 @@ mod tests {
             user: Some(crate::db::TEST_USER.to_string()),
             user_id: None,
             self_issued: false,
+            last_activity: None,
         }
     }
 
@@ -2025,6 +2026,7 @@ mod tests {
             catalog_access: levels(&["pg", "work"], Access::Write),
             user_id: Some("alice-id".to_string()),
             self_issued,
+            last_activity: None,
             ..record(id, secret, false)
         };
         // A self-issued OAuth grant of hers on pg at write.
@@ -2033,6 +2035,7 @@ mod tests {
             catalog_access: levels(&["pg"], Access::Write),
             user_id: Some("alice-id".to_string()),
             self_issued: true,
+            last_activity: None,
             ..grant_record("grant-mine", false)
         };
         // A self-issued key of a user with no ceiling at all.
