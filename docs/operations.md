@@ -1847,7 +1847,7 @@ of `docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`).
 | `setting.changed` | `settings set` or `PUT /api/v1/settings/{key}` changes a setting ([Settings](#settings)). Setting the value already stored records nothing | `from` (the stored value before, `null` without an override) and `to`; for `support_contact` only `set` (whether a contact is set now), never the address |
 | `setting.cleared` | `settings reset` or `DELETE /api/v1/settings/{key}` removes an override (with none, nothing is recorded) | `from`; nothing for `support_contact` |
 | **Catalog writes** | | |
-| `catalog.published` | A publish writes at least one revision (one that changes nothing writes none and records nothing). Moves, splits and concept deletes are publishes and are recorded as such | `changeset` (the handle; the diff stays in the catalog's history), `files` (revisions written), `generation_from`, `generation_to` |
+| `catalog.published` | A publish (the `publish` tool, `POST /api/v1/changesets/{handle}/publish`, the console's Publish) writes at least one revision (one that changes nothing writes none and records nothing). Moves, splits and concept deletes are publishes and are recorded as such | `changeset` (the handle; the diff stays in the catalog's history), `files` (revisions written), `generation_from`, `generation_to` |
 | `catalog.reverted` | A `revert` succeeds: a document's old revision (or its deletion) goes into a changeset. A refused revert records nothing | `path`, `revision`, `changeset` |
 | `catalog.changeset_discarded` | An admin closes another key's changeset (`discard` without `paths`, or `DELETE /api/v1/changesets/{handle}`), or a user deletion discards an open changeset of one of the user's keys (the entry's person is that user). A key discarding its own changeset records nothing | `changeset`, `files` (entries dropped), `reason` (`admin` or `user_deleted`) |
 | **Data access** | | |
@@ -2121,7 +2121,9 @@ token derived from it, stored hashed too.
   session reaches exactly its ceiling, at the ceiling's levels. The admin
   flag and the ceiling are read from the key cache on every request.
 - **No changesets.** A session never owns a changeset, so MCP writes still
-  need a key or a grant.
+  need a key or a grant. An admin user's session may still publish or
+  discard any key's changeset from the Changesets page, recorded as that
+  user.
 - **Ending sessions.**
   - Sign-out (the console's Sign out, `DELETE /api/v1/session`) deletes the
     session.
@@ -3545,19 +3547,52 @@ curl -fsS -H "Authorization: Bearer $OKF_MCP_KEY" -H 'Content-Type: application/
 The Changesets page (`/ui/#/changesets`) lists the selected catalog's open
 changesets: a key sees its own, an admin every key's. It marks the idle ones
 (no change within `session_idle_timeout`), and a row opens the changeset's
-pending diff in a drawer, with Discard. These are the `list_changesets`,
-`pending_changes` and `discard` tools over HTTP, with the same rules: the
-diff is for the key that opened the changeset or an admin (a read key opens
-none, so it sees none), and another key's handle answers 404, as an unknown
-one does, never 403.
+pending diff in a drawer, with Publish and Discard. These are the
+`list_changesets`, `pending_changes`, `publish` and `discard` tools over
+HTTP, with the same rules: the diff is for the key that opened the changeset
+or an admin (a read key opens none, so it sees none), publishing and
+discarding are for that key (at write) or an admin, and another key's handle
+answers 404, as an unknown one does, never 403. A suspended or locked
+catalog, and the maintenance runner on a catalog with maintenance off, are
+refused as the tools refuse them.
+
+A console session owns no changeset, so a member's session sees none here;
+an admin user's session sees every key's, and may publish or discard them.
+To publish your own key's changeset from the console as a member, sign in
+to the console with that key.
+
+**Publishing from the console.** This is the manual way to finish what an
+agent staged, for instance when its own `publish` call keeps failing.
+Review the diff, type a revision message (it is required, and recorded on
+every revision the publish writes), click Publish and confirm. Cancel sends
+nothing. While the publish runs, Publish and Discard stay disabled, even in
+a drawer opened again meanwhile.
+- **Published.** The drawer closes, the handle leaves the list, and a note
+  above the list shows the revisions written, with any lint warnings and
+  replayed bookkeeping paths. The revisions and the `catalog.published`
+  audit entry name whoever published: an admin publishing an agent's
+  changeset is recorded as that admin (its key, or its console session),
+  never as the key that opened the changeset. A changeset whose edits all
+  match the published text closes with no revisions.
+- **Nothing to publish.** A changeset with no pending files is not
+  published and stays open (discard it, or let the 24-hour prune of empty
+  changesets close it).
+- **Refused.** A conflict (a document changed since the changeset read it)
+  lists the conflicting files; a lint failure lists the errors. Nothing is
+  published or discarded and the message stays in the form: fix the
+  changeset through the agent or another MCP client, then publish again.
 
 | Method and path | Key | Does |
 |---|---|---|
 | `GET /api/v1/changesets?catalog=` | read | The key's own open changesets; an admin's: every key's. `catalog` is optional (absent or empty: every catalog the key reaches; an unreached one is 404). As `list_changesets`: `changeset`, `catalog`, `key`, `key_name`, `actor`, `created`, `last_change`, `idle`, `paths` |
 | `GET /api/v1/changesets/{handle}/diff` | owner or admin | As `pending_changes`: `{catalog, changeset, files}`, each file with its unified `diff`. 404 for another key's handle; 409 once published or discarded |
+| `POST /api/v1/changesets/{handle}/publish` | write (owner) or admin | As `publish`, with the body `{"message": "..."}`: `{catalog, catalog_label, changeset, published, revisions, warnings, replayed}`, each revision `{path, revision, op}`. `published: false` means the changeset held no entries and stays open; `published: true` with no revisions means every edit matched the published text, and it is closed. The revisions and the `catalog.published` entry are the caller's (an admin's own, when it publishes another key's changeset). 404 for another key's handle or an unknown one; 403 for a suspended or locked catalog, or the maintenance runner where maintenance is off; 409 for a blank message (`Refused`), a published or discarded handle (`Refused`) or a conflict (`Conflict`, with `files`: `path`, `base_revision`, `current_revision`); 422 for lint errors in the changed files (`LintFailed`, with `errors` and `warnings`) or a body without `message`. A refused publish leaves the changeset open and unchanged |
 | `DELETE /api/v1/changesets/{handle}` | write (owner) or admin | As `discard` without `paths`: drops every entry and closes the handle for good (`{catalog, changeset, removed, closed}`). An admin closing another key's changeset is recorded in the [audit log](#audit-log). 404 for another key's handle; 409 once published or discarded |
 
 ```sh
+curl -s -X POST -H "Authorization: Bearer $OKF_MCP_KEY" \
+    -H 'Content-Type: application/json' -d '{"message": "Reviewed the agent edits"}' \
+    https://okf-mcp.example.com/api/v1/changesets/$HANDLE/publish
 curl -s -X DELETE -H "Authorization: Bearer $OKF_MCP_KEY" \
     https://okf-mcp.example.com/api/v1/changesets/$HANDLE
 ```
