@@ -3501,13 +3501,13 @@ disposition and one for all. A finding's drawer shows its claim, its evidence
 at the pinned revisions and its decision history, and a write key records a
 decision there with a rationale; the console makes the retry key. A decision
 is recorded only: it never edits the catalog. The Runs page (`/ui/#/runs`)
-lists runs newest first, and a run's drawer lists its work items with links
+lists runs newest first, one page at a time with a Load older button, and a run's drawer lists its work items with links
 to their concepts and findings. The nav badge shows the selected catalog's
 open findings.
 
 | Method and path | Key | Does |
 |---|---|---|
-| `GET /api/v1/catalogs/{catalog}/maintenance/runs?after=&limit=` | read | As `maintenance_list_runs`: oldest first; `limit` 1..=200 (default 20; outside is 409); `after` is the previous page's `next_after` (an unknown one is 404) |
+| `GET /api/v1/catalogs/{catalog}/maintenance/runs?after=&limit=&order=` | read | As `maintenance_list_runs`: oldest first by default, newest first with `order=desc` (another value is 400; `after` continues in that order); `limit` 1..=200 (default 20; outside is 409); `after` is the previous page's `next_after` (an unknown one is 404) |
 | `GET /api/v1/catalogs/{catalog}/maintenance/runs/{run}` | read | As `maintenance_get_run`: the run summary and up to 50 work items, with their finding ids |
 | `GET /api/v1/catalogs/{catalog}/maintenance/findings?after=&limit=&disposition=` | read | As `maintenance_list_findings`, optionally narrowed to one current disposition (`open`, `accepted_for_follow_up`, `dismissed`, `needs_input`; another value is 400). `limit` and `next_after` count matching findings only |
 | `GET /api/v1/catalogs/{catalog}/maintenance/findings/{finding}` | read | As `maintenance_get_finding`: claim, evidence with pinned revisions, decision history, `outdated` |

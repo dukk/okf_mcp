@@ -317,8 +317,9 @@ Report-only: list run summaries without lease tokens. Requires Read; page size d
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `catalog` | string | yes | Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply. |
-| `after` | string | no | Exclusive last-row ID from the previous page in this catalog; omit for the first page. |
+| `after` | string | no | Exclusive last-row ID from the previous page in this catalog; omit for the first page. Continues in the chosen `order`. |
 | `limit` | integer | no | Page size (default 20, minimum 1, maximum 200). |
+| `order` | one of: asc, desc | no | `asc` (default) lists oldest first; `desc` lists newest first. |
 
 ## `maintenance_read_revision`
 
