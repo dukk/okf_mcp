@@ -1,6 +1,7 @@
 # okf-mcp display names: design
 
-Status: designed 2026-11-17; not yet scheduled.
+Status: delivered in milestone 17 (epic #597), 2026-11-17. The provisioner follow-up is tracked in
+https://github.com/hypotheosis/telekin-platform/issues/111 (Part 5, Rollout step 2).
 
 ## Goal
 

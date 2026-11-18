@@ -11,7 +11,7 @@ run stamps the concept, so repeated runs rotate through the whole catalog.
 
 Everything here goes through the okf-mcp tools (`mcp__okf-mcp__*`) on
 the catalog the session names (a SessionStart hook names it; otherwise
-use the connection's write target from `list_catalogs`). The server is the
+use the connection's write target from `list_catalogs`). Say the catalog's `label` to people; pass its id (`name`) as `catalog`. The server is the
 source of truth. Never read or write a git checkout of the catalog, or run
 its tooling: it is a frozen snapshot.
 
@@ -72,7 +72,8 @@ text: the server stamps every `at` from its own clock and edits only the
 key it writes. Every write takes the `changeset` handle from step 1.
 Always pass `by: "claude-code/<model-id>"` to `stamp` and `review` (the
 default is the API key's actor, which may name a person), and
-`by: "human:<owner>"` only for confirmations the owner gave.
+`by: "human:<owner>"` only for confirmations the owner gave. The `<owner>` there is the owner's id
+(slug), not a label.
 
 | Write | Tool |
 |---|---|

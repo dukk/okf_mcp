@@ -1625,6 +1625,8 @@ export function named(label, slug) {
 - [ ] **Step 6: The coordinator files the provisioner follow-up issue** in the provisioner's own repository, not this one, with the contents of spec Part 5 "Rollout" step 2. It depends on the release carrying this milestone. Link it from the epic.
 - [ ] **Step 7: Gates, commit** `docs: display names and labels`.
 
+> **Corrected (issue #611, 2026-11-17).** What shipped differs from the steps above. (1) The route and CLI rows (`PATCH` users, teams and catalogs, `user update`, `team update`, `catalog update`) and the audit-action rows were already in `docs/operations.md` from issues #600, #603 and #610; Task 12 added the `label` fields, `GET /labels`, the catalog `PATCH` body and the "Display names and labels" section, and did not repeat them. (2) The provisioner allow-list is the code's `PROVISIONER_ROUTES` (`src/http/api/mod.rs`), and the provisioner is refused `GET /labels`; the operations.md allow-list table now lists the three PATCH routes (20 pairs). (3) The skills' line sits in each skill's ground rules, and `okf-review-oldest` also says `human:<owner>` is the owner's id. (4) Step 4: the spec already held the Task 3 (#600) and Task 9 (#606) correction notes; the deleted-user audit wording (Task 5) is in the spec's body ("Unnamed user"), so it needed no note. (5) Step 6: the follow-up is https://github.com/hypotheosis/telekin-platform/issues/111, filed by the coordinator in the private provisioner repository. (6) The milestone changelog is `changelog/*-m17-milestone.md`.
+
 ---
 
 ## Self-review
