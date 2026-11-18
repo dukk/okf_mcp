@@ -9,6 +9,10 @@ import threading
 root = os.path.dirname(os.path.realpath(__file__))
 with open(root + "/scenario.json") as f:
     cfg = json.load(f)
+if cfg.get("start_delay_ms"):
+    # Models a slow interpreter start on a loaded machine: record.json (the
+    # "started" signal) appears only after this delay.
+    time.sleep(cfg["start_delay_ms"] / 1000)
 with open(root + "/record.json", "w") as f:
     json.dump({"argv": sys.argv[1:], "env": dict(os.environ), "cwd": os.getcwd(),
                "mode": os.stat(os.getcwd()).st_mode & 0o777, "pid": os.getpid()}, f)
