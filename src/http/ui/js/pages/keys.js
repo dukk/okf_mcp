@@ -45,7 +45,8 @@ function expiryChoices(maxSecs) {
     if (typeof maxSecs !== 'number') return EXPIRIES;
     const fits = EXPIRIES.filter(([, , secs]) => secs <= maxSecs);
     if (fits.length) return fits;
-    const value = maxSecs % 3600 === 0 ? `${maxSecs / 3600}h` : `${maxSecs}s`;
+    // Under an hour (the shortest choice), so seconds spell it exactly.
+    const value = `${maxSecs}s`;
     return [[value, value, maxSecs]];
 }
 

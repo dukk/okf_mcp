@@ -692,17 +692,26 @@ async fn the_keys_page_shows_users_and_catalogs_by_label() {
     .await;
 }
 
-/// Issue #270: the code form offers only the expiries `oauth.code_max_expiry`
-/// allows, and a code minted with the form's default is accepted.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_code_form_hides_expiries_above_the_servers_limit() {
+/// Opens the code form on a server whose `oauth.code_max_expiry` is `limit`
+/// (the default when `None`), reads what it offers, mints a code with its
+/// default and reads that code's lifetime.
+///
+/// # Returns
+/// The option values, the selected value and the minted code's lifetime.
+async fn offered_and_minted(
+    limit: Option<std::time::Duration>,
+) -> (Vec<String>, String, TimeDelta) {
     let mut config = Config::default();
-    config.oauth.code_max_expiry = std::time::Duration::from_secs(2 * 3600);
+    if let Some(limit) = limit {
+        config.oauth.code_max_expiry = limit;
+    }
     let server =
         TestServer::start(vec![("main", files(&[("index.md", "# Main\n")]))], config).await;
     let admin = server
         .key("console-admin", Access::Admin, &["main"], Some("main"))
         .await;
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let sink = std::sync::Arc::clone(&seen);
     let ran = drive(server.base.clone(), move |ui| {
         ui.login(&admin);
         ui.open("/keys");
@@ -710,12 +719,12 @@ async fn the_code_form_hides_expiries_above_the_servers_limit() {
         ui.click("#code-new");
         ui.wait_visible("#code-form");
         let offered = ui.eval(
-            "() => [...document.querySelectorAll('#code-form select[name=expires_in] option')].map(o => o.value)",
+            "() => [[...document.querySelectorAll('#code-form select[name=expires_in] option')].map(o => o.value), \
+                    document.querySelector('#code-form select[name=expires_in]').value]",
             json!(null),
         );
-        // 24h is above the 2h limit, so only 1h is offered, and selected.
-        assert_eq!(offered, json!(["1h"]));
-        ui.fill("#code-form input[name=name]", "short-code");
+        *sink.lock().expect("lock") = Some(offered);
+        ui.fill("#code-form input[name=name]", "limit-code");
         ui.select("#code-form select[name=user]", OWNER);
         ui.click("#code-form input[name=catalog][value=main]");
         ui.click("#code-form button[type=submit]");
@@ -723,9 +732,71 @@ async fn the_code_form_hides_expiries_above_the_servers_limit() {
     })
     .await;
     assert!(ran);
+    let offered = seen
+        .lock()
+        .expect("lock")
+        .take()
+        .expect("the form was read");
+    let values = offered[0]
+        .as_array()
+        .expect("options")
+        .iter()
+        .map(|value| value.as_str().expect("a string").to_string())
+        .collect();
+    let selected = offered[1].as_str().expect("selected").to_string();
     let minted = codes::list(&server.db.pool).await.expect("list codes");
-    assert_eq!(minted.len(), 1);
-    assert!(minted[0].expires_at - minted[0].created_at <= TimeDelta::hours(1));
+    assert_eq!(minted.len(), 1, "the form's default was accepted");
+    (
+        values,
+        selected,
+        minted[0].expires_at - minted[0].created_at,
+    )
+}
+
+/// Issue #270: the code form offers only the expiries `oauth.code_max_expiry`
+/// allows, selects 24 hours when allowed (else the longest choice), and the
+/// default it selects mints a code of that lifetime. Reviews of #657: the
+/// default limit, a limit between two choices, one that leaves only 1 hour,
+/// and one shorter than every choice (the limit itself is the choice).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_code_form_offers_only_expiries_within_the_servers_limit() {
+    use std::time::Duration;
+    let cases: [(Option<Duration>, &[&str], &str, TimeDelta); 4] = [
+        // The default limit is 7 days: every choice, 24 hours selected.
+        (
+            None,
+            &["1h", "24h", "3d", "7d"],
+            "24h",
+            TimeDelta::hours(24),
+        ),
+        // 3 days: 7d is hidden, 24 hours still selected.
+        (
+            Some(Duration::from_secs(3 * 86_400)),
+            &["1h", "24h", "3d"],
+            "24h",
+            TimeDelta::hours(24),
+        ),
+        // 2 hours: only 1h, selected.
+        (
+            Some(Duration::from_secs(2 * 3600)),
+            &["1h"],
+            "1h",
+            TimeDelta::hours(1),
+        ),
+        // 90 seconds: shorter than every choice, so the limit itself.
+        (
+            Some(Duration::from_secs(90)),
+            &["90s"],
+            "90s",
+            TimeDelta::seconds(90),
+        ),
+    ];
+    for (limit, options, selected, lifetime) in cases {
+        let (offered, chosen, minted) = offered_and_minted(limit).await;
+        assert_eq!(offered, options, "limit {limit:?}");
+        assert_eq!(chosen, selected, "limit {limit:?}");
+        assert_eq!(minted, lifetime, "limit {limit:?}");
+    }
 }
 
 /// Registers a client, mints a sign-in code `laptop` and redeems it, as the
@@ -822,35 +893,112 @@ async fn the_code_form_never_offers_every_expiry_before_the_limit_is_known() {
     assert!(ran);
 }
 
+// Installed in the page: every `GET /oauth/codes` fails while `mode` is
+// "fail" (so the limit stays unknown whatever number of times the page
+// asks for the first list), and is held until `releaseLimit()` while it
+// is "hold", and goes through untouched in any other mode.
+const LIMIT_READS: &str = "() => {
+    const original = window.fetch;
+    window.limitMode = 'fail';
+    window.limitHeld = [];
+    window.releaseLimit = () => window.limitHeld.splice(0).forEach(release => release());
+    window.fetch = (input, init) => {
+        const method = (init && init.method) || 'GET';
+        if (method !== 'GET' || !String(input).endsWith('/oauth/codes')) {
+            return original(input, init);
+        }
+        if (window.limitMode === 'fail') {
+            return Promise.resolve(new Response(
+                JSON.stringify({ error: 'test', message: 'limit list down' }),
+                { status: 503, headers: { 'Content-Type': 'application/json' } }));
+        }
+        if (window.limitMode === 'pass') return original(input, init);
+        return new Promise(resolve => {
+            window.limitHeld.push(() => resolve(original(input, init)));
+        });
+    };
+    return true;
+}";
+
+/// Review of #657 (round 3): when New's own read of the limit fails, the
+/// form stays closed (the failure is toasted) and New tries again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_limit_read_keeps_the_code_form_closed_until_it_succeeds() {
+    let server = server().await;
+    let admin = server
+        .key("console-admin", Access::Admin, &["main"], Some("main"))
+        .await;
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.eval(LIMIT_READS, json!(null));
+        ui.open("/keys");
+        ui.wait_visible("#code-new");
+        ui.wait_text("#toasts", "limit list down");
+        let toasts = |ui: &crate::harness::Ui| {
+            ui.eval(
+                "() => document.querySelectorAll('#toasts .toast').length",
+                json!(null),
+            )
+            .as_u64()
+            .unwrap_or(0)
+        };
+        let before = toasts(ui);
+        ui.eval(
+            "() => document.getElementById('code-new').click()",
+            json!(null),
+        );
+        // New's own read failed too: one more toast, and no form.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while toasts(ui) <= before {
+            assert!(std::time::Instant::now() < deadline, "no second failure");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        // A form that did open would do so after the users read; give it time.
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        assert!(!ui.page.is_visible("#code-form").expect("visible"));
+        // The list answers again: New opens the form, with the real limit.
+        ui.eval("() => { window.limitMode = 'pass'; }", json!(null));
+        ui.eval(
+            "() => document.getElementById('code-new').click()",
+            json!(null),
+        );
+        ui.wait_visible("#code-form");
+    })
+    .await;
+    assert!(ran);
+}
+
+/// Review of #657 (round 3): a redeemed code's grant that the key list does
+/// not hold (here its read failed) shows as text, not a button.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_grant_missing_from_the_key_list_shows_as_text() {
+    let server = server().await;
+    let admin = server
+        .key("console-admin", Access::Admin, &["main"], Some("main"))
+        .await;
+    let (grant_id, _) = redeemed_grant(&server).await;
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.fail_next("GET", "/keys", 503, "keys unavailable");
+        ui.open("/keys");
+        ui.wait_visible("#codes-show-all");
+        ui.click("#codes-show-all");
+        ui.wait_visible("[data-test=code-laptop]");
+        ui.eval(
+            "() => document.querySelector('[data-test=code-laptop]').click()",
+            json!(null),
+        );
+        ui.wait_text("#drawer dl.facts", &grant_id);
+        assert!(!ui.page.is_visible("#code-open-grant").expect("visible"));
+    })
+    .await;
+    assert!(ran);
+}
+
 /// Review of #657 (round 2): the code form does not open over a drawer
 /// opened, or after one dismissed, while its limit read was pending.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_pending_limit_read_does_not_open_the_code_form_over_a_newer_drawer() {
-    // Installed in the page: every `GET /oauth/codes` fails while `mode` is
-    // "fail" (so the limit stays unknown whatever number of times the page
-    // asks for the first list), and is held until `releaseLimit()` while it
-    // is "hold".
-    const LIMIT_READS: &str = "() => {
-        const original = window.fetch;
-        window.limitMode = 'fail';
-        window.limitHeld = [];
-        window.releaseLimit = () => window.limitHeld.splice(0).forEach(release => release());
-        window.fetch = (input, init) => {
-            const method = (init && init.method) || 'GET';
-            if (method !== 'GET' || !String(input).endsWith('/oauth/codes')) {
-                return original(input, init);
-            }
-            if (window.limitMode === 'fail') {
-                return Promise.resolve(new Response(
-                    JSON.stringify({ error: 'test', message: 'limit list down' }),
-                    { status: 503, headers: { 'Content-Type': 'application/json' } }));
-            }
-            return new Promise(resolve => {
-                window.limitHeld.push(() => resolve(original(input, init)));
-            });
-        };
-        return true;
-    }";
     let server = server().await;
     let admin = server
         .key("console-admin", Access::Admin, &["main"], Some("main"))
