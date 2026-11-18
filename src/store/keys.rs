@@ -1268,7 +1268,7 @@ pub struct IdleRevocation {
 /// Revokes every OAuth grant that has been idle since before
 /// `idle_before` and holds no live token (`idle_grant!`), each the way an
 /// operator's `oauth grant revoke` does: one transaction that locks its
-/// people and its row, revokes it, records `oauth_grant.revoked` (actor
+/// people and its row, revokes it, records `oauth.grant_revoked` (actor
 /// `system:idle-grant-revocation`, details `{"reason": "idle",
 /// "last_activity": ...}`) and bumps the administrative generation. Static
 /// keys (`kind = 'key'`) are never touched.

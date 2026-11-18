@@ -2262,7 +2262,8 @@ mod tests {
         assert!(
             format_key_record(records.iter().find(|record| record.id == old_id).unwrap())
                 .ends_with(
-                "\tmaintenance_report false\tprovisioner no\tuser test-user\tkind key\tclient -"
+                "\tmaintenance_report false\tprovisioner no\tuser test-user\tkind key\tclient -\t\
+                 last_activity -"
             )
         );
         run(

@@ -4,8 +4,9 @@
 // Each grant's drawer revokes it; the client is refused from its next
 // request. Last active is when the grant's newest token was issued (each
 // sign-in and refresh issues one); the server revokes a grant idle for
-// oauth.idle_grant_revoke_after (30 days by default). The ceiling the cap notes compare with is the one /me gives on
-// this load, never the sign-in snapshot.
+// oauth.idle_grant_revoke_after (30 days by default). The ceiling the cap
+// notes compare with is the one /me gives on this load, never the sign-in
+// snapshot.
 import { h, pill, fact } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
