@@ -15,8 +15,8 @@ import { guard, once } from '../core/pending.js';
 import { ago, when } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
 import { confirmDialog } from '../components/confirm.js';
-import { assignControl, namesOf } from '../components/picker.js';
-import { named, teamLabel, userLabel } from '../core/labels.js';
+import { assignControl, namesOf, rowsOf, teamChoices } from '../components/picker.js';
+import { named, userLabel } from '../core/labels.js';
 import { accountSections, loadAccount } from '../components/user-account.js';
 import { canAdministerPeople, keyUserChanged, refreshIdentity, refreshUnassigned } from '../core/shell.js';
 
@@ -284,9 +284,10 @@ async function renderUnassigned(main) {
         let users;
         let teams;
         try {
-            [rows, users, teams] = await Promise.all([api.get('/unassigned'), namesOf('users'), namesOf('teams')]);
+            [rows, users, teams] = await Promise.all([api.get('/unassigned'), namesOf('users'), rowsOf('teams')]);
         } catch { return; }
         if (!main.isConnected) return;
+        const teamPick = teamChoices(teams);
         const items = [
             ...rows.keys.map(key => assignRow(`key-${key.name}`,
                 [key.kind === 'oauth' ? 'Grant ' : 'Key ', h('code', {}, key.name), ` (actor ${key.actor})`,
@@ -300,7 +301,7 @@ async function renderUnassigned(main) {
                 users, user => api.put(`/oauth/codes/${enc(code.id)}/user`, { user }), `${code.name} now belongs to`, userLabel)),
             ...rows.catalogs.map(name => assignRow(`catalog-${name}`,
                 ['Catalog ', h('code', {}, name)],
-                teams, team => api.put(`/catalogs/${enc(name)}/owner`, { team }), `${name} is now owned by`, teamLabel)),
+                teamPick.names, team => api.put(`/catalogs/${enc(name)}/owner`, { team }), `${name} is now owned by`, teamPick.labelOf)),
         ];
         body.replaceChildren(items.length
             ? h('ul', { class: 'grant-list' }, items)
