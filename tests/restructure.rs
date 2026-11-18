@@ -3,7 +3,10 @@
 //! - a move, published and exported;
 //! - a move against a concurrent edit of a linking file (a conflict);
 //! - a move against a concurrent `index` of the same folder (a replay);
-//! - a delete refused while linked, then allowed.
+//! - a delete refused while linked, then allowed;
+//! - a delete that unlinks `log.md` (issue #658), alone and against a
+//!   concurrent `log` entry in either order, and still refused for links
+//!   outside `log.md`.
 
 mod support;
 
@@ -315,4 +318,213 @@ async fn a_delete_is_refused_while_linked_then_published() {
     .map(|(path, op)| (path.to_string(), op.to_string()));
     assert_eq!(revisions(&published), expected);
     assert_eq!(index["text"], "# Infra\n\n");
+}
+
+/// Issue #658's repro, step 1: a concept, listed and created in its own
+/// changeset, whose `log.md` entry links it; published.
+async fn logged_concept(client: &Client) {
+    let handle = open_changeset(client, None).await;
+    let concept = json!({
+        "path": "/infra/x",
+        "frontmatter": {"type": "System", "title": "X", "description": "A test system."},
+        "body": "# X\n",
+        "index_summary": "a test system",
+        "changeset": handle,
+    });
+    ok(client, "create_concept", concept).await;
+    let entry = json!({
+        "text": "Added [X](/infra/x.md)",
+        "kind": "Creation",
+        "changeset": handle,
+    });
+    ok(client, "log", entry).await;
+    let published = ok(
+        client,
+        "publish",
+        json!({"message": "add x", "changeset": handle}),
+    )
+    .await;
+    assert_eq!(published["published"], true, "{published}");
+}
+
+/// The rules of the lint errors in the published catalog (an empty list
+/// when it is clean).
+async fn lint_errors(client: &Client) -> Vec<String> {
+    let report = ok(client, "lint", json!({})).await;
+    report["errors"]
+        .as_array()
+        .unwrap_or_else(|| panic!("lint has an errors list: {report}"))
+        .iter()
+        .map(|finding| finding.to_string())
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_delete_unlinks_log_md_and_later_log_entries_still_publish() {
+    let server = TestServer::start(catalog(), Config::default()).await;
+    let key = writer(&server, "writer").await;
+    let client = server.client(&key, None).await.unwrap();
+    logged_concept(&client).await;
+
+    let handle = open_changeset(&client, None).await;
+    let deleted = ok(
+        &client,
+        "delete_concept",
+        json!({"path": "/infra/x", "changeset": handle}),
+    )
+    .await;
+    let published = ok(
+        &client,
+        "publish",
+        json!({"message": "retire x", "changeset": handle}),
+    )
+    .await;
+    let after_delete = lint_errors(&client).await;
+    let later = open_changeset(&client, None).await;
+    let entry = json!({"text": "Checked the catalog", "changeset": later});
+    ok(&client, "log", entry).await;
+    let later_published = ok(
+        &client,
+        "publish",
+        json!({"message": "a later entry", "changeset": later}),
+    )
+    .await;
+    let after_log = lint_errors(&client).await;
+    let log = ok(&client, "read_document", json!({"path": "/log.md"})).await;
+    client.cancel().await.unwrap();
+
+    assert_eq!(
+        deleted["touched"],
+        json!(["/infra/x.md", "/infra/index.md", "/log.md"])
+    );
+    assert_eq!(published["published"], true, "{published}");
+    let expected = [
+        ("/infra/index.md", "update"),
+        ("/infra/x.md", "delete"),
+        ("/log.md", "update"),
+    ]
+    .map(|(path, op)| (path.to_string(), op.to_string()));
+    assert_eq!(revisions(&published), expected);
+    assert!(after_delete.is_empty(), "{after_delete:?}");
+    assert_eq!(later_published["published"], true, "{later_published}");
+    assert!(after_log.is_empty(), "{after_log:?}");
+    let text = log["text"].as_str().unwrap();
+    assert!(text.contains("* **Creation:** Added X\n"), "{text}");
+    assert!(
+        text.contains("* **Update:** Checked the catalog\n"),
+        "{text}"
+    );
+    assert!(!text.contains("/infra/x.md"), "{text}");
+}
+
+/// A delete pending while another changeset logs an entry: both publish in
+/// either order, and `log.md` ends with both entries and no link to the
+/// deleted concept.
+async fn a_concurrent_log_entry_replays(delete_first: bool) {
+    let server = TestServer::start(catalog(), Config::default()).await;
+    let deleter_key = writer(&server, "writer-a").await;
+    let logger_key = writer(&server, "writer-b").await;
+    let deleter = server.client(&deleter_key, None).await.unwrap();
+    let logger = server.client(&logger_key, None).await.unwrap();
+    logged_concept(&deleter).await;
+    let (deleting, logging) = (
+        open_changeset(&deleter, None).await,
+        open_changeset(&logger, None).await,
+    );
+    ok(
+        &deleter,
+        "delete_concept",
+        json!({"path": "/infra/x", "changeset": deleting}),
+    )
+    .await;
+    let entry = json!({"text": "Synced the [hub](/hub.md)", "changeset": logging});
+    ok(&logger, "log", entry).await;
+    let publish = |handle: &str| json!({"message": "publish", "changeset": handle});
+
+    let (first, second) = if delete_first {
+        let first = ok(&deleter, "publish", publish(&deleting)).await;
+        (first, ok(&logger, "publish", publish(&logging)).await)
+    } else {
+        let first = ok(&logger, "publish", publish(&logging)).await;
+        (first, ok(&deleter, "publish", publish(&deleting)).await)
+    };
+    let errors = lint_errors(&deleter).await;
+    let log = ok(&deleter, "read_document", json!({"path": "/log.md"})).await;
+    deleter.cancel().await.unwrap();
+    logger.cancel().await.unwrap();
+
+    assert_eq!(first["published"], true, "{first}");
+    assert_eq!(second["published"], true, "{second}");
+    assert_eq!(second["replayed"], json!(["/log.md"]), "{second}");
+    assert!(errors.is_empty(), "{errors:?}");
+    let text = log["text"].as_str().unwrap();
+    assert!(text.contains("* **Creation:** Added X\n"), "{text}");
+    assert!(
+        text.contains("* **Update:** Synced the [hub](/hub.md)\n"),
+        "{text}"
+    );
+    assert!(!text.contains("/infra/x.md"), "{text}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_log_entry_published_after_a_delete_replays() {
+    a_concurrent_log_entry_replays(true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_delete_published_after_a_log_entry_replays() {
+    a_concurrent_log_entry_replays(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn links_outside_log_md_still_refuse_a_delete() {
+    let server = TestServer::start(catalog(), Config::default()).await;
+    let key = writer(&server, "writer").await;
+    let client = server.client(&key, None).await.unwrap();
+    logged_concept(&client).await;
+    let handle = open_changeset(&client, None).await;
+    // One link from a concept, one from another folder's index.md.
+    let hub = json!({
+        "path": "/hub.md",
+        "old_str": "See the [time server](/infra/time.md#ports).",
+        "new_str": "See the [time server](/infra/time.md#ports) and [x](/infra/x.md).",
+        "changeset": handle,
+    });
+    ok(&client, "edit_document", hub).await;
+    let root = json!({
+        "path": "/index.md",
+        "old_str": "* [Infra](/infra/index.md) - systems",
+        "new_str": "* [Infra](/infra/index.md) - systems, such as [X](infra/x.md)",
+        "changeset": handle,
+    });
+    ok(&client, "edit_document", root).await;
+
+    let refused = call(
+        &client,
+        "delete_concept",
+        json!({"path": "/infra/x", "changeset": handle}),
+    )
+    .await;
+    let pending = ok(&client, "pending_changes", json!({"changeset": handle})).await;
+    client.cancel().await.unwrap();
+
+    assert_eq!(refused.is_error, Some(true));
+    let body = refused.structured_content.expect("the error's JSON");
+    assert_eq!(body["error"], "StillLinked");
+    // log.md's link is not listed: a delete unlinks it.
+    assert_eq!(
+        body["links"],
+        json!([
+            {"source": "/hub.md", "line": 6},
+            {"source": "/index.md", "line": 5},
+        ])
+    );
+    let mut paths: Vec<&str> = pending["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| file["path"].as_str().unwrap())
+        .collect();
+    paths.sort_unstable();
+    assert_eq!(paths, ["/hub.md", "/index.md"], "the refusal wrote nothing");
 }

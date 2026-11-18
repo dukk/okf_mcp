@@ -12,6 +12,12 @@
 //! in text mode (`okf.py:1538`), and `rewrite_links` opens files with
 //! `newline=''` (`okf.py:1359`). This is not a parity bug.
 //!
+//! Issue #658 adds [`ReplayOp::Unlink`]: a deleted concept's links in a
+//! `log.md` become their link text. Its edit is `relink::unlink_text`
+//! (crate-internal too), which resolves links as `rewrite_text` does and
+//! keeps bytes as `Relink` does. `okf.py` has no counterpart, as it has no
+//! delete command.
+//!
 //! [`log_text`] is `okf.py`'s `cmd_log` body (`:752`) and
 //! [`insert_index_bullet_text`] its `insert_index_bullet` (`:1410`), line
 //! for line. `okf.py` reads and writes these files in text mode, so both
@@ -24,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::OkfError;
 use crate::okf::analysis::links::INDEX_HEADING;
 use crate::okf::markdown::{find_links, resolve_link};
-use crate::okf::ops::relink::{rewrite_text, Redirect};
+use crate::okf::ops::relink::{rewrite_text, unlink_text, Redirect};
 use crate::okf::paths::{basename, is_concept};
 use crate::okf::pystr::{py_repr_str, py_strip, universal_newlines};
 use crate::okf::workspace::{MemWorkspace, Workspace};
@@ -84,17 +90,26 @@ pub enum ReplayOp {
         /// Which links, and where to.
         redirect: Redirect,
     },
+    /// `delete_concept`: turn every link of a `log.md` into the deleted
+    /// concept `target` into its link text (issue #658). `log.md` is written
+    /// by the `log` tool only, so nobody could remove such a link by hand,
+    /// and a link left into a deleted path is a broken link.
+    Unlink {
+        /// Catalog-relative path of the deleted concept.
+        target: String,
+    },
 }
 
 /// Redoes `ops` on a file's current text (design "Publish", step 3).
 ///
 /// Idempotent where publish needs it: a log bullet already under its date,
 /// a listing whose `target` the index already links, a `CreateIndex` or
-/// `CreateLog` of a file that exists (someone else's text wins), an `Unlist` whose listing is gone, and a `Relink` with
-/// no link left into its source all leave the text alone. Text that no operation
+/// `CreateLog` of a file that exists (someone else's text wins), an `Unlist` whose listing is gone, a `Relink` with
+/// no link left into its source, and an `Unlink` with no link left into its
+/// target all leave the text alone. Text that no operation
 /// changes is returned byte for byte; text a bookkeeping edit changed has
-/// `\n` endings, as `okf.py` writes it, while a `Relink` keeps the file's
-/// own line endings.
+/// `\n` endings, as `okf.py` writes it, while a `Relink` or an `Unlink`
+/// keeps the file's own line endings.
 ///
 /// # Arguments
 /// * `path` - the file's catalog-relative path (`log.md`, `infra/index.md`),
@@ -106,14 +121,15 @@ pub enum ReplayOp {
 /// The text after the operations.
 ///
 /// # Errors
-/// [`OkfError::NotFound`] when a `Log`, `ListBullet`, `Unlist` or `Relink`
+/// [`OkfError::NotFound`] when a `Log`, `ListBullet`, `Unlist`, `Relink` or `Unlink`
 /// (or nothing) finds no file. For `Unlist` this is deliberate, not "already
 /// gone": publish never replays onto a file deleted since the entry's base
 /// (`replayed_text` makes that a conflict), so a missing file here means the
 /// ops themselves are wrong. [`OkfError::Refused`] when a listing's section
 /// heading is gone, when a move's `Unlist` finds its listing changed since
-/// the move, or when a `Relink` redirects a non-concept (`index.md`,
-/// `log.md`), which only a corrupt stored op can hold.
+/// the move, or when a `Relink` redirects (or an `Unlink` names) a
+/// non-concept (`index.md`, `log.md`), which only a corrupt stored op can
+/// hold.
 ///
 /// # Examples
 /// ```
@@ -166,7 +182,15 @@ pub fn replay(path: &str, current: Option<&str>, ops: &[ReplayOp]) -> Result<Str
                     Some((rest, _)) => Some(rest),
                 }
             }
-            // Byte for byte, as the op itself rewrote the file.
+            // Byte for byte, as the op itself rewrote the file, so a concurrent `log` entry and the delete's
+            // unlinking both land in whichever order they publish.
+            ReplayOp::Unlink { target } => {
+                // `no_dirs` resolves concept links only (see `Relink`).
+                if !is_concept(target) {
+                    return Err(non_concept_unlink(path, target));
+                }
+                unlink_text(&no_dirs, path, present(path, &text)?, target)
+            }
             ReplayOp::Relink { redirect } => {
                 // `no_dirs` cannot tell a directory link (`[x](../a)`) from a file
                 // link, which only matters when `from` is an `index.md`. Moves and
@@ -285,6 +309,19 @@ fn non_concept_relink(path: &str, from: &str) -> OkfError {
             "{path}: a stored relink redirects /{from}, which is not a concept; \
              only moves and splits of concepts record one, so discard this path \
              and redo the operation"
+        ),
+    }
+}
+
+/// The refusal of a stored `Unlink` whose target is not a concept: the
+/// replay's empty workspace cannot resolve directory links into it.
+#[tracing::instrument(level = "trace", skip_all)]
+fn non_concept_unlink(path: &str, target: &str) -> OkfError {
+    OkfError::Refused {
+        reason: format!(
+            "{path}: a stored unlink names /{target}, which is not a concept; \
+             only delete_concept records one, so discard this path and redo \
+             the operation"
         ),
     }
 }
@@ -1114,6 +1151,98 @@ mod tests {
                 {"op": "relink", "redirect": {"from": "a/b.md", "to": "a/c.md", "anchors": null}},
             ])
         );
+        assert_eq!(back, ops);
+    }
+    fn unlink(target: &str) -> ReplayOp {
+        ReplayOp::Unlink {
+            target: target.to_string(),
+        }
+    }
+
+    #[test]
+    fn unlink_keeps_the_text_and_every_other_byte_and_is_idempotent() {
+        let crlf = "# Log\r\n\r\n* Added [x](/infra/x.md#a \"t\") and [y](infra/y.md).\r\n";
+        let ops = [unlink("infra/x.md")];
+
+        let once = replay("log.md", Some(crlf), &ops).unwrap();
+        let twice = replay("log.md", Some(&once), &ops).unwrap();
+
+        assert_eq!(once, "# Log\r\n\r\n* Added x and [y](infra/y.md).\r\n");
+        assert_eq!(twice, once);
+    }
+
+    #[test]
+    fn unlink_of_text_with_no_link_into_the_target_keeps_it() {
+        let text = "# Log\r\n\r\n* Added [y](/infra/y.md).\r\n";
+
+        let replayed = replay("log.md", Some(text), &[unlink("infra/x.md")]).unwrap();
+
+        assert_eq!(replayed, text);
+    }
+
+    #[test]
+    fn unlink_leaves_no_link_even_when_the_text_forms_a_new_one() {
+        // The first link's text is `[a`; replacing the link with it leaves
+        // `[a](/infra/x.md)`, a new link into the target, which goes too.
+        let text = "* [[a](/infra/x.md)](/infra/x.md) and [[b](infra/y.md)](/infra/x.md)\n";
+
+        let replayed = replay("log.md", Some(text), &[unlink("infra/x.md")]).unwrap();
+
+        // The second part's link is `[[b](infra/y.md)`, into y; what follows
+        // it is text, as the link graph reads it, so it stays.
+        assert_eq!(replayed, "* a and [[b](infra/y.md)](/infra/x.md)\n");
+    }
+
+    #[test]
+    fn a_log_entry_and_an_unlink_replay_in_either_order() {
+        let base = "# Log\n\n## 2026-11-02\n\n* **Creation:** Added [x](/infra/x.md).\n";
+        let entry = ReplayOp::Log {
+            date: "2026-11-03".to_string(),
+            bullet: "* **Update:** Synced the [hub](/hub.md).".to_string(),
+        };
+        let expected = concat!(
+            "# Log\n\n## 2026-11-03\n\n* **Update:** Synced the [hub](/hub.md).\n\n",
+            "## 2026-11-02\n\n* **Creation:** Added x.\n",
+        );
+
+        // The delete published first, then the entry replayed onto it.
+        let deleted = replay("log.md", Some(base), &[unlink("infra/x.md")]).unwrap();
+        let entry_last = replay("log.md", Some(&deleted), std::slice::from_ref(&entry)).unwrap();
+        // The entry published first, then the delete's unlink replayed onto it.
+        let logged = replay("log.md", Some(base), &[entry]).unwrap();
+        let unlink_last = replay("log.md", Some(&logged), &[unlink("infra/x.md")]).unwrap();
+
+        assert_eq!(entry_last, expected);
+        assert_eq!(unlink_last, expected);
+    }
+
+    #[test]
+    fn unlink_of_a_missing_file_is_not_found_and_of_a_non_concept_refused() {
+        let missing = replay("log.md", None, &[unlink("infra/x.md")]);
+        let index = replay("log.md", Some("# Log\n"), &[unlink("infra/index.md")]);
+
+        assert!(
+            matches!(missing, Err(OkfError::NotFound { .. })),
+            "{missing:?}"
+        );
+        assert!(
+            matches!(
+                index,
+                Err(OkfError::Refused { ref reason })
+                    if reason.contains("/infra/index.md, which is not a concept")
+            ),
+            "{index:?}"
+        );
+    }
+
+    #[test]
+    fn unlink_serializes_with_an_op_tag() {
+        let ops = vec![unlink("a/b.md")];
+
+        let value = serde_json::to_value(&ops).unwrap();
+        let back: Vec<ReplayOp> = serde_json::from_value(value.clone()).unwrap();
+
+        assert_eq!(value, json!([{"op": "unlink", "target": "a/b.md"}]));
         assert_eq!(back, ops);
     }
 }
