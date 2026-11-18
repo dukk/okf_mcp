@@ -68,8 +68,11 @@ update, CLI, provisioner):
 - the empty string means "unset";
 - not unique: two catalogs or users may share a label.
 
-Invalid input is a 400 (`OkfError` validation variant) naming the rule
-broken.
+Invalid input is refused naming the rule broken.
+
+> **Corrected (pre-merge audit, 2026-11-18).** The refusal is a 422 with the
+> `LimitExceeded` error and `limit: "display_name"` (`src/http/mod.rs`), not
+> a 400.
 
 ### The label rule
 
@@ -212,6 +215,17 @@ Wherever a tool returns a catalog, `catalog` stays the slug and
 catalogs) and the report outputs. `list_catalogs` entries gain
 `display_name` and `label`; `suspended.team` gains `team_label`.
 
+> **Corrected (pre-merge audit, 2026-11-18).** The `maintenance_*` results gained no
+> `catalog_label` (issue #604): the investigator client parses them with
+> `deny_unknown_fields` and pins their schemas, so only their parameter
+> descriptions changed. The `publish`, `discard` and `pending_changes` results
+> did gain it.
+
+> **Added (pre-merge audit, 2026-11-18).** Two things the first draft left out.
+> `GET /api/v1/labels` is one scoped read of the label directory, which lives
+> in the key cache and reloads on each `admin_generation` bump. A team owner's
+> catalog-label edit is refused while the team is suspended.
+
 ### Tool inputs
 
 Unchanged: `catalog`, `catalogs` and the required `catalog` on
@@ -282,7 +296,8 @@ are reworded and regenerated.
   existence must not leak.
 - **Rendering:** email templates and the consent page show labels and
   still escape HTML; passkey options carry the label; a new catalog's
-  `index.md` heading is the label.
+  `index.md` heading is its display name, else "Catalog" (see the
+  issue #606 note in Part 3).
 - **Console:** header, account edit and owner-visible catalog edit, in
   the repository's existing UI test pattern.
 - **Property tests:** the label is never empty; whenever a display name,
