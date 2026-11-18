@@ -63,8 +63,27 @@ pub(super) fn decode<T: serde::de::DeserializeOwned>(text: String) -> Result<T, 
 
 #[tracing::instrument(level = "debug", skip_all)]
 pub(super) fn required_id(id: &str) -> Result<(), OkfError> {
+    no_nul(&[id])?;
     if id.trim().is_empty() {
         return Err(refused("maintenance ID must not be blank"));
+    }
+    Ok(())
+}
+
+/// Refuses an id or token holding a NUL as unknown, before SQL: Postgres
+/// refuses a NUL in text, which would be a 500 (issue #339). Ids are
+/// generated hex, but fixtures and older rows use other text, so a NUL is
+/// the only shape ruled out.
+///
+/// # Arguments
+/// * `values` - client-sent ids or tokens.
+///
+/// # Errors
+/// [`OkfError::NotFound`], as for an unknown id.
+#[tracing::instrument(level = "trace", skip_all)]
+pub(super) fn no_nul(values: &[&str]) -> Result<(), OkfError> {
+    if values.iter().any(|value| value.contains('\0')) {
+        return Err(not_found());
     }
     Ok(())
 }
@@ -173,6 +192,8 @@ pub(super) async fn page_ids(
         ),
     };
     let cursor: Option<(DateTime<Utc>, String)> = if let Some(id) = after {
+        // A cursor holding a NUL names no row (Postgres refuses a NUL, #339).
+        no_nul(&[id])?;
         Some(
             sqlx::query_as(cursor_sql)
                 .bind(catalog)
@@ -521,6 +542,7 @@ pub async fn renew(
     now: DateTime<Utc>,
 ) -> Result<Lease, OkfError> {
     validate(actor, idempotency_key)?;
+    no_nul(&[work_id, token])?;
     if work_id.trim().is_empty() || token.trim().is_empty() {
         return Err(refused("work ID and lease token are required"));
     }
@@ -648,6 +670,7 @@ pub async fn close(
 ) -> Result<RunSummary, OkfError> {
     validate(actor, idempotency_key)?;
     crate::maintenance::validate::text(rationale)?;
+    no_nul(&[run_id])?;
     if run_id.trim().is_empty() || matches!(desired, RunState::Running) {
         return Err(refused("run ID and terminal state are required"));
     }

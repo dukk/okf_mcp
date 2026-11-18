@@ -316,6 +316,26 @@ pub async fn open(
     Ok(row.into())
 }
 
+/// Can `handle` be one the server issued? Postgres draws each as
+/// `gen_random_uuid()::text` (migration 0003): 36 characters of lowercase
+/// hex in the 8-4-4-4-12 grouping. Anything else, a NUL included (which
+/// Postgres refuses in text), names no changeset.
+///
+/// # Arguments
+/// * `handle` - the handle, as a client sent it.
+///
+/// # Returns
+/// `true` if `handle` has the shape of an issued handle.
+#[tracing::instrument(level = "debug", skip_all)]
+pub fn is_issued_handle(handle: &str) -> bool {
+    // A byte loop, so a multi-byte character can never split a group.
+    handle.len() == 36
+        && handle.bytes().enumerate().all(|(at, byte)| match at {
+            8 | 13 | 18 | 23 => byte == b'-',
+            _ => byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte),
+        })
+}
+
 /// A changeset by its handle, in any state.
 ///
 /// # Arguments
@@ -323,8 +343,9 @@ pub async fn open(
 /// * `handle` - the handle, as a client sent it.
 ///
 /// # Returns
-/// The row, or `None` if no changeset has that handle. One lookup in the
-/// handle's unique index.
+/// The row, or `None` if no changeset has that handle, or the handle is not
+/// of the shape the server issues ([`is_issued_handle`]; a NUL would be a
+/// database error, issue #339). One lookup in the handle's unique index.
 ///
 /// # Errors
 /// [`OkfError::Database`].
@@ -333,6 +354,9 @@ pub async fn by_handle<'e>(
     executor: impl PgExecutor<'e>,
     handle: &str,
 ) -> Result<Option<ChangesetRow>, OkfError> {
+    if !is_issued_handle(handle) {
+        return Ok(None);
+    }
     let row = sqlx::query_as::<_, RawChangeset>(concat!(
         "SELECT ",
         changeset_columns!(),
@@ -745,6 +769,22 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn only_a_uuid_shaped_handle_can_have_been_issued() {
+        assert!(is_issued_handle("0b1e6f2a-9c3d-4e5f-8a7b-123456789abc"));
+        for bad in [
+            "",
+            "no-such-handle",
+            "a\0b",
+            "0b1e6f2a-9c3d-4e5f-8a7b-123456789abc\0",
+            "0B1E6F2A-9C3D-4E5F-8A7B-123456789ABC",
+            "0b1e6f2a9c3d4e5f8a7b123456789abc----",
+            "0b1e6f2a-9c3d-4e5f-8a7b-123456789ab\u{e9}",
+        ] {
+            assert!(!is_issued_handle(bad), "{bad:?}");
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn open_returns_a_fresh_handle_each_time_and_by_handle_finds_it() {
         let db = test_db().await;
@@ -767,6 +807,8 @@ mod tests {
             Some(first)
         );
         assert_eq!(by_handle(&db.pool, "no-such-handle").await.unwrap(), None);
+        // A NUL is no handle, not a database error (issue #339).
+        assert_eq!(by_handle(&db.pool, "a\0b").await.unwrap(), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -362,7 +362,9 @@ mod tests {
         // A closed pool fails the changeset lookup, as an outage would.
         test.app.pool().close().await;
         let mut through = params("routes", &[]);
-        through.changeset = Some("any-handle".to_string());
+        // Handle-shaped, so the lookup reaches the closed pool: a malformed
+        // handle is unknown before any SQL (issue #339).
+        through.changeset = Some("0b1e6f2a-9c3d-4e5f-8a7b-123456789abc".to_string());
 
         let result = run(&ctx, through).await;
 
