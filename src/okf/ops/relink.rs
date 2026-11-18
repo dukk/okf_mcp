@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::error::OkfError;
-use crate::okf::markdown::{find_links, resolve_link};
+use crate::okf::markdown::{encode_link_path, find_links, resolve_link};
 use crate::okf::paths::{dirname, is_concept, outside_link_graph, relpath};
 use crate::okf::pystr::py_unquote;
 use crate::okf::workspace::Workspace;
@@ -230,21 +230,22 @@ fn redirected_target(
     let mut new = if own && new_target == path {
         match fragment {
             Some(fragment) => format!("#{fragment}"),
-            None => format!("/{new_target}"),
+            None => format!("/{}", encode_link_path(&new_target)),
         }
     } else if own || absolute || (base != path && is_concept(path)) {
         // `strip_suffix` gives `Some(folder/)` only when the path ends in `index.md`.
         match new_target.strip_suffix("index.md") {
             Some(folder) if target_part.ends_with('/') && new_target.ends_with("/index.md") => {
-                format!("/{folder}")
+                format!("/{}", encode_link_path(folder))
             }
-            Some(_) | None => format!("/{new_target}"),
+            Some(_) | None => format!("/{}", encode_link_path(&new_target)),
         }
     } else if target_part.ends_with('/') && new_target.ends_with("index.md") {
         // `dirname(ntgt) or "."`: `relpath` reads `""` as the root.
-        format!("{}/", relpath(dirname(&new_target), dirname(path)))
+        let folder = relpath(dirname(&new_target), dirname(path));
+        format!("{}/", encode_link_path(&folder))
     } else {
-        relpath(&new_target, dirname(path))
+        encode_link_path(&relpath(&new_target, dirname(path))).into_owned()
     };
     if let Some(fragment) = fragment {
         if !new.starts_with('#') {
@@ -353,6 +354,51 @@ mod tests {
             text(&workspace, "AGENTS.md"),
             "See [alpha](moves/alpha.md).\n"
         );
+    }
+
+    #[test]
+    fn a_rewritten_destination_is_percent_encoded_and_still_resolves() {
+        let workspace = MemWorkspace::from_files([
+            ("moves/alpha.md", "# Alpha\n"),
+            (
+                "moves/beta.md",
+                "[rel](alpha.md#Part) [abs](/moves/alpha.md) [enc](a%20b.md)\n",
+            ),
+            ("moves/a b.md", "# Spaced\n"),
+        ]);
+        let moved = Moved {
+            path: "moves/100% (new).md",
+            written_at: "moves/alpha.md",
+        };
+
+        rewrite_links(
+            &workspace,
+            &redirect("moves/alpha.md", "moves/100% (new).md"),
+            Some(moved),
+        )
+        .unwrap();
+
+        // The new name is encoded, the fragment is kept, and the encoded
+        // link to another file is left as written.
+        assert_eq!(
+            text(&workspace, "moves/beta.md"),
+            "[rel](100%25%20%28new%29.md#Part) [abs](/moves/100%25%20%28new%29.md) [enc](a%20b.md)\n"
+        );
+        // The encoded destination resolves to the moved file.
+        let resolved = resolve_link(&workspace, "100%25%20%28new%29.md", "moves/beta.md");
+        assert_eq!(resolved.unwrap().path, "moves/100% (new).md");
+    }
+
+    #[test]
+    fn an_encoded_link_to_the_moved_file_is_redirected() {
+        let workspace = MemWorkspace::from_files([
+            ("moves/a b.md", "# Spaced\n"),
+            ("moves/beta.md", "[x](a%20b.md)\n"),
+        ]);
+
+        rewrite_links(&workspace, &redirect("moves/a b.md", "moves/c.md"), None).unwrap();
+
+        assert_eq!(text(&workspace, "moves/beta.md"), "[x](c.md)\n");
     }
 
     #[test]

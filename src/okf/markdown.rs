@@ -38,6 +38,7 @@ use indexmap::IndexMap;
 use regex::Regex;
 
 use crate::okf::paths::{dirname, join, normpath};
+use crate::okf::pystr::py_unquote;
 use crate::okf::pystr::{is_py_word, py_rstrip, py_strip};
 use crate::okf::workspace::Workspace;
 
@@ -468,6 +469,14 @@ pub struct ResolvedLink {
 
 /// Resolves a link target written in `source` to a bundle path.
 ///
+/// A link destination is URL-encoded (CommonMark), so the path part is
+/// percent-decoded once before it is read as a path: `a%20b.md` is the file
+/// `a b.md`, and a file literally named `a%20b.md` is written `a%2520b.md`.
+/// A `%` not followed by two hex digits stays literal. The `#fragment` is
+/// left alone here (the anchor checks decode it themselves). This is the one
+/// place links are decoded; [`encode_link_path`] is its inverse for the
+/// operations that write a destination.
+///
 /// # Arguments
 /// * `workspace` - the catalog, to tell directories from files.
 /// * `link` - the raw link target, possibly with a `#fragment`.
@@ -477,10 +486,14 @@ pub struct ResolvedLink {
 /// `None` for external links (any URI scheme) and pure `#fragment` links.
 #[tracing::instrument(level = "debug", skip_all)]
 pub fn resolve_link(workspace: &dyn Workspace, link: &str, source: &str) -> Option<ResolvedLink> {
-    let target = link.split('#').next().unwrap_or_default();
-    if target.is_empty() || URI_SCHEME.is_match(target) {
+    let raw_target = link.split('#').next().unwrap_or_default();
+    // The scheme check reads the destination as written: `mailto%3Aa` is a
+    // path, not an address.
+    if raw_target.is_empty() || URI_SCHEME.is_match(raw_target) {
         return None;
     }
+    let decoded = py_unquote(raw_target);
+    let target = decoded.as_ref();
     let absolute = target.starts_with('/');
     let mut path = if absolute {
         target.trim_start_matches('/').to_string()
@@ -494,6 +507,62 @@ pub fn resolve_link(workspace: &dyn Workspace, link: &str, source: &str) -> Opti
         path: normpath(&path),
         absolute,
     })
+}
+
+/// Percent-encodes a bundle path for use as a markdown link destination, so
+/// that [`find_links`] still parses it and [`resolve_link`] reads it back as
+/// the same path.
+///
+/// Encodes every character that would end or change a destination: controls,
+/// every Unicode whitespace character (the link parser's `\s`, such as
+/// U+00A0), `%`, `#`, `?`, `(`, `)`, `<`, `>`, `[`, `]`, `\\`, `"`, `'` and
+/// `:` (so a name like `note:part.md` is not read as a URI scheme). A
+/// non-ASCII character is encoded as its UTF-8 bytes. Everything else,
+/// including other non-ASCII text and `/`, stays as written.
+///
+/// # Arguments
+/// * `path` - a bundle path, or a relative path such as `../a b.md`.
+///
+/// # Returns
+/// `path` itself (borrowed) when nothing needs encoding.
+///
+/// # Examples
+/// ```
+/// use okf_mcp::okf::markdown::encode_link_path;
+/// assert_eq!(encode_link_path("a b/100%.md"), "a%20b/100%25.md");
+/// assert_eq!(encode_link_path("a\u{a0}b:c.md"), "a%C2%A0b%3Ac.md");
+/// assert_eq!(encode_link_path("plain/x.md"), "plain/x.md");
+/// ```
+#[tracing::instrument(level = "trace", skip_all)]
+pub fn encode_link_path(path: &str) -> std::borrow::Cow<'_, str> {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let needs = |ch: char| {
+        ch.is_whitespace()
+            || ch.is_control()
+            || matches!(
+                ch,
+                '%' | '#' | '?' | '(' | ')' | '<' | '>' | '[' | ']' | '\\' | '"' | '\'' | ':'
+            )
+    };
+    if !path.chars().any(needs) {
+        return std::borrow::Cow::Borrowed(path);
+    }
+    let mut out = String::with_capacity(path.len() + 8);
+    for ch in path.chars() {
+        if needs(ch) {
+            // `encode_utf8` writes the char's UTF-8 bytes into a buffer; each
+            // byte becomes `%XX`.
+            let mut buf = [0u8; 4];
+            for byte in ch.encode_utf8(&mut buf).bytes() {
+                out.push('%');
+                out.push(char::from(HEX[usize::from(byte >> 4)]));
+                out.push(char::from(HEX[usize::from(byte & 15)]));
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 #[cfg(test)]
@@ -691,6 +760,56 @@ mod tests {
         assert_eq!(resolve("https://example.com", "y.md"), None);
         assert_eq!(resolve("mailto:a@b", "y.md"), None);
         assert_eq!(resolve("#frag", "y.md"), None);
+    }
+
+    #[test]
+    fn resolve_link_percent_decodes_the_path_not_the_fragment() {
+        let ws = MemWorkspace::from_files([
+            ("infra/a b.md", ""),
+            ("infra/100%.md", ""),
+            ("infra/a%20b.md", ""),
+            ("infra/caf\u{e9}.md", ""),
+        ]);
+        let path = |link: &str| resolve_link(&ws, link, "infra/index.md").map(|r| r.path);
+        assert_eq!(path("a%20b.md"), Some("infra/a b.md".into()));
+        assert_eq!(path("/infra/a%20b.md#x%20y"), Some("infra/a b.md".into()));
+        assert_eq!(path("caf%C3%A9.md"), Some("infra/caf\u{e9}.md".into()));
+        // A file literally named `a%20b.md` is written with its `%` encoded.
+        assert_eq!(path("a%2520b.md"), Some("infra/a%20b.md".into()));
+        // A `%` that starts no escape stays literal.
+        assert_eq!(path("100%.md"), Some("infra/100%.md".into()));
+        assert_eq!(path("100%25.md"), Some("infra/100%.md".into()));
+        // The scheme test reads the destination as written.
+        assert_eq!(path("mailto%3Aa"), Some("infra/mailto:a".into()));
+        assert_eq!(path("https://example.com/a%20b"), None);
+    }
+
+    #[test]
+    fn encode_link_path_round_trips_through_resolve_link() {
+        let names = [
+            "a b.md",
+            "100%.md",
+            "a%20b.md",
+            "x(1)#?.md",
+            "caf\u{e9} <q>.md",
+        ];
+        let owned: Vec<String> = names.iter().map(|name| format!("d/{name}")).collect();
+        let ws = MemWorkspace::from_files(owned.iter().map(|path| (path.as_str(), "")));
+        for name in names {
+            let link = encode_link_path(name);
+            assert!(!link.contains(' ') && !link.contains('#'), "{link}");
+            // The written destination must still parse as a link.
+            let text = format!("[x]({link})");
+            let found = find_links(&text);
+            assert_eq!(found.len(), 1, "{link}");
+            assert_eq!(found[0].target, link.as_ref());
+            let back = resolve_link(&ws, &link, "d/index.md").map(|r| r.path);
+            assert_eq!(back, Some(format!("d/{name}")), "{link}");
+        }
+        assert!(matches!(
+            encode_link_path("plain/x.md"),
+            std::borrow::Cow::Borrowed(_)
+        ));
     }
 
     #[test]

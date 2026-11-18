@@ -25,6 +25,7 @@ use chrono::{DateTime, Utc};
 
 use crate::error::OkfError;
 use crate::okf::doc::Doc;
+use crate::okf::markdown::encode_link_path;
 use crate::okf::ops::replay::{
     folder_heading, insert_index_bullet_text, lists_target, log_text, missing_heading,
     new_index_text, root_index_text, ReplayOp, LOG_TEMPLATE,
@@ -166,7 +167,7 @@ fn concept_bullet(listing: &Listing<'_>) -> String {
     let label = listing.title.replace('[', "\\[").replace(']', "\\]");
     format!(
         "* [{label}]({}) - {}",
-        basename(listing.concept),
+        encode_link_path(basename(listing.concept)),
         collapse_whitespace(listing.summary)
     )
 }
@@ -319,18 +320,18 @@ fn folder_bullet(folder: &str, parent_text: &str) -> String {
         .split('\n')
         .any(|line| line.starts_with("* [") && line.contains("](/"));
     let href = if absolute {
-        format!("/{folder}/")
+        format!("/{}/", encode_link_path(folder))
     } else {
-        format!("{}/", basename(folder))
+        format!("{}/", encode_link_path(basename(folder)))
     };
     format!("* [{}]({href}) - {FOLDER_TODO}", folder_heading(folder))
 }
 
-/// Does `bullet`, written in `index`, link `target`? Not for every path or
-/// label: a link's destination stops at whitespace or `)`, `#` starts its
-/// fragment, and its label ends at the first unescaped `]` (see
-/// [`crate::okf::markdown`]), so `a note.md`, a folder `a]` or a title
-/// ending in `\` cannot be listed this way. The repair checks the exact
+/// Does `bullet`, written in `index`, link `target`? Not for every label: a
+/// label ends at the first unescaped `]` (see [`crate::okf::markdown`]), so
+/// a folder `a]` or a title ending in `\` cannot be listed this way. (Paths
+/// are no obstacle: whitespace, `)` and `#` are written percent-encoded.)
+/// The repair checks the exact
 /// bullet it would write and skips one that no later run would recognise.
 #[cfg_attr(
     dylint_lib = "hyp_tracing",
@@ -1169,13 +1170,11 @@ mod tests {
     }
 
     #[test]
-    fn repair_indexes_skips_listings_no_link_can_reach_and_settles() {
+    fn repair_indexes_percent_encodes_names_a_plain_link_cannot_hold() {
         // A link's destination stops at whitespace or `)`, and `#` starts
-        // its fragment: these names cannot be linked, so the repair notes
-        // them instead of writing a listing no later run recognises. A
-        // folder with a space still gets its index, and linkable files in
-        // it are listed relatively; under an absolute-style parent the
-        // folder's own listing would need its path, so it is skipped too.
+        // its fragment, so these names are written percent-encoded
+        // (`a%20note.md`); `resolve_link` decodes them, so the next run
+        // recognises each listing and writes nothing.
         let note = "---\ntype: Note\ntitle: N\ndescription: D.\n---\n";
         let root = "---\nokf_version: \"0.2\"\n---\n# Root\n\n* [Top](/top.md) - curated\n";
         let ws = MemWorkspace::from_files([
@@ -1193,41 +1192,32 @@ mod tests {
         let outcome = repair_indexes(&ws).unwrap();
         let again = repair_indexes(&ws).unwrap();
 
-        assert_eq!(
-            outcome.touched,
-            ["my notes/index.md", "ok/index.md", "index.md"]
-        );
-        assert_eq!(
-            ws.read_to_string("index.md").unwrap(),
-            format!("{root}\n# Sections\n\n* [Ok](/ok/) - TODO: describe this folder\n")
-        );
+        let index = ws.read_to_string("index.md").unwrap();
+        for listing in [
+            "(/my%20notes/)",
+            "(/ok/)",
+            "(a%20note.md)",
+            "(x%29y.md)",
+            "(h%231.md)",
+            "(tab%09x.md)",
+        ] {
+            assert!(index.contains(listing), "{listing} in {index}");
+        }
         assert!(ws
             .read_to_string("my notes/index.md")
             .unwrap()
             .ends_with("# Concepts\n\n* [N](a.md) - D.\n"));
-        assert_eq!(
-            sorted(
-                outcome
-                    .notes
-                    .iter()
-                    .filter(|line| line.starts_with("did not list"))
-                    .cloned()
-                    .collect()
-            ),
-            [
-                "did not list /a note.md in /index.md: no markdown link to it can be written",
-                "did not list /h#1.md in /index.md: no markdown link to it can be written",
-                "did not list /my notes/ in /index.md: no markdown link to it can be written",
-                "did not list /tab\tx.md in /index.md: no markdown link to it can be written",
-                "did not list /x)y.md in /index.md: no markdown link to it can be written",
-            ]
+        assert!(
+            !outcome
+                .notes
+                .iter()
+                .any(|line| line.starts_with("did not list")),
+            "{:?}",
+            outcome.notes
         );
-        // The second run writes nothing; it only repeats the notes.
+        // The second run recognises every listing: it writes nothing.
         assert!(again.touched.is_empty() && again.replay.is_empty());
-        assert!(again
-            .notes
-            .iter()
-            .all(|line| line.starts_with("did not list")));
+        assert!(again.notes.is_empty(), "{:?}", again.notes);
     }
 
     #[test]
