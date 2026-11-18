@@ -16,7 +16,8 @@ use crate::maintenance::types::{
     Actor, Assessment, ClaimResult, Evidence, Lane, Lease, RevisionPin, RunState, WorkOutcome,
 };
 
-/// A deterministic ascending page; the cursor is the last returned row ID.
+/// A deterministic page (ascending unless a run listing asks for newest
+/// first); the cursor is the last returned row ID.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Page<T> {
     /// Rows ordered by creation time, then ID.
@@ -92,11 +93,24 @@ pub(super) async fn snapshot(
     Ok(tx)
 }
 
+/// The order a page of runs is listed in.
+///
+/// `Asc` is the default, and what MCP clients have always received.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunOrder {
+    /// Oldest first: ascending by `(created_at, id)`.
+    #[default]
+    Asc,
+    /// Newest first: descending by `(created_at, id)`.
+    Desc,
+}
+
 /// Which rows a page of IDs lists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Listing {
-    /// Maintenance runs.
-    Runs,
+    /// Maintenance runs, in the given order.
+    Runs(RunOrder),
     /// Findings; with a disposition, only those whose current one it is.
     Findings(Option<Disposition>),
 }
@@ -104,6 +118,10 @@ pub(super) enum Listing {
 /// Runs, oldest first.
 const RUNS_PAGE: &str = "SELECT id FROM maintenance_runs WHERE catalog_id=$1 AND \
     ($2::timestamptz IS NULL OR (created_at,id)>($2,$3)) ORDER BY created_at,id LIMIT $4";
+
+/// Runs, newest first; the cursor row is the last one of the previous page.
+const RUNS_PAGE_DESC: &str = "SELECT id FROM maintenance_runs WHERE catalog_id=$1 AND \
+    ($2::timestamptz IS NULL OR (created_at,id)<($2,$3)) ORDER BY created_at DESC,id DESC LIMIT $4";
 
 /// Findings, oldest first, narrowed by `$5` (a disposition, or NULL for all).
 const FINDINGS_PAGE: &str = concat!(
@@ -113,7 +131,8 @@ const FINDINGS_PAGE: &str = concat!(
     "=$5) ORDER BY f.created_at,f.id LIMIT $4"
 );
 
-/// One page of run or finding IDs, ascending by `(created_at,id)`.
+/// One page of run or finding IDs, ascending by `(created_at,id)` (runs
+/// may ask for descending).
 ///
 /// The cursor `after` is any row of the listed kind in the catalog, so a
 /// finding cursor survives that finding changing disposition; `limit` and
@@ -139,9 +158,12 @@ pub(super) async fn page_ids(
     // no `$5`). `transpose` turns Option<Result<..>> into Result<Option<..>>,
     // so `?` can raise the (impossible) encoding error.
     let (cursor_sql, page_sql, filter) = match listing {
-        Listing::Runs => (
+        Listing::Runs(order) => (
             "SELECT created_at,id FROM maintenance_runs WHERE catalog_id=$1 AND id=$2",
-            RUNS_PAGE,
+            match order {
+                RunOrder::Asc => RUNS_PAGE,
+                RunOrder::Desc => RUNS_PAGE_DESC,
+            },
             None,
         ),
         Listing::Findings(disposition) => (
@@ -183,7 +205,11 @@ pub(super) async fn page_ids(
     Ok(Page { items, next_after })
 }
 
-/// Lists runs ascending by `(created_at,id)` within one explicit catalog.
+/// Lists runs within one explicit catalog, ascending by `(created_at,id)`
+/// for `RunOrder::Asc` and descending (newest first) for `RunOrder::Desc`.
+///
+/// In either order `after` is the previous page's `next_after` and the page
+/// continues past it in that order.
 ///
 /// `limit` must be 1..=200; callers supply 20 when a page size is omitted.
 /// `after` is an existing row ID in this catalog, never an offset or timestamp.
@@ -198,9 +224,10 @@ pub async fn list_runs(
     catalog_id: i64,
     after: Option<&str>,
     limit: u32,
+    order: RunOrder,
 ) -> Result<Page<RunSummary>, OkfError> {
     let mut tx = snapshot(pool).await?;
-    let ids = page_ids(&mut tx, catalog_id, after, limit, Listing::Runs).await?;
+    let ids = page_ids(&mut tx, catalog_id, after, limit, Listing::Runs(order)).await?;
     let mut items = Vec::with_capacity(ids.items.len());
     for id in ids.items {
         items.push(summary(&mut tx, catalog_id, &id).await?);

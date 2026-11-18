@@ -607,7 +607,10 @@ async fn maintenance_http_tool_schemas_are_exact() {
             "maintenance_close",
             vec!["catalog", "run_id", "state", "rationale", "idempotency_key"],
         ),
-        ("maintenance_list_runs", vec!["catalog", "after", "limit"]),
+        (
+            "maintenance_list_runs",
+            vec!["catalog", "after", "limit", "order"],
+        ),
         ("maintenance_get_run", vec!["catalog", "run_id"]),
         (
             "maintenance_list_findings",
@@ -672,7 +675,7 @@ async fn maintenance_http_tool_schemas_are_exact() {
         let mut expected_required = fields
             .iter()
             .copied()
-            .filter(|field| !["batch_size", "after", "limit"].contains(field))
+            .filter(|field| !["batch_size", "after", "limit", "order"].contains(field))
             .collect::<Vec<_>>();
         expected_required.sort();
         let mut required_sorted = required;
@@ -894,6 +897,55 @@ async fn maintenance_http_pages_default_to_twenty_and_are_catalog_scoped() {
     )
     .await;
     assert_eq!(structured(&all)["items"].as_array().unwrap().len(), 23);
+    // `order` is opt-in: `desc` is the exact reverse, and `asc` is the default.
+    let ids = |result: &rmcp::model::CallToolResult| -> Vec<Value> {
+        structured(result)["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|run| run["id"].clone())
+            .collect()
+    };
+    let newest = call(
+        &client,
+        "maintenance_list_runs",
+        json!({"catalog":"pg","limit":200,"order":"desc"}),
+    )
+    .await;
+    let mut reversed = ids(&all);
+    reversed.reverse();
+    assert_eq!(ids(&newest), reversed);
+    let asc = call(
+        &client,
+        "maintenance_list_runs",
+        json!({"catalog":"pg","limit":200,"order":"asc"}),
+    )
+    .await;
+    assert_eq!(ids(&asc), ids(&all));
+    // A cursor continues in the chosen order: the page after the newest run.
+    let second = call(
+        &client,
+        "maintenance_list_runs",
+        json!({"catalog":"pg","limit":1,"order":"desc"}),
+    )
+    .await;
+    assert_eq!(ids(&second), reversed[..1]);
+    let next = structured(&second)["next_after"].clone();
+    let after = call(
+        &client,
+        "maintenance_list_runs",
+        json!({"catalog":"pg","limit":200,"order":"desc","after":next}),
+    )
+    .await;
+    assert_eq!(ids(&after), reversed[1..]);
+    error(
+        &call(
+            &client,
+            "maintenance_list_runs",
+            json!({"catalog":"pg","order":"sideways"}),
+        )
+        .await,
+    );
     assert_eq!(
         error(
             &call(

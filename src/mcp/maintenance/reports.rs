@@ -14,18 +14,6 @@ use super::{actor, evidence_paths, finding_paths, pin_path, MaintenanceResult};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct MaintenanceListRunsParams {
-    /// Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.
-    pub catalog: String,
-    /// Exclusive last-row ID from the previous page in this catalog; omit for the first page.
-    pub after: Option<String>,
-    /// Page size (default 20, minimum 1, maximum 200).
-    #[schemars(range(min = 1, max = 200))]
-    pub limit: Option<u32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct MaintenanceGetRunParams {
     /// Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.
     pub catalog: String,
@@ -88,6 +76,50 @@ mod dispose_params {
 
 pub use dispose_params::MaintenanceDisposeParams;
 
+// Same hook, same reason, as `dispose_params`: `order` needs an inline enum.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "constant trait plumbing: the derive's schema_with hook returns a fixed schema"
+    )
+)]
+mod list_runs_params {
+    use super::{run_order_schema, runs, JsonSchema};
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct MaintenanceListRunsParams {
+        /// Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.
+        pub catalog: String,
+        /// Exclusive last-row ID from the previous page in this catalog; omit for the first page. Continues in the chosen `order`.
+        pub after: Option<String>,
+        /// Page size (default 20, minimum 1, maximum 200).
+        #[schemars(range(min = 1, max = 200))]
+        pub limit: Option<u32>,
+        /// `asc` (default) lists oldest first; `desc` lists newest first.
+        #[serde(default)]
+        #[schemars(schema_with = "run_order_schema")]
+        pub order: Option<runs::RunOrder>,
+    }
+}
+
+pub use list_runs_params::MaintenanceListRunsParams;
+
+/// The `order` property's schema: the enum inlined (and optional, like the
+/// other `Option` fields), so the property has a direct `type`. A test keeps it in step with [`runs::RunOrder`].
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "constant trait plumbing: the derive's schema_with hook returns a fixed schema"
+    )
+)]
+fn run_order_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({"type": ["string", "null"], "enum": ["asc", "desc", null]})
+}
+
 /// The `disposition` property's schema: the enum inlined, so the property has
 /// a direct `type` instead of a bare `$ref`. A test keeps it in step with
 /// [`Disposition`].
@@ -117,6 +149,7 @@ pub(crate) async fn maintenance_list_runs(
         state.id(),
         params.after.as_deref(),
         params.limit.unwrap_or(20),
+        params.order.unwrap_or_default(),
     )
     .await?;
     Ok(MaintenanceResult::new(state.name(), result))
