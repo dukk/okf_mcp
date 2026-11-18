@@ -20,7 +20,7 @@ pub const STARTER_MESSAGE: &str = "create catalog";
 
 /// The first key of every catalog lock (`okf` in ASCII), separating this
 /// crate's advisory locks from anyone else's on a shared database.
-const CATALOG_LOCK_NAMESPACE: i32 = 0x006f_6b66;
+pub(crate) const CATALOG_LOCK_NAMESPACE: i32 = 0x006f_6b66;
 
 /// A catalog row.
 // `derive(sqlx::FromRow)` maps a result row's columns onto the fields by

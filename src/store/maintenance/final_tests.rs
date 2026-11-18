@@ -1,5 +1,5 @@
 use chrono::Duration;
-use sqlx::{PgPool, Row};
+use sqlx::{PgConnection, Row};
 
 use super::tests::{actor, revision, setup, t0};
 use super::{candidates, reports, runs};
@@ -103,15 +103,68 @@ fn supported(lease: &Lease) -> Submission {
     }
 }
 
-async fn wait_blocked(pool: &PgPool, pid: i32, needle: &str) -> String {
+/// A session queued for a heavyweight lock that another session holds, as
+/// `pg_locks` shows it.
+#[derive(Debug)]
+struct Waiter {
+    /// The waiting session's backend pid.
+    pid: i32,
+    /// `pg_locks.locktype` of the lock it waits for (`advisory`,
+    /// `transactionid`, `tuple`, `relation`, ...).
+    locktype: String,
+    /// For an advisory lock taken with the two-key form, the first key
+    /// (`classid`); `None` for other lock types.
+    key1: Option<i64>,
+    /// For an advisory lock taken with the two-key form, the second key
+    /// (`objid`); `None` for other lock types.
+    key2: Option<i64>,
+}
+
+/// Waits (up to 10 s) until some session is queued for a lock that `holder`
+/// holds, and returns that session and the lock it waits for.
+///
+/// It reads `pg_locks`, not `pg_stat_activity.query`. `pg_stat_activity`
+/// takes its query text and state from a snapshot taken once per
+/// transaction, while `wait_event_type` and `pg_blocking_pids` are read
+/// live, so a session that was idle when the snapshot was taken and is
+/// blocked now shows up with the text of the statement it ran before
+/// (issue #372). `pg_locks` lists the lock each waiter has requested and
+/// not been granted, read when the query runs.
+///
+/// # Arguments
+/// * `conn` - the connection to poll from.
+/// * `holder` - the backend pid holding the lock.
+///
+/// # Returns
+/// The first waiter (lowest pid) queued behind `holder`.
+///
+/// # Panics
+/// When no session waits on `holder` within 10 s, or a query fails.
+async fn wait_waiter(conn: &mut PgConnection, holder: i32) -> Waiter {
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
-            let query: Option<String> = sqlx::query_scalar("SELECT query FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE $2 AND $1=ANY(pg_blocking_pids(pid)) LIMIT 1")
-                .bind(pid).bind(format!("%{needle}%")).fetch_optional(pool).await.unwrap();
-            if let Some(query) = query { return query; }
+            // `classid`/`objid` are `oid`s, cast so they decode as `i64`.
+            let row: Option<(i32, String, Option<i64>, Option<i64>)> = sqlx::query_as(
+                "SELECT pid, locktype, classid::int8, objid::int8 FROM pg_locks \
+                 WHERE NOT granted AND $1 = ANY(pg_blocking_pids(pid)) ORDER BY pid LIMIT 1",
+            )
+            .bind(holder)
+            .fetch_optional(&mut *conn)
+            .await
+            .unwrap();
+            if let Some((pid, locktype, key1, key2)) = row {
+                return Waiter {
+                    pid,
+                    locktype,
+                    key1,
+                    key2,
+                };
+            }
             tokio::task::yield_now().await;
         }
-    }).await.expect("transaction did not reach expected lock")
+    })
+    .await
+    .expect("no session queued for a lock the holder holds")
 }
 
 async fn replacement_import_race(submit: bool) {
@@ -178,8 +231,11 @@ async fn replacement_import_race(submit: bool) {
         )
         .await
     });
-    wait_blocked(&db.pool, pid, "INSERT INTO documents").await;
-    let import_pid: i32 = sqlx::query_scalar("SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND $1=ANY(pg_blocking_pids(pid))").bind(pid).fetch_one(&db.pool).await.unwrap();
+    // One connection for every probe. The blocker holds only b.md's row, which
+    // import writes after taking the catalog's advisory lock, so a session
+    // queued behind the blocker is import, holding that lock.
+    let mut probe = db.pool.acquire().await.unwrap();
+    let import_pid = wait_waiter(&mut probe, pid).await.pid;
     let pool = db.pool.clone();
     let worker = tokio::spawn(async move {
         if submit {
@@ -231,8 +287,10 @@ async fn replacement_import_race(submit: bool) {
         }
         Ok::<_, crate::error::OkfError>(())
     });
-    // With the fix maintenance waits on import's advisory lock, not its document locks.
-    let waiting = wait_blocked(&db.pool, import_pid, "").await;
+    // Maintenance must queue on import's advisory lock for this catalog, its
+    // first lock, not on a document, run or state row import holds. Any other
+    // order shows up here as another lock type (or as no wait behind import).
+    let waiting = wait_waiter(&mut probe, import_pid).await;
     blocker.commit().await.unwrap();
     let imported = tokio::time::timeout(std::time::Duration::from_secs(10), importer)
         .await
@@ -243,9 +301,14 @@ async fn replacement_import_race(submit: bool) {
         .await
         .unwrap()
         .unwrap();
-    assert!(
-        waiting.contains("pg_advisory_xact_lock"),
-        "wrong lock order: {waiting}"
+    assert_eq!(
+        (waiting.locktype.as_str(), waiting.key1, waiting.key2),
+        (
+            "advisory",
+            Some(i64::from(crate::store::catalogs::CATALOG_LOCK_NAMESPACE)),
+            Some(catalog)
+        ),
+        "wrong lock order: maintenance waits on {waiting:?}"
     );
     worked.unwrap();
     assert_eq!(imported.updated, ["b.md"]);
@@ -260,6 +323,83 @@ async fn maintenance_final_claim_coordinates_replacement_import() {
 #[tokio::test(flavor = "multi_thread")]
 async fn maintenance_final_submit_coordinates_replacement_import() {
     replacement_import_race(true).await;
+}
+
+/// Issue #372: a probe whose transaction took its `pg_stat_activity`
+/// snapshot before a session blocked still sees which lock that session
+/// waits on. The old check, the query text of a session in a `Lock` wait,
+/// reports the statement it ran before.
+#[tokio::test(flavor = "multi_thread")]
+async fn maintenance_final_lock_probe_ignores_stale_activity_text() {
+    let db = test_db().await;
+    let (key1, key2) = (crate::store::catalogs::CATALOG_LOCK_NAMESPACE, 372_i32);
+    let mut holder = db.pool.begin().await.unwrap();
+    let holder_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock($1, $2)")
+        .bind(key1)
+        .bind(key2)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let mut waiter = db.pool.acquire().await.unwrap();
+    // The statement the waiter's row shows in the stale snapshot.
+    let waiter_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid() AS stale_text_372")
+        .fetch_one(&mut *waiter)
+        .await
+        .unwrap();
+    // A transaction's first read of `pg_stat_activity` fixes the query text
+    // and state it shows until the transaction ends.
+    let mut probe = db.pool.begin().await.unwrap();
+    sqlx::query("SELECT count(*) FROM pg_stat_activity")
+        .execute(&mut *probe)
+        .await
+        .unwrap();
+    let blocked = tokio::spawn(async move {
+        sqlx::query("SELECT pg_advisory_xact_lock($1, $2)")
+            .bind(key1)
+            .bind(key2)
+            .execute(&mut *waiter)
+            .await
+            .map(|_| ())
+    });
+    // A fresh connection sees the waiter queued behind the holder.
+    let mut watch = db.pool.acquire().await.unwrap();
+    assert_eq!(wait_waiter(&mut watch, holder_pid).await.pid, waiter_pid);
+    let stale: Option<String> = sqlx::query_scalar(
+        "SELECT query FROM pg_stat_activity WHERE datname=current_database() \
+         AND wait_event_type='Lock' AND $1=ANY(pg_blocking_pids(pid))",
+    )
+    .bind(holder_pid)
+    .fetch_optional(&mut *probe)
+    .await
+    .unwrap();
+    let seen = wait_waiter(&mut probe, holder_pid).await;
+    holder.commit().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), blocked)
+        .await
+        .expect("the waiter never got the advisory lock")
+        .unwrap()
+        .unwrap();
+    probe.rollback().await.unwrap();
+    // Precondition: this probe reproduces issue #372's stale text.
+    assert!(
+        stale
+            .as_deref()
+            .is_some_and(|q| q.contains("stale_text_372")),
+        "the snapshot was not stale: {stale:?}"
+    );
+    assert_eq!(
+        (seen.pid, seen.locktype.as_str(), seen.key1, seen.key2),
+        (
+            waiter_pid,
+            "advisory",
+            Some(i64::from(key1)),
+            Some(i64::from(key2))
+        )
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
