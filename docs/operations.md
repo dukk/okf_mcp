@@ -3067,7 +3067,7 @@ reason and hours.
 
 ### API reference
 
-The API has 94 endpoints (a method and path each). The identity endpoints
+The API has 95 endpoints (a method and path each). The identity endpoints
 are below (3), and each area's endpoints are in its own subsection:
 [API keys](#api-keys) (7),
 [OAuth sign-in codes](#oauth-sign-in-codes) (4),
@@ -3075,7 +3075,7 @@ are below (3), and each area's endpoints are in its own subsection:
 [Your account](#your-account-api) (19),
 [Settings and mail](#settings-and-mail-api) (7),
 [Audit](#audit-api) (2), [Unlocks](#unlocks-api) (3),
-[Health](#health) (2), [Browse and search](#browse-and-search) (7),
+[Health](#health) (2), [Browse and search](#browse-and-search) (8),
 [Catalogs and import/export](#catalogs-and-importexport) (10),
 [Findings and runs](#findings-and-runs) (6) and [Changesets](#changesets) (3).
 Each area's tests but Your account's check every endpoint against the
@@ -3412,6 +3412,16 @@ the revision's diff in a drawer. Choosing another catalog in the switcher
 while browsing opens that catalog's root `index.md`. Search
 (`#/search/<query>`) searches every catalog the key reaches.
 
+Recent changes (`#/recent`) lists the revisions published in the selected
+catalog, newest first: every document's, one row per revision (a path
+changed three times has three rows), creates, updates, deletions and
+imports alike, with the path, revision, operation, actor, message and time.
+Open changesets never show; only what was published. A row opens that
+revision's diff and text in the same drawer as Browse's History tab, a
+deleted document's included. Refresh reads the newest page again, and Load
+older continues from the last row shown. Choosing another catalog in the
+switcher shows that catalog's changes.
+
 Concepts are rendered to HTML on the server (`src/render.rs`):
 
 - raw HTML in a document is shown as text, never run;
@@ -3435,10 +3445,11 @@ whole body and scrolls to that heading.
 | `GET /api/v1/catalogs/{catalog}/history/{path}?limit=` | read | The `history` tool |
 | `GET /api/v1/catalogs/{catalog}/revisions/{n}/{path}` | read | `text` at revision `n` (null for a deletion or non-text bytes) and a unified `diff` from revision `n-1` |
 | `GET /api/v1/catalogs/{catalog}/documents/{path}` | read | `read_document` (any `index.md` or `log.md`, the root `AGENTS.md`) plus `body_html` |
+| `GET /api/v1/catalogs/{catalog}/recent-changes?limit=&after=` | read | The catalog's published revisions, newest first: `{catalog, catalog_label, changes, next_after}`, each change `{path, revision, op, actor, actor_label, message, at}`, content left out. Revisions sharing a time come by path, then revision, both descending. `limit` 1..=200 (default 50; outside is 409); `after` is the previous page's `next_after` (an unknown or malformed one is 404); `next_after` is `null` on the last page |
 | `GET /api/v1/search?q=&catalogs=&limit=` | read | The `search` tool. `catalogs` is comma-separated and defaults to every catalog the key reaches; a named catalog it does not reach is a 404 |
 
 A catalog the key does not reach, or that does not exist, is 404 on all
-seven.
+eight.
 
 The per-document routes put their kind before the path (`/links/{path}`,
 not `/concepts/{path}/links`), because the path is a wildcard and must come

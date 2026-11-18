@@ -442,7 +442,9 @@ own keys, grants, sign-in methods and sessions; admins also get Settings
 
 Browse shows a catalog's tree, each concept rendered (raw HTML in a concept
 is shown as text, never run), its links, history and revision diffs, and
-Search searches every catalog the key reaches.
+Search searches every catalog the key reaches. Recent changes
+(`/ui/#/recent`) lists the revisions published in the selected catalog,
+every document's, newest first, and opens each one's diff.
 
 Changesets an agent left open can be inspected (their pending diff) and
 discarded at `/ui/#/changesets`.
