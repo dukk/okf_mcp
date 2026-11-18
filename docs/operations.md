@@ -1253,8 +1253,8 @@ id on stderr; only the key's SHA-256 is stored. Put it straight
 into a password manager or a secret store. Never paste it into logs, tickets,
 chat or shell history (a leading space keeps a command out of history in most
 shells). `key list` shows name, actor, id, access, state, grants, `default
-X`, `maintenance_report true|false`, `provisioner yes|no` and `user U` (`-` for a key from before
-users existed that nobody has assigned), grouped by name. Use
+X`, `maintenance_report true|false`, `provisioner yes|no`, `user U` (`-` for a key from before
+users existed that nobody has assigned), `kind key|oauth` and `client NAME` (the OAuth client's name for a grant, `-` for a key), grouped by name. OAuth grants appear in the list too and may share a name and actor with a key, so check `kind`. Use
 `okf-mcp key maintenance-report ID --enabled true|false [--actor ACTOR]` to
 change the reporting flag. `revoke`, `grant`, `ungrant` and `maintenance-report`
 accept an id, an unambiguous live name, or `NAME --actor ACTOR` of an API key;
@@ -1453,7 +1453,7 @@ takes effect at once.
 
 `catalog list` prints name, `generation N`, `owner T` (`-` when unassigned),
 then the description. `key list`, `oauth grant list` and `oauth code list`
-end with `user U` (`-` when unassigned). Every listing is tab-separated with
+end with `user U` (`-` when unassigned); `key list` and `oauth grant list` then add `kind` and `client`. Every listing is tab-separated with
 no header row, so `cut -f` works on it.
 
 ### Provisioner keys
@@ -3727,7 +3727,7 @@ people, or the same client again after a revoke, takes a new code each time.
 | `okf-mcp oauth code list` | Every code, never the code itself. Tab-separated: name, actor, id, access, state (`live`, `expired`, `redeemed` or `revoked`), catalogs (`*` for all), `default D`, `expires T`, `grant G` (the grant a redeemed code became), `user U`; an empty cell is `-` |
 | `okf-mcp oauth code revoke ID` | Revokes a code nobody has redeemed. Refuses a redeemed or already revoked one |
 | `okf-mcp oauth code assign ID --user USER` | Gives a code, in any state, a user. The grant a redeemed code became keeps its own user: assign that with `okf-mcp key assign` ([Users and teams](#users-and-teams)) |
-| `okf-mcp oauth grant list` | The OAuth grants, revoked ones included, with `key list`'s columns (ending in `user U`) and `client <name>` |
+| `okf-mcp oauth grant list` | The OAuth grants, revoked ones included, with `key list`'s columns (ending in `user U`, `kind oauth`, `client <name>`) |
 | `okf-mcp oauth grant revoke ID` | Revokes a grant by its exact id, and with it every token it holds. Refuses a plain key's id |
 
 Each takes `--database-url` and `--config` like every subcommand; inside the
