@@ -403,7 +403,8 @@ fn canonical_query(query: &AuthorizeQuery) -> String {
         ("code_challenge_method", &query.code_challenge_method),
         ("resource", &query.resource),
     ];
-    // `filter_map` drops the absent ones (only `state` can be, by now).
+    // `filter_map` drops the absent ones (only `state` and `resource` can
+    // be, by now).
     form_urlencoded::Serializer::new(String::new())
         .extend_pairs(
             fields
@@ -694,7 +695,15 @@ async fn authorize(
     if query.code_challenge_method.as_deref() != Some("S256") {
         return back("invalid_request", "code_challenge_method must be S256");
     }
-    if query.resource.as_deref() != Some(oauth.settings.resource.as_str()) {
+    // RFC 8707 makes `resource` optional here, and some clients (Crush)
+    // strip it from the browser URL and send it only at the token endpoint.
+    // This server has one resource, so a missing one means `/mcp`; a named
+    // one must be it. The token endpoint still requires and checks it.
+    if query
+        .resource
+        .as_deref()
+        .is_some_and(|resource| resource != oauth.settings.resource)
+    {
         return back(
             "invalid_target",
             "resource must name this server's MCP endpoint",
@@ -1421,13 +1430,12 @@ mod tests {
 
     /// Runs step 1 and returns `(pending, csrf)`.
     async fn start(test: &TestApp) -> (String, String) {
-        let (_, _, page) = send(
-            test,
-            "GET",
-            &format!("/oauth/authorize?{}", authorize_query()),
-            None,
-        )
-        .await;
+        start_from(test, &authorize_query()).await
+    }
+
+    /// Runs step 1 for `query` and returns `(pending, csrf)`.
+    async fn start_from(test: &TestApp, query: &str) -> (String, String) {
+        let (_, _, page) = send(test, "GET", &format!("/oauth/authorize?{query}"), None).await;
         (hidden(&page, "pending"), hidden(&page, "csrf"))
     }
 
@@ -1591,7 +1599,6 @@ mod tests {
                 query_with("resource", "https://other.example.com/mcp"),
                 "invalid_target",
             ),
-            (query_without("resource"), "invalid_target"),
         ] {
             let (status, headers, _) =
                 send(&test, "GET", &format!("/oauth/authorize?{query}"), None).await;
@@ -1606,6 +1613,42 @@ mod tests {
             assert_eq!(param(&target, "state").as_deref(), Some("xyz"));
             assert_eq!(param(&target, "iss").as_deref(), Some(PUBLIC_URL));
         }
+    }
+
+    /// RFC 8707 makes `resource` optional at authorize, and some clients
+    /// (Crush) strip it from the browser URL and send it only at the token
+    /// endpoint. A request without it is for this server's one resource:
+    /// the code and the tokens are bound to `/mcp` as usual.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_authorize_request_without_resource_is_for_the_mcp_endpoint() {
+        let test = oauth_app().await;
+        let code = sign_in_code(&test, Access::Write).await;
+        let (pending, csrf) = start_from(&test, &query_without("resource")).await;
+        let (status, _, summary) = post(
+            &test,
+            &[
+                ("pending", &pending),
+                ("csrf", &csrf),
+                ("action", "code"),
+                ("sign_in_code", &code),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, headers, body) = approve_from(&test, &summary).await;
+        let target = forwarded(status, &headers, &body);
+        let issued = param(&target, "code").expect("a code");
+        let oauth = test.app.oauth().expect("oauth on");
+        let waiting = oauth
+            .codes
+            .update(&code_key(&issued), Instant::now(), |code| code.clone())
+            .await
+            .unwrap()
+            .expect("the code is stored");
+        assert_eq!(waiting.resource, oauth.settings.resource);
+        let (access, _) = crate::oauth::testing::exchange_for_tokens(&test, &issued).await;
+        assert!(access.starts_with("okfat_"), "{access}");
     }
 
     /// Design, Auth row: the authorize decision spans carry `method` and

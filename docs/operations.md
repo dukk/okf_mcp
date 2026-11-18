@@ -3810,9 +3810,11 @@ console" ([OAuth sign-in codes](#oauth-sign-in-codes)).
   error page, never sent to an unchecked address. Later errors go back to
   the client with `error`, `state` and `iss`.
 - **PKCE.** S256 only, on every authorization.
-- **Audience.** `resource` is required at authorize and at the code
-  exchange, and must be `<public_url>/mcp` (RFC 8707). Every token is issued
-  for it and refused with any other.
+- **Audience.** `resource` must be `<public_url>/mcp` (RFC 8707). It is
+  required at the code exchange. At authorize it may be left out, which
+  means `<public_url>/mcp`, because some clients (Crush) send it only to the
+  token endpoint; any other value is refused there with `invalid_target`.
+  Every token is issued for it and refused with any other.
 - **Replay.**
   - An authorization code works once, within 60 seconds. Presenting it again
     revokes the tokens issued from it, even if the two requests race. A
