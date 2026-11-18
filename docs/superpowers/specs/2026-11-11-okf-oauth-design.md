@@ -290,7 +290,8 @@ document.
   changed `client_id` or invalid `redirect_uris`) fails the authorization at
   once, even with a cached copy: the client's host tendered invalid data
   without any transport error (issue #268). The cached row is left as it was,
-  neither replaced nor evicted, and is refreshed by the next valid fetch.
+  neither replaced nor evicted: a later refetch that fails in transport can
+  still use it within the 24 hours, and the next valid fetch refreshes it.
 
 ## Sign-in codes
 

@@ -2069,6 +2069,16 @@ mod tests {
             assert_eq!(row, cached, "case {index}: the row is untouched");
         }
 
+        // The rejection applies to the authorization whose refetch delivered
+        // invalid data; it is not a persistent state. A later transport
+        // failure still serves the retained row, inside its ceiling.
+        host.failing.store(true, Ordering::SeqCst);
+        let later = resolve(&test.app, oauth(&test), &client_id)
+            .await
+            .expect("a later transport failure serves the retained row");
+        assert_eq!(later, cached);
+        host.failing.store(false, Ordering::SeqCst);
+
         // The host recovers: the kept row is refreshed by the next valid fetch.
         *host.reply.lock().expect("lock") = None;
         let healed = resolve(&test.app, oauth(&test), &client_id)
