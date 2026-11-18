@@ -691,3 +691,468 @@ async fn the_keys_page_shows_users_and_catalogs_by_label() {
     })
     .await;
 }
+
+/// Opens the code form on a server whose `oauth.code_max_expiry` is `limit`
+/// (the default when `None`), reads what it offers, mints a code with its
+/// default and reads that code's lifetime.
+///
+/// # Returns
+/// The option values, the selected value and the minted code's lifetime.
+async fn offered_and_minted(
+    limit: Option<std::time::Duration>,
+) -> (Vec<String>, String, TimeDelta) {
+    let mut config = Config::default();
+    if let Some(limit) = limit {
+        config.oauth.code_max_expiry = limit;
+    }
+    let server =
+        TestServer::start(vec![("main", files(&[("index.md", "# Main\n")]))], config).await;
+    let admin = server
+        .key("console-admin", Access::Admin, &["main"], Some("main"))
+        .await;
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let sink = std::sync::Arc::clone(&seen);
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/keys");
+        ui.wait_visible("#code-new");
+        ui.click("#code-new");
+        ui.wait_visible("#code-form");
+        let offered = ui.eval(
+            "() => [[...document.querySelectorAll('#code-form select[name=expires_in] option')].map(o => o.value), \
+                    document.querySelector('#code-form select[name=expires_in]').value]",
+            json!(null),
+        );
+        *sink.lock().expect("lock") = Some(offered);
+        ui.fill("#code-form input[name=name]", "limit-code");
+        ui.select("#code-form select[name=user]", OWNER);
+        ui.click("#code-form input[name=catalog][value=main]");
+        ui.click("#code-form button[type=submit]");
+        ui.wait_visible("#code-secret");
+    })
+    .await;
+    assert!(ran);
+    let offered = seen
+        .lock()
+        .expect("lock")
+        .take()
+        .expect("the form was read");
+    let values = offered[0]
+        .as_array()
+        .expect("options")
+        .iter()
+        .map(|value| value.as_str().expect("a string").to_string())
+        .collect();
+    let selected = offered[1].as_str().expect("selected").to_string();
+    let minted = codes::list(&server.db.pool).await.expect("list codes");
+    assert_eq!(minted.len(), 1, "the form's default was accepted");
+    (
+        values,
+        selected,
+        minted[0].expires_at - minted[0].created_at,
+    )
+}
+
+/// Issue #270: the code form offers only the expiries `oauth.code_max_expiry`
+/// allows, selects 24 hours when allowed (else the longest choice), and the
+/// default it selects mints a code of that lifetime. Reviews of #657: the
+/// default limit, a limit between two choices, one that leaves only 1 hour,
+/// and one shorter than every choice (the limit itself is the choice).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_code_form_offers_only_expiries_within_the_servers_limit() {
+    use std::time::Duration;
+    let cases: [(Option<Duration>, &[&str], &str, TimeDelta); 4] = [
+        // The default limit is 7 days: every choice, 24 hours selected.
+        (
+            None,
+            &["1h", "24h", "3d", "7d"],
+            "24h",
+            TimeDelta::hours(24),
+        ),
+        // 3 days: 7d is hidden, 24 hours still selected.
+        (
+            Some(Duration::from_secs(3 * 86_400)),
+            &["1h", "24h", "3d"],
+            "24h",
+            TimeDelta::hours(24),
+        ),
+        // 2 hours: only 1h, selected.
+        (
+            Some(Duration::from_secs(2 * 3600)),
+            &["1h"],
+            "1h",
+            TimeDelta::hours(1),
+        ),
+        // 90 seconds: shorter than every choice, so the limit itself.
+        (
+            Some(Duration::from_secs(90)),
+            &["90s"],
+            "90s",
+            TimeDelta::seconds(90),
+        ),
+    ];
+    for (limit, options, selected, lifetime) in cases {
+        let (offered, chosen, minted) = offered_and_minted(limit).await;
+        assert_eq!(offered, options, "limit {limit:?}");
+        assert_eq!(chosen, selected, "limit {limit:?}");
+        assert_eq!(minted, lifetime, "limit {limit:?}");
+    }
+}
+
+/// Registers a client, mints a sign-in code `laptop` and redeems it, as the
+/// consent page does.
+///
+/// # Returns
+/// The grant's id and its key name.
+async fn redeemed_grant(server: &TestServer) -> (String, String) {
+    let client_id = "https://client.example.com/client.json";
+    sqlx::query(
+        "INSERT INTO oauth_clients \
+         (client_id, kind, client_name, redirect_uris, metadata, fetched_at, cache_expires_at, \
+          created_at) \
+         VALUES ($1, 'cimd', 'Example Client', ARRAY['https://client.example.com/callback'], \
+                 '{}'::jsonb, now(), now() + interval '1 hour', now())",
+    )
+    .bind(client_id)
+    .execute(&server.db.pool)
+    .await
+    .expect("insert a client");
+    let client = clients::find(&server.db.pool, client_id)
+        .await
+        .expect("read the client")
+        .expect("the client exists");
+    let main = ["main".to_string()];
+    let code = codes::create(
+        &server.db.pool,
+        &NewSignInCode {
+            name: "laptop",
+            access: Access::Write,
+            grants: Grants::Catalogs(&main),
+            default_catalog: Some("main"),
+            actor: "example-actor",
+            expires_at: Utc::now() + TimeDelta::hours(1),
+            user: OWNER,
+        },
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("mint a code");
+    let grant_id = codes::redeem(&server.db.pool, &code.id, &client, Utc::now())
+        .await
+        .expect("redeem the code");
+    server.app.poll().await.expect("poll the grant in");
+    let name = key_rows::list(&server.db.pool)
+        .await
+        .expect("list keys")
+        .into_iter()
+        .find(|key| key.id == grant_id)
+        .expect("the grant")
+        .name;
+    (grant_id, name)
+}
+
+/// Review of #657: the code form is not offered with every expiry while the
+/// first list (which carries the limit) is pending or failed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_code_form_never_offers_every_expiry_before_the_limit_is_known() {
+    let mut config = Config::default();
+    config.oauth.code_max_expiry = std::time::Duration::from_secs(2 * 3600);
+    let server =
+        TestServer::start(vec![("main", files(&[("index.md", "# Main\n")]))], config).await;
+    let admin = server
+        .key("console-admin", Access::Admin, &["main"], Some("main"))
+        .await;
+    let offered = |ui: &crate::harness::Ui| {
+        ui.eval(
+            "() => [...document.querySelectorAll('#code-form select[name=expires_in] option')].map(o => o.value)",
+            json!(null),
+        )
+    };
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        // The first list is held: New must fetch the limit itself.
+        ui.hold_next("GET", "/oauth/codes");
+        ui.open("/keys");
+        ui.wait_visible("#code-new");
+        ui.click("#code-new");
+        ui.wait_visible("#code-form");
+        assert_eq!(offered(ui), json!(["1h"]));
+        ui.release_held();
+        ui.click("#drawer-close");
+        // The first list fails: New fetches it again, and offers only 1h.
+        ui.fail_next("GET", "/oauth/codes", 503, "unavailable");
+        ui.open("/health");
+        ui.open("/keys");
+        ui.wait_visible("#code-new");
+        ui.click("#code-new");
+        ui.wait_visible("#code-form");
+        assert_eq!(offered(ui), json!(["1h"]));
+    })
+    .await;
+    assert!(ran);
+}
+
+// Installed in the page: every `GET /oauth/codes` fails while `mode` is
+// "fail" (so the limit stays unknown whatever number of times the page
+// asks for the first list), and is held until `releaseLimit()` while it
+// is "hold", and goes through untouched in any other mode.
+const LIMIT_READS: &str = "() => {
+    const original = window.fetch;
+    window.limitMode = 'fail';
+    window.limitHeld = [];
+    window.releaseLimit = () => window.limitHeld.splice(0).forEach(release => release());
+    window.fetch = (input, init) => {
+        const method = (init && init.method) || 'GET';
+        if (method !== 'GET' || !String(input).endsWith('/oauth/codes')) {
+            return original(input, init);
+        }
+        if (window.limitMode === 'fail') {
+            return Promise.resolve(new Response(
+                JSON.stringify({ error: 'test', message: 'limit list down' }),
+                { status: 503, headers: { 'Content-Type': 'application/json' } }));
+        }
+        if (window.limitMode === 'pass') return original(input, init);
+        return new Promise(resolve => {
+            window.limitHeld.push(() => resolve(original(input, init)));
+        });
+    };
+    return true;
+}";
+
+/// Review of #657 (round 3): when New's own read of the limit fails, the
+/// form stays closed (the failure is toasted) and New tries again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_limit_read_keeps_the_code_form_closed_until_it_succeeds() {
+    let server = server().await;
+    let admin = server
+        .key("console-admin", Access::Admin, &["main"], Some("main"))
+        .await;
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.eval(LIMIT_READS, json!(null));
+        ui.open("/keys");
+        ui.wait_visible("#code-new");
+        ui.wait_text("#toasts", "limit list down");
+        let toasts = |ui: &crate::harness::Ui| {
+            ui.eval(
+                "() => document.querySelectorAll('#toasts .toast').length",
+                json!(null),
+            )
+            .as_u64()
+            .unwrap_or(0)
+        };
+        let before = toasts(ui);
+        ui.eval(
+            "() => document.getElementById('code-new').click()",
+            json!(null),
+        );
+        // New's own read failed too: one more toast, and no form.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while toasts(ui) <= before {
+            assert!(std::time::Instant::now() < deadline, "no second failure");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        // A form that did open would do so after the users read; give it time.
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        assert!(!ui.page.is_visible("#code-form").expect("visible"));
+        // The list answers again: New opens the form, with the real limit.
+        ui.eval("() => { window.limitMode = 'pass'; }", json!(null));
+        ui.eval(
+            "() => document.getElementById('code-new').click()",
+            json!(null),
+        );
+        ui.wait_visible("#code-form");
+    })
+    .await;
+    assert!(ran);
+}
+
+/// Review of #657 (round 3): a redeemed code's grant that the key list does
+/// not hold (here its read failed) shows as text, not a button.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_grant_missing_from_the_key_list_shows_as_text() {
+    let server = server().await;
+    let admin = server
+        .key("console-admin", Access::Admin, &["main"], Some("main"))
+        .await;
+    let (grant_id, _) = redeemed_grant(&server).await;
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.fail_next("GET", "/keys", 503, "keys unavailable");
+        ui.open("/keys");
+        ui.wait_visible("#codes-show-all");
+        ui.click("#codes-show-all");
+        ui.wait_visible("[data-test=code-laptop]");
+        ui.eval(
+            "() => document.querySelector('[data-test=code-laptop]').click()",
+            json!(null),
+        );
+        ui.wait_text("#drawer dl.facts", &grant_id);
+        assert!(!ui.page.is_visible("#code-open-grant").expect("visible"));
+    })
+    .await;
+    assert!(ran);
+}
+
+/// Review of #657 (round 2): the code form does not open over a drawer
+/// opened, or after one dismissed, while its limit read was pending.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pending_limit_read_does_not_open_the_code_form_over_a_newer_drawer() {
+    let server = server().await;
+    let admin = server
+        .key("console-admin", Access::Admin, &["main"], Some("main"))
+        .await;
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.eval(LIMIT_READS, json!(null));
+        let row = "[data-test=key-console-admin]";
+        let held = |ui: &crate::harness::Ui| {
+            ui.eval("() => window.limitHeld.length", json!(null))
+                .as_u64()
+                .unwrap_or(0)
+        };
+        for dismiss in [false, true] {
+            ui.eval("() => { window.limitMode = 'fail'; }", json!(null));
+            ui.open("/health");
+            ui.wait_hidden(row);
+            ui.open("/keys");
+            ui.wait_visible(row);
+            // The failure's toast shows the first list has been answered.
+            ui.wait_text("#toasts", "limit list down");
+            ui.eval("() => { window.limitMode = 'hold'; }", json!(null));
+            // In the page: the toast may sit under a real click.
+            ui.eval(
+                "() => document.getElementById('code-new').click()",
+                json!(null),
+            );
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            while held(ui) == 0 {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "New never read the limit list (dismiss: {dismiss})"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            ui.eval(
+                "(selector) => document.querySelector(selector).click()",
+                json!(row),
+            );
+            ui.wait_text("#drawer dl.facts", "API key");
+            if dismiss {
+                ui.click("#drawer-close");
+            }
+            ui.eval("() => window.releaseLimit()", json!(null));
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+            assert!(
+                !ui.page.is_visible("#code-form").expect("visible"),
+                "the code form opened (dismissed: {dismiss})"
+            );
+            assert_eq!(
+                ui.page.is_visible("#drawer").expect("visible"),
+                !dismiss,
+                "dismissed: {dismiss}"
+            );
+            if !dismiss {
+                ui.click("#drawer-close");
+            }
+        }
+    })
+    .await;
+    assert!(ran);
+}
+
+/// Review of #657: a keys read that answers after the page was left and
+/// shown again must not replace the visible page's rows or loader, so a
+/// grant change from the code drawer still refreshes the current table.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_late_keys_read_from_a_left_page_does_not_hijack_the_current_one() {
+    let server = server().await;
+    let admin = server
+        .key("console-admin", Access::Admin, &["main"], Some("main"))
+        .await;
+    let (grant_id, name) = redeemed_grant(&server).await;
+    let row = format!("[data-test=\"key-{name}\"]");
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        // The first visit's keys read is answered early and delivered late.
+        ui.hold_answer("GET", "/keys", || ui.open("/keys"));
+        ui.open("/health");
+        ui.open("/keys");
+        ui.wait_visible(&row);
+        ui.release_held();
+        ui.click("#codes-show-all");
+        ui.wait_visible("[data-test=code-laptop]");
+        ui.click("[data-test=code-laptop]");
+        ui.wait_visible("#code-open-grant");
+        ui.click("#code-open-grant");
+        ui.wait_text("#drawer dl.facts", &grant_id);
+        ui.click("#key-revoke");
+        ui.click("#confirm-ok");
+        // Revoked keys leave the default list: the CURRENT table redrew.
+        ui.wait_hidden(&row);
+    })
+    .await;
+    assert!(ran);
+}
+
+/// Issue #270: a redeemed code's drawer opens its grant's drawer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_redeemed_codes_grant_opens_from_its_drawer() {
+    let server = server().await;
+    let admin = server
+        .key("console-admin", Access::Admin, &["main"], Some("main"))
+        .await;
+    let (grant_id, _) = redeemed_grant(&server).await;
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/keys");
+        ui.wait_visible("#codes-show-all");
+        ui.click("#codes-show-all");
+        ui.wait_visible("[data-test=code-laptop]");
+        ui.click("[data-test=code-laptop]");
+        ui.wait_visible("#code-open-grant");
+        ui.click("#code-open-grant");
+        // The drawer now shows the grant: its kind and its id.
+        ui.wait_text("#drawer dl.facts", "OAuth grant");
+        ui.wait_text("#drawer dl.facts", &grant_id);
+        ui.wait_visible("#key-revoke");
+    })
+    .await;
+    assert!(ran);
+}
+
+/// Issue #270: Pico's light-theme variables must not outrank the console's
+/// own mapping, so a primary button is the console's accent in both themes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_console_colours_beat_picos_in_both_themes() {
+    let server = server().await;
+    let admin = server
+        .key("console-admin", Access::Admin, &["main"], Some("main"))
+        .await;
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/keys");
+        ui.wait_visible("#key-new");
+        let colour = |ui: &crate::harness::Ui| {
+            ui.eval(
+                // Pico fades colours over .2s; no transition reads the end value.
+                "() => { const b = document.getElementById('key-new'); \
+                   b.style.transition = 'none'; \
+                   return [document.documentElement.dataset.theme, \
+                           getComputedStyle(b).backgroundColor]; }",
+                json!(null),
+            )
+        };
+        let first = colour(ui);
+        ui.click("#theme-toggle");
+        let second = colour(ui);
+        let mut seen = [first, second];
+        seen.sort_by_key(|pair| pair[0].as_str().unwrap().to_string());
+        // styles.css: --accent #6d28d9 (light), #a78bfa (dark).
+        assert_eq!(seen[0], json!(["dark", "rgb(167, 139, 250)"]));
+        assert_eq!(seen[1], json!(["light", "rgb(109, 40, 217)"]));
+    })
+    .await;
+    assert!(ran);
+}

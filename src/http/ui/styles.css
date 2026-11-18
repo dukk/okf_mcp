@@ -26,8 +26,11 @@
     --error: #f87171; --error-soft: #450a0a;
     --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.4);
 }
-/* Map the tokens onto Pico's variables, so its form controls follow the theme. */
-:root, [data-theme="dark"] {
+/* Map the tokens onto Pico's variables, so its form controls follow the theme.
+ * Pico sets its light values on `:root:not([data-theme=dark])` (two
+ * selectors' worth of specificity), which a plain `:root` loses to; the
+ * same selector, later in the cascade, wins (issue #270). */
+:root, :root:not([data-theme="dark"]), [data-theme="light"], [data-theme="dark"] {
     --pico-font-family: var(--font-body);
     --pico-font-size: 14px;
     --pico-background-color: var(--bg);

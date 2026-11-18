@@ -1137,15 +1137,11 @@ async fn finish(
         return server_error(&error, &brand);
     }
     // Creating the grant bumped admin_generation, so this loads it into the
-    // key cache before the client's token request can arrive.
-    if let Err(error) = app.poll().await {
-        split_event!(
-            error,
-            { kind = error.kind(), },
-            { %error, },
-            "poll after creating a grant failed"
-        );
-    }
+    // key cache before the client's token request can arrive. Only the keys
+    // are reloaded (not every catalog, as a full poll pass does), and the
+    // new generation is announced to the other replicas. A failure is
+    // logged inside; the next poll pass retries.
+    app.reload_keys_now(true).await;
     let (code, family_id) = match (
         keys::generate_with(keys::AUTHORIZATION_CODE_PREFIX),
         new_id(),
