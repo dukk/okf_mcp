@@ -13,4 +13,4 @@
 ## Notes
 - A file literally named `a%20b.md` is now linked as `a%2520b.md`; an existing link written `a%20b.md` to such a file reads as the file `a b.md` and is reported broken if that does not exist. A `%` not followed by two hex digits (`100%.md`) stays literal.
 - The URI-scheme test still reads the destination as written, so `mailto%3Aa` is a path.
-- Links written unencoded by hand (`a b.md`) still resolve; they are only encoded when an operation rewrites them.
+- A destination with a space (`[x](a b.md)`) was never parsed as a link (a destination stops at whitespace), so such a file has to be linked as `a%20b.md`.
