@@ -822,13 +822,19 @@ pub(crate) async fn insert_legacy_test_key(
 /// Their ids, in `names`' order.
 ///
 /// # Errors
-/// [`OkfError::CatalogNotSelected`] for the first name with no catalog;
-/// [`OkfError::Database`].
+/// [`OkfError::CatalogNotSelected`] for the first name with no catalog (a
+/// name that cannot be one, a NUL included, counts as one with none:
+/// Postgres refuses a NUL, issue #339); [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "keys.catalog_ids"))]
 pub(crate) async fn catalog_ids(
     conn: &mut PgConnection,
     names: &[String],
 ) -> Result<Vec<i64>, OkfError> {
+    if let Some(name) = names.iter().find(|name| !catalogs::is_valid_name(name)) {
+        return Err(OkfError::CatalogNotSelected {
+            catalog: name.clone(),
+        });
+    }
     // `WITH ORDINALITY` numbers the array's elements, so the rows come back in
     // the caller's order with a NULL id for each unknown name.
     let rows: Vec<(String, Option<i64>)> = sqlx::query_as(

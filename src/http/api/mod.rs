@@ -37,6 +37,8 @@ mod labels;
 mod labels_tests;
 mod mail;
 mod maintenance;
+#[cfg(test)]
+mod malformed_name_tests;
 mod me;
 mod oauth;
 mod people;
