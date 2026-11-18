@@ -707,8 +707,6 @@ async fn the_code_form_hides_expiries_above_the_servers_limit() {
         ui.login(&admin);
         ui.open("/keys");
         ui.wait_visible("#code-new");
-        // The limit comes with the list, so wait until the table has drawn.
-        ui.wait_visible("#codes-table");
         ui.click("#code-new");
         ui.wait_visible("#code-form");
         let offered = ui.eval(
@@ -730,13 +728,12 @@ async fn the_code_form_hides_expiries_above_the_servers_limit() {
     assert!(minted[0].expires_at - minted[0].created_at <= TimeDelta::hours(1));
 }
 
-/// Issue #270: a redeemed code's drawer opens its grant's drawer.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_redeemed_codes_grant_opens_from_its_drawer() {
-    let server = server().await;
-    let admin = server
-        .key("console-admin", Access::Admin, &["main"], Some("main"))
-        .await;
+/// Registers a client, mints a sign-in code `laptop` and redeems it, as the
+/// consent page does.
+///
+/// # Returns
+/// The grant's id and its key name.
+async fn redeemed_grant(server: &TestServer) -> (String, String) {
     let client_id = "https://client.example.com/client.json";
     sqlx::query(
         "INSERT INTO oauth_clients \
@@ -774,6 +771,99 @@ async fn a_redeemed_codes_grant_opens_from_its_drawer() {
         .await
         .expect("redeem the code");
     server.app.poll().await.expect("poll the grant in");
+    let name = key_rows::list(&server.db.pool)
+        .await
+        .expect("list keys")
+        .into_iter()
+        .find(|key| key.id == grant_id)
+        .expect("the grant")
+        .name;
+    (grant_id, name)
+}
+
+/// Review of #657: the code form is not offered with every expiry while the
+/// first list (which carries the limit) is pending or failed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_code_form_never_offers_every_expiry_before_the_limit_is_known() {
+    let mut config = Config::default();
+    config.oauth.code_max_expiry = std::time::Duration::from_secs(2 * 3600);
+    let server =
+        TestServer::start(vec![("main", files(&[("index.md", "# Main\n")]))], config).await;
+    let admin = server
+        .key("console-admin", Access::Admin, &["main"], Some("main"))
+        .await;
+    let offered = |ui: &crate::harness::Ui| {
+        ui.eval(
+            "() => [...document.querySelectorAll('#code-form select[name=expires_in] option')].map(o => o.value)",
+            json!(null),
+        )
+    };
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        // The first list is held: New must fetch the limit itself.
+        ui.hold_next("GET", "/oauth/codes");
+        ui.open("/keys");
+        ui.wait_visible("#code-new");
+        ui.click("#code-new");
+        ui.wait_visible("#code-form");
+        assert_eq!(offered(ui), json!(["1h"]));
+        ui.release_held();
+        ui.click("#drawer-close");
+        // The first list fails: New fetches it again, and offers only 1h.
+        ui.fail_next("GET", "/oauth/codes", 503, "unavailable");
+        ui.open("/health");
+        ui.open("/keys");
+        ui.wait_visible("#code-new");
+        ui.click("#code-new");
+        ui.wait_visible("#code-form");
+        assert_eq!(offered(ui), json!(["1h"]));
+    })
+    .await;
+    assert!(ran);
+}
+
+/// Review of #657: a keys read that answers after the page was left and
+/// shown again must not replace the visible page's rows or loader, so a
+/// grant change from the code drawer still refreshes the current table.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_late_keys_read_from_a_left_page_does_not_hijack_the_current_one() {
+    let server = server().await;
+    let admin = server
+        .key("console-admin", Access::Admin, &["main"], Some("main"))
+        .await;
+    let (grant_id, name) = redeemed_grant(&server).await;
+    let row = format!("[data-test=\"key-{name}\"]");
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        // The first visit's keys read is answered early and delivered late.
+        ui.hold_answer("GET", "/keys", || ui.open("/keys"));
+        ui.open("/health");
+        ui.open("/keys");
+        ui.wait_visible(&row);
+        ui.release_held();
+        ui.click("#codes-show-all");
+        ui.wait_visible("[data-test=code-laptop]");
+        ui.click("[data-test=code-laptop]");
+        ui.wait_visible("#code-open-grant");
+        ui.click("#code-open-grant");
+        ui.wait_text("#drawer dl.facts", &grant_id);
+        ui.click("#key-revoke");
+        ui.click("#confirm-ok");
+        // Revoked keys leave the default list: the CURRENT table redrew.
+        ui.wait_hidden(&row);
+    })
+    .await;
+    assert!(ran);
+}
+
+/// Issue #270: a redeemed code's drawer opens its grant's drawer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_redeemed_codes_grant_opens_from_its_drawer() {
+    let server = server().await;
+    let admin = server
+        .key("console-admin", Access::Admin, &["main"], Some("main"))
+        .await;
+    let (grant_id, _) = redeemed_grant(&server).await;
     let ran = drive(server.base.clone(), move |ui| {
         ui.login(&admin);
         ui.open("/keys");

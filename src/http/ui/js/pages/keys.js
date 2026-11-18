@@ -32,9 +32,11 @@ const CODE_STATE_KIND = { live: 'ok', expired: 'muted', redeemed: 'info', revoke
 // humantime spellings the server parses; the default is a day.
 const EXPIRIES = [['1h', '1 hour', 3600], ['24h', '24 hours', 86400], ['3d', '3 days', 259200], ['7d', '7 days', 604800]];
 
-// The key rows last drawn and the loader that redraws them, so a redeemed
-// code's drawer can open its grant's drawer.
-const keysView = { rows: new Map(), reload: null };
+// Per render (keyed by its `main`): the key rows last drawn and the loader
+// that redraws them, so a redeemed code's drawer can open its grant's
+// drawer. Scoped to the render, so a read that answers after the page was
+// left and shown again cannot replace the visible page's rows or loader.
+const keysViews = new WeakMap();
 
 // The expiry choices the server accepts: those within `maxSecs`
 // (`oauth.code_max_expiry`; null when unknown: all of them). When even the
@@ -124,15 +126,20 @@ export async function render(main) {
     showRevoked.addEventListener('change', applyFilter);
     head.append(h('div', { class: 'actions' },
         h('button', { type: 'button', id: 'key-new', onclick: () => newKey(main, load) }, 'New key')));
+    const view = { rows: new Map(), reload: null, latest: 0 };
+    keysViews.set(main, view);
     const codes = codesPanel(main);
     main.append(h('label', { class: 'small muted' }, showRevoked, ' Show revoked keys'), table, codes.section);
 
+    view.reload = load;
     async function load() {
+        // Numbered, so a read overtaken by a newer one draws nothing.
+        const mine = ++view.latest;
         try {
             const { keys } = await api.get('/keys');
-            keysView.rows = new Map(keys.map(key => [key.id, key]));
-            keysView.reload = load;
-            if (main.isConnected) table.redraw(keys);
+            if (!main.isConnected || mine !== view.latest) return;
+            view.rows = new Map(keys.map(key => [key.id, key]));
+            table.redraw(keys);
         } catch { /* toasted; a 401 has already signed the browser out */ }
     }
     applyFilter();
@@ -389,17 +396,30 @@ function codesPanel(main) {
     const showAll = h('input', { type: 'checkbox', id: 'codes-show-all' });
     const table = listTable(CODE_COLUMNS, [], { onRow: code => showCode(main, code, load), empty: 'No sign-in codes to show.' });
     table.id = 'codes-table';
-    // The longest expiry the server allows, from the last list; null until read.
+    // The longest expiry the server allows, from the last list; null until
+    // one has been read (the code form is not offered before that).
     let maxExpirySecs = null;
+    let latest = 0;
     const applyFilter = () => table.setFilter(showAll.checked ? null : code => code.state === 'live');
     showAll.addEventListener('change', applyFilter);
     applyFilter();
+    // Returns whether the list was read (so the limit is known).
     async function load() {
+        const mine = ++latest;
         try {
             const { codes, max_expiry_secs: maxSecs } = await api.get('/oauth/codes');
-            maxExpirySecs = typeof maxSecs === 'number' ? maxSecs : null;
-            if (main.isConnected) table.redraw(codes);
+            if (typeof maxSecs === 'number') maxExpirySecs = maxSecs;
+            if (main.isConnected && mine === latest) table.redraw(codes);
+            return typeof maxSecs === 'number';
         } catch { /* toasted */ }
+        return false;
+    }
+    // The form offers only expiries the server accepts, so it opens once the
+    // limit is known: read now when the first list is still pending or failed
+    // (a failure is toasted and the form stays closed; New retries it).
+    async function openNew() {
+        if (maxExpirySecs === null && !(await load())) return;
+        if (main.isConnected) await newCode(main, load, () => maxExpirySecs);
     }
     const section = h('section', { id: 'codes-panel', class: 'codes-panel' },
         h('header', { class: 'page-head' },
@@ -409,7 +429,7 @@ function codesPanel(main) {
                     'One-time codes a person enters when connecting an OAuth client such as ChatGPT. '
                     + 'Each becomes an OAuth grant with the code\'s catalogs, access, actor and user.')),
             h('div', { class: 'actions' },
-                h('button', { type: 'button', id: 'code-new', onclick: () => newCode(main, load, () => maxExpirySecs) }, 'New sign-in code'))),
+                h('button', { type: 'button', id: 'code-new', onclick: () => openNew() }, 'New sign-in code'))),
         h('label', { class: 'small muted' }, showAll, ' Show redeemed, expired and revoked codes'),
         table);
     return { section, load };
@@ -464,11 +484,12 @@ async function newCode(main, reload, maxExpiry = () => null) {
 // the id as text.
 function grantLink(main, grantId) {
     const id = h('code', {}, grantId);
-    const key = keysView.rows.get(grantId);
-    if (!key || !keysView.reload) return id;
+    const view = keysViews.get(main);
+    const key = view?.rows.get(grantId);
+    if (!key || !view.reload) return id;
     return h('button', {
         type: 'button', class: 'outline', id: 'code-open-grant', title: 'Open this grant',
-        onclick: () => showKey(main, key, keysView.reload),
+        onclick: () => showKey(main, key, view.reload),
     }, id);
 }
 
