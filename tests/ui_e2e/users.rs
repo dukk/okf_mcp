@@ -330,8 +330,8 @@ const STRAY_TEXT: &str = "() => [...document.querySelector('#main .view').childN
 async fn no_page_prints_a_stray_null_under_its_content() {
     let server = server().await;
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
-    let writer = server
-        .key("console-writer", Access::Write, &["main"], Some("main"))
+    let reader = server
+        .key("console-reader", Access::Read, &["main"], Some("main"))
         .await;
     drive(server.base.clone(), move |ui| {
         // An admin reaching every catalog: no "needs every catalog" note
@@ -352,8 +352,9 @@ async fn no_page_prints_a_stray_null_under_its_content() {
         }
         ui.click("#signout");
         ui.wait_visible("#login");
-        // A write key: no import panel on Import & export.
-        ui.login(&writer);
+        // A read key: no import panel on Import & export (a write key gets
+        // one since issue #260).
+        ui.login(&reader);
         ui.open("/transfer");
         ui.wait_visible("#export-panel");
         assert!(!ui.page.is_visible("#import-panel").expect("visible"));
