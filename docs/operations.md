@@ -3691,8 +3691,14 @@ appended), `/.well-known/oauth-authorization-server`, `/oauth/` and `/ui/`
 (an `https://` `client_id`) makes the server fetch that document from the
 client's host over HTTPS. The fetch ignores `HTTP_PROXY` and the other proxy
 variables, so a network policy that blocks the pod's direct outbound HTTPS
-breaks such clients. Clients that register themselves (dynamic client
-registration) need no egress.
+breaks such clients. A fetched document is cached (5 minutes to 24 hours, from
+its `Cache-Control`). If a refetch fails in transport (timeout, refused
+connection, no DNS answer, a non-200 status), the cached copy keeps working
+for up to 24 hours after it was fetched. If the refetch delivers an invalid
+document (not JSON, too large, a changed `client_id`, invalid
+`redirect_uris`), authorization fails at once and the cached copy is left in
+place but unused until a valid document is fetched. Clients that register
+themselves (dynamic client registration) need no egress.
 
 **State.** Without `[redis]` the server stays single-replica. Consent pages in
 progress and authorization codes not yet exchanged live in memory, so a
