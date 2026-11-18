@@ -104,7 +104,10 @@ creates its personal team of the same name. Ownership grants no access.
 `okf-mcp user create|update|list|delete`, `team create|update|list|add-member|set-role|remove-member|delete|suspend|unsuspend`,
 `catalog set-owner`, `key assign` and `oauth code assign` manage them, and
 `okf-mcp unassigned` lists what predates users and teams and has neither
-(`docs/operations.md`, "Users and teams").
+(`docs/operations.md`, "Users and teams"). Each also has a display name that
+people see instead of the id (`user update`, `team update` and
+`catalog update --display-name`; `docs/operations.md`, "Display names and
+labels"). Ids never change.
 `okf-mcp user set-admin|set-email|invite|entitle|unentitle|sessions|revoke-sessions|sign-ins`,
 `catalog set-member-access`, `settings list|set|reset` and
 `mail test|queue|retry|delete` manage sign-in, the ceiling, policy and mail
@@ -264,7 +267,8 @@ An `mcp.json` entry (Claude Code expands the `${...}` variables):
 ```
 
 `X-OKF-Catalogs` (or `?catalogs=pg,work` on the URL) names the connection's
-catalogs: the whole list is the read set and the first is the default write
+catalogs by id (the `name` that `list_catalogs` returns beside the display
+`label`; never the label): the whole list is the read set and the first is the default write
 target. The list is also the session's boundary: `list_catalogs` offers only
 those catalogs, and a tool's `catalog` (or `search`'s `catalogs`) argument or
 a changeset handle can narrow it but never reach a catalog it leaves out,

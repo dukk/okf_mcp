@@ -18,7 +18,8 @@ scheduled or "don't ask" context, stop and say this skill needs the owner.
 - Everything goes through the okf-mcp tools (`mcp__okf-mcp__*`), on the
   catalog the session names (a SessionStart hook names it; otherwise the
   connection's write target from `list_catalogs`). Pass `catalog` on every
-  `maintenance_*` call: those tools have no default. The server is the
+  `maintenance_*` call: those tools have no default.
+  Say the catalog's `label` to people; pass its id (`name`) as `catalog`. The server is the
   source of truth; never read or write a git checkout of the catalog.
 - If the okf-mcp tools are unavailable, stop and say so.
 - Follow the catalog's AGENTS.md (`read_document` with path `AGENTS.md`)
