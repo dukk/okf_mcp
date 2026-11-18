@@ -418,8 +418,12 @@ function codesPanel(main) {
     // limit is known: read now when the first list is still pending or failed
     // (a failure is toasted and the form stays closed; New retries it).
     async function openNew() {
+        // Claimed before the read, so a drawer opened or dismissed while it
+        // is pending wins: the form then does not open over or after it.
+        const ticket = drawerTicket(main);
         if (maxExpirySecs === null && !(await load())) return;
-        if (main.isConnected) await newCode(main, load, () => maxExpirySecs);
+        if (!ticket.current()) return;
+        await newCode(main, load, () => maxExpirySecs, ticket);
     }
     const section = h('section', { id: 'codes-panel', class: 'codes-panel' },
         h('header', { class: 'page-head' },
@@ -436,8 +440,7 @@ function codesPanel(main) {
 }
 
 // The mint form, in the drawer.
-async function newCode(main, reload, maxExpiry = () => null) {
-    const ticket = drawerTicket(main);
+async function newCode(main, reload, maxExpiry = () => null, ticket = drawerTicket(main)) {
     const users = await usersOrNull();
     if (!users || !ticket.current()) return;
     const choices = expiryChoices(maxExpiry());

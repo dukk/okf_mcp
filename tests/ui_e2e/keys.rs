@@ -822,6 +822,54 @@ async fn the_code_form_never_offers_every_expiry_before_the_limit_is_known() {
     assert!(ran);
 }
 
+/// Review of #657 (round 2): the code form does not open over a drawer
+/// opened, or after one dismissed, while its limit read was pending.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pending_limit_read_does_not_open_the_code_form_over_a_newer_drawer() {
+    let server = server().await;
+    let admin = server
+        .key("console-admin", Access::Admin, &["main"], Some("main"))
+        .await;
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        let row = "[data-test=key-console-admin]";
+        for dismiss in [false, true] {
+            // The first list fails, so the limit is unknown; New's own read
+            // is held.
+            ui.fail_next("GET", "/oauth/codes", 503, "unavailable");
+            ui.open("/health");
+            ui.open("/keys");
+            ui.wait_visible(row);
+            ui.hold_next("GET", "/oauth/codes");
+            ui.click("#code-new");
+            // The failed list's toast may cover the row, so click in the page.
+            ui.eval(
+                "(selector) => document.querySelector(selector).click()",
+                json!(row),
+            );
+            ui.wait_text("#drawer dl.facts", "API key");
+            if dismiss {
+                ui.click("#drawer-close");
+            }
+            ui.release_held();
+            assert!(
+                !ui.page.is_visible("#code-form").expect("visible"),
+                "the code form opened (dismissed: {dismiss})"
+            );
+            assert_eq!(
+                ui.page.is_visible("#drawer").expect("visible"),
+                !dismiss,
+                "dismissed: {dismiss}"
+            );
+            if !dismiss {
+                ui.click("#drawer-close");
+            }
+        }
+    })
+    .await;
+    assert!(ran);
+}
+
 /// Review of #657: a keys read that answers after the page was left and
 /// shown again must not replace the visible page's rows or loader, so a
 /// grant change from the code drawer still refreshes the current table.
