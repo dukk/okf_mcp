@@ -67,6 +67,9 @@ pub(crate) struct KeyView {
     pub self_issued: bool,
     /// The user it belongs to (`None`: unassigned, from before users existed).
     pub user: Option<String>,
+    /// A grant's last token activity: when its newest token on record was
+    /// issued (`None` for a key, or a grant with none on record).
+    pub last_activity: Option<String>,
 }
 
 impl From<KeyRecord> for KeyView {
@@ -104,6 +107,7 @@ impl From<KeyRecord> for KeyView {
             // The API names users; their ids stay internal.
             user_id: _,
             self_issued,
+            last_activity,
         } = record;
         Self {
             id,
@@ -127,6 +131,7 @@ impl From<KeyRecord> for KeyView {
             expires_at: expires_at.map(format_timestamp),
             self_issued,
             user,
+            last_activity: last_activity.map(format_timestamp),
         }
     }
 }

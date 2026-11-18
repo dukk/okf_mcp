@@ -12,6 +12,8 @@ use okf_mcp::store::oauth::clients;
 use okf_mcp::store::oauth::codes::{self, NewSignInCode};
 use okf_mcp::store::users::{self, NewUser};
 
+use serde_json::json;
+
 use crate::harness::drive;
 use crate::support::server::{files, TestServer, OWNER};
 
@@ -234,8 +236,25 @@ async fn an_oauth_grant_is_marked_and_cannot_be_given_reporting() {
         .find(|key| key.id == grant_id)
         .expect("the grant")
         .name;
+    // A token issued for the grant at a known time two days ago: its last
+    // activity (issue #269). A raw row, so the time is exact; recent, so the
+    // poll loop's idle revocation leaves the grant alone.
+    let issued = okf_mcp::clock::format_timestamp(Utc::now() - TimeDelta::days(2));
+    sqlx::query(
+        "INSERT INTO oauth_tokens \
+         (sha256, grant_id, kind, family_id, resource, created_at, expires_at) \
+         VALUES ($1, $2, 'refresh', 'family-1', 'https://okf.example.com/mcp', \
+                 $3::timestamptz, $3::timestamptz + interval '30 days')",
+    )
+    .bind([7_u8; 32].as_slice())
+    .bind(&grant_id)
+    .bind(&issued)
+    .execute(&server.db.pool)
+    .await
+    .expect("insert a token");
     // Quoted: a grant's name has dots (Task 4, Decision 1).
     let row = format!("[data-test=\"key-{name}\"]");
+    let active = format!("[data-test=\"key-active-{name}\"]");
     drive(server.base.clone(), move |ui| {
         ui.login(&admin);
         ui.open("/keys");
@@ -244,8 +263,19 @@ async fn an_oauth_grant_is_marked_and_cannot_be_given_reporting() {
             text.contains("Example Client"),
             "the client is named: {text:?}"
         );
+        // The page shows times in the browser's locale: ask it for the
+        // spelling it gives this one.
+        let shown = ui.eval("(iso) => new Date(iso).toLocaleString()", json!(issued));
+        let shown = shown.as_str().expect("a string").to_string();
+        assert_eq!(ui.wait_text(&active, &shown), shown);
+        // A plain key has no token activity.
+        assert_eq!(
+            ui.wait_text("[data-test=key-active-console-admin]", "-"),
+            "-"
+        );
         ui.click(&row);
         ui.wait_text("#drawer", "OAuth grant");
+        ui.wait_text("#drawer dl.facts", &format!("Last active{shown}"));
         ui.wait_visible("#key-revoke");
         assert!(!ui.page.is_visible("#key-report-toggle").expect("visible"));
     })

@@ -69,6 +69,9 @@ const COLUMNS = [
     { key: 'maintenance_report', label: 'Reporting',
       render: key => key.maintenance_report ? pill('reports', 'ok') : '-' },
     { key: 'created_at', label: 'Created', sort: key => key.created_at, render: key => when(key.created_at) },
+    // A grant's newest token's issue time; a plain key has none ('-').
+    { key: 'last_activity', label: 'Last active', sort: key => key.last_activity ?? '',
+      render: key => h('span', { 'data-test': `key-active-${key.name}` }, isGrant(key) ? when(key.last_activity) : '-') },
     { key: 'revoked_at', label: 'State', sort: key => key.revoked_at ?? '',
       render: key => key.revoked_at
           ? [pill('revoked', 'error'), ' ', h('span', { class: 'muted small' }, when(key.revoked_at))]
@@ -280,6 +283,7 @@ async function showKey(main, key, reload, ticket = drawerTicket(main), previous 
         fact('Default', key.default_catalog ? catalogLabel(key.default_catalog) : '-'),
         fact('Reporting', key.maintenance_report ? 'may submit maintenance reports' : 'no'),
         fact('Created', when(key.created_at)),
+        grant ? fact('Last active', when(key.last_activity)) : null,
         fact('Revoked', key.revoked_at ? when(key.revoked_at) : 'no'));
     const subtitle = mine
         ? 'The key this browser is signed in with'

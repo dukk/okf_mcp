@@ -287,8 +287,52 @@ type RefreshRow = (
     Option<DateTime<Utc>>,
 );
 
-/// Presents a refresh token: takes its family's lock ([`lock_family`]),
-/// locks its row and, if it is live and unused, marks it used.
+/// Takes a share lock on a grant's `api_keys` row for the rest of the
+/// transaction, and says whether the grant is live.
+///
+/// This is the grant half of the token lock protocol. Every transaction
+/// that issues tokens for a grant (a code exchange, a refresh rotation)
+/// takes it first, before the family's lock ([`lock_family`]) and before
+/// any token row, and holds it until it commits. Every revocation of the
+/// grant (`store::keys::revoke_by_id`, the poll loop's
+/// `store::keys::revoke_idle_grants`) locks the same row `FOR UPDATE`, which
+/// conflicts with this. So either the revocation commits first, and this
+/// (waiting, then reading the committed row) reports the grant revoked and
+/// the caller issues nothing; or the issuing transaction holds the lock
+/// first, and the revocation waits for it to commit (the idle pass then
+/// re-checks and finds the new tokens live). A revoked grant never gains a
+/// token, and an issue that passed this check is never undone by an idle
+/// revocation.
+///
+/// Lock order: (a user row, taken only by user deletion, whose cascade
+/// reaches the grant and then its tokens) the grant row, then the family
+/// lock, then token rows. Revocations of a grant touch no token row and no
+/// family lock; a family revocation touches no grant row.
+///
+/// # Arguments
+/// * `conn` - the transaction's connection.
+/// * `grant_id` - the grant (`api_keys.id`).
+///
+/// # Returns
+/// `true` for a live grant; `false` for a revoked or missing one.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "tokens.lock_grant"))]
+pub async fn lock_grant(conn: &mut PgConnection, grant_id: &str) -> Result<bool, OkfError> {
+    // `FOR SHARE`: issuers do not block each other, only a writer of the
+    // row (a revocation's `FOR UPDATE`) waits, and is waited for.
+    let live: Option<bool> =
+        sqlx::query_scalar("SELECT revoked_at IS NULL FROM api_keys WHERE id = $1 FOR SHARE")
+            .bind(grant_id)
+            .fetch_optional(&mut *conn)
+            .await?;
+    Ok(live == Some(true))
+}
+
+/// Presents a refresh token: takes its grant's share lock ([`lock_grant`]),
+/// then its family's lock ([`lock_family`]), locks its row and, if it is
+/// live and unused, marks it used.
 ///
 /// Reuse is checked first: a used token is `Reused` even after its family
 /// was revoked, so replaying it again stays harmless (revoking twice).
@@ -311,17 +355,23 @@ pub async fn use_refresh(
     sha256: &[u8; 32],
     now: DateTime<Utc>,
 ) -> Result<RefreshUse, OkfError> {
-    // The family first: a token's family never changes, so reading it
-    // before the lock is safe; the token's state is read only after it.
-    let family: Option<String> = sqlx::query_scalar(
-        "SELECT family_id FROM oauth_tokens WHERE sha256 = $1 AND kind = 'refresh'",
+    // The grant and the family first: a token's grant and family never
+    // change, so reading them before the locks is safe; the token's state
+    // is read only after them.
+    let binding: Option<(String, String)> = sqlx::query_as(
+        "SELECT grant_id, family_id FROM oauth_tokens WHERE sha256 = $1 AND kind = 'refresh'",
     )
     .bind(sha256.as_slice())
     .fetch_optional(&mut *tx)
     .await?;
-    let Some(family) = family else {
+    let Some((grant, family)) = binding else {
         return Ok(RefreshUse::Unknown);
     };
+    // Held until the successor is committed (or the transaction is
+    // dropped), so a revocation, an idle one included, cannot slip between
+    // this check and the mint. A revoked grant is answered below, after the
+    // reuse check, from the row read under this lock.
+    lock_grant(&mut *tx, &grant).await?;
     lock_family(&mut *tx, &family).await?;
     // A new statement, so (read committed) a new snapshot: it sees whatever
     // the family's previous lock holder committed, a revocation included.

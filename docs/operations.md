@@ -107,6 +107,7 @@ unknown keys are ignored, so one file serves every version.
 | `public_url` | none | The server's public origin, such as `"https://okf-mcp.example.com"` (no path, query or user info; a trailing `/` is dropped). Setting it turns on OAuth ("OAuth connectors") and console sign-in by account ("Signing in and self-service"); without it the OAuth and sign-in routes are 404. It must be `https`, except on a loopback host (such as `localhost`, `127.0.0.1` or `::1`) for local testing, and its host must be in `allowed_hosts` |
 | `oauth.access_token_ttl` | `"1h"` | How long an OAuth access token works |
 | `oauth.refresh_token_ttl` | `"30d"` | How long a refresh token works. Each refresh issues a new one with a fresh lifetime, so a connection used within this stays signed in |
+| `oauth.idle_grant_revoke_after` | `"30d"` | The poll loop revokes an OAuth grant that has had no token issued for this long and holds no live token ([Idle grants](#idle-grants)). At most 10 years; zero is refused |
 | `oauth.code_max_expiry` | `"7d"` | The longest expiry a sign-in code may be given (`oauth code create --expires`, the console's expiry) |
 | `oauth.dcr_enabled` | `true` | Accept dynamic client registration (RFC 7591) at `/oauth/register`. Clients that publish a Client ID Metadata Document work either way |
 | `oauth.cimd_allow_private` | `false` | Fetch Client ID Metadata Documents from loopback and private addresses. For test rigs only: it opens the fetcher to the internal network |
@@ -207,6 +208,7 @@ public_url = "https://okf-mcp.example.com"   # turns on OAuth; see "OAuth connec
 [oauth]
 access_token_ttl = "1h"
 refresh_token_ttl = "30d"
+idle_grant_revoke_after = "30d"
 code_max_expiry = "7d"
 dcr_enabled = true
 cimd_allow_private = false
@@ -1254,7 +1256,7 @@ into a password manager or a secret store. Never paste it into logs, tickets,
 chat or shell history (a leading space keeps a command out of history in most
 shells). `key list` shows name, actor, id, access, state, grants, `default
 X`, `maintenance_report true|false`, `provisioner yes|no`, `user U` (`-` for a key from before
-users existed that nobody has assigned), `kind key|oauth` and `client NAME` (the OAuth client's name for a grant, `-` for a key), grouped by name. OAuth grants appear in the list too and may share a name and actor with a key, so check `kind`. Use
+users existed that nobody has assigned), `kind key|oauth`, `client NAME` (the OAuth client's name for a grant, `-` for a key) and `last_activity T` (when a grant's newest token was issued, `-` for a key or a grant with none on record; see "Idle grants" below), grouped by name. OAuth grants appear in the list too and may share a name and actor with a key, so check `kind`. Use
 `okf-mcp key maintenance-report ID --enabled true|false [--actor ACTOR]` to
 change the reporting flag. `revoke`, `grant`, `ungrant` and `maintenance-report`
 accept an id, an unambiguous live name, or `NAME --actor ACTOR` of an API key;
@@ -2399,7 +2401,8 @@ renames and revokes the keys they made themselves. A self-issued key:
 Creating one above the ceiling, past the key limit or beyond the lifetime
 limit answers 422 naming the limit (`ceiling`, `max_keys_per_user` or
 `max_key_lifetime`). An expired key stops working at once. **My grants**
-(`/ui/#/my-grants`) lists and revokes the user's OAuth grants. My keys also
+(`/ui/#/my-grants`) lists and revokes the user's OAuth grants, with when
+each was last active ([Idle grants](#idle-grants)). My keys also
 lists the keys an admin made for the user: those are admin-issued, so not
 capped by the ceiling, and an admin manages them on the API keys page.
 **Account** (`/ui/#/account`) changes the password, adds, renames and
@@ -3716,6 +3719,33 @@ The client renews its access itself: access tokens last
 `oauth.refresh_token_ttl` from its last use. A connection used at least that
 often stays connected.
 
+#### Idle grants
+
+A grant's **last activity** is when its newest token was issued: the
+client's first token exchange after sign-in, and every refresh since (each
+refresh issues a new pair). Requests made with an access token are not
+recorded one by one, but a client that keeps working refreshes at least
+every `oauth.access_token_ttl`, so the time lags real use by at most that
+much. `okf-mcp oauth grant list` and `key list` show it as `last_activity T`,
+the console's API keys page and My grants as Last active. `-` means no token
+is on record: the grant was never used, or its tokens expired more than a
+week ago and were pruned.
+
+Once an hour the poll loop revokes every grant whose last activity (or, with
+no token on record, its creation) is older than
+`oauth.idle_grant_revoke_after` (30 days by default) and that holds no live
+token, unrevoked and unexpired. Such a grant can never be used again (only a
+live refresh token gets a new one), so the revocation only tidies the list.
+With a `refresh_token_ttl` longer than the idle period, a grant is kept
+until its last refresh token expires. Static API keys are never touched.
+
+The revocation is the one `oauth grant revoke` makes: the grant shows as
+revoked, and the audit log records `oauth.grant_revoked` with the actor
+`system:idle-grant-revocation` and the details `{"reason": "idle",
+"last_activity": "..."}`. With several replicas, each runs the pass; a grant
+is re-checked under its row lock, so it is revoked and audited once. The
+client reconnects with a new sign-in, as after any revoke.
+
 Each connection needs its own code. Connecting ChatGPT and Claude.ai, two
 people, or the same client again after a revoke, takes a new code each time.
 
@@ -3727,7 +3757,7 @@ people, or the same client again after a revoke, takes a new code each time.
 | `okf-mcp oauth code list` | Every code, never the code itself. Tab-separated: name, actor, id, access, state (`live`, `expired`, `redeemed` or `revoked`), catalogs (`*` for all), `default D`, `expires T`, `grant G` (the grant a redeemed code became), `user U`; an empty cell is `-` |
 | `okf-mcp oauth code revoke ID` | Revokes a code nobody has redeemed. Refuses a redeemed or already revoked one |
 | `okf-mcp oauth code assign ID --user USER` | Gives a code, in any state, a user. The grant a redeemed code became keeps its own user: assign that with `okf-mcp key assign` ([Users and teams](#users-and-teams)) |
-| `okf-mcp oauth grant list` | The OAuth grants, revoked ones included, with `key list`'s columns (ending in `user U`, `kind oauth`, `client <name>`) |
+| `okf-mcp oauth grant list` | The OAuth grants, revoked ones included, with `key list`'s columns (ending in `user U`, `kind oauth`, `client <name>`, `last_activity T`; see [Idle grants](#idle-grants)) |
 | `okf-mcp oauth grant revoke ID` | Revokes a grant by its exact id, and with it every token it holds. Refuses a plain key's id |
 
 Each takes `--database-url` and `--config` like every subcommand; inside the
@@ -4297,6 +4327,6 @@ curl -sf -H "Authorization: Bearer $OKF_MCP_KEY" -o notes.tar.gz \
 | The consent page says the redirect URI is not one the client registered | The client sent a `redirect_uri` that is not, character for character, one of those it declared. Fix the client's registration or metadata document |
 | The consent page refuses a sign-in code | The code is mistyped, expired, already redeemed or revoked (the page does not say which, on purpose). `okf-mcp oauth code list` shows its state; mint a new one |
 | The consent page says "This sign-in request has expired or is not valid." or "Too many wrong sign-in codes." | The sign-in took longer than 10 minutes, the server restarted, or a code was refused five times. Start the connection again in the client |
-| An OAuth client was connected but now gets 401 and asks to sign in | Its grant was revoked, it was unused for longer than `oauth.refresh_token_ttl`, the client revoked its refresh token, or a used refresh token was presented again (a sign of a copied token), which ends the connection's tokens. Mint a new code and reconnect |
+| An OAuth client was connected but now gets 401 and asks to sign in | Its grant was revoked (by an operator, or by the poll loop once idle: the audit actor is then `system:idle-grant-revocation`), it was unused for longer than `oauth.refresh_token_ttl`, the client revoked its refresh token, or a used refresh token was presented again (a sign of a copied token), which ends the connection's tokens. Mint a new code and reconnect |
 | Approve shows "Returning to your client" but the client never connects | The browser did not follow the refresh. Click Continue on the page; if that also fails, the client is not listening on its redirect URI (a native client's loopback port closed) |
 | `/oauth/register` or `/oauth/token` answers 429 `slow_down` | The global rate limit, or 500 registered clients without a grant (each is deleted 24 hours after registration). Wait and retry; look for a client registering in a loop |
