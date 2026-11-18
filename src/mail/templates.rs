@@ -417,6 +417,7 @@ mod tests {
         Brand {
             product_name: "Acme <Notes>".to_string(),
             support_contact: Some("help@example.com".to_string()),
+            feedback_url: None,
         }
     }
 

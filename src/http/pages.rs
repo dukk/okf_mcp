@@ -243,10 +243,12 @@ mod tests {
         let brand = Brand {
             product_name: "Acme <Notes>".to_string(),
             support_contact: Some("https://example.com/help?a=1&b=\"2\"".to_string()),
+            feedback_url: None,
         };
         let mail = Brand {
             product_name: "Acme Notes".to_string(),
             support_contact: Some("help@example.com".to_string()),
+            feedback_url: None,
         };
 
         let html = document("Sign in", "<p>x</p>", &[], &brand);

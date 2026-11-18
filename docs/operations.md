@@ -2339,9 +2339,9 @@ usually means an unverified identity or a sandbox recipient.
 
 Policy and branding settings live in the database, so the Settings page
 changes them without a restart; the config file's `[auth]` table gives each
-policy setting's default. The two branding settings,
+policy setting's default. The three branding settings,
 `audit_retention_days` and the three unlock settings have no config key:
-their defaults are `okf`, `none`, `400`, `false`, `4` and `true`.
+their defaults are `okf`, `none`, `none`, `400`, `false`, `4` and `true`.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -2354,6 +2354,7 @@ their defaults are `okf`, `none`, `400`, `false`, `4` and `true`.
 | `reset_link_ttl` | `1h` | Password reset link lifetime |
 | `product_name` | `okf` | The product name people see: in every email (subjects and text), the console (sidebar, login card and tab title) and the sign-in, forgot, setup, reset and OAuth consent pages. 1 to 60 characters with no control characters; surrounding spaces are trimmed |
 | `support_contact` | `none` | An email address or an `https://` URL (with a host). When set, every email ends with "Questions? Contact ..." and the server pages show the same line (a URL as a link); `none` shows no line |
+| `feedback_url` | `none` | An `https://` URL (with a host, at most 500 characters, no whitespace or control characters; an email address is refused). When set, the console's sidebar footer shows a "Send feedback" link to it, opening in a new tab; `none` shows no link. Nothing else changes when it is unset |
 | `audit_retention_days` | `400` | How many days [audit log](#audit-log) entries are kept, `30` to `3650`. A daily pass deletes older ones |
 | `require_unlock` | `false` | Whether operator credentials (admin keys, admin users' sessions) need an unlock, with a reason and a time limit, before they open a customer catalog's contents |
 | `unlock_max_hours` | `4` | The longest an unlock lasts, in hours, `1` to `72`; a longer one is refused (422, `limit: "unlock_max_hours"`) |
@@ -2365,12 +2366,13 @@ okf-mcp settings set max_key_lifetime 90d
 okf-mcp settings reset max_key_lifetime    # back to the config file's default
 okf-mcp settings set product_name "Acme Notes"
 okf-mcp settings set support_contact https://example.com/help
+okf-mcp settings set feedback_url https://example.com/feedback
 okf-mcp settings set audit_retention_days 730
 ```
 
 A value is checked as its config key is: `true`/`false` (or `on`/`off`), a
 whole number, or a duration like `12h` above zero and at most ten years
-(`none` for `max_key_lifetime`); `product_name` and `support_contact` as in
+(`none` for `max_key_lifetime`); `product_name`, `support_contact` and `feedback_url` as in
 the table. A bad one is refused, naming the key: 422
 over REST, a non-zero exit on the command line, and an unknown key is clap's
 list of the keys. Each change records who made it (`cli:<os user>` for the
@@ -3001,7 +3003,7 @@ the same port as `/mcp`:
 | `GET /ui`, `GET /ui/` | none | `/ui` redirects (308) to `/ui/`, which serves the console's shell |
 | `GET /ui/*` | none | The console's static files, embedded in the binary at build time; an unknown file is 404 |
 | `GET /ui/manifest.json` | none | `{"pages": [...]}`: the console pages this build has |
-| `GET /ui/brand.json` | none | `{"product_name", "support_contact"}` (`null` when unset): the [branding settings](#settings), which the console shows before anyone signs in |
+| `GET /ui/brand.json` | none | `{"product_name", "support_contact", "feedback_url"}` (`null` when unset): the [branding settings](#settings), which the console shows before anyone signs in |
 | `/api/v1/*` | bearer key or console session | The JSON API; each endpoint checks the level it needs |
 | `GET /signin`, `POST /signin` | none | The sign-in page and its password form ([Signing in and self-service](#signing-in-and-self-service)). Without `public_url` the page offers only the pasted key and the POST is 404; with `password_sign_in` off the POST is 404 |
 | `GET /signin/forgot`, `POST /signin/forgot` | none | Ask for a reset link; only with `public_url` set |
