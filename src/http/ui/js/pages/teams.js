@@ -251,7 +251,7 @@ export async function render(main) {
             return h('p', { id: 'team-named-after', class: 'muted small' }, 'Named after its user.');
         }
         const key = `team:${team.name}:display-name`;
-        const input = guard(h('input', { id: 'team-display-name', name: 'display_name', maxlength: 80,
+        const input = guard(h('input', { id: 'team-display-name', name: 'display_name',
             value: team.display_name, autocomplete: 'off', 'aria-label': 'Display name' }), key, manager);
         const save = guard(h('button', { type: 'submit', id: 'team-display-name-save' }, 'Save'), key, manager);
         const form = h('form', { id: 'team-display-name-form', class: 'inline-form' }, input, save);

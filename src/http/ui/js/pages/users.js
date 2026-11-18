@@ -153,7 +153,7 @@ export async function render(main, rest) {
         // The save of the display-name field below (a pending write like
         // the account actions, so a second click cannot send it twice).
         const naming = `user:${name}:display-name`;
-        const displayName = guard(h('input', { id: 'user-display-name', name: 'display_name', maxlength: 80,
+        const displayName = guard(h('input', { id: 'user-display-name', name: 'display_name',
             value: user.display_name, autocomplete: 'off', 'aria-label': 'Display name' }), naming, manager);
         const saveName = guard(h('button', { type: 'submit', id: 'user-display-name-save' }, 'Save'), naming, manager);
         const nameForm = h('form', { id: 'user-display-name-form', class: 'inline-form' }, displayName, saveName);

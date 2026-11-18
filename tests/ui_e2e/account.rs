@@ -652,12 +652,6 @@ async fn a_member_edits_their_display_name_and_an_over_long_one_is_refused() {
         ui.wait_text("#whoami", "Alice B - write");
         ui.wait_visible("#account-display-name");
         assert_eq!(ui.eval(DISPLAY_NAME_VALUE, json!(null)), "Alice B");
-        // The input's maxlength would cut the text before it is sent;
-        // lift it so the server's own refusal is what the page shows.
-        ui.eval(
-            "() => document.querySelector('#account-display-name').removeAttribute('maxlength')",
-            json!(null),
-        );
         ui.fill("#account-display-name", &too_long);
         ui.click("#account-display-name-save");
         ui.wait_text("#toasts", "longer than 80 characters");

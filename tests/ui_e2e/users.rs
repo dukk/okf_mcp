@@ -902,12 +902,6 @@ async fn the_users_table_and_drawer_show_the_label_and_the_display_name_saves() 
         ui.wait_text("#toasts", "Display name saved");
         ui.wait_text("#drawer-title", "Alice B");
         ui.wait_text("[data-test=user-alice]", "Alice B");
-        // The input's maxlength would cut the text before it is sent; lift
-        // it so the server's own refusal is what the page shows.
-        ui.eval(
-            "() => document.querySelector('#user-display-name').removeAttribute('maxlength')",
-            serde_json::json!(null),
-        );
         ui.fill("#user-display-name", &too_long);
         ui.click("#user-display-name-save");
         ui.wait_text("#toasts", "longer than 80 characters");
@@ -920,4 +914,43 @@ async fn the_users_table_and_drawer_show_the_label_and_the_display_name_saves() 
     }
     let stored = users::find(&server.db.pool, "alice").await.expect("alice");
     assert_eq!(stored.display_name, "Alice B");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_display_name_counts_characters_not_utf16_units() {
+    // 80 supplementary-plane characters are 160 UTF-16 units: the input
+    // takes them all (it has no maxlength), and the server accepts 80 and
+    // refuses 81.
+    let server = server().await;
+    let admin = server.key("console-admin", Access::Admin, &[], None).await;
+    let alice = NewUser {
+        name: "alice",
+        display_name: &okf_mcp::labels::DisplayName::default(),
+    };
+    users::create(&server.db.pool, &alice, &AuditActor::cli(), Utc::now())
+        .await
+        .expect("create alice");
+    server.app.poll().await.expect("poll");
+    let exactly = "\u{1F600}".repeat(80);
+    let over = "\u{1F600}".repeat(81);
+    let shown = exactly.clone();
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/users");
+        ui.click("[data-test=user-alice]");
+        ui.wait_visible("#user-display-name");
+        ui.fill("#user-display-name", &exactly);
+        ui.click("#user-display-name-save");
+        ui.wait_text("#toasts", "Display name saved");
+        ui.wait_text("#drawer-title", &shown);
+        ui.fill("#user-display-name", &over);
+        ui.click("#user-display-name-save");
+        ui.wait_text("#user-refusal", "longer than 80 characters");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let stored = users::find(&server.db.pool, "alice").await.expect("alice");
+    assert_eq!(stored.display_name.chars().count(), 80);
 }

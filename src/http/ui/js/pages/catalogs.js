@@ -145,7 +145,7 @@ export async function render(main) {
     // write keyed by the catalog (core/pending.js).
     function detailsEditor(row, ticket) {
         const key = `catalog:${row.name}:details`;
-        const displayName = guard(h('input', { id: 'catalog-display-name', name: 'display_name', maxlength: 80,
+        const displayName = guard(h('input', { id: 'catalog-display-name', name: 'display_name',
             value: row.display_name, autocomplete: 'off' }), key);
         const description = guard(h('textarea', { id: 'catalog-description', name: 'description', rows: '3' },
             row.description), key);
