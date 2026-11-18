@@ -443,8 +443,8 @@ struct ImportQuery {
 }
 
 /// `POST /catalogs/{name}/import[?replace=true&only_machinery=true&expect_generation=N]`:
-/// imports the uploaded `.tar.gz` as the key's actor, for a key with `admin`
-/// on the catalog, and swaps the new snapshot in before answering, so the
+/// imports the uploaded `.tar.gz` as the key's actor, for a key with `write`
+/// (or `admin`) on the catalog, and swaps the new snapshot in before answering, so the
 /// next read sees it.
 ///
 /// The key is checked before the body is read, so a key that may not import
@@ -468,9 +468,10 @@ struct ImportQuery {
 ///
 /// # Errors
 /// 404 for a catalog that does not exist or that the key does not reach;
-/// 403 ([`OkfError::Forbidden`]) for a key below `admin`, or
-/// ([`OkfError::UnlockRequired`]) for operator staff without an unlock
-/// while `require_unlock` is on; 400
+/// 403 ([`OkfError::Forbidden`]) for a key below `write`,
+/// ([`OkfError::Suspended`]) for a non-admin while the catalog's owner team
+/// is suspended, or ([`OkfError::UnlockRequired`]) for operator staff
+/// without an unlock while `require_unlock` is on; 400
 /// ([`OkfError::ImportRefused`]) for an unreadable or rule-breaking archive;
 /// 409 ([`OkfError::Refused`]) for a non-empty catalog past generation 0
 /// without `?replace=true`, or one no longer at `expect_generation`; 500 for a
@@ -501,7 +502,11 @@ async fn import_catalog(
 ) -> Result<Response, AppError> {
     // Before any check, so a refusal still ends the span with an error.
     let mut transfer = Transfer::begin(tracing::Span::current(), &app, Direction::Import);
-    principal.require(Access::Admin, &name)?;
+    // Reach, then level, then suspension (`Principal::require`): a key that
+    // does not reach the catalog gets 404, one that reaches it read-only
+    // gets 403, and a non-admin cannot import into a suspended catalog.
+    // Import is a write, so `write` is enough (issue #260).
+    principal.require(Access::Write, &name)?;
     // An import rewrites the catalog's contents: a write, which needs the
     // unlock a write does (M14 Task 9b). Checked before the body is read.
     let admission = principal.admission(&name, Access::Write, app.clock().now())?;
@@ -712,12 +717,17 @@ mod tests {
     /// routes alone (the auth layer's principal added by hand), with a 1 KiB
     /// `max_import_bytes`.
     async fn import_status(caller: Arc<Principal>, size: usize) -> StatusCode {
+        import_status_into("pg", caller, size).await
+    }
+
+    /// [`import_status`] into `catalog`, on an app holding `pg` and `other`.
+    async fn import_status_into(catalog: &str, caller: Arc<Principal>, size: usize) -> StatusCode {
         let config = Config {
             max_import_bytes: bytesize::ByteSize::b(1024),
             ..Config::default()
         };
-        let test = app_with(&[("pg", &[])], config).await;
-        let request = Request::post("/catalogs/pg/import")
+        let test = app_with(&[("pg", &[]), ("other", &[])], config).await;
+        let request = Request::post(format!("/catalogs/{catalog}/import"))
             .body(Body::from(vec![0u8; size]))
             .expect("request");
         router(&test, caller)
@@ -745,15 +755,68 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn the_key_is_checked_before_the_body_is_read() {
+        use crate::mcp::testing::principal_as;
         let reader = principal(&[], None);
+        let writer = principal_as("writer", Access::Write, &["pg"], None);
+        // A writer granted only `other`: `pg` is outside its reach.
+        let stranger = principal_as("stranger", Access::Write, &["other"], None);
         let oversized = body_limit(1024) + 1;
 
         let as_reader = import_status(reader, oversized).await;
+        let as_stranger = import_status(Arc::clone(&stranger), oversized).await;
+        // A named-grant key, for which an unknown catalog is outside reach.
+        // An every-catalog key reaches every name, so it gets past the check
+        // and is refused 404 by the import itself, as before this change;
+        // it may write any catalog anyway, so the body it could make the
+        // server read is no larger than for a real import.
+        let unknown = import_status_into("nope", Arc::clone(&stranger), oversized).await;
+        let as_writer = import_status(writer, oversized).await;
         let as_admin = import_status(admin(), oversized).await;
 
-        // A body read first would have made both 413.
-        assert_eq!(as_reader, StatusCode::FORBIDDEN);
+        // A body read first would have made every one of them 413.
+        assert_eq!(as_reader, StatusCode::FORBIDDEN, "read-only");
+        assert_eq!(as_stranger, StatusCode::NOT_FOUND, "outside the grants");
+        assert_eq!(unknown, StatusCode::NOT_FOUND, "no such catalog");
+        // Past the check, the body is read and its size refused.
+        assert_eq!(as_writer, StatusCode::PAYLOAD_TOO_LARGE);
         assert_eq!(as_admin, StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    /// Issue #260: `write` on the catalog is enough to import, and the
+    /// import is read at once; a read-only key's valid archive is refused
+    /// and changes nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_writer_imports_and_a_reader_changes_nothing() {
+        use crate::mcp::testing::principal_as;
+        let test = app_with(&[("pg", &[("index.md", "# Index\n")])], Config::default()).await;
+        let reader = principal_as("reader", Access::Read, &["pg"], None);
+        let writer = principal_as("writer", Access::Write, &["pg"], None);
+        let import = || {
+            Request::post("/catalogs/pg/import?replace=true")
+                .body(Body::from(tarball_of(&[
+                    ("index.md", "# Index\n\nImported.\n"),
+                    ("a.md", "# A\n"),
+                ])))
+                .unwrap()
+        };
+        let before = stored(&test).await;
+
+        let refused = status_and_json(router(&test, reader).oneshot(import()).await.unwrap()).await;
+        let after_refusal = stored(&test).await;
+        let imported =
+            status_and_json(router(&test, writer).oneshot(import()).await.unwrap()).await;
+        let after_import = stored(&test).await;
+
+        assert_eq!(refused.0, StatusCode::FORBIDDEN, "{}", refused.1);
+        assert_eq!(refused.1["error"], "Forbidden");
+        assert_eq!(after_refusal, before, "a refused import writes nothing");
+        assert_eq!(imported.0, StatusCode::OK, "{}", imported.1);
+        assert_eq!(imported.1["added"], serde_json::json!(["a.md"]));
+        assert_eq!(imported.1["updated"], serde_json::json!(["index.md"]));
+        assert_eq!(after_import, (before.0 + 1, 2));
+        // The route swapped the snapshot in before answering.
+        let current = test.app.catalog("pg").expect("pg").current();
+        assert_eq!(current.generation(), before.0 + 1);
     }
 
     // Paused time (after the database is up, which needs real time): with
@@ -946,8 +1009,10 @@ mod tests {
     }
 
     /// M13 Task 3: export stays open to every credential that reaches a
-    /// suspended catalog, and import into it stays behind `admin` (which is
-    /// exempt from suspension); a key that does not reach it gets 404.
+    /// suspended catalog, and only an admin (exempt from suspension) imports
+    /// into it: a writer, who may import an active catalog (issue #260), is
+    /// refused as `Suspended`, and a reader as `Forbidden` (the level check
+    /// comes first); a key that does not reach it gets 404.
     #[tokio::test(flavor = "multi_thread")]
     async fn export_stays_open_and_only_an_admin_imports_while_suspended() {
         use crate::mcp::testing::{cached_principal, stored_secret, suspend_catalogs};
@@ -981,6 +1046,7 @@ mod tests {
         let exported = call(&reader, export()).await.unwrap();
         let hidden = status_and_json(call(&stranger, export()).await.unwrap()).await;
         let refused = status_and_json(call(&writer, import()).await.unwrap()).await;
+        let below = status_and_json(call(&reader, import()).await.unwrap()).await;
         let imported = status_and_json(call(&root, import()).await.unwrap()).await;
 
         assert_eq!(
@@ -991,10 +1057,9 @@ mod tests {
         assert_eq!(hidden.0, StatusCode::NOT_FOUND, "{}", hidden.1);
         assert_eq!(hidden.1["error"], "CatalogNotSelected");
         assert_eq!(refused.0, StatusCode::FORBIDDEN, "{}", refused.1);
-        assert_eq!(
-            refused.1["error"], "Forbidden",
-            "the level check comes first"
-        );
+        assert_eq!(refused.1["error"], "Suspended", "a writer is not exempt");
+        assert_eq!(below.0, StatusCode::FORBIDDEN, "{}", below.1);
+        assert_eq!(below.1["error"], "Forbidden", "the level check comes first");
         assert_eq!(
             imported.0,
             StatusCode::OK,

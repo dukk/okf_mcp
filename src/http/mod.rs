@@ -936,7 +936,7 @@ mod tests {
             catalog: "nope".to_string(),
         });
         let forbidden = AppError::from(OkfError::Forbidden {
-            reason: "import needs admin".to_string(),
+            reason: "import needs write".to_string(),
         });
         let refused = AppError(OkfError::Refused {
             reason: "not empty".to_string(),
