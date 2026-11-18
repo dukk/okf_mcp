@@ -122,7 +122,8 @@ export async function refreshUnassigned() {
 let brandTicket = 0;
 
 // The operator's product name (Settings: product_name) on the login card, in
-// the sidebar and in the tab title, from the public /ui/brand.json. Called at
+// the sidebar and in the tab title, and the "Send feedback" link (Settings:
+// feedback_url) in the sidebar footer, from the public /ui/brand.json. Called at
 // boot (before anyone signs in) and after the setting is saved or reset.
 // textContent only. Only the newest call writes: a boot read answering late
 // never draws over a newer save's. On any failure the page keeps what it
@@ -134,7 +135,20 @@ export async function applyBrand() {
         const response = await fetch('/ui/brand.json', { cache: 'no-store' });
         if (response.ok) brand = await response.json();
     } catch { /* keep the current name */ }
-    if (mine !== brandTicket || !brand?.product_name) return;
+    if (mine !== brandTicket || !brand) return;
+    // The server validated the URL (https only); set it as a property, never
+    // build HTML from it. Hidden when unset, also after a reset.
+    const feedback = document.getElementById('feedback-link');
+    if (feedback) {
+        if (typeof brand.feedback_url === 'string' && brand.feedback_url) {
+            feedback.href = brand.feedback_url;
+            feedback.hidden = false;
+        } else {
+            feedback.removeAttribute('href');
+            feedback.hidden = true;
+        }
+    }
+    if (!brand.product_name) return;
     document.title = `${brand.product_name} console`;
     for (const el of document.querySelectorAll('.brand')) el.textContent = brand.product_name;
 }

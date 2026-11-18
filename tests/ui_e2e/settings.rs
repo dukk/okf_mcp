@@ -352,3 +352,52 @@ async fn the_product_name_set_on_the_settings_page_brands_the_console() {
         .brand();
     assert_eq!(brand.product_name, "Acme Notes");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_feedback_url_set_on_the_settings_page_shows_a_send_feedback_link() {
+    let server = login_server().await;
+    let admin = server.key("console-admin", Access::Admin, &[], None).await;
+    let ran = drive(console_base(&server), move |ui| {
+        ui.login(&admin);
+        // Unset by default: the link is there to fill, but hidden.
+        ui.wait_text(".brand-block .brand", "okf");
+        ui.wait_hidden("#feedback-link");
+        ui.click("a[data-nav=settings]");
+        ui.wait_text("[data-test=setting-source-feedback_url]", "default");
+        ui.fill(
+            "[data-test=setting-input-feedback_url]",
+            "https://example.com/feedback",
+        );
+        ui.click("[data-test=setting-save-feedback_url]");
+        ui.wait_text("[data-test=setting-source-feedback_url]", "override");
+        // The shell follows the save without a reload.
+        ui.wait_visible("#feedback-link");
+        ui.wait_text("#feedback-link", "Send feedback");
+        let link = ui.eval(
+            "() => { const a = document.getElementById('feedback-link'); \
+             return [a.getAttribute('href'), a.target, a.rel]; }",
+            json!(null),
+        );
+        assert_eq!(
+            link,
+            json!(["https://example.com/feedback", "_blank", "noopener"])
+        );
+        // A fresh load reads it at boot.
+        ui.page.reload(GotoOptions::default()).expect("reload");
+        ui.wait_visible("#feedback-link");
+        // `none` clears it, and the link goes away again.
+        ui.click("a[data-nav=settings]");
+        ui.fill("[data-test=setting-input-feedback_url]", "none");
+        ui.click("[data-test=setting-save-feedback_url]");
+        ui.wait_hidden("#feedback-link");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let brand = settings::load(&server.db.pool, &AuthConfig::default())
+        .await
+        .expect("load settings")
+        .brand();
+    assert_eq!(brand.feedback_url, None);
+}
