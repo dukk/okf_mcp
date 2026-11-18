@@ -20,8 +20,8 @@
 //!
 //! The three branding settings (`product_name`, `support_contact`,
 //! `feedback_url`) have no `[auth]` config key: their defaults are
-//! [`DEFAULT_PRODUCT_NAME`], no contact and no feedback link. Neither has `audit_retention_days` (default
-//! [`audit::DEFAULT_RETENTION_DAYS`]), which the audit log's append-only
+//! [`DEFAULT_PRODUCT_NAME`], no contact and no feedback link. Neither has
+//! `audit_retention_days` (default [`audit::DEFAULT_RETENTION_DAYS`]), which the audit log's append-only
 //! trigger reads from the same row (`migrations/0012_audit.sql`), nor the
 //! three unlock settings (spec Part 6; defaults off, [`unlocks::DEFAULT_MAX_HOURS`]
 //! and on).
