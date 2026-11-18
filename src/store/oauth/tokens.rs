@@ -174,25 +174,42 @@ pub async fn find_access(
 /// Its family and kind, or `None` for an unknown token.
 ///
 /// # Errors
-/// [`OkfError::Database`].
+/// [`OkfError::Database`], including a stored kind that is not `access` or
+/// `refresh` (a hand-edited row); nothing is revoked in that case.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "tokens.revoke"))]
 pub async fn revoke(
     pool: &PgPool,
     sha256: &[u8; 32],
     now: DateTime<Utc>,
 ) -> Result<Option<RevokedToken>, OkfError> {
+    // A transaction, so a row whose kind does not parse is rolled back
+    // (dropping `tx` without `commit` rolls it back) instead of being
+    // revoked while the caller is told the call failed.
+    let mut tx = pool.begin().await?;
     let row: Option<(String, String)> = sqlx::query_as(
         "UPDATE oauth_tokens SET revoked_at = COALESCE(revoked_at, $2) \
          WHERE sha256 = $1 RETURNING family_id, kind",
     )
     .bind(sha256.as_slice())
     .bind(now)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
-    Ok(row.map(|(family_id, kind)| RevokedToken {
-        family_id,
-        kind: TokenKind::parse(&kind).expect("the schema checks oauth_tokens.kind"),
-    }))
+    let revoked = match row {
+        None => None,
+        Some((family_id, kind)) => {
+            // The column's CHECK allows only the two spellings, so this
+            // fails only for a hand-edited row; answer an error, not a panic.
+            let kind = TokenKind::parse(&kind).ok_or_else(|| OkfError::Database {
+                source: sqlx::Error::ColumnDecode {
+                    index: "kind".to_string(),
+                    source: format!("unknown oauth_tokens.kind {kind:?}").into(),
+                },
+            })?;
+            Some(RevokedToken { family_id, kind })
+        }
+    };
+    tx.commit().await?;
+    Ok(revoked)
 }
 
 /// The first key of the token-family locks (`okff` in ASCII): its own
@@ -532,6 +549,48 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(revoked_at, now(), "the first revocation time stays");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn revoke_answers_an_error_and_revokes_nothing_for_a_corrupt_kind() {
+        let (db, grant) = with_grant().await;
+        store(
+            &db,
+            &NewToken {
+                sha256: [8; 32],
+                grant_id: &grant,
+                kind: TokenKind::Access,
+                family_id: "family-corrupt",
+                resource: "https://okf.example.com/mcp",
+                expires_at: now() + TimeDelta::hours(1),
+            },
+        )
+        .await;
+        // The throwaway database's CHECK would refuse a bad kind, so drop it
+        // (the constraint name is Postgres' default for an inline column CHECK).
+        sqlx::query("ALTER TABLE oauth_tokens DROP CONSTRAINT oauth_tokens_kind_check")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE oauth_tokens SET kind = 'bogus' WHERE sha256 = $1")
+            .bind([8u8; 32].as_slice())
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let result = revoke(&db.pool, &[8; 32], now()).await;
+
+        assert!(
+            matches!(result, Err(OkfError::Database { .. })),
+            "got {result:?}"
+        );
+        let revoked_at: Option<DateTime<Utc>> =
+            sqlx::query_scalar("SELECT revoked_at FROM oauth_tokens WHERE sha256 = $1")
+                .bind([8u8; 32].as_slice())
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(revoked_at, None, "the failed revoke is rolled back");
     }
 
     /// A token of `grant` in `family`, live for 30 days.
