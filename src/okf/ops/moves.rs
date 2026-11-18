@@ -286,6 +286,33 @@ mod tests {
     }
 
     #[test]
+    fn a_moved_name_with_unicode_whitespace_or_a_colon_still_resolves_everywhere() {
+        // Within the folder and into a new one (which carries the listing);
+        // every written destination must still parse as a link and resolve
+        // to the moved file, not be read as text or as a URI scheme.
+        for name in ["a\u{a0}b.md", "note:part.md", "x\u{2003}y:z.md"] {
+            for new in [format!("infra/{name}"), format!("other/{name}")] {
+                let workspace = MemWorkspace::from_files(FILES);
+
+                move_concept(&workspace, "infra/time.md", &new).unwrap();
+
+                let linked = |file: &str| {
+                    let body = text(&workspace, file);
+                    find_links(&body)
+                        .iter()
+                        .filter_map(|link| resolve_link(&workspace, &link.target, file))
+                        .any(|resolved| resolved.path == new)
+                };
+                assert!(linked("infra/ntp.md"), "ntp.md for {new}");
+                assert!(
+                    linked(&join(dirname(&new), "index.md")),
+                    "listing for {new}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_move_to_a_new_folder_carries_its_listing() {
         let workspace = MemWorkspace::from_files(FILES);
 

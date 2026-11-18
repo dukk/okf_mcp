@@ -510,11 +510,15 @@ pub fn resolve_link(workspace: &dyn Workspace, link: &str, source: &str) -> Opti
 }
 
 /// Percent-encodes a bundle path for use as a markdown link destination, so
-/// that [`resolve_link`] reads it back as the same path.
+/// that [`find_links`] still parses it and [`resolve_link`] reads it back as
+/// the same path.
 ///
-/// Encodes the bytes that would end or change a destination: controls, space,
-/// `%`, `#`, `?`, `(`, `)`, `<`, `>`, `[`, `]`, `\\`, `"` and `'`.
-/// Everything else, including non-ASCII text and `/`, stays as written.
+/// Encodes every character that would end or change a destination: controls,
+/// every Unicode whitespace character (the link parser's `\s`, such as
+/// U+00A0), `%`, `#`, `?`, `(`, `)`, `<`, `>`, `[`, `]`, `\\`, `"`, `'` and
+/// `:` (so a name like `note:part.md` is not read as a URI scheme). A
+/// non-ASCII character is encoded as its UTF-8 bytes. Everything else,
+/// including other non-ASCII text and `/`, stays as written.
 ///
 /// # Arguments
 /// * `path` - a bundle path, or a relative path such as `../a b.md`.
@@ -526,32 +530,36 @@ pub fn resolve_link(workspace: &dyn Workspace, link: &str, source: &str) -> Opti
 /// ```
 /// use okf_mcp::okf::markdown::encode_link_path;
 /// assert_eq!(encode_link_path("a b/100%.md"), "a%20b/100%25.md");
+/// assert_eq!(encode_link_path("a\u{a0}b:c.md"), "a%C2%A0b%3Ac.md");
 /// assert_eq!(encode_link_path("plain/x.md"), "plain/x.md");
 /// ```
 #[tracing::instrument(level = "trace", skip_all)]
 pub fn encode_link_path(path: &str) -> std::borrow::Cow<'_, str> {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let needs = |byte: u8| {
-        byte <= b' '
-            || byte == 0x7f
+    let needs = |ch: char| {
+        ch.is_whitespace()
+            || ch.is_control()
             || matches!(
-                byte,
-                b'%' | b'#' | b'?' | b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'\\' | b'"' | b'\''
+                ch,
+                '%' | '#' | '?' | '(' | ')' | '<' | '>' | '[' | ']' | '\\' | '"' | '\'' | ':'
             )
     };
-    if !path.bytes().any(needs) {
+    if !path.chars().any(needs) {
         return std::borrow::Cow::Borrowed(path);
     }
     let mut out = String::with_capacity(path.len() + 8);
-    // Only ASCII bytes are ever encoded, so each non-ASCII char is copied whole.
     for ch in path.chars() {
-        match u8::try_from(ch) {
-            Ok(byte) if needs(byte) => {
+        if needs(ch) {
+            // `encode_utf8` writes the char's UTF-8 bytes into a buffer; each
+            // byte becomes `%XX`.
+            let mut buf = [0u8; 4];
+            for byte in ch.encode_utf8(&mut buf).bytes() {
                 out.push('%');
                 out.push(char::from(HEX[usize::from(byte >> 4)]));
                 out.push(char::from(HEX[usize::from(byte & 15)]));
             }
-            _ => out.push(ch),
+        } else {
+            out.push(ch);
         }
     }
     std::borrow::Cow::Owned(out)
@@ -790,6 +798,11 @@ mod tests {
         for name in names {
             let link = encode_link_path(name);
             assert!(!link.contains(' ') && !link.contains('#'), "{link}");
+            // The written destination must still parse as a link.
+            let text = format!("[x]({link})");
+            let found = find_links(&text);
+            assert_eq!(found.len(), 1, "{link}");
+            assert_eq!(found[0].target, link.as_ref());
             let back = resolve_link(&ws, &link, "d/index.md").map(|r| r.path);
             assert_eq!(back, Some(format!("d/{name}")), "{link}");
         }

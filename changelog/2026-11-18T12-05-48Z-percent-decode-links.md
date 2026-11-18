@@ -1,7 +1,7 @@
 # Percent-decode link destinations (issue #235)
 
 ## Added
-- `markdown::encode_link_path`, the inverse of the decoding in `resolve_link`: it percent-encodes the characters a link destination cannot hold (controls, space, `%`, `#`, `?`, brackets, parentheses, `<`, `>`, `\`, quotes).
+- `markdown::encode_link_path`, the inverse of the decoding in `resolve_link`: it percent-encodes the characters a link destination cannot hold (controls, every Unicode whitespace character such as U+00A0, `%`, `#`, `?`, `:`, brackets, parentheses, `<`, `>`, `\`, quotes).
 - Tests: `%20`, `%25`, non-ASCII and literal-`%` rows for `resolve_link`, an encode/decode round trip, a links-report test that a `%20` link to an existing file is not broken, and relink, move and repair tests for the written destinations.
 
 ## Changed
