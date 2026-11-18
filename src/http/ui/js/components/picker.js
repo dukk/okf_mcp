@@ -1,11 +1,35 @@
 import { h } from '../core/dom.js';
 import { api } from '../core/api.js';
+import { teamLabel, userLabel } from '../core/labels.js';
 
 // The names of every user or team, for a picker: `kind` is 'users' or
 // 'teams', the collection GET /<kind> answers with. Any admin may list them
 // (plan Decision 3). Throws the toasted ApiError on failure.
 export async function namesOf(kind) {
-    return (await api.get(`/${kind}`))[kind].map(row => row.name);
+    return (await rowsOf(kind)).map(row => row.name);
+}
+
+// The rows of every user or team (name, display_name, personal_of for a
+// team, label), for a picker that needs more than the name.
+export async function rowsOf(kind) {
+    return (await api.get(`/${kind}`))[kind];
+}
+
+// The option text of one team row, which says what kind of thing it is: a
+// personal team reads "Alice Example (personal team)" (its user's label,
+// from M17's label table), any other "Acme (team)". Returned as text, to be
+// set with textContent by `picker`; the value stays the bare team name.
+export function teamKindText(row) {
+    return row.personal_of
+        ? `${userLabel(row.personal_of)} (personal team)`
+        : `${teamLabel(row.name)} (team)`;
+}
+
+// Team rows as `{ names, labelOf }`, the two arguments a picker or
+// `assignControl` takes for a team picker.
+export function teamChoices(rows) {
+    const byName = new Map(rows.map(row => [row.name, row]));
+    return { names: rows.map(row => row.name), labelOf: name => teamKindText(byName.get(name)) };
 }
 
 // A <select> over `names`, with `selected` chosen. Without one, a disabled
