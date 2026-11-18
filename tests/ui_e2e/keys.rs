@@ -817,7 +817,7 @@ async fn the_console_colours_beat_picos_in_both_themes() {
         let first = colour(ui);
         ui.click("#theme-toggle");
         let second = colour(ui);
-        let mut seen = vec![first, second];
+        let mut seen = [first, second];
         seen.sort_by_key(|pair| pair[0].as_str().unwrap().to_string());
         // styles.css: --accent #6d28d9 (light), #a78bfa (dark).
         assert_eq!(seen[0], json!(["dark", "rgb(167, 139, 250)"]));
