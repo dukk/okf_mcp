@@ -17,6 +17,7 @@
 // follows fails, the table is drawn again from the last answer and marked
 // as possibly out of date, so the reason still shows and every control can
 // be tried again.
+import { latest } from '../core/latest.js';
 import { h, pill, fact, fill } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
@@ -187,8 +188,8 @@ export async function render(main) {
     // the newest read draws: reads overlap (a Refresh and an action's reload)
     // and can finish out of order, and an older answer must never draw over
     // a newer one.
-    let settingsTicket = 0;
-    let queueTicket = 0;
+    const settingsReads = latest(main);
+    const queueReads = latest(main);
     const staleNote = (id, what) => h('p', { id, class: 'error small', role: 'status', hidden: true },
         `Could not read ${what} again, so what is shown may be out of date.`);
     const settingsStale = staleNote('settings-stale', 'the settings');
@@ -217,10 +218,10 @@ export async function render(main) {
     // redraws the last ones, marked stale, with the current refusals. A
     // read that a newer one has overtaken draws nothing.
     async function loadSettings() {
-        const mine = ++settingsTicket;
+        const current = settingsReads();
         let answer = null;
         try { answer = await api.get('/settings'); } catch { /* toasted */ }
-        if (!main.isConnected || mine !== settingsTicket) return;
+        if (!current()) return;
         settingsStale.hidden = answer !== null;
         if (answer === null) {
             settings.redraw(settingRows);
@@ -241,10 +242,10 @@ export async function render(main) {
 
     // Reads the queue and redraws it, as loadSettings does the settings.
     async function loadQueue() {
-        const mine = ++queueTicket;
+        const current = queueReads();
         let answer = null;
         try { answer = await api.get('/mail/queue'); } catch { /* toasted */ }
-        if (!main.isConnected || mine !== queueTicket) return;
+        if (!current()) return;
         queueStale.hidden = answer !== null;
         if (answer !== null) {
             queueRows = answer.mail;

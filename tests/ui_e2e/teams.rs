@@ -848,3 +848,37 @@ async fn the_unassigned_views_pickers_label_users_and_teams_and_send_bare_names(
         .expect("the catalog");
     assert_eq!(row.owner_team.as_deref(), Some(OWNER));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_older_list_read_that_answers_late_never_redraws_the_teams_table() {
+    let server = server().await;
+    let admin = server.key("console-admin", Access::Admin, &[], None).await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/teams");
+        ui.wait_visible("#team-new:not([disabled])");
+        // The list read after creating "older" is sent at once but answers
+        // late: the server's answer lists "older" but not "newer".
+        ui.click("#team-new");
+        ui.wait_visible("#team-form select[name=owner]");
+        ui.fill("#team-form input[name=name]", "older");
+        ui.select("#team-form select[name=owner]", OWNER);
+        ui.hold_answer("GET", "/api/v1/teams", || {
+            ui.click("#team-form button[type=submit]")
+        });
+        // A newer write's list read answers first and lists both teams.
+        ui.click("#team-new");
+        ui.wait_visible("#team-form select[name=owner]");
+        ui.fill("#team-form input[name=name]", "newer");
+        ui.select("#team-form select[name=owner]", OWNER);
+        ui.click("#team-form button[type=submit]");
+        ui.wait_visible("[data-test=team-newer]");
+        // The older answer, released now, must not replace the newer table.
+        ui.release_held();
+        assert!(
+            ui.present("[data-test=team-newer]") && ui.present("[data-test=team-older]"),
+            "the older read redrew the teams table"
+        );
+    })
+    .await;
+}

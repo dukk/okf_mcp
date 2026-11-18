@@ -955,3 +955,33 @@ async fn a_display_name_counts_characters_not_utf16_units() {
     let stored = users::find(&server.db.pool, "alice").await.expect("alice");
     assert_eq!(stored.display_name.chars().count(), 80);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_older_list_read_that_answers_late_never_redraws_the_users_table() {
+    let server = server().await;
+    let admin = server.key("console-admin", Access::Admin, &[], None).await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/users");
+        ui.wait_visible("#user-new:not([disabled])");
+        // The list read after creating "older" is sent at once but answers
+        // late: the server's answer lists "older" only.
+        ui.click("#user-new");
+        ui.fill("#user-form input[name=name]", "older");
+        ui.hold_answer("GET", "/api/v1/users", || {
+            ui.click("#user-form button[type=submit]")
+        });
+        // A newer write's list read answers first and lists both users.
+        ui.click("#user-new");
+        ui.fill("#user-form input[name=name]", "newer");
+        ui.click("#user-form button[type=submit]");
+        ui.wait_visible("[data-test=user-newer]");
+        // The older answer, released now, must not replace the newer table.
+        ui.release_held();
+        assert!(
+            ui.present("[data-test=user-newer]") && ui.present("[data-test=user-older]"),
+            "the older read redrew the users table"
+        );
+    })
+    .await;
+}

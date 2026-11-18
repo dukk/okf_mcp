@@ -8,6 +8,7 @@ import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
 import { toast } from '../core/toast.js';
 import { drawerTicket } from '../core/drawer.js';
+import { latest } from '../core/latest.js';
 import { ago, count } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
 import { confirmDialog } from '../components/confirm.js';
@@ -49,7 +50,10 @@ export async function render(main) {
     ];
     const table = listTable(columns, [], { onRow: admin ? openEdit : openOwner, empty: 'This key reaches no catalog.' });
 
+    // Reads the list again; a slower older read never draws over a newer one.
+    const listReads = latest(main);
     async function load() {
+        const current = listReads();
         // Admins read the teams too, for the Owner column's kind; a failed
         // read only leaves the kinds out.
         const kinds = admin
@@ -57,6 +61,7 @@ export async function render(main) {
             : Promise.resolve([]);
         try {
             const [answer, teamKinds] = await Promise.all([api.get('/catalogs'), kinds]);
+            if (!current()) return;
             personalTeams.clear();
             for (const [name, personal] of teamKinds) personalTeams.set(name, personal);
             table.redraw(answer.catalogs);
