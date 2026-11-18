@@ -346,7 +346,7 @@ only).
 |---|---|---|
 | `GET /healthz` | none | `{"database": "ok", "catalogs": N, "clock": ..., "redis": ...}`: 200, or 503 when the database does not answer within 2 s; `clock` is the last clock check (`docs/operations.md`, "Health and time"); `redis` is `"ok"`, `"unavailable"` or `null` without `[redis]`, and never changes the status |
 | `POST/GET/DELETE /mcp` | any | MCP streamable HTTP |
-| `GET /catalogs/{name}/export` | `read` on the catalog | The catalog as `application/gzip`, `Content-Disposition: attachment; filename="<name>.tar.gz"` |
+| `GET /catalogs/{name}/export` | `read` on the catalog | The catalog as `application/gzip`, `Content-Disposition: attachment; filename="<stem>-<name>.tar.gz"` (the stem is the sanitised label, see `docs/operations.md`, "Display names and labels"; `<name>.tar.gz` when it is empty) |
 | `POST /catalogs/{name}/import[?replace=true&only_machinery=true&expect_generation=N]` | `admin` on the catalog | Imports the uploaded `.tar.gz` and answers with the import report |
 | `GET /` | none | Redirects (303) to the web console, `/ui/` |
 | `GET /ui/*` | none | The web console's static files ("Web console" below) |

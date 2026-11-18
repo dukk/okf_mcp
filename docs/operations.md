@@ -1633,8 +1633,12 @@ name, else its description (cut to 80 characters), else "Untitled catalog".
   the console pickers add the owner team where that tells them apart, then
   the slug, repeatedly, until the option texts are distinct. A new catalog's root
   `index.md` heading is its display name, else `Catalog`. An export is
-  named `<label>-<id>.tar.gz`, and the console downloads it under the
-  server's name.
+  named `<stem>-<id>.tar.gz`, where the stem is the label with ASCII
+  letters and digits lowercased, every other run of characters replaced by
+  one `-`, ends trimmed and cut at 40 bytes ("Work Notes" gives
+  `work-notes-<id>.tar.gz`). A label with no ASCII letter or digit leaves an
+  empty stem, and the file is `<id>.tar.gz`. The console downloads it under
+  the server's name.
 - **Audit log.** An entry's `person_label` comes from the audit person
   record (a deleted or unnamed person shows "Unnamed user"). Its
   `target_label`, set for a catalog or shared team, is looked up at read
