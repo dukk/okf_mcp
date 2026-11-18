@@ -7,6 +7,6 @@
 - `Fake::started` now waits for a complete `record.json`, not just an existing file.
 
 ## Notes
-- Root cause (issue #307): `run_process`'s deadline covers spawn and the fake's interpreter start-up. Under load the 200 ms deadline expired before the fake wrote `record.json`. `Fake::started` then panicked with "fake did not start", or, when the file appeared just as the child was killed, `reaped` failed reading it with `NotFound`. Production code is unchanged.
+- Root cause (issue #307): `run_process`'s deadline covers spawn and the fake's interpreter start-up. Under load the 200 ms deadline expired before the fake wrote `record.json`. `Fake::started` then panicked with "fake did not start". The final case (`after_output_stall`) had no `started` wait at all, so `reaped` read a `record.json` that did not exist yet and failed with `NotFound`. Production code is unchanged.
 - Checked with the old test body plus a 500 ms start delay: it fails with "fake did not start".
 - `investigator_claude_timeout_includes_pipe_eof` has a 2 s deadline with the same shape (deadline covering start-up, then `reaped`). It is a possible follow-up and is unchanged here.
