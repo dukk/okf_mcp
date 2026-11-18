@@ -170,7 +170,7 @@ async fn an_owner_switches_maintenance_off_for_its_catalog() {
         ui.wait_visible("#catalog-maintenance:checked");
         ui.wait_text("#catalog-maintenance-state", "on");
         ui.click("#catalog-maintenance");
-        ui.wait_text("#toasts", "Maintenance is off for main");
+        ui.wait_text("#toasts", "Maintenance is off for Untitled catalog");
         ui.wait_visible("#catalog-maintenance:not(:checked)");
         ui.wait_text("#catalog-maintenance-state", "off");
     })
@@ -218,7 +218,7 @@ async fn the_maintenance_switch_sends_one_write_and_keeps_a_refusal() {
         ui.wait_visible("#catalog-maintenance[disabled]");
         assert_eq!(ui.held_matches(), 1, "a double click sent two writes");
         ui.release_held();
-        ui.wait_text("#toasts", "Maintenance is off for main");
+        ui.wait_text("#toasts", "Maintenance is off for Untitled catalog");
         // The reopened drawer shows the write's answer, its refusal gone.
         ui.wait_visible("#catalog-maintenance:not(:checked):not([disabled])");
         ui.wait_hidden("#catalog-maintenance-error");
@@ -241,7 +241,7 @@ async fn a_drawer_opened_after_the_switch_settles_shows_the_saved_value() {
         ui.click("[data-catalog=main]");
         ui.wait_text("#catalog-maintenance-state", "on");
         ui.click("#catalog-maintenance");
-        ui.wait_text("#toasts", "Maintenance is off for main");
+        ui.wait_text("#toasts", "Maintenance is off for Untitled catalog");
         // The write and the read after it have settled.
         ui.wait_text("#catalog-maintenance-state", "off");
         ui.wait_visible("#catalog-maintenance:not(:checked):not([disabled])");
@@ -258,7 +258,7 @@ async fn a_drawer_opened_after_the_switch_settles_shows_the_saved_value() {
         ui.click("#catalog-maintenance");
         assert_eq!(ui.held_matches(), 1, "one click sent two writes");
         ui.release_held();
-        ui.wait_text("#toasts", "Maintenance is on for main");
+        ui.wait_text("#toasts", "Maintenance is on for Untitled catalog");
         ui.wait_visible("#catalog-maintenance:checked:not([disabled])");
     })
     .await;

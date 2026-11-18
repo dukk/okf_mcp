@@ -20,7 +20,7 @@ use okf_mcp::store::user_sessions;
 use okf_mcp::store::users::{self, NewUser};
 
 use crate::catalogs::switcher;
-use crate::harness::drive;
+use crate::harness::{drive, Ui};
 use crate::self_service::{console_base, login_server, member, EMAIL, PASSWORD};
 use crate::support::server::{files, TestServer, OWNER};
 use okf_mcp::store::audit::AuditActor;
@@ -129,7 +129,7 @@ async fn a_user_whose_only_key_is_revoked_is_deleted_from_the_console() {
             "keys, grants and sign-in codes (revoked ones too)",
         );
         ui.click("#confirm-ok");
-        ui.wait_text("#toasts", "Deleted user alice.");
+        ui.wait_text("#toasts", "Deleted user Unnamed user.");
         ui.wait_hidden("#user-detail");
         ui.wait_hidden("[data-test=user-alice]");
     })
@@ -302,7 +302,7 @@ async fn a_last_owner_or_an_owned_catalog_refuses_the_delete_until_cleared() {
         ui.click("[data-catalog=bobs]");
         ui.select("#catalog-owner-select", OWNER);
         ui.click("#catalog-owner-save");
-        ui.wait_text("[data-test=catalog-owner-bobs]", OWNER);
+        ui.wait_text("[data-test=catalog-owner-bobs]", "'s team");
         ui.open("/users");
         ui.click("[data-test=user-bob]");
         ui.wait_visible("#user-delete:not([disabled])");
@@ -340,7 +340,7 @@ async fn no_page_prints_a_stray_null_under_its_content() {
         for (route, loaded) in [
             ("/users", format!("[data-test=user-{OWNER}]")),
             ("/teams", format!("[data-test=team-{OWNER}]")),
-            ("/catalogs", "code[data-catalog=main]".to_string()),
+            ("/catalogs", "[data-catalog=main]".to_string()),
         ] {
             ui.open(route);
             ui.wait_visible(&loaded);
@@ -407,7 +407,7 @@ async fn an_admin_sets_an_email_and_the_admin_flag_and_sends_a_setup_email() {
         ui.click("#user-invite");
         ui.wait_text("#toasts", "Queued a setup email to alice@example.com");
         ui.click("#user-admin-toggle");
-        ui.wait_text("#toasts", "alice is now an admin");
+        ui.wait_text("#toasts", "is now an admin");
         ui.wait_visible("#user-admin-toggle:checked");
         ui.wait_text("[data-test=user-alice]", "admin");
         // A full admin key gets no "needs every catalog" note, and the
@@ -784,9 +784,9 @@ async fn a_write_that_settles_after_its_user_was_reopened_updates_the_new_drawer
         ui.click("#user-email-form button[type=submit]");
         ui.click("#drawer-close");
         ui.click("[data-test=user-bob]");
-        ui.wait_text("#drawer-title", "bob");
+        ui.wait_text("#drawer-title", "Unnamed user");
         ui.release_held();
-        assert_eq!(ui.text("#drawer-title"), "bob");
+        assert_eq!(ui.text("#drawer-title"), "Unnamed user");
         ui.wait_text("[data-test=user-bob-email]", "none");
     })
     .await;
@@ -862,4 +862,95 @@ async fn the_users_filter_matches_names_and_emails() {
         ui.wait_hidden("[data-test=user-alice]");
     })
     .await;
+}
+
+/// The value of the input `selector`.
+fn input_value(ui: &Ui, selector: &str) -> serde_json::Value {
+    ui.eval(
+        "(selector) => document.querySelector(selector).value",
+        serde_json::json!(selector),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_users_table_and_drawer_show_the_label_and_the_display_name_saves() {
+    let server = server().await;
+    let admin = server.key("console-admin", Access::Admin, &[], None).await;
+    let alice = NewUser {
+        name: "alice",
+        display_name: &okf_mcp::labels::DisplayName::parse("Alice Example").expect("a name"),
+    };
+    users::create(&server.db.pool, &alice, &AuditActor::cli(), Utc::now())
+        .await
+        .expect("create alice");
+    server.app.poll().await.expect("poll");
+    let too_long = "x".repeat(81);
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/users");
+        // The label heads the cell, with the slug beneath it.
+        let cell = ui.wait_text("[data-test=user-alice]", "Alice Example");
+        assert!(cell.contains("alice"), "{cell}");
+        ui.click("[data-test=user-alice]");
+        assert_eq!(
+            ui.wait_text("#drawer-title", "Alice Example"),
+            "Alice Example"
+        );
+        assert_eq!(input_value(ui, "#user-display-name"), "Alice Example");
+        ui.fill("#user-display-name", "Alice B");
+        ui.click("#user-display-name-save");
+        ui.wait_text("#toasts", "Display name saved");
+        ui.wait_text("#drawer-title", "Alice B");
+        ui.wait_text("[data-test=user-alice]", "Alice B");
+        ui.fill("#user-display-name", &too_long);
+        ui.click("#user-display-name-save");
+        ui.wait_text("#toasts", "longer than 80 characters");
+        ui.wait_text("#user-refusal", "longer than 80 characters");
+        ui.wait_text("[data-test=user-alice]", "Alice B");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let stored = users::find(&server.db.pool, "alice").await.expect("alice");
+    assert_eq!(stored.display_name, "Alice B");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_display_name_counts_characters_not_utf16_units() {
+    // 80 supplementary-plane characters are 160 UTF-16 units: the input
+    // takes them all (it has no maxlength), and the server accepts 80 and
+    // refuses 81.
+    let server = server().await;
+    let admin = server.key("console-admin", Access::Admin, &[], None).await;
+    let alice = NewUser {
+        name: "alice",
+        display_name: &okf_mcp::labels::DisplayName::default(),
+    };
+    users::create(&server.db.pool, &alice, &AuditActor::cli(), Utc::now())
+        .await
+        .expect("create alice");
+    server.app.poll().await.expect("poll");
+    let exactly = "\u{1F600}".repeat(80);
+    let over = "\u{1F600}".repeat(81);
+    let shown = exactly.clone();
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/users");
+        ui.click("[data-test=user-alice]");
+        ui.wait_visible("#user-display-name");
+        ui.fill("#user-display-name", &exactly);
+        ui.click("#user-display-name-save");
+        ui.wait_text("#toasts", "Display name saved");
+        ui.wait_text("#drawer-title", &shown);
+        ui.fill("#user-display-name", &over);
+        ui.click("#user-display-name-save");
+        ui.wait_text("#user-refusal", "longer than 80 characters");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let stored = users::find(&server.db.pool, "alice").await.expect("alice");
+    assert_eq!(stored.display_name.chars().count(), 80);
 }

@@ -21,6 +21,7 @@ import { toast } from '../core/toast.js';
 import { when } from '../core/format.js';
 import { drawerTicket } from '../core/drawer.js';
 import { guard, once } from '../core/pending.js';
+import { catalogLabel } from '../core/labels.js';
 import { picker } from './picker.js';
 
 // The categories, in the server's form order (`Category::ALL`), labelled.
@@ -82,7 +83,7 @@ export async function openUnlock(catalog, { onDone = () => {}, view = document.b
         const names = catalogs.status === 'fulfilled' ? catalogs.value.catalogs.map(row => row.name) : null;
         // The catalog selected in the shell is picked to start with.
         choose = names
-            ? picker({ name: 'catalog', required: true }, names, names.includes(store.catalog) ? store.catalog : null)
+            ? picker({ name: 'catalog', required: true }, names, names.includes(store.catalog) ? store.catalog : null, catalogLabel)
             : h('input', { type: 'text', name: 'catalog', required: true, autocomplete: 'off',
                            placeholder: 'the catalog\'s name' });
     }

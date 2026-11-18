@@ -70,7 +70,7 @@ export async function render(main) {
     // character name with its reason (toasted by api.js).
     function displayNameForm(account) {
         const key = 'account:display-name';
-        const input = h('input', { id: 'account-display-name', maxlength: '80', autocomplete: 'off',
+        const input = h('input', { id: 'account-display-name', autocomplete: 'off',
                                    'aria-label': 'Display name', value: account.display_name,
                                    placeholder: account.label });
         const save = guard(h('button', { type: 'button', id: 'account-display-name-save' }, 'Save'), key);
@@ -94,7 +94,7 @@ export async function render(main) {
                     h('span', {}, team.label), ' ', h('span', { class: 'muted small' }, 'Named after you'));
             }
             const key = `account:team:${team.name}`;
-            const input = h('input', { id: `account-team-${team.name}`, maxlength: '80', autocomplete: 'off',
+            const input = h('input', { id: `account-team-${team.name}`, autocomplete: 'off',
                                        'aria-label': `Display name of ${team.name}`, value: team.display_name,
                                        placeholder: team.label });
             const save = guard(h('button', { type: 'button', id: `account-team-${team.name}-save` }, 'Save'), key);
