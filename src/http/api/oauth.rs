@@ -116,6 +116,9 @@ impl SignInCodeView {
 pub(crate) struct SignInCodeList {
     /// The codes the caller manages, newest first, in every state.
     pub codes: Vec<SignInCodeView>,
+    /// `oauth.code_max_expiry` in seconds: the longest a new code may stay
+    /// valid, so a client can offer only the choices the server accepts.
+    pub max_expiry_secs: u64,
 }
 
 /// `POST /oauth/codes`' answer: the new code's view and, this once, the code.
@@ -232,7 +235,10 @@ async fn list_codes(
         .filter(|code| manages_grants(&principal, code.all_catalogs, &code.catalogs))
         .map(|code| SignInCodeView::new(code, now))
         .collect();
-    Ok(Json(SignInCodeList { codes }))
+    Ok(Json(SignInCodeList {
+        codes,
+        max_expiry_secs: app.config().oauth.code_max_expiry.as_secs(),
+    }))
 }
 
 /// `POST /oauth/codes`: mints a code and returns it, once.
@@ -465,6 +471,12 @@ mod tests {
         assert!(!text.contains(&secret));
         assert!(!text.contains("sha256") && !text.contains("secret"));
         assert_eq!(listed["codes"][0]["id"], code["id"]);
+        // The server's expiry limit, for the console's choices (issue #270).
+        assert_eq!(
+            listed["max_expiry_secs"],
+            test.app.config().oauth.code_max_expiry.as_secs()
+        );
+        assert!(listed["max_expiry_secs"].as_u64().unwrap() > 0);
         // The code works on the consent page's lookup.
         let live = codes::find_live(test.app.pool(), &secret, Utc::now())
             .await

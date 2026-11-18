@@ -691,3 +691,138 @@ async fn the_keys_page_shows_users_and_catalogs_by_label() {
     })
     .await;
 }
+
+/// Issue #270: the code form offers only the expiries `oauth.code_max_expiry`
+/// allows, and a code minted with the form's default is accepted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_code_form_hides_expiries_above_the_servers_limit() {
+    let mut config = Config::default();
+    config.oauth.code_max_expiry = std::time::Duration::from_secs(2 * 3600);
+    let server =
+        TestServer::start(vec![("main", files(&[("index.md", "# Main\n")]))], config).await;
+    let admin = server
+        .key("console-admin", Access::Admin, &["main"], Some("main"))
+        .await;
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/keys");
+        ui.wait_visible("#code-new");
+        // The limit comes with the list, so wait until the table has drawn.
+        ui.wait_visible("#codes-table");
+        ui.click("#code-new");
+        ui.wait_visible("#code-form");
+        let offered = ui.eval(
+            "() => [...document.querySelectorAll('#code-form select[name=expires_in] option')].map(o => o.value)",
+            json!(null),
+        );
+        // 24h is above the 2h limit, so only 1h is offered, and selected.
+        assert_eq!(offered, json!(["1h"]));
+        ui.fill("#code-form input[name=name]", "short-code");
+        ui.select("#code-form select[name=user]", OWNER);
+        ui.click("#code-form input[name=catalog][value=main]");
+        ui.click("#code-form button[type=submit]");
+        ui.wait_visible("#code-secret");
+    })
+    .await;
+    assert!(ran);
+    let minted = codes::list(&server.db.pool).await.expect("list codes");
+    assert_eq!(minted.len(), 1);
+    assert!(minted[0].expires_at - minted[0].created_at <= TimeDelta::hours(1));
+}
+
+/// Issue #270: a redeemed code's drawer opens its grant's drawer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_redeemed_codes_grant_opens_from_its_drawer() {
+    let server = server().await;
+    let admin = server
+        .key("console-admin", Access::Admin, &["main"], Some("main"))
+        .await;
+    let client_id = "https://client.example.com/client.json";
+    sqlx::query(
+        "INSERT INTO oauth_clients \
+         (client_id, kind, client_name, redirect_uris, metadata, fetched_at, cache_expires_at, \
+          created_at) \
+         VALUES ($1, 'cimd', 'Example Client', ARRAY['https://client.example.com/callback'], \
+                 '{}'::jsonb, now(), now() + interval '1 hour', now())",
+    )
+    .bind(client_id)
+    .execute(&server.db.pool)
+    .await
+    .expect("insert a client");
+    let client = clients::find(&server.db.pool, client_id)
+        .await
+        .expect("read the client")
+        .expect("the client exists");
+    let main = ["main".to_string()];
+    let code = codes::create(
+        &server.db.pool,
+        &NewSignInCode {
+            name: "laptop",
+            access: Access::Write,
+            grants: Grants::Catalogs(&main),
+            default_catalog: Some("main"),
+            actor: "example-actor",
+            expires_at: Utc::now() + TimeDelta::hours(1),
+            user: OWNER,
+        },
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("mint a code");
+    let grant_id = codes::redeem(&server.db.pool, &code.id, &client, Utc::now())
+        .await
+        .expect("redeem the code");
+    server.app.poll().await.expect("poll the grant in");
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/keys");
+        ui.wait_visible("#codes-show-all");
+        ui.click("#codes-show-all");
+        ui.wait_visible("[data-test=code-laptop]");
+        ui.click("[data-test=code-laptop]");
+        ui.wait_visible("#code-open-grant");
+        ui.click("#code-open-grant");
+        // The drawer now shows the grant: its kind and its id.
+        ui.wait_text("#drawer dl.facts", "OAuth grant");
+        ui.wait_text("#drawer dl.facts", &grant_id);
+        ui.wait_visible("#key-revoke");
+    })
+    .await;
+    assert!(ran);
+}
+
+/// Issue #270: Pico's light-theme variables must not outrank the console's
+/// own mapping, so a primary button is the console's accent in both themes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_console_colours_beat_picos_in_both_themes() {
+    let server = server().await;
+    let admin = server
+        .key("console-admin", Access::Admin, &["main"], Some("main"))
+        .await;
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/keys");
+        ui.wait_visible("#key-new");
+        let colour = |ui: &crate::harness::Ui| {
+            ui.eval(
+                // Pico fades colours over .2s; no transition reads the end value.
+                "() => { const b = document.getElementById('key-new'); \
+                   b.style.transition = 'none'; \
+                   return [document.documentElement.dataset.theme, \
+                           getComputedStyle(b).backgroundColor]; }",
+                json!(null),
+            )
+        };
+        let first = colour(ui);
+        ui.click("#theme-toggle");
+        let second = colour(ui);
+        let mut seen = vec![first, second];
+        seen.sort_by_key(|pair| pair[0].as_str().unwrap().to_string());
+        // styles.css: --accent #6d28d9 (light), #a78bfa (dark).
+        assert_eq!(seen[0], json!(["dark", "rgb(167, 139, 250)"]));
+        assert_eq!(seen[1], json!(["light", "rgb(109, 40, 217)"]));
+    })
+    .await;
+    assert!(ran);
+}

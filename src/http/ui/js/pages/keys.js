@@ -30,7 +30,22 @@ const LEVELS = ['read', 'write', 'admin'];
 const CODE_LEVELS = ['read', 'write'];
 const CODE_STATE_KIND = { live: 'ok', expired: 'muted', redeemed: 'info', revoked: 'error' };
 // humantime spellings the server parses; the default is a day.
-const EXPIRIES = [['1h', '1 hour'], ['24h', '24 hours'], ['3d', '3 days'], ['7d', '7 days']];
+const EXPIRIES = [['1h', '1 hour', 3600], ['24h', '24 hours', 86400], ['3d', '3 days', 259200], ['7d', '7 days', 604800]];
+
+// The key rows last drawn and the loader that redraws them, so a redeemed
+// code's drawer can open its grant's drawer.
+const keysView = { rows: new Map(), reload: null };
+
+// The expiry choices the server accepts: those within `maxSecs`
+// (`oauth.code_max_expiry`; null when unknown: all of them). When even the
+// shortest is too long, the limit itself is the one choice.
+function expiryChoices(maxSecs) {
+    if (typeof maxSecs !== 'number') return EXPIRIES;
+    const fits = EXPIRIES.filter(([, , secs]) => secs <= maxSecs);
+    if (fits.length) return fits;
+    const value = maxSecs % 3600 === 0 ? `${maxSecs / 3600}h` : `${maxSecs}s`;
+    return [[value, value, maxSecs]];
+}
 
 // Keys and codes both carry all_catalogs and catalogs.
 function catalogsOf(grantee) {
@@ -115,6 +130,8 @@ export async function render(main) {
     async function load() {
         try {
             const { keys } = await api.get('/keys');
+            keysView.rows = new Map(keys.map(key => [key.id, key]));
+            keysView.reload = load;
             if (main.isConnected) table.redraw(keys);
         } catch { /* toasted; a 401 has already signed the browser out */ }
     }
@@ -372,12 +389,15 @@ function codesPanel(main) {
     const showAll = h('input', { type: 'checkbox', id: 'codes-show-all' });
     const table = listTable(CODE_COLUMNS, [], { onRow: code => showCode(main, code, load), empty: 'No sign-in codes to show.' });
     table.id = 'codes-table';
+    // The longest expiry the server allows, from the last list; null until read.
+    let maxExpirySecs = null;
     const applyFilter = () => table.setFilter(showAll.checked ? null : code => code.state === 'live');
     showAll.addEventListener('change', applyFilter);
     applyFilter();
     async function load() {
         try {
-            const { codes } = await api.get('/oauth/codes');
+            const { codes, max_expiry_secs: maxSecs } = await api.get('/oauth/codes');
+            maxExpirySecs = typeof maxSecs === 'number' ? maxSecs : null;
             if (main.isConnected) table.redraw(codes);
         } catch { /* toasted */ }
     }
@@ -389,17 +409,20 @@ function codesPanel(main) {
                     'One-time codes a person enters when connecting an OAuth client such as ChatGPT. '
                     + 'Each becomes an OAuth grant with the code\'s catalogs, access, actor and user.')),
             h('div', { class: 'actions' },
-                h('button', { type: 'button', id: 'code-new', onclick: () => newCode(main, load) }, 'New sign-in code'))),
+                h('button', { type: 'button', id: 'code-new', onclick: () => newCode(main, load, () => maxExpirySecs) }, 'New sign-in code'))),
         h('label', { class: 'small muted' }, showAll, ' Show redeemed, expired and revoked codes'),
         table);
     return { section, load };
 }
 
 // The mint form, in the drawer.
-async function newCode(main, reload) {
+async function newCode(main, reload, maxExpiry = () => null) {
     const ticket = drawerTicket(main);
     const users = await usersOrNull();
     if (!users || !ticket.current()) return;
+    const choices = expiryChoices(maxExpiry());
+    // 24 hours when allowed, else the longest choice that is.
+    const preferred = (choices.find(([value]) => value === '24h') ?? choices[choices.length - 1])[0];
     const form = h('form', { id: 'code-form' },
         h('label', {}, 'Name', h('input', { name: 'name', required: true, autocomplete: 'off', placeholder: 'letters, digits, . _ -' })),
         h('label', {}, 'Actor', h('input', { name: 'actor', autocomplete: 'off', placeholder: 'defaults to the name' })),
@@ -408,7 +431,7 @@ async function newCode(main, reload) {
         catalogFields(),
         h('label', {}, 'Expires unused after',
             h('select', { name: 'expires_in' },
-                EXPIRIES.map(([value, label]) => h('option', { value, selected: value === '24h' }, label)))),
+                choices.map(([value, label]) => h('option', { value, selected: value === preferred }, label)))),
         h('button', { type: 'submit' }, 'Create sign-in code'));
     form.addEventListener('submit', async event => {
         event.preventDefault();
@@ -418,7 +441,7 @@ async function newCode(main, reload) {
             actor: String(data.get('actor') ?? '').trim() || null,
             access: String(data.get('access') ?? 'read'),
             ...readGrants(data),
-            expires_in: String(data.get('expires_in') ?? '24h'),
+            expires_in: String(data.get('expires_in') ?? preferred),
             user: String(data.get('user') ?? ''),
         };
         try {
@@ -434,6 +457,19 @@ async function newCode(main, reload) {
         } catch { /* the server's reason is toasted; the form stays filled */ }
     });
     ticket.open('New sign-in code', 'The code is shown once, right after creation.', form);
+}
+
+// A redeemed code's grant: a button that opens the grant's drawer when the
+// key list holds it (a grant outside the caller's reach is not listed), else
+// the id as text.
+function grantLink(main, grantId) {
+    const id = h('code', {}, grantId);
+    const key = keysView.rows.get(grantId);
+    if (!key || !keysView.reload) return id;
+    return h('button', {
+        type: 'button', class: 'outline', id: 'code-open-grant', title: 'Open this grant',
+        onclick: () => showKey(main, key, keysView.reload),
+    }, id);
 }
 
 // One code's drawer: its facts and user, and Revoke while nobody has
@@ -453,7 +489,7 @@ async function showCode(main, code, reload, ticket = drawerTicket(main), previou
         fact('Created', when(code.created_at)),
         fact('Expires', when(code.expires_at)),
         code.redeemed_at ? fact('Redeemed', when(code.redeemed_at)) : null,
-        code.grant_id ? fact('Grant', h('code', {}, code.grant_id)) : null,
+        code.grant_id ? fact('Grant', grantLink(main, code.grant_id)) : null,
         code.revoked_at ? fact('Revoked', when(code.revoked_at)) : null);
     const revocable = code.state === 'live' || code.state === 'expired';
     const revoke = revocable ? h('button', {
