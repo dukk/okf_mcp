@@ -499,7 +499,7 @@ Deprecated (parse with a warning for one release): `poll_interval`,
 ## Rollout
 
 1. Ship with the new defaults. Old and new replicas coexist during the
-   rolling deploy (Decision 14). Migration 20 (audit rows) runs before
+   rolling deploy (Decision 14). The audit backfill migration (Decision 20) runs before
    the new binary serves.
 2. Watch `okf.cache.requests` hit ratios, `okf.cache.bytes`,
    `okf.cache.load.duration` and `okf.invalidations.lag`.
