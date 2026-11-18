@@ -826,23 +826,66 @@ async fn the_code_form_never_offers_every_expiry_before_the_limit_is_known() {
 /// opened, or after one dismissed, while its limit read was pending.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_pending_limit_read_does_not_open_the_code_form_over_a_newer_drawer() {
+    // Installed in the page: every `GET /oauth/codes` fails while `mode` is
+    // "fail" (so the limit stays unknown whatever number of times the page
+    // asks for the first list), and is held until `releaseLimit()` while it
+    // is "hold".
+    const LIMIT_READS: &str = "() => {
+        const original = window.fetch;
+        window.limitMode = 'fail';
+        window.limitHeld = [];
+        window.releaseLimit = () => window.limitHeld.splice(0).forEach(release => release());
+        window.fetch = (input, init) => {
+            const method = (init && init.method) || 'GET';
+            if (method !== 'GET' || !String(input).endsWith('/oauth/codes')) {
+                return original(input, init);
+            }
+            if (window.limitMode === 'fail') {
+                return Promise.resolve(new Response(
+                    JSON.stringify({ error: 'test', message: 'limit list down' }),
+                    { status: 503, headers: { 'Content-Type': 'application/json' } }));
+            }
+            return new Promise(resolve => {
+                window.limitHeld.push(() => resolve(original(input, init)));
+            });
+        };
+        return true;
+    }";
     let server = server().await;
     let admin = server
         .key("console-admin", Access::Admin, &["main"], Some("main"))
         .await;
     let ran = drive(server.base.clone(), move |ui| {
         ui.login(&admin);
+        ui.eval(LIMIT_READS, json!(null));
         let row = "[data-test=key-console-admin]";
+        let held = |ui: &crate::harness::Ui| {
+            ui.eval("() => window.limitHeld.length", json!(null))
+                .as_u64()
+                .unwrap_or(0)
+        };
         for dismiss in [false, true] {
-            // The first list fails, so the limit is unknown; New's own read
-            // is held.
-            ui.fail_next("GET", "/oauth/codes", 503, "unavailable");
+            ui.eval("() => { window.limitMode = 'fail'; }", json!(null));
             ui.open("/health");
+            ui.wait_hidden(row);
             ui.open("/keys");
             ui.wait_visible(row);
-            ui.hold_next("GET", "/oauth/codes");
-            ui.click("#code-new");
-            // The failed list's toast may cover the row, so click in the page.
+            // The failure's toast shows the first list has been answered.
+            ui.wait_text("#toasts", "limit list down");
+            ui.eval("() => { window.limitMode = 'hold'; }", json!(null));
+            // In the page: the toast may sit under a real click.
+            ui.eval(
+                "() => document.getElementById('code-new').click()",
+                json!(null),
+            );
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            while held(ui) == 0 {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "New never read the limit list (dismiss: {dismiss})"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
             ui.eval(
                 "(selector) => document.querySelector(selector).click()",
                 json!(row),
@@ -851,7 +894,8 @@ async fn a_pending_limit_read_does_not_open_the_code_form_over_a_newer_drawer() 
             if dismiss {
                 ui.click("#drawer-close");
             }
-            ui.release_held();
+            ui.eval("() => window.releaseLimit()", json!(null));
+            std::thread::sleep(std::time::Duration::from_millis(1000));
             assert!(
                 !ui.page.is_visible("#code-form").expect("visible"),
                 "the code form opened (dismissed: {dismiss})"
