@@ -33,7 +33,7 @@ use indexmap::IndexMap;
 use crate::error::OkfError;
 use crate::okf::doc::Doc;
 use crate::okf::markdown::{
-    atx_heading, body_split, footnote_defs, footnote_refs, headings, Heading,
+    atx_heading, body_split, encode_link_path, footnote_defs, footnote_refs, headings, Heading,
 };
 use crate::okf::ops::log_index::collapse_whitespace;
 use crate::okf::ops::relink::{rewrite_links, Moved, Redirect};
@@ -215,8 +215,10 @@ pub fn split_concept(
         description: &description,
         status: py_truthy_str(data.get("status")),
     };
-    let intro =
-        format!("Split out of [{parent_title}](/{parent}); see it for the surrounding context.");
+    let intro = format!(
+        "Split out of [{parent_title}](/{}); see it for the surrounding context.",
+        encode_link_path(&parent)
+    );
     let foot = carried_footnotes(&defs, &used_moved, &body);
     let frontmatter = frontmatter_lines(&header, ctx, &chosen);
     let mut lines: Vec<&str> = frontmatter.iter().map(String::as_str).collect();
@@ -236,7 +238,7 @@ pub fn split_concept(
 
     // The parent: the heading stays, its content becomes the stub.
     let escaped = title.replace('[', "\\[").replace(']', "\\]");
-    let link = format!("[{escaped}](/{new})");
+    let link = format!("[{escaped}](/{})", encode_link_path(&new));
     let mut stub = match (split.stub.filter(|stub| !stub.is_empty()), given) {
         (Some(stub), _) => stub.to_string(),
         (None, Some(_)) => format!("{link}: {description}"),
@@ -290,7 +292,7 @@ pub fn split_concept(
     // without checking the index lists it already (plan Decision 15).
     let bullet = format!(
         "* [{title}]({}) - {}",
-        basename(&new),
+        encode_link_path(basename(&new)),
         collapse_whitespace(&description)
     );
     let listed = insert_index_bullet_text(&workspace.read_text(&index_path)?, &bullet, None, false)

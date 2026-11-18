@@ -24,7 +24,7 @@
 
 use crate::error::OkfError;
 use crate::okf::doc::Doc;
-use crate::okf::markdown::{find_links, resolve_link};
+use crate::okf::markdown::{encode_link_path, find_links, resolve_link};
 use crate::okf::ops::log_index::collapse_whitespace;
 use crate::okf::ops::relink::{rewrite_links, Moved, Redirect};
 use crate::okf::ops::replay::{insert_index_bullet_text, unlist_text, ReplayOp};
@@ -159,7 +159,7 @@ fn relinked_bullet(
         out.push_str(&bullet[copied..link.range.start]);
         out.push_str(&whole.replacen(
             &format!("({}", link.target),
-            &format!("({name}{fragment}"),
+            &format!("({}{fragment}", encode_link_path(name)),
             1,
         ));
         copied = link.range.end;
@@ -184,7 +184,8 @@ fn frontmatter_bullet(workspace: &dyn Workspace, new: &str) -> Result<String, Ok
         .unwrap_or_else(|| name.strip_suffix(".md").unwrap_or(name).to_string());
     let description = py_truthy_str(data.get("description")).unwrap_or_default();
     Ok(format!(
-        "* [{title}]({name}) - {}",
+        "* [{title}]({}) - {}",
+        encode_link_path(name),
         collapse_whitespace(&description)
     ))
 }
@@ -264,6 +265,23 @@ mod tests {
         assert_eq!(
             outcome.replay,
             BTreeMap::from([("infra/index.md".to_string(), vec![relink])])
+        );
+    }
+
+    #[test]
+    fn a_move_to_a_name_with_a_space_writes_an_encoded_listing() {
+        let workspace = MemWorkspace::from_files(FILES);
+
+        move_concept(&workspace, "infra/time.md", "infra/wall clock.md").unwrap();
+
+        assert_eq!(
+            text(&workspace, "infra/index.md"),
+            "# Infra\n\n# Concepts\n\n* [Time](wall%20clock.md) - the clock\n* [NTP](ntp.md) - sync\n"
+        );
+        assert_eq!(
+            text(&workspace, "infra/ntp.md"),
+            "---\ntype: System\ntitle: NTP\ndescription: How   hosts sync.\n---\n\
+             Uses [time](/infra/wall%20clock.md#ports).\n"
         );
     }
 

@@ -360,8 +360,8 @@ fn destination(link_type: LinkType, url: &str, page: &Page<'_>) -> Destination {
     if escapes_root(&resolved.path) || !resolved.path.ends_with(".md") {
         return Destination::Text;
     }
-    // The path stays literal, as `resolve_link` and the catalog's link
-    // checks read it; only the fragment is decoded (see `section_slug`).
+    // `resolve_link` has decoded the path, as the catalog's link checks read
+    // it; the fragment is decoded here (see `section_slug`).
     let fragment = url
         .split_once('#')
         .map(|(_, fragment)| section_slug(fragment));
@@ -632,7 +632,7 @@ mod tests {
     }
 
     #[test]
-    fn encoded_fragments_are_decoded_once_and_paths_stay_literal() {
+    fn encoded_fragments_and_paths_are_decoded_once() {
         let files = MemWorkspace::from_files([
             ("systems/alpha.md", "# Alpha\n"),
             ("systems/beta.md", "# Beta\n\n## Caf\u{e9}\n"),
@@ -641,7 +641,7 @@ mod tests {
         ]);
         let html = to_html(
             "[Cafe](beta.md#caf%C3%A9) [Here](#Caf%C3%A9) [Upper](beta.md#CONFIG) \
-             [Encoded](a%20b.md)\n",
+             [Encoded](a%20b.md) [Literal](a%2520b.md)\n",
             &Page::new("main", "systems/alpha.md", &files),
         );
 
@@ -649,8 +649,10 @@ mod tests {
             "#/browse/main/systems/beta.md/caf%C3%A9",
             "#/browse/main/systems/alpha.md/caf%C3%A9",
             "#/browse/main/systems/beta.md/config",
-            // The file named `a%20b.md`, as the catalog's link check reads
-            // the link: `%` is encoded once, so the router decodes it back.
+            // `a%20b.md` is the file `a b.md`, as the catalog's link check
+            // reads it; the route encodes it once.
+            "#/browse/main/systems/a%20b.md",
+            // The file literally named `a%20b.md` is written `a%2520b.md`.
             "#/browse/main/systems/a%2520b.md",
         ] {
             assert!(

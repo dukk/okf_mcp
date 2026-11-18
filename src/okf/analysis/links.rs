@@ -684,6 +684,21 @@ mod tests {
     }
 
     #[test]
+    fn a_percent_encoded_link_to_an_existing_file_is_not_broken() {
+        let report = report(&[
+            ("index.md", "# Sections\n\n* [Infra](infra/)\n"),
+            (
+                "infra/index.md",
+                "# Concepts\n\n* [A B](a%20b.md)\n* [Gone](gone%20x.md)\n",
+            ),
+            ("infra/a b.md", "---\ntype: Host\n---\n# A\n"),
+        ]);
+
+        // Only the link to the missing file is broken; the encoded one resolves.
+        assert_eq!(report.summary.broken, 1, "{report:?}");
+    }
+
+    #[test]
     fn mentions_can_be_turned_off() {
         let workspace = MemWorkspace::from_files(CATALOG);
         let report = links_report(&Snapshot::build(&workspace).expect("snapshot"), false);
