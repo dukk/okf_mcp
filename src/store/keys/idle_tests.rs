@@ -358,3 +358,161 @@ async fn a_grant_used_or_revoked_while_the_pass_waits_is_left_alone() {
     assert_eq!(revoked_at(&db.pool, &revoked).await, Some(earlier));
     assert_eq!(entries(&db.pool, "oauth.grant_revoked").await.len(), 0);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refresh_admitted_before_expiry_is_never_undone_by_the_idle_pass() {
+    let db = test_db().await;
+    let client = setup(&db.pool).await;
+    let created = now() - TimeDelta::days(50);
+    let grant = insert_grant(&db.pool, &client, Access::Read, &["main"], created).await;
+    // Its only refresh token was issued 30 days before `now()`, so it
+    // expires at `now()`: the default lifetimes' boundary.
+    let issued = now() - TimeDelta::days(30);
+    token(
+        &db.pool,
+        &grant,
+        1,
+        tokens::TokenKind::Refresh,
+        issued,
+        TimeDelta::days(30),
+    )
+    .await;
+
+    // A real rotation, as `/oauth/token` runs it: presented a second
+    // before expiry and admitted, then paused before minting.
+    let presented_at = now() - TimeDelta::seconds(1);
+    let mut rotation = db.pool.begin().await.expect("begin");
+    let admitted = tokens::use_refresh(&mut rotation, &[1; 32], presented_at)
+        .await
+        .expect("present the token");
+    assert!(
+        matches!(admitted, RefreshUse::Rotated { .. }),
+        "{admitted:?}"
+    );
+
+    // The idle pass runs just past expiry, while the rotation is paused.
+    let after_expiry = now() + TimeDelta::seconds(1);
+    let pool = db.pool.clone();
+    let pass = tokio::spawn(async move {
+        revoke_idle_grants(&pool, after_expiry - TimeDelta::days(30), after_expiry).await
+    });
+    // Give the pass the chance to finish, or to block on the grant's row.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let waiting: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_stat_activity \
+                 WHERE wait_event_type = 'Lock' \
+                   AND query LIKE '%FROM api_keys WHERE id = $1 FOR UPDATE%'",
+            )
+            .fetch_one(&db.pool)
+            .await
+            .expect("read pg_stat_activity");
+            if waiting > 0 || pass.is_finished() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the pass finished or waited on the grant's row within 30 s");
+
+    // The rotation resumes: it mints its successor pair, as `mint` does,
+    // and commits.
+    for (byte, kind, lifetime) in [
+        (2_u8, tokens::TokenKind::Access, TimeDelta::hours(1)),
+        (3_u8, tokens::TokenKind::Refresh, TimeDelta::days(30)),
+    ] {
+        tokens::insert(
+            &mut rotation,
+            &tokens::NewToken {
+                sha256: [byte; 32],
+                grant_id: &grant,
+                kind,
+                family_id: &grant,
+                resource: "https://okf.example.com/mcp",
+                expires_at: presented_at + lifetime,
+            },
+            presented_at,
+        )
+        .await
+        .expect("mint the successor");
+    }
+    rotation.commit().await.expect("commit the rotation");
+    let revoked = tokio::time::timeout(Duration::from_secs(30), pass)
+        .await
+        .expect("the pass finished within 30 s of the rotation's commit")
+        .expect("the pass's task")
+        .expect("the pass");
+
+    // The refresh succeeded, so its grant must still be live.
+    assert!(revoked.is_empty(), "{revoked:?}");
+    assert_eq!(revoked_at(&db.pool, &grant).await, None);
+    assert_eq!(entries(&db.pool, "oauth.grant_revoked").await.len(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rotation_after_a_revocation_is_refused() {
+    let db = test_db().await;
+    let client = setup(&db.pool).await;
+    let grant = insert_grant(
+        &db.pool,
+        &client,
+        Access::Read,
+        &["main"],
+        now() - TimeDelta::days(50),
+    )
+    .await;
+    token(
+        &db.pool,
+        &grant,
+        1,
+        tokens::TokenKind::Refresh,
+        now() - TimeDelta::days(30),
+        TimeDelta::days(30),
+    )
+    .await;
+    // The idle pass holds the grant's row, revoking it.
+    let mut revocation = db.pool.begin().await.expect("begin");
+    sqlx::query("SELECT 1 FROM api_keys WHERE id = $1 FOR UPDATE")
+        .bind(&grant)
+        .execute(&mut *revocation)
+        .await
+        .expect("lock the grant");
+    sqlx::query("UPDATE api_keys SET revoked_at = $2 WHERE id = $1")
+        .bind(&grant)
+        .bind(now())
+        .execute(&mut *revocation)
+        .await
+        .expect("revoke it");
+    // A refresh presented a second before expiry waits on it ...
+    let pool = db.pool.clone();
+    let refresh = tokio::spawn(async move {
+        let mut tx = pool.begin().await.expect("begin");
+        tokens::use_refresh(&mut tx, &[1; 32], now() - TimeDelta::seconds(1)).await
+    });
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let waiting: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_stat_activity \
+                 WHERE wait_event_type = 'Lock' AND query LIKE '%FOR SHARE%'",
+            )
+            .fetch_one(&db.pool)
+            .await
+            .expect("read pg_stat_activity");
+            if waiting > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the refresh waited on the grant's row within 30 s");
+    revocation.commit().await.expect("commit the revocation");
+    // ... and, once it commits, is refused: nothing is minted.
+    let found = tokio::time::timeout(Duration::from_secs(30), refresh)
+        .await
+        .expect("the refresh finished within 30 s of the revocation")
+        .expect("the refresh's task")
+        .expect("present the token");
+    assert_eq!(found, RefreshUse::Unknown);
+}

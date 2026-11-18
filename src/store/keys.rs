@@ -1242,7 +1242,11 @@ pub const IDLE_REVOCATION_ACTOR: &str = "idle-grant-revocation";
 /// and refreshing needs a live refresh token, so a grant this matches can
 /// gain no new token: no client can still be using it. A grant made by a
 /// consent or a code redemption is matched only once `$2` has passed its
-/// creation.
+/// creation. An issue already admitted when the pass runs (a refresh that
+/// validated its token just before it expired) holds the grant's share
+/// lock (`store::oauth::tokens::lock_grant`) until it commits, so the
+/// pass's `FOR UPDATE` waits for it and the re-check then sees its new
+/// tokens.
 ///
 /// A macro, not a `const`, so `concat!` can splice it into the two queries
 /// at compile time: sqlx refuses SQL built with `format!` at run time.
