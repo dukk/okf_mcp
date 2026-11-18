@@ -12,15 +12,16 @@
 //! | the four other lifetimes | JSON string (humantime) | a duration above zero |
 //! | `product_name` | JSON string | 1 to 60 characters, no control characters (trimmed) |
 //! | `support_contact` | JSON string or `null` | an email address, an `https://` URL, or `none` |
+//! | `feedback_url` | JSON string or `null` | an `https://` URL, or `none` |
 //! | `audit_retention_days` | JSON number | `30` to `3650` |
 //! | `require_unlock` | JSON boolean | `true`, `false`, `on`, `off` |
 //! | `unlock_max_hours` | JSON number | `1` to `72` |
 //! | `unlock_notify_owners` | JSON boolean | `true`, `false`, `on`, `off` |
 //!
-//! The two branding settings (`product_name`, `support_contact`) have no
-//! `[auth]` config key: their defaults are [`DEFAULT_PRODUCT_NAME`] and no
-//! contact. Neither has `audit_retention_days` (default
-//! [`audit::DEFAULT_RETENTION_DAYS`]), which the audit log's append-only
+//! The three branding settings (`product_name`, `support_contact`,
+//! `feedback_url`) have no `[auth]` config key: their defaults are
+//! [`DEFAULT_PRODUCT_NAME`], no contact and no feedback link. Neither has
+//! `audit_retention_days` (default [`audit::DEFAULT_RETENTION_DAYS`]), which the audit log's append-only
 //! trigger reads from the same row (`migrations/0012_audit.sql`), nor the
 //! three unlock settings (spec Part 6; defaults off, [`unlocks::DEFAULT_MAX_HOURS`]
 //! and on).
@@ -64,18 +65,21 @@ pub const DEFAULT_PRODUCT_NAME: &str = "okf";
 /// The longest product name, in characters.
 pub const MAX_PRODUCT_NAME_CHARS: usize = 60;
 
-/// The longest support contact URL, in characters (an email address is
-/// held to `users::check_email`'s 254).
+/// The longest support contact or feedback URL, in characters (an email
+/// address is held to `users::check_email`'s 254).
 const MAX_SUPPORT_URL_CHARS: usize = 500;
 
-/// What people see the server as: the two branding settings. Serialized as
-/// `GET /ui/brand.json` answers it (`support_contact` is `null` when unset).
+/// What people see the server as: the three branding settings. Serialized
+/// as `GET /ui/brand.json` answers it (`support_contact` and `feedback_url`
+/// are `null` when unset).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Brand {
     /// The product name.
     pub product_name: String,
     /// The support contact (an email address or `https://` URL), if set.
     pub support_contact: Option<String>,
+    /// The `https://` URL the console's "Send feedback" link opens, if set.
+    pub feedback_url: Option<String>,
 }
 
 // `Default` by hand: a derived one would make the product name empty.
@@ -91,6 +95,7 @@ impl Default for Brand {
         Self {
             product_name: DEFAULT_PRODUCT_NAME.to_string(),
             support_contact: None,
+            feedback_url: None,
         }
     }
 }
@@ -118,6 +123,9 @@ pub struct Settings {
     /// An email address or `https://` URL people are pointed to; `None`
     /// shows no contact line.
     pub support_contact: Option<String>,
+    /// An `https://` URL the console's "Send feedback" link opens; `None`
+    /// shows no link.
+    pub feedback_url: Option<String>,
     /// How many days audit entries are kept before the daily prune deletes
     /// them ([`audit::DEFAULT_RETENTION_DAYS`] by default).
     pub audit_retention_days: u32,
@@ -159,6 +167,7 @@ impl Settings {
             // Runtime settings only, with no `[auth]` key (spec "My calls").
             product_name: DEFAULT_PRODUCT_NAME.to_string(),
             support_contact: None,
+            feedback_url: None,
             audit_retention_days: audit::DEFAULT_RETENTION_DAYS,
             require_unlock: false,
             unlock_max_hours: unlocks::DEFAULT_MAX_HOURS,
@@ -169,7 +178,7 @@ impl Settings {
     /// The branding settings.
     ///
     /// # Returns
-    /// A copy of the product name and support contact.
+    /// A copy of the product name, support contact and feedback URL.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -181,6 +190,7 @@ impl Settings {
         Brand {
             product_name: self.product_name.clone(),
             support_contact: self.support_contact.clone(),
+            feedback_url: self.feedback_url.clone(),
         }
     }
 }
@@ -216,6 +226,9 @@ pub enum SettingKey {
     /// `support_contact`.
     #[value(name = "support_contact")]
     SupportContact,
+    /// `feedback_url`.
+    #[value(name = "feedback_url")]
+    FeedbackUrl,
     /// `audit_retention_days`.
     #[value(name = "audit_retention_days")]
     AuditRetentionDays,
@@ -232,7 +245,7 @@ pub enum SettingKey {
 
 impl SettingKey {
     /// Every key, in the order `settings list` shows them.
-    pub const ALL: [SettingKey; 13] = [
+    pub const ALL: [SettingKey; 14] = [
         SettingKey::PasswordSignIn,
         SettingKey::MaxKeysPerUser,
         SettingKey::MaxKeyLifetime,
@@ -246,6 +259,7 @@ impl SettingKey {
         SettingKey::RequireUnlock,
         SettingKey::UnlockMaxHours,
         SettingKey::UnlockNotifyOwners,
+        SettingKey::FeedbackUrl,
     ];
 
     /// The stored name.
@@ -270,6 +284,7 @@ impl SettingKey {
             SettingKey::ResetLinkTtl => "reset_link_ttl",
             SettingKey::ProductName => "product_name",
             SettingKey::SupportContact => "support_contact",
+            SettingKey::FeedbackUrl => "feedback_url",
             SettingKey::AuditRetentionDays => "audit_retention_days",
             SettingKey::RequireUnlock => "require_unlock",
             SettingKey::UnlockMaxHours => "unlock_max_hours",
@@ -354,27 +369,56 @@ fn check_product_name(text: &str) -> Result<&str, String> {
     Ok(name)
 }
 
-/// A support contact: one plain email address, or an `https://` URL with a
-/// host, with no whitespace or control characters (the URL parser would
-/// silently drop a tab or line break, which would then be stored).
+/// A URL setting: `https://` with a host, at most [`MAX_SUPPORT_URL_CHARS`]
+/// characters, with no whitespace or control characters (the URL parser
+/// would silently drop a tab or line break, which would then be stored).
+///
+/// # Arguments
+/// * `text` - the candidate URL.
+///
+/// # Returns
+/// `true` when it is acceptable.
+#[tracing::instrument(level = "trace", skip_all)]
+fn is_https_url(text: &str) -> bool {
+    if !text.starts_with("https://") {
+        return false;
+    }
+    let clean = text.chars().count() <= MAX_SUPPORT_URL_CHARS
+        && !text.chars().any(|c| c.is_whitespace() || c.is_control());
+    // `is_some_and`: the URL parses and has a non-empty host.
+    let has_host = url::Url::parse(text)
+        .ok()
+        .is_some_and(|url| url.host_str().is_some_and(|host| !host.is_empty()));
+    clean && has_host
+}
+
+/// A support contact: one plain email address, or an `https://` URL (see
+/// [`is_https_url`]).
 #[tracing::instrument(level = "trace", skip_all)]
 fn check_support_contact(text: &str) -> Result<(), String> {
     let refuse =
         || format!("support_contact takes an email address, an https:// URL or none, not {text:?}");
     if text.starts_with("https://") {
-        let clean = text.chars().count() <= MAX_SUPPORT_URL_CHARS
-            && !text.chars().any(|c| c.is_whitespace() || c.is_control());
-        // `is_some_and`: the URL parses and has a non-empty host.
-        let has_host = url::Url::parse(text)
-            .ok()
-            .is_some_and(|url| url.host_str().is_some_and(|host| !host.is_empty()));
-        return if clean && has_host {
+        return if is_https_url(text) {
             Ok(())
         } else {
             Err(refuse())
         };
     }
     crate::store::users::check_email(text).map_err(|_| refuse())
+}
+
+/// A feedback URL: an `https://` URL only (see [`is_https_url`]); an email
+/// address is refused.
+#[tracing::instrument(level = "trace", skip_all)]
+fn check_feedback_url(text: &str) -> Result<(), String> {
+    if is_https_url(text) {
+        Ok(())
+    } else {
+        Err(format!(
+            "feedback_url takes an https:// URL or none, not {text:?}"
+        ))
+    }
 }
 
 /// Reads the text of a boolean setting: `true`/`on` or `false`/`off`.
@@ -432,6 +476,10 @@ fn parse_value(key: SettingKey, text: &str) -> Result<Value, String> {
         SettingKey::SupportContact if text == "none" => Ok(Value::Null),
         SettingKey::SupportContact => {
             check_support_contact(text).map(|()| Value::String(text.to_string()))
+        }
+        SettingKey::FeedbackUrl if text == "none" => Ok(Value::Null),
+        SettingKey::FeedbackUrl => {
+            check_feedback_url(text).map(|()| Value::String(text.to_string()))
         }
         // A JSON number, which the append-only trigger reads too; the range
         // is `apply`'s.
@@ -534,6 +582,18 @@ fn apply(settings: &mut Settings, key: SettingKey, value: &Value) -> Result<(), 
                 }
             };
         }
+        SettingKey::FeedbackUrl => {
+            settings.feedback_url = match value {
+                Value::Null => None,
+                other => {
+                    let text = other
+                        .as_str()
+                        .ok_or_else(|| "feedback_url must be a string or null".to_string())?;
+                    check_feedback_url(text)?;
+                    Some(text.to_string())
+                }
+            };
+        }
         SettingKey::AuditRetentionDays => {
             // `RangeInclusive::contains`: `MIN..=MAX` includes both ends.
             settings.audit_retention_days = value
@@ -565,6 +625,10 @@ fn display(settings: &Settings, key: SettingKey) -> String {
         SettingKey::ProductName => settings.product_name.clone(),
         SettingKey::SupportContact => settings
             .support_contact
+            .clone()
+            .unwrap_or_else(|| "none".to_string()),
+        SettingKey::FeedbackUrl => settings
+            .feedback_url
             .clone()
             .unwrap_or_else(|| "none".to_string()),
         SettingKey::AuditRetentionDays => settings.audit_retention_days.to_string(),
@@ -619,7 +683,7 @@ fn overlay(defaults: &AuthConfig, rows: &[StoredSetting]) -> Settings {
 /// * `conn` - the caller's connection or transaction (`&mut tx`).
 ///
 /// # Returns
-/// The product name and support contact.
+/// The product name, support contact and feedback URL.
 ///
 /// # Errors
 /// [`OkfError::Database`].
@@ -627,7 +691,7 @@ fn overlay(defaults: &AuthConfig, rows: &[StoredSetting]) -> Settings {
 pub async fn brand_in(conn: &mut PgConnection) -> Result<Brand, OkfError> {
     let rows = sqlx::query_as::<_, StoredSetting>(
         "SELECT key, value, updated_at, updated_by FROM server_settings \
-         WHERE key IN ('product_name', 'support_contact')",
+         WHERE key IN ('product_name', 'support_contact', 'feedback_url')",
     )
     .fetch_all(&mut *conn)
     .await?;
@@ -688,7 +752,8 @@ fn updated_by(actor: &AuditActor) -> String {
 /// An entry's details for a setting's value: the stored JSON, except for
 /// `support_contact`, which can be an email address and is never written
 /// into an entry (spec "People in entries"). Every key is listed, so a new
-/// setting must decide which arm it takes. The unlock settings are policy
+/// setting must decide which arm it takes. `feedback_url` is an
+/// `https://` URL, never a person, so it is recorded. The unlock settings are policy
 /// (a flag and a number of hours), never a person, so they are recorded.
 #[tracing::instrument(level = "trace", skip_all)]
 fn audited_value(key: SettingKey, value: &Value) -> Option<&Value> {
@@ -702,6 +767,7 @@ fn audited_value(key: SettingKey, value: &Value) -> Option<&Value> {
         | SettingKey::SetupLinkTtl
         | SettingKey::ResetLinkTtl
         | SettingKey::ProductName
+        | SettingKey::FeedbackUrl
         | SettingKey::AuditRetentionDays
         | SettingKey::RequireUnlock
         | SettingKey::UnlockMaxHours
@@ -1252,6 +1318,7 @@ mod tests {
             Brand {
                 product_name: "Acme Notes".to_string(),
                 support_contact: Some("https://example.com/help".to_string()),
+                feedback_url: None,
             }
         );
         let mut conn = db.pool.acquire().await.unwrap();
@@ -1686,6 +1753,85 @@ mod tests {
         );
         assert_eq!(cleared.len(), 1);
         assert_eq!(cleared[0].details, serde_json::json!({}));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn feedback_url_is_validated_shown_in_the_brand_and_cleared_by_none() {
+        let db = test_db().await;
+        let defaults = AuthConfig::default();
+        let set_text = |value: String| {
+            let pool = db.pool.clone();
+            async move { set(&pool, SettingKey::FeedbackUrl, &value, &by("cli"), now()).await }
+        };
+        assert_eq!(
+            display(&Settings::from_config(&defaults), SettingKey::FeedbackUrl),
+            "none"
+        );
+
+        for value in [
+            "http://example.com/feedback".to_string(),
+            "help@example.com".to_string(),
+            "https://".to_string(),
+            "https://example.com/a b".to_string(),
+            "https://exa\tmple.com".to_string(),
+            format!("https://example.com/{}", "x".repeat(500)),
+        ] {
+            let result = set_text(value.clone()).await;
+            assert!(
+                matches!(
+                    result,
+                    Err(OkfError::LimitExceeded {
+                        limit: "setting",
+                        ..
+                    })
+                ),
+                "{value:?}: {result:?}"
+            );
+        }
+        assert_eq!(
+            load(&db.pool, &defaults).await.unwrap().brand(),
+            Brand::default()
+        );
+
+        set_text("https://example.com/feedback".to_string())
+            .await
+            .unwrap();
+        let loaded = load(&db.pool, &defaults).await.unwrap();
+        let mut conn = db.pool.acquire().await.unwrap();
+        assert_eq!(
+            loaded.brand().feedback_url.as_deref(),
+            Some("https://example.com/feedback")
+        );
+        assert_eq!(brand_in(&mut conn).await.unwrap(), loaded.brand());
+        assert_eq!(
+            display(&loaded, SettingKey::FeedbackUrl),
+            "https://example.com/feedback"
+        );
+
+        set_text("none".to_string()).await.unwrap();
+        assert_eq!(load(&db.pool, &defaults).await.unwrap().feedback_url, None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_feedback_url_entry_records_the_url() {
+        let db = test_db().await;
+        set(
+            &db.pool,
+            SettingKey::FeedbackUrl,
+            "https://example.com/feedback",
+            &by("alice"),
+            now(),
+        )
+        .await
+        .unwrap();
+
+        let changed = audit::testing::entries(&db.pool, "setting.changed").await;
+
+        assert_eq!(changed.len(), 1, "{changed:?}");
+        assert_eq!(
+            changed[0].details,
+            serde_json::json!({"from": null, "to": "https://example.com/feedback"})
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

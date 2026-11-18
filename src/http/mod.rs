@@ -269,9 +269,11 @@ async fn redis_health(app: &App) -> Option<&'static str> {
     }
 }
 
-/// `GET /ui/brand.json`: the product name and support contact
-/// (`{"product_name": ..., "support_contact": ... or null}`), for the console
-/// shell before anyone signs in. Public: the sign-in page shows both anyway.
+/// `GET /ui/brand.json`: the product name, support contact and feedback URL
+/// (`{"product_name": ..., "support_contact": ... or null, "feedback_url":
+/// ... or null}`), for the console shell before anyone signs in. Public: the
+/// sign-in page shows the first two anyway, and the feedback URL is a link
+/// the operator wants people to open.
 /// `no-cache`, so a changed setting shows on the next load.
 ///
 /// # Arguments
@@ -1135,6 +1137,15 @@ mod tests {
         )
         .await
         .unwrap();
+        settings::set(
+            test.app.pool(),
+            SettingKey::FeedbackUrl,
+            "https://example.com/feedback",
+            &AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
         test.app.poll().await.unwrap();
         let (_, _, after) = get_brand().await;
 
@@ -1146,11 +1157,19 @@ mod tests {
         );
         assert_eq!(
             before,
-            serde_json::json!({"product_name": "okf", "support_contact": null})
+            serde_json::json!({
+                "product_name": "okf",
+                "support_contact": null,
+                "feedback_url": null
+            })
         );
         assert_eq!(
             after,
-            serde_json::json!({"product_name": "Acme Notes", "support_contact": "help@example.com"})
+            serde_json::json!({
+                "product_name": "Acme Notes",
+                "support_contact": "help@example.com",
+                "feedback_url": "https://example.com/feedback"
+            })
         );
     }
 
