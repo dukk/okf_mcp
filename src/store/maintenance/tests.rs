@@ -26,6 +26,7 @@ pub(super) async fn setup(pool: &PgPool, paths: &[&str]) -> i64 {
         pool,
         &crate::store::catalogs::NewCatalog {
             name: "pg",
+            display_name: &crate::labels::DisplayName::default(),
             description: "",
             owner_team: crate::db::TEST_TEAM,
         },
@@ -2296,6 +2297,7 @@ async fn maintenance_deleted_catalog_identity_cannot_replay() {
         &db.pool,
         &crate::store::catalogs::NewCatalog {
             name: "pg",
+            display_name: &crate::labels::DisplayName::default(),
             description: "",
             owner_team: crate::db::TEST_TEAM,
         },

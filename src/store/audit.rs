@@ -15,6 +15,8 @@ use sqlx::{PgConnection, PgPool};
 use crate::auth::{CatalogScope, CredentialKind, Principal};
 use crate::error::OkfError;
 use crate::http::requester::Requester;
+use crate::labels::directory::Labels;
+use crate::labels::user_label;
 use crate::store::keys::Access;
 
 /// How many days entries are kept with no `audit_retention_days` override
@@ -261,6 +263,7 @@ actions! {
     UserCreated => "user.created",
     UserDeleted => "user.deleted",
     UserEmailChanged => "user.email_changed",
+    UserDisplayNameChanged => "user.display_name_changed",
     UserAdminChanged => "user.admin_changed",
     UserInvited => "user.invited",
     UserEntitlementSet => "user.entitlement_set",
@@ -273,11 +276,13 @@ actions! {
     TeamMemberRemoved => "team.member_removed",
     TeamSuspended => "team.suspended",
     TeamUnsuspended => "team.unsuspended",
+    TeamDisplayNameChanged => "team.display_name_changed",
     CatalogCreated => "catalog.created",
     CatalogDeleted => "catalog.deleted",
     CatalogOwnerChanged => "catalog.owner_changed",
     CatalogMemberAccessChanged => "catalog.member_access_changed",
     CatalogDescriptionChanged => "catalog.description_changed",
+    CatalogDisplayNameChanged => "catalog.display_name_changed",
     CatalogImported => "catalog.imported",
     CatalogRepaired => "catalog.repaired",
     CatalogMaintenanceChanged => "catalog.maintenance_changed",
@@ -1219,6 +1224,10 @@ pub enum ActorView {
     Known {
         /// The person, if the actor was one (`deleted user #N` once deleted).
         person: Option<String>,
+        /// The person's label from the audit snapshot of their display name:
+        /// never their slug, and `Unnamed user` once the user is deleted.
+        /// `None` when `person` is.
+        person_label: Option<String>,
         /// The key or grant id (`credential #N` once its user is deleted).
         credential: Option<String>,
         /// The credential's label, or the entry's actor label.
@@ -1237,6 +1246,13 @@ pub struct TargetView {
     pub name: Option<String>,
     /// The person it is about, if any, and if the reader may see them.
     pub person: Option<String>,
+    /// The person's label from the audit snapshot (see
+    /// [`ActorView::Known`]'s `person_label`); `None` when `person` is.
+    pub person_label: Option<String>,
+    /// The label of a catalog target that still exists, or of a shared
+    /// team target, read from the directory now; `None` otherwise (a
+    /// deleted catalog, a personal team, any other kind).
+    pub target_label: Option<String>,
 }
 
 /// One entry as a reader sees it.
@@ -1280,6 +1296,7 @@ pub const OWNER_REDACTED: &[(&str, &[&str])] = &[("catalog.unlocked", &["reason"
 /// * `pool` - the database.
 /// * `viewer` - who reads.
 /// * `query` - the filters.
+/// * `labels` - the directory that labels catalog and shared-team targets.
 ///
 /// # Returns
 /// At most [`AuditQuery::page_size`] records. A filter that cannot name
@@ -1292,6 +1309,7 @@ pub async fn list(
     pool: &PgPool,
     viewer: &Viewer,
     query: &AuditQuery<'_>,
+    labels: &Labels,
 ) -> Result<Vec<AuditRecord>, OkfError> {
     // Postgres refuses a NUL in text, and no stored name holds one (team
     // names are `[a-z0-9-]+`): such a filter is "nothing", never a 500.
@@ -1330,7 +1348,10 @@ pub async fn list(
         .bind(team_name)
         .fetch_all(pool)
         .await?;
-    Ok(rows.into_iter().map(|row| row.into_record(owner)).collect())
+    Ok(rows
+        .into_iter()
+        .map(|row| row.into_record(owner, labels))
+        .collect())
 }
 
 /// Every entry a viewer may read that the filters select, as JSON Lines
@@ -1345,6 +1366,7 @@ pub async fn list(
 /// * `pool` - the database.
 /// * `viewer` - who reads ([`list`] redacts for them).
 /// * `query` - the filters.
+/// * `labels` - the directory [`list`] labels targets with.
 ///
 /// # Returns
 /// The lines, each ending in `\n` (empty when nothing matches).
@@ -1356,6 +1378,7 @@ pub async fn export_lines(
     pool: &PgPool,
     viewer: &Viewer,
     query: &AuditQuery<'_>,
+    labels: &Labels,
 ) -> Result<String, OkfError> {
     // A copy with the page size fixed; `..query.clone()` takes the other
     // fields from the caller's query, like `dataclasses.replace`.
@@ -1365,7 +1388,7 @@ pub async fn export_lines(
     };
     let mut lines = String::new();
     loop {
-        let page = list(pool, viewer, &page_query).await?;
+        let page = list(pool, viewer, &page_query, labels).await?;
         for record in &page {
             // A record holds only strings, numbers and JSON values, so
             // serializing it cannot fail.
@@ -1391,10 +1414,17 @@ const LIST_SQL: &str = "\
     SELECT e.id, e.at, e.action, e.source, e.actor_operator, \
            COALESCE(ac.credential_id, 'credential #' || ac.id) AS actor_credential, \
            COALESCE(ac.label, e.actor_label) AS actor_label, \
-           ap.name AS actor_person, host(e.client_ip) AS ip, e.target_kind, \
+           ap.name AS actor_person, ap.display_name AS actor_display_name, \
+           host(e.client_ip) AS ip, e.target_kind, \
            COALESCE(e.target_name, tt.name, ttp.name, tc.credential_id, 'credential #' || tc.id) \
                AS target_name, \
-           tp.name AS target_person, e.target_operator, \
+           tp.name AS target_person, tp.display_name AS target_display_name, \
+           CASE WHEN EXISTS (SELECT 1 FROM teams lt WHERE lt.id = tt.team_id) \
+                THEN tt.name END AS target_team, \
+           CASE WHEN e.target_kind = 'catalog' AND EXISTS ( \
+                    SELECT 1 FROM catalogs lc WHERE lc.name = e.target_name AND lc.created_at <= e.at) \
+                THEN e.target_name END AS target_catalog, \
+           e.target_operator, \
            ARRAY(SELECT COALESCE(t.name, p.name) \
                  FROM unnest(e.teams) WITH ORDINALITY AS r (id, n) \
                  JOIN audit_teams t ON t.id = r.id \
@@ -1440,15 +1470,69 @@ struct ListedRow {
     actor_credential: Option<String>,
     actor_label: String,
     actor_person: Option<String>,
+    actor_display_name: Option<String>,
     ip: Option<String>,
     target_kind: String,
     target_name: Option<String>,
     target_person: Option<String>,
+    target_display_name: Option<String>,
+    // The slug of a shared team target while the same team (by `teams.id`)
+    // still exists; `None` for a personal team or a deleted one, even when a
+    // new team has taken its slug.
+    target_team: Option<String>,
+    // The name of a catalog target while that catalog still exists: the log
+    // keeps no catalog id, so a catalog created after the entry is another
+    // one reusing the name.
+    target_catalog: Option<String>,
     target_operator: bool,
     teams: Vec<String>,
     details: serde_json::Value,
     requests: Option<i64>,
     actor_in_team: bool,
+}
+
+/// A person's label from the audit snapshot of their display name. The
+/// snapshot has no email, so there is no email fallback; a deleted user's
+/// snapshot is blank, so it reads as the placeholder, never the slug.
+///
+/// # Arguments
+/// * `person` - the snapshot's person name, if the entry has one.
+/// * `display_name` - the snapshot's display name (joined with `person`).
+///
+/// # Returns
+/// The label, or `None` when there is no person.
+#[tracing::instrument(level = "trace", skip_all)]
+fn snapshot_label(person: &Option<String>, display_name: &Option<String>) -> Option<String> {
+    person
+        .as_ref()
+        .map(|_| user_label(display_name.as_deref().unwrap_or_default(), None))
+}
+
+/// The label of a target that is a catalog or a shared team, read from the
+/// directory now.
+///
+/// # Arguments
+/// * `kind` - the target's kind.
+/// * `name` - the slug of a catalog target that still exists.
+/// * `team` - the slug of a shared team target that still exists.
+/// * `labels` - the directory.
+///
+/// # Returns
+/// The label, or `None` for another kind, a deleted catalog or team, or a
+/// personal team.
+#[tracing::instrument(level = "trace", skip_all)]
+fn target_label(
+    kind: &str,
+    name: Option<&str>,
+    team: Option<&str>,
+    labels: &Labels,
+) -> Option<String> {
+    let label = match kind {
+        "catalog" => name.and_then(|slug| labels.catalog(slug)),
+        "team" => team.and_then(|slug| labels.team(slug)),
+        _ => None,
+    };
+    label.map(str::to_string)
 }
 
 impl ListedRow {
@@ -1461,11 +1545,12 @@ impl ListedRow {
     /// another customer's or a staff member's personal team). The stored
     /// entry is never changed.
     #[tracing::instrument(level = "trace", skip_all)]
-    fn into_record(self, owner: bool) -> AuditRecord {
+    fn into_record(self, owner: bool, labels: &Labels) -> AuditRecord {
         let actor = if owner && self.actor_operator {
             ActorView::Operator
         } else {
             ActorView::Known {
+                person_label: snapshot_label(&self.actor_person, &self.actor_display_name),
                 person: self.actor_person,
                 credential: self.actor_credential,
                 label: self.actor_label,
@@ -1493,11 +1578,20 @@ impl ListedRow {
             let credential = matches!(self.target_kind.as_str(), "key" | "grant" | "code");
             TargetView {
                 name: if credential { None } else { self.target_name },
+                target_label: None,
                 kind: self.target_kind,
                 person: None,
+                person_label: None,
             }
         } else {
             TargetView {
+                target_label: target_label(
+                    &self.target_kind,
+                    self.target_catalog.as_deref(),
+                    self.target_team.as_deref(),
+                    labels,
+                ),
+                person_label: snapshot_label(&self.target_person, &self.target_display_name),
                 kind: self.target_kind,
                 name: self.target_name,
                 person: self.target_person,
@@ -1615,6 +1709,15 @@ mod tests {
     use crate::store::users::{self, NewUser};
     use chrono::TimeDelta;
     use sqlx::PgPool;
+
+    /// [`list`] with an empty label directory.
+    async fn list_plain(
+        pool: &PgPool,
+        viewer: &Viewer,
+        query: &AuditQuery<'_>,
+    ) -> Result<Vec<AuditRecord>, OkfError> {
+        list(pool, viewer, query, &Labels::default()).await
+    }
 
     fn now() -> DateTime<Utc> {
         "2026-11-13T12:00:00Z".parse().unwrap()
@@ -1813,7 +1916,7 @@ mod tests {
         let db = test_db().await;
         let family = NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
             owner: TEST_USER,
         };
         teams::create(&db.pool, &family, &AuditActor::cli(), now())
@@ -1849,7 +1952,7 @@ mod tests {
         let db = test_db().await;
         let new = NewUser {
             name: "alice",
-            display_name: "Alice Example",
+            display_name: &crate::labels::DisplayName::parse("Alice Example").unwrap(),
         };
         users::create(&db.pool, &new, &AuditActor::cli(), now())
             .await
@@ -1908,7 +2011,7 @@ mod tests {
         let db = test_db().await;
         let new = NewUser {
             name: "alice",
-            display_name: "Alice Example",
+            display_name: &crate::labels::DisplayName::parse("Alice Example").unwrap(),
         };
         users::create(&db.pool, &new, &AuditActor::cli(), now())
             .await
@@ -2004,7 +2107,7 @@ mod tests {
         let db = test_db().await;
         let new = NewUser {
             name: "alice",
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
         };
         users::create(&db.pool, &new, &AuditActor::cli(), now())
             .await
@@ -2048,7 +2151,7 @@ mod tests {
         let db = test_db().await;
         let new = NewUser {
             name: "alice",
-            display_name: "Alice Example",
+            display_name: &crate::labels::DisplayName::parse("Alice Example").unwrap(),
         };
         users::create(&db.pool, &new, &AuditActor::cli(), now())
             .await
@@ -2102,7 +2205,7 @@ mod tests {
         for name in ["staff", "alice"] {
             let new = NewUser {
                 name,
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             };
             users::create(&db.pool, &new, &AuditActor::cli(), now())
                 .await
@@ -2201,7 +2304,7 @@ mod tests {
         let db = test_db().await;
         let family = NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
             owner: TEST_USER,
         };
         teams::create(&db.pool, &family, &AuditActor::cli(), now())
@@ -2251,7 +2354,7 @@ mod tests {
         let db = test_db().await;
         let new = NewUser {
             name: "alice",
-            display_name: "Alice",
+            display_name: &crate::labels::DisplayName::parse("Alice").unwrap(),
         };
         users::create(&db.pool, &new, &AuditActor::cli(), now())
             .await
@@ -2559,6 +2662,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "main",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -2614,7 +2718,7 @@ mod tests {
             &db.pool,
             &NewTeam {
                 name: "family",
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
                 owner: TEST_USER,
             },
             &cli,
@@ -2622,8 +2726,12 @@ mod tests {
         )
         .await
         .unwrap();
+        // A local the closure borrows: a temporary made inside it would be
+        // dropped when it returns, leaving the struct's reference dangling.
+        let unset = crate::labels::DisplayName::default();
         let main = |owner_team| NewCatalog {
             name: "main",
+            display_name: &unset,
             description: "",
             owner_team,
         };
@@ -2712,7 +2820,7 @@ mod tests {
             &db.pool,
             &NewUser {
                 name: "staff",
-                display_name: "Staff Member",
+                display_name: &crate::labels::DisplayName::parse("Staff Member").unwrap(),
             },
             &AuditActor::cli(),
             now(),
@@ -2763,7 +2871,7 @@ mod tests {
         record_one(&db.pool, &actor, &unlocked).await;
         let owner_view = owner_of(&db.pool, TEST_TEAM).await;
 
-        let owner = list(&db.pool, &owner_view, &AuditQuery::default())
+        let owner = list_plain(&db.pool, &owner_view, &AuditQuery::default())
             .await
             .unwrap();
         // Owners cannot use the filters as an identity oracle.
@@ -2778,10 +2886,20 @@ mod tests {
         let mut owner_hits = Vec::new();
         let mut admin_hits = Vec::new();
         for probe in &probes {
-            owner_hits.push(list(&db.pool, &owner_view, probe).await.unwrap().len());
-            admin_hits.push(list(&db.pool, &Viewer::Admin, probe).await.unwrap().len());
+            owner_hits.push(
+                list_plain(&db.pool, &owner_view, probe)
+                    .await
+                    .unwrap()
+                    .len(),
+            );
+            admin_hits.push(
+                list_plain(&db.pool, &Viewer::Admin, probe)
+                    .await
+                    .unwrap()
+                    .len(),
+            );
         }
-        let admin = list(&db.pool, &Viewer::Admin, &AuditQuery::default())
+        let admin = list_plain(&db.pool, &Viewer::Admin, &AuditQuery::default())
             .await
             .unwrap();
 
@@ -2804,6 +2922,8 @@ mod tests {
             kind: kind.to_string(),
             name: None,
             person: None,
+            person_label: None,
+            target_label: None,
         };
         assert_eq!(
             hidden,
@@ -2857,7 +2977,7 @@ mod tests {
             &db.pool,
             &NewUser {
                 name: "staff",
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),
@@ -2892,10 +3012,10 @@ mod tests {
         record_one(&db.pool, &actor, &published).await;
         let owner_view = owner_of(&db.pool, TEST_TEAM).await;
 
-        let owner = list(&db.pool, &owner_view, &AuditQuery::default())
+        let owner = list_plain(&db.pool, &owner_view, &AuditQuery::default())
             .await
             .unwrap();
-        let probe = list(&db.pool, &owner_view, &by(Some("staff"), None))
+        let probe = list_plain(&db.pool, &owner_view, &by(Some("staff"), None))
             .await
             .unwrap();
 
@@ -2910,7 +3030,7 @@ mod tests {
             &db.pool,
             &NewUser {
                 name: "bob",
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),
@@ -2946,14 +3066,14 @@ mod tests {
         operator.operator = true;
         record_one(&db.pool, &operator, &moved).await;
 
-        let owner = list(
+        let owner = list_plain(
             &db.pool,
             &owner_of(&db.pool, TEST_TEAM).await,
             &AuditQuery::default(),
         )
         .await
         .unwrap();
-        let admin = list(&db.pool, &Viewer::Admin, &AuditQuery::default())
+        let admin = list_plain(&db.pool, &Viewer::Admin, &AuditQuery::default())
             .await
             .unwrap();
 
@@ -2979,7 +3099,7 @@ mod tests {
         let db = test_db().await;
         let family = NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
             owner: TEST_USER,
         };
         teams::create(&db.pool, &family, &AuditActor::cli(), now())
@@ -2989,7 +3109,7 @@ mod tests {
             &db.pool,
             &NewUser {
                 name: "alice",
-                display_name: "Alice Example",
+                display_name: &crate::labels::DisplayName::parse("Alice Example").unwrap(),
             },
             &AuditActor::cli(),
             now(),
@@ -3022,7 +3142,7 @@ mod tests {
             ..entry(Action::KeyCreated, Target::Key("alice-laptop"))
         };
         record_one(&db.pool, &actor, &created).await;
-        let before = list(&db.pool, &Viewer::Admin, &AuditQuery::default())
+        let before = list_plain(&db.pool, &Viewer::Admin, &AuditQuery::default())
             .await
             .unwrap();
 
@@ -3036,10 +3156,10 @@ mod tests {
         .await
         .unwrap();
 
-        let admin = list(&db.pool, &Viewer::Admin, &AuditQuery::default())
+        let admin = list_plain(&db.pool, &Viewer::Admin, &AuditQuery::default())
             .await
             .unwrap();
-        let owner = list(
+        let owner = list_plain(
             &db.pool,
             &owner_of(&db.pool, "family").await,
             &AuditQuery::default(),
@@ -3068,16 +3188,19 @@ mod tests {
             &db.pool,
             &NewUser {
                 name: "bob",
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),
         )
         .await
         .unwrap();
+        // A local the closure borrows: a temporary made inside it would be
+        // dropped when it returns, leaving the struct's reference dangling.
+        let unset = crate::labels::DisplayName::default();
         let new_team = |owner: &'static str| NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &unset,
             owner,
         };
         teams::create(&db.pool, &new_team(TEST_USER), &AuditActor::cli(), now())
@@ -3091,14 +3214,14 @@ mod tests {
             .await
             .unwrap();
 
-        let seen = list(
+        let seen = list_plain(
             &db.pool,
             &owner_of(&db.pool, "family").await,
             &AuditQuery::default(),
         )
         .await
         .unwrap();
-        let by_name = list(
+        let by_name = list_plain(
             &db.pool,
             &Viewer::Admin,
             &AuditQuery {
@@ -3146,7 +3269,7 @@ mod tests {
         )
         .await;
 
-        let seen = list(
+        let seen = list_plain(
             &db.pool,
             &Viewer::Credential("k1".to_string()),
             &AuditQuery::default(),
@@ -3190,10 +3313,10 @@ mod tests {
             ..AuditQuery::default()
         };
 
-        let first = list(&db.pool, &Viewer::Admin, &query(None, None, None, 2))
+        let first = list_plain(&db.pool, &Viewer::Admin, &query(None, None, None, 2))
             .await
             .unwrap();
-        let rest = list(
+        let rest = list_plain(
             &db.pool,
             &Viewer::Admin,
             &query(None, None, Some(first[1].id), 2),
@@ -3206,7 +3329,7 @@ mod tests {
             None,
             0,
         );
-        let windowed = list(&db.pool, &Viewer::Admin, &window).await.unwrap();
+        let windowed = list_plain(&db.pool, &Viewer::Admin, &window).await.unwrap();
 
         assert_eq!(names(first), ["c", "b"]);
         assert_eq!(names(rest), ["a"]);
@@ -3240,7 +3363,7 @@ mod tests {
         ];
 
         for query in &queries {
-            let seen = list(&db.pool, &Viewer::Admin, query).await;
+            let seen = list_plain(&db.pool, &Viewer::Admin, query).await;
             assert_eq!(seen.map(|records| records.len()).ok(), Some(0), "{query:?}");
         }
     }

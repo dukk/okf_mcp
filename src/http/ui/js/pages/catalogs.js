@@ -14,13 +14,14 @@ import { confirmDialog } from '../components/confirm.js';
 import { namesOf, picker, assignControl } from '../components/picker.js';
 import { canAdministerPeople, freshAccount, refreshIdentity, refreshUnassigned } from '../core/shell.js';
 import { guard, once, recheck } from '../core/pending.js';
+import { named, teamLabel } from '../core/labels.js';
 
 export async function render(main) {
     const admin = store.can('admin');
     const creator = admin && store.whoami.all_catalogs;
     const columns = [
-        { key: 'name', label: 'Name', sort: row => row.name,
-          render: row => h('code', { dataset: { catalog: row.name } }, row.name,
+        { key: 'name', label: 'Name', sort: row => row.label.toLowerCase(),
+          render: row => h('span', { dataset: { catalog: row.name } }, named(row.label, row.name),
               // `suspended` is {team, notice} while its owner team is suspended.
               row.suspended
                   ? [' ', h('span', { dataset: { test: `catalog-suspended-${row.name}` },
@@ -29,16 +30,17 @@ export async function render(main) {
                   : null) },
         { key: 'description', label: 'Description',
           render: row => row.description || h('span', { class: 'muted' }, '-') },
-        { key: 'owner_team', label: 'Owner', sort: row => row.owner_team ?? '',
+        { key: 'owner_team', label: 'Owner', sort: row => row.owner_team_label ?? '',
           render: row => h('span', { dataset: { test: `catalog-owner-${row.name}` },
-                                     class: row.owner_team ? 'mono' : 'muted' }, row.owner_team ?? 'unassigned') },
+                                     class: row.owner_team ? null : 'muted' },
+              row.owner_team_label ?? row.owner_team ?? 'unassigned') },
         { key: 'concepts', label: 'Concepts', sort: row => row.concepts, class: 'num' },
         { key: 'files', label: 'Files', sort: row => row.files, class: 'num' },
         { key: 'generation', label: 'Generation', sort: row => row.generation, class: 'num' },
         { key: 'last_change', label: 'Last change', sort: row => row.last_change ?? '',
           render: row => ago(row.last_change) },
     ];
-    const table = listTable(columns, [], { onRow: admin ? openEdit : openMaintenance, empty: 'This key reaches no catalog.' });
+    const table = listTable(columns, [], { onRow: admin ? openEdit : openOwner, empty: 'This key reaches no catalog.' });
 
     async function load() {
         try { table.redraw((await api.get('/catalogs')).catalogs); } catch { /* toasted */ }
@@ -66,7 +68,7 @@ export async function render(main) {
                 h('input', { name: 'name', required: true, pattern: '[a-z0-9-]+', autocomplete: 'off',
                              placeholder: 'lowercase letters, digits and -' })),
             h('label', {}, 'Description', h('textarea', { name: 'description', rows: '3' })),
-            h('label', {}, 'Owner team', picker({ name: 'owner', required: true }, teams)),
+            h('label', {}, 'Owner team', picker({ name: 'owner', required: true }, teams, null, teamLabel)),
             h('button', { type: 'submit' }, 'Create catalog'));
         form.addEventListener('submit', async event => {
             event.preventDefault();
@@ -87,29 +89,17 @@ export async function render(main) {
         let teams;
         try { teams = await namesOf('teams'); } catch { return; }
         if (!ticket.current()) return;
-        const description = h('textarea', { id: 'catalog-description', name: 'description', rows: '3' }, row.description);
-        const edit = h('form', { id: 'catalog-edit-form' },
-            h('label', {}, 'Description', description),
-            h('button', { type: 'submit', id: 'catalog-save' }, 'Save description'));
-        edit.addEventListener('submit', async event => {
-            event.preventDefault();
-            try {
-                await api.patch(`/catalogs/${enc(row.name)}`, { description: description.value });
-            } catch { return; }
-            toast(`Saved ${row.name}'s description.`, 'ok');
-            ticket.close();
-            if (main.isConnected) await load();
-        });
+        const edit = detailsEditor(row, ticket);
         const owner = h('section', {},
             h('h3', {}, 'Owner'),
             assignControl({
-                names: teams, current: row.owner_team, label: row.owner_team ? 'Change owner' : 'Assign',
+                names: teams, labelOf: teamLabel, current: row.owner_team, label: row.owner_team ? 'Change owner' : 'Assign',
                 allowed: creator, ids: { select: 'catalog-owner-select', button: 'catalog-owner-save' },
                 assign: async team => {
                     try {
                         await api.put(`/catalogs/${enc(row.name)}/owner`, { team });
                     } catch { return; /* toasted: an unknown team */ }
-                    toast(`${row.name} is now owned by ${team}.`, 'ok');
+                    toast(`${row.label} is now owned by ${team}.`, 'ok');
                     refreshUnassigned();
                     ticket.close();
                     if (main.isConnected) await load();
@@ -120,7 +110,7 @@ export async function render(main) {
         const remove = h('button', { type: 'button', id: 'catalog-delete', class: 'danger' }, 'Delete catalog');
         remove.addEventListener('click', async () => {
             const ok = await confirmDialog({
-                title: `Delete ${row.name}?`,
+                title: `Delete ${row.label}?`,
                 message: 'Its documents, history, changesets and key grants are deleted. This cannot be undone.',
                 action: 'Delete',
                 typed: row.name,
@@ -129,13 +119,13 @@ export async function render(main) {
             try {
                 await api.del(`/catalogs/${enc(row.name)}${force.checked ? '?force=true' : ''}`);
             } catch { return; /* toasted: 409 names ?force=true */ }
-            toast(`Deleted catalog ${row.name}.`, 'ok');
+            toast(`Deleted catalog ${row.label}.`, 'ok');
             await settled(ticket);
         });
         const members = memberAccess(row, creator, ticket);
         const switcher = maintenance(row, await maySwitchMaintenance(row), ticket);
         if (!ticket.current()) return;
-        ticket.open(row.name, subtitle(row),
+        ticket.open(row.label, subtitle(row),
             edit,
             owner,
             members.section,
@@ -147,14 +137,56 @@ export async function render(main) {
         await Promise.all([members.refresh(), switcher.refresh()]);
     }
 
+    // The Display name and Description form, shared by the admin and the
+    // owner drawer. It sends only the fields that changed (PATCH
+    // /catalogs/{name}), toasts the new label, reads the list and the
+    // identity (the switcher's labels) again, and closes the drawer. It
+    // needs no team list, which only an admin may read. Saving is a pending
+    // write keyed by the catalog (core/pending.js).
+    function detailsEditor(row, ticket) {
+        const key = `catalog:${row.name}:details`;
+        const displayName = guard(h('input', { id: 'catalog-display-name', name: 'display_name',
+            value: row.display_name, autocomplete: 'off' }), key);
+        const description = guard(h('textarea', { id: 'catalog-description', name: 'description', rows: '3' },
+            row.description), key);
+        const save = guard(h('button', { type: 'submit', id: 'catalog-save' }, 'Save'), key);
+        const form = h('form', { id: 'catalog-edit-form' },
+            h('label', {}, 'Display name', displayName),
+            h('label', {}, 'Description', description),
+            save);
+        form.addEventListener('submit', event => {
+            event.preventDefault();
+            const change = {};
+            if (displayName.value.trim() !== row.display_name) change.display_name = displayName.value.trim();
+            if (description.value !== row.description) change.description = description.value;
+            if (!Object.keys(change).length) {
+                toast('Nothing changed.', 'ok');
+                return;
+            }
+            once(key, async () => {
+                let answer;
+                try {
+                    answer = await api.patch(`/catalogs/${enc(row.name)}`, change);
+                } catch { return; /* toasted: a refused display name, or not an owner */ }
+                toast(`Saved ${answer.label}.`, 'ok');
+                await refreshIdentity().catch(() => {});
+                ticket.close();
+                if (main.isConnected) await load();
+            });
+        });
+        return form;
+    }
+
     // Someone who administers no catalog: the drawer holds the maintenance
-    // switch alone.
-    async function openMaintenance(row) {
+    // switch, and above it the details editor for an owner of the catalog's
+    // team (never the owner picker, member access or Delete, which are the
+    // admin's).
+    async function openOwner(row) {
         const ticket = drawerTicket(main);
         const allowed = await maySwitchMaintenance(row);
         if (!ticket.current()) return;
         const switcher = maintenance(row, allowed, ticket);
-        ticket.open(row.name, subtitle(row), switcher.section);
+        ticket.open(row.label, subtitle(row), allowed ? detailsEditor(row, ticket) : null, switcher.section);
         await switcher.refresh();
     }
 
@@ -363,7 +395,7 @@ function maintenance(row, allowed, ticket) {
             let refused = null;
             try {
                 answer = (await api.put(`/catalogs/${enc(name)}/maintenance`, { maintenance: to })).maintenance;
-                toast(`Maintenance is ${answer} for ${name}.`, 'ok');
+                toast(`Maintenance is ${answer} for ${row.label}.`, 'ok');
             } catch (error) {
                 refused = error.message;   // already toasted
             }

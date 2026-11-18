@@ -141,6 +141,7 @@ async fn storage_round_trip_on_a_real_catalog() {
         &db.pool,
         &okf_mcp::store::catalogs::NewCatalog {
             name: "pg",
+            display_name: &okf_mcp::labels::DisplayName::default(),
             description: "",
             owner_team: support::server::OWNER,
         },

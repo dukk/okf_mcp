@@ -7,6 +7,7 @@
 
 use chrono::{TimeDelta, Utc};
 use okf_mcp::config::Config;
+use okf_mcp::labels::UNNAMED_USER;
 use okf_mcp::store::audit::AuditActor;
 use okf_mcp::store::keys::{self as key_rows, Access, Grants};
 use okf_mcp::store::oauth::clients;
@@ -15,7 +16,7 @@ use okf_mcp::store::teams::{self, NewTeam};
 use okf_mcp::store::users::{self, NewUser};
 use serde_json::json;
 
-use crate::harness::drive;
+use crate::harness::{drive, Ui};
 use crate::support::server::{files, TestServer, OWNER};
 
 async fn server() -> TestServer {
@@ -52,7 +53,7 @@ async fn create_team_add_member_create_owned_catalog_and_key_for_user() {
         ui.wait_text("#team-members", "alice");
         // alice becomes an owner too, so the fixture user could leave.
         ui.select("[data-test=member-role-alice]", "owner");
-        ui.wait_text("#toasts", "alice is now owner of family");
+        ui.wait_text("#toasts", "is now owner of Unnamed team");
         ui.click("#drawer-close");
         // A catalog the team owns.
         ui.open("/catalogs");
@@ -61,7 +62,7 @@ async fn create_team_add_member_create_owned_catalog_and_key_for_user() {
         ui.select("#catalog-create-form select[name=owner]", "family");
         ui.click("#catalog-create-form button[type=submit]");
         ui.wait_text("[data-catalog=shared]", "shared");
-        ui.wait_text("[data-test=catalog-owner-shared]", "family");
+        ui.wait_text("[data-test=catalog-owner-shared]", "Unnamed team");
         // The team now names the catalog, and cannot be deleted.
         ui.open("/teams");
         ui.click("[data-test=team-family]");
@@ -76,7 +77,7 @@ async fn create_team_add_member_create_owned_catalog_and_key_for_user() {
         ui.click("#key-form input[name=catalog][value=shared]");
         ui.click("#key-form button[type=submit]");
         ui.click("#key-secret-done");
-        ui.wait_text("[data-test=key-user-alice-laptop]", "alice");
+        ui.wait_text("[data-test=key-user-alice-laptop]", UNNAMED_USER);
     })
     .await;
 }
@@ -163,7 +164,7 @@ async fn assigning_the_signed_in_key_from_the_unassigned_view_updates_the_shell_
         ui.click("[data-test=assign-key-legacy-admin] button");
         ui.wait_text("#unassigned-empty", "Nothing is unassigned");
         // The shell follows without a reload.
-        ui.wait_text("#whoami", &format!("{OWNER} / legacy-admin"));
+        ui.wait_text("#whoami", &format!("{UNNAMED_USER} / legacy-admin"));
         ui.open("/users");
         ui.wait_text(&format!("[data-test=user-{OWNER}]"), "you");
     })
@@ -268,14 +269,14 @@ async fn a_grant_a_code_and_a_catalog_are_assigned_from_the_unassigned_view() {
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
     let alice = NewUser {
         name: "alice",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
     };
     users::create(&server.db.pool, &alice, &AuditActor::cli(), Utc::now())
         .await
         .expect("create alice");
     let family = NewTeam {
         name: "family",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
         owner: "alice",
     };
     teams::create(
@@ -308,9 +309,9 @@ async fn a_grant_a_code_and_a_catalog_are_assigned_from_the_unassigned_view() {
         ui.wait_hidden("#unassigned-badge");
         // The list pages show what was persisted.
         ui.open("/catalogs");
-        ui.wait_text("[data-test=catalog-owner-orphan]", "family");
+        ui.wait_text("[data-test=catalog-owner-orphan]", "Unnamed team");
         ui.open("/keys");
-        ui.wait_text("[data-test=code-user-tablet]", "alice");
+        ui.wait_text("[data-test=code-user-tablet]", UNNAMED_USER);
         let users = ui.eval(
             "() => [...document.querySelectorAll('[data-test^=\"key-user-\"]')] \
              .map(cell => cell.textContent)",
@@ -648,7 +649,7 @@ async fn a_write_settling_for_one_team_never_cancels_opening_another() {
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
     let family = NewTeam {
         name: "family",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
         owner: OWNER,
     };
     teams::create(
@@ -681,7 +682,7 @@ async fn a_write_settling_for_one_team_never_cancels_opening_another() {
         ui.wait_text("#toasts", &format!("Suspended team {OWNER}."));
         ui.release_held();
         ui.wait_visible("#drawer");
-        ui.wait_text("#drawer-title", "family");
+        ui.wait_text("#drawer-title", "Unnamed team");
         ui.wait_visible("#team-suspend-form");
     })
     .await;
@@ -692,4 +693,117 @@ async fn a_write_settling_for_one_team_never_cancels_opening_another() {
         .await
         .expect("read the team");
     assert!(team.suspension.is_some());
+}
+
+/// The value of the input `selector`.
+fn input_value(ui: &Ui, selector: &str) -> serde_json::Value {
+    ui.eval(
+        "(selector) => document.querySelector(selector).value",
+        json!(selector),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_teams_table_and_drawer_show_labels_and_a_shared_team_is_renamed() {
+    let server = server().await;
+    let admin = server.key("console-admin", Access::Admin, &[], None).await;
+    let alice = NewUser {
+        name: "alice",
+        display_name: &okf_mcp::labels::DisplayName::parse("Alice Example").expect("a name"),
+    };
+    users::create(&server.db.pool, &alice, &AuditActor::cli(), Utc::now())
+        .await
+        .expect("create alice");
+    let acme = NewTeam {
+        name: "acme",
+        display_name: &okf_mcp::labels::DisplayName::parse("Acme").expect("a name"),
+        owner: "alice",
+    };
+    teams::create(&server.db.pool, &acme, &AuditActor::cli(), Utc::now())
+        .await
+        .expect("create acme");
+    server.app.poll().await.expect("poll");
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/teams");
+        let cell = ui.wait_text("[data-test=team-acme]", "Acme");
+        assert!(cell.contains("acme"), "{cell}");
+        // A personal team is labelled after its user, and has no field.
+        ui.wait_text("[data-test=team-alice]", "Alice Example's team");
+        ui.click("[data-test=team-alice]");
+        ui.wait_text("#drawer-title", "Alice Example's team");
+        ui.wait_text("#team-named-after", "Named after its user");
+        assert!(!ui.page.is_visible("#team-display-name").expect("visible"));
+        ui.click("#drawer-close");
+        // A shared team: members show their labels, and the name saves.
+        ui.click("[data-test=team-acme]");
+        ui.wait_text("#drawer-title", "Acme");
+        ui.wait_text("#team-members", "Alice Example");
+        assert_eq!(input_value(ui, "#team-display-name"), "Acme");
+        ui.fill("#team-display-name", "Acme Ltd");
+        ui.click("#team-display-name-save");
+        ui.wait_text("#toasts", "Display name saved");
+        ui.wait_text("#drawer-title", "Acme Ltd");
+        ui.wait_text("[data-test=team-acme]", "Acme Ltd");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let stored = teams::find(&server.db.pool, "acme").await.expect("acme");
+    assert_eq!(stored.display_name, "Acme Ltd");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pickers_tell_users_with_the_same_label_apart_and_keep_slugs_as_values() {
+    let server = server().await;
+    let admin = server.key("console-admin", Access::Admin, &[], None).await;
+    // Two users share the default label, a third is named like alice's suffixed
+    // text, a fourth is plain; each is a candidate in the New team owner picker.
+    for (name, display) in [
+        ("alice", ""),
+        ("bob", ""),
+        ("carol", "Unnamed user (alice)"),
+        ("dave", "Dave Example"),
+    ] {
+        let user = NewUser {
+            name,
+            display_name: &okf_mcp::labels::DisplayName::parse(display).expect("a name"),
+        };
+        users::create(&server.db.pool, &user, &AuditActor::cli(), Utc::now())
+            .await
+            .expect("create a user");
+    }
+    server.app.poll().await.expect("poll");
+    drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/teams");
+        ui.click("#team-new");
+        ui.wait_visible("#team-form select[name=owner] option[value=bob]");
+        let options = ui.eval(
+            "() => [...document.querySelectorAll('#team-form select[name=owner] option')] \
+             .filter(option => option.value) \
+             .map(option => [option.value, option.textContent])",
+            json!(null),
+        );
+        let options: Vec<(String, String)> = serde_json::from_value(options).expect("options");
+        let text = |value: &str| {
+            options
+                .iter()
+                .find(|(slug, _)| slug == value)
+                .map(|(_, text)| text.clone())
+                .unwrap_or_default()
+        };
+        // The slugs stay the values; colliding labels carry their slug.
+        assert_eq!(text("alice"), "Unnamed user (alice)");
+        assert_eq!(text("bob"), "Unnamed user (bob)");
+        // A display name that reads like a suffixed label is told apart too.
+        assert_eq!(text("carol"), "Unnamed user (alice) (carol)");
+        assert_eq!(text("dave"), "Dave Example");
+        let mut texts: Vec<&String> = options.iter().map(|(_, text)| text).collect();
+        texts.sort();
+        texts.dedup();
+        assert_eq!(texts.len(), options.len(), "every option reads differently");
+    })
+    .await;
 }

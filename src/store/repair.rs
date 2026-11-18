@@ -289,6 +289,7 @@ mod tests {
     async fn legacy(pool: &PgPool, name: &str, description: &str, files: &[(&str, &str)]) {
         let new = catalogs::NewCatalog {
             name,
+            display_name: &crate::labels::DisplayName::default(),
             description,
             owner_team: TEST_TEAM,
         };
@@ -499,6 +500,7 @@ mod tests {
         legacy(&db.pool, "old", "", &[("a.md", NOTE)]).await;
         let new = catalogs::NewCatalog {
             name: "fresh",
+            display_name: &crate::labels::DisplayName::default(),
             description: "",
             owner_team: TEST_TEAM,
         };

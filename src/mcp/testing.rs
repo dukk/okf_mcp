@@ -221,6 +221,7 @@ pub(crate) fn sample_of(rendered: &str, series: &str) -> Option<f64> {
 async fn create_catalog(db: &TestDb, name: &str, at: DateTime<Utc>) {
     let new = catalogs::NewCatalog {
         name,
+        display_name: &crate::labels::DisplayName::default(),
         description: "",
         owner_team: crate::db::TEST_TEAM,
     };
@@ -677,7 +678,7 @@ pub(crate) async fn suspend_catalogs(test: &TestApp, catalogs: &[&str]) {
     let now = Utc::now();
     let team = crate::store::teams::NewTeam {
         name: SUSPENDED_TEAM,
-        display_name: "Family",
+        display_name: &crate::labels::DisplayName::parse("Family").unwrap(),
         owner: crate::db::TEST_USER,
     };
     let actor = AuditActor::cli();
@@ -788,7 +789,7 @@ pub(crate) async fn staff_root(test: &TestApp) -> String {
     let pool = test.app.pool();
     let new_user = crate::store::users::NewUser {
         name: "staff",
-        display_name: "Staff Member",
+        display_name: &crate::labels::DisplayName::parse("Staff Member").unwrap(),
     };
     crate::store::users::create(pool, &new_user, &AuditActor::cli(), Utc::now())
         .await

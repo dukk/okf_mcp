@@ -37,7 +37,7 @@ use crate::write::{apply_audited, OpAudit, WriteReport};
 // its input schema, with the doc comments as the fields' descriptions.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 pub struct ListParams {
-    /// Only this catalog (default: every catalog the connection offers: the
+    /// Only this catalog id (the `name` from `list_catalogs`; default: every catalog the connection offers: the
     /// key's, limited to the connection's list when it has one).
     pub catalog: Option<String>,
 }
@@ -47,14 +47,18 @@ pub struct ListParams {
 pub struct ListedChangeset {
     /// Its handle: pass it as `changeset` to resume work on it.
     pub changeset: String,
-    /// Its catalog.
+    /// Its catalog (id).
     pub catalog: String,
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
     /// The key it belongs to; null once that key is deleted.
     pub key: Option<String>,
     /// The key's grouping name; null once that key is deleted.
     pub key_name: Option<String>,
     /// The actor of the key that opened it.
     pub actor: String,
+    /// The actor's label, when the actor is a user; null for a key or OAuth actor.
+    pub actor_label: Option<String>,
     /// When it was opened.
     pub created: String,
     /// Its last change.
@@ -150,11 +154,17 @@ pub(crate) async fn list_changesets(
         ctx.app().clock().now(),
         ctx.app().config().session_idle_timeout,
     );
+    let labels = ctx.labels();
     let changesets = rows
         .into_iter()
         .map(|row| ListedChangeset {
             changeset: row.changeset.handle,
+            catalog_label: labels
+                .catalog(&row.catalog)
+                .unwrap_or(&row.catalog)
+                .to_string(),
             catalog: row.catalog,
+            actor_label: labels.actor(&row.changeset.actor).map(str::to_string),
             key: row.changeset.key_id,
             key_name: row.key_name,
             actor: row.changeset.actor,
@@ -205,7 +215,7 @@ impl OkfServer {
 /// `open_changeset`'s arguments.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 pub struct OpenParams {
-    /// The catalog (default: this connection's write target).
+    /// The catalog id (the `name` from `list_catalogs`; default: this connection's write target).
     pub catalog: Option<String>,
 }
 
@@ -214,8 +224,10 @@ pub struct OpenParams {
 pub struct Opened {
     /// The new changeset's handle: pass it as `changeset` to every write, `publish`, `discard`, `revert` and `pending_changes`, and to reads that should see the drafts.
     pub changeset: String,
-    /// Its catalog.
+    /// Its catalog (id).
     pub catalog: String,
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
 }
 
 /// Opens a changeset and returns its handle (M8 Decision 1).
@@ -276,6 +288,7 @@ pub(crate) async fn open_changeset(
     Ok(Opened {
         changeset: opened.handle,
         catalog: state.name().to_string(),
+        catalog_label: ctx.catalog_label(state.name()),
     })
 }
 
@@ -323,8 +336,10 @@ pub struct PublishParams {
 /// `publish`'s result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Published {
-    /// The changeset's catalog.
+    /// The changeset's catalog (id).
     pub catalog: String,
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
     /// The changeset's handle. With `published: false` it was not published and stays open (it held no entries, for instance after a discard emptied it).
     pub changeset: String,
     /// What was written; `flatten` puts its fields beside these.
@@ -370,6 +385,7 @@ pub(crate) async fn publish(
     let report = publishing::publish(ctx.app(), &state, &input, &ctx.audit_actor()).await?;
     Ok(Published {
         catalog: state.name().to_string(),
+        catalog_label: ctx.catalog_label(state.name()),
         changeset: row.handle,
         report,
     })
@@ -422,8 +438,10 @@ pub struct DiscardParams {
 /// `discard`'s result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Discarded {
-    /// The changeset's catalog.
+    /// The changeset's catalog (id).
     pub catalog: String,
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
     /// The changeset's handle.
     pub changeset: String,
     /// How many entries were dropped.
@@ -472,8 +490,10 @@ pub struct PendingParams {
 /// `pending_changes`' result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct PendingChanges {
-    /// The changeset's catalog.
+    /// The changeset's catalog (id).
     pub catalog: String,
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
     /// The changeset's handle.
     pub changeset: String,
     /// Its entries, in path order.
@@ -556,6 +576,7 @@ pub(crate) async fn discard(
     } = ctx.changeset(&params.changeset, Access::Write).await?;
     let mut discarded = Discarded {
         catalog: state.name().to_string(),
+        catalog_label: ctx.catalog_label(state.name()),
         changeset: params.changeset,
         removed: 0,
         closed: false,
@@ -737,6 +758,7 @@ pub(crate) async fn pending_changes(
     let files = blocking(move || pending_files(&loaded, &entries)).await;
     Ok(PendingChanges {
         catalog: state.name().to_string(),
+        catalog_label: ctx.catalog_label(state.name()),
         changeset: row.handle,
         files,
     })
@@ -954,6 +976,7 @@ mod open_tests {
         let user = crate::store::users::UserAuth {
             id: "9eaae459-441c-49c2-8613-e3996bdc96ee".to_string(),
             name: "alice".to_string(),
+            display_name: String::new(),
             email: None,
             is_admin: true,
         };

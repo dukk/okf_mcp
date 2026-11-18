@@ -31,11 +31,13 @@ use crate::auth::{CredentialKind, Principal};
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
 use crate::http::api::keys::{parse_access, CreatedKeyView, KeyView};
+use crate::http::api::people::DisplayNameBody;
 use crate::http::api::settle;
 use crate::http::console_session::ConsoleSession;
 use crate::http::passkeys::passkey_name;
 use crate::http::signin::notify_method_added;
 use crate::http::AppError;
+use crate::labels::{team_label, user_label, DisplayName};
 use crate::store::ceiling::{self, Ceiling};
 use crate::store::keys::{
     self as key_rows, Access, CatalogGrant, Grants, KeyKind, KeyRecord, NewKey,
@@ -151,6 +153,9 @@ pub(crate) struct AccountView {
     pub user: String,
     /// Free text, possibly empty.
     pub display_name: String,
+    /// What people are shown for the user: its display name, else its
+    /// email's local part (see [`user_label`]).
+    pub label: String,
     /// Where setup, reset and notice mail goes.
     pub email: Option<String>,
     /// An admin user (its console session acts as an admin).
@@ -162,6 +167,9 @@ pub(crate) struct AccountView {
     /// The teams the user owns, sorted, its personal team included: whose
     /// audit log its console session can read (`GET /audit?team=`).
     pub owned_teams: Vec<String>,
+    /// The same teams with what the account page needs to rename them,
+    /// sorted by name like `owned_teams`.
+    pub owned_team_details: Vec<OwnedTeamView>,
     /// What its self-issued credentials may reach.
     pub ceiling: Vec<CeilingEntry>,
     /// Whether the caller is a console session (`false` for a key).
@@ -172,6 +180,20 @@ pub(crate) struct AccountView {
     /// The self-issued key limits, so My keys can offer only what the API
     /// accepts.
     pub limits: AccountLimits,
+}
+
+/// One team the user owns, with what its editor shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct OwnedTeamView {
+    /// The team's name.
+    pub name: String,
+    /// Its stored display name, empty when unset: what the editor holds.
+    pub display_name: String,
+    /// What people are shown for it.
+    pub label: String,
+    /// Whether it is the user's personal team, whose label follows the
+    /// user and which cannot be renamed.
+    pub personal: bool,
 }
 
 /// The self-issued key limits (the policy settings).
@@ -475,7 +497,7 @@ impl std::fmt::Debug for PasswordBody {
 )]
 pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new()
-        .route("/me", get(account))
+        .route("/me", get(account).patch(update_account))
         .route("/me/keys", get(list_keys).post(create_key))
         .route("/me/keys/{id}", patch(rename_key).delete(revoke_key))
         .route("/me/grants", get(list_grants))
@@ -692,34 +714,61 @@ async fn account(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
 ) -> Result<Json<AccountView>, AppError> {
+    Ok(Json(account_view(&app, &principal).await?))
+}
+
+/// The account behind `principal`, as `GET /me` and `PATCH /me` answer.
+///
+/// # Arguments
+/// * `app` - the application.
+/// * `principal` - the caller.
+///
+/// # Errors
+/// [`OkfError::NotFound`] for a credential that belongs to no user;
+/// [`OkfError::Database`] for a failed read.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn account_view(app: &App, principal: &Principal) -> Result<AccountView, OkfError> {
     let Some(name) = principal.user.as_deref() else {
         return Err(OkfError::NotFound {
             path: "me".to_string(),
-        }
-        .into());
+        });
     };
     let owned_teams = async {
         match principal.user_id.as_deref() {
-            Some(user_id) => teams::owned_names(app.pool(), user_id).await,
+            Some(user_id) => teams::owned(app.pool(), user_id).await,
             None => Ok(Vec::new()),
         }
     };
     // `try_join!` runs the three reads at once (as `asyncio.gather` would)
     // and returns the first error, if any.
-    let (record, ceiling, owned_teams) = tokio::try_join!(
+    let (record, ceiling, owned) = tokio::try_join!(
         users::find(app.pool(), name),
         ceiling::ceiling_of(app.pool(), name),
         owned_teams,
     )?;
     let policy = app.settings();
-    Ok(Json(AccountView {
+    let label = user_label(&record.display_name, record.email.as_deref());
+    let owned_teams = owned.iter().map(|team| team.name.clone()).collect();
+    let owned_team_details = owned
+        .into_iter()
+        .map(|team| OwnedTeamView {
+            // A personal team is named after its (only) owner: this user.
+            label: team_label(&team.display_name, team.personal.then_some(label.as_str())),
+            name: team.name,
+            display_name: team.display_name,
+            personal: team.personal,
+        })
+        .collect();
+    Ok(AccountView {
         user: record.name,
         display_name: record.display_name,
+        label,
         email: record.email,
         admin: record.is_admin,
         has_password: record.has_password,
         teams: record.teams,
         owned_teams,
+        owned_team_details,
         ceiling: ceiling_view(ceiling),
         session: matches!(principal.kind, CredentialKind::Session { .. }),
         password_sign_in: policy.password_sign_in,
@@ -727,7 +776,46 @@ async fn account(
             max_keys_per_user: policy.max_keys_per_user,
             max_key_lifetime_secs: policy.max_key_lifetime.map(|lifetime| lifetime.as_secs()),
         },
-    }))
+    })
+}
+
+/// `PATCH /me`: sets the caller's own display name, then polls so the labels
+/// show it at once.
+///
+/// # Returns
+/// The account as it now is.
+///
+/// # Errors
+/// 404 for a credential that belongs to no user (as `GET /me`); 403 for a
+/// bearer key or OAuth token, which cannot act as the person; 422 for a
+/// refused display name or a body that is not exactly `display_name`; 500
+/// for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn update_account(
+    State(app): State<Arc<App>>,
+    audit: crate::store::audit::AuditActor,
+    Extension(principal): Extension<Arc<Principal>>,
+    Json(body): Json<DisplayNameBody>,
+) -> Result<Json<AccountView>, AppError> {
+    // The 404 first, as `GET /me` answers a credential without a user.
+    if principal.user.is_none() {
+        return Err(OkfError::NotFound {
+            path: "me".to_string(),
+        }
+        .into());
+    }
+    let user = session_user(&principal)?;
+    let display_name = DisplayName::parse(&body.display_name)?;
+    users::set_display_name(
+        app.pool(),
+        user.name,
+        &display_name,
+        &audit,
+        app.clock().now(),
+    )
+    .await?;
+    settle(&app).await;
+    Ok(Json(account_view(&app, &principal).await?))
 }
 
 /// `GET /me/keys`: the user's API keys.
@@ -1256,7 +1344,7 @@ mod tests {
             pool,
             &NewUser {
                 name,
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             },
             &AuditActor::cli(),
             Utc::now(),
@@ -1726,7 +1814,7 @@ mod tests {
             test.app.pool(),
             &NewUser {
                 name: "alice",
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             },
             &AuditActor::cli(),
             Utc::now(),

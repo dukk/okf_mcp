@@ -1,6 +1,7 @@
 // Access levels as the console shows them: the pill kinds, and a key's or
 // grant's per-catalog levels.
 import { h, pill } from '../core/dom.js';
+import { catalogLabel } from '../core/labels.js';
 
 export const ACCESS_KIND = { read: 'muted', write: 'info', admin: 'warn' };
 const ORDER = ['read', 'write', 'admin'];
@@ -28,6 +29,6 @@ export function levelsCell(credential, ceiling = {}) {
         let note = null;
         if (!allowed) note = h('span', { class: 'muted small' }, ' (outside your ceiling now)');
         else if (ORDER.indexOf(allowed) < ORDER.indexOf(access)) note = h('span', { class: 'muted small' }, ` (capped to ${allowed})`);
-        return h('li', { dataset: { catalog } }, h('span', { class: 'mono' }, catalog), ' ', accessPill(access), note);
+        return h('li', { dataset: { catalog } }, h('span', {}, catalogLabel(catalog)), ' ', accessPill(access), note);
     }));
 }

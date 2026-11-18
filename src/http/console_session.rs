@@ -1349,7 +1349,7 @@ mod http_tests {
             pool,
             &users::NewUser {
                 name: "bob",
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             },
             &AuditActor::cli(),
             Utc::now(),

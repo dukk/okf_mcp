@@ -25,6 +25,7 @@ use crate::clock::{format_timestamp, Clock};
 use crate::config::Config;
 use crate::db;
 use crate::http;
+use crate::labels::DisplayName;
 use crate::shared::announce::announce_from_cli;
 use crate::store::audit::AuditActor;
 use crate::store::catalogs;
@@ -160,6 +161,10 @@ pub enum CatalogCommand {
     Create {
         /// Its name (`[a-z0-9-]+`).
         name: String,
+        /// Its display name, shown instead of the name: at most 80
+        /// characters, no control characters or line breaks.
+        #[arg(long, default_value = "")]
+        display_name: String,
         /// Free text.
         #[arg(long, default_value = "")]
         description: String,
@@ -168,14 +173,25 @@ pub enum CatalogCommand {
         #[arg(long)]
         owner: String,
     },
-    /// Change an existing catalog's description. A running server shows the
-    /// new text within one `poll_interval`.
+    /// Change an existing catalog's display name and/or description. A
+    /// running server shows the new text within one `poll_interval`.
+    // At least one flag is required; both may be given.
+    #[command(group(
+        clap::ArgGroup::new("details")
+            .required(true)
+            .multiple(true)
+            .args(["display_name", "description"])
+    ))]
     Update {
         /// Its name.
         name: String,
+        /// The new display name (may be empty, which clears it): at most 80
+        /// characters, no control characters or line breaks.
+        #[arg(long)]
+        display_name: Option<String>,
         /// The new free text (may be empty).
         #[arg(long)]
-        description: String,
+        description: Option<String>,
     },
     /// List catalogs.
     List,
@@ -301,8 +317,19 @@ pub enum UserCommand {
     Create {
         /// Its name (`[a-z0-9-]+`); also its personal team's.
         name: String,
-        /// Free text shown beside the name.
+        /// Its display name, shown instead of the name: at most 80
+        /// characters, no control characters or line breaks.
         #[arg(long, default_value = "")]
+        display_name: String,
+    },
+    /// Change a user's display name (empty clears it). Its personal team
+    /// follows.
+    Update {
+        /// Its name.
+        name: String,
+        /// The new display name: at most 80 characters, no control
+        /// characters or line breaks.
+        #[arg(long)]
         display_name: String,
     },
     /// List users with their credential counts, emails, admin flags and
@@ -393,12 +420,23 @@ pub enum TeamCommand {
     Create {
         /// Its name (`[a-z0-9-]+`, not taken by a user or team).
         name: String,
-        /// Free text shown beside the name.
+        /// Its display name, shown instead of the name: at most 80
+        /// characters, no control characters or line breaks.
         #[arg(long, default_value = "")]
         display_name: String,
         /// The user who owns it first.
         #[arg(long)]
         owner: String,
+    },
+    /// Change a shared team's display name (empty clears it). A personal
+    /// team's follows its user: use `user update`.
+    Update {
+        /// Its name.
+        name: String,
+        /// The new display name: at most 80 characters, no control
+        /// characters or line breaks.
+        #[arg(long)]
+        display_name: String,
     },
     /// List teams with their members and the catalogs they own.
     List,
@@ -1155,6 +1193,44 @@ fn write_file_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The lines `catalog update` prints: one per field the caller gave.
+///
+/// # Arguments
+/// * `name` - the catalog.
+/// * `previous` - what the fields held before the change.
+/// * `display_name` - the new display name, if given.
+/// * `description` - the new description, if given.
+///
+/// # Returns
+/// `updated catalog <name> <field>: <old> -> <new>\n` per field given. `{:?}`
+/// quotes the text, so an empty value shows as `""`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "pure formatting")
+)]
+fn describe_details_change(
+    name: &str,
+    previous: &catalogs::Details,
+    display_name: Option<&DisplayName>,
+    description: Option<&str>,
+) -> String {
+    let mut text = String::new();
+    if let Some(new) = display_name {
+        text.push_str(&format!(
+            "updated catalog {name} display name: {:?} -> {:?}\n",
+            previous.display_name,
+            new.as_str()
+        ));
+    }
+    if let Some(new) = description {
+        text.push_str(&format!(
+            "updated catalog {name} description: {:?} -> {new:?}\n",
+            previous.description
+        ));
+    }
+    text
+}
+
 /// Runs `okf-mcp catalog ...`.
 ///
 /// # Arguments
@@ -1173,28 +1249,41 @@ async fn run_catalog(
     match command {
         CatalogCommand::Create {
             name,
+            display_name,
             description,
             owner,
         } => {
+            let display_name = DisplayName::parse(&display_name)?;
             let new = catalogs::NewCatalog {
                 name: &name,
+                display_name: &display_name,
                 description: &description,
                 owner_team: &owner,
             };
             let catalog = catalogs::create(pool, &new, &AuditActor::cli(), clock.now()).await?;
             println!("created catalog {}", catalog.name);
         }
-        CatalogCommand::Update { name, description } => {
-            let previous = catalogs::update_description(
-                pool,
-                &name,
-                &description,
-                &AuditActor::cli(),
-                clock.now(),
-            )
-            .await?;
-            // `{:?}` quotes the text, so an empty description shows as `""`.
-            println!("updated catalog {name} description: {previous:?} -> {description:?}");
+        CatalogCommand::Update {
+            name,
+            display_name,
+            description,
+        } => {
+            let parsed = display_name
+                .as_deref()
+                .map(DisplayName::parse)
+                .transpose()?;
+            let change = catalogs::DetailsChange {
+                catalog: &name,
+                display_name: parsed.as_ref(),
+                description: description.as_deref(),
+                owner: None,
+            };
+            let previous =
+                catalogs::update_details(pool, &change, &AuditActor::cli(), clock.now()).await?;
+            print!(
+                "{}",
+                describe_details_change(&name, &previous, parsed.as_ref(), description.as_deref())
+            );
         }
         CatalogCommand::List => {
             for catalog in catalogs::list(pool).await? {
@@ -1789,7 +1878,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             parsed.command,
-            Some(Command::Catalog(CatalogCommand::Create { ref name, ref description, ref owner }))
+            Some(Command::Catalog(CatalogCommand::Create { ref name, ref description, ref owner, .. }))
                 if name == "pg" && description == "D" && owner == "family"
         ));
         // Every new catalog has an owner, so `--owner` is required.
@@ -1799,11 +1888,21 @@ mod tests {
                 .unwrap();
         assert!(matches!(
             parsed.command,
-            Some(Command::Catalog(CatalogCommand::Update { ref name, ref description }))
-                if name == "pg" && description.is_empty()
+            Some(Command::Catalog(CatalogCommand::Update { ref name, ref description, ref display_name }))
+                if name == "pg" && description.as_deref() == Some("") && display_name.is_none()
         ));
-        // `--description` is what `update` changes, so it is required.
+        // `update` changes at least one field, so it needs a flag; either
+        // flag alone or both together parse.
         assert!(Cli::try_parse_from(["okf-mcp", "catalog", "update", "pg"]).is_err());
+        for flags in [
+            vec!["--display-name", "N"],
+            vec!["--display-name", "N", "--description", "D"],
+        ] {
+            let args = ["okf-mcp", "catalog", "update", "pg"]
+                .into_iter()
+                .chain(flags);
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
         let parsed =
             Cli::try_parse_from(["okf-mcp", "catalog", "delete", "pg", "--force"]).unwrap();
         assert!(matches!(
@@ -1812,11 +1911,95 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn catalog_update_prints_one_line_per_field_given() {
+        let previous = catalogs::Details {
+            display_name: String::new(),
+            description: "Old".to_string(),
+        };
+        let name = DisplayName::parse("Work notes").unwrap();
+
+        let both = describe_details_change("pg", &previous, Some(&name), Some(""));
+        let only_name = describe_details_change("pg", &previous, Some(&name), None);
+
+        assert_eq!(
+            both,
+            "updated catalog pg display name: \"\" -> \"Work notes\"\n\
+             updated catalog pg description: \"Old\" -> \"\"\n"
+        );
+        assert_eq!(
+            only_name,
+            "updated catalog pg display name: \"\" -> \"Work notes\"\n"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn catalog_create_and_update_store_the_display_name() {
+        // Arrange
+        let db = crate::db::test_db().await;
+        let clock = fixed_now();
+        let run_catalog_command = |command: CatalogCommand| {
+            run(
+                cli(Some(db.url.clone()), Command::Catalog(command)),
+                Arc::clone(&clock),
+            )
+        };
+        let stored = || async {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT display_name, description FROM catalogs WHERE name = 'pg'",
+            )
+            .fetch_one(&db.pool)
+            .await
+            .unwrap()
+        };
+
+        // Act and assert: create with a display name (trimmed), then change
+        // each field alone, then refuse one over the limit.
+        run_catalog_command(CatalogCommand::Create {
+            name: "pg".to_string(),
+            display_name: " Work ".to_string(),
+            description: "D".to_string(),
+            owner: crate::db::TEST_TEAM.to_string(),
+        })
+        .await
+        .unwrap();
+        assert_eq!(stored().await, ("Work".to_string(), "D".to_string()));
+        run_catalog_command(CatalogCommand::Update {
+            name: "pg".to_string(),
+            display_name: Some("Work notes".to_string()),
+            description: None,
+        })
+        .await
+        .unwrap();
+        assert_eq!(stored().await, ("Work notes".to_string(), "D".to_string()));
+        run_catalog_command(CatalogCommand::Update {
+            name: "pg".to_string(),
+            display_name: None,
+            description: Some("E".to_string()),
+        })
+        .await
+        .unwrap();
+        assert_eq!(stored().await, ("Work notes".to_string(), "E".to_string()));
+        let refused = run_catalog_command(CatalogCommand::Update {
+            name: "pg".to_string(),
+            display_name: Some("x".repeat(81)),
+            description: None,
+        })
+        .await
+        .expect_err("81 characters are refused");
+        assert!(
+            refused.to_string().contains("display name refused"),
+            "{refused}"
+        );
+        assert_eq!(stored().await, ("Work notes".to_string(), "E".to_string()));
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn catalog_create_runs_against_the_database() {
         let db = crate::db::test_db().await;
         let create = CatalogCommand::Create {
             name: "pg".to_string(),
+            display_name: String::new(),
             description: String::new(),
             owner: crate::db::TEST_TEAM.to_string(),
         };
@@ -2213,6 +2396,7 @@ mod tests {
         let catalog = catalogs::Catalog {
             id: 1,
             name: "pg".to_string(),
+            display_name: String::new(),
             description: "Notes\tand more".to_string(),
             generation: 3,
             created_at: chrono::Utc::now(),
@@ -2583,6 +2767,7 @@ mod tests {
         for name in ["old", "other", "fresh"] {
             let new = catalogs::NewCatalog {
                 name,
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             };
@@ -2687,6 +2872,7 @@ mod tests {
         let clock = fixed_now();
         let create = CatalogCommand::Create {
             name: "pg".to_string(),
+            display_name: String::new(),
             description: String::new(),
             owner: crate::db::TEST_TEAM.to_string(),
         };
@@ -2726,6 +2912,7 @@ mod tests {
         let clock = fixed_now();
         let create = CatalogCommand::Create {
             name: "pg".to_string(),
+            display_name: String::new(),
             description: String::new(),
             owner: crate::db::TEST_TEAM.to_string(),
         };
@@ -2813,6 +3000,7 @@ mod tests {
         let clock = fixed_now();
         let create = CatalogCommand::Create {
             name: "pg".to_string(),
+            display_name: String::new(),
             description: String::new(),
             owner: crate::db::TEST_TEAM.to_string(),
         };

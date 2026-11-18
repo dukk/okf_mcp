@@ -9,6 +9,7 @@ use serde_json::json;
 use sqlx::{PgConnection, PgPool};
 
 use crate::error::OkfError;
+use crate::labels::DisplayName;
 use crate::store::audit::{self, Action, AuditActor, Entry, People, RowLock, Target};
 use crate::store::catalogs::{bump_admin_generation, is_unique_violation, is_valid_name};
 use crate::store::changesets::{self, ChangesetState};
@@ -21,8 +22,9 @@ use crate::store::user_sessions;
 pub struct NewUser<'a> {
     /// `[a-z0-9-]+`; also its personal team's name.
     pub name: &'a str,
-    /// Free text shown beside the name.
-    pub display_name: &'a str,
+    /// Its display name (empty when unset), validated by
+    /// [`DisplayName::parse`]; its personal team gets the same one.
+    pub display_name: &'a DisplayName,
 }
 
 /// A stored user.
@@ -56,6 +58,8 @@ pub struct UserAuth {
     pub id: String,
     /// Its name.
     pub name: String,
+    /// Its display name; empty when unset.
+    pub display_name: String,
     /// Its email address, if set.
     pub email: Option<String>,
     /// Whether its session acts as an admin.
@@ -85,7 +89,7 @@ macro_rules! select_users {
 // (`email_tokens`, `passwords`), which splice it into their own `concat!`.
 macro_rules! user_auth_columns {
     () => {
-        "u.id, u.name, u.email::text AS email, u.is_admin"
+        "u.id, u.name, u.display_name, u.email::text AS email, u.is_admin"
     };
 }
 pub(crate) use user_auth_columns;
@@ -219,7 +223,7 @@ pub async fn create(
         "INSERT INTO users (name, display_name, created_at) VALUES ($1, $2, $3) RETURNING id",
     )
     .bind(new.name)
-    .bind(new.display_name)
+    .bind(new.display_name.as_str())
     .bind(now)
     .fetch_one(&mut *tx)
     .await;
@@ -231,7 +235,7 @@ pub async fn create(
          VALUES ($1, $2, $3, $4) RETURNING id",
     )
     .bind(new.name)
-    .bind(new.display_name)
+    .bind(new.display_name.as_str())
     .bind(&user_id)
     .bind(now)
     .fetch_one(&mut *tx)
@@ -261,7 +265,7 @@ pub async fn create(
     tx.commit().await?;
     Ok(UserRecord {
         name: new.name.to_string(),
-        display_name: new.display_name.to_string(),
+        display_name: new.display_name.as_str().to_string(),
         created_at: now,
         credentials: 0,
         teams: vec![new.name.to_string()],
@@ -694,6 +698,72 @@ pub async fn set_email(
         )
         .await?;
     }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Sets a user's display name, records `user.display_name_changed` (its
+/// new length in characters, never the text) and bumps the administrative
+/// generation (the key cache's labels read it). The same text again is no
+/// change: it writes and records nothing. The user's personal team keeps
+/// its own `display_name` column: its label follows the user's.
+///
+/// The user's row is locked (`FOR UPDATE`, which `set_admin` also takes)
+/// with the actor's rows before anything else (`audit::lock_people`), so a
+/// provisioner's refusal of an admin user cannot race a promotion.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `name` - the user's name.
+/// * `display_name` - the new display name (empty clears it).
+/// * `actor` - who, for the audit log; a provisioner is refused an admin.
+/// * `now` - the server clock.
+///
+/// # Errors
+/// [`OkfError::Forbidden`] for a provisioner and an admin user;
+/// [`OkfError::UnknownName`] (a malformed name included);
+/// [`OkfError::Database`], a failed audit write included.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.set_display_name"))]
+pub async fn set_display_name(
+    pool: &PgPool,
+    name: &str,
+    display_name: &DisplayName,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<(), OkfError> {
+    // A malformed name (a NUL, which Postgres refuses) names nobody.
+    if !is_valid_name(name) {
+        return Err(unknown(name));
+    }
+    let mut tx = pool.begin().await?;
+    let (user_id, is_admin) = lock_target(&mut tx, name, RowLock::Update, actor).await?;
+    audit::refuse_admin_target(actor, is_admin, name)?;
+    // The subquery reads the old value (the row is already locked), so
+    // `changed` compares it with the new one in the same statement.
+    let changed = sqlx::query_scalar::<_, bool>(
+        "UPDATE users u SET display_name = $2 \
+         FROM (SELECT id, display_name FROM users WHERE id = $1) old \
+         WHERE u.id = old.id \
+         RETURNING old.display_name <> u.display_name",
+    )
+    .bind(&user_id)
+    .bind(display_name.as_str())
+    .fetch_one(&mut *tx)
+    .await?;
+    if !changed {
+        // Dropping `tx` rolls back the `UPDATE`, which wrote the same text.
+        return Ok(());
+    }
+    bump_admin_generation(&mut tx).await?;
+    // The length in characters, never the text (spec "People in entries").
+    let details = json!({ "length": display_name.as_str().chars().count() });
+    audit::record(
+        &mut tx,
+        actor,
+        &user_entry(Action::UserDisplayNameChanged, &user_id, details),
+        now,
+    )
+    .await?;
     tx.commit().await?;
     Ok(())
 }
@@ -1269,6 +1339,7 @@ pub(crate) mod tests {
             pool,
             &crate::store::catalogs::NewCatalog {
                 name: "shared",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: team,
             },
@@ -1302,7 +1373,7 @@ pub(crate) mod tests {
             pool,
             &NewUser {
                 name,
-                display_name: "",
+                display_name: &DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),
@@ -1349,19 +1420,94 @@ pub(crate) mod tests {
             .with_timezone(&Utc)
     }
 
+    // `static` values live for the whole run, so the `NewUser<'static>`
+    // and `NewTeam<'static>` fixtures below can borrow them. `LazyLock`
+    // builds each on first use (`DisplayName::parse` is not a `const fn`),
+    // and `&ALICE_EXAMPLE` derefs to a `&DisplayName`.
+    static ALICE_EXAMPLE: std::sync::LazyLock<DisplayName> =
+        std::sync::LazyLock::new(|| DisplayName::parse("Alice Example").unwrap());
+    static UNSET: std::sync::LazyLock<DisplayName> = std::sync::LazyLock::new(DisplayName::default);
+
     fn alice() -> NewUser<'static> {
         NewUser {
             name: "alice",
-            display_name: "Alice Example",
+            display_name: &ALICE_EXAMPLE,
         }
     }
 
     fn family_owned_by_alice() -> teams::NewTeam<'static> {
         teams::NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &UNSET,
             owner: "alice",
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn user_auth_carries_the_display_name() {
+        // Arrange: a user with a display name and an email.
+        let db = test_db().await;
+        let display = DisplayName::parse("Alice Example").unwrap();
+        create(
+            &db.pool,
+            &NewUser {
+                name: "alice",
+                display_name: &display,
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        set_email(
+            &db.pool,
+            "alice",
+            Some("alice@example.com"),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+
+        // Act: two readers built from `user_auth_columns!`.
+        let by_email = find_by_email(&db.pool, "alice@example.com")
+            .await
+            .unwrap()
+            .unwrap();
+        let by_id = auth_by_id(&db.pool).await.unwrap();
+
+        // Assert
+        assert_eq!(by_email.display_name, "Alice Example");
+        assert_eq!(by_id[&by_email.id].display_name, "Alice Example");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_gives_the_personal_team_the_users_display_name() {
+        // Arrange
+        let db = test_db().await;
+        let display = DisplayName::parse("Alice Example").unwrap();
+
+        // Act
+        let created = create(
+            &db.pool,
+            &NewUser {
+                name: "alice",
+                display_name: &display,
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+
+        // Assert
+        assert_eq!(created.display_name, "Alice Example");
+        let team: String =
+            sqlx::query_scalar("SELECT display_name FROM teams WHERE name = 'alice'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(team, "Alice Example");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1950,7 +2096,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewUser {
                 name: "family",
-                display_name: "",
+                display_name: &DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),
@@ -1972,7 +2118,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewUser {
                 name: "Alice",
-                display_name: "",
+                display_name: &DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),
@@ -2025,7 +2171,7 @@ pub(crate) mod tests {
             .unwrap();
         let user = NewUser {
             name: "family",
-            display_name: "",
+            display_name: &DisplayName::default(),
         };
         let team = family_owned_by_alice();
 
@@ -2169,7 +2315,7 @@ pub(crate) mod tests {
         seed_user(&db.pool, "alice", Some("alice@example.com")).await;
         let family = teams::NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &DisplayName::default(),
             owner: crate::db::TEST_USER,
         };
         teams::create(&db.pool, &family, &AuditActor::cli(), now())
@@ -2451,7 +2597,7 @@ pub(crate) mod tests {
     fn family_owned_by_test_user() -> teams::NewTeam<'static> {
         teams::NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &UNSET,
             owner: crate::db::TEST_USER,
         }
     }
@@ -2501,7 +2647,7 @@ pub(crate) mod tests {
         seed_user(&db.pool, "alice", None).await;
         let family = teams::NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &DisplayName::default(),
             owner: "alice",
         };
         teams::create(&db.pool, &family, &AuditActor::cli(), now())
@@ -2722,6 +2868,7 @@ pub(crate) mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "shared",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -3054,7 +3201,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewUser {
                 name: "bob",
-                display_name: "",
+                display_name: &DisplayName::default(),
             },
             &cli,
             now(),
@@ -3107,6 +3254,96 @@ pub(crate) mod tests {
             .await
             .is_empty());
         allowed.expect("a provisioner may set a non-admin's email");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_display_name_changes_it_records_its_length_and_bumps() {
+        // Arrange
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", Some("alice@example.com")).await;
+        let cli = AuditActor::cli();
+        let name = DisplayName::parse("Alice Exämple").unwrap();
+        let before = crate::store::catalogs::admin_generation(&db.pool)
+            .await
+            .unwrap();
+
+        // Act: set it, then the same text again.
+        set_display_name(&db.pool, "alice", &name, &cli, now())
+            .await
+            .unwrap();
+        let after_change = crate::store::catalogs::admin_generation(&db.pool)
+            .await
+            .unwrap();
+        set_display_name(&db.pool, "alice", &name, &cli, now())
+            .await
+            .unwrap();
+
+        // Assert
+        assert_eq!(
+            find(&db.pool, "alice").await.unwrap().display_name,
+            "Alice Exämple"
+        );
+        // The personal team's column is left alone: its label is derived.
+        let team: String = sqlx::query_scalar("SELECT display_name FROM teams WHERE name = $1")
+            .bind("alice")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(team, "");
+        assert_eq!(after_change, before + 1);
+        assert_eq!(
+            crate::store::catalogs::admin_generation(&db.pool)
+                .await
+                .unwrap(),
+            after_change,
+            "the same text bumps nothing"
+        );
+        let entries = entries_about(&db.pool, "user.display_name_changed", "alice").await;
+        assert_eq!(entries.len(), 1, "the same text records nothing");
+        assert!(entries[0].teams.is_empty());
+        // Characters, not bytes; never the text.
+        assert_eq!(entries[0].details, json!({"length": 13}));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_provisioner_may_not_rename_an_admin_user() {
+        // Arrange
+        let db = test_db().await;
+        seed_user(&db.pool, "staff", None).await;
+        seed_user(&db.pool, "alice", None).await;
+        set_admin(&db.pool, "staff", admin(true), &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        let name = DisplayName::parse("Renamed").unwrap();
+
+        // Act
+        let refused = set_display_name(&db.pool, "staff", &name, &provisioner(), now()).await;
+        let allowed = set_display_name(&db.pool, "alice", &name, &provisioner(), now()).await;
+        let unknown = set_display_name(&db.pool, "nobody", &name, &AuditActor::cli(), now()).await;
+        let malformed = set_display_name(&db.pool, "a\0b", &name, &AuditActor::cli(), now()).await;
+
+        // Assert
+        assert!(
+            matches!(refused, Err(OkfError::Forbidden { .. })),
+            "{refused:?}"
+        );
+        assert_eq!(find(&db.pool, "staff").await.unwrap().display_name, "");
+        assert!(
+            entries_about(&db.pool, "user.display_name_changed", "staff")
+                .await
+                .is_empty()
+        );
+        allowed.expect("a provisioner may rename a non-admin");
+        assert_eq!(
+            find(&db.pool, "alice").await.unwrap().display_name,
+            "Renamed"
+        );
+        for outcome in [unknown, malformed] {
+            assert!(
+                matches!(outcome, Err(OkfError::UnknownName { .. })),
+                "{outcome:?}"
+            );
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -3332,7 +3569,7 @@ pub(crate) mod tests {
         let created = async move {
             let new = NewUser {
                 name: "dave",
-                display_name: "",
+                display_name: &DisplayName::default(),
             };
             create(&pool, &new, &actor, now()).await.map(|_| ())
         };

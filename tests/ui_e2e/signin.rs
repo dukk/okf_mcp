@@ -64,7 +64,7 @@ async fn a_setup_link_sets_a_password_and_the_console_shows_the_user() {
         pool,
         &users::NewUser {
             name: "alice",
-            display_name: "Alice",
+            display_name: &okf_mcp::labels::DisplayName::parse("Alice").unwrap(),
         },
         &AuditActor::cli(),
         Utc::now(),
@@ -124,12 +124,13 @@ async fn a_setup_link_sets_a_password_and_the_console_shows_the_user() {
             .goto(&link, GotoOptions::default())
             .expect("open the setup link");
         ui.wait_text("#setup-form", "Confirm the password");
-        ui.wait_text("main strong", "alice");
+        // The page welcomes the display name ("Alice"), not the slug.
+        ui.wait_text("main strong", "Alice");
         ui.fill("#setup-password", PASSWORD);
         ui.fill("#setup-confirm", PASSWORD);
         ui.click("#setup-submit");
         ui.wait_visible("#app");
-        ui.wait_text("#whoami", "alice - read");
+        ui.wait_text("#whoami", "Alice - read");
         assert!(!ui.page.is_visible("[data-need=admin]").expect("visible"));
         // The first sign-out request fails (a 503 from a fetch wrapper):
         // the console says so and stays signed in, on the server too.
@@ -148,7 +149,7 @@ async fn a_setup_link_sets_a_password_and_the_console_shows_the_user() {
         ui.wait_visible("#login");
         assert!(!ui.page.is_visible("#app").expect("visible"));
         ui.sign_in_password("alice@example.com", PASSWORD);
-        ui.wait_text("#whoami", "alice - read");
+        ui.wait_text("#whoami", "Alice - read");
     })
     .await;
     if !ran {
@@ -396,7 +397,7 @@ async fn a_setup_link_registers_a_passkey_that_then_signs_in_from_the_sign_in_pa
         pool,
         &users::NewUser {
             name: "alice",
-            display_name: "Alice",
+            display_name: &okf_mcp::labels::DisplayName::parse("Alice").unwrap(),
         },
         &AuditActor::cli(),
         Utc::now(),
@@ -448,7 +449,7 @@ async fn a_setup_link_registers_a_passkey_that_then_signs_in_from_the_sign_in_pa
         ui.wait_visible("#setup-passkey[data-ready=true]");
         ui.fill("#setup-passkey-name", "Laptop");
         ui.click("#setup-passkey");
-        ui.wait_text("#whoami", "alice - read");
+        ui.wait_text("#whoami", "Alice - read");
         ui.click("#signout");
         ui.wait_visible("#login");
         assert_eq!(ui.eval(SESSION_STATUS, serde_json::json!(null)), 401);
@@ -458,7 +459,7 @@ async fn a_setup_link_registers_a_passkey_that_then_signs_in_from_the_sign_in_pa
             .expect("open the sign-in page");
         ui.wait_visible("#signin-passkey[data-ready=true]");
         ui.click("#signin-passkey");
-        ui.wait_text("#whoami", "alice - read");
+        ui.wait_text("#whoami", "Alice - read");
         assert_eq!(ui.eval(SESSION_STATUS, serde_json::json!(null)), 200);
     })
     .await;

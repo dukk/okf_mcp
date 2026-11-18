@@ -357,7 +357,7 @@ mod tests {
                 test.app.pool(),
                 &users::NewUser {
                     name,
-                    display_name: "",
+                    display_name: &crate::labels::DisplayName::default(),
                 },
                 &AuditActor::cli(),
                 Utc::now(),

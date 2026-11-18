@@ -1363,7 +1363,9 @@ claude mcp add --transport http okf https://okf-mcp.example.com/mcp \
 ```
 
 `X-OKF-Catalogs` (or its alias `X-OKF-Catalog`, or `?catalogs=a,b`) picks
-the connection's catalogs, and bounds them: the session sees no other
+the connection's catalogs, and bounds them. Each value is a catalog's id
+(its `name`, which `list_catalogs` returns beside its `label`), never its
+label: the session sees no other
 catalog, whatever the key's grants or default. A request with both header
 spellings reads them as one list, the `X-OKF-Catalogs` names first. No
 header names a changeset: an agent calls `open_changeset` and passes the
@@ -1417,6 +1419,7 @@ takes effect at once.
 | Command | Does |
 |---|---|
 | `okf-mcp user create NAME [--display-name TEXT]` | Creates the user and its personal team `NAME` |
+| `okf-mcp user update NAME --display-name TEXT` | Sets (or, with `""`, clears) the user's display name; its personal team's label follows. Prints `updated user NAME display name: "old" -> "new"` |
 | `okf-mcp user list [--email ADDRESS]` | One tab-separated line per user: name, `credentials N` (keys, grants and codes naming it, revoked ones included), `email E` (`-` when unset), `admin yes\|no`, `teams a,b`, then the display name. `--email` prints only the user with that email, in any letter case, and nothing when no user has it |
 | `okf-mcp user delete NAME` | Deletes a user with its credentials, sessions and personal team, discarding its open changesets; catalogs and history stay. Prints what went (see below) |
 | `okf-mcp user set-admin NAME --on\|--off` | Gives or takes the admin flag: an admin user's console session acts as an admin that reaches every catalog. A change signs the user out of every console session. `--off` for the last admin user is allowed here (operator access), refused over REST |
@@ -1428,6 +1431,7 @@ takes effect at once.
 | `okf-mcp user revoke-sessions NAME` | Signs the user out of every console session; keys and grants keep working. Prints `revoked N sessions of NAME` |
 | `okf-mcp user sign-ins NAME [--limit N]` | The user's recent sign-in attempts (20 by default), newest first: time, method, outcome, `ip A` |
 | `okf-mcp team create NAME [--display-name TEXT] --owner USER` | Creates a shared team with `USER` as its first owner |
+| `okf-mcp team update NAME --display-name TEXT` | Sets (or clears) a shared team's display name; a personal team is refused (change its user's) |
 | `okf-mcp team list` | One line per team: name, `personal U` (`-` for a shared team), `members u(role),...`, `catalogs c,...` (`-` for none), `suspended TIME` (`-` when active), then the display name |
 | `okf-mcp team add-member TEAM USER [--role owner\|member]` | Adds a member (`member` by default), or gives a member that role |
 | `okf-mcp team set-role TEAM USER --role owner\|member` | Changes a member's role, adding the user if it is not a member |
@@ -1435,7 +1439,8 @@ takes effect at once.
 | `okf-mcp team delete NAME` | Deletes a shared team that owns no catalog; its memberships go with it |
 | `okf-mcp team suspend NAME [--notice TEXT]` | Suspends the team: its catalogs refuse every non-admin credential except export (see [Suspending a team](#suspending-a-team)). Prints `suspended team NAME`. Repeating it replaces the notice (none when `--notice` is left out) and keeps the first suspension time |
 | `okf-mcp team unsuspend NAME` | Lifts the suspension. Prints `lifted the suspension of team NAME`; no change when the team is active |
-| `okf-mcp catalog create NAME --owner TEAM [--description TEXT]` | `--owner` is required |
+| `okf-mcp catalog create NAME --owner TEAM [--display-name TEXT] [--description TEXT]` | `--owner` is required |
+| `okf-mcp catalog update NAME [--display-name TEXT] [--description TEXT]` | At least one flag is required; prints one `updated catalog NAME <field>: "old" -> "new"` line per flag given |
 | `okf-mcp catalog repair-indexes [NAME...] [--missing-only] [--dry-run] [--actor ACTOR]` | Adds the root `index.md`, `log.md`, folder indexes and listings the named catalogs are missing, and publishes them at once. `--missing-only` keeps only catalogs without a root `index.md` (every such catalog when none is named); `--dry-run` writes nothing. Prints, per catalog, its summary, the files written and a note per created file and `TODO` placeholder, then `repaired N of M catalog(s)`. A failing catalog does not stop the others; the command then exits non-zero naming it. Revisions record `ACTOR` (default `okf-mcp/repair-indexes`) and the message `repair indexes` |
 | `okf-mcp catalog set-owner NAME --team TEAM` | Moves a catalog to another team, or gives a legacy catalog its first owner. Prints `catalog C: owner OLD -> NEW` (`(none)` for a legacy catalog) |
 | `okf-mcp catalog set-member-access NAME --access none\|read\|write` | What members of the owner team reach through their own keys and grants (default `write`). Prints `catalog C: member access OLD -> NEW` |
@@ -1472,7 +1477,7 @@ every use to be recorded; #423 tracks that gap). Team and catalog
 management remains server-wide, as the allow-list specifies; the admin-target
 refusal applies to named user operations and membership/initial-owner targets.
 
-The explicit allow-list has these 17 method/template pairs (adding a new route
+The explicit allow-list has these 20 method/template pairs (adding a new route
 does not add permission):
 
 | Method | Route |
@@ -1482,20 +1487,23 @@ does not add permission):
 | POST | `/api/v1/users` |
 | PUT | `/api/v1/users/{name}/email` |
 | POST | `/api/v1/users/{name}/invite` |
+| PATCH | `/api/v1/users/{name}` (display name) |
 | DELETE | `/api/v1/users/{name}` |
 | GET | `/api/v1/teams` (every team, as an admin sees it; for reconciling its records) |
 | GET | `/api/v1/teams/{name}` |
 | POST | `/api/v1/teams` |
 | PUT | `/api/v1/teams/{name}/members/{user}` |
 | DELETE | `/api/v1/teams/{name}/members/{user}` |
+| PATCH | `/api/v1/teams/{name}` (display name) |
 | DELETE | `/api/v1/teams/{name}` |
 | PUT | `/api/v1/teams/{name}/suspension` |
 | POST | `/api/v1/catalogs` |
+| PATCH | `/api/v1/catalogs/{catalog}` (display name, description) |
 | DELETE | `/api/v1/catalogs/{catalog}` |
 | PUT | `/api/v1/catalogs/{catalog}/member-access` |
 | GET | `/api/v1/audit` (only the entries it wrote; not the export) |
 
-Every other API route is refused, including listing all users, managing
+Every other API route is refused, including `GET /api/v1/labels`, listing all users, managing
 keys or grants, changing settings or admin flags, entitlements and session
 revocation. It reaches no catalog contents: no reads, writes, imports or exports.
 It is not an MCP or archive credential, nor a console sign-in credential.
@@ -1595,6 +1603,49 @@ An unknown user or team is a 404 (`{"error": "UnknownName", "message": ...,
 it. A create body without its required `user` or `owner` is a 422; on the
 command line a missing `--user` or `--owner` is clap's usage error (exit 2).
 
+### Display names and labels
+
+Users, teams and catalogs each have an id (`name`, a slug that never
+changes) and an optional display name. A signup provisioner may generate
+the ids at random, so the server shows people a `label` instead, never the
+id. A user's is its display name, else its email's local part, else
+"Unnamed user". A shared team's is its display name, else "Unnamed team";
+a personal team's is "<its user's label>'s team". A catalog's is its display
+name, else its description (cut to 80 characters), else "Untitled catalog".
+
+- **Rules.** A display name is trimmed, at most 80 characters (the server
+  counts Unicode scalar values, so the console inputs have no `maxlength`),
+  with no control characters or line breaks. Empty clears it. Migration
+  `0019` cleans existing values and adds the CHECK constraints; it locks
+  `users` and `teams` while it runs.
+- **Who edits what.** A user's display name: an admin that reaches every
+  catalog, a provisioner (not for an admin user), or the user on its
+  account page. A shared team's: an admin, a provisioner or an owner of the
+  team; a personal team follows its user. A catalog's: an admin on the
+  catalog, an owner of its owner team or a provisioner.
+- **Ids stay ids.** Ids appear in URLs, key and grant records, client
+  config and MCP arguments. Tools return both `name` and `label`: say the
+  label to people, pass the id in calls. Audit details record only the
+  length of a display name, never the text.
+- **Where labels show.** Views gain `label` fields, MCP results gain
+  `catalog_label` (and `actor_label`), and the console resolves ids
+  through `GET /api/v1/labels`. Where two catalogs or teams share a label,
+  the console pickers add the owner team where that tells them apart, then
+  the slug, repeatedly, until the option texts are distinct. A new catalog's root
+  `index.md` heading is its display name, else `Catalog`. An export is
+  named `<stem>-<id>.tar.gz`, where the stem is the label with ASCII
+  letters and digits lowercased, every other run of characters replaced by
+  one `-`, ends trimmed and cut at 40 bytes ("Work Notes" gives
+  `work-notes-<id>.tar.gz`). A label with no ASCII letter or digit leaves an
+  empty stem, and the file is `<id>.tar.gz`. The console downloads it under
+  the server's name.
+- **Audit log.** An entry's `person_label` comes from the audit person
+  record (a deleted or unnamed person shows "Unnamed user"). Its
+  `target_label`, set for a catalog or shared team, is looked up at read
+  time: a team's by its immutable team id, a catalog's by `created_at` (the
+  log keeps no catalog id), so a catalog recreated under an old name does
+  not lend its label to older entries.
+
 ### Suspending a team
 
 Suspending a team stops every catalog it owns from answering its members,
@@ -1686,10 +1737,12 @@ the test checks the flag exists.
 | CLI | REST | Console |
 |---|---|---|
 | `okf-mcp user create` | `POST /api/v1/users` | Users → New user |
+| `okf-mcp user update` | `PATCH /api/v1/users/{name}` | Users → user → Display name |
 | `okf-mcp user list` | `GET /api/v1/users` | Users |
 | `okf-mcp user list --email` | `GET /api/v1/users` | Users → the filter box |
 | `okf-mcp user delete` | `DELETE /api/v1/users/{name}` | Users → user → Delete user |
 | `okf-mcp team create` | `POST /api/v1/teams` | Teams → New team |
+| `okf-mcp team update` | `PATCH /api/v1/teams/{name}` | Teams → team → Display name |
 | `okf-mcp team list` | `GET /api/v1/teams` | Teams |
 | `okf-mcp team add-member` | `PUT /api/v1/teams/{name}/members/{user}` | Teams → team → Add member |
 | `okf-mcp team set-role` | `PUT /api/v1/teams/{name}/members/{user}` | Teams → team → a member's role |
@@ -1755,6 +1808,7 @@ of `docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`).
 | `user.deleted` | A user is deleted (`user delete`, `DELETE /api/v1/users/{name}`, the console). A refused deletion records nothing | `keys` (keys and grants deleted), `codes` (sign-in codes deleted), `changesets_discarded` |
 | `user.created` | A user is created (`user create`, `POST /api/v1/users`, the console). A refused create records nothing | none |
 | `user.email_changed` | A user's email is set or cleared (`user set-email`, `PUT /api/v1/users/{name}/email`). A change of letter case only, or clearing an email that is not set, records nothing | `cleared` (never the address) |
+| `user.display_name_changed` | A user's display name changes. A provisioner is refused an admin user; the same text again, and a refused change, record nothing | `length` (in characters; never the text) |
 | `user.admin_changed` | A user's admin flag changes (`user set-admin`, `PUT /api/v1/users/{name}/admin`). Setting the flag it already has records nothing | `from`, `to` |
 | `user.invited` | A setup email is queued (`user invite`, `POST /api/v1/users/{name}/invite`). A refused invite (no email, no `public_url`) records nothing | none |
 | `user.entitlement_set` | A user is given a catalog, or its level changes (`user entitle`, `PUT /api/v1/users/{name}/entitlements/{catalog}`). The entry belongs to the catalog's owner team. The level it already has records nothing | `catalog`, `access`, `previous` (`read`, `write`, or `null` for a new one) |
@@ -1767,11 +1821,13 @@ of `docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`).
 | `team.member_removed` | A member leaves a team (`team remove-member`, `DELETE /api/v1/teams/{name}/members/{user}`); its person is the user. A refused removal records nothing | none |
 | `team.deleted` | A shared team is deleted (`team delete`, `DELETE /api/v1/teams/{name}`), recorded before the row goes. A refused deletion records nothing | none |
 | `team.suspended` | A team is suspended or its notice changes (`team suspend`, `PUT /api/v1/teams/{name}/suspension`). Suspending a suspended team with the same notice, a refused notice and an unknown or malformed name record nothing | `notice` (whether there is one; never its text), `already` (it was suspended before) |
+| `team.display_name_changed` | A shared team's display name changes, by an admin, a provisioner or an owner of the team. A personal team is refused (its label follows its user); the same text again, and a refused change, record nothing | `length` (in characters; never the text) |
 | `team.unsuspended` | A suspension is lifted (`team unsuspend`, the same `PUT`). Lifting an active team's suspension records nothing | none |
 | **Catalogs** | | |
 | `catalog.created` | A catalog is created (`catalog create`, `POST /api/v1/catalogs`) | none |
 | `catalog.owner_changed` | A catalog gets another owner team (`catalog set-owner`, `PUT /api/v1/catalogs/{catalog}/owner`); the entry belongs to both teams. Giving it to the team that owns it records nothing | `from` (the old team's audit id, `null` for a catalog that had no owner), `to` |
 | `catalog.description_changed` | A catalog's description changes (`catalog update`, `PATCH /api/v1/catalogs/{catalog}`). The same text again records nothing | `length` (in characters; never the text) |
+| `catalog.display_name_changed` | A catalog's display name changes, by an admin on the catalog or an owner of its team. The same text again, and a refused change, record nothing | `length` (in characters; never the text) |
 | `catalog.member_access_changed` | A catalog's member access changes (`catalog set-member-access`, `PUT /api/v1/catalogs/{catalog}/member-access`). The same value again records nothing | `from`, `to` (`none`, `read` or `write`) |
 | `catalog.maintenance_changed` | A catalog's maintenance flag changes (`catalog set-maintenance`, `PUT /api/v1/catalogs/{catalog}/maintenance`), by an admin that reaches every catalog or an owner of its team signed in to the console. The same value again, and a refused change, record nothing | `from`, `to` (`on` or `off`) |
 | `catalog.deleted` | A catalog is deleted (`catalog delete`, `DELETE /api/v1/catalogs/{catalog}`), recorded before the row goes. A refused deletion records nothing | `forced` (unpublished changes were deleted with it), `generation` |
@@ -3124,9 +3180,10 @@ admin). Every change takes effect at once. A refusal under the
 
 | Method and path | Key | Does |
 |---|---|---|
-| `GET /api/v1/users` | admin | `?email=` (optional) answers only the user with that email, in any letter case: zero or one, in the same view; text that cannot be an address finds none, and an unknown parameter is 400. `{users}`, by name: `name`, `display_name`, `created_at`, `credentials` (keys, grants and codes naming it, whoever manages them), `teams`, `email` (`null` when unset), `is_admin`, `has_password` (never the password or its hash) |
-| `POST /api/v1/users` | admin, every catalog | Body `{name, display_name}` (`display_name` optional). Creates the user and its personal team; 201 with the user. 409 for an invalid or taken name, 422 without `name` |
+| `GET /api/v1/users` | admin | `?email=` (optional) answers only the user with that email, in any letter case: zero or one, in the same view; text that cannot be an address finds none, and an unknown parameter is 400. `{users}`, by name: `name`, `display_name`, `label` (what people are shown: the display name, else the email's local part, else "Unnamed user"), `created_at`, `credentials` (keys, grants and codes naming it, whoever manages them), `teams`, `email` (`null` when unset), `is_admin`, `has_password` (never the password or its hash) |
+| `POST /api/v1/users` | admin, every catalog | Body `{name, display_name}` (`display_name` optional: trimmed, at most 80 characters, no control characters or line breaks; the personal team gets it too). Creates the user and its personal team; 201 with the user. 409 for an invalid or taken name, 422 without `name` or for a refused `display_name` |
 | `GET /api/v1/users/{name}` | admin | `{user, keys, codes, entitlements}`: the user, the keys, grants and codes naming it that the caller manages, and its entitlements (`[{catalog, access, created_at}]`, by catalog) |
+| `PATCH /api/v1/users/{name}` | admin, every catalog | Body `{display_name}` (`deny_unknown_fields`; empty clears it). Answers the user. 422 (`limit: "display_name"`) for one over 80 characters or holding a control character or line break. The CLI is `user update` |
 | `DELETE /api/v1/users/{name}` | admin, every catalog | Deletes the user with its credentials, sessions and personal team (see "Deletion rules"); 204. Optional query `?unless_shared_member=true`: delete nothing and answer 409 while the user is a member, in any role, of any team other than its own personal team (suspended teams included); the check runs under the delete's own locks, so a membership committed concurrently is never removed silently. A client tells this 409 from the others by the `message`: it starts `the user is a member of shared team(s): ` and then the quoted team names, while every other deletion refusal starts `user "<name>" cannot be deleted`. It wins over every other refusal, the last-owner one included. `false` or no parameter: unchanged. 400 for another query parameter or a non-boolean value. Otherwise 409 for a personal team that owns catalogs, the last owner of a shared team, or the last admin user |
 | `PUT /api/v1/users/{name}/admin` | admin, every catalog | Body `{admin: bool}`. Answers `{name, previous, admin}`. A change signs the user out of every console session (they sign in again with the new flag). 409 for clearing the last admin user (only the CLI may), 422 without `admin` |
 | `PUT /api/v1/users/{name}/email` | admin, every catalog | Body `{email}` (`null` clears; the field is required). Answers the user. A change ends the user's outstanding emailed links. 409 "Another user has this email" (in any letter case), 422 for an address that is not one or without `email` |
@@ -3137,9 +3194,10 @@ admin). Every change takes effect at once. A refusal under the
 | `DELETE /api/v1/users/{name}/sessions` | admin, every catalog | Signs the user out of every console session (keys and grants keep working); answers `{name, revoked}` |
 | `DELETE /api/v1/users/{name}/sessions/{id_prefix}` | admin, every catalog | Signs one session out; 204. 404 for a malformed prefix or one that matches none of the user's sessions, 409 for one that matches several (none is ended) |
 | `GET /api/v1/users/{name}/sign-ins` | admin | `{sign_ins}`, newest first (at most 50): `method`, `outcome`, `ip`, `at` |
-| `GET /api/v1/teams` | admin; a provisioner | `{teams}`, by name: `name`, `display_name`, `personal_of` (the user whose personal team it is, or `null`), `created_at`, `members` (`[{user, role}]`, by user), `catalogs` (the names it owns), `suspended_at` (when it was suspended, `null` while active) and `suspension_notice` (`null` when there is none; see [Suspending a team](#suspending-a-team)) |
-| `POST /api/v1/teams` | admin, every catalog | Body `{name, display_name, owner}` (`owner` required: the first owner's user name). 201 with the team. 404 for an unknown owner, 409 for an invalid or taken name, 422 without `owner` |
+| `GET /api/v1/teams` | admin; a provisioner | `{teams}`, by name: `name`, `display_name`, `label` (the display name, else "Unnamed team"; a personal team's is "<its user's label>'s team"), `personal_of` (the user whose personal team it is, or `null`), `created_at`, `members` (`[{user, role}]`, by user), `catalogs` (the names it owns), `suspended_at` (when it was suspended, `null` while active) and `suspension_notice` (`null` when there is none; see [Suspending a team](#suspending-a-team)) |
+| `POST /api/v1/teams` | admin, every catalog | Body `{name, display_name, owner}` (`owner` required: the first owner's user name; `display_name` optional, checked as for users). 201 with the team. 404 for an unknown owner, 409 for an invalid or taken name, 422 without `owner` or for a refused `display_name` |
 | `GET /api/v1/teams/{name}` | admin | The team, as in the list |
+| `PATCH /api/v1/teams/{name}` | admin, every catalog; an owner of the team signed in to the console | Body `{display_name}`. Answers the team. 409 for a personal team (its label follows its user). The CLI is `team update` |
 | `DELETE /api/v1/teams/{name}` | admin, every catalog | Deletes a shared team that owns no catalog; 204. 409 for a personal team or one that owns a catalog |
 | `PUT /api/v1/teams/{name}/members/{user}` | admin, every catalog | Body `{role: "owner"\|"member"}`. Adds the user, or gives a member that role; answers `{change: "added"\|"role_changed"\|"unchanged", team}`. 409 for demoting the last owner, 422 for a missing or unknown `role` |
 | `DELETE /api/v1/teams/{name}/members/{user}` | admin, every catalog | Removes a member; answers the team. 409 for a non-member, the last owner, or a personal team's user |
@@ -3393,9 +3451,10 @@ curl -s -H "Authorization: Bearer $OKF_MCP_KEY" \
 
 | Method and path | Key | Does |
 |---|---|---|
-| `GET /api/v1/catalogs` | any | The catalogs the key reaches, by name: `name`, `description`, `owner_team` (`null` when unassigned), `files`, `concepts`, `generation` (of the loaded snapshot, what `expect_generation` compares against), `last_change` (`null` when empty), `suspended` (`{team, notice}` while its owner team is suspended, otherwise `null`: a suspended catalog is listed, never hidden; see [Suspending a team](#suspending-a-team)) and `maintenance` (`on` or `off`) |
-| `POST /api/v1/catalogs` | admin, every catalog | `{name, description, owner}` (`description` optional; `owner` required, a team's name). 201 with the new catalog's summary; 403 for a key granted named catalogs, since it would not reach the new one; 404 for an unknown owner; 409 for an invalid or taken name; 422 without `owner` |
-| `PATCH /api/v1/catalogs/{catalog}` | admin | `{description}`. Answers `{name, previous, description}` |
+| `GET /api/v1/catalogs` | any | The catalogs the key reaches, by name: `name`, `display_name`, `label` (the display name, else the description, else "Untitled catalog"), `description`, `owner_team` (`null` when unassigned), `owner_team_label`, `files`, `concepts`, `generation` (of the loaded snapshot, what `expect_generation` compares against), `last_change` (`null` when empty), `suspended` (`{team, notice}` while its owner team is suspended, otherwise `null`: a suspended catalog is listed, never hidden; see [Suspending a team](#suspending-a-team)) and `maintenance` (`on` or `off`) |
+| `POST /api/v1/catalogs` | admin, every catalog | `{name, display_name, description, owner}` (`display_name` and `description` optional, `display_name` checked as for users; `owner` required, a team's name). 201 with the new catalog's summary; 403 for a key granted named catalogs, since it would not reach the new one; 404 for an unknown owner; 409 for an invalid or taken name; 422 without `owner` or for a refused `display_name` |
+| `PATCH /api/v1/catalogs/{catalog}` | admin on the catalog; an owner of its owner team signed in to the console; a provisioner | `{display_name?, description?}`, at least one (`deny_unknown_fields`). Answers `{name, previous, description, previous_display_name, display_name, label}`. 422 for a refused `display_name`. The CLI is `catalog update` |
+| `GET /api/v1/labels` | any credential; not a provisioner | `{users, teams, catalogs}`, each a map from id to label. An admin that reaches every catalog gets every one; anyone else gets its own user, its teams, the catalogs it reaches and their owner teams. The console reads it to show labels where an answer names something by id (see [Display names and labels](#display-names-and-labels)) |
 | `PUT /api/v1/catalogs/{catalog}/owner` | admin, every catalog | `{team}`. Makes the team the owner; answers `{name, previous, owner_team}` (`previous` is `null` for a legacy catalog). 404 for an unknown catalog or team, 422 without `team`. Ownership grants no access |
 | `GET /api/v1/catalogs/{catalog}/member-access` | admin | `{name, member_access}` (`none`, `read` or `write`): what members of the owner team reach through their own keys and grants |
 | `PUT /api/v1/catalogs/{catalog}/member-access` | admin, every catalog | Body `{access: "none"\|"read"\|"write"}`. Sets it, and every member's own keys and grants are capped again at once; answers `{name, previous, member_access}`. 400 for another value, 404 for an unknown catalog, 422 without `access` |

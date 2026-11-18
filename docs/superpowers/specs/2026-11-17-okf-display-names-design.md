@@ -1,6 +1,7 @@
 # okf-mcp display names: design
 
-Status: designed 2026-11-17; not yet scheduled.
+Status: delivered in milestone 17 (epic #597), 2026-11-17. The provisioner follow-up is tracked in
+https://github.com/hypotheosis/telekin-platform/issues/111 (Part 5, Rollout step 2).
 
 ## Goal
 
@@ -67,8 +68,11 @@ update, CLI, provisioner):
 - the empty string means "unset";
 - not unique: two catalogs or users may share a label.
 
-Invalid input is a 400 (`OkfError` validation variant) naming the rule
-broken.
+Invalid input is refused naming the rule broken.
+
+> **Corrected (pre-merge audit, 2026-11-18).** The refusal is a 422 with the
+> `LimitExceeded` error and `limit: "display_name"` (`src/http/mod.rs`), not
+> a 400.
 
 ### The label rule
 
@@ -107,8 +111,13 @@ disambiguation is computed server-side alongside the listing.
 | `POST /api/v1/catalogs` (exists) | gains optional `display_name` | unchanged |
 
 Every route returns the updated view (with `label`) and writes an audit
-entry through the existing audit machinery, recording the old and new
-value.
+entry through the existing audit machinery, recording the new value's
+length in characters (`{"length": n}`), never the text, as
+`catalog.description_changed` does: a display name is personal data
+("People in entries").
+
+> **Corrected (issue #600).** This read "recording the old and new
+> value"; plan Decision 4 records only the length.
 
 **Team-owner check.** Session ceilings stop at `write`, so a team owner
 never holds `Access::Admin` on a catalog. The catalog PATCH therefore
@@ -180,10 +189,13 @@ moves to a muted secondary "ID: m-7b1e…" line or tooltip.
 
 ### Catalog content and exports
 
-- A new catalog's root `index.md` heading is `# <catalog label>`, falling
-  back to `# Catalog` when the catalog has neither display name nor
-  description. Existing catalogs keep their heading: content is never
-  rewritten after the fact.
+- A new catalog's root `index.md` heading is `# <display name>`, falling
+  back to `# Catalog` when the catalog has no display name. Existing
+  catalogs keep their heading: content is never rewritten after the fact.
+
+  > **Corrected (issue #606).** The first draft used the catalog label,
+  > which falls back to the description. The description is already the
+  > paragraph beneath the heading, so the heading would have repeated it.
 - The export filename becomes `<slugified label>-<slug>.tar.gz`, still
   unique and now recognisable.
 
@@ -202,6 +214,17 @@ Wherever a tool returns a catalog, `catalog` stays the slug and
 `open_changeset`, `list_changesets`, search hits (including skipped
 catalogs) and the report outputs. `list_catalogs` entries gain
 `display_name` and `label`; `suspended.team` gains `team_label`.
+
+> **Corrected (pre-merge audit, 2026-11-18).** The `maintenance_*` results gained no
+> `catalog_label` (issue #604): the investigator client parses them with
+> `deny_unknown_fields` and pins their schemas, so only their parameter
+> descriptions changed. The `publish`, `discard` and `pending_changes` results
+> did gain it.
+
+> **Added (pre-merge audit, 2026-11-18).** Two things the first draft left out.
+> `GET /api/v1/labels` is one scoped read of the label directory, which lives
+> in the key cache and reloads on each `admin_generation` bump. A team owner's
+> catalog-label edit is refused while the team is suspended.
 
 ### Tool inputs
 
@@ -273,7 +296,8 @@ are reworded and regenerated.
   existence must not leak.
 - **Rendering:** email templates and the consent page show labels and
   still escape HTML; passkey options carry the label; a new catalog's
-  `index.md` heading is the label.
+  `index.md` heading is its display name, else "Catalog" (see the
+  issue #606 note in Part 3).
 - **Console:** header, account edit and owner-visible catalog edit, in
   the repository's existing UI test pattern.
 - **Property tests:** the label is never empty; whenever a display name,

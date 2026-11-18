@@ -6,15 +6,17 @@
 //! one's), unlinking an identity, the ceiling as `/me` gives it now and
 //! recent sign-ins, linking an identity through a mock OIDC provider (and a
 //! link the server refuses), a credential that fails verification at
-//! finish, and what a key sees.
+//! finish, and what a key sees. M17 Task 10a adds the display name (edit,
+//! refusal, the Account ID line) and the "Teams you own" editor.
 
 use std::time::Duration;
 
 use chrono::Utc;
 use okf_mcp::config::AuthConfig;
+use okf_mcp::labels::DisplayName;
 use okf_mcp::store::keys::Access;
 use okf_mcp::store::passwords::{self, SignInOutcome};
-use okf_mcp::store::{ceiling, identities, passkeys, user_sessions, users};
+use okf_mcp::store::{ceiling, identities, passkeys, teams, user_sessions, users};
 use serde_json::json;
 use webauthn_authenticator_rs::prelude::WebauthnAuthenticator as _;
 use webauthn_authenticator_rs::softpasskey::SoftPasskey;
@@ -600,4 +602,166 @@ async fn my_grants_and_account_say_so_to_a_key() {
         assert!(!ui.page.is_visible("#password-form").expect("visible"));
     })
     .await;
+}
+
+/// alice's `#account-display-name` value.
+const DISPLAY_NAME_VALUE: &str = "() => document.querySelector('#account-display-name').value";
+
+/// The value of the input `selector`.
+fn input_value(ui: &Ui, selector: &str) -> serde_json::Value {
+    ui.eval(
+        "(selector) => document.querySelector(selector).value",
+        json!(selector),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_edits_their_display_name_and_an_over_long_one_is_refused() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    let pool = &server.db.pool;
+    users::set_display_name(
+        pool,
+        "alice",
+        &DisplayName::parse("Alice Example").expect("a display name"),
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("name alice");
+    server.app.poll().await.expect("poll");
+    let too_long = "x".repeat(81);
+    let ran = drive(console_base(&server), move |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.wait_text("#whoami", "Alice Example - write");
+        ui.open("/account");
+        ui.wait_visible("#account-display-name");
+        assert_eq!(ui.eval(DISPLAY_NAME_VALUE, json!(null)), "Alice Example");
+        // The slug stays visible as an id, apart from the name.
+        assert_eq!(
+            ui.wait_text("#account-id", "Account ID: alice").trim(),
+            "Account ID: alice"
+        );
+        ui.fill("#account-display-name", "Alice B");
+        ui.click("#account-display-name-save");
+        ui.wait_text("#toasts", "Display name saved");
+        ui.wait_text("#whoami", "Alice B - write");
+        ui.page
+            .reload(rustwright::GotoOptions::default())
+            .expect("reload");
+        ui.wait_text("#whoami", "Alice B - write");
+        ui.wait_visible("#account-display-name");
+        assert_eq!(ui.eval(DISPLAY_NAME_VALUE, json!(null)), "Alice B");
+        ui.fill("#account-display-name", &too_long);
+        ui.click("#account-display-name-save");
+        ui.wait_text("#toasts", "longer than 80 characters");
+        ui.wait_text("#whoami", "Alice B - write");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let stored = users::find(pool, "alice").await.expect("alice");
+    assert_eq!(
+        stored.display_name, "Alice B",
+        "the refused name was not stored"
+    );
+}
+
+/// A non-admin `bob` who owns the shared team `acme` ("Acme", with a
+/// catalog so he reaches one) and a plain member `carol` of it. Both sign
+/// in with [`PASSWORD`] and `<name>@example.com`.
+pub(crate) async fn acme_with_owner_and_member(server: &TestServer) {
+    let pool = &server.db.pool;
+    server
+        .user_with_password("bob", "bob@example.com", PASSWORD)
+        .await;
+    server
+        .user_with_password("carol", "carol@example.com", PASSWORD)
+        .await;
+    let acme = teams::NewTeam {
+        name: "acme",
+        display_name: &DisplayName::parse("Acme").expect("a display name"),
+        owner: "bob",
+    };
+    teams::create(pool, &acme, &AuditActor::cli(), Utc::now())
+        .await
+        .expect("create acme");
+    teams::set_member(
+        pool,
+        &teams::Membership {
+            team: "acme",
+            user: "carol",
+            role: teams::Role::Member,
+        },
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("add carol");
+    okf_mcp::store::catalogs::create(
+        pool,
+        &okf_mcp::store::catalogs::NewCatalog {
+            name: "acme-notes",
+            display_name: &DisplayName::default(),
+            description: "",
+            owner_team: "acme",
+        },
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("create acme's catalog");
+    server.app.poll().await.expect("poll");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_non_admin_team_owner_renames_their_team_from_account() {
+    let server = login_server().await;
+    acme_with_owner_and_member(&server).await;
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password("bob@example.com", PASSWORD);
+        ui.open("/account");
+        ui.wait_visible("#account-team-acme");
+        assert_eq!(input_value(ui, "#account-team-acme"), "Acme");
+        ui.fill("#account-team-acme", "Acme Ltd");
+        ui.click("#account-team-acme-save");
+        ui.wait_text("#toasts", "Team name saved");
+        ui.page
+            .reload(rustwright::GotoOptions::default())
+            .expect("reload");
+        ui.wait_visible("#account-team-acme");
+        assert_eq!(input_value(ui, "#account-team-acme"), "Acme Ltd");
+        // The personal team is named after bob: listed, with no editor.
+        let personal = ui.wait_text("[data-test=owned-team-bob]", "Named after you");
+        assert!(personal.contains("Named after you"));
+        assert!(!ui.page.is_visible("#account-team-bob").expect("visible"));
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let team = teams::find(&server.db.pool, "acme").await.expect("acme");
+    assert_eq!(team.display_name, "Acme Ltd");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_who_is_not_an_owner_sees_the_team_but_no_editor() {
+    let server = login_server().await;
+    acme_with_owner_and_member(&server).await;
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password("carol@example.com", PASSWORD);
+        ui.open("/account");
+        // The team is listed in Profile by its label.
+        ui.wait_text("#account-facts", "Acme");
+        ui.wait_text("[data-test=owned-team-carol]", "Named after you");
+        assert!(!ui.page.is_visible("#account-team-acme").expect("visible"));
+        assert!(!ui.text("#account-owned-list").contains("Acme"));
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let team = teams::find(&server.db.pool, "acme").await.expect("acme");
+    assert_eq!(team.display_name, "Acme", "nothing was sent");
 }

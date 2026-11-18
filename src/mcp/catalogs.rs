@@ -15,8 +15,10 @@ use crate::store::teams::SuspendedCatalog;
 /// Why a listed catalog is unavailable: its owner team is suspended (M13).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct SuspensionInfo {
-    /// The owner team.
+    /// The owner team's id.
     pub team: String,
+    /// The owner team's label: say this to people, pass `team` in calls.
+    pub team_label: String,
     /// The operator's notice, if any.
     pub notice: Option<String>,
 }
@@ -29,6 +31,7 @@ impl From<&SuspendedCatalog> for SuspensionInfo {
     fn from(suspended: &SuspendedCatalog) -> Self {
         Self {
             team: suspended.team.clone(),
+            team_label: suspended.team_label.clone(),
             notice: suspended.notice.clone(),
         }
     }
@@ -39,8 +42,13 @@ impl From<&SuspendedCatalog> for SuspensionInfo {
 // fields' descriptions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct CatalogInfo {
-    /// The catalog's name.
+    /// The catalog's id: pass it as `catalog` in other tools.
     pub name: String,
+    /// Its display name, empty when none is set.
+    pub display_name: String,
+    /// What to call it when talking to people: its display name, else its
+    /// description. Say this, and pass `name` in tool calls.
+    pub label: String,
     /// Its description.
     pub description: String,
     /// How many files it holds.
@@ -79,6 +87,7 @@ pub struct CatalogList {
 /// leaves it out of a connection's list ([`crate::selection::resolve`]).
 #[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn list(ctx: &ToolContext) -> CatalogList {
+    let labels = ctx.labels();
     let catalogs = ctx
         .catalogs()
         .iter()
@@ -87,6 +96,11 @@ pub(crate) fn list(ctx: &ToolContext) -> CatalogList {
             let loaded = state.current();
             CatalogInfo {
                 name: name.clone(),
+                display_name: labels
+                    .catalog_display_name(name)
+                    .unwrap_or_default()
+                    .to_string(),
+                label: labels.catalog(name).unwrap_or(name).to_string(),
                 description: state.description().to_string(),
                 files: loaded.files(),
                 last_change: loaded.last_change().map(format_timestamp),
@@ -125,8 +139,9 @@ impl OkfServer {
     // written type, and an alias hides it.
     #[tool(
         title = "List Catalogs",
-        description = "List the catalogs this connection offers (name, description, file \
-                       count, last change): those the API key can reach, limited to the \
+        description = "List the catalogs this connection offers (name, display name, label, \
+                       description, file count, last change). Pass `name` (the id) in other \
+                       tools and say `label` to people: those the API key can reach, limited to the \
                        connection's X-OKF-Catalogs list when it has one. A catalog whose \
                        team is suspended is listed with `suspended` set, and only export \
                        works on it. Also this connection's selection: the catalogs a call \
@@ -255,6 +270,7 @@ mod tests {
             main.suspended,
             Some(SuspensionInfo {
                 team: SUSPENDED_TEAM.to_string(),
+                team_label: "Family".to_string(),
                 notice: Some(SUSPENSION_NOTICE.to_string()),
             })
         );

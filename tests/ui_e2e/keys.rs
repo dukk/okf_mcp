@@ -5,6 +5,7 @@
 
 use chrono::{TimeDelta, Utc};
 use okf_mcp::config::Config;
+use okf_mcp::labels::UNNAMED_USER;
 use okf_mcp::store::audit::AuditActor;
 use okf_mcp::store::keys::{self as key_rows, Access, Grants};
 use okf_mcp::store::oauth::clients;
@@ -18,7 +19,7 @@ use crate::support::server::{files, TestServer, OWNER};
 async fn alice(server: &TestServer) {
     let alice = NewUser {
         name: "alice",
-        display_name: "Alice Example",
+        display_name: &okf_mcp::labels::DisplayName::parse("Alice Example").unwrap(),
     };
     users::create(&server.db.pool, &alice, &AuditActor::cli(), Utc::now())
         .await
@@ -261,17 +262,19 @@ async fn an_admin_changes_a_keys_user_and_assigns_a_legacy_key() {
     server.key("laptop", Access::Read, &["main"], None).await;
     server.legacy_key("legacy", Access::Read).await;
     alice(&server).await;
+    // The console reads the labels the server holds: reload them.
+    server.app.poll().await.expect("poll");
     let ran = drive(server.base.clone(), move |ui| {
         ui.login(&admin);
         // The shell names the signed-in key's user.
-        ui.wait_text("#whoami", &format!("{OWNER} / console-admin"));
+        ui.wait_text("#whoami", &format!("{UNNAMED_USER} / console-admin"));
         ui.open("/keys");
-        ui.wait_text("[data-test=key-user-laptop]", OWNER);
+        ui.wait_text("[data-test=key-user-laptop]", UNNAMED_USER);
         ui.click("[data-test=key-laptop]");
         ui.wait_text("#key-assign", "Change user");
         ui.select("#key-user-select", "alice");
         ui.click("#key-assign");
-        ui.wait_text("[data-test=key-user-laptop]", "alice");
+        ui.wait_text("[data-test=key-user-laptop]", "Alice Example");
         ui.click("#drawer-close");
         // A key from before users existed is marked, and its drawer offers
         // Assign instead.
@@ -281,7 +284,7 @@ async fn an_admin_changes_a_keys_user_and_assigns_a_legacy_key() {
         ui.wait_text("#key-assign", "Assign");
         ui.select("#key-user-select", OWNER);
         ui.click("#key-assign");
-        ui.wait_text("[data-test=key-user-legacy]", OWNER);
+        ui.wait_text("[data-test=key-user-legacy]", UNNAMED_USER);
     })
     .await;
     if !ran {
@@ -301,9 +304,11 @@ async fn an_admin_changes_a_keys_user_and_assigns_a_legacy_key() {
 async fn an_admin_changes_a_sign_in_codes_user() {
     let server = server().await;
     let admin = server
-        .key("console-admin", Access::Admin, &["main"], Some("main"))
+        .key("console-admin", Access::Admin, &[], Some("main"))
         .await;
     alice(&server).await;
+    // The console reads the labels the server holds: reload them.
+    server.app.poll().await.expect("poll");
     let main = ["main".to_string()];
     codes::create(
         &server.db.pool,
@@ -324,12 +329,12 @@ async fn an_admin_changes_a_sign_in_codes_user() {
     let ran = drive(server.base.clone(), move |ui| {
         ui.login(&admin);
         ui.open("/keys");
-        ui.wait_text("[data-test=code-user-tablet]", OWNER);
+        ui.wait_text("[data-test=code-user-tablet]", UNNAMED_USER);
         ui.click("[data-test=code-tablet]");
         ui.wait_text("#code-assign", "Change user");
         ui.select("#code-user-select", "alice");
         ui.click("#code-assign");
-        ui.wait_text("[data-test=code-user-tablet]", "alice");
+        ui.wait_text("[data-test=code-user-tablet]", "Alice Example");
     })
     .await;
     if !ran {
@@ -348,16 +353,16 @@ async fn reassigning_the_signed_in_key_updates_the_shell_identity() {
     alice(&server).await;
     drive(server.base.clone(), move |ui| {
         ui.login(&admin);
-        ui.wait_text("#whoami", &format!("{OWNER} / console-admin"));
+        ui.wait_text("#whoami", &format!("{UNNAMED_USER} / console-admin"));
         ui.open("/keys");
         ui.click("[data-test=key-console-admin]");
         ui.wait_text("#key-assign", "Change user");
         ui.select("#key-user-select", "alice");
         ui.click("#key-assign");
-        ui.wait_text("[data-test=key-user-console-admin]", "alice");
+        ui.wait_text("[data-test=key-user-console-admin]", "Alice Example");
         // The shell follows without a reload: the identity line, and the
         // Users page's "you" marker.
-        ui.wait_text("#whoami", "alice / console-admin");
+        ui.wait_text("#whoami", "Alice Example / console-admin");
         ui.click("#drawer-close");
         ui.open("/users");
         ui.wait_text("[data-test=user-alice]", "you");
@@ -621,4 +626,38 @@ async fn an_admin_creates_a_provisioner_key_that_reaches_no_catalog() {
             .unwrap();
         assert!(record.provisioner && !record.all_catalogs && record.catalogs.is_empty());
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_keys_page_shows_users_and_catalogs_by_label() {
+    let server = server().await;
+    // Every catalog: a scoped admin reads only its own user's label.
+    let admin = server
+        .key("console-admin", Access::Admin, &[], Some("main"))
+        .await;
+    server
+        .key("laptop", Access::Read, &["main"], Some("main"))
+        .await;
+    alice(&server).await;
+    server.set_catalog_label("main", "Work notes").await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/keys");
+        ui.wait_visible("[data-test=key-laptop]");
+        ui.click("[data-test=key-laptop]");
+        ui.select("#key-user-select", "alice");
+        ui.click("#key-assign");
+        // The user column is the label, not the slug.
+        ui.wait_text("[data-test=key-user-laptop]", "Alice Example");
+        // Its drawer lists the catalog grant and the default by label.
+        let drawer = ui.text("#drawer");
+        assert!(drawer.contains("Work notes"), "{drawer}");
+        assert!(drawer.contains("Alice Example"), "{drawer}");
+        // The ungrant control keeps the slug.
+        ui.wait_visible("[data-ungrant=main]");
+        ui.click("#drawer-close");
+        let table = ui.text("table");
+        assert!(table.contains("Work notes"), "{table}");
+    })
+    .await;
 }

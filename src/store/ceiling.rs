@@ -671,7 +671,7 @@ mod tests {
                 pool,
                 &NewUser {
                     name,
-                    display_name: "",
+                    display_name: &crate::labels::DisplayName::default(),
                 },
                 &AuditActor::cli(),
                 now(),
@@ -681,7 +681,7 @@ mod tests {
         }
         let team = NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
             owner: "alice",
         };
         teams::create(pool, &team, &AuditActor::cli(), now())
@@ -708,6 +708,7 @@ mod tests {
                 pool,
                 &crate::store::catalogs::NewCatalog {
                     name: catalog,
+                    display_name: &crate::labels::DisplayName::default(),
                     description: "",
                     owner_team: owner,
                 },
@@ -1095,6 +1096,7 @@ mod tests {
             pool,
             &crate::store::catalogs::NewCatalog {
                 name: "extra",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: "family",
             },
@@ -1182,7 +1184,7 @@ mod tests {
             pool,
             &NewUser {
                 name: "carol",
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),

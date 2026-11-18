@@ -27,6 +27,7 @@ use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
+use crate::labels::catalog_label;
 use crate::mail::queue;
 use crate::mail::templates::Template;
 use crate::store::audit::{
@@ -565,8 +566,14 @@ async fn notify_owners(
     .bind(catalog_id)
     .fetch_all(&mut *conn)
     .await?;
+    // The label, never the slug; the template field keeps its name.
+    let (display_name, description): (String, String) =
+        sqlx::query_as("SELECT display_name, description FROM catalogs WHERE id = $1")
+            .bind(catalog_id)
+            .fetch_one(&mut *conn)
+            .await?;
     let template = Template::Unlocked {
-        catalog: new.catalog.to_string(),
+        catalog: catalog_label(&display_name, &description),
         category: new.category.label().to_string(),
         until: format_timestamp(expires_at),
     };
@@ -837,7 +844,7 @@ mod tests {
     async fn admin(pool: &PgPool, name: &str) {
         let user = NewUser {
             name,
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
         };
         users::create(pool, &user, &AuditActor::cli(), now())
             .await
@@ -861,6 +868,7 @@ mod tests {
             .unwrap();
         let main = NewCatalog {
             name: "main",
+            display_name: &crate::labels::DisplayName::default(),
             description: "",
             owner_team: TEST_TEAM,
         };
@@ -925,6 +933,63 @@ mod tests {
         }
         assert_eq!(Category::parse("audit"), None);
         assert_eq!(Category::DeletionRequest.label(), "a deletion request");
+    }
+
+    /// Sets `main`'s display name and description, makes an unlock, and
+    /// returns the queued mail's (subject, text, html).
+    async fn unlock_mail_for(display_name: &str, description: &str) -> (String, String, String) {
+        let db = test_db().await;
+        staff_and_main(&db.pool).await;
+        sqlx::query("UPDATE catalogs SET display_name = $1, description = $2 WHERE name = 'main'")
+            .bind(display_name)
+            .bind(description)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        create(&db.pool, &new(2), &policy(), &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        sqlx::query_as(
+            "SELECT convert_from(job, 'UTF8')::jsonb -> 'mail' ->> 'subject', \
+                    convert_from(job, 'UTF8')::jsonb -> 'mail' ->> 'text', \
+                    convert_from(job, 'UTF8')::jsonb -> 'mail' ->> 'html' \
+             FROM apalis.jobs",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_unlock_email_names_the_catalog_by_label_never_by_slug() {
+        let (subject, text, html) = unlock_mail_for("Acme Handbook", "").await;
+        assert!(subject.contains("opened Acme Handbook in"), "{subject}");
+        assert!(text.contains("catalog Acme Handbook for"), "{text}");
+        assert!(html.contains("Acme Handbook"), "{html}");
+
+        // Neither display name nor description: "Untitled catalog", not "main".
+        let (subject, text, _) = unlock_mail_for("", "").await;
+        assert!(subject.contains("opened Untitled catalog in"), "{subject}");
+        assert!(!text.contains("catalog main"), "{text}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_hostile_catalog_label_cannot_break_the_unlock_emails_markup_or_subject() {
+        let (_, _, html) = unlock_mail_for("<script>x</script>", "").await;
+        assert!(!html.contains("<script>x"), "{html}");
+        assert!(html.contains("&lt;script&gt;x&lt;/script&gt;"), "{html}");
+
+        // A line break in a description (the label's fallback) collapses
+        // before it reaches the subject header.
+        let (subject, _, _) = unlock_mail_for("", "Line one\r\nBcc: evil@example.com").await;
+        assert!(
+            !subject.contains('\r') && !subject.contains('\n'),
+            "{subject:?}"
+        );
+        assert!(
+            subject.contains("Line one Bcc: evil@example.com"),
+            "{subject:?}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

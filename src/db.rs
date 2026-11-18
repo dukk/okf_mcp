@@ -117,7 +117,7 @@ pub(crate) async fn test_db() -> pg_support::TestDb {
     let db = pg_support::TestDb::start_migrated().await;
     let fixture = crate::store::users::NewUser {
         name: TEST_USER,
-        display_name: "",
+        display_name: &crate::labels::DisplayName::default(),
     };
     let actor = crate::store::audit::AuditActor::cli();
     crate::store::users::create(&db.pool, &fixture, &actor, chrono::Utc::now())
@@ -369,6 +369,177 @@ mod tests {
                 .as_database_error()
                 .and_then(|e| e.constraint().map(str::to_string))
         })
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn migration_0019_normalises_legacy_display_names_and_adds_the_checks() {
+        // Arrange: a database at 0018 (what a v0.21 server left), holding the
+        // dirty values 0009 never refused. Raw strings (`r#"..."#`): Rust
+        // would read `\u2028` as a malformed escape; `E'..'` makes Postgres
+        // read `\t`, `\n` and `\uXXXX`.
+        let db = pg_support::TestDb::start().await;
+        MIGRATOR.run_to(18, &db.pool).await.unwrap();
+        sqlx::raw_sql(
+            r#"INSERT INTO users (name, display_name, created_at) VALUES
+                   ('long', repeat('x', 85), now()),
+                   ('ctrl', E'  Alice\tExample\u2028Smith  ', now()),
+                   ('wide', E'\u00a0Carol\u3000', now()),
+                   ('c1', E'Dan\u009fEve', now()),
+                   ('cut', repeat('y', 79) || E' \u0085z', now()),
+                   ('clean', 'Bob  Lee', now()),
+                   ('unset', '', now());
+               INSERT INTO teams (name, display_name, created_at) VALUES
+                   ('acme', E'Acme\nLtd', now()),
+                   ('zeta', 'Zeta', now());
+               INSERT INTO catalogs (name, created_at) VALUES ('pg', now());"#,
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        // `xmin` is the id of the transaction that wrote a row's current
+        // version: unchanged afterwards means the migration left the row be.
+        let untouched = "SELECT xmin::text FROM users WHERE name = 'clean' \
+                         UNION ALL SELECT xmin::text FROM teams WHERE name = 'zeta'";
+        let before: Vec<String> = sqlx::query_scalar(untouched)
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+
+        // Act: the rest of the migrations, 0019 included.
+        MIGRATOR.run(&db.pool).await.unwrap();
+
+        // Assert: exact normalised values. Control characters (U+0009,
+        // U+0085, U+009F, U+2028) become one space each, Unicode whitespace
+        // is trimmed (U+00A0, U+3000), the first 80 characters stay, and the
+        // space the cut leaves at the end goes. Inner runs of spaces stay.
+        let users: Vec<(String, String)> =
+            sqlx::query_as("SELECT name, display_name FROM users ORDER BY name")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        let expected_users = [
+            ("c1", "Dan Eve".to_string()),
+            ("clean", "Bob  Lee".to_string()),
+            ("ctrl", "Alice Example Smith".to_string()),
+            ("cut", "y".repeat(79)),
+            ("long", "x".repeat(80)),
+            ("unset", String::new()),
+            ("wide", "Carol".to_string()),
+        ]
+        .map(|(name, display)| (name.to_string(), display));
+        assert_eq!(users, expected_users);
+        let teams: Vec<(String, String)> =
+            sqlx::query_as("SELECT name, display_name FROM teams ORDER BY name")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            teams,
+            [
+                ("acme".to_string(), "Acme Ltd".to_string()),
+                ("zeta".to_string(), "Zeta".to_string()),
+            ]
+        );
+        // Every value is one the server's own rule accepts unchanged.
+        for (_, display) in users.iter().chain(&teams) {
+            let parsed = crate::labels::DisplayName::parse(display).unwrap();
+            assert_eq!(parsed.as_str(), display);
+        }
+        let after: Vec<String> = sqlx::query_scalar(untouched)
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(after, before, "clean rows are not rewritten");
+        // The existing catalog gets the column, empty.
+        let catalog: String = sqlx::query_scalar("SELECT display_name FROM catalogs")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(catalog, "");
+        // The CHECKs are in force on all three tables.
+        // `AssertSqlSafe`: `table` is one of the literals below.
+        for table in ["users", "teams", "catalogs"] {
+            let refused = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE {table} SET display_name = repeat('x', 81)"
+            )))
+            .execute(&db.pool)
+            .await;
+            assert_eq!(
+                broken(refused).as_deref(),
+                Some(format!("{table}_display_name_length").as_str()),
+                "{table}: the CHECK should refuse 81 characters"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn migration_0019_makes_a_concurrent_legacy_create_wait_for_the_checks() {
+        use crate::store::catalogs::tests::until_locks_are_awaited;
+        use std::time::Duration;
+        // How long each wait below may take before the test fails.
+        const WAIT: Duration = Duration::from_secs(30);
+
+        // Arrange: a database at 0018 with one dirty user, whose row another
+        // transaction holds (`FOR UPDATE`), so the migration stops inside
+        // its cleanup `UPDATE`: after taking its table locks, before the
+        // CHECKs.
+        let db = pg_support::TestDb::start().await;
+        MIGRATOR.run_to(18, &db.pool).await.unwrap();
+        sqlx::raw_sql(
+            "INSERT INTO users (name, display_name, created_at) VALUES ('ctrl', E'a\\tb', now());",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let mut holder = db.pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM users WHERE name = 'ctrl' FOR UPDATE")
+            .execute(&mut *holder)
+            .await
+            .unwrap();
+        // `tokio::spawn` runs each future concurrently, like a thread.
+        let pool = db.pool.clone();
+        let migrating = tokio::spawn(async move { MIGRATOR.run(&pool).await });
+        until_locks_are_awaited(&db.pool, 1).await;
+
+        // Act: what an older replica's `users::create` writes, with a name
+        // 0009 never refused. Without the migration's `LOCK TABLE` it
+        // commits at once, the cleanup's snapshot misses it, and the CHECK
+        // then fails the migration.
+        let pool = db.pool.clone();
+        let creating = tokio::spawn(async move {
+            sqlx::query(
+                "INSERT INTO users (name, display_name, created_at) \
+                 VALUES ('late', repeat('x', 81), now())",
+            )
+            .execute(&pool)
+            .await
+        });
+        // Two waiters: the migration on the held row, the create on the
+        // migration's table lock.
+        until_locks_are_awaited(&db.pool, 2).await;
+        holder.rollback().await.unwrap();
+
+        // Assert: the migration commits; the create, run after it, is
+        // refused by the CHECK rather than stored.
+        let migrated = tokio::time::timeout(WAIT, migrating)
+            .await
+            .expect("the migration should finish once the row is released")
+            .unwrap();
+        assert!(migrated.is_ok(), "{migrated:?}");
+        let created = tokio::time::timeout(WAIT, creating)
+            .await
+            .expect("the create should finish once the migration commits")
+            .unwrap();
+        assert_eq!(
+            broken(created).as_deref(),
+            Some("users_display_name_length")
+        );
+        let cleaned: String =
+            sqlx::query_scalar("SELECT display_name FROM users WHERE name = 'ctrl'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(cleaned, "a b");
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -454,6 +454,7 @@ mod tests {
     async fn create_empty(pool: &PgPool) -> catalogs::Catalog {
         let new = catalogs::NewCatalog {
             name: "pg",
+            display_name: &crate::labels::DisplayName::default(),
             description: "",
             owner_team: crate::db::TEST_TEAM,
         };
@@ -469,6 +470,7 @@ mod tests {
         let db = test_db().await;
         let new = catalogs::NewCatalog {
             name: "pg",
+            display_name: &crate::labels::DisplayName::default(),
             description: "",
             owner_team: crate::db::TEST_TEAM,
         };
@@ -964,6 +966,7 @@ mod tests {
             &db.pool,
             &catalogs::NewCatalog {
                 name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },

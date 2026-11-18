@@ -5,30 +5,36 @@
 import { $, h } from './dom.js';
 import { store } from './store.js';
 import { api } from './api.js';
+import { catalogLabel, setLabels } from './labels.js';
 
 export async function refreshIdentity() {
     // Signed in with an account, the session (admin flag, ceiling, CSRF
     // token) is read again beside whoami: an admin may have changed it.
-    const [session, me] = await Promise.all([
+    // The labels are read beside them: a failed read leaves slugs showing
+    // rather than failing the whole identity.
+    const [session, me, labels] = await Promise.all([
         store.session ? api.get('/session') : null,
         api.get('/whoami'),
+        api.get('/labels', { quiet: true }).catch(() => null),
     ]);
     if (session) {
         store.session = session;
         store.csrf = session.csrf;
     }
     store.whoami = me;
+    setLabels(labels);
     // A console session is its user; a key shows its user and its name.
+    const who = me.user_label ?? me.user;
     $('#whoami').textContent = me.kind === 'session'
-        ? `${me.user} - ${me.access}`
-        : `${me.user ? `${me.user} / ` : ''}${me.name ?? me.key_id} - ${me.access}`;
+        ? `${who} - ${me.access}`
+        : `${me.user ? `${who} / ` : ''}${me.name ?? me.key_id} - ${me.access}`;
     if (!me.catalogs.includes(store.catalog)) {
         store.catalog = me.catalogs.includes(me.default_catalog) ? me.default_catalog : (me.catalogs[0] ?? null);
     }
     // After the catalog is settled: a member's level depends on it.
     document.querySelectorAll('[data-need]').forEach(el => { el.hidden = !shows(el.dataset.need); });
     const select = $('#catalog-select');
-    select.replaceChildren(...me.catalogs.map(name => h('option', { value: name }, name)));
+    select.replaceChildren(...me.catalogs.map(name => h('option', { value: name }, catalogLabel(name))));
     select.value = store.catalog ?? '';
 }
 

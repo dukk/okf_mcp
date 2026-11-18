@@ -2,7 +2,8 @@
 
 Interactive skills for keeping an OKF catalog healthy through the okf-mcp
 server's tools. They work on whichever catalog the session names (a
-SessionStart hook, or the connection's write target).
+SessionStart hook, or the connection's write target). Say a catalog's `label`
+to people; pass its id (`name`) in tool calls.
 
 | Skill | What it does |
 |---|---|

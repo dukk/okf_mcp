@@ -105,7 +105,7 @@
 | 1 | `src/labels/mod.rs`: `DisplayName`, `user_label`, `team_label`, `catalog_label`, `export_stem`; unit and property tests |
 | 2 | Migration 0019; `Catalog.display_name`; `NewCatalog.display_name`; `UserAuth.display_name` |
 | 3 | `users::set_display_name`, `teams::set_display_name`, `catalogs::update_details` (with the shared owner check); three audit actions |
-| 4 | `src/labels/directory.rs`: `Labels`, `Labels::load`, `disambiguate`; `Keys::labels()`; suspension labels |
+| 4 | `src/labels/directory.rs`: `Labels`, `Labels::load`, `catalog_choices`; `Keys::labels()`; suspension labels |
 | 5 | REST: `label` on views; `GET /labels`; `PATCH /me`, `/users/{name}`, `/teams/{name}`; the widened catalog PATCH and create; provisioner routes |
 | 6 | CLI: `user update`, `team update`, `catalog update --display-name`, `catalog create --display-name` |
 | 7 | MCP: label fields in outputs, `actor_label`, parameter descriptions, `INSTRUCTIONS`, the suspended error naming labels, regenerated `tools.md` |
@@ -391,7 +391,7 @@ pub fn user_label(display_name: &str, email: Option<&str>) -> String {
     local.map_or_else(|| UNNAMED_USER.to_string(), Cow::into_owned)
 }
 
-/// A team's label: for a personal team, "<user label>'s team"; else its
+/// A team's label: for a personal team, "{user label}'s team"; else its
 /// display name, else [`UNNAMED_TEAM`].
 ///
 /// # Arguments
@@ -426,10 +426,11 @@ pub fn team_label(display_name: &str, personal_of: Option<&str>) -> String {
 pub fn catalog_label(display_name: &str, description: &str) -> String {
     // A description may span lines; a label never does.
     let collapsed = description.split_whitespace().collect::<Vec<_>>().join(" ");
-    [bounded(display_name), bounded(&collapsed)]
+    let label = [bounded(display_name), bounded(&collapsed)]
         .into_iter()
         .find(|candidate| !candidate.is_empty())
-        .map_or_else(|| UNTITLED_CATALOG.to_string(), Cow::into_owned)
+        .map_or_else(|| UNTITLED_CATALOG.to_string(), Cow::into_owned);
+    label
 }
 
 /// A filename stem from a label: ASCII letters and digits lowercased, every
@@ -553,6 +554,8 @@ ALTER TABLE catalogs ADD CONSTRAINT catalogs_display_name_length CHECK (char_len
 
 > `\u2028` inside a Postgres regex is a regex escape, not a string escape: with `standard_conforming_strings` on (the default), `'[[:cntrl:]\u2028\u2029]'` reaches the regex engine as written, and the ARE syntax reads `\uXXXX`. Step 3's test checks this on a real row.
 
+> **Corrected (issue #599).** The SQL above did not match `DisplayName::parse`: `[[:cntrl:]]` depends on the database locale, `btrim` trims only ASCII spaces where Rust's `str::trim` trims all Unicode White_Space (U+00A0, U+3000, ...), and `left(.., 80)` can leave a trailing space that `labels::bounded` would trim. The shipped `migrations/0019_display_names.sql` uses explicit code-point classes (`[\u0001-\u001f\u007f-\u009f\u2028\u2029]` for the controls, the White_Space set for the trims), trims again after the cut, and rewrites only rows whose value changes (`UPDATE .. FROM (SELECT ..) n WHERE .. <> n.display_name`). It also orders its locks (PR #613 review): sqlx holds every lock until the migration commits. It starts with `LOCK TABLE users, teams IN SHARE ROW EXCLUSIVE MODE`, so an older replica's create cannot land between a cleanup snapshot and the CHECK (which would fail the migration). Then come the cleanup `UPDATE`s, then the `users` and `teams` CHECKs, then one `ALTER TABLE catalogs` adding the column and its CHECK. The ACCESS EXCLUSIVE locks come last because `catalogs` first would block every catalog read for the whole cleanup. Read that file, not this block.
+
 - [ ] **Step 3: A migration test on legacy data** (`src/db.rs` tests, beside `migration_0010_keeps_every_row_and_both_migrators_rerun_as_no_ops`, which is the pattern: `MIGRATOR.run_to(N, ..)`, seed with `sqlx::raw_sql`, then `MIGRATOR.run(..)`).
 
 ```rust
@@ -620,6 +623,8 @@ async fn migration_0019_normalises_legacy_display_names_and_adds_the_checks() {
 The expected `"Alice Example Smith"` relies on the migration's replace-then-trim order. The tab and U+2028 each become one space, and no run of spaces is collapsed: the source has exactly one character at each spot. If Step 2's SQL changes, change this expectation with it. The test also proves that adding the CHECKs succeeds on a database that held dirty data.
 
 > **Corrected (PR #596 review).** The first draft asserted only on an already-migrated, empty database, which would pass with the normalising `UPDATE`s deleted.
+
+> **Corrected (issue #599).** The shipped test (`src/db.rs`) seeds more rows, for the corrected SQL: Unicode-whitespace trims (`E'\u00a0Carol\u3000'` to `Carol`), a C1 control (`E'Dan\u009fEve'` to `Dan Eve`), the trim after the 80-character cut (`repeat('y', 79) || E' \u0085z'` to 79 `y`), an inner double space kept, and an empty value. It checks that the clean rows' `xmin` is unchanged (not rewritten), that every result re-parses unchanged with `DisplayName::parse`, and that each CHECK refuses by its constraint name on all three tables. Step 1's tests: there is no `seed_team` helper; the tests use `test_db()`'s fixture team `TEST_TEAM`, and the CHECK test covers all three tables by constraint name.
 
 - [ ] **Step 4: Rows and inputs**
   - `Catalog` gains `pub display_name: String` (doc: "Its display name; empty when unset."). Add `c.display_name` to `select_catalogs!`, to the `INSERT` (`$6`) and to its `RETURNING`.
@@ -838,7 +843,9 @@ The function body follows `update_description` and `set_maintenance`:
    ```
 
    binding `display_name.map(DisplayName::as_str)` and `description`.
-5. `None` from the `UPDATE` → `CatalogNotSelected`.
+
+   > **Corrected (issue #600).** The `UPDATE` also returns `old.owner_team_id`, and an owner's change is refused (`not_owner()`) when it differs from the team `lock_owner` returned, as `set_maintenance` already does: a catalog moved to another team between the membership read and the row lock must not be renamed by the old team's owner. The shipped statement is in `src/store/catalogs.rs` (`update_details`).
+5. `None` from the `UPDATE` → `CatalogNotSelected` (or `not_owner()` when `owner` is set, so an unknown catalog reveals nothing).
 6. Record `CatalogDisplayNameChanged` with `{"length": n}` if the display name changed, and `CatalogDescriptionChanged` (as today) if the description changed.
 7. If either changed, run `bump_admin_generation` and commit; otherwise drop `tx`.
 8. Return `Details`.
@@ -863,7 +870,7 @@ The `not_owner` text is `"this needs admin on catalog {name:?}, or an owner of i
   2. Read `SELECT id, personal_of IS NOT NULL FROM teams WHERE name = $1 FOR NO KEY UPDATE`. None → `unknown(team)`; personal → `Refused { reason: "a personal team's label follows its user; change the user's display name" }`.
   3. If `owner` is set, run `SELECT 1 FROM team_members WHERE team_id = $1 AND user_id = $2 AND role = 'owner' FOR SHARE`. None → `Forbidden { reason: "this needs an owner of team {team:?} or an admin that reaches every catalog" }`.
   4. Run the update, `RETURNING old <> new`.
-  5. If it changed: `bump_admin_generation`, then `record_team(.., TeamEvent { action: TeamDisplayNameChanged, team, person: None, details: json!({"length": n}) }, now)`.
+  5. If it changed: `record_team(.., TeamEvent { action: TeamDisplayNameChanged, team, person: None, details: json!({"length": n}) }, now)`, then `bump_admin_generation`, the order of every other team writer (`suspend`, `set_member`). *(Corrected, issue #600: the draft bumped first.)*
 
   Lock order as in `lessons.md`: the people, then the team row, then the membership, then `server_state`.
 
@@ -1224,6 +1231,8 @@ Add the accessors, each a trivial-accessor `uninstrumented_fn` allow:
 
   Test in `src/auth.rs` tests: after `users::create` and `Keys::reload`, `keys.labels().user("alice")` is `Some("alice")` for a user with email `alice@example.com`.
 
+  > **Corrected (issue #601, 2026-11-17).** `users::NewUser` has no email, so the shipped test (`the_cache_loads_labels_and_reloads_them_after_a_create`) creates `alice` with display name "Alice Example" and a catalog "Team notes", reloads, and asserts the user, personal-team and catalog labels, the catalog owner and `teams_of`. The suspension test also asserts that `SuspendedCatalog.catalog_label` and `team_label` equal the directory's labels. `suspended_catalogs` fills both fields with the slugs; `KeyCache::read` overwrites them from the directory.
+
 - [ ] **Step 4: Suspension labels** (`src/store/teams.rs`). `SuspendedCatalog` gains `pub catalog_label: String` and `pub team_label: String`. `suspended_catalogs` keeps its query. `KeyCache::read` fills the two fields from the loaded `Labels` after the `try_join!`, falling back to the slugs only if a row is missing. The rows come from one load, so that happens only in a race, and the slug is honest then. Every `SuspendedCatalog { .. }` literal in tests gains the fields.
 - [ ] **Step 5: Run the tests, full gates, changelog `m17-task-04-label-directory`, commit** `feat(labels): the label directory, loaded with the key cache`.
 
@@ -1321,6 +1330,12 @@ Mount it with `.route("/labels", get(labels))`. Test the scope as Step 1 says.
        > **Corrected (PR #596 review).** The first draft allowed `previous` to become an object when no in-repo reader used it; absence of in-repo readers says nothing about external clients.
   - **`POST /catalogs`** passes `display_name` (Task 2 already parsed it).
   - **`PROVISIONER_ROUTES`** gains `("PATCH", "/api/v1/users/{name}")`, `("PATCH", "/api/v1/teams/{name}")` and `("PATCH", "/api/v1/catalogs/{catalog}")`. The provisioner arm of the catalog PATCH is explicit (step 2 above); it cannot reach catalog content, and this route touches only the row.
+  > **Corrected (issue #602, 2026-11-17).** What shipped differs from the text above in these ways; none changes a later task's inputs:
+  > - `owned_team_details` is a `Vec<OwnedTeamView>` in `me.rs`. `teams::owned_names` was replaced by `teams::owned` (store type `OwnedTeam { name, display_name, personal }`), one query that gives both `owned_teams` and the details; the label is `team_label` over the user's own label. Task 10a reads `account.owned_team_details` exactly as described.
+  > - `Labels` gained `users()`, `teams()` and `catalog_slugs()` iterators, for the every-catalog admin's `GET /labels`.
+  > - The suspended-owner refusal calls `Principal::check_not_suspended` (it does not build `OkfError::Suspended` itself, so Task 7's new fields need no change here), and only when the session reaches the catalog or belongs to its owner team: a session outside both gets the store's `Forbidden`, so it cannot probe which catalogs are suspended.
+  > - `PATCH /me` answers 404 for a credential without a user (as `GET /me`) and 403 for a key or OAuth token that has one: a key is not the person's console session.
+  > - The route tests are in `src/http/api/labels_tests.rs` and `provisioner_tests.rs`, not in each handler file.
 - [ ] **Step 5: Run the tests, full gates, changelog `m17-task-05-rest-labels`, commit** `feat(api): labels on views, GET /labels, display-name edits`.
 
 ---
@@ -1342,6 +1357,8 @@ Mount it with `.route("/labels", get(labels))`. Test the scope as Step 1 says.
   - `CatalogCommand::Create` gains `--display-name` (default `""`).
   - Everything calls the Task 3 store functions with `AuditActor::cli()` and `owner: None`, and parses with `DisplayName::parse`.
 - [ ] **Step 3: Gates, changelog `m17-task-06-cli`, commit** `feat(cli): update display names`.
+
+> **Corrected (issue #603, 2026-11-17).** The store's `users::set_display_name` and `teams::set_display_name` return `()`, so the CLI reads the old value with `users::find` / `teams::find` just before the write to print `"" -> "Alice Example"`. `catalog update` prints through a pure `describe_details_change` in `src/cli.rs` so the lines are testable; the catalog tests assert stored state plus that function's exact text. Tests live in `src/cli.rs` and `src/cli/people.rs`.
 
 ---
 
@@ -1372,6 +1389,8 @@ Mount it with `.route("/labels", get(labels))`. Test the scope as Step 1 says.
   - `suspended_message(catalog, catalog_label, team, team_label, notice)` writes `catalog {catalog_label:?} ({catalog}) is unavailable: its team {team_label:?} ({team}) is suspended`.
   - Every construction site fills the labels from `SuspendedCatalog` (`grep -rn "OkfError::Suspended {" src`).
   - The other messages in `error.rs` keep echoing only the caller's value or the slug (spec Part 4).
+> **Corrected (issue #604, 2026-11-17).** `SuspendedCatalog` already carried `catalog_label` and `team_label` from Task 4, so Step 6 only threads them into `OkfError::Suspended` (the JSON error body is unchanged). Search hits are wrapped as `LabeledHit { catalog_label, #[serde(flatten)] hit: CatalogHit }` in `src/mcp/search.rs`, so `okf::search` stays label-free. The `maintenance_*` results gain no `catalog_label`: the investigator client parses them with `deny_unknown_fields` and pins their schemas, so only their parameter descriptions change. The `publish`, `discard` and `pending_changes` results also gain `catalog_label`. The new tests live in `src/mcp/labels_tests.rs`.
+
 - [ ] **Step 7: Regenerate `docs/reference/tools.md`** with the generating test's documented command (see the doc comment at `src/mcp/mod.rs:65` and the test that compares it). Then run gates, write changelog `m17-task-07-mcp-labels`, and commit `feat(mcp): labels beside ids in tool outputs`.
 
 ---
@@ -1402,6 +1421,12 @@ Mount it with `.route("/labels", get(labels))`. Test the scope as Step 1 says.
   - **`authorize.rs:339` `summary`:** it needs `&Labels`. `catalogs` becomes the labels joined with ", ", from `catalog_choices`, and `default_catalog` and `user` become labels.
   - **`passkeys.rs:539-546`:** `let display = user_label(&user.display_name, user.email.as_deref());`, then pass `&display` as the third argument.
 - [ ] **Step 3: Gates, changelog `m17-task-08-rendered-labels`, commit** `feat: emails, sign-in, consent and passkeys name people and catalogs by label`.
+
+> **Corrected (issue #605).** What shipped differs from the steps above in four places, none of which affects a later task:
+> - `UserPage.user` was renamed `user_label` (nothing else read it), and `catalog_labels` is `&[(String, String)]` built by `Labels::catalog_choices` over the ceiling's keys. `user_consent_page` takes `(&UserAuth, &Labels)` instead of a name, so it can build the user's label and the catalog texts.
+> - `authorize::summary` takes `&Labels` and shows the user, the catalogs (as `catalog_choices` texts, so duplicates are told apart) and the default catalog by label. A slug the directory does not hold yet is shown as itself, as `catalog_choices` does.
+> - The unlock email's subject carries the catalog label, and a subject is one header line. `Template::Unlocked`'s subject in `src/mail/templates.rs` now turns any control character, U+2028 or U+2029 in the catalog into a space (a stored row can predate the display-name check).
+> - The existing consent test that expected `alice` as the signed-in name now expects `Unnamed user` (a user with no display name and no email), and the console journey in `tests/ui_e2e/consent.rs` sets display names and checks the labels.
 
 ---
 
@@ -1495,6 +1520,7 @@ export function named(label, slug) {
 
     > **Corrected (PR #596 review).** The first draft put the team editor only in the admin Teams drawer, which a non-admin owner cannot open.
   - Use the existing `api.patch` helper if `core/api.js` has one; otherwise add `patch` beside `put` in the same style.
+  > **Corrected (issue #607, 2026-11-17).** What shipped differs from the sketches above in three places. (1) `core/labels.js` looks a slug up with `Object.hasOwn`, so a slug such as `constructor` is not read off the object prototype. (2) `refreshIdentity` reads `/labels` with `{ quiet: true }` and falls back to no labels on failure, so the header shows slugs rather than the console failing to load. (3) `#account-id` is a paragraph under the profile facts (`Account ID: <code>alice</code>`), not a row in the `dl`. Both save buttons are guarded with `core/pending.js`. Read `src/http/ui/js/core/labels.js` and `pages/account.js`. Task 10b and 10c import `userLabel`, `teamLabel`, `catalogLabel` and `named` from `core/labels.js` unchanged.
 - [ ] **Step 5: CSS.** `.named { display: flex; flex-direction: column; }` and `.id-line { font-size: 0.8em; font-family: var(--pico-font-family-monospace); }`, using the existing tokens. No new colours.
 - [ ] **Step 6: `just test-ui` via `gate.sh test-ui`, plus the other gates; changelog `m17-task-10a-console-core`; commit** `feat(console): labels in the header and an editable display name`.
 
@@ -1535,6 +1561,7 @@ export function named(label, slug) {
 
       > **Corrected (PR #596 review).** The first draft only changed the form's visibility, which an owner never reaches.
     - toasts `:99`, `:112`, `:247`, `:260` → the label.
+  > **Corrected (issue #608, 2026-11-17).** What shipped differs in a few places. (1) Toasts and confirm titles use the label from the row or answer (`team.label`, `member.label`, `answer.label`), or `userLabel(slug)` in `user-account.js`. (2) The user and team display-name fields are pending writes (`core/pending.js`), disabled for an admin who does not reach every catalog; each calls `refreshIdentity()` after saving so the header and switcher labels follow. (3) `PATCH /teams/{name}` returns the `TeamView`, so the drawer redraws from the answer with no second read. (4) `detailsEditor` closes the drawer after a save (as the old description form did), and says "Nothing changed." without a request when neither field differs. (5) `components/picker.js` takes an optional `labelOf` (`picker(attrs, names, selected, labelOf)`, and `assignControl({ labelOf })`): option text is the label, the value stays the slug. Used by the owner, member, entitlement, unassigned and unlock pickers. (6) The test helper `acme_with_owner_and_member` in `account.rs` is `pub(crate)` and shared by `catalogs.rs`. Read `pages/catalogs.js` (`detailsEditor`, `openOwner`).
 - [ ] **Step 3: Gates (with `test-ui`), changelog `m17-task-10b-console-admin`, commit** `feat(console): label-first users, teams and catalogs, with edits`.
 
 ---
@@ -1557,6 +1584,8 @@ export function named(label, slug) {
   - `keys.js:50-63`, `:165-171`, `:276`, `:323-330`, `my-keys.js:151-172`, and `my-grants.js` → `userLabel` for users and `catalogLabel` for the default catalog and grants.
 
   URLs (`#/browse/<slug>/…`) are not touched.
+
+  > **Corrected (issue #609, 2026-11-17).** (1) `GET /changesets` already reuses `ListedChangeset`, which carries `catalog_label` and `actor_label`, so no Rust change was needed; the page reads those fields. (2) The run view has no `actor_label`, so `runs.js` keeps the actor as is and labels only the catalog in its heading. (3) `components/levels.js` (the catalog levels cell of my-keys and my-grants) now shows `catalogLabel`. (4) Since #606 the server names an export `<export_stem(label)>-<slug>.tar.gz`; `transfer.js` takes the download name from the response's `Content-Disposition` (`exportFilename`), falling back to `<slug>.tar.gz`. (5) Pickers fed by `components/picker.js` (user and team pickers) are left to Task 10b. Unlocks and keys show the user with `userLabel`; the keys pages do not use `named`, to keep one line per cell.
 - [ ] **Step 3: Gates (with `test-ui`), changelog `m17-task-10c-console-pages`, commit** `feat(console): labels across the remaining pages`.
 
 ---
@@ -1572,6 +1601,8 @@ export function named(label, slug) {
 - [ ] **Step 2: Implement.**
   - The listing SELECT also reads `ap.display_name`. Email is not snapshotted, so the person label is `user_label(&display_name, None)` (an email fallback is unavailable in audit, by design).
   - The view gains `person_label: Option<String>` and `target_label: Option<String>`.
+
+    > **Corrected (issue #610).** The fields are on the nested objects: `actor.person_label` (`ActorView::Known`) and `target.person_label` and `target.target_label` (`TargetView`), next to the `person` and `name` they label, so every existing field keeps its shape. `audit::list` and `audit::export_lines` take a `&Labels` (the routes pass `app.keys().labels()`; `okf-mcp audit` calls `Labels::load`). `target_label` is set for `catalog` targets and shared `team` targets only (`null` for a personal team), and only while the original still exists: a team by `audit_teams.team_id` against `teams.id`, a catalog by `catalogs.created_at <= entry.at` (the log keeps no catalog id), so a recreated name never lends its label to the old entries. The export gains the fields inside its JSON objects rather than a trailing column, since it is JSON Lines.
   - In `audit.js:34-58`, show `person_label ?? person ?? label` and `target_label ?? target_name`.
   - The filters (`:119-124`) keep matching slugs.
   - The export format keeps its columns and appends `person_label` last. If the export has a fixed schema test, update it.
@@ -1593,6 +1624,8 @@ export function named(label, slug) {
 - [ ] **Step 5: The milestone changelog,** listing what shipped and the follow-ups.
 - [ ] **Step 6: The coordinator files the provisioner follow-up issue** in the provisioner's own repository, not this one, with the contents of spec Part 5 "Rollout" step 2. It depends on the release carrying this milestone. Link it from the epic.
 - [ ] **Step 7: Gates, commit** `docs: display names and labels`.
+
+> **Corrected (issue #611, 2026-11-17).** What shipped differs from the steps above. (1) The route and CLI rows (`PATCH` users, teams and catalogs, `user update`, `team update`, `catalog update`) and the audit-action rows were already in `docs/operations.md` from issues #600, #603 and #610; Task 12 added the `label` fields, `GET /labels`, the catalog `PATCH` body and the "Display names and labels" section, and did not repeat them. (2) The provisioner allow-list is the code's `PROVISIONER_ROUTES` (`src/http/api/mod.rs`), and the provisioner is refused `GET /labels`; the operations.md allow-list table now lists the three PATCH routes (20 pairs). (3) The skills' line sits in each skill's ground rules, and `okf-review-oldest` also says `human:<owner>` is the owner's id. (4) Step 4: the spec already held the Task 3 (#600) and Task 9 (#606) correction notes; the deleted-user audit wording (Task 5) is in the spec's body ("Unnamed user"), so it needed no note. (5) Step 6: the follow-up is https://github.com/hypotheosis/telekin-platform/issues/111, filed by the coordinator in the private provisioner repository. (6) The milestone changelog is `changelog/*-m17-milestone.md`.
 
 ---
 

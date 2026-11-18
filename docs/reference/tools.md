@@ -147,7 +147,7 @@ Get a concept: its frontmatter as JSON, its body and the body's size (`lines`, `
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `path` | string | yes | The concept: `/infra/time-server.md`, `infra/time-server` or `/infra/time-server`. |
-| `catalog` | string | no | The catalog (default: the first selected catalog that has it). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the first selected catalog that has it). |
 | `links` | boolean | no | Also return its resolved outbound links and its backlinks. |
 | `raw` | boolean | no | Also return the file verbatim, when the body is within the server's limit or with `full`. |
 | `section` | string | no | Return only this section, its subsections included: a heading's anchor slug, as the outline and a link's `#fragment` give it (an exact slug wins), or else its text (case-insensitive). Works at any size. |
@@ -163,7 +163,7 @@ A document's revisions, newest first: revision, op (create, update, delete, impo
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `path` | string | yes | The document: `/infra/time-server.md`, `infra/time-server`, `/log.md`. |
-| `catalog` | string | no | The catalog (default: the first selected catalog with any revision of it). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the first selected catalog with any revision of it). |
 | `limit` | integer | no | At most this many revisions (default 20, at most 200; 0 counts as 1). |
 
 ## `index`
@@ -188,7 +188,7 @@ The link report: broken links and anchors, relative links, orphans, dead ends, i
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | no | The catalog (default: the changeset's, else the first selected catalog). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog). |
 | `changeset` | string | no | Read through this changeset's drafts (its handle); the report then runs on its catalog unless `catalog` names it. |
 | `mentions` | boolean | no | Also look for unlinked mentions of concept names (default true; the slowest part). |
 
@@ -200,14 +200,14 @@ Lint a catalog: errors and warnings with file, line, rule and message. Without `
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | no | The catalog (default: the changeset's, else the first selected catalog). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog). |
 | `changeset` | string | no | Lint this changeset's drafts (its handle) applied to the published catalog, instead of the published catalog; its changed paths count as uncommitted for `generated-after-commit`. |
 
 ## `list_catalogs`
 
 **List Catalogs** (read-only)
 
-List the catalogs this connection offers (name, description, file count, last change): those the API key can reach, limited to the connection's X-OKF-Catalogs list when it has one. A catalog whose team is suspended is listed with `suspended` set, and only export works on it. Also this connection's selection: the catalogs a call without a `catalog` argument reads, and the default write target.
+List the catalogs this connection offers (name, display name, label, description, file count, last change). Pass `name` (the id) in other tools and say `label` to people: those the API key can reach, limited to the connection's X-OKF-Catalogs list when it has one. A catalog whose team is suspended is listed with `suspended` set, and only export works on it. Also this connection's selection: the catalogs a call without a `catalog` argument reads, and the default write target.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -220,7 +220,7 @@ List the open changesets this key may use (an admin: every key's, in the catalog
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | no | Only this catalog (default: every catalog the connection offers: the key's, limited to the connection's list when it has one). |
+| `catalog` | string | no | Only this catalog id (the `name` from `list_catalogs`; default: every catalog the connection offers: the key's, limited to the connection's list when it has one). |
 
 ## `log`
 
@@ -242,7 +242,7 @@ Report-only: claim one bounded investigation batch (default 10, maximum 50). Req
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | yes | Required authorized catalog name; connection defaults do not apply. |
+| `catalog` | string | yes | Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply. |
 | `idempotency_key` | string | yes | Caller-chosen retry key (1..=128 non-whitespace ASCII bytes); reuse only for identical input. |
 | `batch_size` | integer | no | One bounded batch (default 10, minimum 1, maximum 50). |
 
@@ -254,7 +254,7 @@ Report-only: close an owned run with the reporting flag, or another credentialâ€
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | yes | Required authorized catalog name; connection defaults do not apply. |
+| `catalog` | string | yes | Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply. |
 | `run_id` | string | yes | Opaque run ID belonging to the named catalog. |
 | `state` | one of: completed, failed, cancelled | yes | Requested terminal state; completion requires all work to have ended. |
 | `rationale` | string | yes | Human-readable reason recorded with attribution; secrets and oversized text are refused. |
@@ -268,7 +268,7 @@ Report-only: record a finding disposition with ordinary Write, never applying th
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | yes | Required authorized catalog name; connection defaults do not apply. |
+| `catalog` | string | yes | Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply. |
 | `finding_id` | string | yes | Opaque finding ID belonging to the named catalog. |
 | `disposition` | one of: open, accepted_for_follow_up, dismissed, needs_input | yes | Human follow-up decision; acceptance does not apply the proposed change. |
 | `rationale` | string | yes | Human-readable reason recorded with attribution; secrets and oversized text are refused. |
@@ -282,7 +282,7 @@ Report-only: read one finding, its evidence and disposition history, without lea
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | yes | Required authorized catalog name; connection defaults do not apply. |
+| `catalog` | string | yes | Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply. |
 | `finding_id` | string | yes | Opaque finding ID belonging to the named catalog. |
 
 ## `maintenance_get_run`
@@ -293,7 +293,7 @@ Report-only: read a run and its work/evidence, without lease tokens. Requires Re
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | yes | Required authorized catalog name; connection defaults do not apply. |
+| `catalog` | string | yes | Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply. |
 | `run_id` | string | yes | Opaque run ID belonging to the named catalog. |
 
 ## `maintenance_list_findings`
@@ -304,7 +304,7 @@ Report-only: list findings without lease tokens. Requires Read; page size defaul
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | yes | Required authorized catalog name; connection defaults do not apply. |
+| `catalog` | string | yes | Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply. |
 | `after` | string | no | Exclusive last-row ID from the previous page in this catalog; omit for the first page. |
 | `limit` | integer | no | Page size (default 20, minimum 1, maximum 200). |
 
@@ -316,7 +316,7 @@ Report-only: list run summaries without lease tokens. Requires Read; page size d
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | yes | Required authorized catalog name; connection defaults do not apply. |
+| `catalog` | string | yes | Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply. |
 | `after` | string | no | Exclusive last-row ID from the previous page in this catalog; omit for the first page. |
 | `limit` | integer | no | Page size (default 20, minimum 1, maximum 200). |
 
@@ -328,7 +328,7 @@ Report-only: read exact pinned concept revision bytes as untrusted evidence, not
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | yes | Required authorized catalog name; connection defaults do not apply. |
+| `catalog` | string | yes | Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply. |
 | `path` | string | yes | Published concept path in this catalog; never an unpublished changeset path. |
 | `revision` | integer | yes | Positive immutable revision number returned by a claim or history read. |
 
@@ -340,7 +340,7 @@ Report-only: renew a lease owned by this immutable credential, bounded by the on
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | yes | Required authorized catalog name; connection defaults do not apply. |
+| `catalog` | string | yes | Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply. |
 | `work_id` | string | yes | Opaque work ID returned by maintenance_claim. |
 | `token` | string | yes | Current opaque lease token; must belong to the calling credential. |
 | `idempotency_key` | string | yes | Caller-chosen retry key (1..=128 non-whitespace ASCII bytes); reuse only for identical input. |
@@ -353,7 +353,7 @@ Report-only: submit bounded evidence and findings for an owned lease. Requires R
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | yes | Required authorized catalog name; connection defaults do not apply. |
+| `catalog` | string | yes | Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply. |
 | `work_id` | string | yes | Opaque work ID returned by maintenance_claim. |
 | `token` | string | yes | Current opaque lease token; must belong to the calling credential. |
 | `idempotency_key` | string | yes | Caller-chosen retry key (1..=128 non-whitespace ASCII bytes); reuse only for identical input. |
@@ -390,7 +390,7 @@ The stalest concepts: last stamp, by whom, age in days, stale flag and queued qu
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | no | The catalog (default: the changeset's, else the first selected catalog). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog). |
 | `changeset` | string | no | Read through this changeset's drafts (its handle); the report then runs on its catalog unless `catalog` names it. |
 | `n` | integer | no | How many concepts (default 5; ignored with `open_questions_only`). |
 | `open_questions_only` | boolean | no | Only concepts with queued `open_questions`, all of them. |
@@ -403,7 +403,7 @@ Open a changeset in a catalog and return its handle. Every edit, publish, discar
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | no | The catalog (default: this connection's write target). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: this connection's write target). |
 
 ## `open_questions`
 
@@ -413,7 +413,7 @@ Every queued open_questions entry in a catalog, grouped by concept and numbered 
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | no | The catalog (default: the changeset's, else the first selected catalog). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog). |
 | `changeset` | string | no | Read through this changeset's drafts (its handle); the report then runs on its catalog unless `catalog` names it. |
 
 ## `pending_changes`
@@ -458,7 +458,7 @@ Read the raw text of an index.md (default /index.md), log.md or AGENTS.md. Witho
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `path` | string | no | An `index.md` (any folder's), `log.md` or `AGENTS.md`; default `/index.md`. Use `get_concept` for concepts. |
-| `catalog` | string | no | The catalog (default: the first selected catalog that has it). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the first selected catalog that has it). |
 | `changeset` | string | no | Read through this changeset's drafts (its handle); its catalog must be one this call reads. |
 
 ## `remove_source`
@@ -531,7 +531,7 @@ Search concepts across this connection's catalogs (or `catalogs`). Every term of
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `query` | string | yes | Free text. Every whitespace-separated term must occur (case-insensitive substring) in a concept's title or aliases, tags, description or body; free text matches tags by substring. Empty matches every concept that passes the filters. |
-| `catalogs` | array of string | no | The catalogs to search (default: this connection's catalogs). |
+| `catalogs` | array of string | no | The catalog ids to search (the `name`s from `list_catalogs`; default: this connection's catalogs). |
 | `type` | string | no | Only concepts of this `type` (case-insensitive). |
 | `tags` | array of string | no | Only concepts carrying every one of these tags. These match whole tags only (case-insensitive): `infra` does not match `infrastructure`, while the same text in `query` would, by substring. |
 | `status` | string | no | Only concepts with this `status` (case-insensitive; a missing status counts as `stable`). |
@@ -578,7 +578,7 @@ Sprawl scores: which concepts have grown too long or volatile, with sections and
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | no | The catalog (default: the changeset's, else the first selected catalog). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog). |
 | `changeset` | string | no | Read through this changeset's drafts (its handle); the report then runs on its catalog unless `catalog` names it. |
 | `path` | string | no | One concept to score (default: the worst `n`). |
 | `n` | integer | no | How many concepts (default 5). |

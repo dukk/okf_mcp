@@ -64,7 +64,7 @@ mod tests {
             &db.pool,
             &users::NewUser {
                 name: "alice",
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             },
             &AuditActor::cli(),
             now,
