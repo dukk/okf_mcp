@@ -192,6 +192,8 @@ pub(super) async fn page_ids(
         ),
     };
     let cursor: Option<(DateTime<Utc>, String)> = if let Some(id) = after {
+        // A cursor holding a NUL names no row (Postgres refuses a NUL, #339).
+        no_nul(&[id])?;
         Some(
             sqlx::query_as(cursor_sql)
                 .bind(catalog)

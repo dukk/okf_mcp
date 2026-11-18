@@ -1,3 +1,10 @@
+//! Route inventory (re-derived from every `.route(` in `src/http` with a
+//! `{...}` segment): every one is sent a malformed name below except
+//! `/ui/{*path}` (static assets, no lookup), `/auth/oidc/{provider}/...` and
+//! `/me/identities/{provider}/link` (a configured provider id looked up in
+//! memory, never in SQL), and `/unlocks/{id}` as a 400 (a numeric id axum
+//! parses first).
+//!
 //! Every `/api/v1` route that takes a user, team, catalog or key name or id
 //! from its path answers an unknown name with the usual not-found answer, never a
 //! 500, whatever the name holds (issue #339). Postgres refuses a NUL in text,
@@ -26,6 +33,12 @@ fn bad_names() -> Vec<String> {
 fn user_routes() -> Vec<Route> {
     vec![
         ("GET", "/api/v1/users/{}", None),
+        (
+            "PATCH",
+            "/api/v1/users/{}",
+            Some(json!({"display_name": "Alice"})),
+        ),
+        ("DELETE", "/api/v1/users/{}", None),
         (
             "PUT",
             "/api/v1/users/{}/admin",
@@ -60,6 +73,11 @@ fn user_routes() -> Vec<Route> {
 fn team_routes() -> Vec<Route> {
     vec![
         ("GET", "/api/v1/teams/{}", None),
+        (
+            "PATCH",
+            "/api/v1/teams/{}",
+            Some(json!({"display_name": "Family"})),
+        ),
         ("DELETE", "/api/v1/teams/{}", None),
         (
             "PUT",
@@ -130,6 +148,11 @@ fn catalog_routes() -> Vec<Route> {
         ("DELETE", "/api/v1/users/alice/entitlements/{}", None),
         ("PUT", "/api/v1/keys/{key}/catalogs/{}", None),
         ("DELETE", "/api/v1/keys/{key}/catalogs/{}", None),
+        (
+            "POST",
+            "/api/v1/catalogs/main/maintenance/findings/{}/disposition",
+            Some(json!({"disposition": "dismissed", "rationale": "x", "idempotency_key": "k"})),
+        ),
         (
             "POST",
             "/api/v1/catalogs/{}/maintenance/findings/abc/disposition",
@@ -301,6 +324,16 @@ fn body_routes() -> Vec<Route> {
         ),
         ("GET", "/api/v1/unlocks?catalog=a%00b", None),
         ("GET", "/api/v1/unlocks?user=a%00b", None),
+        (
+            "GET",
+            "/api/v1/catalogs/main/maintenance/runs?after=a%00b",
+            None,
+        ),
+        (
+            "GET",
+            "/api/v1/catalogs/main/maintenance/findings?after=a%00b",
+            None,
+        ),
         ("GET", "/api/v1/audit?team=a%00b", None),
         ("GET", "/api/v1/audit?actor=a%00b", None),
         ("GET", "/api/v1/audit?target=a%00b", None),
