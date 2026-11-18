@@ -7,8 +7,9 @@
   An unknown value is a 400 on the endpoint.
 - A "Load older" button on the console's Runs page.
 - Tests: a store test for the descending order and cursor (including unequal
-  timestamps), API checks for `order`, and a browser journey that the Runs page
-  shows the newest run first and loads older ones on demand.
+  timestamps), API checks for `order`, and two browser journeys: the Runs page
+  shows the newest run first and loads older ones on demand, and a failed
+  "Load older" keeps the rows and the cursor so a retry adds the page once.
 
 ## Changed
 - The Runs page loads one page of 20 runs, newest first, instead of following

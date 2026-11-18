@@ -426,3 +426,75 @@ async fn the_runs_page_shows_the_newest_run_first_and_loads_older_ones_on_demand
     })
     .await;
 }
+
+/// The `/runs?` requests the page has sent, as URLs, in order.
+fn run_requests(ui: &Ui) -> Vec<String> {
+    ui.eval(
+        "() => window.fetchLog.filter(url => url.includes('/maintenance/runs?'))",
+        json!(null),
+    )
+    .as_array()
+    .expect("a list")
+    .iter()
+    .map(|url| url.as_str().expect("a url").to_string())
+    .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_load_older_keeps_the_rows_and_the_cursor_for_a_retry() {
+    let (server, client) = server_with(&[("main", 3)]).await;
+    let mut created = Vec::new();
+    for tag in ["-a", "-b", "-c"] {
+        created.push(report_tagged(&client, "main", 1, 1, tag).await.0);
+    }
+    let newest_first: Vec<String> = created.iter().rev().cloned().collect();
+    let key = server
+        .key("console-reader", Access::Read, &["main"], Some("main"))
+        .await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&key);
+        ui.open("/runs");
+        ui.wait_text("#runs-table tbody", &newest_first[0]);
+        ui.eval(
+            "async () => { (await import('/ui/js/pages/runs.js')).setRunsPageSize(2); }",
+            json!(null),
+        );
+        // Hold answers, and log every request's URL, before the page redraws.
+        install_hold(ui);
+        ui.eval(
+            "() => { const inner = window.fetch; window.fetchLog = []; \
+               window.fetch = (url, options) => { window.fetchLog.push(String(url)); \
+                 return inner(url, options); }; }",
+            json!(null),
+        );
+        ui.open("/findings");
+        ui.open("/runs");
+        ui.wait_visible("#runs-older");
+        assert_eq!(run_ids(ui), newest_first[..2].to_vec());
+        // The older page's answer arrives as a server error.
+        hold(ui, "after=");
+        ui.click("#runs-older");
+        wait_held_answered(ui);
+        assert_eq!(release(ui, true), 1);
+        // The two rows stay, and the button comes back for a retry.
+        ui.wait_visible("#runs-older");
+        assert_eq!(run_ids(ui), newest_first[..2].to_vec());
+        // The retry succeeds, once, and continues from the same cursor.
+        ui.click("#runs-older");
+        ui.wait_hidden("#runs-older");
+        ui.wait_text("#runs-table tbody", &newest_first[2]);
+        assert_eq!(run_ids(ui), newest_first);
+        let requests = run_requests(ui);
+        let continuations: Vec<&String> = requests
+            .iter()
+            .filter(|url| url.contains("after="))
+            .collect();
+        assert_eq!(continuations.len(), 2, "{requests:?}");
+        assert_eq!(continuations[0], continuations[1], "the same cursor");
+        assert!(
+            continuations[0].contains(&format!("after={}", newest_first[1])),
+            "{continuations:?}"
+        );
+    })
+    .await;
+}
