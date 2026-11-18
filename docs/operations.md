@@ -2519,7 +2519,7 @@ Report get/list responses contain no lease tokens.
 | `maintenance_read_revision` | `path`, `revision` | `pin`, exact UTF-8 `content`, `outdated`; Read |
 | `maintenance_submit` | `work_id`, `token`, `idempotency_key`, `submission` | Receipt: `run_id`, `work_id`, `outcome`, `finding_ids`, `outdated`; Read + reporting, owner only |
 | `maintenance_close` | `run_id`, `state`, `rationale`, `idempotency_key` | Run summary; own run requires reporting, another credential's requires Write |
-| `maintenance_list_runs` | optional `after`, `limit` | `items`, `next_after`; Read |
+| `maintenance_list_runs` | optional `after`, `limit`, `order` (`asc` default, or `desc` for newest first) | `items`, `next_after`; Read |
 | `maintenance_get_run` | `run_id` | `run` summary and `work` array with original evidence/finding IDs; Read |
 | `maintenance_list_findings` | optional `after`, `limit` | `items`, `next_after`; Read |
 | `maintenance_get_finding` | `finding_id` | Finding input, actor, time, disposition/history and read-time `outdated`; Read |

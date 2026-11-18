@@ -420,6 +420,11 @@ mod tests {
         assert_eq!(get(format!("{BASE}/findings?disposition=bogus")).await, 400);
         assert_eq!(get(format!("{BASE}/findings/missing")).await, 404);
         assert_eq!(get(format!("{BASE}/runs/missing")).await, 404);
+        assert_eq!(get(format!("{BASE}/runs?order=bogus")).await, 400);
+        assert_eq!(
+            get(format!("{BASE}/runs?order=desc&after=missing")).await,
+            404
+        );
         assert_eq!(get(format!("{BASE}/findings?after=missing")).await, 404);
         // Out-of-range page sizes are the tool's `Refused`.
         assert_eq!(get(format!("{BASE}/runs?limit=0")).await, 409);
@@ -506,6 +511,19 @@ mod tests {
         .await;
         assert_eq!(runs["items"][0]["id"], run.as_str());
         assert_eq!(runs["items"][0]["state"], "completed");
+        // Either order lists the one run; `order` is opt-in and `asc` is the default.
+        for order in ["asc", "desc"] {
+            let (status, listed) = send(
+                &test,
+                "GET",
+                &format!("{BASE}/runs?order={order}"),
+                Some(&keys.read),
+                None,
+            )
+            .await;
+            assert_eq!(status.as_u16(), 200, "{order}: {listed}");
+            assert_eq!(listed, runs, "{order}");
+        }
         let (status, report) = send(
             &test,
             "GET",
