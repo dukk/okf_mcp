@@ -151,11 +151,13 @@ pub(crate) async fn split_concept(
 /// * `params` - the concept.
 ///
 /// # Returns
-/// The write's report: the concept (a deletion) and its folder index.
+/// The write's report: the concept (a deletion), its folder index, and
+/// each `log.md` whose links to it became plain text.
 ///
 /// # Errors
-/// As [`apply`]; [`OkfError::StillLinked`] while other documents link to
-/// it; [`OkfError::InvalidPath`] for a non-concept or machinery.
+/// As [`apply`]; [`OkfError::StillLinked`] while other documents (not a
+/// `log.md`) link to it; [`OkfError::InvalidPath`] for a non-concept or
+/// machinery.
 #[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn delete_concept(
     ctx: &ToolContext,
@@ -230,9 +232,11 @@ impl OkfServer {
     #[tool(
         title = "Delete Concept",
         description = "Delete a concept and its listing in its folder's index.md, in the \
-                       changeset `changeset` names (open one with open_changeset). Refused with \
-                       StillLinked, listing each link (source, line), while any other document \
-                       links to it, log.md and other index.md files included; move_concept or \
+                       changeset `changeset` names (open one with open_changeset). Links to it \
+                       in log.md become plain text (the link text stays, the target goes), \
+                       replayed at publish so concurrent log entries never conflict. Refused \
+                       with StillLinked, listing each link (source, line), while any other \
+                       document links to it, other index.md files included; move_concept or \
                        edit_document fixes them first. index.md files are never deleted. Write \
                        access.",
         annotations(

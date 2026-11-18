@@ -534,7 +534,7 @@ Restructuring (`write`):
 |---|---|
 | `move_concept` | Moves or renames a concept (`old`, `new`): its folder listing moves with it, and every link to it is rewritten, keeping each link's style and anchor |
 | `split_concept` | Carves a `section` out of a concept (`path`) into a new one (`to`): the parent keeps a stub linking to it, links to the section follow it, and it is listed in its folder (`type`, `title`, `description`, `stub`, `sources`) |
-| `delete_concept` | Deletes a concept and its listing; refused with `StillLinked`, listing each link, while any other document links to it |
+| `delete_concept` | Deletes a concept and its listing, turning its links in `log.md` into plain text; refused with `StillLinked`, listing each link, while any other document links to it |
 
 Changesets:
 
