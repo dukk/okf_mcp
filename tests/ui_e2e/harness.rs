@@ -239,6 +239,17 @@ impl Ui {
             .expect("evaluate")
     }
 
+    /// Whether an element matching `selector` is in the page now (no wait).
+    ///
+    /// # Arguments
+    /// * `selector` - a CSS selector.
+    pub fn present(&self, selector: &str) -> bool {
+        self.eval(
+            "(selector) => document.querySelector(selector) !== null",
+            serde_json::json!(selector),
+        ) == serde_json::json!(true)
+    }
+
     /// Holds the page's next `method` request to a path ending in `suffix`
     /// until [`Ui::release_held`] (see [`HOLD_NEXT`]).
     ///

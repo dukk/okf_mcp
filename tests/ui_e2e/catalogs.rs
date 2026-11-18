@@ -952,3 +952,39 @@ async fn team_pickers_say_personal_team_or_team_and_still_send_the_bare_name() {
         "the first owner was the personal team, by its bare name"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_older_list_read_that_answers_late_never_redraws_the_catalogs_table() {
+    let server = server().await;
+    let key = server
+        .key("console-root", Access::Admin, &[], Some("main"))
+        .await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&key);
+        ui.open("/catalogs");
+        ui.wait_visible("[data-catalog=main]");
+        // The list read after creating "older" is sent at once but answers
+        // late: the server's answer lists "older" but not "newer".
+        ui.click("#catalog-create");
+        ui.wait_visible("#catalog-create-form select[name=owner]");
+        ui.fill("#catalog-create-form input[name=name]", "older");
+        ui.select("#catalog-create-form select[name=owner]", OWNER);
+        ui.hold_answer("GET", "/api/v1/catalogs", || {
+            ui.click("#catalog-create-form button[type=submit]")
+        });
+        // A newer write's list read answers first and lists both.
+        ui.click("#catalog-create");
+        ui.wait_visible("#catalog-create-form select[name=owner]");
+        ui.fill("#catalog-create-form input[name=name]", "newer");
+        ui.select("#catalog-create-form select[name=owner]", OWNER);
+        ui.click("#catalog-create-form button[type=submit]");
+        ui.wait_visible("[data-catalog=newer]");
+        // The older answer, released now, must not replace the newer table.
+        ui.release_held();
+        assert!(
+            ui.present("[data-catalog=newer]") && ui.present("[data-catalog=older]"),
+            "the older read redrew the catalogs table"
+        );
+    })
+    .await;
+}
