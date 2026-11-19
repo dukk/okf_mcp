@@ -731,6 +731,56 @@ mod tests {
         ));
     }
 
+    /// The grant's own expiry, apart from its refresh token's: refresh reads
+    /// no credential cache, so `use_refresh` is what refuses an expired
+    /// grant (review of PR #713).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_live_refresh_token_of_an_expired_grant_is_unknown_and_unspent() {
+        let (db, grant) = with_grant().await;
+        // The grant expires an hour in; each token outlives it by 29 days.
+        let expiry = now() + TimeDelta::hours(1);
+        sqlx::query("UPDATE api_keys SET expires_at = $2 WHERE id = $1")
+            .bind(&grant)
+            .bind(expiry)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        for (byte, family) in [
+            (21, "family-before"),
+            (22, "family-at"),
+            (23, "family-after"),
+        ] {
+            store(&db, &token(&grant, TokenKind::Refresh, family, [byte; 32])).await;
+        }
+        let present_at = async |byte: u8, at: DateTime<Utc>| {
+            let mut tx = db.pool.begin().await.unwrap();
+            let found = use_refresh(&mut tx, &[byte; 32], at).await.unwrap();
+            tx.commit().await.unwrap();
+            found
+        };
+        let used_at = async |byte: u8| -> Option<DateTime<Utc>> {
+            sqlx::query_scalar("SELECT used_at FROM oauth_tokens WHERE sha256 = $1")
+                .bind([byte; 32].as_slice())
+                .fetch_one(&db.pool)
+                .await
+                .unwrap()
+        };
+
+        let before = present_at(21, expiry - TimeDelta::seconds(1)).await;
+        let at = present_at(22, expiry).await;
+        let after = present_at(23, expiry + TimeDelta::minutes(1)).await;
+
+        assert!(
+            matches!(before, RefreshUse::Rotated { .. }),
+            "a grant not yet expired rotates: {before:?}"
+        );
+        assert_eq!(at, RefreshUse::Unknown, "expired at its expiry");
+        assert_eq!(after, RefreshUse::Unknown);
+        assert!(used_at(21).await.is_some());
+        assert_eq!(used_at(22).await, None, "the refused token is not spent");
+        assert_eq!(used_at(23).await, None);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn unknown_access_expired_revoked_and_revoked_grant_tokens_are_unknown() {
         let (db, grant) = with_grant().await;
