@@ -212,7 +212,7 @@ Spec Decisions 10, 12. This task changes no write path (Task 2 does) and no cach
 fn every_kind_round_trips_through_its_payload() {
     let all = [
         Invalidation::Catalog { id: 42, generation: 17 },
-        Invalidation::CatalogMeta { id: 42 },
+        Invalidation::CatalogMeta { id: 42, name: "notes".into() },
         Invalidation::Credential { key_id: "k_1".to_owned() },
         Invalidation::User { id: "u_1".to_owned() },
         Invalidation::Team { id: "t_1".to_owned() },
@@ -241,12 +241,12 @@ async fn a_committed_invalidation_is_delivered_and_a_rolled_back_one_is_not() {
     invalidate(&mut tx, &[Invalidation::Settings]).await.unwrap();
     tx.rollback().await.unwrap();
     let mut tx = db.pool.begin().await.unwrap();
-    invalidate(&mut tx, &[Invalidation::CatalogMeta { id: 3 }]).await.unwrap();
+    invalidate(&mut tx, &[Invalidation::CatalogMeta { id: 3, name: "c".into() }]).await.unwrap();
     tx.commit().await.unwrap();
 
     let got = timeout(WAIT, listener.recv()).await.expect("in time").unwrap();
     let message = Message::parse(got.payload()).expect("parses");
-    assert_eq!(message.invalidation, Invalidation::CatalogMeta { id: 3 });
+    assert_eq!(message.invalidation, Invalidation::CatalogMeta { id: 3, name: "c".into() });
 }
 
 #[tokio::test]
@@ -293,8 +293,11 @@ pub enum Invalidation {
     /// A publish, import or repair moved the catalog to `generation`.
     Catalog { id: i64, generation: i64 },
     /// The catalog row or its access facts changed (create, delete,
-    /// details, owner, maintenance, member access, suspension).
-    CatalogMeta { id: i64 },
+    /// details, owner, maintenance, member access, suspension). `name`
+    /// (the catalog's slug, an id, not a person's data) lets a replica drop
+    /// a cached "no such catalog" entry on create: the id is new, so no
+    /// cache can map it back to the name.
+    CatalogMeta { id: i64, name: String },
     /// A key or grant (`api_keys.id`) changed.
     Credential { key_id: String },
     /// A user (`users.id`) changed: profile, admin flag, entitlements,
@@ -476,12 +479,12 @@ Spec Decision 10's table. After this task every change reaches every replica wit
 
 | Store function (current bump line) | Invalidations |
 |---|---|
-| `catalogs::create` (`catalogs.rs:178`) | `CatalogMeta { id }`, `Team { id: owner }` when it has an owner |
-| `catalogs::set_owner` (`:325`) | `CatalogMeta { id }`, `Team` for the old and the new owner |
-| `catalogs::update_details` (`:493`) | `CatalogMeta { id }` |
-| `catalogs::set_maintenance` (`:730`) | `CatalogMeta { id }` |
-| `catalogs::delete` (`:882`) | `CatalogMeta { id }`, `Team { id: owner }` |
-| `ceiling::set_member_access` (`ceiling.rs:345`) | `CatalogMeta { id }`, `Team { id: owner }` |
+| `catalogs::create` (`catalogs.rs:178`) | `CatalogMeta { id, name }`, `Team { id: owner }` when it has an owner |
+| `catalogs::set_owner` (`:325`) | `CatalogMeta { id, name }`, `Team` for the old and the new owner |
+| `catalogs::update_details` (`:493`) | `CatalogMeta { id, name }` |
+| `catalogs::set_maintenance` (`:730`) | `CatalogMeta { id, name }` |
+| `catalogs::delete` (`:882`) | `CatalogMeta { id, name }`, `Team { id: owner }` |
+| `ceiling::set_member_access` (`ceiling.rs:345`) | `CatalogMeta { id, name }`, `Team { id: owner }` |
 | `ceiling::entitle` (`:446`), `unentitle` (`:502`) | `User { id }` |
 | `settings::set` (`settings.rs:821`), `reset` (`:894`) | `Settings` |
 | `oauth::codes::redeem` (`codes.rs:672`) | `Credential { key_id: grant id }` |
@@ -498,7 +501,7 @@ Spec Decision 10's table. After this task every change reaches every replica wit
 | `unlocks::create` (`unlocks.rs:509`), `end` (`:669`) | `User { id: the unlock's user }` |
 | `teams::create` (`teams.rs:292`), `set_display_name` (`:715`), `delete` (`:785`) | `Team { id }` |
 | `teams::set_member` (`:515`), `remove_member` (`:585`) | `Team { id }`, `User { id: member }` |
-| `teams::suspend` (`:897`), `unsuspend` (`:956`) | `Team { id }`, `CatalogMeta` for each owned catalog |
+| `teams::suspend` (`:897`), `unsuspend` (`:956`) | `Team { id }`, `CatalogMeta { id, name }` for each owned catalog |
 | `publish::publish_locked` (`publish.rs:271`, the generation update) | `Catalog { id, generation: new }` |
 | `import` (`import.rs:282`), `repair` (`repair.rs:143`) | `Catalog { id, generation: new }` |
 
@@ -594,6 +597,24 @@ async fn a_load_overtaken_by_an_invalidation_is_served_but_not_kept() {
 }
 
 #[tokio::test]
+async fn invalidating_keys_that_are_not_cached_keeps_no_state() {
+    let cache: Bounded<i64, u32> = Bounded::new(CacheName::User, Limit::Entries(10), TTL);
+    for key in 0..100_000 {
+        cache.invalidate(&key).await;
+    }
+    assert_eq!(cache.tracked_epochs(), 0, "no load in flight, so no epoch kept");
+}
+
+#[tokio::test]
+async fn an_epoch_outlives_the_entry_until_the_older_load_finishes() {
+    // Load A starts; the key is invalidated; load A is still running when a
+    // second invalidation arrives. A must still not be cached when it ends,
+    // and the epoch entry is gone once it has.
+    /* hold load A on a oneshot, invalidate twice, release, assert peek is None
+       and tracked_epochs() == 0 */
+}
+
+#[tokio::test]
 async fn a_stale_entry_is_revalidated_on_next_use() { /* insert, mark_all_stale(), get_or_revalidate calls `check` once and keeps the value when `check` says it is current */ }
 
 #[tokio::test]
@@ -638,12 +659,22 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static, V: Clone + Send + Sync + 'sta
     pub fn invalidate_where(&self, predicate: impl Fn(&K, &V) -> bool);
     /// Marks every current entry stale (Decision 12).
     pub fn mark_all_stale(&self);
+    /// Re-inserts `key`'s cached value so the weigher runs again: moka
+    /// weighs on insert and replace only, not when data behind an `Arc`
+    /// changes. Respects epochs like a load (a re-weigh overtaken by an
+    /// invalidation is dropped). No-op if `key` is not cached.
+    pub async fn reweigh(&self, key: &K);
+    /// Keys with a load in flight (tests: the epoch map's size).
+    #[cfg(test)]
+    pub fn tracked_epochs(&self) -> usize;
 }
 ```
 
 Implementation notes for the engineer:
 - Each `Entry<V>` stores `value`, `loaded_at: Instant` and `stamp: u64` (the `stale_before` counter at load). `mark_all_stale` increments `stale_before`; an entry with `stamp < stale_before` is stale.
-- Epochs: `get_or_load` reads `epoch(key)` before calling `load`. Use moka's `try_get_with` for single flight, but have the init future return the value **and** the epoch it started at; after it resolves, if `epoch(key)` moved, call `cache.invalidate(&key)` and return the value. `invalidate` increments `epochs[key]` before dropping. Epoch entries are removed by an eviction listener once the key leaves the cache (keep the map bounded with the cache).
+- Epochs exist only for keys with a load in flight. The map is `inflight: std::sync::Mutex<HashMap<K, InFlight>>`, `InFlight { loads: u32, epoch: u64 }`. Before calling `load`, a caller registers (`loads += 1`, inserting `{ loads: 1, epoch: 0 }` if absent) and records the epoch it saw; a guard deregisters it when the load finishes, errors or is cancelled (`Drop`), removing the entry when `loads` reaches 0. `invalidate(key)` drops the cache entry and, **only if `inflight` has the key**, increments its epoch; an invalidation of a key that is neither cached nor loading leaves no state at all. Use moka's `try_get_with` for single flight, with the init future returning the value and the epoch it started at; after it resolves, if the key's epoch moved, call `cache.invalidate(&key)` and return the value to the callers. The map is therefore bounded by the number of concurrent loads, not by the cache or by the change history. An epoch is never reset while an older load is still registered, because the entry outlives every registered load.
+- `Bounded` has no eviction listener for epochs (the listener only counts evictions for metrics).
+- Minimum generations (Decision 11, used by Task 8) follow the same rule: `InFlight` also carries `min_generation: Option<i64>`, raised by a `Catalog` message only while a load is in flight. A load that starts after the message was applied reads after the writer's commit (Postgres delivers `NOTIFY` at commit), so it needs no minimum.
 - `invalidate_where` uses `iter()` (sync) and calls `invalidate` for each match; the cache is bounded, so the scan is bounded. Do not enable moka's `support_invalidation_closures` (it keeps predicates around).
 - Over-budget values: with `Limit::Bytes(n)`, a value whose weight exceeds `n` is returned to the callers of that load and then invalidated, so it is never kept. Concurrent callers still share the one load (moka's single flight); a later request loads it again. Log a warn with the weight, at most once per key per hour.
 - Metrics (`src/telemetry/metrics.rs`): `okf.cache.requests{cache,result=hit|miss|stale}`, `okf.cache.evictions{cache,cause=size|ttl|invalidated}` from the eviction listener (`RemovalCause::Size` -> `size`, `Expired` -> `ttl`, `Explicit` -> `invalidated`, `Replaced` not counted), `okf.cache.entries{cache}` and `okf.cache.bytes{cache}` as observable gauges over `entry_count()`/`weighted_size()`, `okf.cache.load.duration{cache,outcome}`.
@@ -689,7 +720,7 @@ Build the SELECT once in a macro next to `select_catalogs!`, joining `teams` for
 
 - [ ] **Step 2: Failing tests** (`src/cache/directory.rs`):
   - `resolve_reads_once_then_serves_from_cache` (count queries with a test hook or by checking `okf.cache.requests` through a test meter).
-  - `an_unknown_name_is_remembered_briefly_and_forgotten_by_create`: `resolve("x")` is `None`; create `x` through the store (which sends `CatalogMeta`); after `apply`, `resolve("x")` is `Some`.
+  - `an_unknown_name_is_remembered_briefly_and_forgotten_by_create`: `resolve("x")` is `None`; create `x` through the store (which sends `CatalogMeta { id, name: "x" }`); after `apply`, `resolve("x")` is `Some`. The directory drops by `name` (rows and absent entries are keyed by name) and by `id` (a cached row with that id, for a delete or an update).
   - `a_catalog_meta_invalidation_drops_the_row` and `a_catalog_invalidation_raises_the_minimum_generation`: after `Catalog { id, generation: 9 }`, a row read at generation 8 is not cached (Decision 11).
 
 - [ ] **Step 3: Implement.**
@@ -779,6 +810,8 @@ async fn state(&self, name: &str) -> Result<Arc<CatalogState>, OkfError>; // no 
   - `a_catalog_invalidation_refreshes_in_place`: readers that pinned the old `Arc<Loaded>` keep it; new reads get the new generation.
   - `a_broken_generation_is_not_rebuilt_on_every_request`: store rows that fail to build; two reads, one build attempt; after a new generation, one more attempt.
   - `a_request_keeps_its_snapshot_while_the_entry_is_evicted` (budget of one catalog, two catalogs read in one `ToolContext`).
+  - `a_request_sees_one_snapshot_when_the_catalog_refreshes_between_reads`: in one `ToolContext`, read catalog `a`, publish `a` through the store and `apply` its `Catalog` message (an in-place refresh), read `a` again: both reads return the first generation; a new `ToolContext` sees the second.
+  - `a_resident_catalog_that_grows_past_the_budget_is_not_kept`: budget of 10 KiB, load a 2 KiB catalog, publish documents that take it past 10 KiB, refresh it (once through `apply`, once through the publisher's direct refresh): `okf.cache.bytes{cache=catalog}` reflects the new weight and the entry is gone (over budget), not reported at its original size.
   - In `tests/multi_replica.rs`: `a_catalog_created_on_one_replica_is_readable_on_the_other` (no poll: directory invalidation plus load on demand).
 
 - [ ] **Step 3: Implement.**
@@ -802,14 +835,14 @@ impl CatalogCache {
 }
 ```
 
-`get`: `states.get_or_revalidate(row.id, load, check)`, where `check` compares `state.current().generation()` with `row.generation` and refreshes in place when behind (returns `Ok(None)` after an in-place swap). A delete (`CatalogMeta` whose directory row is now absent) invalidates the id. `CatalogState` loses `description`, `owner_team`, `set_description`, `set_owner_team`: readers take them from the `CatalogRow`. `CatalogState::load` takes `(pool, &CatalogRow)` instead of `(pool, name)`.
+`get`: `states.get_or_revalidate(row.id, load, check)`, where `check` compares `state.current().generation()` with `row.generation` and refreshes in place when behind, then returns `Ok(Some(Arc::clone(&state)))`, so `Bounded` replaces the entry with the same `Arc` and the weigher runs on the new snapshot. Every other in-place refresh (the `Catalog` message in `apply`, the publisher's and the import's direct refreshes) ends with `states.reweigh(&id)`, through one `CatalogCache::refreshed(id)` helper so no refresh path can skip it. A delete (`CatalogMeta` whose directory row is now absent) invalidates the id. `CatalogState` loses `description`, `owner_team`, `set_description`, `set_owner_team`: readers take them from the `CatalogRow`. `CatalogState::load` takes `(pool, &CatalogRow)` instead of `(pool, name)`.
 
 `App`:
 - `catalogs`, `catalogs()`, `catalog()` and the `Broken` map are removed. New: `App::catalog_row(name) -> Result<Option<Arc<CatalogRow>>>` (directory) and `App::catalog_state(&CatalogRow) -> Result<Arc<CatalogState>>` (cache).
 - `load_with_redis` no longer lists or loads catalogs; it checks `default_catalog` with one `directory.resolve`.
 - `poll_pass` drops the catalog loop (the rest of the poll stays until Task 16).
 
-`ToolContext`: drops the `catalogs` field; adds `pinned: Mutex<HashMap<String, (Arc<CatalogRow>, Arc<CatalogState>)>>`. `state(name)` returns the pinned pair or resolves both and pins them. `resolve_changeset` finds the catalog by `row.catalog_id` through a new `catalogs::row_by_id` (add to Task 5's queries here) instead of scanning. `ToolContext::catalogs()` is removed; its callers are Task 10's (listings) and the tests.
+`ToolContext`: drops the `catalogs` field; adds `pinned: Mutex<HashMap<String, Pinned>>`, `Pinned { row: Arc<CatalogRow>, state: Arc<CatalogState>, snapshot: Arc<Loaded> }`. Pinning a `CatalogState` alone does not pin a snapshot: `current` is a `RwLock<Arc<Loaded>>` swapped by every in-place refresh. On first use of a catalog, `ToolContext` resolves the row and state and takes `state.current()` once, as `snapshot`. Request reads go through `ToolContext::snapshot(name) -> Arc<Loaded>`; `state(name)` remains for writers that must see the latest (publish under its lock, overlay builds keyed by changeset, which validate against the current generation themselves). Convert the read sites that call `.current()` on a context's state (`grep -rn '\.current()' src/mcp src/http`, about 60) to `snapshot`; any that must stay on `state().current()` gets a one-line comment saying why. `resolve_changeset` finds the catalog by `row.catalog_id` through a new `catalogs::row_by_id` (add to Task 5's queries here) instead of scanning. `ToolContext::catalogs()` is removed; its callers are Task 10's (listings) and the tests.
 
 `src/mcp/mod.rs:114` (`catalog_label` existence for telemetry): use `directory.resolve`.
 

@@ -79,7 +79,11 @@ unchanged inside.
 - **Loads are single-flight** (`try_get_with`): concurrent misses on one
   catalog build it once, through today's `CatalogState::load`.
 - **A stale hit refreshes in place** with today's `refresh_to`. Readers
-  keep serving the old snapshot until the new one is swapped in.
+  keep serving the old snapshot until the new one is swapped in. moka
+  weighs an entry only when it is inserted or replaced, so every in-place
+  refresh (stale hit, `catalog` message, the publisher's own refresh)
+  re-inserts the entry to re-weigh it; a catalog that grows past the
+  budget is then evicted instead of keeping its old weight.
 - **A catalog larger than the whole budget** is loaded, served to the
   requests waiting on it, and not retained; a warning names its size.
 - **A catalog whose stored data will not build** is recorded in a small
@@ -92,9 +96,11 @@ unchanged inside.
 ### 3. A request pins the catalogs it uses
 
 `ToolContext` no longer copies the whole map at construction. It resolves
-each catalog the first time the request touches it and keeps the `Arc`
-for the rest of the request, so one request sees one snapshot per catalog
-even if the entry is evicted or refreshed meanwhile.
+each catalog the first time the request touches it and keeps the
+snapshot (`Arc<Loaded>`, not only the `Arc<CatalogState>` whose current
+snapshot an in-place refresh swaps) for the rest of the request, so one
+request sees one snapshot per catalog even if the entry is evicted or
+refreshed meanwhile. Writers that must see the latest still use the state.
 
 ### 4. Per-catalog locks move out of the cache entry
 
@@ -219,7 +225,7 @@ Kinds and fields:
 | Kind | Fields | Sent by |
 |---|---|---|
 | `catalog` | `id`, `generation` | publish, import, repair |
-| `catalog_meta` | `id`, `name` | create, delete, `update_details`, `set_owner`, `set_maintenance`, `set_member_access`, team suspend and unsuspend (one per owned catalog) |
+| `catalog_meta` | `id`, `name` (the slug, so a cached "no such catalog" entry is dropped on create) | create, delete, `update_details`, `set_owner`, `set_maintenance`, `set_member_access`, team suspend and unsuspend (one per owned catalog) |
 | `credential` | `key_id` | key or grant create, revoke, grant, ungrant, `set_user`, `set_maintenance_report`, OAuth code redeem, self-issued grant create |
 | `user` | `id` | user create, delete, `set_email`, `set_display_name`, `set_admin`, entitle, unentitle, unlock create and end |
 | `team` | `id` | team create, delete, `set_member`, `remove_member`, `set_display_name`, `set_member_access` (for the owner team) |
@@ -240,12 +246,16 @@ measurable; it is recorded so a much higher write rate is designed for.
 
 ### 11. Loads cannot resurrect stale data
 
-Each cache keeps a per-key invalidation epoch (a small counter map,
-bounded with the cache). A load records the epoch when it starts and
-inserts its result only if the epoch has not moved; otherwise it serves
-the result to its own request and does not cache it. A `catalog` message
-also records the announced generation as the catalog's minimum, so a load
-that read an older generation is never cached.
+Each cache keeps a per-key invalidation epoch, but only for keys with a
+load in flight: the counter is created when a load starts and removed when
+the last load of that key finishes. A load records the epoch when it starts
+and inserts its result only if the epoch has not moved; otherwise it serves
+the result to its own request and does not cache it. An invalidation of a
+key that is neither cached nor loading keeps no state, so the map is bounded
+by concurrent loads, not by the population or the change history. A
+`catalog` message also raises an in-flight load's minimum generation, so a
+load that read an older generation is never cached; a load that starts
+after the message reads after the writer's commit and needs none.
 
 ### 12. Reconnects mark everything stale
 
@@ -416,7 +426,7 @@ New modules:
 | `cache::catalogs` | `CatalogCache`: weighed LRU, single-flight load, stale refresh, negative cache |
 | `cache::directory` | `CatalogDirectory`: rows by name, absent entries, reach-driven listing queries |
 | `cache::credentials` | credential, user and label caches; principal assembly |
-| `cache::epoch` | per-key invalidation epochs and minimum generations, shared by every cache |
+| `cache::epoch` | per-key invalidation epochs and minimum generations for in-flight loads, shared by every cache |
 | `invalidate` | the `Invalidation` enum, its JSON form, `invalidate(conn, ..)`, the listener and `apply` |
 | `housekeeping` | the job type, the ticker, the tasks, `cluster_stats` |
 
