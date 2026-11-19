@@ -206,7 +206,7 @@ Spec Decisions 10, 12. This task changes no write path (Task 2 does) and no cach
 - Create: `src/invalidate.rs`.
 - Modify: `src/lib.rs`, `src/app.rs`, `src/http/mod.rs`, `src/telemetry/metrics.rs`, `src/shared/announce.rs` (uses `Backoff`); also create `src/backoff.rs`.
 
-> **Corrected (issue #679).** `src/store/catalogs.rs` is not touched: `bump_admin_generation` stays `pub(crate)` until Task 2 replaces its 37 callers.
+> **Corrected (issue #679, 2026-11-19).** `src/store/catalogs.rs` is not touched: `bump_admin_generation` stays `pub(crate)` until Task 2 replaces its 37 callers.
 
 - [ ] **Step 1: Write the failing tests** (`src/invalidate.rs`, `#[cfg(test)] mod tests`)
 
@@ -437,7 +437,7 @@ async fn apply_payload(app: &App, payload: &str) {
 
 - [ ] **Step 3: `App::apply` and `App::apply_reconnect` over today's caches** (`src/app.rs`)
 
-> **Corrected (issue #679).** As built, `apply` sends a `Catalog` message through the existing `refresh_announced` (which already finds the loaded state by id, skips a generation already reached and maps a deleted catalog to `Unknown`), and `apply_reconnect` is `reload_keys_now(false)` plus the existing `catch_up_catalogs` (one list read, refreshing only the catalogs behind). The sketch below is the idea, not the code: read `src/app.rs`. Later tasks that move `apply` onto a cache replace these bodies; they do not need `refresh_catalog_by_id`, which was never created.
+> **Corrected (issue #679, 2026-11-19).** As built, `apply` sends a `Catalog` message through the existing `refresh_announced` (which already finds the loaded state by id, skips a generation already reached and maps a deleted catalog to `Unknown`), and `apply_reconnect` is `reload_keys_now(false)` plus the existing `catch_up_catalogs` (one list read, refreshing only the catalogs behind). The sketch below is the idea, not the code: read `src/app.rs`. Later tasks that move `apply` onto a cache replace these bodies; they do not need `refresh_catalog_by_id`, which was never created.
 
 ```rust
 /// Applies one change-feed message to this replica's caches.
