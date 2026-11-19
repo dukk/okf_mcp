@@ -1180,7 +1180,6 @@ mod tests {
         )
         .await
         .unwrap();
-        test.app.reload_settings_now(false).await;
         let exported = router(&test, admin())
             .oneshot(
                 Request::get("/catalogs/pg/export")

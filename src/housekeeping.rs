@@ -590,7 +590,9 @@ async fn revoke_idle_grants(app: &App, now: DateTime<Utc>) -> Result<(), OkfErro
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all)]
 async fn prune_audit(app: &App) -> Result<(), OkfError> {
-    let days = i64::from(app.settings().audit_retention_days);
+    // Outside any request, so it checks the settings itself (spec Decision
+    // 9): the retention never runs on settings older than `credential_ttl`.
+    let days = i64::from(app.fresh_settings().await.audit_retention_days);
     let before =
         app.clock().now() - TimeDelta::days(days) - TimeDelta::hours(AUDIT_PRUNE_MARGIN_HOURS);
     let mut steps = Steps::default();
@@ -1472,7 +1474,7 @@ mod tests {
         .await
         .unwrap();
         // The running app learns of the setting as a server would.
-        test.app.reload_settings_now(false).await;
+        test.app.reload_settings().await;
         for days in [61, 59] {
             let mut tx = pool.begin().await.unwrap();
             audit::record(

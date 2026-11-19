@@ -1,7 +1,13 @@
 //! Redis pub/sub announcements, on two channels.
 //!
-//! - `admin_generation` (spec Decision 12): the instance whose reload saw a
-//!   bump publishes it; every instance's subscriber reloads its key cache.
+//! - `admin_generation` (milestone 16 spec Decision 12), kept for one
+//!   release as the bridge to milestone 16 replicas (milestone 18 spec
+//!   Decision 14): after an administrative change, a milestone 18 replica or
+//!   command publishes [`BRIDGE_PAYLOAD`], which an M16 replica answers by
+//!   checking `admin_generation`; any other payload comes from an M16
+//!   replica or command, which sends no change message, so the subscriber
+//!   marks the credential caches and the catalog directory stale and checks
+//!   the settings ([`App::apply_m16_announcement`]).
 //! - Catalog generations (issue #659): after a publish, an import or a
 //!   repair commits, the writer publishes `<catalog id> <generation>`; every
 //!   instance's subscriber refreshes that catalog's snapshot
@@ -42,24 +48,33 @@ const BACKOFF_MAX: Duration = Duration::from_secs(30);
 /// Redis that stays down longer), and then no `Subscribed` would ever follow.
 const RESUBSCRIBE_GRACE: Duration = Duration::from_secs(10);
 
-/// Publishes a generation (or, from the CLI, an empty "check now"). A failure
-/// is counted and logged; the poll loop covers a lost announcement.
+/// M16 bridge (spec Decision 14): remove in the release after 0.23.
+///
+/// What a milestone 18 binary publishes on [`CHANNEL`] after an
+/// administrative change. It is not a number, so a milestone 16 replica reads
+/// it as "check `admin_generation` now" (as it reads the M16 command line's
+/// empty payload) and reloads its key cache, since `invalidate` still bumps
+/// the counter. A milestone 18 replica ignores it: the change it stands for
+/// was also sent through the change feed.
+pub const BRIDGE_PAYLOAD: &str = "notified";
+
+/// M16 bridge (spec Decision 14): remove in the release after 0.23.
+///
+/// Publishes [`BRIDGE_PAYLOAD`]. A failure is counted and logged; an M16
+/// replica's poll loop covers a lost announcement.
 ///
 /// # Arguments
-/// * `redis` - the shared Redis.
-/// * `generation` - the generation now loaded, or `None` for "check now".
+/// * `redis` - the shared Redis (owned: [`App::bridge_to_m16`] runs this on
+///   its own task).
 #[tracing::instrument(
     level = "debug",
     skip_all,
     fields(db.system.name = "redis", db.operation.name = "publish")
 )]
-pub async fn publish(redis: &Redis, generation: Option<i64>) {
-    let payload = generation
-        .map(|value| value.to_string())
-        .unwrap_or_default();
+pub async fn publish_bridge(redis: Redis) {
     let published: redis::RedisResult<usize> = redis
         .connection()
-        .publish(redis.channel(CHANNEL), payload)
+        .publish(redis.channel(CHANNEL), BRIDGE_PAYLOAD)
         .await;
     if let Err(error) = published {
         // `failed` counts and logs; its 503 is for requests, not for here.
@@ -121,8 +136,9 @@ fn announced_catalog(payload: &[u8]) -> Option<CatalogGeneration> {
 }
 
 /// After a CLI command that may have changed keys, users, teams or grants,
-/// tells every serving instance to check `admin_generation` (spec Decision
-/// 13). Best effort: the change is committed whatever happens here, so a
+/// tells every milestone 16 serving instance to check `admin_generation`
+/// ([`BRIDGE_PAYLOAD`]; milestone 18 instances learned of it through the
+/// change feed). Best effort: the change is committed whatever happens here, so a
 /// missing variable or an unreachable Redis is a `warn`, never a failure.
 /// Nothing printed names the URL. Each catalog in `catalogs` (an import or a
 /// repair the command committed) is announced first, on the catalog channel
@@ -133,7 +149,7 @@ fn announced_catalog(payload: &[u8]) -> Option<CatalogGeneration> {
 /// * `env` - reads an environment variable (injectable for tests).
 /// * `metrics` - where `okf.redis.errors` is counted.
 /// * `catalogs` - the catalog generations the command committed.
-/// * `admin` - whether to send the `admin_generation` "check now" as well
+/// * `admin` - whether to send the M16 bridge's "check now" as well
 ///   (`false` after a failed command, which announces only what it
 ///   committed).
 #[tracing::instrument(level = "debug", skip_all)]
@@ -153,8 +169,9 @@ pub async fn announce_from_cli(
             for change in catalogs {
                 publish_catalog(redis.clone(), *change).await;
             }
+            // M16 bridge (spec Decision 14): remove in the release after 0.23.
             if admin {
-                publish(&redis, None).await;
+                publish_bridge(redis).await;
             }
         }
         // The error's text names the variable and a kind, never the URL, but
@@ -166,28 +183,32 @@ pub async fn announce_from_cli(
     }
 }
 
-/// The generation an announcement names, `None` for an empty or unreadable
-/// payload (the CLI's "check now").
+/// M16 bridge (spec Decision 14): remove in the release after 0.23.
+///
+/// Whether an announcement on [`CHANNEL`] comes from a milestone 16 replica
+/// or command (a generation, or the empty "check now"), whose change sent no
+/// change message: anything but [`BRIDGE_PAYLOAD`].
 ///
 /// # Arguments
 /// * `payload` - the message's bytes.
 ///
 /// # Returns
-/// The announced generation, if the payload holds one.
+/// `true` unless the payload is the bridge's own.
 #[tracing::instrument(level = "trace", skip_all)]
-fn announced_generation(payload: &[u8]) -> Option<i64> {
-    std::str::from_utf8(payload)
-        .ok()
-        .and_then(|text| text.parse::<i64>().ok())
+fn from_an_m16_replica(payload: &[u8]) -> bool {
+    payload != BRIDGE_PAYLOAD.as_bytes()
 }
 
-/// Runs until `shutdown`: subscribes, reloads once (messages sent while it was
-/// not subscribed are lost), then reloads on every announcement of another
-/// generation. Reconnects with backoff when the connection ends. Returns at
+/// M16 bridge (spec Decision 14): remove in the release after 0.23.
+///
+/// Runs until `shutdown`: subscribes, applies an M16 announcement once
+/// (messages sent while it was not subscribed are lost), then on every
+/// announcement from an M16 replica ([`App::apply_m16_announcement`]).
+/// Reconnects with backoff when the connection ends. Returns at
 /// once without `[redis]`.
 ///
 /// # Arguments
-/// * `app` - the instance whose key cache is reloaded.
+/// * `app` - the instance whose caches are marked stale.
 /// * `shutdown` - cancelled when the server stops.
 #[cfg_attr(
     dylint_lib = "hyp_tracing",
@@ -259,10 +280,15 @@ trait Handler: Send + Sync {
     async fn message(&self, payload: &[u8]);
 }
 
-/// The `admin_generation` subscriber: an announcement this replica has not
-/// already caught up with (an M16 replica's change, which sends no change
-/// message) marks the credential caches stale and reloads the settings and
-/// labels ([`App::apply_m16_announcement`]).
+/// M16 bridge (spec Decision 14): remove in the release after 0.23.
+///
+/// The `admin_generation` subscriber: an announcement from an M16 replica
+/// (whose change sends no change message) marks the credential caches and
+/// the catalog directory stale, checks the settings and reloads the labels
+/// ([`App::apply_m16_announcement`]). Every one counts, whatever generation
+/// it names: a generation this replica already reached may still include
+/// an M16 change no message described. A milestone 18 replica's
+/// [`BRIDGE_PAYLOAD`] is ignored.
 struct AdminChanges<'a>(&'a App);
 
 #[async_trait::async_trait]
@@ -274,7 +300,7 @@ impl Handler for AdminChanges<'_> {
 
     #[tracing::instrument(level = "debug", skip_all)]
     async fn message(&self, payload: &[u8]) {
-        if announced_generation(payload) != Some(self.0.loaded_admin_generation()) {
+        if from_an_m16_replica(payload) {
             self.0.apply_m16_announcement().await;
         }
     }
@@ -444,7 +470,7 @@ async fn run<H: Handler, S: Source>(
 
 #[cfg(test)]
 mod tests {
-    use super::{announced_catalog, announced_generation, catalog_payload};
+    use super::{announced_catalog, catalog_payload, from_an_m16_replica, BRIDGE_PAYLOAD};
     use crate::store::catalogs::CatalogGeneration;
 
     #[test]
@@ -464,11 +490,16 @@ mod tests {
     }
 
     #[test]
-    fn a_payload_names_a_generation_only_when_it_is_a_number() {
-        assert_eq!(announced_generation(b"42"), Some(42));
-        assert_eq!(announced_generation(b""), None);
-        assert_eq!(announced_generation(b"not a number"), None);
-        assert_eq!(announced_generation(&[0xff, 0xfe]), None);
+    fn only_the_bridge_payload_is_not_an_m16_announcement() {
+        assert!(!from_an_m16_replica(BRIDGE_PAYLOAD.as_bytes()));
+        for m16 in [&b"42"[..], b"", b"not a number", &[0xff, 0xfe]] {
+            assert!(from_an_m16_replica(m16), "{m16:?}");
+        }
+        // What an M16 replica's subscriber does with the bridge's payload:
+        // it is not a generation, so it is never the one already loaded,
+        // and the replica checks `admin_generation` (M16's
+        // `announced_generation(payload) != Some(loaded)`).
+        assert!(BRIDGE_PAYLOAD.parse::<i64>().is_err());
     }
 }
 
@@ -477,12 +508,13 @@ mod catalog_tests;
 
 #[cfg(test)]
 mod catch_up_tests {
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
 
     use tokio_util::sync::CancellationToken;
 
     use super::listen;
-    use super::{run, AdminChanges, Events, Source};
+    use super::{run, AdminChanges, Events, Handler, Source, BRIDGE_PAYLOAD};
     use crate::config::Config;
     use crate::mcp::testing::replica_pair;
     use crate::shared::SubscriptionEvent;
@@ -506,8 +538,8 @@ mod catch_up_tests {
     }
 
     /// Attempt 1: `Disconnected` and nothing more. Attempt 2: fails.
-    /// Attempt 3: `Subscribed`. Records whether B had still not caught up with
-    /// the revocation (its loaded `admin_generation`) when each attempt began.
+    /// Attempt 3: `Subscribed`. Records whether B had still not applied an
+    /// announcement (its test counter) when each attempt began.
     struct Outage {
         attempts: std::sync::Mutex<Vec<bool>>,
         holds_key: Box<dyn Fn() -> bool + Send + Sync>,
@@ -551,10 +583,9 @@ mod catch_up_tests {
         let b = second;
         let key = crate::mcp::testing::staff_root(&first).await;
         a.poll().await.expect("A's poll");
-        b.reload_settings_now(false).await;
-        // What B has caught up with: the revocation below moves it, and
-        // only B's reload (the announcement subscriber's) catches up.
-        let before = b.loaded_admin_generation();
+        // How many announcements B applied: only the subscriber below
+        // applies one.
+        let before = b.m16_announcements.load(Ordering::Relaxed);
         let id = a
             .find_key(&key)
             .await
@@ -570,7 +601,7 @@ mod catch_up_tests {
         let holder = b.clone();
         let source = Outage {
             attempts: std::sync::Mutex::new(Vec::new()),
-            holds_key: Box::new(move || holder.loaded_admin_generation() == before),
+            holds_key: Box::new(move || holder.m16_announcements.load(Ordering::Relaxed) == before),
         };
         let shutdown = CancellationToken::new();
         let redis = b.redis().expect("B's redis").clone();
@@ -622,7 +653,6 @@ mod catch_up_tests {
         let b = second;
         let key = crate::mcp::testing::staff_root(&first).await;
         a.poll().await.expect("A's poll");
-        b.reload_settings_now(false).await;
         assert!(b.find_key(&key).await.unwrap().is_some(), "B holds the key");
 
         let id = a
@@ -635,7 +665,8 @@ mod catch_up_tests {
         crate::store::keys::revoke_by_id(a.pool(), &id, &AuditActor::cli(), chrono::Utc::now())
             .await
             .expect("revoke");
-        // Announced to nobody: B has no subscription yet.
+        // Heard by nobody: B runs no change-feed listener (a lib test) and
+        // has no subscription yet.
         a.poll().await.expect("A's poll");
         assert!(
             b.find_key(&key).await.unwrap().is_some(),
@@ -656,5 +687,125 @@ mod catch_up_tests {
             .expect("the subscriber stops")
             .expect("the subscriber's task");
         assert!(waited.is_ok(), "B reloaded when it subscribed");
+    }
+
+    /// Yields `events` on the first subscribe, and a subscription with
+    /// nothing in it on any later one.
+    struct Once(std::sync::Mutex<Option<Scripted>>);
+
+    #[async_trait::async_trait]
+    impl Source for Once {
+        type Stream = Scripted;
+
+        #[cfg_attr(
+            dylint_lib = "hyp_tracing",
+            allow(uninstrumented_fn, reason = "test double")
+        )]
+        async fn subscribe(&self) -> redis::RedisResult<Scripted> {
+            let first = self.0.lock().expect("script lock").take();
+            Ok(first.unwrap_or_else(|| Scripted(std::collections::VecDeque::new())))
+        }
+    }
+
+    /// Two replicas, B holding a staff key's principal; then the key is
+    /// revoked and `require_unlock` turned on through the store, as an M16
+    /// replica would (B runs no change-feed listener, so no message reaches
+    /// it).
+    async fn changed_behind_b() -> (
+        crate::mcp::testing::TestApp,
+        std::sync::Arc<crate::app::App>,
+        String,
+        crate::db::redis_support::TestRedis,
+    ) {
+        let (first, b, redis) = tokio::time::timeout(
+            Duration::from_secs(120),
+            replica_pair(&[], Config::default()),
+        )
+        .await
+        .expect("starting two replicas within 120 s");
+        let key = crate::mcp::testing::staff_root(&first).await;
+        let found = b.find_key(&key).await.unwrap().expect("B finds the key");
+        assert!(!found.facts.require_unlock);
+        crate::store::keys::revoke_by_id(
+            first.app.pool(),
+            &found.key_id,
+            &AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .expect("revoke");
+        crate::store::settings::set(
+            first.app.pool(),
+            crate::store::settings::SettingKey::RequireUnlock,
+            "on",
+            &AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .expect("require unlocks");
+        assert!(
+            b.find_key(&key).await.unwrap().is_some(),
+            "B has not heard of the revocation"
+        );
+        assert!(!b.settings().require_unlock, "nor of the setting");
+        (first, b, key, redis)
+    }
+
+    /// An announcement from an M16 replica (a generation on the channel),
+    /// answered through the subscriber loop, makes B read the key again and
+    /// check its settings: the next `find` refuses the revoked key, and the
+    /// settings carry the new `require_unlock`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_m16_announcement_marks_credentials_and_settings_stale() {
+        let (_first, b, key, _redis) = changed_behind_b().await;
+        let source = Once(std::sync::Mutex::new(Some(Scripted(
+            [SubscriptionEvent::Message(b"42".to_vec())].into(),
+        ))));
+        let shutdown = CancellationToken::new();
+        let redis = b.redis().expect("B's redis").clone();
+        let handler = AdminChanges(&b);
+        let looped = run(
+            &handler,
+            &redis,
+            &source,
+            Duration::from_secs(60),
+            &shutdown,
+        );
+        let waited = tokio::time::timeout(Duration::from_secs(20), async {
+            tokio::pin!(looped);
+            loop {
+                tokio::select! {
+                    () = &mut looped => return,
+                    () = tokio::time::sleep(Duration::from_millis(50)) => {
+                        if b.m16_announcements.load(Ordering::Relaxed) > 0 {
+                            shutdown.cancel();
+                        }
+                    }
+                }
+            }
+        })
+        .await;
+        assert!(waited.is_ok(), "B applied the announcement within 20 s");
+
+        assert!(
+            b.find_key(&key).await.unwrap().is_none(),
+            "the next find reads the key again"
+        );
+        assert!(b.settings().require_unlock, "the settings were checked");
+    }
+
+    /// The bridge's own payload stands for a change sent through the change
+    /// feed too, so it marks nothing stale: B still serves what it cached.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_bridge_payload_marks_nothing_stale() {
+        let (_first, b, key, _redis) = changed_behind_b().await;
+
+        AdminChanges(&b).message(BRIDGE_PAYLOAD.as_bytes()).await;
+
+        assert_eq!(b.m16_announcements.load(Ordering::Relaxed), 0);
+        assert!(
+            b.find_key(&key).await.unwrap().is_some(),
+            "the cached key was not reread"
+        );
     }
 }
