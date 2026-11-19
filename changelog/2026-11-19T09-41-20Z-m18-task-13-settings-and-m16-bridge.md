@@ -16,6 +16,12 @@
   keeps serving the loaded settings, logs at `warn` and leaves them expired,
   so the next request retries. A validation time in the future (the
   clock stepped back) counts as expired.
+- `SETTINGS_CHECK_TIMEOUT` (5 s): a settings check runs before the routes'
+  own timeouts, so it has its own bound. A check past it (a read blocked
+  behind a lock on `server_state`, an unresponsive connection) counts as
+  failed: the loaded settings serve, nothing is satisfied, callers queued
+  behind it share it, and the next request retries. Test
+  `a_blocked_settings_check_answers_within_its_bound` (through the router).
 - `App::reload_settings`: marks the settings stale and checks them at once
   (a `Settings` message, a reconnect, an M16 announcement, a poll pass). A
   mark keeps the settings stale for every caller until a check that began

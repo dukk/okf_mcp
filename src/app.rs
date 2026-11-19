@@ -46,6 +46,13 @@ pub type Catalogs = BTreeMap<String, Arc<CatalogState>>;
 /// fail the same way, so it is retried only once the generation moves.
 type Broken = HashMap<i64, i64>;
 
+/// The longest a settings check may take. A check runs before every
+/// request whose settings expired, outside the routes' own timeouts, so a
+/// blocked read (`server_state` under an exclusive lock, an unresponsive
+/// connection) must not hold requests: past this bound the check counts as
+/// failed, the loaded settings serve, and the next request retries.
+pub const SETTINGS_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// The settings as last loaded, with the `admin_generation` they were
 /// checked at and when (spec Decision 9): `admin_generation` moves with
 /// every administrative change, settings writes included, so an unmoved
@@ -814,7 +821,7 @@ impl App {
             .read()
             .expect("settings lock poisoned")
             .generation;
-        let checked = async {
+        let checking = async {
             let generation = catalogs::admin_generation(&self.pool).await?;
             if generation == loaded_generation {
                 return Ok(None);
@@ -834,8 +841,17 @@ impl App {
                 Outcome::Error
             });
             Ok::<_, OkfError>(Some((generation, loaded?)))
-        }
-        .await;
+        };
+        // A check past its bound is a failed one: dropping the future
+        // abandons its read (sqlx discards the connection), and nothing
+        // below is written, so its marks stay unsatisfied.
+        let checked = tokio::time::timeout(SETTINGS_CHECK_TIMEOUT, checking)
+            .await
+            .unwrap_or_else(|_| {
+                Err(OkfError::Busy {
+                    reason: "the settings check timed out".to_string(),
+                })
+            });
         match checked {
             Ok(reloaded) => {
                 let mut loaded = self.settings.write().expect("settings lock poisoned");
@@ -2901,6 +2917,61 @@ mod tests {
             .expect("the next request within 30 s");
 
         assert_eq!(next.max_keys_per_user, 5, "the next request checked");
+    }
+
+    /// A settings read blocked behind an exclusive lock on `server_state`
+    /// must not hold a request: past [`SETTINGS_CHECK_TIMEOUT`] the check
+    /// fails, the request is answered with the loaded settings, and the
+    /// check is not satisfied, so the next request (once the lock is gone)
+    /// checks again.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_blocked_settings_check_answers_within_its_bound() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+        let db = test_db().await;
+        let (app, clock) = app_with_movable_clock(&db.pool).await;
+        set_setting(&db.pool, settings::SettingKey::ProductName, "Acme Notes").await;
+        clock.advance(app.config().credential_ttl + Duration::from_secs(1));
+        // Held on its own connection; dropping the transaction releases it.
+        let mut locker = db.pool.begin().await.unwrap();
+        sqlx::query("LOCK TABLE server_state IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *locker)
+            .await
+            .unwrap();
+        let product_name = || async {
+            let response = crate::http::router(
+                Arc::clone(&app),
+                &tokio_util::sync::CancellationToken::new(),
+            )
+            .oneshot(Request::get("/ui/brand.json").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["product_name"].clone()
+        };
+
+        let started = Instant::now();
+        let blocked = tokio::time::timeout(
+            SETTINGS_CHECK_TIMEOUT + Duration::from_secs(10),
+            product_name(),
+        )
+        .await
+        .expect("the request answers although the settings read is blocked");
+        let waited = started.elapsed();
+        locker.rollback().await.unwrap();
+        let after = tokio::time::timeout(Duration::from_secs(30), product_name())
+            .await
+            .expect("the next request within 30 s");
+
+        assert_eq!(blocked, "okf", "the loaded settings serve");
+        assert!(
+            waited >= SETTINGS_CHECK_TIMEOUT,
+            "it waited for the bound: {waited:?}"
+        );
+        assert_eq!(after, "Acme Notes", "the next request checked again");
     }
 
     /// A check that finds `admin_generation` unmoved loads nothing; one
