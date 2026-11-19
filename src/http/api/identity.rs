@@ -145,7 +145,7 @@ async fn teams_of(pool: &PgPool, name: &str) -> Result<(Vec<String>, bool), OkfE
 /// `GET /whoami?after=&limit=`.
 ///
 /// # Errors
-/// 400 for a malformed `after`; 500 if the key list, the user or the
+/// 400 for a malformed `after`; 500 if the key row, the user or the
 /// catalog directory cannot be read.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn whoami(
@@ -159,14 +159,16 @@ async fn whoami(
         // A session has no key row: it is its user.
         CredentialKind::Session { .. } => (None, principal.user.clone()),
         CredentialKind::ApiKey | CredentialKind::OAuth { .. } => {
-            // The user comes from the row read now, not the principal, in
-            // case it was reassigned since the principal was cached. `unzip` splits an
-            // `Option<(a, b)>` into `(Option<a>, Option<b>)`.
-            let (name, user) = key_rows::list(app.pool())
+            // The user comes from the one row read now, not the principal,
+            // in case it was reassigned since the principal was cached. A
+            // row that is gone has no name or user; a row revoked since the
+            // principal was cached is still read (revoked or not), so it
+            // keeps both, as the whole-table read did.
+            // `unzip` splits an `Option<(a, b)>` into
+            // `(Option<a>, Option<b>)`.
+            let (name, user) = key_rows::record_by_id(app.pool(), &principal.key_id)
                 .await?
-                .into_iter()
-                .find(|record| record.id == principal.key_id)
-                .map(|record| (record.name, record.user))
+                .map(|credential| (credential.record.name, credential.record.user))
                 .unzip();
             // `flatten` turns the `Option<Option<String>>` (row found, user
             // set) into one `Option<String>`.
@@ -301,6 +303,7 @@ async fn sign_out(
 #[cfg(test)]
 mod tests {
     use crate::http::api::testing::{app, assert_matrix, keys, send, Row};
+    use crate::rows_returned::RowsReturned;
     // `oneshot` sends one request through a router without a socket.
     use tower::ServiceExt;
 
@@ -464,5 +467,87 @@ mod tests {
         let test = app().await;
         let (status, _) = send(&test, "GET", "/api/v1/nothing-here", None, None).await;
         assert_eq!(status.as_u16(), 404);
+    }
+
+    /// A key deleted after its credential was cached still authenticates
+    /// until the cache expires; its row is gone, so `whoami` names no key
+    /// and no user (the answer the whole-table read gave).
+    #[tokio::test]
+    async fn whoami_of_a_key_deleted_after_it_was_cached_has_no_name_or_user() {
+        let test = app().await;
+        let keys = keys(&test).await;
+        let (warm, _) = send(&test, "GET", "/api/v1/whoami", Some(&keys.read), None).await;
+        assert_eq!(warm.as_u16(), 200);
+        sqlx::query("DELETE FROM api_keys WHERE name = 'reader'")
+            .execute(test.app.pool())
+            .await
+            .expect("delete the key row");
+
+        let (status, body) = send(&test, "GET", "/api/v1/whoami", Some(&keys.read), None).await;
+
+        assert_eq!(status.as_u16(), 200, "{body}");
+        assert_eq!(body.get("name"), Some(&serde_json::Value::Null));
+        assert_eq!(body.get("user"), Some(&serde_json::Value::Null));
+        assert_eq!(body["teams"], serde_json::json!([]));
+    }
+
+    /// Issue #737: `GET /whoami` read every key to find the caller's. With
+    /// 50,000 other keys present (seeded by SQL), the request's queries
+    /// return a handful of rows, and the answer is the caller's own.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn whoami_reads_the_callers_key_not_every_key() {
+        use tracing_subscriber::layer::SubscriberExt;
+        // `with_filter` is a method of the `Layer` trait.
+        use tracing_subscriber::Layer as _;
+
+        const OTHERS: i64 = 50_000;
+        let test = app().await;
+        let keys = keys(&test).await;
+        sqlx::query(
+            "INSERT INTO api_keys (id, name, actor, sha256, access, all_catalogs, created_at) \
+             SELECT 'k' || n, 'bulk' || n, 'bulk' || n, sha256(('bulk' || n)::bytea), \
+                    'read', false, now() \
+             FROM generate_series(1, $1) AS n",
+        )
+        .bind(OTHERS)
+        .execute(test.app.pool())
+        .await
+        .expect("seed keys");
+        sqlx::query("ANALYZE api_keys")
+            .execute(test.app.pool())
+            .await
+            .unwrap();
+        // Warm the caches, so the measured request is the steady state.
+        let (warm, _) = send(&test, "GET", "/api/v1/whoami", Some(&keys.read), None).await;
+        assert_eq!(warm.as_u16(), 200);
+        let counter = RowsReturned::default();
+        let subscriber = tracing_subscriber::registry().with(
+            counter.clone().with_filter(
+                tracing_subscriber::filter::Targets::new()
+                    .with_target("sqlx::query", tracing::Level::TRACE),
+            ),
+        );
+
+        let (status, body) = {
+            // Only this thread's events: the request runs on it.
+            let _guard = tracing::subscriber::set_default(subscriber);
+            tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                send(&test, "GET", "/api/v1/whoami", Some(&keys.read), None),
+            )
+            .await
+            .expect("whoami answers")
+        };
+
+        let relaxed = std::sync::atomic::Ordering::Relaxed;
+        let rows = counter.rows.load(relaxed);
+        let statements = counter.statements.load(relaxed);
+        assert_eq!(status.as_u16(), 200);
+        assert_eq!(body["name"], "reader");
+        assert!(statements > 0, "the request's statements are counted");
+        assert!(
+            rows < 50,
+            "whoami returned {rows} rows in {statements} statements beside {OTHERS} other keys"
+        );
     }
 }

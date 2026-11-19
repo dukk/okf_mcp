@@ -60,6 +60,8 @@ pub mod oidc;
 pub mod okf;
 pub mod overlay;
 pub mod render;
+#[cfg(test)]
+pub(crate) mod rows_returned;
 pub mod selection;
 pub mod shared;
 pub mod store;
