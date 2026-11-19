@@ -16,6 +16,7 @@ use crate::db::{test_db, TEST_TEAM, TEST_USER};
 use crate::invalidate::testing::invalidations_of;
 use crate::labels::DisplayName;
 use crate::mcp::testing::{local_metrics, render};
+use crate::rows_returned::RowsReturned;
 use crate::store::audit::AuditActor;
 use crate::store::catalogs::{self, NewCatalog};
 use crate::store::keys::{Access, Grants, NewKey};
@@ -836,36 +837,6 @@ async fn the_per_catalog_ceiling_answers_what_the_whole_ceiling_did() {
             let expected: Vec<String> = whole.keys().cloned().collect();
             assert_eq!(listed, expected, "{user}'s listing");
         }
-    }
-}
-
-/// Sums the `rows_returned` of every `sqlx::query` event: how many rows the
-/// database sent back to the code under test.
-#[derive(Clone, Default)]
-struct RowsReturned {
-    rows: Arc<std::sync::atomic::AtomicU64>,
-    statements: Arc<std::sync::atomic::AtomicU64>,
-}
-
-impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for RowsReturned {
-    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
-        struct Rows(u64);
-        impl tracing::field::Visit for Rows {
-            fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
-                if field.name() == "rows_returned" {
-                    self.0 = value;
-                }
-            }
-            fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
-        }
-        if event.metadata().target() != "sqlx::query" {
-            return;
-        }
-        let mut rows = Rows(0);
-        event.record(&mut rows);
-        let relaxed = std::sync::atomic::Ordering::Relaxed;
-        self.rows.fetch_add(rows.0, relaxed);
-        self.statements.fetch_add(1, relaxed);
     }
 }
 
