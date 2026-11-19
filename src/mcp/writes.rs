@@ -1947,7 +1947,7 @@ mod repair_tests {
 
         assert!(published.report.published, "{published:?}");
         assert_eq!(
-            published_text(&test, "d/index.md").unwrap(),
+            published_text(&test, "d/index.md").await.unwrap(),
             "# D\n\nCurated words.\n\n# Concepts\n\n* [Odd](a%20b.md) - An odd one.\n"
         );
         let again_handle = open(&first).await;

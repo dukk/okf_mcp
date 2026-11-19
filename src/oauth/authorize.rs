@@ -3110,7 +3110,12 @@ mod tests {
         let (status, headers, body) = approve_as_shown(&test, &alice, &page).await;
 
         let grant = grant_of(&test, &forwarded(status, &headers, &body)).await;
-        let principal = test.app.keys().find_grant(&grant).expect("cached grant");
+        let principal = test
+            .app
+            .find_grant(&grant)
+            .await
+            .unwrap()
+            .expect("cached grant");
         assert_eq!(principal.user.as_deref(), Some("alice"));
         assert_eq!(principal.level("main"), Some(Access::Write));
         assert_eq!(principal.default_catalog.as_deref(), Some("main"));
@@ -3127,7 +3132,12 @@ mod tests {
         let (status, headers, body) = approve_as_shown(&test, &alice, &page).await;
 
         let grant = grant_of(&test, &forwarded(status, &headers, &body)).await;
-        let principal = test.app.keys().find_grant(&grant).expect("cached grant");
+        let principal = test
+            .app
+            .find_grant(&grant)
+            .await
+            .unwrap()
+            .expect("cached grant");
         assert_eq!(principal.level("main"), Some(Access::Read));
         assert_eq!(principal.default_catalog.as_deref(), Some("main"));
     }
@@ -3208,7 +3218,12 @@ mod tests {
         )
         .await;
         let grant = grant_of(&test, &forwarded(status, &headers, &body)).await;
-        let principal = test.app.keys().find_grant(&grant).expect("cached grant");
+        let principal = test
+            .app
+            .find_grant(&grant)
+            .await
+            .unwrap()
+            .expect("cached grant");
         assert_eq!(principal.level("main"), Some(Access::Read));
         assert_eq!(principal.default_catalog, None);
     }
