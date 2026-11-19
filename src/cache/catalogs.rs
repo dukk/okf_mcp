@@ -157,6 +157,12 @@ pub struct CatalogCache {
     states: Bounded<i64, Arc<CatalogState>>,
     // `(id, generation)` pairs whose stored data would not build.
     broken: Bounded<(i64, i64), ()>,
+    // One request at a time brings a resident catalog up to its row, by
+    // catalog id: the broken check, the refresh and the recording of its
+    // failure happen together, so requests queued behind a generation that
+    // does not build see it recorded instead of building it again. Taken
+    // before (never inside) the rebuild lock `CatalogState::refresh` takes.
+    catching_up: KeyedLocks,
 }
 
 impl std::fmt::Debug for CatalogCache {
@@ -195,6 +201,7 @@ impl CatalogCache {
                 Limit::Entries(BROKEN_ENTRIES),
                 BROKEN_TTL,
             ),
+            catching_up: KeyedLocks::new(),
         }
     }
 
@@ -242,6 +249,16 @@ impl CatalogCache {
             Err(error) => return Err(self.load_failed(row, error).await),
         };
         if state.current().generation() >= row.generation {
+            return Ok(state);
+        }
+        // The guard (`_` prefix: kept for its lifetime) is held until the
+        // refresh's outcome is recorded below.
+        let _catching_up = self.catching_up.lock(row.id).await;
+        // Again under the lock: a request ahead of this one may have
+        // refreshed it, or found that this generation does not build.
+        if state.current().generation() >= row.generation
+            || self.is_broken(row.id, row.generation).await
+        {
             return Ok(state);
         }
         match state.refresh(&self.pool, rebuilds).await {

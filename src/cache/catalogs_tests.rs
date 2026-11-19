@@ -275,6 +275,51 @@ async fn a_failed_refresh_keeps_serving_the_old_snapshot_until_the_catalog_chang
     assert_eq!(served.current().generation(), loaded_at, "the old snapshot");
 }
 
+/// Requests that all find a resident catalog behind a generation that does
+/// not build rebuild it once between them: the first records it as broken
+/// under the catalog's catch-up lock, and the others, queued on that lock,
+/// see the record and serve the old snapshot.
+#[test]
+fn concurrent_requests_behind_a_broken_generation_build_it_once() {
+    use crate::telemetry::subscriber::capture::SpanRecorder;
+
+    // Arranged on its own runtime: the recorder runs the act on another.
+    let setup = tokio::runtime::Runtime::new().unwrap();
+    let (test, _registry, broken, loaded_at) = setup.block_on(async {
+        let (test, registry) =
+            app(&[("pg", &[("a.md", "# A\n")])], ByteSize::gib(1).as_u64()).await;
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
+        let loaded_at = state.current().generation();
+        break_catalog(test.app.pool(), state.id()).await;
+        test.app.apply_reconnect().await;
+        let broken = row(&test.app, "pg").await;
+        assert!(broken.generation > loaded_at);
+        (test, registry, broken, loaded_at)
+    });
+    let recorder = SpanRecorder::new();
+
+    let served = recorder.run(async {
+        let get = || test.app.catalog_state(&broken);
+        tokio::time::timeout(BOUND, async {
+            tokio::join!(get(), get(), get(), get(), get(), get())
+        })
+        .await
+        .expect("the requests finish")
+    });
+
+    let builds = recorder
+        .finished()
+        .iter()
+        .filter(|span| span.name == "build")
+        .count();
+    assert_eq!(builds, 1, "one build for six requests");
+    for state in [served.0, served.1, served.2, served.3, served.4, served.5] {
+        let state = state.expect("the old snapshot is served");
+        assert_eq!(state.current().generation(), loaded_at);
+    }
+    setup.block_on(async move { drop(test) });
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_request_keeps_its_snapshot_while_the_entry_is_evicted() {
     // Two catalogs of one kilobyte each; the budget holds one.
