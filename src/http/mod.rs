@@ -630,7 +630,8 @@ const ACCESS_SETTLE_LIMIT: std::time::Duration = std::time::Duration::from_secs(
 /// What `serve_with` starts beside the HTTP server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ServeOptions {
-    /// Whether to run the background workers (the mail worker). Always
+    /// Whether to run the background workers (mail and housekeeping) and
+    /// the housekeeping ticker. Always
     /// `true` in production: every replica runs them (issue #458). Test
     /// servers that only enqueue set it to `false`.
     pub worker: bool,
@@ -679,22 +680,25 @@ pub async fn serve(
     serve_with(app, listener, shutdown, ServeOptions::default()).await
 }
 
-/// Waits for the mail worker and enforces the shutdown grace: once
-/// `shutdown` is cancelled the worker has `grace` to finish the mail in
-/// hand; past that it is aborted and an error is logged (another replica
-/// takes the job after the orphan timeout). It returns when the worker has
-/// finished or been aborted, and runs beside the server's own draining, so
-/// a slow request or poll pass never lengthens the grace.
+/// Waits for a worker (mail or housekeeping) and enforces the shutdown
+/// grace: once `shutdown` is cancelled the worker has `grace` to finish the
+/// job in hand; past that it is aborted and an error is logged (another
+/// replica takes the job after the orphan timeout). It returns when the
+/// worker has finished or been aborted, and runs beside the server's own
+/// draining, so a slow request or poll pass never lengthens the grace.
 ///
 /// # Arguments
-/// * `worker` - the mail worker's task.
+/// * `worker` - the worker's task.
 /// * `shutdown` - the server's stop signal; the grace starts when it is cancelled.
 /// * `grace` - how long the worker may take after the signal.
+/// * `queue` - the worker's queue (`send_mail`, `housekeeping`), for the
+///   log lines.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn supervise_worker(
     mut worker: tokio::task::JoinHandle<()>,
     shutdown: CancellationToken,
     grace: std::time::Duration,
+    queue: &'static str,
 ) {
     // `&mut worker` polls the handle without consuming it, so it can still
     // be aborted afterwards.
@@ -709,9 +713,10 @@ async fn supervise_worker(
             Err(_) => {
                 worker.abort();
                 tracing::error!(
+                    queue,
                     grace_secs = grace.as_secs_f64(),
-                    "the mail worker did not finish within worker_shutdown_grace; \
-                     its mail in hand is retried by another replica"
+                    "a worker did not finish within worker_shutdown_grace; \
+                     its job in hand is retried by another replica"
                 );
                 return;
             }
@@ -720,24 +725,25 @@ async fn supervise_worker(
     if let Err(error) = result {
         split_event!(
             error,
-            {},
+            { queue, },
             { %error, },
-            "the mail worker panicked"
+            "a worker panicked"
         );
     }
 }
 
 /// Serves until `shutdown` is cancelled, running the poll loop, the clock
-/// check and (unless `options.worker` is off) the mail worker beside it.
+/// check and (unless `options.worker` is off) the mail worker, the
+/// housekeeping worker and the housekeeping ticker beside it.
 ///
 /// # Arguments
 /// * `app` - the shared state.
 /// * `listener` - a bound socket.
 /// * `shutdown` - cancelled to stop: it ends the MCP sessions, the poll loop,
-///   the clock check, the mail worker and the listener, and `serve` returns
-///   once open connections close, the mail worker has finished the mail in
-///   hand (at most `worker_shutdown_grace`) and the access counts in flight
-///   are written.
+///   the clock check, the workers, the ticker and the listener, and `serve`
+///   returns once open connections close, each worker has finished the job
+///   in hand (at most `worker_shutdown_grace`) and the access counts in
+///   flight are written.
 /// * `options` - what to start beside the server.
 ///
 /// # Errors
@@ -784,14 +790,33 @@ pub async fn serve_with(
     let worker_pool = options
         .worker
         .then(|| crate::mail::queue::WorkerPool::new(app.pool()));
-    // The mail worker runs under a supervisor that enforces
+    // Each worker runs under a supervisor that enforces
     // `worker_shutdown_grace` from the moment `shutdown` is cancelled,
     // concurrently with the HTTP drain and the other joins below.
-    let mail_supervisor = worker_pool.as_ref().map(|pool| {
-        tokio::spawn(supervise_worker(
-            crate::mail::queue::spawn_worker(Arc::clone(&app), pool, shutdown.clone()),
+    let grace = app.config().worker_shutdown_grace;
+    let supervisors = worker_pool.as_ref().map(|pool| {
+        [
+            tokio::spawn(supervise_worker(
+                crate::mail::queue::spawn_worker(Arc::clone(&app), pool, shutdown.clone()),
+                shutdown.clone(),
+                grace,
+                crate::mail::queue::QUEUE,
+            )),
+            tokio::spawn(supervise_worker(
+                crate::housekeeping::spawn_worker(Arc::clone(&app), pool, shutdown.clone()),
+                shutdown.clone(),
+                grace,
+                crate::housekeeping::QUEUE,
+            )),
+        ]
+    });
+    // Schedules each housekeeping slot (once per cluster: the other
+    // replicas' pushes of a slot are ignored) and reads the cluster stats
+    // into this replica's gauges, once a minute; with the workers only.
+    let ticker = options.worker.then(|| {
+        tokio::spawn(crate::housekeeping::tick_until(
+            Arc::clone(&app),
             shutdown.clone(),
-            app.config().worker_shutdown_grace,
         ))
     });
     // The feedback worker (issue #674): only with `[feedback]` and its
@@ -858,16 +883,27 @@ pub async fn serve_with(
             "the clock check panicked"
         );
     }
-    // The supervisor started its clock when `shutdown` was cancelled, so
-    // the grace did not wait for the drains above. It ends once the worker
-    // has finished or been aborted; then nothing uses the pool.
-    if let Some(supervisor) = mail_supervisor {
+    if let Some(ticker) = ticker {
+        if let Err(error) = ticker.await {
+            split_event!(
+                error,
+                {},
+                { %error, },
+                "the housekeeping ticker panicked"
+            );
+        }
+    }
+    // The supervisors started their clocks when `shutdown` was cancelled,
+    // so the grace did not wait for the drains above. Each ends once its
+    // worker has finished or been aborted; after both, nothing uses the pool.
+    // `into_iter().flatten()`: the `Option`'s array, or nothing.
+    for supervisor in supervisors.into_iter().flatten() {
         if let Err(error) = supervisor.await {
             split_event!(
                 error,
                 {},
                 { %error, },
-                "the mail worker supervisor panicked"
+                "a worker supervisor panicked"
             );
         }
     }
@@ -1583,7 +1619,8 @@ mod tests {
         .unwrap();
         let mut status = String::new();
         for _ in 0..200 {
-            status = sqlx::query_scalar("SELECT status FROM apalis.jobs")
+            status = sqlx::query_scalar("SELECT status FROM apalis.jobs WHERE job_type = $1")
+                .bind(crate::mail::queue::QUEUE)
                 .fetch_one(&db.pool)
                 .await
                 .unwrap();
@@ -1640,6 +1677,7 @@ mod tests {
             worker,
             shutdown.clone(),
             std::time::Duration::from_millis(200),
+            "send_mail",
         ));
         // Before the signal the clock has not started, however long it takes.
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -1676,6 +1714,7 @@ mod tests {
             worker,
             shutdown.clone(),
             std::time::Duration::from_secs(20),
+            "send_mail",
         ));
 
         shutdown.cancel();

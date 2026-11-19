@@ -32,6 +32,7 @@ pub mod clock_check;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod housekeeping;
 pub mod http;
 pub mod invalidate;
 pub mod investigator;

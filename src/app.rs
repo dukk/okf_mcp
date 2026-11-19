@@ -8,7 +8,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, RwLock};
 
-use chrono::TimeDelta;
 use sqlx::PgPool;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
@@ -30,13 +29,8 @@ use crate::overlay::Overlays;
 use crate::shared;
 use crate::store::audit::{self, AccessKind, AccessRecord};
 use crate::store::catalogs::CatalogGeneration;
-use crate::store::oauth::{
-    clients as oauth_clients, codes as sign_in_codes, tokens as oauth_tokens,
-};
 use crate::store::settings::{self, Settings};
-use crate::store::{
-    catalogs, changesets, email_tokens, keys, sign_in_events, unlocks, user_sessions,
-};
+use crate::store::{catalogs, unlocks};
 use crate::telemetry::metrics::{AnnouncementResult, Metrics, Outcome, RefreshResult};
 use crate::telemetry::subscriber::{split_event, LOCAL_ONLY};
 
@@ -48,31 +42,6 @@ pub type Catalogs = BTreeMap<String, Arc<CatalogState>>;
 /// and the generation that failed. Building the same generation again would
 /// fail the same way, so it is retried only once the generation moves.
 type Broken = HashMap<i64, i64>;
-
-/// How long an empty open changeset may go unchanged before the poll loop
-/// discards it (design "Session lifecycle").
-const EMPTY_CHANGESET_HOURS: i64 = 24;
-
-/// How often the poll loop prunes the OAuth tables (they change slowly; a
-/// pass every `poll_interval` would be three needless deletes).
-const OAUTH_PRUNE_EVERY: std::time::Duration = std::time::Duration::from_secs(60 * 60);
-
-/// How long expired tokens and unredeemed codes are kept (for diagnosis).
-const OAUTH_RETENTION_DAYS: i64 = 7;
-
-/// How long a registered client that no grant names is kept.
-const UNBOUND_CLIENT_HOURS: i64 = 24;
-
-/// How long sign-in events are kept (spec "Logging and audit").
-const SIGN_IN_EVENT_RETENTION_DAYS: i64 = 90;
-
-/// How often the poll loop prunes the audit log (plan Decision 12).
-const AUDIT_PRUNE_EVERY: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
-
-/// How far past the retention period the audit prune's cut-off lies, so a
-/// small skew between this clock and the database's (whose clock the
-/// append-only trigger uses) never makes it refuse the prune.
-const AUDIT_PRUNE_MARGIN_HOURS: i64 = 1;
 
 /// The state every route and tool shares. Built once by [`App::load`] and
 /// shared as an `Arc<App>`.
@@ -128,11 +97,6 @@ pub struct App {
     clock_status: RwLock<Option<ClockStatus>>,
     // The OAuth authorization server's state; `None` without `public_url`.
     oauth: Option<OAuth>,
-    // When the OAuth tables were last pruned; `None` until the first pass.
-    // A `std` mutex: held only to read or set the instant.
-    oauth_pruned: std::sync::Mutex<Option<std::time::Instant>>,
-    // When the audit log was last pruned; `None` until the first pass.
-    audit_pruned: std::sync::Mutex<Option<std::time::Instant>>,
     // The sign-in routes' per-address and per-email limits.
     sign_in_limits: SignInLimits,
     // The configured mail provider (Decision 10), built once at start-up.
@@ -153,10 +117,6 @@ pub struct App {
     // The metric instruments (M15 Task 2); built on the global meter provider
     // unless a test supplies its own.
     metrics: Metrics,
-    // Open changesets per catalog name, as the last poll pass counted them
-    // (`okf.changesets.open` reads it; a scrape never queries Postgres). A
-    // `std` lock: held only to read or swap the map.
-    open_changesets: RwLock<BTreeMap<String, i64>>,
     // Test hook: a background access write waits for this lock first, so a
     // test can hold it to run a deletion or a transfer between admission
     // and persistence.
@@ -297,8 +257,6 @@ impl App {
         let passkeys = Passkeys::new(&config, redis.as_ref())?;
         // A provider whose secret variable is unset fails start-up here.
         let oidc = OidcProviders::new(&config, |name| std::env::var(name).ok(), redis.as_ref())?;
-        // A failed count leaves the map empty until the first poll pass.
-        let open_changesets = changesets::open_counts(&pool).await.unwrap_or_default();
         let app = Arc::new(Self {
             pool,
             config,
@@ -317,8 +275,6 @@ impl App {
             polling: tokio::sync::Mutex::new(broken),
             clock_status: RwLock::new(None),
             oauth,
-            oauth_pruned: std::sync::Mutex::new(None),
-            audit_pruned: std::sync::Mutex::new(None),
             sign_in_limits: SignInLimits::new(),
             mailer,
             forminit,
@@ -326,7 +282,6 @@ impl App {
             oidc,
             access_writes: std::sync::Mutex::new(tokio::task::JoinSet::new()),
             metrics,
-            open_changesets: RwLock::new(open_changesets),
             #[cfg(test)]
             access_hold: Arc::default(),
         });
@@ -721,11 +676,9 @@ impl App {
     }
 
     /// One pass of the poll loop: reloads the key cache and the settings if
-    /// `admin_generation` moved, and brings the catalogs in line with the catalog list. Between
-    /// the two, it discards empty changesets unchanged for 24 hours (design
-    /// "Session lifecycle"), so that runs on every pass, even one whose
-    /// catalog list then fails; a prune failure is logged and retried at the
-    /// next pass.
+    /// `admin_generation` moved, and brings the catalogs in line with the
+    /// catalog list. Pruning and the cluster counts are housekeeping jobs
+    /// ([`crate::housekeeping`]), run once per cluster, not per pass.
     ///
     /// A catalog that fails to load or refresh, or a key reload (or the
     /// `admin_generation` read before it) that fails, is logged and the rest
@@ -777,12 +730,6 @@ impl App {
         // broken catalogs.
         let mut broken = self.polling.lock().await;
         self.reload_keys_if_changed(true).await;
-        // Before the catalog list, whose `?` would skip it on a failure.
-        self.prune_empty_changesets().await;
-        self.prune_oauth().await;
-        self.prune_audit().await;
-        self.count_open_changesets().await;
-        crate::mail::queue::record_depth(&self.pool, &self.metrics).await;
         let current = self.catalogs();
         let mut next = Catalogs::new();
         // Rebuilt each pass, so a deleted catalog's entry goes with it.
@@ -1190,225 +1137,6 @@ impl App {
         }
     }
 
-    /// Counts the open changesets per catalog for `okf.changesets.open`.
-    /// Called only under `polling`. A failure is logged (its text stays off
-    /// OTLP) and the last counts stay.
-    #[tracing::instrument(level = "debug", skip_all)]
-    async fn count_open_changesets(&self) {
-        match changesets::open_counts(&self.pool).await {
-            Ok(counts) => {
-                *self
-                    .open_changesets
-                    .write()
-                    .expect("open changesets lock poisoned") = counts;
-            }
-            Err(error) => {
-                split_event!(
-                    error,
-                    { kind = error.kind(), },
-                    { %error, },
-                    "counting open changesets failed; keeping the last counts"
-                );
-            }
-        }
-    }
-
-    /// How many changesets were open in `catalog` at the last poll pass.
-    ///
-    /// # Arguments
-    /// * `catalog` - the catalog's name.
-    ///
-    /// # Returns
-    /// The count; 0 for a catalog with none (or one not yet counted).
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(uninstrumented_fn, reason = "one-line accessor, read by a scrape")
-    )]
-    pub fn open_changesets(&self, catalog: &str) -> i64 {
-        self.open_changesets
-            .read()
-            .expect("open changesets lock poisoned")
-            .get(catalog)
-            .copied()
-            .unwrap_or(0)
-    }
-
-    /// Discards empty changesets unchanged for [`EMPTY_CHANGESET_HOURS`].
-    /// Called only under `polling`.
-    ///
-    /// A failure is logged, not returned: the next pass tries again, and
-    /// the rest of the pass is not held up by it.
-    #[tracing::instrument(level = "debug", skip_all)]
-    async fn prune_empty_changesets(&self) {
-        let now = self.clock.now();
-        let older_than = now - TimeDelta::hours(EMPTY_CHANGESET_HOURS);
-        match changesets::prune_empty(&self.pool, older_than, now).await {
-            Ok(0) => {}
-            Ok(pruned) => tracing::info!(pruned, "discarded empty changesets a day old"),
-            Err(error) => {
-                split_event!(
-                    error,
-                    { kind = error.kind(), },
-                    { %error, },
-                    "pruning empty changesets failed; retrying at the next poll"
-                );
-            }
-        }
-    }
-
-    /// At most once per [`OAUTH_PRUNE_EVERY`], revokes idle OAuth grants
-    /// ([`App::revoke_idle_grants`]), then deletes expired OAuth tokens
-    /// and unredeemed codes kept [`OAUTH_RETENTION_DAYS`] past their expiry,
-    /// registered clients no grant names after [`UNBOUND_CLIENT_HOURS`],
-    /// sign-in events older than [`SIGN_IN_EVENT_RETENTION_DAYS`], emailed
-    /// links [`OAUTH_RETENTION_DAYS`] past their expiry, console sessions
-    /// past their absolute limit, mail jobs (sent ones after 7 days and
-    /// failed ones after 30), and forwarded feedback after
-    /// `[feedback] retention` (default 30 days). Runs whether or not OAuth is on, so rows
-    /// left from when it was are cleared too. Called only under `polling`.
-    ///
-    /// A failure is logged, not returned, and waits for the next hourly pass.
-    #[tracing::instrument(level = "debug", skip_all)]
-    async fn prune_oauth(&self) {
-        let now_instant = std::time::Instant::now();
-        {
-            // A block, so the guard is released before the `.await`s below.
-            let mut pruned = self.oauth_pruned.lock().expect("oauth prune lock poisoned");
-            if pruned.is_some_and(|at| now_instant.duration_since(at) < OAUTH_PRUNE_EVERY) {
-                return;
-            }
-            *pruned = Some(now_instant);
-        }
-        let now = self.clock.now();
-        // Before the token prune, which may delete the tokens that date a
-        // grant's last activity (it then falls back to the grant's creation,
-        // which is older still).
-        self.revoke_idle_grants(now).await;
-        let retained = now - TimeDelta::days(OAUTH_RETENTION_DAYS);
-        log_pruned(
-            "expired OAuth tokens",
-            oauth_tokens::prune(&self.pool, retained).await,
-        );
-        log_pruned(
-            "expired sign-in codes",
-            sign_in_codes::prune(&self.pool, retained).await,
-        );
-        log_pruned(
-            "unused registered OAuth clients",
-            oauth_clients::prune_unbound_dcr(
-                &self.pool,
-                now - TimeDelta::hours(UNBOUND_CLIENT_HOURS),
-            )
-            .await,
-        );
-        log_pruned(
-            "old sign-in events",
-            sign_in_events::prune(
-                &self.pool,
-                now - TimeDelta::days(SIGN_IN_EVENT_RETENTION_DAYS),
-            )
-            .await,
-        );
-        log_pruned(
-            "expired emailed links",
-            email_tokens::prune(&self.pool, retained).await,
-        );
-        log_pruned(
-            "expired console sessions",
-            user_sessions::prune(&self.pool, now).await,
-        );
-        log_pruned(
-            "old mail jobs",
-            crate::mail::queue::prune(&self.pool, now).await,
-        );
-        // After the jobs: a worker row goes only once no job names it.
-        log_pruned(
-            "rows of stopped mail workers",
-            crate::mail::queue::prune_workers(&self.pool, now).await,
-        );
-        // Without `[feedback]` too, so rows left from when it was set go
-        // after the default retention.
-        let retention = self
-            .config
-            .feedback
-            .as_ref()
-            .map_or(crate::config::DEFAULT_FEEDBACK_RETENTION, |feedback| {
-                feedback.retention
-            });
-        // Validated to at most ten years, so the conversion succeeds.
-        if let Ok(retention) = TimeDelta::from_std(retention) {
-            log_pruned(
-                "forwarded feedback past retention",
-                crate::mail::feedback::prune(&self.pool, now, retention).await,
-            );
-        }
-    }
-
-    /// Revokes the OAuth grants idle for `oauth.idle_grant_revoke_after`
-    /// that hold no live token ([`keys::revoke_idle_grants`]). Called from
-    /// [`App::prune_oauth`], so at most once an hour per replica; several
-    /// replicas running it at once revoke and audit each grant once. The
-    /// key cache learns of the revocations at the next pass.
-    ///
-    /// A failure is logged, not returned, and waits for the next hourly pass.
-    ///
-    /// # Arguments
-    /// * `now` - the pass's time (server clock).
-    #[tracing::instrument(level = "debug", skip_all)]
-    async fn revoke_idle_grants(&self, now: chrono::DateTime<chrono::Utc>) {
-        // The config check caps the period at 10 years, so both steps
-        // succeed; `and_then` chains the two `Option`s, and `None` skips
-        // the pass instead of panicking.
-        let Some(idle_before) = TimeDelta::from_std(self.config.oauth.idle_grant_revoke_after)
-            .ok()
-            .and_then(|period| now.checked_sub_signed(period))
-        else {
-            return;
-        };
-        match keys::revoke_idle_grants(&self.pool, idle_before, now).await {
-            Ok(revoked) if revoked.is_empty() => {}
-            Ok(revoked) => tracing::info!(
-                revoked = revoked.len(),
-                "revoked idle OAuth grants that held no live token"
-            ),
-            Err(error) => {
-                split_event!(
-                    error,
-                    { kind = error.kind(), },
-                    { %error, },
-                    "revoking idle OAuth grants failed; retrying in an hour"
-                );
-            }
-        }
-    }
-
-    /// At most once per [`AUDIT_PRUNE_EVERY`], deletes audit entries older
-    /// than the `audit_retention_days` setting plus
-    /// [`AUDIT_PRUNE_MARGIN_HOURS`]. Nothing else deletes entries. Called
-    /// only under `polling`, after the settings reload.
-    ///
-    /// A failure is logged, not returned, and waits for the next daily pass.
-    #[tracing::instrument(level = "debug", skip_all)]
-    async fn prune_audit(&self) {
-        let now_instant = std::time::Instant::now();
-        {
-            // A block, so the guard is released before the `.await` below.
-            let mut pruned = self.audit_pruned.lock().expect("audit prune lock poisoned");
-            if pruned.is_some_and(|at| now_instant.duration_since(at) < AUDIT_PRUNE_EVERY) {
-                return;
-            }
-            *pruned = Some(now_instant);
-        }
-        let days = i64::from(self.settings().audit_retention_days);
-        let before =
-            self.clock.now() - TimeDelta::days(days) - TimeDelta::hours(AUDIT_PRUNE_MARGIN_HOURS);
-        log_pruned_retrying(
-            "audit entries past retention",
-            "in a day",
-            audit::prune(&self.pool, before).await,
-        );
-    }
-
     /// Runs [`App::poll`] every `poll_interval` until `shutdown` is cancelled.
     /// A failed pass is logged and the loop goes on.
     ///
@@ -1515,48 +1243,6 @@ impl App {
     }
 }
 
-/// Logs one hourly prune's outcome (see [`log_pruned_retrying`]).
-///
-/// # Arguments
-/// * `what` - the rows, for the log line.
-/// * `result` - how many were deleted, or the failure.
-#[cfg_attr(
-    dylint_lib = "hyp_tracing",
-    allow(
-        uninstrumented_fn,
-        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-    )
-)]
-fn log_pruned(what: &'static str, result: Result<u64, OkfError>) {
-    log_pruned_retrying(what, "in an hour", result);
-}
-
-/// Logs one prune's outcome: silent for nothing deleted, `info` for some,
-/// `error` for a failure.
-///
-/// # Arguments
-/// * `what` - the rows, for the log line.
-/// * `retry` - when the next pass runs (`"in an hour"`), for a failure.
-/// * `result` - how many were deleted, or the failure.
-#[tracing::instrument(level = "trace", skip_all)]
-fn log_pruned_retrying(what: &'static str, retry: &'static str, result: Result<u64, OkfError>) {
-    match result {
-        Ok(0) => {}
-        Ok(pruned) => tracing::info!(pruned, "deleted {what}"),
-        Err(error) => {
-            tracing::error!(
-                kind = error.kind(),
-                "deleting {what} failed; retrying {retry}"
-            );
-            tracing::error!(
-                target: LOCAL_ONLY,
-                %error,
-                "deleting {what} failed; retrying {retry} (detail)"
-            );
-        }
-    }
-}
-
 /// Logs a catalog that failed to load or refresh and, if its stored data is
 /// to blame, remembers its generation as broken.
 ///
@@ -1608,10 +1294,9 @@ mod tests {
     use crate::mcp::testing::app_with;
     use crate::okf::workspace::StoredFile;
     use crate::store::audit::AuditActor;
-    use crate::store::changesets::{ChangesetState, EntryRow};
     use crate::store::import::{import, ImportOptions, ImportScope};
     use crate::store::keys as key_rows;
-    use chrono::{DateTime, TimeDelta, Utc};
+    use chrono::Utc;
     use std::time::{Duration, Instant};
 
     async fn import_files(pool: &PgPool, catalog: &str, files: &[(&str, &str)], replace: bool) {
@@ -2568,317 +2253,6 @@ mod tests {
         .expect("returns at once without a time_server");
 
         assert_eq!(test.app.clock_status(), None);
-    }
-
-    /// Opens a changeset for key `writer` at `at`, with an entry for `path`
-    /// if given.
-    async fn changeset_at(
-        pool: &PgPool,
-        catalog_id: i64,
-        at: DateTime<Utc>,
-        path: Option<&str>,
-    ) -> i64 {
-        let mut tx = pool.begin().await.unwrap();
-        changesets::lock_catalog(&mut tx, catalog_id).await.unwrap();
-        let changeset = changesets::open(&mut tx, catalog_id, "writer", "writer", at)
-            .await
-            .unwrap();
-        if let Some(path) = path {
-            let entry = EntryRow {
-                path: path.to_string(),
-                base_revision: None,
-                content: Some(b"x\n".to_vec()),
-                executable: false,
-                replay: None,
-            };
-            changesets::upsert_entry(&mut tx, changeset.id, &entry, at)
-                .await
-                .unwrap();
-        }
-        tx.commit().await.unwrap();
-        changeset.id
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn poll_discards_empty_changesets_a_day_old_and_keeps_the_rest() {
-        let db = test_db().await;
-        let pg = catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "pg",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        new_key(&db.pool, "writer").await;
-        let app = app(&db.pool).await;
-        let day_old = Utc::now() - TimeDelta::hours(25);
-        let empty_old = changeset_at(&db.pool, pg.id, day_old, None).await;
-        let empty_new = changeset_at(&db.pool, pg.id, Utc::now(), None).await;
-        let full_old = changeset_at(&db.pool, pg.id, day_old, Some("a.md")).await;
-
-        app.poll().await.unwrap();
-
-        let state = |id| {
-            let pool = db.pool.clone();
-            async move { changesets::by_id(&pool, id).await.unwrap().unwrap().state }
-        };
-        assert_eq!(state(empty_old).await, ChangesetState::Discarded);
-        assert_eq!(state(empty_new).await, ChangesetState::Open);
-        assert_eq!(state(full_old).await, ChangesetState::Open);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn poll_prunes_oauth_rows_at_most_hourly() {
-        use crate::store::keys::Access;
-        use crate::store::oauth::testing::{insert_client, insert_grant};
-        let test = app_with(&[("main", &[])], Config::default()).await;
-        let pool = test.app.pool().clone();
-        let now = Utc::now();
-        let client = insert_client(
-            &pool,
-            "https://client.example.com/client.json",
-            "Example",
-            now,
-        )
-        .await;
-        let grant = insert_grant(&pool, &client, Access::Read, &["main"], now).await;
-        let stale_token = |byte: u8| {
-            let pool = pool.clone();
-            let grant = grant.clone();
-            async move {
-                sqlx::query(
-                    "INSERT INTO oauth_tokens \
-                     (sha256, grant_id, kind, family_id, resource, created_at, expires_at) \
-                     VALUES ($1, $2, 'access', 'f', 'https://okf.example.com/mcp', $3, $4)",
-                )
-                .bind([byte; 32].as_slice())
-                .bind(&grant)
-                .bind(now - TimeDelta::days(9))
-                .bind(now - TimeDelta::days(8))
-                .execute(&pool)
-                .await
-                .unwrap();
-            }
-        };
-        let count = |table: &'static str| {
-            let pool = pool.clone();
-            async move {
-                // `AssertSqlSafe`: `table` is one of this test's literals.
-                sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(format!(
-                    "SELECT count(*) FROM {table}"
-                )))
-                .fetch_one(&pool)
-                .await
-                .unwrap()
-            }
-        };
-        stale_token(1).await;
-        sqlx::query(
-            "INSERT INTO oauth_clients (client_id, kind, redirect_uris, metadata, created_at) \
-             VALUES ('unbound', 'dcr', ARRAY['https://client.example.com/callback'], '{}', $1)",
-        )
-        .bind(now - TimeDelta::days(2))
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        // The first pass prunes.
-        test.app.poll().await.unwrap();
-        assert_eq!(count("oauth_tokens").await, 0);
-        assert_eq!(count("oauth_clients").await, 1, "the bound client stays");
-
-        // Within the hour, a new stale row waits for the next hourly pass.
-        stale_token(2).await;
-        test.app.poll().await.unwrap();
-        assert_eq!(count("oauth_tokens").await, 1);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn poll_revokes_grants_idle_past_the_configured_period() {
-        use crate::store::keys::Access;
-        use crate::store::oauth::testing::{insert_client, insert_grant};
-        // 10 days instead of the default 30, so a grant last used 15 days
-        // ago is idle here and would not be by default.
-        let mut config = Config::default();
-        config.oauth.idle_grant_revoke_after = std::time::Duration::from_secs(10 * 24 * 60 * 60);
-        let test = app_with(&[("main", &[])], config).await;
-        let pool = test.app.pool().clone();
-        let now = Utc::now();
-        let client = insert_client(
-            &pool,
-            "https://client.example.com/client.json",
-            "Example",
-            now,
-        )
-        .await;
-        let created = now - TimeDelta::days(40);
-        let grant_used = |days: i64, byte: u8| {
-            let pool = pool.clone();
-            let client = client.clone();
-            async move {
-                let grant = insert_grant(&pool, &client, Access::Read, &["main"], created).await;
-                sqlx::query(
-                    "INSERT INTO oauth_tokens \
-                     (sha256, grant_id, kind, family_id, resource, created_at, expires_at) \
-                     VALUES ($1, $2, 'access', 'f', 'https://okf.example.com/mcp', $3, \
-                             $3 + interval '1 hour')",
-                )
-                .bind([byte; 32].as_slice())
-                .bind(&grant)
-                .bind(now - TimeDelta::days(days))
-                .execute(&pool)
-                .await
-                .unwrap();
-                grant
-            }
-        };
-        let idle = grant_used(15, 1).await;
-        let recent = grant_used(5, 2).await;
-        // Load both into the key cache first, as a running server has them.
-        test.app.reload_keys_if_changed(true).await;
-        assert!(test.app.keys().find_grant(&idle).is_some());
-
-        test.app.poll().await.unwrap();
-        // The key cache learns of it at the next pass.
-        test.app.poll().await.unwrap();
-
-        let revoked = |id: String| {
-            let pool = pool.clone();
-            async move {
-                sqlx::query_scalar::<_, Option<chrono::DateTime<Utc>>>(
-                    "SELECT revoked_at FROM api_keys WHERE id = $1",
-                )
-                .bind(id)
-                .fetch_one(&pool)
-                .await
-                .unwrap()
-                .is_some()
-            }
-        };
-        assert!(revoked(idle.clone()).await);
-        assert!(!revoked(recent.clone()).await);
-        assert!(
-            test.app.keys().find_grant(&idle).is_none(),
-            "its tokens stop working"
-        );
-        assert!(test.app.keys().find_grant(&recent).is_some());
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn poll_prunes_audit_entries_past_the_retention_setting_at_most_daily() {
-        use crate::store::audit::{Action, AuditActor, Entry, Target};
-        let test = app_with(&[("main", &[])], Config::default()).await;
-        let pool = test.app.pool().clone();
-        settings::set(
-            &pool,
-            settings::SettingKey::AuditRetentionDays,
-            "60",
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        let entry_days_ago = |days: i64| {
-            let pool = pool.clone();
-            async move {
-                let mut tx = pool.begin().await.unwrap();
-                audit::record(
-                    &mut tx,
-                    &AuditActor::cli(),
-                    &Entry {
-                        action: Action::SettingCleared,
-                        target: Target::Setting("product_name"),
-                        person: None,
-                        teams: &[],
-                        details: serde_json::json!({}),
-                    },
-                    Utc::now() - TimeDelta::days(days),
-                )
-                .await
-                .unwrap();
-                tx.commit().await.unwrap();
-            }
-        };
-        let left = || {
-            let pool = pool.clone();
-            async move {
-                sqlx::query_scalar::<_, i64>(
-                    "SELECT count(*) FROM audit_entries WHERE action = 'setting.cleared'",
-                )
-                .fetch_one(&pool)
-                .await
-                .unwrap()
-            }
-        };
-        entry_days_ago(61).await;
-        entry_days_ago(59).await;
-
-        // The first pass reloads the setting, then prunes by it.
-        test.app.poll().await.unwrap();
-        let after_first = left().await;
-        // Within the day, a new old entry waits for the next daily pass.
-        entry_days_ago(90).await;
-        test.app.poll().await.unwrap();
-
-        assert_eq!(
-            after_first, 1,
-            "61 days is past 60 (plus the hour); 59 is not"
-        );
-        assert_eq!(left().await, 2);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn poll_prunes_old_sign_in_events_and_long_expired_emailed_links() {
-        let test = app_with(&[("main", &[])], Config::default()).await;
-        let pool = test.app.pool().clone();
-        let now = Utc::now();
-        let user: String = sqlx::query_scalar("SELECT id FROM users WHERE name = $1")
-            .bind(crate::db::TEST_USER)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        for (byte, expired_days_ago) in [(1u8, 8), (2u8, 1)] {
-            sqlx::query(
-                "INSERT INTO email_tokens (hash, user_id, purpose, created_at, expires_at) \
-                 VALUES ($1, $2, 'setup', $3, $4)",
-            )
-            .bind([byte; 32].as_slice())
-            .bind(&user)
-            .bind(now - TimeDelta::days(expired_days_ago + 1))
-            .bind(now - TimeDelta::days(expired_days_ago))
-            .execute(&pool)
-            .await
-            .unwrap();
-        }
-        for days_ago in [91, 1] {
-            sqlx::query(
-                "INSERT INTO sign_in_events (user_id, method, outcome, at) \
-                 VALUES ($1, 'password', 'failed', $2)",
-            )
-            .bind(&user)
-            .bind(now - TimeDelta::days(days_ago))
-            .execute(&pool)
-            .await
-            .unwrap();
-        }
-
-        test.app.poll().await.unwrap();
-
-        let tokens: i64 = sqlx::query_scalar("SELECT count(*) FROM email_tokens")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        let events: i64 = sqlx::query_scalar("SELECT count(*) FROM sign_in_events")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!((tokens, events), (1, 1));
     }
 
     #[tokio::test(flavor = "multi_thread")]

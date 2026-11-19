@@ -1485,10 +1485,6 @@ mod publish_tests {
             !text.contains(r#"okf_catalog_concepts{catalog="pg"}"#),
             "{text}"
         );
-        assert!(
-            !text.contains(r#"okf_changesets_open{catalog="pg"}"#),
-            "{text}"
-        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1499,23 +1495,25 @@ mod publish_tests {
         let _kept = open(&first).await;
         let published = open(&second).await;
         body(&second, &published, "/a.md", "# A\n\nNew.\n").await;
-        test.app.poll().await.unwrap();
+        // Counted by the `cluster_stats` housekeeping job, read into the
+        // gauge by the ticker (issue #693): one cluster-wide series.
+        let count = || async {
+            crate::housekeeping::run(crate::housekeeping::Task::ClusterStats, &test.app)
+                .await
+                .unwrap();
+            crate::housekeeping::refresh_gauges(&test.app).await;
+        };
+        count().await;
         let text = render(&registry);
-        assert!(
-            text.contains(r#"okf_changesets_open{catalog="pg"} 2"#),
-            "{text}"
-        );
+        assert!(text.contains("okf_changesets_open 2"), "{text}");
 
         publish_as(&second, &published, "edit a").await.unwrap();
-        // Counted by the poll, not read at the scrape.
-        assert!(render(&registry).contains(r#"okf_changesets_open{catalog="pg"} 2"#));
-        test.app.poll().await.unwrap();
+        // Counted by the job, not read at the scrape.
+        assert!(render(&registry).contains("okf_changesets_open 2"));
+        count().await;
 
         let text = render(&registry);
-        assert!(
-            text.contains(r#"okf_changesets_open{catalog="pg"} 1"#),
-            "{text}"
-        );
+        assert!(text.contains("okf_changesets_open 1"), "{text}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

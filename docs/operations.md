@@ -591,7 +591,7 @@ two). What `[redis]` does not share:
 - **The mail worker** runs on every replica, with no per-pod setting.
   apalis takes each job with `FOR UPDATE SKIP LOCKED`, so two replicas never
   send the same mail at once. Each process opens up to 3 connections for
-  the mail worker's pool (housekeeping will share it), so N replicas add
+  the worker pool the mail and housekeeping workers share, so N replicas add
   `3 * N` to Postgres's `max_connections`, beside the request pools, plus
   `3 * N` more with the feedback worker on (its pool is its own). A replica that
   dies loses its mail in hand to another replica after about one minute (a
@@ -602,7 +602,8 @@ two). What `[redis]` does not share:
   second send. On SIGTERM a replica starts no new send and finishes the one
   in hand, for at most `worker_shutdown_grace` (30 seconds by default, the
   longest a provider may take); keep `terminationGracePeriodSeconds` above it.
-  The hourly prune deletes the `apalis.workers` rows of stopped replicas.
+  The hourly `prune_workers` housekeeping job deletes the `apalis.workers`
+  rows of stopped replicas.
 - **The feedback worker** runs on every replica with `[feedback]` unless
   `[feedback] worker = false`, like the mail worker: turn it on for one
   replica, the same way. Fetching a job is exclusive in normal operation, so
@@ -610,11 +611,27 @@ two). What `[redis]` does not share:
   at-least-once (see [Feedback](#feedback)), and one worker is enough. The
   feedback rate limit is counted in Postgres, so unlike the
   limits above it holds across replicas.
-- **Pruning.** Every replica's poll loop prunes the OAuth tables, unbound
-  registered clients, console sessions, mail jobs, forwarded feedback,
-  sign-in events and emailed-link tokens (hourly), the audit log (daily) and empty changesets
-  (every pass). The deletes are idempotent, so this wastes a little work and
-  does nothing wrong.
+- **Housekeeping** runs once per cluster as apalis jobs on queue
+  `housekeeping`: `prune_changesets` (empty changesets a day old, every 5
+  minutes), `prune_oauth` (idle OAuth grants, expired tokens and codes,
+  unbound registered clients, sign-in events, emailed-link tokens, console
+  sessions, mail jobs, finished housekeeping jobs and forwarded feedback,
+  hourly), `prune_audit` (the audit log, daily), `prune_workers` (hourly)
+  and `cluster_stats` (every minute). Every replica's ticker pushes each
+  task's current slot once a minute; a unique key per slot makes the other
+  replicas' pushes no-ops, so each slot runs once, on whichever replica's
+  worker takes it. A failed job is retried twice with a backoff; a slot
+  missed while every replica was down is not caught up, and the next slot
+  does the same work. `okf_housekeeping_runs_total` counts the runs. A
+  replica looks a slot up before pushing it, so a slot already scheduled
+  costs one indexed read and leaves nothing in the Postgres log. Only when
+  two replicas push a new slot at the same moment does the loser hit the
+  unique index: the Postgres log then shows one `duplicate key value
+  violates unique constraint "idx_jobs_idempotency_key"` error, which the
+  server ignores.
+- **Cluster gauges.** `okf_changesets_open` and `okf_mail_queue_depth` come
+  from the `cluster_stats` row, which every replica reads once a minute, so
+  all replicas report the same value: use `max()` across replicas.
 - **`okf_mcp_sessions_active`** counts the sessions each replica holds. A
   session restored on a second replica counts there too, so the sum over
   replicas can exceed the number of live sessions.
@@ -1144,7 +1161,7 @@ the `okf.catalog` span attribute and the `catalog` metric label.
 Metric labels come from closed sets only: route templates, registered tool
 names (anything else is `other`), catalog names, and fixed outcome, method,
 rule, reason and status words. Only the gauges that enumerate loaded catalogs
-(`okf_catalog_concepts`, `okf_catalog_generation`, `okf_changesets_open`) drop
+(`okf_catalog_concepts`, `okf_catalog_generation`) drop
 a deleted catalog's series at the next collection. The counters and histograms
 (`okf_catalog_refreshes_total`, `okf_publish_duration_seconds`, the tool and
 archive series) keep the series they recorded for that catalog until the
@@ -1173,9 +1190,9 @@ Names are as `/metrics` shows them. Dots become underscores in names and in
 label names (`http.route` is `http_route`), durations are in seconds, and a
 counter ends in `_total`. A histogram is three series (`_bucket`, `_sum`,
 `_count`) with buckets from 1 ms to 60 s. Every family except
-`okf_build_info`, `okf_telemetry_export_failures_total`, `okf_mail_queue_depth`
-and the gauges that read loaded state (`okf_catalog_concepts`,
-`okf_catalog_generation`, `okf_changesets_open`, `db_client_connection_count`)
+`okf_build_info`, `okf_telemetry_export_failures_total`, `okf_mail_queue_depth`,
+`okf_changesets_open` and the gauges that read loaded state
+(`okf_catalog_concepts`, `okf_catalog_generation`, `db_client_connection_count`)
 has no series until its first event, so a scrape of an idle server lists
 fewer families than this table. Over OTLP the names are
 the dotted originals.
@@ -1189,7 +1206,7 @@ the dotted originals.
 | `okf_publish_duration_seconds` | histogram | `catalog`, `outcome` | A publish, from the first lock to the refreshed snapshot |
 | `okf_publish_lock_wait_seconds` | histogram | `catalog` | Time a publish waited for the catalog's locks |
 | `okf_lint_rejections_total` | counter | `catalog`, `rule` | Lint errors that refused a publish. `rule` is the lint's rule id, `secret` for any secret rule, or `other` |
-| `okf_changesets_open` | gauge | `catalog` | Open changesets, as of the last poll |
+| `okf_changesets_open` | gauge | none | Open changesets in the cluster, as of the last `cluster_stats` housekeeping job (the same on every replica) |
 | `okf_poll_duration_seconds` | histogram | `outcome` | One pass of the poll loop |
 | `okf_catalog_refreshes_total` | counter | `catalog`, `result` | Each catalog's turn in a pass: `unchanged`, `reloaded`, `loaded` or `failed` |
 | `okf_catalog_announcements_total` | counter | `result` | Catalog announcements handled, counting also each catalog found behind in the catch-up after a (re)subscribe: `applied` (rebuilt), `current` (already there), `unknown` (not loaded here, or deleted) or `failed`. Only with `[redis]` |
@@ -1205,7 +1222,9 @@ the dotted originals.
 | `okf_oauth_tokens_issued_total` | counter | `grant` | Token pairs issued: `authorization_code` or `refresh_token` |
 | `okf_ratelimit_rejections_total` | counter | `limiter` | Requests a limiter refused: `sign_in_per_ip`, `forgot_per_email`, `forgot_per_ip`, `link_starts`, `oauth_register`, `oauth_token` or `oauth_consent` |
 | `okf_mail_jobs_total` | counter | `provider`, `outcome` | Mail tries. `provider` is the configured one; `outcome` is `sent`, `retry` or `failed` |
-| `okf_mail_queue_depth` | gauge | `status` | Mail not yet sent, as of the last poll: `pending`, `sending`, `retrying` or `failed` |
+| `okf_mail_queue_depth` | gauge | `status` | Mail not yet sent, as of the last `cluster_stats` housekeeping job (the same on every replica): `pending`, `sending`, `retrying` or `failed` |
+| `okf_housekeeping_runs_total` | counter | `task`, `outcome` | Housekeeping jobs run on this replica. `task` is `prune_changesets`, `prune_oauth`, `prune_audit`, `prune_workers` or `cluster_stats`; `outcome` is `ok` or `error` (an error is retried) |
+| `okf_housekeeping_duration_seconds` | histogram | `task` | Housekeeping job duration |
 | `db_client_connection_count` | gauge | `state` | Postgres pool connections: `idle` and `used` sum to the pool's size |
 | `okf_clock_checks_total` | counter | `outcome` | Clock checks against `time_server` |
 | `okf_clock_offset_seconds` | gauge | none | The time server's clock minus the server's, at the last good check |
