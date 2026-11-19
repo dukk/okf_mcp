@@ -7,7 +7,7 @@
 **Goal:** A replica's memory, startup time and background database load stop growing with the total number of users and catalogs (target: about 1M of each, a small fraction active). Catalogs, credentials, users and labels load on demand into bounded caches; changes reach every replica through `pg_notify` sent by the transaction that makes them; listing is a query; housekeeping runs once per cluster as apalis jobs; the poll loop and per-catalog metric series go.
 
 **Architecture:**
-- **`src/invalidate.rs`** owns the change feed: the `Invalidation` enum, `invalidate(conn, &[Invalidation])` (bumps `admin_generation` and runs `pg_notify('okf_invalidate', ..)` in the caller's transaction), and the listener task that applies each message to the caches. It replaces the ~36 `bump_admin_generation(conn)` calls.
+- **`src/invalidate.rs`** owns the change feed: the `Invalidation` enum, `invalidate(conn, &[Invalidation])` (bumps `admin_generation` and runs `pg_notify('okf_invalidate', ..)` in the caller's transaction), and the listener task that applies each message to the caches. It replaces the ~37 `bump_admin_generation(conn)` calls.
 - **`src/cache/`** holds the caches, all built on one wrapper, `cache::Bounded<K, V>` (moka `future::Cache` plus per-key invalidation epochs, stale marking and the `okf.cache.*` metrics):
   - `cache::catalogs::CatalogCache`: snapshots by catalog id, weighed in bytes;
   - `cache::directory::CatalogDirectory`: catalog rows by name, with access facts;
@@ -80,15 +80,15 @@
 - `KeyedLocks` (`src/keyed_lock.rs`): `lock(&self, key: i64) -> KeyedGuard<'_>`, cancel-safe, entries removed when unused.
 - `Overlays` (`src/overlay.rs:257`): hand-rolled LRU by count (`overlay_cache_size`, default 64, `src/config.rs:48`).
 - `catalogs.name` is `UNIQUE` (`migrations/0001_schema.sql:14`).
-- `bump_admin_generation(conn)` (`src/store/catalogs.rs:1036`) has 36 non-test call sites, all inside the write's transaction; no SQL trigger bumps it. The per-function list is in Task 2.
+- `bump_admin_generation(conn)` (`src/store/catalogs.rs:1036`) has 37 non-test call sites, all inside the write's transaction; no SQL trigger bumps it. The per-function list is in Task 2.
 - `KeyCache::read` (`src/auth.rs:954`) runs `key_rows::list`, `ceiling::ceilings`, `users::auth_by_id`, `teams::suspended_catalogs`, `Labels::load`, then `gates::load` (`src/store/gates.rs:37`), which first **writes** missing audit rows (`ensure_audit_rows`, `:157`).
 - `settle(app)` (`src/http/api/mod.rs:306`) is `app.poll()`; it is called after every administrative HTTP write (41 sites) and `src/oauth/authorize.rs:1141`.
 - `serve` (`src/http/mod.rs:651`) spawns the poll loop (`:657`), the M16 announce subscriber (`:660`), the clock check (`:664`) and the mail worker (`:667`, gated by `mail.worker`).
-- The latest migration is `0019_display_names.sql`.
+- The latest migration is `0021_oauth_tokens_grant_activity.sql`.
 
 ## Decisions taken while planning (2026-11-18)
 
-1. **Milestone 18.** Labels: `epic`, `milestone-18`. Folds in #458.
+1. **Milestone 18.** Labels: `epic`, `milestone-18`. Folds in #458 and #356.
 2. **Invalidations ride Postgres `NOTIFY`, not Redis** (the maintainer, 2026-11-18). Spec Decisions 10, 12-14 corrected. `invalidate(conn, ..)` replaces `bump_admin_generation(conn)` in every store function, so the CLI is covered with no extra step and nothing is sent on rollback.
 3. **Housekeeping uses apalis's idempotency index** instead of a schedule table and repair sweep (spec Decision 15 corrected).
 4. **Audit rows are created with their entity**, plus a backfill migration (spec Decision 20, added during planning).
@@ -101,7 +101,7 @@
 |---|---|
 | 1 | `src/invalidate.rs`: `Invalidation`, JSON payload, `invalidate(conn, ..)`, the listener task, `apply` onto today's caches, reconnect = mark stale; `okf.invalidations.*` metrics |
 | 2 | Every `bump_admin_generation` call becomes `invalidate(conn, &[..])` with its kinds; `catalog` invalidations from publish, import and repair; per-function coverage tests; two-replica tests with TTLs and poll at 1h |
-| 3 | Audit rows created by the create paths; migration `0020_audit_backfill.sql`; `gates::load` stops writing |
+| 3 | Audit rows created by the create paths; migration `0022_audit_backfill.sql`; `gates::load` stops writing |
 | 4 | `moka`; `cache::Bounded<K, V>` (epochs, stale marking, single-flight, metrics `okf.cache.*`) |
 | 5 | `cache::directory::CatalogDirectory` and the store queries behind it (row by name with access facts, list by names, paginated list) |
 | 6 | Publish and rebuild locks move from `CatalogState` to `KeyedLocks` on `App` |
@@ -142,8 +142,8 @@
 | `src/store/catalogs.rs` | 1 (`bump_admin_generation` becomes private to `invalidate`), 2, 5 (`row_by_name`, `rows_by_names`, `page`) |
 | `src/store/{keys,users,teams,ceiling,settings,unlocks,import,repair,publish}.rs`, `src/store/oauth/{codes,grants}.rs` | 2 |
 | `src/store/{users,keys,teams}.rs`, `src/store/oauth/{codes,grants}.rs`, `src/store/gates.rs`, `src/store/audit.rs` | 3 |
-| `migrations/0020_audit_backfill.sql` | 3 |
-| `migrations/0021_cluster_stats.sql` | 15 |
+| `migrations/0022_audit_backfill.sql` | 3 |
+| `migrations/0023_cluster_stats.sql` | 15 |
 | `src/catalog.rs` | 6 (locks out), 8 (description and owner out) |
 | `src/keyed_lock.rs` | 6 (doc only) |
 | `src/store/publish.rs`, `src/mcp/changesets.rs` | 6, 8 |
@@ -186,7 +186,7 @@ wave 7:  18 (all)
 ```
 
 Why each edge, and the shared files to merge with care:
-- **2 needs 1** (`invalidate`). 2 is the wide one: 36 call sites in 14 store files. Nothing else in waves 1-2 edits those store files except 3, which touches the *create* functions of users, keys, teams and grants: 3 adds audit inserts near the top of each, 2 swaps the bump at the end. Keep both.
+- **2 needs 1** (`invalidate`). 2 is the wide one: 37 call sites in 14 store files. Nothing else in waves 1-2 edits those store files except 3, which touches the *create* functions of users, keys, teams and grants: 3 adds audit inserts near the top of each, 2 swaps the bump at the end. Keep both.
 - **5 needs 1 and 4**: the directory is a `Bounded` cache and registers with `invalidate::apply`.
 - **8 needs 2, 5, 6 and 7**: the cache is invalidated by `catalog` messages (2), resolves rows through the directory (5), relies on locks outside the entry (6) and on async resolution (7). 7 and 8 both edit `src/mcp/context.rs`.
 - **11 needs 2, 3 and 5**: credential and user messages (2), audit ids read with the entity (3), suspension and gates from the directory (5). 11 and 8 both edit `src/app.rs` (different fields) and `src/mcp/context.rs` (`admission_to` vs resolution): keep both.
@@ -489,6 +489,7 @@ Spec Decision 10's table. After this task every change reaches every replica wit
 | `keys::create_provisioner` (`keys.rs:468`), `create_with_id` (`:527`), `create_self_issued` (`:725`) | `Credential { key_id }` |
 | `keys::set_maintenance_report_with` (`:1103`) | `Credential { key_id }` |
 | `keys::revoke_with` (`:1193`) | `Credential { key_id }` |
+| `keys::revoke_if_idle` (`:1341`), called by `revoke_idle_grants` | `Credential { key_id }` (new: today it bumps nothing, and the poll's key reload picks the revocation up) |
 | `keys::grant_with` (`:1312`), `ungrant_with` (`:1433`) | `Credential { key_id }` |
 | `keys::set_user` (`:1582`) | `Credential { key_id }` |
 | `users::create` (`users.rs:253`) | `User { id }`, `Team { id: personal team }` |
@@ -542,7 +543,7 @@ Plus `a_refused_write_sends_nothing` for one representative failing write (e.g. 
 ### Task 3: Audit rows are created with their entity (spec Decision 20)
 
 **Files:**
-- Create: `migrations/0020_audit_backfill.sql`.
+- Create: `migrations/0022_audit_backfill.sql`.
 - Modify: `src/store/users.rs` (`create`), `src/store/keys.rs` (`create_provisioner`, `create_with_id`, `create_self_issued`), `src/store/oauth/codes.rs` (`redeem`), `src/store/oauth/grants.rs` (`create_self_issued`), `src/store/teams.rs` (`create`), `src/store/catalogs.rs` (`set_owner`, for the owner team's audit row), `src/store/gates.rs`, `src/store/audit.rs`.
 
 - [ ] **Step 1: Failing tests** (`src/store/gates.rs` tests):
@@ -550,7 +551,7 @@ Plus `a_refused_write_sends_nothing` for one representative failing write (e.g. 
   - `gates_load_writes_nothing`: snapshot row counts of the three audit tables, call `gates::load`, assert unchanged.
   - `the_backfill_creates_missing_rows_and_is_idempotent` (in `src/db.rs` tests, alongside the migration tests): delete a user's audit row, run the migration's SQL, assert it is back; run again, assert no duplicates.
 
-- [ ] **Step 2: The migration** (`migrations/0020_audit_backfill.sql`). Read `src/store/gates.rs:157` (`ensure_audit_rows`) and `src/store/audit.rs` (`audit_person`, `audit_credential`, `audit_team_ref`) first and reproduce exactly the rows they would create, as `INSERT ... SELECT ... WHERE NOT EXISTS` statements, one per table. Copy the column list and any derived value (for example a label snapshot) from those functions; do not invent columns.
+- [ ] **Step 2: The migration** (`migrations/0022_audit_backfill.sql`). Read `src/store/gates.rs:157` (`ensure_audit_rows`) and `src/store/audit.rs` (`audit_person`, `audit_credential`, `audit_team_ref`) first and reproduce exactly the rows they would create, as `INSERT ... SELECT ... WHERE NOT EXISTS` statements, one per table. Copy the column list and any derived value (for example a label snapshot) from those functions; do not invent columns.
 
 - [ ] **Step 3: Create paths.** Each create function calls the matching existing helper (`audit::audit_person(&mut tx, ..)`, `audit_credential`, `audit_team_ref`) in its own transaction, after the entity insert.
 
@@ -976,10 +977,10 @@ Each caller builds its `Wanted` from what it is about to render (the audit page'
 
 ---
 
-### Task 15: Housekeeping as apalis jobs (spec Decisions 15, 16)
+### Task 15: Housekeeping as apalis jobs (#356, spec Decisions 15, 16)
 
 **Files:**
-- Create: `src/housekeeping.rs`, `migrations/0021_cluster_stats.sql`.
+- Create: `src/housekeeping.rs`, `migrations/0023_cluster_stats.sql`.
 - Modify: `src/app.rs` (prune functions move), `src/http/mod.rs`, `src/telemetry/metrics.rs`, `src/mail/queue.rs` (`record_depth` returns counts instead of recording), `tests/multi_replica.rs`.
 
 - [ ] **Step 1: Migration.**
@@ -1054,13 +1055,13 @@ async fn run(job: Housekeeping, context: Data<HousekeepingContext>) -> Result<()
 ```
 
 - `schedule` recognizes the unique violation as `sqlx::Error::Database(e) if e.code().as_deref() == Some("23505")` and returns `Ok(())`.
-- The tasks are today's functions moved from `App`: `prune_empty_changesets`, `prune_oauth` (minus its in-process once-an-hour gate, now the cadence), `prune_audit` (minus its gate), `queue::prune_workers` (Task 14), and `cluster_stats`: `changesets::open_counts` summed, `queue::record_depth`'s grouped count, written to the row with `INSERT ... ON CONFLICT (id) DO UPDATE`. `prune_oauth` also deletes `Done` housekeeping jobs older than a day.
+- The tasks are today's functions moved from `App`: `prune_empty_changesets`, `prune_oauth` (minus its in-process once-an-hour gate, now the cadence; it keeps calling `revoke_idle_grants` before the token prune), `prune_audit` (minus its gate), `queue::prune_workers` (Task 14), and `cluster_stats`: `changesets::open_counts` summed, `queue::record_depth`'s grouped count, written to the row with `INSERT ... ON CONFLICT (id) DO UPDATE`. `prune_oauth` also deletes `Done` housekeeping jobs older than a day.
 - `max_attempts(3)`; a failure returns a plain error so apalis retries.
 - Each replica's gauges (`okf.changesets.open` without the `catalog` label, `okf_mail_queue_depth`) read an in-memory copy of the row that `tick_until` refreshes each minute.
 - Metrics: `okf.housekeeping.runs{task,outcome}`, `okf.housekeeping.duration{task}`.
 - `serve` spawns `tick_until` and the housekeeping worker and awaits both at shutdown. `poll_pass` drops the prune and count calls.
 
-- [ ] **Step 4: Run, gates, commit** — `feat: housekeeping runs once per cluster as apalis jobs (M18 task 15)`.
+- [ ] **Step 4: Run, gates, commit** — `feat: housekeeping runs once per cluster as apalis jobs (M18 task 15, closes #356)`.
 
 ---
 
@@ -1124,7 +1125,7 @@ async fn run(job: Housekeeping, context: Data<HousekeepingContext>) -> Result<()
   - Decision 12 (reconnect): Tasks 1, 4 (`mark_all_stale`), each cache's `apply_reconnect`.
   - Decision 13 (TTLs): Tasks 5, 8, 11.
   - Decision 14 (mixed versions): Task 13.
-  - Decision 15 (housekeeping): Task 15.
+  - Decision 15 (housekeeping, #356): Task 15.
   - Decision 16 (gauges): Task 15.
   - Decision 17 (#458): Task 14.
   - Decision 18 (poll removed): Task 16.

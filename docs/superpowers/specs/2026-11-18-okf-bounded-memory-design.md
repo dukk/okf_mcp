@@ -1,7 +1,7 @@
 # okf-mcp bounded memory: design
 
 Status: designed 2026-11-18; to be delivered in milestone 18. Folds in
-issue #458 (HA-tolerant mail worker).
+issues #458 (HA-tolerant mail worker) and #356 (cleanup loops on apalis).
 
 ## Goal
 
@@ -282,7 +282,7 @@ bridge both ways:
 
 The bridge is removed one release later.
 
-### 15. Housekeeping runs as apalis jobs, once per cluster
+### 15. Housekeeping runs as apalis jobs, once per cluster (#356)
 
 > **Corrected (2026-11-18, planning).** The design first used a
 > `housekeeping_schedule` table, a self-rescheduling job chain and a repair
@@ -294,7 +294,7 @@ Queue `housekeeping`, one job type `Housekeeping { task, slot }`:
 | Task | Cadence | Work |
 |---|---|---|
 | `prune_changesets` | 5 min | empty changesets unchanged for 24h |
-| `prune_oauth` | hourly | expired tokens and codes, unbound clients, old sign-in events, expired emailed links, console sessions, old mail jobs, done housekeeping jobs older than a day |
+| `prune_oauth` | hourly | idle OAuth grants revoked first, then expired tokens and codes, unbound clients, old sign-in events, expired emailed links, console sessions, old mail jobs, done housekeeping jobs older than a day |
 | `prune_audit` | daily | entries past `audit_retention_days` plus the margin |
 | `prune_workers` | hourly | dead `apalis.workers` rows (#458) |
 | `cluster_stats` | 60s | open changesets total, mail queue depth by status |
