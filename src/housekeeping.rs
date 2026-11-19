@@ -1127,6 +1127,7 @@ mod tests {
             app_with_metrics(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
         let (other, _provider, other_registry) = replica(&test).await;
         let pg = catalogs::find(test.app.pool(), "pg").await.unwrap();
+        writer_key(test.app.pool()).await;
         changeset_at(test.app.pool(), pg.id, Utc::now(), None).await;
         changeset_at(test.app.pool(), pg.id, Utc::now(), None).await;
         crate::mail::queue::enqueue(
@@ -1167,6 +1168,12 @@ mod tests {
         assert!(stats.mail_queue.contains(&(MailStatus::Failed, 0)));
     }
 
+    /// Creates key `writer`, which [`changeset_at`] opens changesets for.
+    async fn writer_key(pool: &PgPool) {
+        keys::insert_legacy_test_key(pool, "writer", keys::Access::Read, "tester", Utc::now())
+            .await;
+    }
+
     /// Opens a changeset for key `writer` at `at`, with an entry for `path`
     /// if given.
     async fn changeset_at(
@@ -1201,6 +1208,7 @@ mod tests {
         let test = app_with(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
         let pool = test.app.pool().clone();
         let pg = catalogs::find(&pool, "pg").await.unwrap();
+        writer_key(&pool).await;
         let day_old = Utc::now() - TimeDelta::hours(25);
         let empty_old = changeset_at(&pool, pg.id, day_old, None).await;
         let empty_new = changeset_at(&pool, pg.id, Utc::now(), None).await;
