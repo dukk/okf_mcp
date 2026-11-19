@@ -380,6 +380,55 @@ test_watchdog_covers_worktrees_outside_main_checkout() {
     want_rc 0
 }
 
+# watchdog_with_ps <first etimes> <re-read etimes|gone> [uptime]: runs the
+# watchdog once, with a stub `ps` that lists one test process in the checkout
+# (a real sleep, so /proc/<pid>/cwd resolves) with the first etimes, then
+# answers a re-read with the second (or fails when "gone"). Limits are 1200 s.
+watchdog_with_ps() {
+    new_fixtures
+    fake_pids=()
+    trap 'kill "${fake_pids[@]}" 2>/dev/null' EXIT
+    (cd "$work/wt" && exec -a "$work/wt/target/debug/deps/fake_test" sleep 30) >/dev/null 2>&1 &
+    ps_pid=$!; fake_pids+=("$ps_pid")
+    sleep 0.3
+    mkdir -p "$fx/bin"
+    printf '%s\n' "${3:-693000.50} 1.00" >"$fx/uptime"
+    cat >"$fx/bin/ps" <<STUB
+#!/usr/bin/env bash
+case "\$*" in
+    *"-p "*) [ "$2" = gone ] && exit 1; echo "  $2" ;;
+    *) echo "$ps_pid $1 $work/wt/target/debug/deps/fake_test" ;;
+esac
+STUB
+    chmod +x "$fx/bin/ps"
+    out=$(cd "$work/wt" && PATH="$fx/bin:$PATH" AGENTIC_UPTIME_FILE="$fx/uptime" \
+        timeout 15 "$tools/watchdog.sh" --once 2>&1)
+    rc=$?
+}
+
+test_watchdog_ignores_a_wrapped_etimes_reading() {
+    # The 2026-11-18 sighting: 2^32 - 4123168608 = 171798688.
+    watchdog_with_ps 4123168608 5001
+    want_rc 0
+    ! grep -q WATCHDOG <<<"$out" || die "alarmed on a reading above the uptime"
+}
+
+test_watchdog_ignores_a_process_gone_on_reread() {
+    watchdog_with_ps 5000 gone
+    want_rc 0
+    ! grep -q WATCHDOG <<<"$out" || die "alarmed on a process that exited"
+}
+
+test_watchdog_ignores_an_implausible_reread() {
+    watchdog_with_ps 5000 4123168608
+    want_rc 0
+}
+
+test_watchdog_alarms_on_a_genuinely_long_process() {
+    watchdog_with_ps 5000 5001
+    want_rc 3; want_out "pid=$ps_pid elapsed=5000s"; want_out "fake_test"
+}
+
 # --- gate.sh ---
 
 test_gate_timeout_returns_124() {

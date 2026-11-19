@@ -171,3 +171,11 @@ agentic_now() {
 agentic_sleep() {
     "${AGENTIC_SLEEP_CMD:-sleep}" "$1"
 }
+
+# The host's uptime in whole seconds ($AGENTIC_UPTIME_FILE, default
+# /proc/uptime; the tests point it at a fixture), or nothing when unreadable.
+agentic_uptime() {
+    local up
+    read -r up _ <"${AGENTIC_UPTIME_FILE:-/proc/uptime}" 2>/dev/null || return 0
+    printf '%s\n' "${up%%.*}"
+}
