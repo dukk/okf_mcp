@@ -46,7 +46,13 @@ tokio::task_local! {
 ///
 /// # Returns
 /// Its output, and the invalidations, in the order they were queued.
-#[tracing::instrument(level = "trace", skip_all)]
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "wraps every HTTP request, an unmatched path included, which must make no span"
+    )
+)]
 pub async fn capturing<F: std::future::Future>(request: F) -> (F::Output, Vec<Invalidation>) {
     WRITTEN
         .scope(std::cell::RefCell::new(Vec::new()), async {

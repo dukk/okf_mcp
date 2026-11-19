@@ -111,7 +111,7 @@ pub(crate) fn routes(app: &Arc<App>) -> Router<Arc<App>> {
 }
 
 /// Runs the handler, collecting the invalidations its writes queued, and
-/// applies them to this replica's catalog directory before the response
+/// applies them to this replica's directory and credential caches before the response
 /// goes out ([`App::apply_own_writes`]): in-process cache drops only, so
 /// nothing after the commit waits on I/O.
 ///
@@ -122,14 +122,23 @@ pub(crate) fn routes(app: &Arc<App>) -> Router<Arc<App>> {
 ///
 /// # Returns
 /// The handler's response, unchanged.
-#[tracing::instrument(level = "trace", skip_all)]
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "wraps every HTTP request, an unmatched path included, which must make no span"
+    )
+)]
 pub(crate) async fn apply_own_writes(
     axum::extract::State(app): axum::extract::State<Arc<App>>,
     request: Request,
     next: Next,
 ) -> Response {
     let (response, written) = crate::invalidate::capturing(next.run(request)).await;
-    app.apply_own_writes(&written).await;
+    // Most requests write nothing: then nothing runs (and no span opens).
+    if !written.is_empty() {
+        app.apply_own_writes(&written).await;
+    }
     response
 }
 
