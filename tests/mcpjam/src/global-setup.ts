@@ -24,6 +24,10 @@ import { promisify } from "node:util";
 
 import type { TestProject } from "vitest/node";
 
+// First, before any MCP connection: the main process's seed and clean-up
+// sessions would print the SDK's ajv notice too.
+import "./quiet-ajv.js";
+
 import { CatalogAdmin } from "./admin.js";
 import { OkfSession, type Target } from "./okf.js";
 import { SCENARIOS, folderOf, type Scenario } from "./scenarios.js";
