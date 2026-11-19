@@ -1201,6 +1201,11 @@ impl App {
             "old mail jobs",
             crate::mail::queue::prune(&self.pool, now).await,
         );
+        // After the jobs: a worker row goes only once no job names it.
+        log_pruned(
+            "rows of stopped mail workers",
+            crate::mail::queue::prune_workers(&self.pool, now).await,
+        );
     }
 
     /// Revokes the OAuth grants idle for `oauth.idle_grant_revoke_after`

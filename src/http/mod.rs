@@ -627,20 +627,43 @@ async fn request_telemetry(
 /// How long a stopping server waits for its background access writes.
 const ACCESS_SETTLE_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Serves until `shutdown` is cancelled, running the poll loop, the clock
-/// check and (unless `[mail] worker = false`) the mail worker beside it.
+/// What `serve_with` starts beside the HTTP server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServeOptions {
+    /// Whether to run the background workers (the mail worker). Always
+    /// `true` in production: every replica runs them (issue #458). Test
+    /// servers that only enqueue set it to `false`.
+    pub worker: bool,
+}
+
+impl ServeOptions {
+    /// A server that starts no worker, for tests that only enqueue mail.
+    pub const NO_WORKER: Self = Self { worker: false };
+}
+
+impl Default for ServeOptions {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "a constant value, called once at start-up"
+        )
+    )]
+    fn default() -> Self {
+        Self { worker: true }
+    }
+}
+
+/// Serves until `shutdown` is cancelled, with every worker: [`serve_with`]
+/// and the default [`ServeOptions`].
 ///
 /// # Arguments
 /// * `app` - the shared state.
 /// * `listener` - a bound socket.
-/// * `shutdown` - cancelled to stop: it ends the MCP sessions, the poll loop,
-///   the clock check, the mail worker and the listener, and `serve` returns
-///   once open connections close, the mail worker has stopped and the
-///   access counts in flight are written.
+/// * `shutdown` - cancelled to stop.
 ///
 /// # Errors
-/// The listener's I/O error, after the loops and the sessions are
-/// stopped (`shutdown` is cancelled on every return).
+/// As [`serve_with`].
 #[cfg_attr(
     dylint_lib = "hyp_tracing",
     allow(
@@ -653,6 +676,41 @@ pub async fn serve(
     listener: TcpListener,
     shutdown: CancellationToken,
 ) -> std::io::Result<()> {
+    serve_with(app, listener, shutdown, ServeOptions::default()).await
+}
+
+/// Serves until `shutdown` is cancelled, running the poll loop, the clock
+/// check and (unless `options.worker` is off) the mail worker beside it.
+///
+/// # Arguments
+/// * `app` - the shared state.
+/// * `listener` - a bound socket.
+/// * `shutdown` - cancelled to stop: it ends the MCP sessions, the poll loop,
+///   the clock check, the mail worker and the listener, and `serve` returns
+///   once open connections close, the mail worker has finished the mail in
+///   hand (at most `worker_shutdown_grace`) and the access counts in flight
+///   are written.
+/// * `options` - what to start beside the server.
+///
+/// # Errors
+/// The listener's I/O error, after the loops and the sessions are
+/// stopped (`shutdown` is cancelled on every return).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "long-lived server loop: its span would stay open until shutdown and be exported only then"
+    )
+)]
+pub async fn serve_with(
+    app: Arc<App>,
+    listener: TcpListener,
+    shutdown: CancellationToken,
+    options: ServeOptions,
+) -> std::io::Result<()> {
+    for warning in app.config().deprecation_warnings() {
+        tracing::warn!("{warning}");
+    }
     let router = router(Arc::clone(&app), &shutdown);
     let poller = tokio::spawn(Arc::clone(&app).poll_until(shutdown.clone()));
     // Reloads the key cache on every `admin_generation` announcement; ends
@@ -668,13 +726,14 @@ pub async fn serve(
         shutdown.clone(),
     ));
     let clock_checker = tokio::spawn(Arc::clone(&app).check_clock_until(shutdown.clone()));
-    // The mail worker (Task 6), unless this process only enqueues.
+    // The workers' one pool, shared by every worker this process runs.
     // `bool::then` runs the closure only for `true`, giving an `Option`.
-    let mail_worker = app
-        .config()
-        .mail
+    let worker_pool = options
         .worker
-        .then(|| crate::mail::queue::spawn_worker(Arc::clone(&app), shutdown.clone()));
+        .then(|| crate::mail::queue::WorkerPool::new(app.pool()));
+    let mail_worker = worker_pool
+        .as_ref()
+        .map(|pool| crate::mail::queue::spawn_worker(Arc::clone(&app), pool, shutdown.clone()));
     let stop = shutdown.clone();
     // `async move { ... }` is a future that resolves once the token is
     // cancelled; axum then stops accepting and waits for open connections.
@@ -722,16 +781,30 @@ pub async fn serve(
             "the clock check panicked"
         );
     }
-    // It finishes the mail in hand first.
-    if let Some(mail_worker) = mail_worker {
-        if let Err(error) = mail_worker.await {
-            split_event!(
+    // It finishes the mail in hand first, but only for `worker_shutdown_grace`:
+    // past that, the job goes back to another replica after the orphan timeout.
+    if let (Some(mail_worker), Some(worker_pool)) = (mail_worker, &worker_pool) {
+        let grace = app.config().worker_shutdown_grace;
+        // `abort_handle` lets us cancel the task after `timeout` consumed it.
+        let abort = mail_worker.abort_handle();
+        match tokio::time::timeout(grace, mail_worker).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => split_event!(
                 error,
                 {},
                 { %error, },
                 "the mail worker panicked"
-            );
+            ),
+            Err(_) => {
+                abort.abort();
+                tracing::error!(
+                    grace_secs = grace.as_secs(),
+                    "the mail worker did not finish within worker_shutdown_grace; \
+                     its mail in hand is retried by another replica"
+                );
+            }
         }
+        worker_pool.close().await;
     }
     // The access counts still being written (plan Decision 5), bounded so a
     // database that stopped answering cannot hold the shutdown forever.
@@ -1405,11 +1478,15 @@ mod tests {
             .connect_with(db.pool.connect_options().as_ref().clone())
             .await
             .unwrap();
+        // The deprecated `mail.worker = false` is ignored: the worker runs.
         let config = Config {
             database_max_connections: 1,
+            mail: crate::config::MailConfig {
+                worker: Some(false),
+                ..crate::config::MailConfig::default()
+            },
             ..Config::default()
         };
-        // The default `[mail]`: the log provider, with a worker.
         let app = App::load(one, config, Arc::new(crate::clock::SystemClock))
             .await
             .unwrap();

@@ -154,8 +154,6 @@ pub(crate) async fn app_with_metrics(
 ) -> (TestApp, prometheus::Registry) {
     let (provider, metrics, registry) = local_metrics();
     let db = seed(catalogs_and_files, Utc::now()).await;
-    let mut config = config;
-    config.mail.worker = false;
     let app = App::load_with_metrics(db.pool.clone(), config, Arc::new(SystemClock), metrics)
         .await
         .expect("load the app");
@@ -381,10 +379,9 @@ pub(crate) async fn app_on_redis_with(
     )
 }
 
-/// `config` with `[redis]` pointing at `redis` and no mail worker.
+/// `config` with `[redis]` pointing at `redis`.
 fn redis_config(mut config: Config, redis: &TestRedis) -> Config {
     config.redis = Some(crate::shared::testing::config(redis));
-    config.mail.worker = false;
     config
 }
 
@@ -403,9 +400,8 @@ async fn load_shared(db: &TestDb, config: Config, redis: &TestRedis) -> Arc<App>
 
 /// Loads the app over `db` with `clock`.
 async fn load(db: TestDb, config: Config, clock: Arc<dyn Clock>) -> TestApp {
-    // Test apps only enqueue (Decision 19); the investigator test serves one.
-    let mut config = config;
-    config.mail.worker = false;
+    // Test apps only enqueue (Decision 19): the tests that serve one start
+    // it with `ServeOptions::NO_WORKER`.
     let app = App::load(db.pool.clone(), config, clock)
         .await
         .expect("load the app");

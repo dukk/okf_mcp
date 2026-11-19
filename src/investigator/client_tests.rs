@@ -649,10 +649,11 @@ async fn investigator_client_real_slice1_http_nine_tools() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
     let shutdown = tokio_util::sync::CancellationToken::new();
-    let server = tokio::spawn(crate::http::serve(
+    let server = tokio::spawn(crate::http::serve_with(
         app.app.clone(),
         listener,
         shutdown.clone(),
+        crate::http::ServeOptions::NO_WORKER,
     ));
     let mut client = McpClient::loopback(&endpoint, "pg", &key).await.unwrap();
     let tools = client.list_tools().await.unwrap();

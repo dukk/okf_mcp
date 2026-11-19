@@ -30,7 +30,7 @@ changesets and the routes in detail.
   | Passkey registration and sign-in ceremonies | Finishing on another replica fails |
   | The key cache | A key revoked on one replica still works on another until its next poll |
   | The OAuth access-token cache | A token revoked on one replica still works on another until it expires |
-  | Rate-limit buckets and the mail worker | Counted per replica (#357, #458); not fixed by `[redis]` |
+  | Rate-limit buckets | Counted per replica (#357); not fixed by `[redis]` |
 
 - **With `[redis]`, several replicas work.** Redis holds the first four rows'
   short-lived state, and three caches learn of changes on every replica
@@ -128,7 +128,8 @@ unknown keys are ignored, so one file serves every version.
 | `[[auth.oidc]]` | none | One table per OIDC provider: `id` (1 to 32 of `a-z`, `0-9` and `-`; stable, since each linked identity stores it), `label` (the button text), `issuer`, `client_id`, `client_secret_env` (the environment variable holding the secret) and `scopes` (default `["openid", "email", "profile"]`). Needs `public_url` |
 | `mail.provider` | `"log"` | `"smtp"`, `"postmark"`, `"ses"` or `"log"`. **`log` is for development only:** it writes each whole message, setup and reset links included, to the log at `info`, and delivers nothing |
 | `mail.from` | `"okf <okf@localhost>"` | The From address, such as `"okf <okf@example.com>"`; it must parse as one mailbox. Set it for `smtp`, `postmark` and `ses` (for `ses`, an identity verified in SES) |
-| `mail.worker` | `true` | Run the mail worker in `serve`. Its own pool opens up to 4 connections, on top of `database_max_connections` |
+| `mail.worker` | none | Deprecated and ignored: every `serve` runs the mail worker, and logs a warning if the key is present. The workers share one pool of up to 3 connections per process, on top of `database_max_connections` |
+| `worker_shutdown_grace` | `"30s"` | How long `serve` waits, once told to stop, for the mail worker to finish the mail in hand. Set the pod's `terminationGracePeriodSeconds` a few seconds above it |
 | `mail.smtp.host`, `mail.smtp.port`, `mail.smtp.starttls`, `mail.smtp.username`, `mail.smtp.password_env` | none, `587`, `true`, none, none | The SMTP relay. `starttls = true` requires STARTTLS; `false` is TLS from the first byte (port 465); there is no plain-text mode. `username` and `password_env` (the environment variable holding the password) go together |
 | `mail.postmark.token_env`, `mail.postmark.message_stream` | none, `"outbound"` | Postmark's server token (by environment variable) and message stream |
 | `mail.ses.region` | none | The AWS region SES sends in. Unset, the AWS SDK's own resolution decides (`AWS_REGION`, then the profile, then instance metadata). The `[mail.ses]` table is optional; there is no credential key ([Mail](#mail)) |
@@ -148,8 +149,8 @@ unknown keys are ignored, so one file serves every version.
 | `telemetry.prometheus.listen` | none | The address of the separate, unauthenticated `/metrics` listener, such as `"[::]:9464"`. No listener without it. It must not equal `listen` or share its port when either is unspecified |
 
 The server refuses to start (and every subcommand refuses to run) with a zero
-`poll_interval`, `session_idle_timeout`, `database_max_connections` or
-`overlay_cache_size`, an empty `allowed_hosts` or a blank
+`poll_interval`, `session_idle_timeout`, `worker_shutdown_grace`,
+`database_max_connections` or `overlay_cache_size`, an empty `allowed_hosts` or a blank
 entry in it, or a `time_server` that is blank or has surrounding whitespace.
 `maintenance_review_intervals` also rejects invalid catalog names, malformed
 durations, durations below 86,400 seconds and durations beyond the supported
@@ -577,12 +578,20 @@ two). What `[redis]` does not share:
 - **Rate limits** (per address, per email, OIDC starts, OAuth) are counted per
   replica, so the effective limit is the configured limit times the number of
   replicas (#357). The shared Redis handle is the place to fix that.
-- **The mail worker.** Until #458 settles how it behaves with several
-  replicas, run it on one: `[mail] worker = false` turns it off for a replica,
-  which still enqueues mail in Postgres. Since one ConfigMap serves a
-  Deployment, that means a second, single-replica Deployment of the same image
-  with its own ConfigMap (`worker = true`), and `worker = false` in the
-  serving Deployment's.
+- **The mail worker** runs on every replica, with no per-pod setting.
+  apalis takes each job with `FOR UPDATE SKIP LOCKED`, so two replicas never
+  send the same mail at once. Each process opens up to 3 worker connections
+  (one pool shared by every background worker), so N replicas add `3 * N`
+  to Postgres's `max_connections`, beside the request pools. A replica that
+  dies loses its mail in hand to another replica after about one minute (a
+  heartbeat every 10 seconds, six missed); the mail shows as `sending` and
+  cannot be deleted until then. Delivery is at least once: a replica killed
+  after the provider accepted a mail but before the job was acknowledged
+  (SIGKILL, out of memory, a grace period shorter than a send) causes a
+  second send. On SIGTERM a replica starts no new send and finishes the one
+  in hand, for at most `worker_shutdown_grace` (30 seconds by default, the
+  longest a provider may take); keep `terminationGracePeriodSeconds` above it.
+  The hourly prune deletes the `apalis.workers` rows of stopped replicas.
 - **Pruning.** Every replica's poll loop prunes the OAuth tables, unbound
   registered clients, console sessions, mail jobs, sign-in events and
   emailed-link tokens (hourly), the audit log (daily) and empty changesets
@@ -874,8 +883,8 @@ spec:
                   key: url
 ```
 
-The mail worker runs on every replica unless `[mail] worker = false`: see "Several
-replicas: what stays per replica".
+The mail worker runs on every replica: see "Several replicas: what stays per
+replica". Set `terminationGracePeriodSeconds` above `worker_shutdown_grace`.
 
 **The Service:** it sets no `ipFamilyPolicy`. On a dual-stack cluster the
 server listens on both families (`listen = "[::]:8080"`), so any policy works,
@@ -2301,7 +2310,7 @@ A request never sends mail itself. It queues a `SendMail` job in the
 server's own Postgres database (the `apalis` schema, section 4); a setup
 link and a "method added" notice are queued in the same transaction as the
 change they report. A worker in every `serve` process
-sends it, on a pool of its own (`mail.worker`); `user invite` and `mail test`
+sends it, on the workers' shared pool; `user invite` and `mail test`
 on the command line only queue. Two workers never send the same mail.
 
 - A provider error that may pass is retried: a network error, Postmark 401,

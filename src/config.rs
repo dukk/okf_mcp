@@ -38,6 +38,11 @@ pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(10);
 /// How long an MCP session may sit idle before it is closed.
 pub const DEFAULT_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 
+/// The default for `worker_shutdown_grace`: how long `serve` waits for the
+/// mail worker to finish the mail in hand once it is told to stop. It is the
+/// longest a provider may take to answer a send (30 s for Postmark and SES).
+pub const DEFAULT_WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
+
 /// The default `get_concept` outline threshold: bodies over 20,000 characters.
 pub const DEFAULT_CONCEPT_OUTLINE_CHARS: usize = 20_000;
 
@@ -458,11 +463,13 @@ pub struct MailConfig {
     pub provider: MailProvider,
     /// The From address (`"okf <okf@example.com>"`).
     pub from: String,
-    /// Whether `serve` runs a mail worker. Off for a replica that should only
-    /// enqueue, and in the test servers (Decision 19). The worker uses a pool
-    /// of its own, up to 4 connections (one of them held by LISTEN), beside
-    /// `database_max_connections`.
-    pub worker: bool,
+    /// Deprecated and ignored: every `serve` runs the mail worker, so a
+    /// Deployment of several replicas needs no per-pod mail setting (issue
+    /// #458). The key still parses, so a configuration that has it keeps
+    /// starting; [`Config::deprecation_warnings`] names it. The worker's
+    /// pool is shared with the housekeeping worker: up to 3 connections
+    /// beside `database_max_connections`.
+    pub worker: Option<bool>,
     /// The SMTP relay, for `provider = "smtp"`.
     pub smtp: Option<SmtpConfig>,
     /// Postmark, for `provider = "postmark"`.
@@ -483,7 +490,7 @@ impl Default for MailConfig {
         Self {
             provider: MailProvider::Log,
             from: DEFAULT_MAIL_FROM.to_string(),
-            worker: true,
+            worker: None,
             smtp: None,
             postmark: None,
             ses: None,
@@ -700,6 +707,13 @@ pub struct Config {
     /// How long an MCP session may be idle before it is closed (`"2h"`).
     #[serde(with = "humantime_serde")]
     pub session_idle_timeout: Duration,
+    /// How long `serve` waits, once told to stop, for the mail worker to
+    /// finish the mail in hand (`"30s"`). Match the pod's
+    /// `terminationGracePeriodSeconds` to it, plus a few seconds. Past it
+    /// `serve` logs and returns, and apalis hands the unfinished job to
+    /// another replica after the orphan timeout.
+    #[serde(with = "humantime_serde")]
+    pub worker_shutdown_grace: Duration,
     /// The NTP server the clock check measures against (`host`, `host:port`
     /// or an address); none means no check (design "Time").
     pub time_server: Option<String>,
@@ -712,8 +726,8 @@ pub struct Config {
     /// The most database connections one process opens (every command,
     /// `serve` included). A write holds one for its transaction, and a read
     /// that builds an overlay holds one to read the changeset's entries.
-    /// `serve`'s mail worker does not count against it: it opens up to
-    /// `mail::queue::WORKER_POOL_SIZE` (4) connections of its own.
+    /// `serve`'s workers do not count against it: they share one pool of up
+    /// to `mail::queue::WORKER_POOL_SIZE` (3) connections of their own.
     pub database_max_connections: u32,
     /// The most changeset overlays kept in memory; past it, the least
     /// recently used one is dropped (and rebuilt if read again).
@@ -753,6 +767,7 @@ impl Default for Config {
             default_catalog: None,
             poll_interval: DEFAULT_POLL_INTERVAL,
             session_idle_timeout: DEFAULT_SESSION_IDLE_TIMEOUT,
+            worker_shutdown_grace: DEFAULT_WORKER_SHUTDOWN_GRACE,
             time_server: None,
             maintenance_review_intervals: BTreeMap::new(),
             concept_outline_chars: DEFAULT_CONCEPT_OUTLINE_CHARS,
@@ -828,6 +843,28 @@ impl Config {
         toml::from_str(text)
     }
 
+    /// Settings that are read but no longer do anything. `Config::load` runs
+    /// before the log subscriber exists, so it cannot log them; `serve` calls
+    /// this once the subscriber is up and logs each message as a warning.
+    ///
+    /// # Returns
+    /// One message per deprecated setting present in the file (empty when
+    /// there is none).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "pure check over the parsed settings, called once at start-up"
+        )
+    )]
+    pub fn deprecation_warnings(&self) -> Vec<&'static str> {
+        let mut warnings = Vec::new();
+        if self.mail.worker.is_some() {
+            warnings.push("mail.worker is deprecated and ignored: every serve runs the worker");
+        }
+        warnings
+    }
+
     /// Checks the values serde cannot: ones that would break the server.
     ///
     /// # Returns
@@ -859,6 +896,9 @@ impl Config {
         }
         if self.session_idle_timeout.is_zero() {
             return Err("session_idle_timeout must be more than zero".to_string());
+        }
+        if self.worker_shutdown_grace.is_zero() {
+            return Err("worker_shutdown_grace must be more than zero".to_string());
         }
         if self.database_max_connections == 0 {
             return Err("database_max_connections must be more than zero".to_string());
@@ -1628,8 +1668,39 @@ mod tests {
         assert_eq!(mail, MailConfig::default());
         assert_eq!(mail.provider, MailProvider::Log);
         assert_eq!(mail.from, "okf <okf@localhost>");
-        assert!(mail.worker);
+        assert_eq!(mail.worker, None);
+        assert!(Config::default().deprecation_warnings().is_empty());
         assert!(Config::default().validate().is_ok());
+    }
+
+    #[test]
+    fn mail_worker_false_parses_with_a_warning_and_is_ignored() {
+        let config = Config::from_toml("[mail]\nworker = false\n").unwrap();
+
+        assert_eq!(config.mail.worker, Some(false));
+        assert!(
+            config.validate().is_ok(),
+            "an old configuration still starts"
+        );
+        assert_eq!(
+            config.deprecation_warnings(),
+            ["mail.worker is deprecated and ignored: every serve runs the worker"]
+        );
+    }
+
+    #[test]
+    fn worker_shutdown_grace_defaults_reads_and_must_be_positive() {
+        assert_eq!(
+            Config::default().worker_shutdown_grace,
+            Duration::from_secs(30)
+        );
+        let config = Config::from_toml("worker_shutdown_grace = \"45s\"\n").unwrap();
+        assert_eq!(config.worker_shutdown_grace, Duration::from_secs(45));
+        let error = Config::from_toml("worker_shutdown_grace = \"0s\"\n")
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(error.contains("worker_shutdown_grace"), "{error}");
     }
 
     #[test]
@@ -1653,7 +1724,7 @@ mod tests {
 
         assert_eq!(config.mail.provider, MailProvider::Smtp);
         assert_eq!(config.mail.from, "okf <okf@example.com>");
-        assert!(!config.mail.worker);
+        assert_eq!(config.mail.worker, Some(false));
         assert_eq!(
             config.mail.smtp,
             Some(SmtpConfig {
