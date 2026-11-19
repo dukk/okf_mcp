@@ -29,10 +29,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::OkfError;
 use crate::okf::analysis::links::INDEX_HEADING;
-use crate::okf::markdown::{find_links, resolve_link};
+use crate::okf::markdown::{encode_link_path, find_links, resolve_link};
 use crate::okf::ops::relink::{rewrite_text, unlink_text, Redirect};
 use crate::okf::paths::{basename, is_concept};
-use crate::okf::pystr::{py_repr_str, py_strip, universal_newlines};
+use crate::okf::pystr::{py_repr_str, py_strip, py_unquote, universal_newlines};
 use crate::okf::workspace::{MemWorkspace, Workspace};
 
 /// One replayable bookkeeping edit, stored in a changeset entry's `replay`
@@ -247,6 +247,143 @@ pub(crate) fn lists_target(
             resolved.path == target
                 || target.strip_suffix("/index.md") == Some(resolved.path.as_str())
         })
+}
+
+/// Does `text` hold a bullet that lists `target` in the raw form older
+/// versions wrote (issue #453): the path as written, unencoded, such as
+/// `[A](a b.md)`, `[A](a).md)` or `[A](a:b.md)`? No parser reads such a
+/// destination back as `target` ([`lists_target`] cannot see it), so
+/// without this check `index` appended a second, working bullet beside it.
+///
+/// Only a name that [`encode_link_path`] would change can have a raw form
+/// that differs from the written one; for any other name this is `false`
+/// (the ordinary check already sees its link).
+///
+/// The rule, conservative on purpose (a rare duplicate bullet is far better
+/// than a missing listing): a bullet is a raw listing of `target` only when
+/// 0. it has the shape older versions wrote, `* [label](destination...`,
+///    with the link first in the bullet (see `legacy_destination_start`);
+/// 1. its destination, as written between `](` and the `)` or `#` that
+///    follows it, equals the target's raw name (not merely a prefix the
+///    parser reads: `[A](a.md).md)` is a working link to `a.md`, so it is
+///    not a raw listing of `a.md).md`);
+/// 2. the name holds no valid `%XX` escape (`py_unquote` leaves it alone):
+///    `a%20b.md` as a raw name is indistinguishable from the encoded name
+///    of `a b.md`, which is that file's listing; and
+/// 3. the link [`find_links`] parses at that spot (if any) is broken: it
+///    resolves to no document that exists in `workspace`. A link that
+///    resolves to any existing document, another concept included, is that
+///    document's listing (`a#b.md` reads as a link to `a` plus a fragment).
+///
+/// Publish replay does not call this: it has no view of which files exist,
+/// so it cannot apply rule 3, and a wrong "already listed" there would
+/// silently drop the staged listing. Replay counts only a bullet whose
+/// parsed link resolves to the target ([`lists_target`]); after a concurrent
+/// change the worst case is an old broken raw bullet beside a new working
+/// one, which lint shows and the author can remove.
+///
+/// # Arguments
+/// * `workspace` - tells which documents exist (rule 3).
+/// * `text` - an `index.md`, with universal newlines.
+/// * `index` - its catalog-relative path; the raw destination is the
+///   target relative to its folder, or `/`-absolute.
+/// * `target` - the catalog-relative path listed.
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) fn lists_raw_target(
+    workspace: &dyn Workspace,
+    text: &str,
+    index: &str,
+    target: &str,
+) -> bool {
+    let folder = crate::okf::paths::dirname(index);
+    let relative = if folder.is_empty() {
+        Some(target)
+    } else {
+        target
+            .strip_prefix(folder)
+            .and_then(|rest| rest.strip_prefix('/'))
+    };
+    let mut raws: Vec<String> = relative.into_iter().map(str::to_string).collect();
+    raws.push(format!("/{target}"));
+    raws.iter()
+        .filter(|raw| encode_link_path(raw) != raw.as_str())
+        .filter(|raw| py_unquote(raw) == raw.as_str())
+        .any(|raw| {
+            text.split('\n').filter(|line| is_bullet(line)).any(|line| {
+                let Some(start) = legacy_destination_start(line) else {
+                    return false;
+                };
+                let Some(rest) = line[start..].strip_prefix(raw.as_str()) else {
+                    return false;
+                };
+                // Rule 1: the destination ends here, as written.
+                (rest.starts_with(')') || rest.starts_with('#'))
+                    // Rule 3: the parsed link at this spot, if any, is broken.
+                    && find_links(line)
+                        .iter()
+                        .find(|link| link.target_range.start == start)
+                        .is_none_or(|link| {
+                            resolve_link(workspace, &link.target, index)
+                                .is_none_or(|r| !workspace.exists(&r.path))
+                        })
+            })
+        })
+}
+
+/// Where the destination starts in a bullet written the way older versions
+/// wrote one: `* [label](destination...` with the link as the first thing in
+/// the bullet. The label follows the link grammar (it ends at the first
+/// unescaped `]`) and must hold no unescaped `[`, which older versions
+/// escaped; anything else (no label, an image `![..]`, a link inside a code
+/// span or after prose, unbalanced brackets) is not a legacy listing. A false
+/// "no" only leaves a duplicate bullet; a false "yes" drops a listing.
+///
+/// # Returns
+/// The byte offset in `line` just after `](`, or `None`.
+#[tracing::instrument(level = "trace", skip_all)]
+fn legacy_destination_start(line: &str) -> Option<usize> {
+    let rest = line
+        .strip_prefix("* ")
+        .or_else(|| line.strip_prefix("- "))?;
+    let after_marker = line.len() - rest.len();
+    let label = rest.strip_prefix('[')?;
+    let mut chars = label.char_indices();
+    while let Some((i, ch)) = chars.next() {
+        match ch {
+            // A backslash escapes the next character (the LINK grammar).
+            '\\' => {
+                chars.next();
+            }
+            '[' => return None,
+            ']' => {
+                let tail = &label[i + 1..];
+                let _ = tail.strip_prefix('(')?;
+                return Some(after_marker + 1 + i + 2);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// [`lists_target`], or [`lists_raw_target`]: does `text` list `target` in
+/// any form, working or an older raw one? What `index` and `repair_indexes`
+/// use to decide that a concept is already listed (replay uses only
+/// [`lists_target`]).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "one-line delegation to instrumented functions"
+    )
+)]
+pub(crate) fn already_lists(
+    workspace: &dyn Workspace,
+    text: &str,
+    index: &str,
+    target: &str,
+) -> bool {
+    lists_target(workspace, text, index, target) || lists_raw_target(workspace, text, index, target)
 }
 
 /// The line of `text` (an `index.md` at `index`) that lists `target`: the
