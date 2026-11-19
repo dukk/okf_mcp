@@ -3041,6 +3041,178 @@ mod tests {
         assert!(page.contains("id=\"consent-use-code\""));
     }
 
+    /// What a browser posts from the signed-in form as `page` renders it,
+    /// untouched: each ticked checkbox, and each select's `selected` option
+    /// (else its first). Hidden inputs and the button come from
+    /// [`consent_form`].
+    fn initial_choices(page: &str) -> Vec<(String, String)> {
+        let start = page.find("id=\"consent-user-form\"").expect("the form");
+        let form = &page[start..];
+        let form = &form[..form.find("</form>").expect("the form's end")];
+        let mut choices = Vec::new();
+        for (at, marker) in form.match_indices("<input type=\"checkbox\" name=\"") {
+            let rest = &form[at + marker.len()..];
+            let tag = &rest[..rest.find('>').expect("the tag's end")];
+            if tag.ends_with(" checked") {
+                let (name, rest) = tag.split_once("\" value=\"").expect("a value");
+                let (value, _) = rest.split_once('"').expect("closing quote");
+                choices.push((name.to_string(), value.to_string()));
+            }
+        }
+        for (at, marker) in form.match_indices("<select name=\"") {
+            let rest = &form[at + marker.len()..];
+            let (name, rest) = rest.split_once('"').expect("closing quote");
+            let options = &rest[..rest.find("</select>").expect("the select's end")];
+            let value = |option: &str| {
+                let rest = &option[option.find("value=\"").expect("a value") + 7..];
+                rest[..rest.find('"').expect("closing quote")].to_string()
+            };
+            let all: Vec<&str> = options.split("<option ").skip(1).collect();
+            let chosen = all
+                .iter()
+                .find(|option| option.contains(" selected>"))
+                .or_else(|| all.first())
+                .expect("an option");
+            choices.push((name.to_string(), value(chosen)));
+        }
+        choices
+    }
+
+    /// Approves `page`'s form as it starts, as `session`.
+    async fn approve_as_shown(
+        test: &TestApp,
+        session: &Browser,
+        page: &str,
+    ) -> (StatusCode, HeaderMap, String) {
+        let choices = initial_choices(page);
+        let pairs: Vec<(&str, &str)> = choices
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect();
+        consent_as(test, Some(session), page, &pairs).await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn one_write_catalogs_collapsed_defaults_approve_write_with_it_as_default() {
+        let test = oauth_app().await;
+        let alice = signed_in(&test, "alice", &[("main", Access::Write)]).await;
+        let page = user_page(&test, &alice).await;
+        assert!(page.contains("<details id=\"consent-advanced\">"), "{page}");
+        assert_eq!(
+            initial_choices(&page),
+            [
+                ("grant.main".to_string(), "on".to_string()),
+                ("level.main".to_string(), "write".to_string()),
+                ("default_catalog".to_string(), "main".to_string()),
+            ]
+        );
+
+        let (status, headers, body) = approve_as_shown(&test, &alice, &page).await;
+
+        let grant = grant_of(&test, &forwarded(status, &headers, &body)).await;
+        let principal = test.app.keys().find_grant(&grant).expect("cached grant");
+        assert_eq!(principal.user.as_deref(), Some("alice"));
+        assert_eq!(principal.level("main"), Some(Access::Write));
+        assert_eq!(principal.default_catalog.as_deref(), Some("main"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn one_read_only_catalogs_collapsed_defaults_approve_read_with_it_as_default() {
+        let test = oauth_app().await;
+        let alice = signed_in(&test, "alice", &[("main", Access::Read)]).await;
+        let page = user_page(&test, &alice).await;
+        assert!(page.contains("<details id=\"consent-advanced\">"), "{page}");
+        assert!(!page.contains("value=\"write\""), "write is not offered");
+
+        let (status, headers, body) = approve_as_shown(&test, &alice, &page).await;
+
+        let grant = grant_of(&test, &forwarded(status, &headers, &body)).await;
+        let principal = test.app.keys().find_grant(&grant).expect("cached grant");
+        assert_eq!(principal.level("main"), Some(Access::Read));
+        assert_eq!(principal.default_catalog.as_deref(), Some("main"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn several_catalogs_start_open_and_preselect_nothing() {
+        let test = oauth_app().await;
+        let alice = signed_in(
+            &test,
+            "alice",
+            &[("main", Access::Write), ("other", Access::Read)],
+        )
+        .await;
+        let page = user_page(&test, &alice).await;
+
+        assert!(
+            page.contains("<details id=\"consent-advanced\" open>"),
+            "{page}"
+        );
+        assert!(!page.contains(" checked>"), "{page}");
+        // Untouched, the form chooses nothing, which is refused as before.
+        let (status, _, again) = approve_as_shown(&test, &alice, &page).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(again.contains("Choose at least one catalog"), "{again}");
+        assert_eq!(oauth_grants(&test).await, 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn one_catalogs_preselection_can_be_changed_and_is_still_validated() {
+        let test = oauth_app().await;
+        let alice = signed_in(&test, "alice", &[("main", Access::Write)]).await;
+
+        // Unticked: refused as an empty choice, shown again open.
+        let page = user_page(&test, &alice).await;
+        let (nothing, _, again) = consent_as(
+            &test,
+            Some(&alice),
+            &page,
+            &[("level.main", "write"), ("default_catalog", "main")],
+        )
+        .await;
+        assert_eq!(nothing, StatusCode::OK);
+        assert!(again.contains("Choose at least one catalog"), "{again}");
+        assert!(
+            again.contains("<details id=\"consent-advanced\" open>"),
+            "{again}"
+        );
+        // A default outside the choice: refused.
+        let (not_chosen, _, refused) = consent_as(
+            &test,
+            Some(&alice),
+            &again,
+            &[
+                ("grant.main", "on"),
+                ("level.main", "write"),
+                ("default_catalog", "other"),
+            ],
+        )
+        .await;
+        assert_eq!(not_chosen, StatusCode::OK);
+        assert!(
+            refused.contains("The default catalog must be one you allow"),
+            "{refused}"
+        );
+        assert_eq!(oauth_grants(&test).await, 0);
+
+        // Lowered to read with no default: honoured as chosen.
+        let page = user_page(&test, &alice).await;
+        let (status, headers, body) = consent_as(
+            &test,
+            Some(&alice),
+            &page,
+            &[
+                ("grant.main", "on"),
+                ("level.main", "read"),
+                ("default_catalog", ""),
+            ],
+        )
+        .await;
+        let grant = grant_of(&test, &forwarded(status, &headers, &body)).await;
+        let principal = test.app.keys().find_grant(&grant).expect("cached grant");
+        assert_eq!(principal.level("main"), Some(Access::Read));
+        assert_eq!(principal.default_catalog, None);
+    }
+
     /// A signed-in Approve's form and a pending authorization it matches,
     /// with `failed_attempts` wrong codes and an accepted code.
     fn matching(failed_attempts: u8) -> (super::ConsentForm, super::PendingAuthorization) {

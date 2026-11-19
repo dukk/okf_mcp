@@ -216,9 +216,10 @@ pub enum CatalogCommand {
     },
     /// Create the root index.md, log.md, folder indexes and listings that
     /// catalogs are missing, and publish them at once (each repaired
-    /// catalog's log.md records it). Only adds: existing text is kept, and
-    /// a second run changes nothing. A running server shows the result at
-    /// once (its change feed).
+    /// catalog's log.md records it). Existing text is kept, except that an
+    /// old raw (unencoded) concept listing is percent-encoded in place, or
+    /// removed beside a working one; a second run changes nothing. A
+    /// running server shows the result at once (its change feed).
     RepairIndexes {
         /// The catalogs to repair. With `--missing-only`, only those of them
         /// without a root index.md; with none named, every such catalog.
