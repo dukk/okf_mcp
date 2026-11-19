@@ -76,12 +76,17 @@ async fn a_row_carries_the_owner_and_its_access_facts() {
     assert_eq!(plain.generation, found.generation);
     assert_eq!(plain.description, "about it");
     assert_eq!(plain.owner_team.as_deref(), Some(TEST_TEAM));
-    assert_eq!(plain.owner_team_id.as_deref(), Some(TEST_TEAM));
+    let team_id: String = sqlx::query_scalar("SELECT id FROM teams WHERE name = $1")
+        .bind(TEST_TEAM)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(plain.owner_team_id.as_deref(), Some(team_id.as_str()));
     assert_eq!(plain.suspended, None);
     assert!(!plain.maintenance_off);
     let audit_team: Option<i64> =
         sqlx::query_scalar("SELECT id FROM audit_teams WHERE team_id = $1")
-            .bind(TEST_TEAM)
+            .bind(&team_id)
             .fetch_optional(&db.pool)
             .await
             .unwrap();
