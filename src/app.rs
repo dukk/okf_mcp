@@ -23,7 +23,7 @@ use crate::error::OkfError;
 use crate::http::limits::SignInLimits;
 use crate::http::passkeys::Passkeys;
 use crate::http::sessions::SessionBindings;
-use crate::keyed_lock::KeyedLocks;
+use crate::keyed_lock::{KeyedGuard, KeyedLocks};
 use crate::oauth::OAuth;
 use crate::oidc::OidcProviders;
 use crate::overlay::Overlays;
@@ -94,6 +94,13 @@ pub struct App {
     // Each changeset's writers, queued in this process before they take a
     // pooled connection (`write::apply`).
     write_queue: KeyedLocks,
+    // The in-process half of each catalog's publish lock (design
+    // "Publish"), by catalog id: here rather than in `CatalogState`, so
+    // every state of one catalog shares it (M18 Decision 4).
+    publish_locks: KeyedLocks,
+    // Each catalog's rebuild lock (`CatalogState::refresh`), by catalog id,
+    // for the same reason.
+    rebuild_locks: KeyedLocks,
     // As in `CatalogState`: the lock is held only to clone or swap the `Arc`.
     catalogs: RwLock<Arc<Catalogs>>,
     // The `admin_generation` the key cache was loaded at. Written only under
@@ -301,6 +308,8 @@ impl App {
             redis,
             overlays,
             write_queue: KeyedLocks::new(),
+            publish_locks: KeyedLocks::new(),
+            rebuild_locks: KeyedLocks::new(),
             catalogs: RwLock::new(Arc::new(loaded)),
             admin_generation: AtomicI64::new(admin_generation),
             announced_generation: AtomicI64::new(admin_generation),
@@ -621,6 +630,38 @@ impl App {
         &self.write_queue
     }
 
+    /// Waits for the in-process half of a catalog's publish lock (design
+    /// "Publish"): one publish or discard of the catalog at a time in this
+    /// server. Taken before any pooled connection or Postgres lock; the
+    /// other half is the advisory lock in the publish transaction.
+    ///
+    /// # Arguments
+    /// * `catalog_id` - the catalog's database id ([`CatalogState::id`]).
+    ///
+    /// # Returns
+    /// The guard; the lock is held until it is dropped.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn publish_lock(&self, catalog_id: i64) -> KeyedGuard<'_> {
+        self.publish_locks.lock(catalog_id).await
+    }
+
+    /// The catalog rebuild locks, by catalog id, that
+    /// [`CatalogState::refresh`] takes so one catalog builds one snapshot at
+    /// a time, whichever of its states asks.
+    ///
+    /// # Returns
+    /// The locks.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn rebuild_locks(&self) -> &KeyedLocks {
+        &self.rebuild_locks
+    }
+
     /// The last clock check, if any (`/healthz` shows it).
     ///
     /// # Returns
@@ -775,7 +816,11 @@ impl App {
                         // is skipped, but it is still a failed one.
                         result = RefreshResult::Failed;
                     } else if behind {
-                        match state.refresh(&self.pool).instrument(turn.clone()).await {
+                        match state
+                            .refresh(&self.pool, &self.rebuild_locks)
+                            .instrument(turn.clone())
+                            .await
+                        {
                             Ok(true) => result = RefreshResult::Reloaded,
                             Ok(false) => {}
                             Err(error) => {
@@ -965,7 +1010,7 @@ impl App {
         if change.generation <= state.current().generation() {
             return AnnouncementResult::Current;
         }
-        match state.refresh(&self.pool).await {
+        match state.refresh(&self.pool, &self.rebuild_locks).await {
             Ok(true) => AnnouncementResult::Applied,
             Ok(false) => AnnouncementResult::Current,
             // Deleted since this replica's last poll, which drops it.

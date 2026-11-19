@@ -701,7 +701,10 @@ mod tests {
             .await
             .unwrap();
         let state = test.app.catalog("pg").unwrap();
-        state.refresh(test.app.pool()).await.unwrap();
+        state
+            .refresh(test.app.pool(), test.app.rebuild_locks())
+            .await
+            .unwrap();
         assert_eq!(state.current().revision("a.md"), Some(2));
 
         write(&ctx, &handle, "a.md", format!("{NOTE}Two.\n"))

@@ -589,7 +589,7 @@ pub(crate) async fn discard(
     let app = ctx.app();
     // The guard releases the mutex when it goes out of scope, after the
     // overlay is forgotten.
-    let _closing = state.publish_lock().lock().await;
+    let _closing = app.publish_lock(state.id()).await;
     let now = app.clock().now();
     // Closing another key's changeset is an admin's administrative change;
     // an owner closing its own is not recorded. Decided from the row read
@@ -761,7 +761,9 @@ pub(crate) async fn pending_changes(
     let bases = entries
         .iter()
         .map(|entry| (entry.path.as_str(), entry.base_revision));
-    let loaded = state.current_covering(pool, bases).await?;
+    let loaded = state
+        .current_covering(pool, ctx.app().rebuild_locks(), bases)
+        .await?;
     let files = blocking(move || pending_files(&loaded, &entries)).await?;
     Ok(PendingChanges {
         catalog: state.name().to_string(),
@@ -2385,7 +2387,7 @@ mod changes_tests {
         test.app
             .catalog("pg")
             .unwrap()
-            .refresh(test.app.pool())
+            .refresh(test.app.pool(), test.app.rebuild_locks())
             .await
             .unwrap();
     }

@@ -371,8 +371,8 @@ async fn racing_announcements_and_refreshes_rebuild_once_and_never_go_back() {
             b.apply_catalog_announcement(change),
             b.apply_catalog_announcement(change),
             b.apply_catalog_announcement(change),
-            state.refresh(b.pool()),
-            state.refresh(b.pool()),
+            state.refresh(b.pool(), b.rebuild_locks()),
+            state.refresh(b.pool(), b.rebuild_locks()),
         )
     })
     .await
