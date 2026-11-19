@@ -92,6 +92,13 @@ pub struct App {
     // that only loaded a change (and did not announce) cannot make the next
     // announcing reload skip it. Written only under `polling`.
     announced_generation: AtomicI64,
+    // The `admin_generation` the poll pass last marked the credential caches
+    // and the catalog directory stale at (or the one this instance started
+    // at). Apart from `admin_generation`, which a change message's or an
+    // announcement's reload also advances: a change those did not carry (an
+    // older replica's, or a lost message) moves the generation with them,
+    // and the next pass must still see it. Written only under `polling`.
+    swept_generation: AtomicI64,
     // The effective sign-in policy (`[auth]` with `server_settings`
     // overrides), reloaded with the labels whenever `admin_generation`
     // moves. As with `catalogs`, the lock is held only to clone or swap.
@@ -300,6 +307,7 @@ impl App {
             catalogs: RwLock::new(Arc::new(loaded)),
             admin_generation: AtomicI64::new(admin_generation),
             announced_generation: AtomicI64::new(admin_generation),
+            swept_generation: AtomicI64::new(admin_generation),
             settings: RwLock::new(Arc::new(settings)),
             polling: tokio::sync::Mutex::new(broken),
             clock_status: RwLock::new(None),
@@ -869,15 +877,17 @@ impl App {
         // it (`*broken`, like a reference) the pass reads and replaces the
         // broken catalogs.
         let mut broken = self.polling.lock().await;
-        if self.reload_settings_if_changed(true).await {
-            // `admin_generation` moved and no change message had caught this
-            // replica up with it yet (applying one reloads the settings
-            // first): something changed that this replica has not been told
-            // of, so every cached credential, user and catalog row is
-            // reread on its next use. The poll loop's backstop, until it is
-            // removed (Task 16).
+        self.reload_settings_if_changed(true).await;
+        // `admin_generation` moved since the last pass's sweep, whoever
+        // reloaded it (this pass, a change message, an announcement): a
+        // change no message described may be among those, so every cached
+        // credential, user and catalog row is reread on its next use. The
+        // poll loop's backstop, until it is removed (Task 16).
+        let loaded = self.admin_generation.load(Ordering::Relaxed);
+        if loaded != self.swept_generation.load(Ordering::Relaxed) {
             self.credentials.mark_all_stale();
             self.directory.mark_all_stale().await;
+            self.swept_generation.store(loaded, Ordering::Relaxed);
         }
         let current = self.catalogs();
         let mut next = Catalogs::new();
@@ -1168,11 +1178,13 @@ impl App {
 
     /// What an M16 replica's announcement means here (spec Decision 14):
     /// an older replica changed something without sending change messages,
-    /// so every cached credential and user is reread on its next use, and
-    /// the settings and labels reload.
+    /// so every cached credential, user and catalog row (suspension, owner,
+    /// maintenance) is reread on its next use, and the settings and labels
+    /// reload.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn apply_m16_announcement(&self) {
         self.credentials.mark_all_stale();
+        self.directory.mark_all_stale().await;
         self.reload_settings_now(false).await;
     }
 
@@ -1226,17 +1238,14 @@ impl App {
     /// without announcing it (the subscriber's resubscribe, a change message)
     /// must not make the `settle` poll that follows find nothing to publish,
     /// so the announce step runs whether or not this call reloaded.
-    ///
-    /// # Returns
-    /// Whether this call reloaded them.
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn reload_settings_if_changed(&self, announce: bool) -> bool {
-        let reloaded = self.reload_moved_settings().await;
+    async fn reload_settings_if_changed(&self, announce: bool) {
+        self.reload_moved_settings().await;
         if !announce {
-            return reloaded;
+            return;
         }
         let Some(redis) = &self.redis else {
-            return reloaded;
+            return;
         };
         let loaded = self.admin_generation.load(Ordering::Relaxed);
         // Under `polling`, so no other reload moves either counter meanwhile.
@@ -1246,16 +1255,12 @@ impl App {
             // the poll loop covers a lost announcement (spec Decision 12).
             self.announced_generation.store(loaded, Ordering::Relaxed);
         }
-        reloaded
     }
 
     /// The reload half of [`App::reload_settings_if_changed`]. Called only
     /// under `polling`.
-    ///
-    /// # Returns
-    /// Whether `admin_generation` had moved and both were reloaded.
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn reload_moved_settings(&self) -> bool {
+    async fn reload_moved_settings(&self) {
         let admin_generation = match catalogs::admin_generation(&self.pool).await {
             Ok(admin_generation) => admin_generation,
             Err(error) => {
@@ -1265,11 +1270,11 @@ impl App {
                     { %error, },
                     "reading admin_generation failed; retrying at the next poll"
                 );
-                return false;
+                return;
             }
         };
         if admin_generation == self.admin_generation.load(Ordering::Relaxed) {
-            return false;
+            return;
         }
         // An async block lets `?` stop at the first failure; either way the
         // counter is stored only when both were reloaded, so a failure is
@@ -1295,11 +1300,9 @@ impl App {
             Outcome::Error
         });
         match reloaded {
-            Ok(()) => {
-                self.admin_generation
-                    .store(admin_generation, Ordering::Relaxed);
-                true
-            }
+            Ok(()) => self
+                .admin_generation
+                .store(admin_generation, Ordering::Relaxed),
             Err(error) => {
                 split_event!(
                     error,
@@ -1307,7 +1310,6 @@ impl App {
                     { %error, },
                     "settings or labels reload failed; retrying at the next poll"
                 );
-                false
             }
         }
     }
@@ -2329,6 +2331,133 @@ mod tests {
         // No admin change since: only the unstored counter makes this retry.
         app.poll().await.unwrap();
         assert!(app.find_key(&key).await.unwrap().is_none());
+    }
+
+    /// An app whose catalog rows and credentials live an hour (so only an
+    /// invalidation, never a TTL, can reread them), with `main` owned by
+    /// the test team and a writer key of the test user on it, warmed: its
+    /// principal assembled and `main`'s row cached.
+    async fn warmed_writer() -> (
+        crate::db::pg_support::TestDb,
+        Arc<App>,
+        Arc<crate::auth::Principal>,
+    ) {
+        let db = test_db().await;
+        create_catalog_main(&db.pool).await;
+        let names = ["main".to_string()];
+        let created = key_rows::create_with_id(
+            &db.pool,
+            &key_rows::NewKey {
+                name: "writer",
+                access: key_rows::Access::Write,
+                maintenance_report: false,
+                grants: key_rows::Grants::Catalogs(&names),
+                default_catalog: None,
+                actor: "writer",
+                user: crate::db::TEST_USER,
+                self_issued: false,
+                expires_at: None,
+                levels: &[],
+            },
+            &crate::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        let config = Config {
+            catalog_ttl: std::time::Duration::from_secs(3600),
+            credential_ttl: std::time::Duration::from_secs(3600),
+            ..Config::default()
+        };
+        let app = App::load(db.pool.clone(), config, Arc::new(SystemClock))
+            .await
+            .unwrap();
+        let writer = app.find_key(&created.key).await.unwrap().unwrap();
+        assert!(writer
+            .require_in(app.directory(), key_rows::Access::Read, "main")
+            .await
+            .is_ok());
+        (db, app, writer)
+    }
+
+    async fn create_catalog_main(pool: &PgPool) {
+        catalogs::create(
+            pool,
+            &crate::store::catalogs::NewCatalog {
+                name: "main",
+                display_name: &crate::labels::DisplayName::default(),
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            },
+            &crate::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Suspends the test team as a milestone 16 replica does: the row and
+    /// `admin_generation` in one transaction, and no change message.
+    async fn suspend_as_an_older_replica(pool: &PgPool) {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query(
+            "UPDATE teams SET suspended_at = now(), suspension_notice = 'Paused.' WHERE name = $1",
+        )
+        .bind(crate::db::TEST_TEAM)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE server_state SET admin_generation = admin_generation + 1")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    async fn suspended(app: &App, writer: &crate::auth::Principal) -> bool {
+        matches!(
+            writer
+                .require_in(app.directory(), key_rows::Access::Read, "main")
+                .await,
+            Err(OkfError::Suspended { .. })
+        )
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_older_replicas_announcement_rereads_the_cached_catalog_rows() {
+        let (db, app, writer) = warmed_writer().await;
+        suspend_as_an_older_replica(&db.pool).await;
+        assert!(!suspended(&app, &writer).await, "the row is still cached");
+
+        app.apply_m16_announcement().await;
+
+        assert!(
+            suspended(&app, &writer).await,
+            "the next check reads it again"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_change_absorbed_by_a_messages_reload_is_still_swept_by_the_next_poll() {
+        let (db, app, writer) = warmed_writer().await;
+        suspend_as_an_older_replica(&db.pool).await;
+        // A change message for something else reloads the settings and
+        // catches `admin_generation` up past the silent suspension.
+        let me: String = sqlx::query_scalar("SELECT id FROM users WHERE name = $1")
+            .bind(crate::db::TEST_USER)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        app.apply(&message(crate::invalidate::Invalidation::User { id: me }))
+            .await;
+        assert!(!suspended(&app, &writer).await, "no message named the row");
+
+        app.poll().await.unwrap();
+
+        assert!(
+            suspended(&app, &writer).await,
+            "the poll's sweep rereads it"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
