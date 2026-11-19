@@ -3,7 +3,7 @@
 ## Added
 - `mail::queue::WorkerPool`: the process's one pool for background workers, at most 3 connections (`WORKER_POOL_SIZE`, was 4), created and closed by `serve`.
 - `mail::queue::prune_workers`: deletes `apalis.workers` rows last seen over ten orphan timeouts ago that no job names. Called from the hourly OAuth/mail prune, right after the mail job prune.
-- `worker_shutdown_grace` (default `"30s"`): how long `serve` waits for the mail worker to finish the mail in hand after SIGTERM, then logs and returns.
+- `worker_shutdown_grace` (default `"30s"`): how long the mail worker has, counted from the stop signal (not from when the drains finish), to finish the mail in hand; then a supervisor aborts it and logs.
 - `http::serve_with` and `ServeOptions { worker }`; `ServeOptions::NO_WORKER` for tests that only enqueue.
 - `Config::deprecation_warnings`, logged at `warn` by `serve_with`.
 

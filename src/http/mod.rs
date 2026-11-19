@@ -679,6 +679,54 @@ pub async fn serve(
     serve_with(app, listener, shutdown, ServeOptions::default()).await
 }
 
+/// Waits for the mail worker and enforces the shutdown grace: once
+/// `shutdown` is cancelled the worker has `grace` to finish the mail in
+/// hand; past that it is aborted and an error is logged (another replica
+/// takes the job after the orphan timeout). It returns when the worker has
+/// finished or been aborted, and runs beside the server's own draining, so
+/// a slow request or poll pass never lengthens the grace.
+///
+/// # Arguments
+/// * `worker` - the mail worker's task.
+/// * `shutdown` - the server's stop signal; the grace starts when it is cancelled.
+/// * `grace` - how long the worker may take after the signal.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn supervise_worker(
+    mut worker: tokio::task::JoinHandle<()>,
+    shutdown: CancellationToken,
+    grace: std::time::Duration,
+) {
+    // `&mut worker` polls the handle without consuming it, so it can still
+    // be aborted afterwards.
+    let finished = tokio::select! {
+        result = &mut worker => Some(result),
+        () = shutdown.cancelled() => None,
+    };
+    let result = match finished {
+        Some(result) => result,
+        None => match tokio::time::timeout(grace, &mut worker).await {
+            Ok(result) => result,
+            Err(_) => {
+                worker.abort();
+                tracing::error!(
+                    grace_secs = grace.as_secs_f64(),
+                    "the mail worker did not finish within worker_shutdown_grace; \
+                     its mail in hand is retried by another replica"
+                );
+                return;
+            }
+        },
+    };
+    if let Err(error) = result {
+        split_event!(
+            error,
+            {},
+            { %error, },
+            "the mail worker panicked"
+        );
+    }
+}
+
 /// Serves until `shutdown` is cancelled, running the poll loop, the clock
 /// check and (unless `options.worker` is off) the mail worker beside it.
 ///
@@ -731,9 +779,16 @@ pub async fn serve_with(
     let worker_pool = options
         .worker
         .then(|| crate::mail::queue::WorkerPool::new(app.pool()));
-    let mail_worker = worker_pool
-        .as_ref()
-        .map(|pool| crate::mail::queue::spawn_worker(Arc::clone(&app), pool, shutdown.clone()));
+    // The mail worker runs under a supervisor that enforces
+    // `worker_shutdown_grace` from the moment `shutdown` is cancelled,
+    // concurrently with the HTTP drain and the other joins below.
+    let mail_supervisor = worker_pool.as_ref().map(|pool| {
+        tokio::spawn(supervise_worker(
+            crate::mail::queue::spawn_worker(Arc::clone(&app), pool, shutdown.clone()),
+            shutdown.clone(),
+            app.config().worker_shutdown_grace,
+        ))
+    });
     // The feedback worker (issue #674): only with `[feedback]` and its
     // `worker` switch on, so one replica forwards.
     let feedback_worker = app
@@ -790,29 +845,20 @@ pub async fn serve_with(
             "the clock check panicked"
         );
     }
-    // It finishes the mail in hand first, but only for `worker_shutdown_grace`:
-    // past that, the job goes back to another replica after the orphan timeout.
-    if let (Some(mail_worker), Some(worker_pool)) = (mail_worker, &worker_pool) {
-        let grace = app.config().worker_shutdown_grace;
-        // `abort_handle` lets us cancel the task after `timeout` consumed it.
-        let abort = mail_worker.abort_handle();
-        match tokio::time::timeout(grace, mail_worker).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => split_event!(
+    // The supervisor started its clock when `shutdown` was cancelled, so
+    // the grace did not wait for the drains above. It ends once the worker
+    // has finished or been aborted; then nothing uses the pool.
+    if let Some(supervisor) = mail_supervisor {
+        if let Err(error) = supervisor.await {
+            split_event!(
                 error,
                 {},
                 { %error, },
-                "the mail worker panicked"
-            ),
-            Err(_) => {
-                abort.abort();
-                tracing::error!(
-                    grace_secs = grace.as_secs(),
-                    "the mail worker did not finish within worker_shutdown_grace; \
-                     its mail in hand is retried by another replica"
-                );
-            }
+                "the mail worker supervisor panicked"
+            );
         }
+    }
+    if let Some(worker_pool) = &worker_pool {
         worker_pool.close().await;
     }
     if let Some(feedback_worker) = feedback_worker {
@@ -1567,6 +1613,67 @@ mod tests {
         assert!(
             matches!(stopped, Ok(Ok(Ok(())))),
             "serve returns once the worker stops: {stopped:?}"
+        );
+    }
+
+    /// The grace runs from the cancellation, and a worker that ignores it is
+    /// aborted while the rest of shutdown (here: nothing awaited) goes on.
+    #[tokio::test]
+    async fn a_stuck_mail_worker_is_aborted_at_the_grace_deadline() {
+        let worker = tokio::spawn(std::future::pending::<()>());
+        let watch = worker.abort_handle();
+        let shutdown = CancellationToken::new();
+        let supervisor = tokio::spawn(supervise_worker(
+            worker,
+            shutdown.clone(),
+            std::time::Duration::from_millis(200),
+        ));
+        // Before the signal the clock has not started, however long it takes.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(!watch.is_finished() && !supervisor.is_finished());
+
+        shutdown.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(30), supervisor)
+            .await
+            .expect("the supervisor ends at the grace deadline")
+            .unwrap();
+
+        // `abort` takes effect at the task's next poll; give it a moment.
+        for _ in 0..100 {
+            if watch.is_finished() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(watch.is_finished(), "the stuck worker was aborted");
+    }
+
+    #[tokio::test]
+    async fn a_mail_worker_that_finishes_within_the_grace_is_not_aborted() {
+        let shutdown = CancellationToken::new();
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&done);
+        let stop = shutdown.clone();
+        let worker = tokio::spawn(async move {
+            stop.cancelled().await;
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let supervisor = tokio::spawn(supervise_worker(
+            worker,
+            shutdown.clone(),
+            std::time::Duration::from_secs(20),
+        ));
+
+        shutdown.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(30), supervisor)
+            .await
+            .expect("the supervisor ends once the worker does")
+            .unwrap();
+
+        assert!(
+            done.load(std::sync::atomic::Ordering::SeqCst),
+            "the mail in hand finished"
         );
     }
 }
