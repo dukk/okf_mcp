@@ -127,9 +127,24 @@ pub struct UserConsent {
     /// A random token in the page's form (its hidden `summary` input),
     /// compared in constant time.
     pub nonce: String,
-    /// The ceiling the page offered. The POST may choose only from it, and
-    /// the store checks the choice against the ceiling again at insert.
+    /// What the page offered: one page of the ceiling and the catalogs
+    /// carried over ticked (issue #736), at most
+    /// `authorize::CONSENT_PAGE + authorize::MAX_CARRIED` entries, never the
+    /// whole ceiling. The POST may choose only from it, and the store
+    /// checks the choice against the ceiling again at insert.
     pub offered: Ceiling,
+    /// The name prefix the page's catalogs were found with; empty for none.
+    // `serde(default)`: an entry written before these fields (a rolling
+    // upgrade with Redis) reads as a first page that may have more.
+    #[serde(default)]
+    pub prefix: String,
+    /// The last name of the page shown when another follows: where "Next
+    /// catalogs" continues.
+    #[serde(default)]
+    pub next: Option<String>,
+    /// Whether `offered` is the user's whole ceiling.
+    #[serde(default)]
+    pub whole: bool,
 }
 
 // Written by hand, not derived, so a stray `{:?}` never prints the nonce.
@@ -147,6 +162,9 @@ impl std::fmt::Debug for UserConsent {
             .field("user_id", &self.user_id)
             .field("nonce", &"<redacted>")
             .field("offered", &self.offered)
+            .field("prefix", &self.prefix)
+            .field("next", &self.next)
+            .field("whole", &self.whole)
             .finish()
     }
 }
@@ -214,6 +232,9 @@ mod tests {
             user_id: "user-id".into(),
             nonce: "consent-nonce-that-must-not-leak".into(),
             offered: Ceiling::new(),
+            prefix: String::new(),
+            next: None,
+            whole: true,
         };
 
         let printed = format!("{consent:?}");
@@ -252,9 +273,30 @@ mod tests {
                 user_id: "user-id".into(),
                 nonce: "consent-nonce-that-must-not-leak".into(),
                 offered: Ceiling::new(),
+                prefix: String::new(),
+                next: None,
+                whole: true,
             }),
             query: "state=state-that-stays-out".into(),
         }
+    }
+
+    /// Issue #736: a consent stored before the paged offer (a rolling
+    /// upgrade with Redis) reads back as a first page that may have more,
+    /// so the page never claims to be the whole ceiling.
+    #[test]
+    fn a_consent_stored_before_paging_reads_back() {
+        let old = serde_json::json!({
+            "user_id": "user-id",
+            "nonce": "nonce",
+            "offered": {"main": "read"},
+        });
+
+        let consent: UserConsent = serde_json::from_value(old).expect("reads back");
+
+        assert_eq!(consent.prefix, "");
+        assert_eq!(consent.next, None);
+        assert!(!consent.whole);
     }
 
     /// What Redis stores (M16 Task 8) reads back as the same value.
@@ -269,6 +311,9 @@ mod tests {
             offered: [("main".to_string(), crate::store::keys::Access::Write)]
                 .into_iter()
                 .collect(),
+            prefix: "ma".into(),
+            next: Some("main".into()),
+            whole: false,
         });
 
         let json = serde_json::to_value(&pending).expect("serializes");

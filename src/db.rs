@@ -46,7 +46,11 @@ pub async fn connect(url: &str, max_connections: u32) -> Result<PgPool, OkfError
 /// migrations). A build that fails part-way leaves the index behind,
 /// marked INVALID, and its migration unrecorded; `CREATE INDEX ... IF NOT
 /// EXISTS` on the retry would then keep the invalid index for good.
-const CONCURRENT_INDEXES: [&str; 2] = ["catalogs_member_reach", "catalogs_member_write"];
+const CONCURRENT_INDEXES: [&str; 3] = [
+    "catalogs_member_reach",
+    "catalogs_member_write",
+    "catalogs_member_reach_bytes",
+];
 
 /// The advisory lock [`migrate`] holds around the cleanup and the
 /// migrations (an arbitrary constant, distinct from sqlx's own lock key).

@@ -16,7 +16,6 @@ use crate::db::{test_db, TEST_TEAM, TEST_USER};
 use crate::invalidate::testing::invalidations_of;
 use crate::labels::DisplayName;
 use crate::mcp::testing::{local_metrics, render};
-use crate::rows_returned::RowsReturned;
 use crate::store::audit::AuditActor;
 use crate::store::catalogs::{self, NewCatalog};
 use crate::store::keys::{Access, Grants, NewKey};
@@ -846,10 +845,6 @@ async fn the_per_catalog_ceiling_answers_what_the_whole_ceiling_did() {
 /// at a time, and lists them a page at a time.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_user_whose_team_owns_many_catalogs_loads_a_small_entry() {
-    use tracing_subscriber::layer::SubscriberExt;
-    // `with_filter` is a method of the `Layer` trait.
-    use tracing_subscriber::Layer as _;
-
     const OWNED: i64 = 50_000;
     let db = test_db().await;
     let pool = &db.pool;
@@ -868,28 +863,15 @@ async fn a_user_whose_team_owns_many_catalogs_loads_a_small_entry() {
     sqlx::query("ANALYZE catalogs").execute(pool).await.unwrap();
     let id = user_id(pool, "alice").await;
     let caches = credentials(pool);
-    let counter = RowsReturned::default();
-    let subscriber = tracing_subscriber::registry().with(
-        counter.clone().with_filter(
-            tracing_subscriber::filter::Targets::new()
-                .with_target("sqlx::query", tracing::Level::TRACE),
-        ),
-    );
-
     // Act: the first authentication of her session loads her entry.
-    let session = {
-        // Only this thread's events: the loads below run on it.
-        let _guard = tracing::subscriber::set_default(subscriber);
+    let (session, rows, statements) = crate::rows_returned::counting(async {
         timeout(BOUND, caches.session_principal(&id, &view()))
             .await
             .expect("the load")
             .unwrap()
             .expect("alice")
-    };
-
-    let relaxed = std::sync::atomic::Ordering::Relaxed;
-    let rows = counter.rows.load(relaxed);
-    let statements = counter.statements.load(relaxed);
+    })
+    .await;
     assert!(statements > 0, "the load's statements are counted");
     assert!(
         rows < 20,

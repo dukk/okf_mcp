@@ -12,7 +12,8 @@ export function accessPill(access) {
 
 // A key's or grant's catalogs, from its `catalog_access` ({catalog: level},
 // Task 2's KeyView). A self-issued one is capped at the account's
-// `ceiling` ({catalog: level}, as GET /api/v1/session gives it): where the
+// `ceiling` ({catalog: level}, as GET /api/v1/me/keys and /me/grants give
+// it for their credentials' catalogs): where the
 // ceiling lowers a level, or no longer reaches the catalog, the cell says
 // so (the server caps the credential at its next key reload). An
 // admin-issued one keeps its levels. One granted every catalog (only an

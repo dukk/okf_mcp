@@ -522,7 +522,7 @@ async fn an_admin_entitles_catalogs_and_the_member_sees_them() {
         // My keys (Task 14a) offers exactly the ceiling, at its levels.
         ui.open("/my-keys");
         ui.click("#my-key-new");
-        ui.wait_visible("#my-key-form");
+        ui.wait_visible("#my-key-form select[name=level-other]");
         assert_eq!(
             ui.eval(
                 "() => [...document.querySelectorAll('#my-key-form select[name=level-other] option')] \
