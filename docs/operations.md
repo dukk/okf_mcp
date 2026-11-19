@@ -1270,9 +1270,13 @@ repair is published at once, under the catalog's lock as an import is: a
 missing root `index.md` is the one a new catalog gets (its name and
 description), then a `log.md`, folder indexes, and folder and concept
 listings are added where missing, and `log.md` gets a line recording the
-repair. No existing index text (headings, prose, listings, summaries) is
-changed, so a second run writes nothing. A file or folder whose path no
-markdown link can reach (a space, `)` or `#` in it, or a label that cannot be written, such as a folder named `a]`) is not listed; the output
+repair. Existing index text (headings, prose, listings, summaries) is
+kept, so a second run writes nothing, with one exception: an old raw
+(unencoded) concept listing written before percent-encoding, such as
+`* [A](a b.md) - x`, whose link never resolves, has its destination
+encoded in place (label and summary kept), or is removed when a working
+listing sits beside it; the output quotes each one. A file or folder no
+markdown link can list (a label that cannot be written, such as a folder named `a]`) is not listed; the output
 names it. With names, `--missing-only` says
 which of them it skipped (those with a root `index.md`, or misspelled). Listings of concepts
 without a title or description get `TODO` placeholders; the output names
@@ -1507,7 +1511,7 @@ takes effect at once.
 | `okf-mcp team unsuspend NAME` | Lifts the suspension. Prints `lifted the suspension of team NAME`; no change when the team is active |
 | `okf-mcp catalog create NAME --owner TEAM [--display-name TEXT] [--description TEXT]` | `--owner` is required |
 | `okf-mcp catalog update NAME [--display-name TEXT] [--description TEXT]` | At least one flag is required; prints one `updated catalog NAME <field>: "old" -> "new"` line per flag given |
-| `okf-mcp catalog repair-indexes [NAME...] [--missing-only] [--dry-run] [--actor ACTOR]` | Adds the root `index.md`, `log.md`, folder indexes and listings the named catalogs are missing, and publishes them at once. `--missing-only` keeps only catalogs without a root `index.md` (every such catalog when none is named); `--dry-run` writes nothing. Prints, per catalog, its summary, the files written and a note per created file and `TODO` placeholder, then `repaired N of M catalog(s)`. A failing catalog does not stop the others; the command then exits non-zero naming it. Revisions record `ACTOR` (default `okf-mcp/repair-indexes`) and the message `repair indexes` |
+| `okf-mcp catalog repair-indexes [NAME...] [--missing-only] [--dry-run] [--actor ACTOR]` | Adds the root `index.md`, `log.md`, folder indexes and listings the named catalogs are missing, rewrites old raw (unencoded) concept listings, and publishes them at once. `--missing-only` keeps only catalogs without a root `index.md` (every such catalog when none is named); `--dry-run` writes nothing. Prints, per catalog, its summary, the files written and a note per created file and `TODO` placeholder, then `repaired N of M catalog(s)`. A failing catalog does not stop the others; the command then exits non-zero naming it. Revisions record `ACTOR` (default `okf-mcp/repair-indexes`) and the message `repair indexes` |
 | `okf-mcp catalog set-owner NAME --team TEAM` | Moves a catalog to another team, or gives a legacy catalog its first owner. Prints `catalog C: owner OLD -> NEW` (`(none)` for a legacy catalog) |
 | `okf-mcp catalog set-member-access NAME --access none\|read\|write` | What members of the owner team reach through their own keys and grants (default `write`). Prints `catalog C: member access OLD -> NEW` |
 | `okf-mcp catalog set-maintenance NAME on\|off` | Lets the maintenance runner check the catalog (`on`, the default) or keeps it out (`off`); see [The maintenance runner](#unlock-before-access). Prints `catalog C: maintenance OLD -> NEW` |

@@ -943,10 +943,13 @@ impl OkfServer {
                        log.md, an index.md for every folder holding concepts, each folder's \
                        listing in its parent's # Sections, and each concept's listing in its \
                        folder's index.md (its title and description; TODO placeholders where \
-                       they are missing, each named in `notes`). Only adds: existing text, \
-                       listings and summaries are kept, and a second run changes nothing. A file or \
-                       folder no markdown link can list (a space, `)` or `#` in its path, or a \
-                       `]` in a folder name) is not listed; `notes` names it. \
+                       they are missing, each named in `notes`). Existing text, listings and \
+                       summaries are kept, except an old raw (unencoded) concept listing whose \
+                       link never resolves, such as `[A](a b.md)`: its destination is \
+                       percent-encoded in place, or the bullet removed beside a working one, \
+                       and `notes` quotes each. A second run changes nothing. A file or folder \
+                       no markdown link can list (a `]` in a folder name) is not listed; \
+                       `notes` names it. \
                        Review the result with pending_changes before publishing. Write access.",
         annotations(
             title = "Repair Indexes",
@@ -1885,6 +1888,65 @@ mod repair_tests {
         );
         assert!(curated_root.contains("Curated words.") && curated_infra.contains("Our systems."));
         assert_eq!(curated_root.matches("(a.md)").count(), 1, "{curated_root}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_staged_raw_listing_rewrite_replays_onto_an_index_changed_meanwhile() {
+        // Issue #717: the raw bullet written before #453 is rewritten in the
+        // changeset; another writer edits the index and publishes first, and
+        // publish redoes the rewrite onto their text.
+        let raw_index = "# D\n\nAbout d.\n\n# Concepts\n\n* [Odd](a b.md) - An odd one.\n";
+        let odd = "---\ntype: Note\ntitle: Odd\ndescription: An odd one.\n---\n";
+        let test = app_with(
+            &[(
+                "pg",
+                &[
+                    ("index.md", "# Root\n\n# Sections\n\n* [D](d/) - d\n"),
+                    ("log.md", "# Log\n"),
+                    ("d/index.md", raw_index),
+                    ("d/a b.md", odd),
+                ],
+            )],
+            Config::default(),
+        )
+        .await;
+        let first = writer(&test, "writer-a", "pg").await;
+        let second = writer(&test, "writer-b", "pg").await;
+        let first_handle = open(&first).await;
+        let second_handle = open(&second).await;
+
+        let report = repair(&first, &first_handle).await.unwrap();
+        assert_eq!(report.touched, ["/d/index.md"], "{report:?}");
+        assert!(
+            report.notes.iter().any(|note| note
+                == "rewrote the raw listing of /d/a b.md in /d/index.md: \
+                    * [Odd](a b.md) - An odd one. -> * [Odd](a%20b.md) - An odd one."),
+            "{report:?}"
+        );
+        edit_document(
+            &second,
+            EditDocumentParams {
+                path: "/d/index.md".to_string(),
+                old_str: "About d.".to_string(),
+                new_str: "Curated words.".to_string(),
+                replace_all: false,
+                changeset: second_handle.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        publish_as(&second, &second_handle).await.unwrap();
+
+        let published = publish_as(&first, &first_handle).await.unwrap();
+
+        assert!(published.report.published, "{published:?}");
+        assert_eq!(
+            published_text(&test, "d/index.md").unwrap(),
+            "# D\n\nCurated words.\n\n# Concepts\n\n* [Odd](a%20b.md) - An odd one.\n"
+        );
+        let again_handle = open(&first).await;
+        let again = repair(&first, &again_handle).await.unwrap();
+        assert!(again.touched.is_empty(), "{again:?}");
     }
 }
 
