@@ -279,11 +279,13 @@ async fn a_change_still_announces_after_a_non_announcing_reload_saw_it_first() {
     keys::revoke_by_id(&a.db.pool, &id, &AuditActor::cli(), Utc::now())
         .await
         .expect("revoke");
-    // A reload that does not announce still loads the new generation.
+    // A reload that does not announce still loads the new generation. The
+    // key itself is dropped by A's change-feed listener, asynchronously
+    // (the reload touches only the settings), so that is waited for.
     a.app.reload_settings_now(false).await;
-    assert!(
-        a.app.find_key(&key).await.unwrap().is_none(),
-        "A loaded the change"
+    eventually!(
+        "A loaded the change",
+        a.app.find_key(&key).await.unwrap().is_none()
     );
     // The poll `settle` makes next must still announce it.
     a.app.poll().await.expect("A's poll");
