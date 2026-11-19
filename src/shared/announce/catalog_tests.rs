@@ -1,8 +1,8 @@
 //! Catalog generation announcements between two replicas (issue #659), and
 //! the refresh on a changeset whose base is newer than a replica's snapshot.
 //!
-//! [`replica_pair`] loads two apps on one database and one Redis with
-//! `poll_interval = 1h`, and no poll loop runs in a unit test: a replica's
+//! [`replica_pair`] loads two apps on one database and one Redis, and no
+//! change-feed listener runs in a unit test: a replica's
 //! snapshot moves only through what a test calls or the announcement
 //! subscriber it starts.
 

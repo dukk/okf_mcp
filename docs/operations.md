@@ -112,7 +112,7 @@ unknown keys are ignored, so one file serves every version.
 | `time_server` | none | The NTP server for the clock check (`host`, `host:port` or an address). Without it there is no check |
 | `concept_outline_chars` | `20000` | `get_concept` returns an outline of the headings, not the body, for a body longer than this many characters, unless the call passes `full` or `section` |
 | `database_max_connections` | `16` | The most database connections one process opens (`serve` and every subcommand). Writers queued on one changeset wait without one; the writer whose turn it is, a publish, and a read that builds an overlay each hold one |
-| `overlay_cache_size` | `64` | The most changeset overlays (an open changeset's view of its catalog) kept in memory; past it, the least recently used is dropped and rebuilt on its next read |
+| `overlay_cache_bytes` | `"256MiB"` | The most memory the changeset overlays (an open changeset's view of its catalog) may take, estimated like a catalog snapshot (a fixed cost per file plus a multiple of the stored size, over the overlay's whole workspace, so many empty files count). Past it, an overlay is dropped and rebuilt on its next read; one larger than the whole budget is served but not kept. An overlay unused for `session_idle_timeout` is dropped too. `overlay_cache_size` is deprecated and ignored (a warning at start-up) |
 | `public_url` | none | The server's public origin, such as `"https://okf-mcp.example.com"` (no path, query or user info; a trailing `/` is dropped). Setting it turns on OAuth ("OAuth connectors") and console sign-in by account ("Signing in and self-service"); without it the OAuth and sign-in routes are 404. It must be `https`, except on a loopback host (such as `localhost`, `127.0.0.1` or `::1`) for local testing, and its host must be in `allowed_hosts` |
 | `oauth.access_token_ttl` | `"1h"` | How long an OAuth access token works |
 | `oauth.refresh_token_ttl` | `"30d"` | How long a refresh token works. Each refresh issues a new one with a fresh lifetime, so a connection used within this stays signed in |
@@ -165,7 +165,7 @@ unknown keys are ignored, so one file serves every version.
 
 The server refuses to start (and every subcommand refuses to run) with a zero
 `poll_interval`, `session_idle_timeout`, `worker_shutdown_grace`,
-`database_max_connections`, `overlay_cache_size`, `catalog_directory_entries`, `catalog_ttl`,
+`database_max_connections`, `overlay_cache_bytes`, `catalog_directory_entries`, `catalog_ttl`,
 `credential_cache_entries`, `user_cache_entries` or `credential_ttl`, a `search_fanout_max` outside 1 to 999, an empty `allowed_hosts` or a blank
 entry in it, or a `time_server` that is blank or has surrounding whitespace.
 `maintenance_review_intervals` also rejects invalid catalog names, malformed
@@ -230,7 +230,7 @@ max_import_bytes = "64MiB"
 maintenance_review_intervals = { pg = "30d" }
 concept_outline_chars = 20000
 database_max_connections = 16
-overlay_cache_size = 64
+overlay_cache_bytes = "256MiB"
 public_url = "https://okf-mcp.example.com"   # turns on OAuth; see "OAuth connectors"
 
 [oauth]

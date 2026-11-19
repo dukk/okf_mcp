@@ -253,7 +253,7 @@ where
     tx.commit().await?;
     // The version moved, so the cached overlay is stale; dropping it now
     // also frees its memory before the next read rebuilds it.
-    app.overlays().forget(changeset_row.id);
+    app.overlays().forget(changeset_row.id).await;
     Ok(WriteReport {
         catalog: state.name().to_string(),
         changeset: changeset_row.handle,

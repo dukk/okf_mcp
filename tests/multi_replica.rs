@@ -1,7 +1,7 @@
 //! Two replicas over one Postgres and one Redis (milestone 16). Every test
-//! sets `poll_interval = 1h` (`TestServer::start_shared`): what passes was
-//! carried by Redis announcements or by the change feed (`NOTIFY`, milestone
-//! 18), not by the poll loop. The change-feed tests write through the store
+//! sets `credential_ttl` and `catalog_ttl` to 1h (`TestServer::start_shared`):
+//! what passes was carried by Redis announcements or by the change feed
+//! (`NOTIFY`, milestone 18), not by a cache's expiry. The change-feed tests write through the store
 //! on the pool, as the command line does, so no Redis announcement is sent
 //! and only `NOTIFY` can carry the change. The MCP session
 //! tests (milestone 16 Task 5) open a session on one replica and use it, or
@@ -991,7 +991,7 @@ async fn until_index_reads(client: &support::server::Client, text: &str) -> bool
 }
 
 /// Issue #659's acceptance criterion on two real servers with
-/// `poll_interval = 1h`: a publish on A propagates to B well within it (a
+/// `catalog_ttl = 1h`: a publish on A propagates to B well within it (a
 /// bounded wait, not a first-read guarantee). B's
 /// subscriber answers events in order, so once B reads the first publish
 /// (by its announcement or by the catch-up when B subscribed), the second

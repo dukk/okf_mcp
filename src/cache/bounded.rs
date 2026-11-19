@@ -251,6 +251,7 @@ pub struct Bounded<K, V> {
     name: CacheName,
     limit: Limit,
     ttl: Duration,
+    idle: Option<Duration>,
     weigher: Option<Weigher<K, V>>,
     metrics: Option<Metrics>,
     cache: Cache<K, Entry<V>>,
@@ -296,6 +297,7 @@ where
             name,
             limit,
             ttl,
+            idle: None,
             weigher: None,
             metrics: None,
             cache: Cache::builder().build(),
@@ -332,6 +334,24 @@ where
         self
     }
 
+    /// Also drops an entry that has not been read or stored for `idle`
+    /// (moka's time to idle), whatever its time to live. Call it before
+    /// [`Bounded::with_metrics`] and before the cache is used.
+    ///
+    /// # Arguments
+    /// * `idle` - how long an entry may go unused.
+    ///
+    /// # Returns
+    /// The cache.
+    #[tracing::instrument(level = "trace", skip_all)]
+    #[must_use]
+    pub fn with_idle(mut self, idle: Duration) -> Self {
+        debug_assert!(self.probe.is_none(), "with_idle goes before with_metrics");
+        self.idle = Some(idle);
+        self.cache = self.build_cache();
+        self
+    }
+
     /// Records `okf.cache.*` on `metrics`, and registers the size gauges.
     /// Call it last, before the cache is used.
     ///
@@ -364,6 +384,9 @@ where
         let mut builder = Cache::builder()
             .max_capacity(capacity)
             .time_to_live(self.ttl);
+        if let Some(idle) = self.idle {
+            builder = builder.time_to_idle(idle);
+        }
         if let Some(weigher) = self.weigher.clone() {
             builder = builder.weigher(move |key: &K, entry: &Entry<V>| weigher(key, &entry.value));
         }
@@ -598,6 +621,82 @@ where
         self.record_load(started, checked.is_ok());
         let value = checked?.unwrap_or(entry.value);
         self.keep(&key, value.clone(), stamp, &flight).await;
+        Ok(value)
+    }
+
+    /// The cached value if it is current and `usable`, counting one request:
+    /// a hit when it is served, a miss otherwise (nothing cached, marked
+    /// stale, or not usable, which the caller will build again). For a
+    /// caller that decides by more than the key, as an overlay checks its
+    /// version; the entry is neither dropped nor loaded here.
+    ///
+    /// # Arguments
+    /// * `key` - the key.
+    /// * `usable` - whether a cached value answers this request.
+    ///
+    /// # Returns
+    /// The value, or `None` for the caller to build.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub async fn get_if(&self, key: &K, usable: impl Fn(&V) -> bool) -> Option<V> {
+        let found = self
+            .cache
+            .get(key)
+            .await
+            .filter(|entry| self.is_fresh(entry) && usable(&entry.value));
+        self.count(if found.is_some() {
+            Lookup::Hit
+        } else {
+            Lookup::Miss
+        });
+        found.map(|entry| entry.value)
+    }
+
+    /// Builds the value of `key` with `build` and keeps it, for a caller that
+    /// does its own single flight (a per-key lock) and so cannot use
+    /// [`Bounded::get_or_load`]. The key's fence is registered before the
+    /// build starts, so an [`Bounded::invalidate`] of `key` while it runs
+    /// makes the result be served but not kept. The build counts as a load
+    /// (duration and outcome).
+    ///
+    /// # Arguments
+    /// * `key` - the key.
+    /// * `build` - makes the value.
+    /// * `replaces` - given the entry already cached and the new value,
+    ///   whether the new value may replace it (an older build must not
+    ///   replace a newer one).
+    ///
+    /// # Returns
+    /// The value built, kept or not.
+    ///
+    /// # Errors
+    /// The builder's error; nothing is cached then.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub async fn build<F, Fut>(
+        &self,
+        key: K,
+        build: F,
+        replaces: impl Fn(&V, &V) -> bool,
+    ) -> Result<V, OkfError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<V, OkfError>>,
+    {
+        let flight = self.begin(&key);
+        let stamp = self.stale_before.load(Ordering::SeqCst);
+        let started = Instant::now();
+        let built = build().await;
+        self.record_load(started, built.is_ok());
+        let value = built?;
+        // A peek then a keep: two builds finishing together can still leave
+        // the older, which the caller's own validity check then rejects.
+        let replace = self
+            .cache
+            .get(&key)
+            .await
+            .is_none_or(|entry| replaces(&entry.value, &value));
+        if replace {
+            self.keep(&key, value.clone(), stamp, &flight).await;
+        }
         Ok(value)
     }
 
@@ -1350,6 +1449,131 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(300)).await;
         cache.get_or_load(1, load).await.unwrap();
         assert_eq!(loads.load(Ordering::SeqCst), 2, "an expired entry reloads");
+    }
+
+    #[tokio::test]
+    async fn an_idle_entry_expires_but_a_used_one_stays() {
+        // moka reads the real clock, so this test cannot pause tokio's.
+        let cache = Bounded::<i64, i64>::new(CacheName::Overlay, Limit::Entries(10), TTL)
+            .with_idle(Duration::from_millis(400));
+        cache
+            .build(1, || async { Ok(10) }, |_, _| true)
+            .await
+            .unwrap();
+        cache
+            .build(2, || async { Ok(20) }, |_, _| true)
+            .await
+            .unwrap();
+
+        for _ in 0..4 {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            assert_eq!(cache.peek(&1).await, Some(10), "a read keeps it alive");
+        }
+
+        assert_eq!(cache.peek(&2).await, None, "the unread entry went idle");
+    }
+
+    #[tokio::test]
+    async fn a_build_is_kept_and_replaces_only_when_allowed() {
+        let cache = Bounded::<i64, i64>::new(CacheName::Overlay, Limit::Entries(10), TTL);
+
+        cache
+            .build(1, || async { Ok(10) }, |_, _| true)
+            .await
+            .unwrap();
+        cache
+            .build(1, || async { Ok(5) }, |old, new| new >= old)
+            .await
+            .unwrap();
+        let kept = cache.peek(&1).await;
+        cache
+            .build(1, || async { Ok(11) }, |old, new| new >= old)
+            .await
+            .unwrap();
+
+        assert_eq!(kept, Some(10), "a smaller build does not replace");
+        assert_eq!(cache.peek(&1).await, Some(11));
+    }
+
+    #[tokio::test]
+    async fn an_invalidation_during_a_build_makes_it_served_but_not_kept() {
+        let cache = Arc::new(Bounded::<i64, i64>::new(
+            CacheName::Overlay,
+            Limit::Entries(10),
+            TTL,
+        ));
+        let (started_tx, started_rx) = oneshot::channel::<()>();
+        let (release_tx, release_rx) = oneshot::channel::<()>();
+        let building = {
+            let cache = Arc::clone(&cache);
+            tokio::spawn(async move {
+                cache
+                    .build(
+                        1,
+                        || async {
+                            started_tx.send(()).ok();
+                            release_rx.await.ok();
+                            Ok(7)
+                        },
+                        |_, _| true,
+                    )
+                    .await
+            })
+        };
+        timeout(BOUND, started_rx)
+            .await
+            .expect("the build starts")
+            .unwrap();
+
+        cache.invalidate(&1).await;
+        release_tx.send(()).unwrap();
+        let served = timeout(BOUND, building).await.expect("the build ends");
+
+        assert_eq!(served.unwrap().unwrap(), 7, "the caller still gets it");
+        assert_eq!(cache.peek(&1).await, None, "but it is not kept");
+    }
+
+    #[tokio::test]
+    async fn get_if_counts_one_request_and_a_build_counts_a_load() {
+        let (_provider, metrics, registry) = local_metrics();
+        let cache = Bounded::<i64, i64>::new(CacheName::Overlay, Limit::Entries(10), TTL)
+            .with_metrics(metrics);
+
+        let missed = cache.get_if(&1, |_| true).await;
+        cache
+            .build(1, || async { Ok(3) }, |_, _| true)
+            .await
+            .unwrap();
+        let unusable = cache.get_if(&1, |value| *value > 3).await;
+        let hit = cache.get_if(&1, |_| true).await;
+        let failed = cache
+            .build(
+                2,
+                || async { Err::<i64, _>(OkfError::Busy { reason: "x".into() }) },
+                |_, _| true,
+            )
+            .await;
+
+        assert_eq!((missed, unusable, hit), (None, None, Some(3)));
+        assert!(failed.is_err());
+        let text = render(&registry);
+        let series = |name: &str| crate::mcp::testing::sample_of(&text, name);
+        assert_eq!(
+            series(r#"okf_cache_requests_total{cache="overlay",result="miss"}"#),
+            Some(2.0)
+        );
+        assert_eq!(
+            series(r#"okf_cache_requests_total{cache="overlay",result="hit"}"#),
+            Some(1.0)
+        );
+        assert_eq!(
+            series(r#"okf_cache_load_duration_seconds_count{cache="overlay",outcome="ok"}"#),
+            Some(1.0)
+        );
+        assert_eq!(
+            series(r#"okf_cache_load_duration_seconds_count{cache="overlay",outcome="error"}"#),
+            Some(1.0)
+        );
     }
 
     #[tokio::test]
