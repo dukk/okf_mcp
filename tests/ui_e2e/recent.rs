@@ -99,7 +99,7 @@ async fn add_late(pool: &sqlx::PgPool, app: &std::sync::Arc<okf_mcp::app::App>) 
         audit: &okf_mcp::store::audit::AuditActor::cli(),
         now: Utc::now(),
     };
-    crate::support::server::applied(&app, async {
+    crate::support::server::applied(app, async {
         import(pool, "main", entries, &options)
             .await
             .expect("import late.md");
