@@ -5,7 +5,7 @@
 // different replicas.
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
-import { create, pathsOf, target } from "../src/harness.js";
+import { catalogOf, create, pathsOf, target } from "../src/harness.js";
 import { OkfSession, type Outcome, type SourceEntry } from "../src/okf.js";
 import { SCENARIOS } from "../src/scenarios.js";
 
@@ -14,7 +14,10 @@ const paths = pathsOf(SCENARIOS.concurrency);
 let sessions: OkfSession[] = [];
 
 beforeAll(async () => {
-    sessions = await Promise.all(Array.from({ length: SESSIONS }, () => OkfSession.open(target())));
+    const catalog = catalogOf(SCENARIOS.concurrency);
+    sessions = await Promise.all(
+        Array.from({ length: SESSIONS }, () => OkfSession.open(target(), catalog)),
+    );
 });
 afterAll(async () => {
     await Promise.all(sessions.map((session) => session.close()));

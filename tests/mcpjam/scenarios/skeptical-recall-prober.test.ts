@@ -2,14 +2,12 @@
 // does nothing invented turn up?
 import { describe, expect, test } from "vitest";
 
-import { create, pathsOf, remember, useSession } from "../src/harness.js";
+import { create, remember, useScenario } from "../src/harness.js";
 import type { ToolError } from "../src/okf.js";
 import { SCENARIOS } from "../src/scenarios.js";
 
-const session = useSession();
-
 describe(SCENARIOS.createAndRetrieve.goal, () => {
-    const paths = pathsOf(SCENARIOS.createAndRetrieve);
+    const { session, paths } = useScenario(SCENARIOS.createAndRetrieve);
 
     test("a stored fact comes back verbatim, by search and by read", async () => {
         const path = paths.at("preferences/coffee-shop");
@@ -24,7 +22,7 @@ describe(SCENARIOS.createAndRetrieve.goal, () => {
 });
 
 describe(SCENARIOS.scatteredFacts.goal, () => {
-    const paths = pathsOf(SCENARIOS.scatteredFacts);
+    const { session, paths } = useScenario(SCENARIOS.scatteredFacts);
     // One message, one publish each: facts that arrive across a conversation.
     const facts = [
         { name: "dog", term: "Biscuit", text: "My dog is called Biscuit." },
@@ -50,7 +48,7 @@ describe(SCENARIOS.scatteredFacts.goal, () => {
 });
 
 describe(SCENARIOS.sourceAttribution.goal, () => {
-    const paths = pathsOf(SCENARIOS.sourceAttribution);
+    const { session, paths } = useScenario(SCENARIOS.sourceAttribution);
     const path = paths.at("history/footbridge");
     const sourceId = "family-diary-1995-10-03";
 
@@ -91,7 +89,7 @@ describe(SCENARIOS.sourceAttribution.goal, () => {
 });
 
 describe(SCENARIOS.editConflicts.goal, () => {
-    const paths = pathsOf(SCENARIOS.editConflicts);
+    const { session, paths } = useScenario(SCENARIOS.editConflicts);
     const path = paths.at("car");
 
     test("a contradiction edits the one concept, and history shows both versions", async () => {
@@ -113,7 +111,7 @@ describe(SCENARIOS.editConflicts.goal, () => {
         expect(await session().searchUnder(paths.folder, "car")).toEqual([path]);
         const history = await session().call<{ revisions: { op: string; message: string }[] }>(
             "history",
-            { path, catalog: session().target.catalog },
+            { path, catalog: session().catalog },
         );
         expect(history.revisions.map(({ op, message }) => [op, message])).toEqual([
             ["update", "Correct my car's colour"],
@@ -149,7 +147,7 @@ describe(SCENARIOS.editConflicts.goal, () => {
 });
 
 describe(SCENARIOS.hallucinationAudit.goal, () => {
-    const paths = pathsOf(SCENARIOS.hallucinationAudit);
+    const { session, paths } = useScenario(SCENARIOS.hallucinationAudit);
     const anecdotes = [
         { name: "marathon", term: "marathon", text: "I ran a marathon in Lisbon in 2019." },
         { name: "piano", term: "piano", text: "I played piano for ten years as a child." },

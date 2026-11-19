@@ -10,22 +10,38 @@ export function target(): Target {
     return inject("target");
 }
 
+/** The catalog `scenario` writes in: its own, or the shared one. */
+export function catalogOf(scenario: Scenario): string {
+    const catalog = target().catalogs[scenario.slug];
+    if (catalog === undefined) throw new Error(`no catalog for ${scenario.slug}`);
+    return catalog;
+}
+
+/** A scenario's session getter and paths, for one `describe`. */
+export interface ScenarioContext {
+    /** The scenario's MCP session, bound to its catalog; valid from the first test on. */
+    session: () => OkfSession;
+    paths: Paths;
+}
+
 /**
- * Opens one MCP session for the file's tests and closes it afterwards.
- *
- * @returns a getter, valid from the first test on.
+ * Opens one MCP session for a `describe`'s tests, in the scenario's catalog,
+ * and closes it afterwards. Call it inside the `describe`.
  */
-export function useSession(): () => OkfSession {
+export function useScenario(scenario: Scenario): ScenarioContext {
     let session: OkfSession | undefined;
     beforeAll(async () => {
-        session = await OkfSession.open(target());
+        session = await OkfSession.open(target(), catalogOf(scenario));
     });
     afterAll(async () => {
         await session?.close();
     });
-    return () => {
-        if (session === undefined) throw new Error("useSession: no session before beforeAll ran");
-        return session;
+    return {
+        session: () => {
+            if (session === undefined) throw new Error("useScenario: no session before beforeAll ran");
+            return session;
+        },
+        paths: pathsOf(scenario),
     };
 }
 

@@ -15,21 +15,21 @@ red test is a server behaviour change.
 | `scenarios/careful-fact-curator.test.ts` | Careful Fact Curator | Create and source a fact; Review and publish a draft; Add context with sources; Organize facts into folders; Verify and stamp a fact |
 | `scenarios/skeptical-recall-prober.test.ts` | Skeptical Recall Prober | Create and retrieve a stored fact; Feed scattered facts and audit retention; Test source attribution accuracy; Provoke and inspect edit conflicts; Catch hallucinated recall with a search audit |
 | `scenarios/playful-memory-tester.test.ts` | Playful Memory Tester | Quiz the assistant on facts; Build a personal facts knowledge base; Test memory with surprise questions; Create indexed memory archive; Quick memory capture interview |
-| `scenarios/concurrency.test.ts` | none | The shared-catalog races the 2026-11-19 wave hit, across 8 concurrent MCP sessions |
+| `scenarios/concurrency.test.ts` | none | The shared-catalog races the 2026-11-19 wave hit, across 8 concurrent MCP sessions in one catalog |
+| `scenarios/admin-guard.test.ts` | none | The delete guard on temporary catalogs |
 
 Each `describe` is named after its MCPJam goal, verbatim.
 
 ## Running
 
-Local, on a throwaway Postgres (needs Docker and Node 22+):
+Local, on a throwaway Postgres (needs Docker and Node 22+), from the repo root:
 
     just test-mcpjam
 
 Against a remote server, such as staging:
 
     export OKF_MCP_URL=https://<staging host>/mcp
-    export OKF_MCP_KEY=...          # an API key with write access to the catalog
-    export OKF_MCP_CATALOG=<scratch catalog>
+    export OKF_MCP_KEY=...          # see "Isolation" for which key
     just test-mcpjam
 
 Keep the key in your environment, never in a file.
@@ -37,24 +37,41 @@ Keep the key in your environment, never in a file.
 | Variable | Meaning |
 |---|---|
 | `OKF_MCP_URL` | The MCP endpoint. Set: remote mode. Unset: local mode. |
-| `OKF_MCP_KEY`, `OKF_MCP_CATALOG` | Required in remote mode. Use a scratch catalog: the suite writes to it. |
-| `OKF_MCP_KEEP=1` | Remote mode: keep the run's concepts instead of deleting them afterwards. |
+| `OKF_MCP_KEY` | Remote mode: the API key. |
+| `OKF_MCP_ISOLATION` | `auto` (default), `catalog` or `folder`; see below. |
+| `OKF_MCP_CATALOG` | Folder isolation: the scratch catalog every scenario shares. |
+| `OKF_MCP_API_URL` | The REST admin API, if not `<origin of OKF_MCP_URL>/api/v1`. |
+| `OKF_MCP_KEEP=1` | Keep the run's catalogs (or concepts) instead of deleting them. |
 | `DATABASE_URL` / `TEST_PG_URL` | Local mode: the Postgres to use (`just test-mcpjam` provides one). |
 | `OKF_MCP_BIN` | Local mode: the `okf-mcp` binary (default `target/debug/okf-mcp`). |
 | `RUST_LOG` | Local mode: the server's log filter (default `warn`). |
 
 ## Isolation
 
-Every run writes only under its own folder, `/swarm-<time>-<random>/`, with one
-subfolder per scenario. The global setup seeds every subfolder in a single
-publish before any test runs. So scenarios never share an index, goals that
-assume an existing concept find it (`/…/verify-and-stamp/infra/ntp`), and two
-runs against one staging catalog don't collide. Local mode also gets its own
-user, catalog and key, created with the `okf-mcp` CLI.
+**Catalog isolation** (`OKF_MCP_ISOLATION=catalog`, and what `auto` picks when
+the key allows it): every scenario gets a temporary catalog of its own,
+`mcpjam-<time>-<random>-<scenario>`. The global setup creates them through the
+REST admin API (`POST /api/v1/catalogs`), owned by the key's user, and seeds
+them. The teardown deletes them with their history (`DELETE ...?force=true`).
+This needs an admin key that reaches every catalog:
 
-In remote mode, the teardown deletes the run's concepts. The server never
-deletes `index.md` files, so each run leaves its empty folder indexes and its
-`log.md` lines behind. That is why remote mode should use a scratch catalog.
+    okf-mcp key create mcpjam-tests --access admin --all --user <you>
+
+Such a key can delete any catalog on the server, so `src/admin.ts` refuses to
+delete a catalog unless this run made its name *and* created it. Its unit tests
+are in `scenarios/admin-guard.test.ts`. Use this key on staging only.
+
+**Folder isolation** (`folder`, and the `auto` fallback when the key may not
+create catalogs): every scenario shares `OKF_MCP_CATALOG`, each under
+`/swarm-<time>-<random>/<scenario>/`, so it works with a plain write key. The
+teardown deletes the run's concepts. The server never deletes `index.md`
+files, so empty folder indexes and `log.md` lines stay behind; use a scratch
+catalog.
+
+Either way, each scenario's seeds are published before any test runs. That
+includes `infra/ntp`, which "Verify and stamp a fact" assumes. Local mode
+creates its own user and admin key with the `okf-mcp` CLI, so it runs catalog
+isolation by default, the same path staging takes.
 
 ## Concurrency
 

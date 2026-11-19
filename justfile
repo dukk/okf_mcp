@@ -32,8 +32,10 @@ dylint:
     DYLINT_RUSTFLAGS="-D uninstrumented_fn" cargo dylint --all -- --all-targets
 
 # Deterministic replays of the MCPJam swarm goals, no LLM (tests/mcpjam/README.md).
-# A local server on a throwaway Postgres by default; set OKF_MCP_URL,
-# OKF_MCP_KEY and OKF_MCP_CATALOG to run against a remote one, such as staging.
+# A local server on a throwaway Postgres by default; set OKF_MCP_URL and
+# OKF_MCP_KEY to run against a remote one, such as staging. An admin key with
+# --all gives each scenario a temporary catalog; with a plain write key, also
+# set OKF_MCP_CATALOG to a scratch catalog they share.
 test-mcpjam:
     #!/usr/bin/env bash
     set -euo pipefail

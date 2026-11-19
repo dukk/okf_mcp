@@ -1,10 +1,8 @@
 // Persona "Playful Memory Tester": casual facts saved and recalled later.
 import { describe, expect, test } from "vitest";
 
-import { pathsOf, remember, useSession } from "../src/harness.js";
+import { remember, useScenario } from "../src/harness.js";
 import { SCENARIOS } from "../src/scenarios.js";
-
-const session = useSession();
 
 /** A Q&A note body, as an assistant would save interview answers. */
 function answers(title: string, pairs: [string, string][]): string {
@@ -13,7 +11,8 @@ function answers(title: string, pairs: [string, string][]): string {
 }
 
 describe(SCENARIOS.quiz.goal, () => {
-    const path = pathsOf(SCENARIOS.quiz).at("personal/life-answers");
+    const { session, paths } = useScenario(SCENARIOS.quiz);
+    const path = paths.at("personal/life-answers");
 
     test("answers saved earlier are there to quiz on", async () => {
         await remember(session(), "Save answers to four quick questions", [
@@ -37,7 +36,7 @@ describe(SCENARIOS.quiz.goal, () => {
 });
 
 describe(SCENARIOS.knowledgeBase.goal, () => {
-    const paths = pathsOf(SCENARIOS.knowledgeBase);
+    const { session, paths } = useScenario(SCENARIOS.knowledgeBase);
     const categories = ["foods", "travel", "family", "hobbies"];
 
     test("a collection per category, which a later session adds to", async () => {
@@ -67,14 +66,14 @@ describe(SCENARIOS.knowledgeBase.goal, () => {
         expect((await session().concept(path)).body).toContain("Mango sticky rice");
         const history = await session().call<{ revisions: unknown[] }>("history", {
             path,
-            catalog: session().target.catalog,
+            catalog: session().catalog,
         });
         expect(history.revisions).toHaveLength(2);
     });
 });
 
 describe(SCENARIOS.surpriseQuestions.goal, () => {
-    const paths = pathsOf(SCENARIOS.surpriseQuestions);
+    const { session, paths } = useScenario(SCENARIOS.surpriseQuestions);
     const tidbits = [
         { name: "pet", text: "My cat is called Pickles.", question: "Pickles" },
         { name: "hobby", text: "I build model trains.", question: "trains" },
@@ -96,7 +95,7 @@ describe(SCENARIOS.surpriseQuestions.goal, () => {
 });
 
 describe(SCENARIOS.indexedArchive.goal, () => {
-    const paths = pathsOf(SCENARIOS.indexedArchive);
+    const { session, paths } = useScenario(SCENARIOS.indexedArchive);
     const categories = ["family", "travel", "hobbies", "food"];
 
     test("one folder per category, each listed in the archive's index and searchable", async () => {
@@ -120,7 +119,7 @@ describe(SCENARIOS.indexedArchive.goal, () => {
         const { hits } = await session().call<{ hits: { path: string }[] }>("search", {
             query: "",
             type: "Memory",
-            catalogs: [session().target.catalog],
+            catalogs: [session().catalog],
             limit: 200,
         });
         const mine = hits.map((hit) => hit.path).filter((path) => path.startsWith(paths.folder));
@@ -129,7 +128,8 @@ describe(SCENARIOS.indexedArchive.goal, () => {
 });
 
 describe(SCENARIOS.captureInterview.goal, () => {
-    const path = pathsOf(SCENARIOS.captureInterview).at("interview");
+    const { session, paths } = useScenario(SCENARIOS.captureInterview);
+    const path = paths.at("interview");
 
     test("one-liner answers persist without the user saying how to store them", async () => {
         const pairs: [string, string][] = [

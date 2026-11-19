@@ -1,14 +1,12 @@
 // Persona "Careful Fact Curator": sourcing, drafts, folders and stamps.
 import { describe, expect, test } from "vitest";
 
-import { create, pathsOf, useSession } from "../src/harness.js";
+import { create, useScenario } from "../src/harness.js";
 import type { SourceEntry, Stamp } from "../src/okf.js";
 import { SCENARIOS } from "../src/scenarios.js";
 
-const session = useSession();
-
 describe(SCENARIOS.createAndSource.goal, () => {
-    const paths = pathsOf(SCENARIOS.createAndSource);
+    const { session, paths } = useScenario(SCENARIOS.createAndSource);
 
     test("a concept created and sourced in one changeset publishes with its source", async () => {
         const path = paths.at("history/first-bike");
@@ -59,7 +57,7 @@ describe(SCENARIOS.createAndSource.goal, () => {
 });
 
 describe(SCENARIOS.reviewAndPublish.goal, () => {
-    const paths = pathsOf(SCENARIOS.reviewAndPublish);
+    const { session, paths } = useScenario(SCENARIOS.reviewAndPublish);
 
     test("a draft is visible through its changeset only, until publish", async () => {
         const path = paths.at("garden-plan");
@@ -74,7 +72,7 @@ describe(SCENARIOS.reviewAndPublish.goal, () => {
         expect(draft.body).toContain("Tomatoes go along the south fence.");
         const unpublished = await session().fail("get_concept", {
             path,
-            catalog: session().target.catalog,
+            catalog: session().catalog,
         });
         expect(unpublished.error).toBe("NotFound");
 
@@ -90,7 +88,7 @@ describe(SCENARIOS.reviewAndPublish.goal, () => {
 
         const history = await session().call<{ revisions: { op: string; message: string }[] }>(
             "history",
-            { path, catalog: session().target.catalog },
+            { path, catalog: session().catalog },
         );
         expect(history.revisions).toEqual([
             expect.objectContaining({ op: "create", message: "Add the garden plan" }),
@@ -99,7 +97,8 @@ describe(SCENARIOS.reviewAndPublish.goal, () => {
 });
 
 describe(SCENARIOS.addContextWithSources.goal, () => {
-    const path = pathsOf(SCENARIOS.addContextWithSources).at("history/old-footbridge");
+    const { session, paths } = useScenario(SCENARIOS.addContextWithSources);
+    const path = paths.at("history/old-footbridge");
 
     test("several sources on an existing concept keep their order; a duplicate id is refused", async () => {
         const changeset = await session().openChangeset();
@@ -125,7 +124,7 @@ describe(SCENARIOS.addContextWithSources.goal, () => {
 });
 
 describe(SCENARIOS.organizeIntoFolders.goal, () => {
-    const paths = pathsOf(SCENARIOS.organizeIntoFolders);
+    const { session, paths } = useScenario(SCENARIOS.organizeIntoFolders);
 
     test("concepts created with summaries are listed in a new folder index", async () => {
         const concepts = [
@@ -155,7 +154,7 @@ describe(SCENARIOS.organizeIntoFolders.goal, () => {
 });
 
 describe(SCENARIOS.verifyAndStamp.goal, () => {
-    const paths = pathsOf(SCENARIOS.verifyAndStamp);
+    const { session, paths } = useScenario(SCENARIOS.verifyAndStamp);
     const path = paths.at("infra/ntp");
 
     test("review and verified stamp record who and when, with the server's clock", async () => {

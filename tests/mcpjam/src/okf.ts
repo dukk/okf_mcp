@@ -14,10 +14,16 @@ export interface Target {
     mode: "local" | "remote";
     /** The server's MCP endpoint, e.g. `http://127.0.0.1:8080/mcp`. */
     url: string;
-    /** An API key with write access to `catalog`. */
+    /** An API key with write access to every catalog in `catalogs`. */
     key: string;
-    /** The catalog every scenario writes in. */
-    catalog: string;
+    /**
+     * "catalog": each scenario has a temporary catalog of its own, created and
+     * deleted by this run. "folder": every scenario shares one existing
+     * catalog (OKF_MCP_CATALOG), each in its own folder.
+     */
+    isolation: "catalog" | "folder";
+    /** The catalog of each scenario, by slug. */
+    catalogs: Record<string, string>;
     /** This run's top folder, e.g. `swarm-m3k9x2-ab12`: every path is under it. */
     runFolder: string;
 }
@@ -48,22 +54,25 @@ export class OkfSession {
         private readonly manager: MCPClientManager,
         private readonly serverId: string,
         readonly target: Target,
+        /** The catalog this session's helpers read and write. */
+        readonly catalog: string,
     ) {}
 
     /**
      * Opens a new MCP session against the target.
      *
      * @param target - where to connect, from `inject("target")`.
+     * @param catalog - the catalog the helpers use (`catalog` in every call).
      * @returns the connected session; `close()` it when done.
      */
-    static async open(target: Target): Promise<OkfSession> {
+    static async open(target: Target, catalog: string): Promise<OkfSession> {
         const manager = new MCPClientManager();
         const serverId = `okf-${randomUUID()}`;
         await manager.connectToServer(serverId, {
             url: target.url,
             requestInit: { headers: { Authorization: `Bearer ${target.key}` } },
         });
-        return new OkfSession(manager, serverId, target);
+        return new OkfSession(manager, serverId, target, catalog);
     }
 
     /** Ends the MCP session. */
@@ -122,10 +131,10 @@ export class OkfSession {
 
     // The calls almost every scenario makes, with the catalog filled in.
 
-    /** Opens a changeset in the target catalog and returns its handle. */
+    /** Opens a changeset in this session's catalog and returns its handle. */
     async openChangeset(): Promise<string> {
         const { changeset } = await this.call<{ changeset: string }>("open_changeset", {
-            catalog: this.target.catalog,
+            catalog: this.catalog,
         });
         return changeset;
     }
@@ -139,7 +148,7 @@ export class OkfSession {
     async concept(path: string, extra: Record<string, unknown> = {}): Promise<Concept> {
         return this.call<Concept>("get_concept", {
             path,
-            catalog: this.target.catalog,
+            catalog: this.catalog,
             ...extra,
         });
     }
@@ -148,17 +157,17 @@ export class OkfSession {
     async document(path: string, changeset?: string): Promise<string> {
         const { text } = await this.call<{ text: string }>("read_document", {
             path,
-            catalog: this.target.catalog,
+            catalog: this.catalog,
             ...(changeset === undefined ? {} : { changeset }),
         });
         return text;
     }
 
-    /** Searches the target catalog; returns the hit paths under `folder` only. */
+    /** Searches this session's catalog; returns the hit paths under `folder` only. */
     async searchUnder(folder: string, query: string): Promise<string[]> {
         const { hits } = await this.call<{ hits: { path: string }[] }>("search", {
             query,
-            catalogs: [this.target.catalog],
+            catalogs: [this.catalog],
             limit: 200,
         });
         return hits.map((hit) => hit.path).filter((path) => path.startsWith(`${folder}/`));
