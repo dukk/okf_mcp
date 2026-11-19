@@ -560,6 +560,116 @@ mod tests {
         }))
     }
 
+    /// Creates the shared team `ops` and a catalog `shared` it owns, then
+    /// suspends it.
+    async fn seed_suspended_shared(pool: &PgPool) {
+        use crate::db::TEST_USER;
+        use crate::store::teams::{self, NewTeam};
+        let new = NewTeam {
+            name: "ops",
+            display_name: &DisplayName::parse("Operations").unwrap(),
+            owner: TEST_USER,
+        };
+        teams::create(pool, &new, &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap();
+        let catalog = NewCatalog {
+            name: "shared",
+            display_name: &DisplayName::default(),
+            description: "",
+            owner_team: "ops",
+        };
+        create(pool, &catalog, &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap();
+        teams::suspend(pool, "ops", None, &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap();
+    }
+
+    /// The label of the suspended owner team in `name`'s resolved row.
+    async fn team_label_of(directory: &CatalogDirectory, name: &str) -> String {
+        directory
+            .resolve(name)
+            .await
+            .unwrap()
+            .unwrap()
+            .suspended
+            .as_ref()
+            .expect("suspended")
+            .team_label
+            .clone()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_cached_suspension_gets_a_renamed_shared_teams_label_from_its_team_message() {
+        use crate::invalidate::testing::invalidations_of;
+        use crate::store::teams::{self, TeamDisplayNameChange};
+        let db = test_db().await;
+        seed_suspended_shared(&db.pool).await;
+        let directory = directory(&db.pool);
+        assert_eq!(team_label_of(&directory, "shared").await, "Operations");
+
+        let renamed = DisplayName::parse("Platform").unwrap();
+        let sent = invalidations_of(&db.pool, async {
+            let change = TeamDisplayNameChange {
+                team: "ops",
+                display_name: &renamed,
+                owner: None,
+            };
+            teams::set_display_name(&db.pool, &change, &AuditActor::cli(), Utc::now())
+                .await
+                .unwrap();
+        })
+        .await;
+        assert_eq!(
+            team_label_of(&directory, "shared").await,
+            "Operations",
+            "nothing applied yet: the cached row is served"
+        );
+        for invalidation in &sent {
+            directory.apply(invalidation).await;
+        }
+
+        assert_eq!(team_label_of(&directory, "shared").await, "Platform");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_cached_suspension_gets_a_renamed_personal_owners_label_from_its_user_message() {
+        use crate::db::TEST_USER;
+        use crate::invalidate::testing::invalidations_of;
+        use crate::store::{teams, users};
+        let db = test_db().await;
+        seed(&db.pool, "mine").await;
+        teams::suspend(&db.pool, TEST_TEAM, None, &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap();
+        let directory = directory(&db.pool);
+        let before = team_label_of(&directory, "mine").await;
+
+        let renamed = DisplayName::parse("Renamed Person").unwrap();
+        let sent = invalidations_of(&db.pool, async {
+            users::set_display_name(
+                &db.pool,
+                TEST_USER,
+                &renamed,
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .unwrap();
+        })
+        .await;
+        assert_eq!(team_label_of(&directory, "mine").await, before);
+        for invalidation in &sent {
+            directory.apply(invalidation).await;
+        }
+
+        let after = team_label_of(&directory, "mine").await;
+        assert_ne!(after, before, "the personal team is named after its owner");
+        assert!(after.contains("Renamed Person"), "{after}");
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn resolve_reads_once_then_serves_from_cache() {
         let db = test_db().await;
