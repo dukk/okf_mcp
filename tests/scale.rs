@@ -131,14 +131,14 @@ fn local_metrics() -> (
 }
 
 /// The value of one rendered series (`okf_cache_bytes{cache="catalog"}`),
-/// or 0 when it is absent.
-fn sample(registry: &prometheus::Registry, series: &str) -> f64 {
+/// or `None` when the series is not rendered, so a renamed metric or label
+/// fails the test instead of reading as zero.
+fn sample(registry: &prometheus::Registry, series: &str) -> Option<f64> {
     let text = prometheus::TextEncoder::new()
         .encode_to_string(&registry.gather())
         .expect("encode the metrics");
     text.lines()
         .find_map(|line| line.strip_prefix(series)?.strip_prefix(' ')?.parse().ok())
-        .unwrap_or(0.0)
 }
 
 /// The `percent`th percentile of `samples`, which it sorts.
@@ -177,7 +177,8 @@ async fn a_million_catalogs_and_users_stay_within_bounds() {
     assert_eq!(app.catalog_cache().cached(), 0, "start-up loads no catalog");
     assert_eq!(
         sample(&registry, r#"okf_cache_entries{cache="catalog"}"#),
-        0.0
+        Some(0.0),
+        "the catalog entries series is missing or not zero"
     );
 
     // 2. Reading distinct catalogs: the gauge never passes the budget and
@@ -204,7 +205,9 @@ async fn a_million_catalogs_and_users_stay_within_bounds() {
         tokio::time::timeout(BOUND, read(index))
             .await
             .expect("a catalog read");
-        peak_bytes = peak_bytes.max(sample(&registry, r#"okf_cache_bytes{cache="catalog"}"#));
+        let bytes = sample(&registry, r#"okf_cache_bytes{cache="catalog"}"#)
+            .expect("the okf_cache_bytes{cache=\"catalog\"} series is missing");
+        peak_bytes = peak_bytes.max(bytes);
     }
     let reads = started.elapsed();
     let growth = rss_bytes().saturating_sub(rss_before);
@@ -215,6 +218,8 @@ async fn a_million_catalogs_and_users_stay_within_bounds() {
         growth,
         budget + RSS_SLACK
     );
+    // Proves the measurement is live: catalogs were loaded and weighed.
+    assert!(peak_bytes > 0.0, "the catalog gauge never left zero");
     assert!(
         peak_bytes <= budget as f64,
         "the catalog gauge peaked at {peak_bytes}, over the budget {budget}"
@@ -241,7 +246,8 @@ async fn a_million_catalogs_and_users_stay_within_bounds() {
     // Moka settles its entry count lazily; give it a moment.
     let mut entries = f64::MAX;
     for _ in 0..50 {
-        entries = sample(&registry, r#"okf_cache_entries{cache="credential"}"#);
+        entries = sample(&registry, r#"okf_cache_entries{cache="credential"}"#)
+            .expect("the okf_cache_entries{cache=\"credential\"} series is missing");
         if entries <= CREDENTIAL_ENTRIES as f64 {
             break;
         }

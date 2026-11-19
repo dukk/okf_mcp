@@ -1310,6 +1310,7 @@ async fn run(job: Housekeeping, context: Data<HousekeepingContext>) -> Result<()
 > - Credential entries are asserted at or under `credential_cache_entries` (set to 5,000 for the run, below the 10,000 keys read).
 > - The smoke test needs no Redis: the change feed carries it.
 > - The bridge follow-up is issue #727.
+> - Maintainer accepted the revised bound on 2026-11-19. Loading a page's snapshots concurrently is #732.
 
 ## Self-review
 
