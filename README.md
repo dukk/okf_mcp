@@ -523,8 +523,9 @@ such catalog at once with `okf-mcp catalog repair-indexes --missing-only`
 repair to each catalog's `log.md`. Existing headings, prose, listings and
 summaries stay as they are, a target an index already links is not listed
 again, and a second run changes nothing. The one change to existing text is
-an old raw (unencoded) concept listing written before percent-encoding,
-such as `* [A](a b.md) - x`, whose link never resolves: its destination is
+an old raw (unencoded) concept or folder listing written before
+percent-encoding, such as `* [A](a b.md) - x` or
+`* [My docs](my docs/) - x`, whose link never resolves: its destination is
 encoded in place (`* [A](a%20b.md) - x`, label and summary kept), or the
 bullet is removed when a working listing sits beside it, and `notes` quotes
 each one. A bullet whose link resolves to an existing document, or whose
