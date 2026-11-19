@@ -1092,6 +1092,12 @@ mod tests {
             .execute(&mut *blocker)
             .await
             .unwrap();
+        // The tests share one Postgres server, so the waiter below must be
+        // blocked by this backend, not by another test's lock.
+        let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *blocker)
+            .await
+            .unwrap();
         let shutdown = CancellationToken::new();
         let ticker = tokio::spawn(tick_until(Arc::clone(&test.app), shutdown.clone()));
         // Wait until the tick's query waits on that lock.
@@ -1099,9 +1105,11 @@ mod tests {
             loop {
                 let waiting: i64 = sqlx::query_scalar(
                     "SELECT count(*) FROM pg_stat_activity \
-                     WHERE wait_event_type = 'Lock' AND query ILIKE '%apalis.jobs%' \
-                     AND pid <> pg_backend_pid()",
+                     WHERE datname = current_database() AND wait_event_type = 'Lock' \
+                     AND query ILIKE '%apalis.jobs%' AND pid <> pg_backend_pid() \
+                     AND pg_blocking_pids(pid) @> ARRAY[$1]::int[]",
                 )
+                .bind(holder)
                 .fetch_one(test.app.pool())
                 .await
                 .unwrap();
