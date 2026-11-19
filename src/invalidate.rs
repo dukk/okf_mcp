@@ -328,12 +328,12 @@ async fn listen_signalling(
                             Some(Some(_lag)) => {}
                         }
                     }
-                    // Lost and already re-established by sqlx.
+                    // The connection was lost. Connect again through the outer
+                    // loop, which finishes `LISTEN` before the catch-up, so a
+                    // commit after the catch-up's reads is delivered, not missed.
                     Ok(None) => {
-                        if shutdown.run_until_cancelled(app.apply_reconnect()).await.is_none() {
-                            return;
-                        }
-                        signal();
+                        tracing::warn!("the change feed connection was lost; connecting again");
+                        break;
                     }
                     // A failure sqlx could not repair: connect again.
                     Err(error) => {
@@ -669,6 +669,19 @@ mod tests {
             .wait_caught_up("the catch-up after a lost connection")
             .await;
         assert!(running.app.keys().find(&running.key).is_none());
+        // The catch-up is signalled only once the replacement connection is
+        // subscribed: a commit after the catch-up's reads is then delivered.
+        let listening: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity WHERE query LIKE 'LISTEN%' \
+             AND datname = current_database() AND pid <> pg_backend_pid()",
+        )
+        .fetch_one(&running.db.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            listening, 1,
+            "a live LISTEN backend when the catch-up is signalled"
+        );
         running.stop().await;
     }
 
