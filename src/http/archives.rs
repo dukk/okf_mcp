@@ -583,7 +583,7 @@ async fn import_catalog(
             app.announce_catalog(change);
         }
         if let Some(state) = app.catalog(&name) {
-            if let Err(error) = state.refresh(app.pool()).await {
+            if let Err(error) = state.refresh(app.pool(), app.rebuild_locks()).await {
                 split_event!(
                     error,
                     { catalog = %name, kind = error.kind(), },
