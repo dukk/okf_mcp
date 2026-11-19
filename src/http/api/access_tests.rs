@@ -334,7 +334,7 @@ async fn a_read_of_an_old_catalog_map_under_newer_gates_is_refused_not_misrecord
     // `one` checks the incarnation (PR #442 review, round 2), and `admit`
     // on the map's state refuses it the same way.
     let state = std::sync::Arc::clone(&ctx.catalogs()["main"]);
-    let selected = ctx.one(Some("main")).map(drop);
+    let selected = ctx.one(Some("main")).await.map(drop);
     let refused = ctx.admit(&state, audit::AccessKind::Read);
     assert!(
         matches!(selected, Err(crate::error::OkfError::Busy { .. })),
@@ -360,7 +360,7 @@ async fn an_old_principal_reading_a_new_catalog_map_is_admitted_as_the_new_catal
     test.app.poll().await.unwrap();
     let ctx = crate::mcp::testing::context(&test, old_principal, None);
 
-    let state = ctx.one(Some("main")).unwrap();
+    let state = ctx.one(Some("main")).await.unwrap();
     ctx.admit(&state, audit::AccessKind::Read).unwrap();
     settle_access(&test).await;
 
@@ -912,7 +912,7 @@ async fn an_unlocked_read_of_an_old_catalog_map_is_refused_not_left_out() {
     // `one` checks the incarnation (PR #442 review, round 2), and `admit`
     // on the map's state refuses it the same way.
     let state = std::sync::Arc::clone(&ctx.catalogs()["main"]);
-    let selected = ctx.one(Some("main")).map(drop);
+    let selected = ctx.one(Some("main")).await.map(drop);
     let refused = ctx.admit(&state, audit::AccessKind::Read);
     assert!(
         matches!(selected, Err(crate::error::OkfError::Busy { .. })),
@@ -1164,7 +1164,7 @@ async fn an_old_unlocked_principal_reads_none_of_the_replacements_contents() {
     let (old_principal, _, _) = old_unlock_against_a_new_map(&test).await;
     let ctx = crate::mcp::testing::context(&test, std::sync::Arc::clone(&old_principal), None);
 
-    let one = ctx.one(Some("main")).map(drop);
+    let one = ctx.one(Some("main")).await.map(drop);
     // `view` on the new map's state, as a tool that resolved it otherwise
     // would: refused by the gates that know it, not read unrecorded.
     let state = std::sync::Arc::clone(&ctx.catalogs()["main"]);

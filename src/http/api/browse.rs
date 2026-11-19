@@ -261,7 +261,7 @@ async fn tree(
     Path(catalog): Path<String>,
 ) -> Result<Json<Tree>, AppError> {
     let ctx = context(&app, principal, requester);
-    let state = ctx.one(Some(&catalog))?;
+    let state = ctx.one(Some(&catalog)).await?;
     // The tree lists the catalog's documents: a read of its contents.
     ctx.admit(&state, AccessKind::Read)?;
     let loaded = state.current();
@@ -312,7 +312,7 @@ async fn concept(
         },
     )
     .await?;
-    let loaded = ctx.one(Some(&concept.catalog))?.current();
+    let loaded = ctx.one(Some(&concept.catalog)).await?.current();
     // Rendering is CPU work proportional to the body: off the async threads.
     // `move` hands `concept` and `loaded` (an `Arc`) to the blocking thread.
     Ok(Json(blocking(move || with_html(concept, &loaded)).await))
@@ -443,7 +443,7 @@ async fn revision(
         },
     )
     .await?;
-    let state = ctx.one(Some(&found.catalog))?;
+    let state = ctx.one(Some(&found.catalog)).await?;
     let stored = found.path.trim_start_matches('/');
     let current = content_at(app.pool(), state.id(), stored, revision)
         .await?
@@ -496,7 +496,7 @@ async fn document(
         },
     )
     .await?;
-    let loaded = ctx.one(Some(&document.catalog))?.current();
+    let loaded = ctx.one(Some(&document.catalog)).await?.current();
     let view = blocking(move || {
         // A block, so the borrow of `document` ends before it moves below.
         let body_html = {
@@ -540,7 +540,7 @@ async fn recent_changes(
     // binds the read to the incarnation admitted.
     principal.require_contents(Access::Read, &catalog, app.clock().now())?;
     let ctx = context(&app, principal, requester);
-    let state = ctx.one(Some(&catalog))?;
+    let state = ctx.one(Some(&catalog)).await?;
     ctx.admit(&state, AccessKind::Read)?;
     // The parameters are checked only once the catalog is admitted, so a
     // refusal never depends on them.
