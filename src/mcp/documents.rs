@@ -341,7 +341,7 @@ pub(crate) async fn get_concept(
                 let limit = ctx.app().config().concept_outline_chars;
                 return concept(
                     state.name(),
-                    &ctx.catalog_label(state.name()),
+                    &ctx.catalog_label(state.name()).await?,
                     snapshot,
                     doc,
                     &params,
@@ -480,7 +480,7 @@ pub(crate) async fn read_document(
         if let Some(doc) = view.snapshot().get(&path) {
             return Ok(Document {
                 catalog: state.name().to_string(),
-                catalog_label: ctx.catalog_label(state.name()),
+                catalog_label: ctx.catalog_label(state.name()).await?,
                 path: format!("/{path}"),
                 text: doc.raw(),
             });

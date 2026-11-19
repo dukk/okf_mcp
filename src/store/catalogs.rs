@@ -827,6 +827,10 @@ pub struct SuspendedRow {
     pub team: String,
     /// Its notice, if any.
     pub notice: Option<String>,
+    /// The owner team's label, so a refusal names the team without a label
+    /// lookup (M18 Task 12). The directory drops the row when the team's
+    /// label or its personal owner's can change.
+    pub team_label: String,
 }
 
 /// A catalog's row with its access facts (M18 spec Decisions 6 and 9): what a
@@ -867,6 +871,10 @@ struct CatalogRowColumns {
     owner_team_id: Option<String>,
     suspended: bool,
     suspension_notice: Option<String>,
+    team_display_name: Option<String>,
+    team_personal: bool,
+    team_owner_display_name: Option<String>,
+    team_owner_email: Option<String>,
     maintenance_off: bool,
     audit_team: Option<i64>,
 }
@@ -885,9 +893,24 @@ impl From<CatalogRowColumns> for CatalogRow {
             .suspended
             .then(|| columns.owner_team.clone())
             .flatten()
-            .map(|team| SuspendedRow {
-                team,
-                notice: columns.suspension_notice,
+            .map(|team| {
+                let owner = columns.team_personal.then(|| {
+                    crate::labels::user_label(
+                        columns
+                            .team_owner_display_name
+                            .as_deref()
+                            .unwrap_or_default(),
+                        columns.team_owner_email.as_deref(),
+                    )
+                });
+                SuspendedRow {
+                    team_label: crate::labels::team_label(
+                        columns.team_display_name.as_deref().unwrap_or_default(),
+                        owner.as_deref(),
+                    ),
+                    team,
+                    notice: columns.suspension_notice,
+                }
             });
         Self {
             id: columns.id,
@@ -912,9 +935,14 @@ macro_rules! select_catalog_rows {
         "SELECT c.id, c.name, c.display_name, c.description, c.generation, \
                 t.name AS owner_team, c.owner_team_id, \
                 (t.suspended_at IS NOT NULL) AS suspended, t.suspension_notice, \
+                t.display_name AS team_display_name, \
+                (t.personal_of IS NOT NULL) AS team_personal, \
+                pu.display_name AS team_owner_display_name, \
+                pu.email::text AS team_owner_email, \
                 NOT c.maintenance AS maintenance_off, a.id AS audit_team \
          FROM catalogs c \
          LEFT JOIN teams t ON t.id = c.owner_team_id \
+         LEFT JOIN users pu ON pu.id = t.personal_of \
          LEFT JOIN audit_teams a ON a.team_id = c.owner_team_id"
     };
 }

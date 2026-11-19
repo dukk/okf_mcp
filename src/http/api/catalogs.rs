@@ -19,7 +19,7 @@ use crate::catalog::CatalogState;
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
 use crate::http::{archives, AppError};
-use crate::labels::directory::Labels;
+use crate::labels::directory::{Labels, Wanted};
 use crate::labels::{catalog_label, DisplayName};
 use crate::mcp::catalogs::SuspensionInfo;
 use crate::okf::ops::STARTER_FILE_COUNT;
@@ -251,7 +251,13 @@ async fn list_catalogs(
     Query(query): Query<PageQuery>,
 ) -> Result<Json<CatalogListing>, AppError> {
     let page = reachable_page(&app, &principal, &query).await?;
-    let labels = app.labels();
+    let mut wanted = Wanted::default();
+    for row in &page.items {
+        if let Some(team) = row.owner_team.as_deref() {
+            wanted.team(team);
+        }
+    }
+    let labels = app.labels().labels_for(&wanted).await?;
     let mut catalogs = Vec::with_capacity(page.items.len());
     for row in &page.items {
         if let Some(state) = app.listed_state(row).await? {
@@ -321,6 +327,11 @@ async fn create_catalog(
     // starter files (a root index.md and a log.md, no concepts), written
     // when it was created, and the answer must not depend on the poll
     // having loaded it.
+    let mut wanted = Wanted::default();
+    if let Some(team) = row.owner_team.as_deref() {
+        wanted.team(team);
+    }
+    let labels = app.labels().labels_for(&wanted).await?;
     let summary = CatalogSummary {
         name: row.name,
         label: catalog_label(&row.display_name, &row.description),
@@ -329,7 +340,7 @@ async fn create_catalog(
         owner_team_label: row
             .owner_team
             .as_deref()
-            .and_then(|team| app.labels().team(team).map(str::to_string)),
+            .and_then(|team| labels.team(team).map(str::to_string)),
         owner_team: row.owner_team,
         files: STARTER_FILE_COUNT,
         concepts: 0,
@@ -370,11 +381,10 @@ async fn refuse_suspended_owner(
     let Some(suspended) = principal.suspension(&row) else {
         return Ok(());
     };
-    let labels = app.labels();
-    let in_team = principal
-        .user
-        .as_deref()
-        .is_some_and(|user| labels.teams_of(user).any(|team| team == suspended.team));
+    let in_team = match principal.user.as_deref() {
+        Some(user) => app.labels().teams_of(user).await?.contains(&suspended.team),
+        None => false,
+    };
     if in_team || principal.reaches(catalog) {
         principal.check_not_suspended(&row)
     } else {
@@ -1303,6 +1313,32 @@ mod tests {
 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(after.description, "Changed through the API.");
+    }
+
+    /// As above, for labels: a REST rename reaches this replica's label
+    /// cache before the route answers, so the next labels read shows it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_rest_rename_is_seen_by_the_next_labels_read_on_this_replica() {
+        let test = app().await;
+        let keys = keys(&test).await;
+        let mut wanted = crate::labels::directory::Wanted::default();
+        wanted.catalog("main");
+        // Cached before the write.
+        let before = test.app.labels().labels_for(&wanted).await.unwrap();
+        assert_ne!(before.catalog("main"), Some("Renamed Main"));
+
+        let (status, _) = send(
+            &test,
+            "PATCH",
+            "/api/v1/catalogs/main",
+            Some(&keys.admin),
+            Some(json!({ "display_name": "Renamed Main" })),
+        )
+        .await;
+        let after = test.app.labels().labels_for(&wanted).await.unwrap();
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(after.catalog("main"), Some("Renamed Main"));
     }
 
     #[tokio::test(flavor = "multi_thread")]

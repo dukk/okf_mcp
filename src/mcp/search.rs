@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::catalog::CatalogState;
 use crate::error::OkfError;
+use crate::labels::directory::Wanted;
 use crate::mcp::context::{is_broken_overlay, require_selected, ToolContext};
 use crate::mcp::{blocking, reply, OkfServer};
 use crate::okf::search::{search_catalogs, CatalogHit, SearchQuery};
@@ -140,7 +141,7 @@ pub(crate) async fn run(ctx: &ToolContext, params: SearchParams) -> Result<Searc
                 tracing::warn!(catalog = %state.name(), kind = error.kind(), "search skipped a catalog");
                 skipped.push(SkippedCatalog {
                     catalog: state.name().to_string(),
-                    catalog_label: ctx.catalog_label(state.name()),
+                    catalog_label: ctx.catalog_label(state.name()).await?,
                     error: error.to_json(),
                 });
             }
@@ -160,7 +161,11 @@ pub(crate) async fn run(ctx: &ToolContext, params: SearchParams) -> Result<Searc
         search_catalogs(&catalogs, &query)
     })
     .await;
-    let labels = ctx.labels();
+    let mut wanted = Wanted::default();
+    for hit in &hits {
+        wanted.catalog(&hit.catalog);
+    }
+    let labels = ctx.labels_for(&wanted).await?;
     let hits = hits
         .into_iter()
         .map(|hit| LabeledHit {

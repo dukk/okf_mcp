@@ -17,6 +17,7 @@ use crate::auth::{Admission, Principal};
 use crate::cache::catalogs::{CatalogCache, CatchUp};
 use crate::cache::credentials::{AccessView, CredentialLimits, Credentials};
 use crate::cache::directory::CatalogDirectory;
+use crate::cache::labels::{LabelLookup, DEFAULT_LABEL_CACHE_ENTRIES};
 use crate::catalog::CatalogState;
 use crate::clock::Clock;
 use crate::clock_check::{self, ClockStatus};
@@ -26,7 +27,6 @@ use crate::http::limits::SignInLimits;
 use crate::http::passkeys::Passkeys;
 use crate::http::sessions::SessionBindings;
 use crate::keyed_lock::{KeyedGuard, KeyedLocks};
-use crate::labels::directory::Labels;
 use crate::oauth::OAuth;
 use crate::oidc::OidcProviders;
 use crate::overlay::Overlays;
@@ -49,11 +49,9 @@ pub struct App {
     clock: Arc<dyn Clock>,
     // Keys, grants and users, loaded on demand (M18 Decision 9).
     credentials: Credentials,
-    // Every user's, team's and catalog's label, by slug: reloaded with the
-    // settings when `admin_generation` moves (until Task 12 of milestone 18
-    // loads labels on demand). As with `catalogs`, the lock is held only to
-    // clone or swap the `Arc`.
-    labels: RwLock<Arc<Labels>>,
+    // Labels of the slugs a response shows, read on demand and cached
+    // (M18 Decision 9).
+    labels: LabelLookup,
     // Which key opened each MCP session (M5 Decision 2).
     sessions: SessionBindings,
     // The shared Redis (`[redis]`); `None` keeps every short-lived state in
@@ -77,7 +75,7 @@ pub struct App {
     // Catalog snapshots by id, loaded on demand and bounded in estimated
     // bytes (M18 Decision 2).
     catalog_cache: CatalogCache,
-    // The `admin_generation` the settings and labels were loaded at. Written only under
+    // The `admin_generation` the settings were loaded at. Written only under
     // `polling`, so `Relaxed` ordering is enough.
     admin_generation: AtomicI64,
     // The last `admin_generation` this instance published over Redis (or the
@@ -93,7 +91,7 @@ pub struct App {
     // and the next pass must still see it. Written only under `polling`.
     swept_generation: AtomicI64,
     // The effective sign-in policy (`[auth]` with `server_settings`
-    // overrides), reloaded with the labels whenever `admin_generation`
+    // overrides), reloaded whenever `admin_generation`
     // moves. The lock is held only to clone or swap the `Arc`.
     settings: RwLock<Arc<Settings>>,
     // Held for a whole `poll` pass. Without it, two overlapping passes (the
@@ -219,11 +217,16 @@ impl App {
         metrics: Metrics,
         redis: Option<shared::Redis>,
     ) -> Result<Arc<Self>, OkfError> {
-        // Read the counter before the settings and labels: a change committed
+        // Read the counter before the settings: a change committed
         // between them moves it again, so the next poll reloads.
         let admin_generation = catalogs::admin_generation(&pool).await?;
         let settings = settings::load(&pool, &config.auth).await?;
-        let labels = Labels::load(&pool).await?;
+        let labels = LabelLookup::new(
+            pool.clone(),
+            DEFAULT_LABEL_CACHE_ENTRIES,
+            config.credential_ttl,
+        )
+        .with_metrics(metrics.clone());
         // `clock` moves into `Self` below, so the caches get their own handle.
         let credentials = Credentials::new(
             pool.clone(),
@@ -277,7 +280,7 @@ impl App {
             config,
             clock,
             credentials,
-            labels: RwLock::new(Arc::new(labels)),
+            labels,
             sessions,
             redis,
             overlays,
@@ -527,10 +530,11 @@ impl App {
         &self.credentials
     }
 
-    /// The label directory, as of the last reload.
+    /// The label lookup: the labels of the slugs a response shows, read on
+    /// demand ([`LabelLookup::labels_for`]).
     ///
     /// # Returns
-    /// The shared directory (a pointer copy, not a copy of the maps).
+    /// The lookup.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -538,20 +542,19 @@ impl App {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    pub fn labels(&self) -> Arc<Labels> {
-        Arc::clone(&self.labels.read().expect("labels lock poisoned"))
+    pub fn labels(&self) -> &LabelLookup {
+        &self.labels
     }
 
     /// What every principal of a request is assembled with besides its
-    /// credential and user: the `require_unlock` setting and the labels.
+    /// credential and user: the `require_unlock` setting.
     ///
     /// # Returns
-    /// The view (two pointer copies).
+    /// The view.
     #[tracing::instrument(level = "trace", skip_all)]
     pub fn access_view(&self) -> AccessView {
         AccessView {
             require_unlock: self.settings().require_unlock,
-            labels: self.labels(),
         }
     }
 
@@ -844,7 +847,7 @@ impl App {
         }
     }
 
-    /// One pass of the poll loop: reloads the settings and labels if
+    /// One pass of the poll loop: reloads the settings if
     /// `admin_generation` moved. Catalogs are not polled: the change feed
     /// refreshes a cached catalog, and every use checks its snapshot against
     /// the directory row (M18 Task 8). Pruning and the cluster counts are
@@ -898,13 +901,14 @@ impl App {
         let loaded = self.admin_generation.load(Ordering::Relaxed);
         if loaded != self.swept_generation.load(Ordering::Relaxed) {
             self.credentials.mark_all_stale();
+            self.labels.mark_all_stale();
             self.directory.mark_all_stale().await;
             self.swept_generation.store(loaded, Ordering::Relaxed);
         }
         Ok(())
     }
 
-    /// Reloads the settings and labels if `admin_generation` moved since
+    /// Reloads the settings if `admin_generation` moved since
     /// they were loaded, serialized with poll passes through `polling`: what
     /// the change feed does for a message that may move them, and the M16
     /// subscriber on a message or a resubscribe.
@@ -919,7 +923,7 @@ impl App {
         self.reload_settings_if_changed(announce).await;
     }
 
-    /// The `admin_generation` the settings and labels were loaded at.
+    /// The `admin_generation` the settings were loaded at.
     ///
     /// # Returns
     /// The generation.
@@ -1042,9 +1046,9 @@ impl App {
     }
 
     /// Applies one change-feed message to this replica's caches: the
-    /// catalog directory, the credential and user caches, the catalog
-    /// cache, and the settings and labels (later tasks of milestone 18 move
-    /// the last onto their own caches behind this same method).
+    /// catalog directory, the credential, user and label caches, the catalog
+    /// cache, and the settings (a later task of milestone 18 moves the last
+    /// onto its own cache behind this same method).
     ///
     /// A `Catalog` message refreshes that catalog if it is cached and behind
     /// (the body of [`App::apply_catalog_announcement`]). A `CatalogMeta`
@@ -1052,8 +1056,7 @@ impl App {
     /// drops it from the catalog cache; a catalog that merely changed its
     /// description, owner or maintenance keeps its snapshot, since those
     /// live in the directory row. A message of any other kind than `Catalog`
-    /// reloads the settings and labels if `admin_generation` moved (until
-    /// Tasks 12 and 13).
+    /// reloads the settings if `admin_generation` moved (until Task 13).
     ///
     /// # Arguments
     /// * `message` - what changed.
@@ -1066,6 +1069,7 @@ impl App {
         // row the directory now holds.
         self.directory.apply(&message.invalidation).await;
         self.credentials.apply(&message.invalidation).await;
+        self.labels.apply(&message.invalidation).await;
         match &message.invalidation {
             Invalidation::Catalog { id, generation } => {
                 // The announcement's body, without its span and counter:
@@ -1094,7 +1098,8 @@ impl App {
     }
 
     /// Applies this replica's own writes to its catalog directory and its
-    /// credential and user caches before the request that made them answers ([`crate::invalidate::capturing`]):
+    /// credential, user and label caches before the request that made them
+    /// answers ([`crate::invalidate::capturing`]):
     /// the next request on this replica reads the new rows, without waiting
     /// for the change feed to deliver the same messages. Only in-process
     /// cache drops; nothing here reads the database (a dropped row is read
@@ -1109,6 +1114,7 @@ impl App {
         for invalidation in written {
             self.directory.apply(invalidation).await;
             self.credentials.apply(invalidation).await;
+            self.labels.apply(invalidation).await;
         }
     }
 
@@ -1138,25 +1144,27 @@ impl App {
 
     /// After the change feed's connection was lost (or a payload could not
     /// be read): messages sent meanwhile are gone, so every cache is
-    /// suspect (spec Decision 12). The directory, credential and user caches
-    /// mark every entry stale (each is read again on its next use, and with
-    /// a catalog's row its cached snapshot is checked); the settings and
-    /// labels reload.
+    /// suspect (spec Decision 12). The directory, credential, user and label
+    /// caches mark every entry stale (each is read again on its next use,
+    /// and with a catalog's row its cached snapshot is checked); the
+    /// settings reload.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn apply_reconnect(&self) {
         self.catch_up_catalogs().await;
         self.credentials.mark_all_stale();
+        self.labels.mark_all_stale();
         self.reload_settings_now(false).await;
     }
 
     /// What an M16 replica's announcement means here (spec Decision 14):
     /// an older replica changed something without sending change messages,
-    /// so every cached credential, user and catalog row (suspension, owner,
-    /// maintenance) is reread on its next use, and the settings and labels
+    /// so every cached credential, user, label and catalog row (suspension,
+    /// owner, maintenance) is reread on its next use, and the settings
     /// reload.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn apply_m16_announcement(&self) {
         self.credentials.mark_all_stale();
+        self.labels.mark_all_stale();
         self.directory.mark_all_stale().await;
         self.reload_settings_now(false).await;
     }
@@ -1172,7 +1180,7 @@ impl App {
         self.directory.mark_all_stale().await;
     }
 
-    /// Reloads the settings and labels if `admin_generation` moved
+    /// Reloads the settings if `admin_generation` moved
     /// since they were loaded, then, when `announce` is set, publishes the
     /// loaded generation if it differs from the last one announced.
     /// Called only under `polling`.
@@ -1231,12 +1239,8 @@ impl App {
         // pair as it was. The span and metric keep the key cache's name
         // (`okf.keycache.*`), which dashboards know them by.
         let reloaded = async {
-            let (settings, labels) = tokio::try_join!(
-                settings::load(&self.pool, &self.config.auth),
-                Labels::load(&self.pool)
-            )?;
+            let settings = settings::load(&self.pool, &self.config.auth).await?;
             *self.settings.write().expect("settings lock poisoned") = Arc::new(settings);
-            *self.labels.write().expect("labels lock poisoned") = Arc::new(labels);
             Ok::<(), OkfError>(())
         }
         .instrument(tracing::info_span!("okf.keycache.reload"))
@@ -1255,7 +1259,7 @@ impl App {
                     error,
                     { kind = error.kind(), },
                     { %error, },
-                    "settings or labels reload failed; retrying at the next poll"
+                    "settings reload failed; retrying at the next poll"
                 );
             }
         }
@@ -1755,6 +1759,42 @@ mod tests {
         assert_eq!(pg_after.current().files(), 1);
         assert!(app.catalog("work").await.unwrap().is_some());
         assert!(app.catalog("gone").await.unwrap().is_none());
+    }
+
+    /// A write's own invalidations, collected around it and applied here,
+    /// reach the directory and the label cache at once, with no listener
+    /// and no poll (the `settle` a REST route also runs would hide this).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn own_writes_reach_the_directory_and_the_labels() {
+        let db = test_db().await;
+        create(&db.pool, "pg").await;
+        let app = app(&db.pool).await;
+        let mut wanted = crate::labels::directory::Wanted::default();
+        wanted.catalog("pg");
+        // Both cached before the write.
+        let row = app.catalog_row("pg").await.unwrap().expect("pg");
+        app.labels().labels_for(&wanted).await.unwrap();
+        let renamed = crate::labels::DisplayName::parse("Renamed").unwrap();
+        let change = catalogs::DetailsChange {
+            catalog: "pg",
+            display_name: Some(&renamed),
+            description: Some("Changed."),
+            owner: None,
+        };
+
+        let ((), written) = crate::invalidate::capturing(async {
+            catalogs::update_details(&db.pool, &change, &AuditActor::cli(), Utc::now())
+                .await
+                .unwrap();
+        })
+        .await;
+        app.apply_own_writes(&written).await;
+
+        assert!(!written.is_empty(), "the write queued its invalidations");
+        let after = app.catalog_row("pg").await.unwrap().expect("pg");
+        assert_ne!(after.description, row.description);
+        let labels = app.labels().labels_for(&wanted).await.unwrap();
+        assert_eq!(labels.catalog("pg"), Some("Renamed"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
