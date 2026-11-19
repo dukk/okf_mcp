@@ -268,6 +268,7 @@ pub async fn create_self_issued(
         new.default_catalog,
     )
     .await?;
+    let actor = actor_for(new.client);
     let grant_id: String = sqlx::query_scalar(
         "INSERT INTO api_keys \
          (name, sha256, kind, client_id, access, maintenance_report, all_catalogs, \
@@ -278,7 +279,7 @@ pub async fn create_self_issued(
     .bind(&new.client.client_id)
     .bind(access.as_str())
     .bind(default_catalog_id)
-    .bind(actor_for(new.client))
+    .bind(&actor)
     .bind(now)
     .bind(new.user_id)
     .fetch_one(&mut *tx)
@@ -295,6 +296,8 @@ pub async fn create_self_issued(
     .bind(&levels)
     .execute(&mut *tx)
     .await?;
+    // The grant's audit row from birth (`audit::credential_created`).
+    audit::credential_created(&mut tx, &grant_id, &actor).await?;
     let teams = audit::key_teams(&mut tx, &grant_id).await?;
     audit::record(
         &mut tx,
@@ -508,6 +511,12 @@ mod tests {
         assert_eq!(record.catalog_access, chosen);
         assert_eq!(record.default_catalog.as_deref(), Some("main"));
         assert_eq!(record.actor, "Example Client");
+        // Its audit row from birth, labelled with that actor (M18 spec
+        // Decision 20).
+        assert_eq!(
+            crate::store::audit::testing::credential_row(&db.pool, &grant_id).await,
+            Some((Some("Example Client".to_string()), Some(user_id.clone())))
+        );
         assert_eq!(record.client_id.as_deref(), Some("test-client"));
         assert!(
             record.name.starts_with("alice.client.example.com-"),

@@ -785,6 +785,39 @@ pub async fn team_ref(conn: &mut PgConnection, team: &str) -> Result<i64, OkfErr
         .ok_or_else(unknown)
 }
 
+/// Creates a new key's or grant's `audit_credentials` row in the
+/// transaction that inserts it (M18 spec Decision 20), labelled with its
+/// `actor` as [`record`] labels it when it acts, so caches read the audit
+/// id with the credential and never have to write one. Call it after the
+/// insert and after [`lock_people`] has locked the owner: the SQL resolver
+/// takes the owner `FOR KEY SHARE` again (a no-op under the stronger lock
+/// already held) and inserts a row no other transaction can see yet, so it
+/// waits on nothing (`migrations/0014_audit_row_locks.sql`).
+///
+/// # Arguments
+/// * `conn` - the creating transaction.
+/// * `credential_id` - the new `api_keys.id`.
+/// * `label` - its `actor`.
+///
+/// # Returns
+/// Nothing; the row lasts with the transaction.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.credential_created"))]
+pub async fn credential_created(
+    conn: &mut PgConnection,
+    credential_id: &str,
+    label: &str,
+) -> Result<(), OkfError> {
+    sqlx::query("SELECT audit_credential($1, NULL, $2)")
+        .bind(credential_id)
+        .bind(label)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
 /// The `audit_teams` id of a catalog's owner team: what a catalog event
 /// belongs to.
 ///
@@ -1616,6 +1649,23 @@ impl ListedRow {
 #[cfg(test)]
 pub(crate) mod testing {
     use sqlx::PgPool;
+
+    /// A credential's `audit_credentials` row as `(label, owner's user id)`,
+    /// or `None` when it has none: what the create paths must leave behind
+    /// (M18 spec Decision 20).
+    pub(crate) async fn credential_row(
+        pool: &PgPool,
+        credential_id: &str,
+    ) -> Option<(Option<String>, Option<String>)> {
+        sqlx::query_as(
+            "SELECT a.label, p.user_id FROM audit_credentials a \
+             LEFT JOIN audit_people p ON p.id = a.person_id WHERE a.credential_id = $1",
+        )
+        .bind(credential_id)
+        .fetch_optional(pool)
+        .await
+        .expect("read the credential's audit row")
+    }
 
     /// One stored entry, flattened for assertions.
     #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]

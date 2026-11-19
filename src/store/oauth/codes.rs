@@ -655,6 +655,8 @@ pub async fn redeem(
         .bind(&grant_id)
         .execute(&mut *tx)
         .await?;
+    // The grant's audit row from birth, labelled with the actor it inherits.
+    audit::credential_created(&mut tx, &grant_id, &code.actor).await?;
     let teams = audit::key_teams(&mut tx, &grant_id).await?;
     audit::record(
         &mut tx,
@@ -1154,6 +1156,17 @@ mod tests {
         assert_eq!(redeemed.state(now()), CodeState::Redeemed);
         assert_eq!(redeemed.redeemed_at, Some(now()));
         assert_eq!(redeemed.grant_id.as_deref(), Some(grant_id.as_str()));
+        // Its audit row from birth, with the code's actor and user (M18
+        // spec Decision 20).
+        let owner: String = sqlx::query_scalar("SELECT id FROM users WHERE name = $1")
+            .bind(crate::db::TEST_USER)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            crate::store::audit::testing::credential_row(&db.pool, &grant_id).await,
+            Some((Some("example-actor".to_string()), Some(owner)))
+        );
         assert!(matches!(
             redeem(&db.pool, &code.id, &client, now()).await,
             Err(OkfError::Refused { .. })
