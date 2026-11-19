@@ -2008,7 +2008,7 @@ mod repair_tests {
 
         assert!(published.report.published, "{published:?}");
         assert_eq!(
-            published_text(&test, "index.md").unwrap(),
+            published_text(&test, "index.md").await.unwrap(),
             "# Root\n\nCurated words.\n\n# Sections\n\n* [My docs](my%20docs/) - Mine.\n"
         );
         let again_handle = open(&first).await;
