@@ -264,6 +264,11 @@ pub enum RefreshUse {
         family_id: String,
         /// The resource it was issued for.
         resource: String,
+        /// The grant's OAuth client (`None` once the client row is gone),
+        /// read under the grant's share lock in this transaction: the caller
+        /// checks the presenting client against it without another
+        /// connection or a cache load while its locks are held.
+        client_id: Option<String>,
     },
     /// Already used once: a stolen copy, or the client replaying it. The
     /// caller revokes the family.
@@ -271,12 +276,13 @@ pub enum RefreshUse {
         /// The family to revoke.
         family_id: String,
     },
-    /// Unknown, not a refresh token, expired, revoked, or its grant revoked.
+    /// Unknown, not a refresh token, expired, revoked, or its grant revoked
+    /// or expired.
     Unknown,
 }
 
 /// The row [`use_refresh`] reads: the token's binding, its state, and its
-/// grant's revocation time.
+/// grant's revocation time, expiry and client.
 type RefreshRow = (
     String,
     String,
@@ -285,6 +291,8 @@ type RefreshRow = (
     Option<DateTime<Utc>>,
     DateTime<Utc>,
     Option<DateTime<Utc>>,
+    Option<DateTime<Utc>>,
+    Option<String>,
 );
 
 /// Takes a share lock on a grant's `api_keys` row for the rest of the
@@ -378,7 +386,7 @@ pub async fn use_refresh(
     // `FOR UPDATE OF t` also locks the token row.
     let row: Option<RefreshRow> = sqlx::query_as(
         "SELECT t.grant_id, t.family_id, t.resource, t.used_at, t.revoked_at, t.expires_at, \
-                k.revoked_at \
+                k.revoked_at, k.expires_at, k.client_id \
          FROM oauth_tokens t JOIN api_keys k ON k.id = t.grant_id \
          WHERE t.sha256 = $1 AND t.kind = 'refresh' \
          FOR UPDATE OF t",
@@ -387,15 +395,27 @@ pub async fn use_refresh(
     .fetch_optional(&mut *tx)
     .await?;
     // `let ... else`: return early when there is no row.
-    let Some((grant_id, family_id, resource, used_at, revoked_at, expires_at, grant_revoked_at)) =
-        row
+    let Some((
+        grant_id,
+        family_id,
+        resource,
+        used_at,
+        revoked_at,
+        expires_at,
+        grant_revoked_at,
+        grant_expires_at,
+        client_id,
+    )) = row
     else {
         return Ok(RefreshUse::Unknown);
     };
     if used_at.is_some() {
         return Ok(RefreshUse::Reused { family_id });
     }
-    if revoked_at.is_some() || grant_revoked_at.is_some() || expires_at <= now {
+    // An expired grant is refused as a revoked one is (the credential
+    // cache refuses it the same way).
+    let grant_expired = grant_expires_at.is_some_and(|at| at <= now);
+    if revoked_at.is_some() || grant_revoked_at.is_some() || grant_expired || expires_at <= now {
         return Ok(RefreshUse::Unknown);
     }
     sqlx::query("UPDATE oauth_tokens SET used_at = $2 WHERE sha256 = $1")
@@ -407,6 +427,7 @@ pub async fn use_refresh(
         grant_id,
         family_id,
         resource,
+        client_id,
     })
 }
 
@@ -682,6 +703,7 @@ mod tests {
                 grant_id: grant.clone(),
                 family_id: "family-a".to_string(),
                 resource: "https://okf.example.com/mcp".to_string(),
+                client_id: Some("https://client.example.com/client.json".to_string()),
             }
         );
         assert_eq!(

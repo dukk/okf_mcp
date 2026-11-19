@@ -19,7 +19,6 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgConnection;
 
 use crate::app::App;
-use crate::auth::CredentialKind;
 use crate::error::OkfError;
 use crate::keys;
 use crate::oauth::error::OAuthError;
@@ -273,21 +272,6 @@ async fn revoke_family(app: &App, oauth: &OAuth, family_id: &str) -> Result<(), 
     Ok(())
 }
 
-/// The grant's client, if the grant is live and has one.
-///
-/// # Errors
-/// [`OkfError::Database`] when the grant's load fails.
-#[tracing::instrument(level = "trace", skip_all)]
-async fn grant_client(app: &App, grant_id: &str) -> Result<Option<String>, OkfError> {
-    let Some(principal) = app.find_grant(grant_id).await? else {
-        return Ok(None);
-    };
-    Ok(match &principal.kind {
-        CredentialKind::OAuth { client_id, .. } => client_id.clone(),
-        CredentialKind::ApiKey | CredentialKind::Session { .. } => None,
-    })
-}
-
 /// `POST /oauth/token`. One `okf.oauth.token` span per request; its grant
 /// is one of the closed set, set once the form is read (an unsupported
 /// type stays empty: a client chose it). The span also carries `method`
@@ -503,12 +487,15 @@ async fn refresh(app: &App, oauth: &OAuth, form: &TokenForm) -> Result<TokenResp
             grant_id,
             family_id,
             resource,
+            client_id: grant_client,
         } => {
             // Each refusal returns before `commit`, so dropping `tx` rolls
             // back the `used_at` mark and the rightful client can still use
-            // the token. The credential cache reads a grant it does not
-            // hold (one made on another replica), so there is no retry.
-            if grant_client(app, &grant_id).await?.as_deref() != Some(client_id) {
+            // the token. The grant's client was read under its share lock
+            // on this transaction's connection: nothing before the commit
+            // loads a cache, which would take a second pooled connection
+            // while these locks are held.
+            if grant_client.as_deref() != Some(client_id) {
                 return Err(OAuthError::InvalidGrant(
                     "the refresh token belongs to another client".to_string(),
                 ));
@@ -952,6 +939,49 @@ mod tests {
             "B rotates the refresh token: {:?}",
             answer.err()
         );
+    }
+
+    /// The refresh transaction holds a connection and the grant's, family's
+    /// and token's locks until it commits: nothing in it may take a second
+    /// pooled connection (review of PR #713). With one connection in the
+    /// pool and every cache cold, a second connection would never come.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_refresh_with_cold_caches_on_a_one_connection_pool_rotates() {
+        let test = oauth_app().await;
+        let code = authorization_code(&test).await;
+        let (_, refresh_token) = crate::oauth::testing::exchange_for_tokens(&test, &code).await;
+        let config = crate::config::Config {
+            database_max_connections: 1,
+            ..crate::store::oauth::testing::oauth_config(crate::oauth::testing::PUBLIC_URL)
+        };
+        let pool = crate::db::connect(test.db_url(), 1)
+            .await
+            .expect("a one-connection pool");
+        // A fresh app: its credential and user caches have read nothing.
+        let cold = crate::app::App::load_with_redis(
+            pool,
+            config,
+            std::sync::Arc::new(crate::clock::SystemClock),
+            crate::telemetry::metrics::Metrics::global(),
+            None,
+        )
+        .await
+        .expect("load the app");
+        let request = TokenForm {
+            grant_type: Some("refresh_token".to_string()),
+            refresh_token: Some(refresh_token),
+            client_id: Some(CLIENT_ID.to_string()),
+            ..TokenForm::default()
+        };
+
+        let answer = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            super::refresh(&cold, cold.oauth().expect("OAuth is on"), &request),
+        )
+        .await
+        .expect("the refresh never waits for a second connection");
+
+        assert!(answer.is_ok(), "rotated: {:?}", answer.err());
     }
 
     #[tokio::test(flavor = "multi_thread")]
