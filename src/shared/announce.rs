@@ -23,6 +23,7 @@ use redis::AsyncCommands;
 use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
+use crate::backoff::Backoff;
 use crate::config::Config;
 use crate::shared::{Redis, SubscriptionEvent};
 use crate::store::catalogs::CatalogGeneration;
@@ -381,7 +382,7 @@ async fn run<H: Handler, S: Source>(
     grace: Duration,
     shutdown: &CancellationToken,
 ) {
-    let mut backoff = BACKOFF_MIN;
+    let mut backoff = Backoff::new(BACKOFF_MIN, BACKOFF_MAX);
     while !shutdown.is_cancelled() {
         match source.subscribe().await {
             Ok(mut subscription) => {
@@ -407,7 +408,7 @@ async fn run<H: Handler, S: Source>(
                         // The first subscribe and every automatic resubscribe:
                         // messages sent before it may have been lost, so catch up.
                         Some(SubscriptionEvent::Subscribed) => {
-                            backoff = BACKOFF_MIN;
+                            backoff.reset();
                             disconnected_at = None;
                             handler.subscribed().await;
                         }
@@ -433,9 +434,8 @@ async fn run<H: Handler, S: Source>(
         }
         tokio::select! {
             () = shutdown.cancelled() => return,
-            () = tokio::time::sleep(backoff) => {}
+            () = tokio::time::sleep(backoff.next_delay()) => {}
         }
-        backoff = (backoff * 2).min(BACKOFF_MAX);
     }
 }
 

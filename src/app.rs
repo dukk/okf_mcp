@@ -951,6 +951,49 @@ impl App {
         }
     }
 
+    /// Applies one change-feed message to this replica's caches (today's:
+    /// the catalog map and the key cache; later tasks of milestone 18 move
+    /// each onto its own bounded cache behind this same method).
+    ///
+    /// A `Catalog` message refreshes that catalog if it is loaded and
+    /// behind; a catalog not loaded is left to the poll loop. Every other
+    /// kind reloads the key cache and settings, since description and owner
+    /// are copied in by the poll, which still runs.
+    ///
+    /// # Arguments
+    /// * `message` - what changed.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn apply(&self, message: &crate::invalidate::Message) {
+        use crate::invalidate::Invalidation;
+        match &message.invalidation {
+            Invalidation::Catalog { id, generation } => {
+                self.refresh_announced(
+                    CatalogGeneration {
+                        catalog_id: *id,
+                        generation: *generation,
+                    },
+                    &tracing::Span::none(),
+                )
+                .await;
+            }
+            Invalidation::CatalogMeta { .. }
+            | Invalidation::Credential { .. }
+            | Invalidation::User { .. }
+            | Invalidation::Team { .. }
+            | Invalidation::Settings => self.reload_keys_now(false).await,
+        }
+    }
+
+    /// After the change feed's connection was lost (or a payload could not
+    /// be read): messages sent meanwhile are gone, so every cache is
+    /// suspect. Today's caches have no stale flag, so this reloads the key
+    /// cache and refreshes every loaded catalog.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn apply_reconnect(&self) {
+        self.reload_keys_now(false).await;
+        self.catch_up_catalogs().await;
+    }
+
     /// Refreshes every loaded catalog whose generation in the database is
     /// newer than its snapshot: what the catalog subscriber does when it
     /// (re)subscribes, since announcements sent while it was not subscribed
@@ -1573,6 +1616,106 @@ mod tests {
         note_failure(&mut broken, &row, "refresh", &bad_data);
 
         assert_eq!(broken, Broken::from([(7, 3)]));
+    }
+
+    /// A change-feed message as the listener would parse it off the wire.
+    fn message(invalidation: crate::invalidate::Invalidation) -> crate::invalidate::Message {
+        crate::invalidate::Message {
+            invalidation,
+            sent_at_ms: Utc::now().timestamp_millis(),
+        }
+    }
+
+    async fn create_pg(pool: &PgPool) -> i64 {
+        catalogs::create(
+            pool,
+            &crate::store::catalogs::NewCatalog {
+                name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            },
+            &crate::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        catalogs::list(pool).await.unwrap()[0].id
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_catalog_invalidation_refreshes_that_catalog() {
+        use crate::invalidate::Invalidation;
+        let db = test_db().await;
+        let id = create_pg(&db.pool).await;
+        let app = app(&db.pool).await;
+        let before = app.catalog("pg").unwrap().current().generation();
+
+        // Written on the pool directly, as another replica would.
+        import_files(&db.pool, "pg", &[("a.md", "# A\n")], false).await;
+        let generation = catalogs::list(&db.pool).await.unwrap()[0].generation;
+        assert!(generation > before);
+        assert_eq!(app.catalog("pg").unwrap().current().generation(), before);
+
+        app.apply(&message(Invalidation::Catalog { id, generation }))
+            .await;
+
+        assert_eq!(
+            app.catalog("pg").unwrap().current().generation(),
+            generation
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_credential_invalidation_reloads_the_key_cache() {
+        use crate::invalidate::Invalidation;
+        let db = test_db().await;
+        let key = new_key(&db.pool, "reader").await;
+        let app = app(&db.pool).await;
+        assert!(app.keys().find(&key).is_some());
+
+        key_rows::revoke(
+            &db.pool,
+            "reader",
+            &crate::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        // Still cached: nothing told this replica.
+        assert!(app.keys().find(&key).is_some());
+
+        app.apply(&message(Invalidation::Credential {
+            key_id: "reader".to_owned(),
+        }))
+        .await;
+
+        assert!(app.keys().find(&key).is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_lost_connection_marks_everything_stale() {
+        let db = test_db().await;
+        create_pg(&db.pool).await;
+        let key = new_key(&db.pool, "reader").await;
+        let app = app(&db.pool).await;
+        let before = app.catalog("pg").unwrap().current().generation();
+
+        import_files(&db.pool, "pg", &[("a.md", "# A\n")], false).await;
+        key_rows::revoke(
+            &db.pool,
+            "reader",
+            &crate::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+
+        // Today's caches have no stale flag: reloading is the equivalent.
+        app.apply_reconnect().await;
+
+        assert!(app.catalog("pg").unwrap().current().generation() > before);
+        assert!(app.keys().find(&key).is_none());
     }
 
     #[tokio::test(flavor = "multi_thread")]

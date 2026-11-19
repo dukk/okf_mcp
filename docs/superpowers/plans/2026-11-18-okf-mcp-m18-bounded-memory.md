@@ -139,7 +139,7 @@
 | `src/cache/credentials.rs` | 11 (create), 12 |
 | `src/cache/labels.rs` | 12 (create) |
 | `src/housekeeping.rs` | 15 (create) |
-| `src/store/catalogs.rs` | 1 (`bump_admin_generation` becomes private to `invalidate`), 2, 5 (`row_by_name`, `rows_by_names`, `page`) |
+| `src/store/catalogs.rs` | 2 (`bump_admin_generation` becomes private to `invalidate`; Task 1 left it `pub(crate)` because the 37 callers remain), 5 (`row_by_name`, `rows_by_names`, `page`) |
 | `src/store/{keys,users,teams,ceiling,settings,unlocks,import,repair,publish}.rs`, `src/store/oauth/{codes,grants}.rs` | 2 |
 | `src/store/{users,keys,teams}.rs`, `src/store/oauth/{codes,grants}.rs`, `src/store/gates.rs`, `src/store/audit.rs` | 3 |
 | `migrations/0022_audit_backfill.sql` | 3 |
@@ -204,7 +204,9 @@ Spec Decisions 10, 12. This task changes no write path (Task 2 does) and no cach
 
 **Files:**
 - Create: `src/invalidate.rs`.
-- Modify: `src/lib.rs`, `src/app.rs`, `src/http/mod.rs`, `src/telemetry/metrics.rs`, `src/store/catalogs.rs`.
+- Modify: `src/lib.rs`, `src/app.rs`, `src/http/mod.rs`, `src/telemetry/metrics.rs`, `src/shared/announce.rs` (uses `Backoff`); also create `src/backoff.rs`.
+
+> **Corrected (issue #679).** `src/store/catalogs.rs` is not touched: `bump_admin_generation` stays `pub(crate)` until Task 2 replaces its 37 callers.
 
 - [ ] **Step 1: Write the failing tests** (`src/invalidate.rs`, `#[cfg(test)] mod tests`)
 
@@ -227,8 +229,8 @@ fn every_kind_round_trips_through_its_payload() {
 
 #[test]
 fn a_payload_of_an_unknown_version_or_kind_does_not_parse() {
-    assert!(Message::parse(r#"{"v":2,"kind":"catalog","id":1,"generation":1}"#).is_none());
-    assert!(Message::parse(r#"{"v":1,"kind":"nope"}"#).is_none());
+    assert!(Message::parse(r#"{"v":2,"at":1,"kind":"catalog","id":1,"generation":1}"#).is_none());
+    assert!(Message::parse(r#"{"v":1,"at":1,"kind":"nope"}"#).is_none());
     assert!(Message::parse("42").is_none());
 }
 
@@ -399,7 +401,7 @@ pub async fn listen(app: Arc<App>, shutdown: CancellationToken) {
             () = shutdown.cancelled() => return,
             connected = connect(app.pool()) => match connected {
                 Ok(listener) => listener,
-                Err(error) => { /* split_event!(warn, ...), sleep backoff.next() or return on cancel */ continue; }
+                Err(error) => { /* split_event!(warn, ...), sleep backoff.next_delay() or return on cancel */ continue; }
             },
         };
         // A fresh connection: anything sent while we had none is lost.
@@ -422,7 +424,7 @@ pub async fn listen(app: Arc<App>, shutdown: CancellationToken) {
 async fn apply_payload(app: &App, payload: &str) {
     match Message::parse(payload) {
         Some(message) => {
-            Metrics::global().invalidation_received(message.invalidation.kind(), lag_of(&message));
+            Metrics::global().invalidation_received(message.invalidation.kind(), message.lag(Utc::now().timestamp_millis()));
             app.apply(&message).instrument(tracing::info_span!(parent: None, "okf.invalidate.apply", okf.invalidation.kind = message.invalidation.kind())).await;
         }
         // Unreadable: treat as a reconnect, for safety (spec "Error handling").
@@ -431,9 +433,11 @@ async fn apply_payload(app: &App, payload: &str) {
 }
 ```
 
-`Backoff` is new: `src/shared/announce.rs` has its 1 s to 30 s backoff inline. Extract it to `src/backoff.rs` (`Backoff::new(first, max)`, `next() -> Duration` doubling to `max`, `reset()`) in this task and use it from both.
+`Backoff` is new: `src/shared/announce.rs` has its 1 s to 30 s backoff inline. Extract it to `src/backoff.rs` (`Backoff::new(first, max)`, `next_delay() -> Duration` doubling to `max`, `reset()`) in this task and use it from both.
 
 - [ ] **Step 3: `App::apply` and `App::apply_reconnect` over today's caches** (`src/app.rs`)
+
+> **Corrected (issue #679).** As built, `apply` sends a `Catalog` message through the existing `refresh_announced` (which already finds the loaded state by id, skips a generation already reached and maps a deleted catalog to `Unknown`), and `apply_reconnect` is `reload_keys_now(false)` plus the existing `catch_up_catalogs` (one list read, refreshing only the catalogs behind). The sketch below is the idea, not the code: read `src/app.rs`. Later tasks that move `apply` onto a cache replace these bodies; they do not need `refresh_catalog_by_id`, which was never created.
 
 ```rust
 /// Applies one change-feed message to this replica's caches.
@@ -459,7 +463,7 @@ pub async fn apply_reconnect(&self) {
 
 `refresh_catalog_by_id` finds the loaded state by id and calls `refresh`; a catalog not loaded is left to the poll (until Task 8). `CatalogMeta` reloading keys is enough today: description and owner are copied in by the poll, which still runs.
 
-- [ ] **Step 4: Metrics** (`src/telemetry/metrics.rs`): `okf.invalidations.sent{kind}` and `okf.invalidations.received{kind}` (counters), `okf.invalidations.unreadable` (counter), `okf.invalidations.lag` (seconds histogram, send to apply; a negative lag from clock skew records 0). Add the new families to `Metrics::FAMILIES`.
+- [ ] **Step 4: Metrics** (`src/telemetry/metrics.rs`; Prometheus names `okf_invalidations_sent_total`, `okf_invalidations_received_total`, `okf_invalidations_unreadable_total`, `okf_invalidations_lag_seconds`): `okf.invalidations.sent{kind}` and `okf.invalidations.received{kind}` (counters), `okf.invalidations.unreadable` (counter), `okf.invalidations.lag` (seconds histogram, send to apply; a negative lag from clock skew records 0). Add the new families to `Metrics::FAMILIES`.
 
 - [ ] **Step 5: Spawn the listener** in `serve` (`src/http/mod.rs`, next to the M16 subscriber at `:660`), and await it in the shutdown sequence like the others. It holds its connection for the life of the process, so it gets its own one-connection pool (`PgPoolOptions::new().max_connections(1)`, same URL and options as the main pool) and `PgListener::connect_with(&listener_pool)`. sqlx's `connect_with` keeps a connection from the pool it is given, so using the main pool would take one request slot away for good. The pool also gives the listener its reconnects. `docs/operations.md`'s per-replica count grows by one in Task 17 (spec Decision 17).
 
