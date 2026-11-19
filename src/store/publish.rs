@@ -25,6 +25,7 @@ use tracing::Instrument;
 use crate::app::App;
 use crate::catalog::{CatalogState, Loaded};
 use crate::error::{ConflictFile, OkfError};
+use crate::invalidate::{invalidate, Invalidation};
 use crate::keyed_lock::KeyedLocks;
 use crate::mcp::blocking;
 use crate::okf::analysis::lint::LintReport;
@@ -292,6 +293,15 @@ async fn publish_locked(
                 }),
             };
             audit::record(&mut tx, audit, &entry, now).await?;
+            // Every replica's listener refreshes the catalog once this commits.
+            invalidate(
+                &mut tx,
+                &[Invalidation::Catalog {
+                    id: state.id(),
+                    generation,
+                }],
+            )
+            .await?;
             changed = Some(CatalogGeneration {
                 catalog_id: state.id(),
                 generation,

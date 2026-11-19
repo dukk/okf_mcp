@@ -19,7 +19,6 @@ use tracing::Instrument;
 use crate::app::App;
 use crate::backoff::Backoff;
 use crate::error::OkfError;
-use crate::store::catalogs;
 use crate::telemetry::metrics::Metrics;
 use crate::telemetry::subscriber::split_event;
 
@@ -115,6 +114,62 @@ impl Invalidation {
         .expect("an Invalidation always serializes")
     }
 
+    /// The invalidation of one key or grant.
+    ///
+    /// # Arguments
+    /// * `key_id` - its `api_keys.id`.
+    ///
+    /// # Returns
+    /// [`Invalidation::Credential`] for it.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn credential(key_id: &str) -> Self {
+        Self::Credential {
+            key_id: key_id.to_owned(),
+        }
+    }
+
+    /// The invalidation of one user.
+    ///
+    /// # Arguments
+    /// * `id` - its `users.id`.
+    ///
+    /// # Returns
+    /// [`Invalidation::User`] for it.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn user(id: &str) -> Self {
+        Self::User { id: id.to_owned() }
+    }
+
+    /// The invalidation of one team.
+    ///
+    /// # Arguments
+    /// * `id` - its `teams.id`.
+    ///
+    /// # Returns
+    /// [`Invalidation::Team`] for it.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn team(id: &str) -> Self {
+        Self::Team { id: id.to_owned() }
+    }
+
     /// The serde tag (`"catalog"`, ...), for metric labels and span fields.
     ///
     /// # Returns
@@ -180,7 +235,20 @@ impl Message {
 /// Records `invalidations` in the caller's transaction (counted as
 /// `okf.invalidations.queued`, since only the commit delivers them): bumps
 /// `admin_generation` once and sends one `NOTIFY` per invalidation, which
-/// Postgres delivers at commit and drops on rollback.
+/// Postgres delivers at commit and drops on rollback. Every store function
+/// that changes what a replica caches calls this, so the server, the
+/// command line and any other writer are covered alike.
+///
+/// The bump locks the `server_state` row until the commit, so it sits in
+/// the writer's lock order where the writer calls this: after its users,
+/// teams, catalogs and changesets, before the rest (`lessons.md`). Call it
+/// on the paths that write, and only after the people are locked.
+///
+/// A list of only [`Invalidation::Catalog`] (a publish, import or repair)
+/// does not bump: those were never administrative changes, the poll loop
+/// sees them through the catalog's own generation, and a bump would make
+/// every publish wait on the one `server_state` row and reload every
+/// replica's key cache.
 ///
 /// # Arguments
 /// * `conn` - the writer's transaction (`&mut tx`).
@@ -194,10 +262,13 @@ pub async fn invalidate(
     conn: &mut PgConnection,
     invalidations: &[Invalidation],
 ) -> Result<(), OkfError> {
-    if invalidations.is_empty() {
-        return Ok(());
+    // `matches!` is a pattern test that answers a bool.
+    if invalidations
+        .iter()
+        .any(|invalidation| !matches!(invalidation, Invalidation::Catalog { .. }))
+    {
+        bump_admin_generation(&mut *conn).await?;
     }
-    catalogs::bump_admin_generation(&mut *conn).await?;
     let now = Utc::now().timestamp_millis();
     let metrics = Metrics::global();
     for invalidation in invalidations {
@@ -208,6 +279,23 @@ pub async fn invalidate(
             .await?;
         metrics.invalidation_queued(invalidation.kind());
     }
+    Ok(())
+}
+
+/// Bumps `server_state.admin_generation` inside the caller's transaction,
+/// locking that row until the commit. Only [`invalidate`] calls it, so no
+/// administrative change can bump without telling the other replicas.
+///
+/// # Arguments
+/// * `conn` - the transaction's connection.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "invalidate.bump_admin_generation"))]
+async fn bump_admin_generation(conn: &mut PgConnection) -> Result<(), OkfError> {
+    sqlx::query("UPDATE server_state SET admin_generation = admin_generation + 1")
+        .execute(&mut *conn)
+        .await?;
     Ok(())
 }
 
@@ -381,10 +469,77 @@ async fn apply_payload(app: &App, payload: &str) -> Option<Duration> {
     Some(lag)
 }
 
+/// Test helpers: what a write sends on the change feed.
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::future::Future;
+    use std::time::Duration;
+
+    use sqlx::postgres::PgListener;
+    use sqlx::PgPool;
+
+    use super::{Invalidation, Message, CHANNEL};
+
+    /// The payload that marks the end of a write's messages: not JSON, so
+    /// no message can look like it.
+    const END: &str = "invalidations_of:end";
+
+    /// Longest the helper waits for the end marker.
+    const WAIT: Duration = Duration::from_secs(30);
+
+    /// Listens on the change feed, runs `write`, and returns every message
+    /// its transactions committed, in order (empty if it rolled back).
+    /// After `write` finishes, it sends an end marker in a transaction of
+    /// its own: Postgres delivers notifications in commit order, so every
+    /// message the write committed arrives before it, and nothing waits a
+    /// fixed time.
+    ///
+    /// # Arguments
+    /// * `pool` - the test database (each test has its own, so no other
+    ///   test's messages arrive).
+    /// * `write` - the write, an `async { .. }` block. A Rust future does
+    ///   nothing until it is awaited, so it runs only once the listener is
+    ///   subscribed.
+    ///
+    /// # Returns
+    /// The invalidations delivered, in commit order.
+    ///
+    /// # Panics
+    /// When the end marker does not arrive within 30 s, or on a payload
+    /// that does not parse.
+    pub(crate) async fn invalidations_of(
+        pool: &PgPool,
+        write: impl Future<Output = ()>,
+    ) -> Vec<Invalidation> {
+        let mut listener = PgListener::connect_with(pool).await.expect("listener");
+        listener.listen(CHANNEL).await.expect("LISTEN");
+        write.await;
+        sqlx::query("SELECT pg_notify($1, $2)")
+            .bind(CHANNEL)
+            .bind(END)
+            .execute(pool)
+            .await
+            .expect("send the end marker");
+        let mut got = Vec::new();
+        loop {
+            let notification = tokio::time::timeout(WAIT, listener.recv())
+                .await
+                .expect("the end marker within the wait")
+                .expect("receive a notification");
+            if notification.payload() == END {
+                return got;
+            }
+            let message = Message::parse(notification.payload()).expect("a readable payload");
+            got.push(message.invalidation);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::pg_support::TestDb;
+    use crate::store::catalogs;
     use tokio::time::timeout;
 
     /// Longest a test waits for a notification.
@@ -517,6 +672,34 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_catalog_invalidation_alone_sends_without_bumping_or_locking_the_generation() {
+        let db = TestDb::start_migrated().await;
+        let before = catalogs::admin_generation(&db.pool).await.unwrap();
+        // Another transaction holds the generation row: a bump would wait
+        // on it, so the publish below finishing proves it took no lock.
+        let mut holder = db.pool.begin().await.unwrap();
+        invalidate(&mut holder, &[Invalidation::Settings])
+            .await
+            .unwrap();
+        let catalog = Invalidation::Catalog {
+            id: 7,
+            generation: 3,
+        };
+        let got = testing::invalidations_of(&db.pool, async {
+            let mut tx = db.pool.begin().await.unwrap();
+            timeout(WAIT, invalidate(&mut tx, std::slice::from_ref(&catalog)))
+                .await
+                .expect("a catalog invalidation does not wait on the generation row")
+                .unwrap();
+            tx.commit().await.unwrap();
+        })
+        .await;
+        holder.rollback().await.unwrap();
+        assert_eq!(got, [catalog]);
+        assert_eq!(catalogs::admin_generation(&db.pool).await.unwrap(), before);
+    }
+
     /// A running listener on a fresh app with one key, caught up and
     /// subscribed: the test waits for the listener's own catch-up signal.
     struct Running {
@@ -574,18 +757,18 @@ mod tests {
                 .unwrap_or_else(|_| panic!("timed out waiting for {what}"));
         }
 
-        /// Revokes the key in the store, which bumps `admin_generation`
-        /// but sends nothing.
+        /// Revokes the key and bumps `admin_generation` but sends nothing,
+        /// as a writer from before the change feed would: only a catch-up
+        /// can remove the key then. (The store's `keys::revoke` now sends a
+        /// `credential` message, which the listener could apply first.)
         async fn revoke_silently(&self) {
-            use crate::store::keys as key_rows;
-            key_rows::revoke(
-                &self.db.pool,
-                "reader",
-                &crate::store::audit::AuditActor::cli(),
-                Utc::now(),
-            )
-            .await
-            .unwrap();
+            let mut tx = self.db.pool.begin().await.unwrap();
+            sqlx::query("UPDATE api_keys SET revoked_at = now() WHERE id = 'reader'")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            bump_admin_generation(&mut tx).await.unwrap();
+            tx.commit().await.unwrap();
             assert!(self.app.keys().find(&self.key).is_some());
         }
 

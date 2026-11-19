@@ -9,9 +9,10 @@ use serde_json::json;
 use sqlx::{PgConnection, PgPool};
 
 use crate::error::OkfError;
+use crate::invalidate::{invalidate, Invalidation};
 use crate::labels::DisplayName;
 use crate::store::audit::{self, Action, AuditActor, Entry, People, RowLock, Target};
-use crate::store::catalogs::{bump_admin_generation, is_unique_violation, is_valid_name};
+use crate::store::catalogs::{is_unique_violation, is_valid_name};
 use crate::store::changesets::{self, ChangesetState};
 use crate::store::user_sessions;
 
@@ -250,7 +251,11 @@ pub async fn create(
     .bind(now)
     .execute(&mut *tx)
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(
+        &mut tx,
+        &[Invalidation::user(&user_id), Invalidation::team(&team_id)],
+    )
+    .await?;
     audit::record(
         &mut tx,
         actor,
@@ -687,7 +692,7 @@ pub async fn set_email(
             .await?;
         // The key cache holds every user's email for console sessions
         // (`auth_by_id`), so a change reloads it.
-        bump_admin_generation(&mut tx).await?;
+        invalidate(&mut tx, &[Invalidation::user(&user_id)]).await?;
         // Never the address: only that it changed (spec "People in entries").
         let details = json!({ "cleared": email.is_none() });
         audit::record(
@@ -754,7 +759,7 @@ pub async fn set_display_name(
         // Dropping `tx` rolls back the `UPDATE`, which wrote the same text.
         return Ok(());
     }
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::user(&user_id)]).await?;
     // The length in characters, never the text (spec "People in entries").
     let details = json!({ "length": display_name.as_str().chars().count() });
     audit::record(
@@ -847,7 +852,7 @@ pub async fn set_admin(
         .await?;
     // The session store owns its SQL; `&mut *tx` runs it in this transaction.
     user_sessions::revoke_all(&mut *tx, &user_id, None).await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::user(&user_id)]).await?;
     let details = json!({ "from": previous, "to": on });
     audit::record(
         &mut tx,
@@ -1207,6 +1212,14 @@ pub async fn delete(
         now,
     )
     .await?;
+    // Every team the user is in (its personal team included), read before
+    // the deletes below cascade the memberships: each loses a member. No
+    // lock: a membership added concurrently waits on the user row we hold.
+    let member_of: Vec<String> =
+        sqlx::query_scalar("SELECT team_id FROM team_members WHERE user_id = $1 ORDER BY team_id")
+            .bind(&user_id)
+            .fetch_all(&mut *tx)
+            .await?;
     // The team row goes before the user row, because `teams.personal_of`
     // restricts the user's delete; its memberships cascade with it.
     if let Some(team_id) = &team_id {
@@ -1224,7 +1237,13 @@ pub async fn delete(
         .bind(&user_id)
         .execute(&mut *tx)
         .await?;
-    bump_admin_generation(&mut tx).await?;
+    // The user, each of its keys and grants (the cascade revoked them all),
+    // and each team it was in.
+    let invalidations: Vec<Invalidation> = std::iter::once(Invalidation::user(&user_id))
+        .chain(keys.iter().map(|key| Invalidation::credential(key)))
+        .chain(member_of.iter().map(|team| Invalidation::team(team)))
+        .collect();
+    invalidate(&mut tx, &invalidations).await?;
     tx.commit().await?;
     Ok(deleted)
 }

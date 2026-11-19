@@ -8,6 +8,7 @@ use sqlx::{PgConnection, PgPool};
 
 use crate::archive::Files;
 use crate::error::OkfError;
+use crate::invalidate::{invalidate, Invalidation};
 use crate::okf::analysis::lint::{lint, LintReport};
 use crate::okf::rules::is_machinery;
 use crate::okf::snapshot::Snapshot;
@@ -309,6 +310,14 @@ pub async fn import(
                 }),
             },
             now,
+        )
+        .await?;
+        invalidate(
+            &mut tx,
+            &[Invalidation::Catalog {
+                id: found.id,
+                generation,
+            }],
         )
         .await?;
         report.changed = Some(CatalogGeneration {

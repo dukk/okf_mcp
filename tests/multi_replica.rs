@@ -1,6 +1,9 @@
 //! Two replicas over one Postgres and one Redis (milestone 16). Every test
 //! sets `poll_interval = 1h` (`TestServer::start_shared`): what passes was
-//! carried by Redis announcements, not by the poll loop. The MCP session
+//! carried by Redis announcements or by the change feed (`NOTIFY`, milestone
+//! 18), not by the poll loop. The change-feed tests write through the store
+//! on the pool, as the command line does, so no Redis announcement is sent
+//! and only `NOTIFY` can carry the change. The MCP session
 //! tests (milestone 16 Task 5) open a session on one replica and use it, or
 //! are refused, on the other.
 
@@ -858,4 +861,103 @@ async fn housekeeping_runs_each_slot_once_across_two_serving_replicas() {
         );
     }
     assert!(stats.is_some(), "the cluster_stats job wrote its row");
+}
+
+// ---- The change feed (milestone 18 Task 2) ----
+
+/// A catalog imported through the store on the pool, as `okf-mcp import`
+/// does, announces nothing over Redis: both replicas serve the new
+/// generation because the import's transaction sent a `catalog` `NOTIFY`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_catalog_imported_through_the_store_is_served_on_both_replicas() {
+    let redis = TestRedis::start().await;
+    let (a, b, _admin) = pair(&redis).await;
+    let before = a.app.catalog("main").expect("main").current().generation();
+    let audit = AuditActor::cli();
+    let options = okf_mcp::store::import::ImportOptions {
+        replace: true,
+        scope: okf_mcp::store::import::ImportScope::Everything,
+        expect_generation: None,
+        expect_catalog_id: None,
+        actor: "test/import",
+        audit: &audit,
+        now: Utc::now(),
+    };
+    let report = okf_mcp::store::import::import(
+        &a.db.pool,
+        "main",
+        files(&[("b.md", "---\ntype: Note\n---\n# B\n")]),
+        &options,
+    )
+    .await
+    .expect("import");
+    let generation = report.changed.expect("the import wrote").generation;
+    assert!(generation > before);
+
+    let at = |app: &okf_mcp::app::App| {
+        app.catalog("main")
+            .is_some_and(|state| state.current().generation() == generation)
+    };
+    eventually("A serves the imported generation", || at(&a.app)).await;
+    eventually("B serves the imported generation", || at(&b.app)).await;
+}
+
+/// Revokes `key` through the store on the pool, as `okf-mcp key revoke`
+/// does: no `settle`, no poll, no Redis announcement.
+async fn revoke_through_the_store(a: &TestServer, key: &str) {
+    let id = a.app.keys().find(key).expect("cached").key_id.clone();
+    keys::revoke_by_id(&a.db.pool, &id, &AuditActor::cli(), Utc::now())
+        .await
+        .expect("revoke");
+}
+
+/// The case milestone 16 could not cover without the poll: a revocation
+/// made outside any server reaches both replicas through `NOTIFY` alone.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_key_revoked_through_the_store_is_refused_on_the_other_replica() {
+    let redis = TestRedis::start().await;
+    let (a, b, _admin) = pair(&redis).await;
+    let key = a.key("reader", Access::Read, &[], None).await;
+    eventually("B knows the key", || b.app.keys().find(&key).is_some()).await;
+
+    revoke_through_the_store(&a, &key).await;
+
+    eventually("B refuses the key", || b.app.keys().find(&key).is_none()).await;
+    eventually("A refuses the key", || a.app.keys().find(&key).is_none()).await;
+}
+
+/// Ends every change-feed `LISTEN` backend of the test's database (both
+/// replicas'), as a dropped connection would.
+///
+/// # Returns
+/// How many it ended.
+async fn kill_listener_connections(pool: &sqlx::PgPool) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+         WHERE query LIKE 'LISTEN%' AND query LIKE '%okf_invalidate%' \
+               AND datname = current_database() AND pid <> pg_backend_pid()) t",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("end the listener backends")
+}
+
+/// A listener whose connection was killed reconnects and catches up, so a
+/// revocation made through the store right after is still refused on B,
+/// whether B hears its `NOTIFY` or reads it in the catch-up.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_killed_listener_connection_reloads_on_reconnect() {
+    let redis = TestRedis::start().await;
+    let (a, b, _admin) = pair(&redis).await;
+    let key = a.key("reader", Access::Read, &[], None).await;
+    eventually("B knows the key", || b.app.keys().find(&key).is_some()).await;
+
+    let ended = kill_listener_connections(&a.db.pool).await;
+    assert!(ended >= 1, "at least B's listener backend was ended");
+    revoke_through_the_store(&a, &key).await;
+
+    eventually("B refuses the key after reconnecting", || {
+        b.app.keys().find(&key).is_none()
+    })
+    .await;
 }

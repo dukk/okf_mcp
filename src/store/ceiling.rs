@@ -12,8 +12,9 @@ use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::auth::{Principal, Reach};
 use crate::error::OkfError;
+use crate::invalidate::{invalidate, Invalidation};
 use crate::store::audit::{self, Action, AuditActor, Entry, People, RowLock};
-use crate::store::catalogs::{self, bump_admin_generation, CatalogEvent};
+use crate::store::catalogs::{self, CatalogEvent};
 use crate::store::keys::Access;
 use crate::store::users;
 
@@ -317,16 +318,16 @@ pub async fn set_member_access(
     .await?;
     // As in `catalogs::set_owner`: the subquery reads the row as it was,
     // under its row lock, so this returns the value it replaced.
-    let previous: Option<(i64, String)> = sqlx::query_as(
+    let previous: Option<(i64, String, Option<String>)> = sqlx::query_as(
         "UPDATE catalogs c SET member_access = $2 \
          FROM (SELECT id, member_access FROM catalogs WHERE name = $1 FOR UPDATE) old \
-         WHERE c.id = old.id RETURNING c.id, old.member_access",
+         WHERE c.id = old.id RETURNING c.id, old.member_access, c.owner_team_id",
     )
     .bind(catalog)
     .bind(access.as_str())
     .fetch_optional(&mut *tx)
     .await?;
-    let (catalog_id, previous) = previous.ok_or_else(|| unknown_catalog(catalog))?;
+    let (catalog_id, previous, owner_team_id) = previous.ok_or_else(|| unknown_catalog(catalog))?;
     let previous =
         MemberAccess::parse(&previous).expect("the schema checks catalogs.member_access");
     if previous != access {
@@ -342,7 +343,13 @@ pub async fn set_member_access(
             now,
         )
         .await?;
-        bump_admin_generation(&mut tx).await?;
+        // The catalog, and its owner team's members' reach.
+        let mut invalidations = vec![Invalidation::CatalogMeta {
+            id: catalog_id,
+            name: catalog.to_string(),
+        }];
+        invalidations.extend(owner_team_id.map(|id| Invalidation::Team { id }));
+        invalidate(&mut tx, &invalidations).await?;
     }
     tx.commit().await?;
     Ok(previous)
@@ -443,7 +450,7 @@ pub async fn entitle(
     let Some(inserted) = inserted else {
         return Ok(());
     };
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::user(&user_id)]).await?;
     // There are two levels, so a changed level was the other one.
     let previous = match (inserted, access) {
         (true, _) => None,
@@ -499,7 +506,7 @@ pub async fn unentitle(
         .execute(&mut *tx)
         .await?;
     if removed.rows_affected() != 0 {
-        bump_admin_generation(&mut tx).await?;
+        invalidate(&mut tx, &[Invalidation::user(&user_id)]).await?;
         let details = json!({ "catalog": catalog });
         // The entry belongs to the catalog's owner team, as a catalog event does.
         let teams = audit::catalog_teams(&mut tx, catalog_id).await?;

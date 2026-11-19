@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::error::OkfError;
+use crate::invalidate::{invalidate, Invalidation};
 use crate::labels::DisplayName;
 use crate::okf::ops::replay::ROOT_HEADING;
 use crate::okf::ops::starter_files;
@@ -187,7 +188,17 @@ pub async fn create(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(
+        &mut tx,
+        &[
+            Invalidation::CatalogMeta {
+                id: catalog.id,
+                name: catalog.name.clone(),
+            },
+            Invalidation::Team { id: team_id },
+        ],
+    )
+    .await?;
     tx.commit().await?;
     Ok(catalog)
 }
@@ -295,20 +306,21 @@ pub async fn set_owner(
     // replaced even with two changes racing. The outer `Option` is "no such
     // catalog"; the old owner's id and name are `None` for a catalog that
     // had none.
-    let previous: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+    let previous: Option<(i64, Option<String>, Option<String>)> = sqlx::query_as(
         "UPDATE catalogs c SET owner_team_id = $2 \
          FROM (SELECT id, owner_team_id FROM catalogs WHERE name = $1 FOR UPDATE) old \
          WHERE c.id = old.id \
-         RETURNING old.owner_team_id, \
+         RETURNING c.id, old.owner_team_id, \
                    (SELECT t.name FROM teams t WHERE t.id = old.owner_team_id)",
     )
     .bind(name)
     .bind(&team_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (previous_id, previous) = previous.ok_or_else(|| OkfError::CatalogNotSelected {
-        catalog: name.to_string(),
-    })?;
+    let (catalog_id, previous_id, previous) =
+        previous.ok_or_else(|| OkfError::CatalogNotSelected {
+            catalog: name.to_string(),
+        })?;
     if previous_id.as_deref() == Some(team_id.as_str()) {
         // Dropping `tx` rolls back the `UPDATE`, which wrote the same value.
         return Ok(previous);
@@ -334,7 +346,14 @@ pub async fn set_owner(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    // The catalog, and both owners: each team's catalogs changed.
+    let mut invalidations = vec![Invalidation::CatalogMeta {
+        id: catalog_id,
+        name: name.to_string(),
+    }];
+    invalidations.extend(previous_id.map(|id| Invalidation::Team { id }));
+    invalidations.push(Invalidation::Team { id: team_id });
+    invalidate(&mut tx, &invalidations).await?;
     tx.commit().await?;
     Ok(previous)
 }
@@ -502,7 +521,14 @@ pub async fn update_details(
         )
         .await?;
     }
-    bump_admin_generation(&mut tx).await?;
+    invalidate(
+        &mut tx,
+        &[Invalidation::CatalogMeta {
+            id: catalog_id,
+            name: name.to_string(),
+        }],
+    )
+    .await?;
     tx.commit().await?;
     Ok(previous)
 }
@@ -739,7 +765,14 @@ pub async fn set_maintenance(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(
+        &mut tx,
+        &[Invalidation::CatalogMeta {
+            id: catalog_id,
+            name: name.to_string(),
+        }],
+    )
+    .await?;
     tx.commit().await?;
     Ok(previous)
 }
@@ -1045,12 +1078,12 @@ pub async fn delete(
     lock(&mut tx, catalog.id).await?;
     // A delete that waited on the lock may find the row already gone. The
     // generation is the one no publish can move any more.
-    let still_there: Option<i64> =
-        sqlx::query_scalar("SELECT generation FROM catalogs WHERE id = $1 FOR UPDATE")
+    let still_there: Option<(i64, Option<String>)> =
+        sqlx::query_as("SELECT generation, owner_team_id FROM catalogs WHERE id = $1 FOR UPDATE")
             .bind(catalog.id)
             .fetch_optional(&mut *tx)
             .await?;
-    let Some(generation) = still_there else {
+    let Some((generation, owner_team_id)) = still_there else {
         return Err(OkfError::CatalogNotSelected {
             catalog: name.to_string(),
         });
@@ -1097,7 +1130,13 @@ pub async fn delete(
         .bind(catalog.id)
         .execute(&mut *tx)
         .await?;
-    bump_admin_generation(&mut tx).await?;
+    // The catalog, and its owner's list of catalogs.
+    let mut invalidations = vec![Invalidation::CatalogMeta {
+        id: catalog.id,
+        name: catalog.name,
+    }];
+    invalidations.extend(owner_team_id.map(|id| Invalidation::Team { id }));
+    invalidate(&mut tx, &invalidations).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -1241,21 +1280,6 @@ pub fn check_incarnation(catalog: &str, found: i64, expected: Option<i64>) -> Re
         }),
         Some(_) | None => Ok(()),
     }
-}
-
-/// Bumps `server_state.admin_generation` inside the caller's transaction.
-///
-/// # Arguments
-/// * `conn` - the transaction's connection (pass `&mut tx`).
-///
-/// # Errors
-/// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.bump_admin_generation"))]
-pub(crate) async fn bump_admin_generation(conn: &mut PgConnection) -> Result<(), OkfError> {
-    sqlx::query("UPDATE server_state SET admin_generation = admin_generation + 1")
-        .execute(&mut *conn)
-        .await?;
-    Ok(())
 }
 
 /// The current administrative generation (design "Noticing changes made

@@ -1542,7 +1542,12 @@ mod publish_tests {
             .unwrap();
         // A key change moves `admin_generation`, so the poll reloads the cache.
         let mut conn = test.app.pool().acquire().await.unwrap();
-        catalogs::bump_admin_generation(&mut conn).await.unwrap();
+        crate::invalidate::invalidate(
+            &mut conn,
+            &[crate::invalidate::Invalidation::credential("some-key")],
+        )
+        .await
+        .unwrap();
         drop(conn);
 
         test.app.poll().await.unwrap();
@@ -1681,6 +1686,45 @@ mod publish_tests {
         assert!(
             !message.contains(&format!("changeset {} ", stale.id)),
             "{message}"
+        );
+    }
+
+    /// A publish sends its catalog's new generation on the change feed
+    /// (milestone 18 Task 2), without bumping `admin_generation`; a publish
+    /// that writes nothing sends nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_publish_invalidates_its_catalog_at_the_new_generation() {
+        use crate::invalidate::{testing::invalidations_of, Invalidation};
+        let test = pg().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let pool = test.app.pool();
+        let catalog = catalogs::find(pool, "pg").await.unwrap();
+        let admin_before = catalogs::admin_generation(pool).await.unwrap();
+        let handle = open(&ctx).await;
+        body(&ctx, &handle, "/a.md", "# A\n\nNew.\n").await;
+
+        let got = invalidations_of(pool, async {
+            publish_as(&ctx, &handle, "edit a").await.unwrap();
+        })
+        .await;
+        let empty = open(&ctx).await;
+        let nothing = invalidations_of(pool, async {
+            publish_as(&ctx, &empty, "nothing").await.unwrap();
+        })
+        .await;
+
+        assert_eq!(
+            got,
+            [Invalidation::Catalog {
+                id: catalog.id,
+                generation: catalog.generation + 1,
+            }]
+        );
+        assert_eq!(nothing, []);
+        assert_eq!(
+            catalogs::admin_generation(pool).await.unwrap(),
+            admin_before,
+            "a publish is not an administrative change"
         );
     }
 
