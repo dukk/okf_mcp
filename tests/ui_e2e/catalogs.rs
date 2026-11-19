@@ -988,3 +988,73 @@ async fn an_older_list_read_that_answers_late_never_redraws_the_catalogs_table()
     })
     .await;
 }
+
+/// M18 Task 10: the catalogs page draws the first page (100) and a Load
+/// more control; the rows drawn keep their cursor while an older reload
+/// answers late and a newer one fails, and Load more then appends the next
+/// page once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_catalogs_page_loads_more_and_keeps_its_cursor_when_reloads_fail() {
+    // `c000` to `c100` and `main`: 102 catalogs, so the first page ends at
+    // `c099` and the second holds `c100` and `main`.
+    let names: Vec<String> = (0..=100).map(|index| format!("c{index:03}")).collect();
+    let mut catalogs: Vec<(&str, _)> = names
+        .iter()
+        .map(|name| (name.as_str(), files(&[])))
+        .collect();
+    catalogs.push(("main", files(&[("index.md", "# Main\n")])));
+    let server = TestServer::start(catalogs, Config::default()).await;
+    let key = server
+        .key("console-root", Access::Admin, &[], Some("main"))
+        .await;
+    drive(server.base.clone(), move |ui| {
+        let count = |selector: &str| {
+            ui.eval(
+                "(selector) => document.querySelectorAll(selector).length",
+                json!(selector),
+            )
+        };
+        let create = |name: &str| {
+            ui.click("#catalog-create");
+            ui.wait_visible("#catalog-create-form select[name=owner]");
+            ui.fill("#catalog-create-form input[name=name]", name);
+            ui.select("#catalog-create-form select[name=owner]", OWNER);
+        };
+        ui.login(&key);
+        ui.open("/catalogs");
+        ui.wait_visible("[data-catalog=c000]");
+        ui.wait_visible("#catalogs-more");
+        assert_eq!(count("span[data-catalog]"), json!(100), "one page drawn");
+        assert!(!ui.present("[data-catalog=main]"));
+
+        // The list read after creating `n-one` answers late; the one after
+        // creating `n-two` fails. Neither may take the rows' cursor away.
+        create("n-one");
+        ui.hold_answer("GET", "/api/v1/catalogs", || {
+            ui.click("#catalog-create-form button[type=submit]")
+        });
+        create("n-two");
+        ui.fail_next("GET", "/api/v1/catalogs", 503, "the list is away");
+        ui.click("#catalog-create-form button[type=submit]");
+        ui.wait_visible("#catalogs-stale");
+        ui.release_held();
+        ui.wait_visible("#catalogs-more");
+        assert_eq!(
+            count("span[data-catalog]"),
+            json!(100),
+            "the rows drawn stay"
+        );
+
+        ui.click("#catalogs-more");
+        ui.wait_visible("[data-catalog=n-two]");
+
+        // c100, main, n-one and n-two, appended once.
+        assert_eq!(count("span[data-catalog]"), json!(104));
+        assert_eq!(count("[data-catalog=c099]"), json!(1));
+        assert_eq!(count("[data-catalog=main]"), json!(1));
+        ui.wait_hidden("#catalogs-more");
+        // The first page still comes from the read before the failed one.
+        ui.wait_visible("#catalogs-stale");
+    })
+    .await;
+}

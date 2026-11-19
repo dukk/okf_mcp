@@ -270,7 +270,8 @@ async fn a_failed_labels_read_keeps_the_console_open_and_clears_stale_labels() {
         ui.wait_text("#catalog-select", "Work Notes");
         // The next /labels read fails with a 503; /session and /whoami
         // still answer. The identity refresh must still finish, quietly.
-        ui.fail_next("GET", "/api/v1/labels", 503, "labels are away");
+        // The shell reads every page, the first with the largest page size.
+        ui.fail_next("GET", "/api/v1/labels?limit=1000", 503, "labels are away");
         let done = ui.eval(
             "async () => { \
                const shell = await import('/ui/js/core/shell.js'); \

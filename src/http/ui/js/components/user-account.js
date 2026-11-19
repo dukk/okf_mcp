@@ -33,7 +33,7 @@ const NEEDS_EVERY_CATALOG = 'Changing how a user signs in needs an admin key tha
 export async function loadAccount(name) {
     const base = `/users/${enc(name)}`;
     const [{ sessions }, { sign_ins: signIns }, { catalogs }] = await Promise.all([
-        api.get(`${base}/sessions`), api.get(`${base}/sign-ins`), api.get('/catalogs')]);
+        api.get(`${base}/sessions`), api.get(`${base}/sign-ins`), api.pages('/catalogs', 'catalogs')]);
     return { sessions, signIns, catalogs: catalogs.map(row => row.name) };
 }
 

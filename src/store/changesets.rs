@@ -1001,6 +1001,43 @@ mod tests {
         assert!(no_catalogs.is_empty());
     }
 
+    /// M18 Task 10: the list without a catalog, narrowed by name in SQL.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn open_for_catalogs_narrows_by_name_or_lists_every_catalog() {
+        let db = test_db().await;
+        let pg = setup(&db.pool).await;
+        let first = opened(&db.pool, pg, "alice", now() - TimeDelta::hours(1)).await;
+        let second = opened(&db.pool, pg, "alice", now()).await;
+        let names =
+            |list: &[&str]| -> Vec<String> { list.iter().map(|name| (*name).to_owned()).collect() };
+
+        let every = open_for_catalogs(&db.pool, None, None).await.unwrap();
+        let named = open_for_catalogs(&db.pool, Some(&names(&["pg", "nope"])), None)
+            .await
+            .unwrap();
+        let other = open_for_catalogs(&db.pool, Some(&names(&["work"])), None)
+            .await
+            .unwrap();
+        let malformed = open_for_catalogs(&db.pool, Some(&names(&["p\0g", "P G"])), None)
+            .await
+            .unwrap();
+        let none = open_for_catalogs(&db.pool, Some(&[]), None).await.unwrap();
+        let by_other_key = open_for_catalogs(&db.pool, None, Some("nobody"))
+            .await
+            .unwrap();
+
+        let ids: Vec<i64> = every.iter().map(|row| row.changeset.id).collect();
+        assert_eq!(ids, [first.id, second.id]);
+        assert_eq!(named, every);
+        assert!(other.is_empty());
+        assert!(
+            malformed.is_empty(),
+            "a NUL matches nothing and fails nothing"
+        );
+        assert!(none.is_empty());
+        assert!(by_other_key.is_empty());
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn prune_discards_only_empty_changesets_idle_past_the_cutoff() {
         let db = test_db().await;

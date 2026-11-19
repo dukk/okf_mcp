@@ -341,6 +341,47 @@ mod tests {
         assert_eq!(admins.selection, ["main", "other"], "and selects both");
     }
 
+    /// M18 Task 10: `after` continues the list by name, narrowed as the
+    /// first page is, and a malformed one is refused.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn after_continues_the_list_and_a_malformed_one_is_refused() {
+        use crate::cache::directory::cursor_of;
+        let test = app_with(
+            &[("pg", &[]), ("work", &[]), ("home", &[])],
+            Config::default(),
+        )
+        .await;
+        let every = principal(&[], None);
+
+        let after_home = list(
+            &context(&test, Arc::clone(&every), None),
+            Some(&cursor_of("home")),
+        )
+        .await
+        .unwrap();
+        let narrowed = list(
+            &context(&test, Arc::clone(&every), Some(&["work", "home"])),
+            Some(&cursor_of("pg")),
+        )
+        .await
+        .unwrap();
+        let refused = list(&context(&test, every, None), Some("not a cursor")).await;
+
+        let names: Vec<&str> = after_home
+            .catalogs
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(names, ["pg", "work"]);
+        assert_eq!(after_home.next, None);
+        let names: Vec<&str> = narrowed.catalogs.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["work"], "the connection's list still narrows it");
+        assert!(
+            matches!(&refused, Err(OkfError::InvalidPath { path, .. }) if path == "after"),
+            "{refused:?}"
+        );
+    }
+
     #[test]
     fn the_server_lists_the_tool() {
         let tools = OkfServer::tools().list_all();

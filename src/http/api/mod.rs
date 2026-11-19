@@ -38,6 +38,8 @@ mod keys;
 mod labels;
 #[cfg(test)]
 mod labels_tests;
+#[cfg(test)]
+mod listing_tests;
 mod mail;
 mod maintenance;
 #[cfg(test)]

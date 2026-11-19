@@ -119,7 +119,7 @@ pub fn page_size(limit: Option<u32>) -> u32 {
         reason = "trivial accessor or conversion: maps a value, no I/O"
     )
 )]
-fn cursor_of(name: &str) -> String {
+pub(crate) fn cursor_of(name: &str) -> String {
     URL_SAFE_NO_PAD.encode(name)
 }
 
@@ -880,3 +880,8 @@ mod tests {
         assert!(directory.resolve("P G").await.unwrap().is_none());
     }
 }
+
+// Its own file: the listing's tests (M18 Task 10).
+#[cfg(test)]
+#[path = "directory_listing_tests.rs"]
+mod listing_tests;
