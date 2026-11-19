@@ -1,7 +1,7 @@
 # M18 task 9: overlays weighed in bytes (issue #687)
 
 ## Added
-- `overlay_cache_bytes` (default 256 MiB): the most memory the changeset overlays may take, estimated with the catalog snapshot weigher (`cache::catalogs::weight`) over the overlay's own files, so an overlay of many empty files is not free.
+- `overlay_cache_bytes` (default 256 MiB): the most memory the changeset overlays may take, estimated with the catalog snapshot weigher (`cache::catalogs::weight`) over the overlay's whole workspace (the base's files plus the pending entries), so an overlay of many empty files is not free.
 - `Bounded::with_idle` (time to idle) and `Bounded::insert`; `MemWorkspace::totals`.
 - Overlays report `okf.cache.*` with `cache="overlay"`.
 
@@ -11,5 +11,5 @@
 
 ## Notes
 - An `Overlay` is immutable, so its weight is computed once at build; every path that grows an overlay builds a new one (a changeset write bumps the version, a publish moves the generation) and goes through `store`.
-- The base snapshot an overlay pins is not counted in its weight: the catalog cache weighs it while it is cached. A superseded base held only by an overlay is not counted (bounded by the number of cached overlays).
+- The `Arc<Loaded>` base an overlay pins is not charged again (its snapshot): the catalog cache weighs it while it is cached. A superseded base held only by an overlay is not counted (bounded by the number of cached overlays).
 - Which overlay moka drops over budget follows its admission policy, not strict LRU.

@@ -268,9 +268,10 @@ fn built_at(overlay: &Overlay) -> (i64, i64) {
     (overlay.base.generation(), overlay.version)
 }
 
-/// What an overlay costs in the cache: [`weight`] of its own files and their
-/// sizes, counted as a snapshot's are (an empty file is not free). The shared
-/// base is not counted: it belongs to the catalog cache, which weighs it.
+/// What an overlay costs in the cache: [`weight`] of its whole workspace (the
+/// base's files copied plus the pending entries), counted as a snapshot's are
+/// (an empty file is not free). The shared `Arc<Loaded>` base itself is not
+/// charged again: the catalog cache weighs it.
 ///
 /// # Arguments
 /// * `workspace` - the overlaid files.
