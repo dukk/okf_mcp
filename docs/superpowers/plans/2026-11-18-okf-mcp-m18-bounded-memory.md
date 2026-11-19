@@ -81,7 +81,7 @@
 - `Overlays` (`src/overlay.rs:257`): hand-rolled LRU by count (`overlay_cache_size`, default 64, `src/config.rs:48`).
 - `catalogs.name` is `UNIQUE` (`migrations/0001_schema.sql:14`).
 - `bump_admin_generation(conn)` (`src/store/catalogs.rs:1036`) has 37 non-test call sites, all inside the write's transaction; no SQL trigger bumps it. The per-function list is in Task 2.
-- `KeyCache::read` (`src/auth.rs:954`) runs `key_rows::list`, `ceiling::ceilings`, `users::auth_by_id`, `teams::suspended_catalogs`, `Labels::load`, then `gates::load` (`src/store/gates.rs:37`), which first **writes** missing audit rows (`ensure_audit_rows`, `:157`).
+- `KeyCache::read` (`src/auth.rs:954`) runs `key_rows::list`, `ceiling::ceilings`, `users::auth_by_id`, `teams::suspended_catalogs`, `Labels::load`, then `gates::load` (`src/store/gates.rs:37`), which first **writes** missing audit rows (`ensure_audit_rows`, `:157`). *(Task 3, issue #681: no longer; `gates::load` writes nothing.)*
 - `settle(app)` (`src/http/api/mod.rs:306`) is `app.poll()`; it is called after every administrative HTTP write (41 sites) and `src/oauth/authorize.rs:1141`.
 - `serve` (`src/http/mod.rs:651`) spawns the poll loop (`:657`), the M16 announce subscriber (`:660`), the clock check (`:664`) and the mail worker (`:667`, gated by `mail.worker`).
 - The latest migration is `0021_oauth_tokens_grant_activity.sql`.
@@ -562,6 +562,12 @@ Plus `a_refused_write_sends_nothing` for one representative failing write (e.g. 
 - [ ] **Step 4: `gates::load`** drops `ensure_audit_rows` (and the function itself if nothing else calls it).
 
 - [ ] **Step 5: Run, full gates, commit** — `feat: create audit rows with their entity, backfill the rest (M18 task 3)`.
+
+> **Corrected (issue #681, 2026-11-19).** What shipped differs from Steps 1-4 in these ways; read `migrations/0022_audit_backfill.sql`, `src/store/audit.rs` (`credential_created`) and `src/store/gates.rs`.
+> - There are no Rust helpers `audit::audit_person` or `audit::audit_credential`: those are SQL functions (`migrations/0014_audit_row_locks.sql`). The one new helper is `audit::credential_created(conn, credential_id, label)`, which runs `audit_credential($1, NULL, $2)`. `keys::create_provisioner`, `keys::record_created` (shared by `create_with_id` and `create_self_issued`), `oauth::codes::redeem` and `oauth::grants::create_self_issued` call it after the insert and before `audit::record`, with the credential's `actor` as its label. That is the label `ensure_audit_rows` gave a key and `audit::record` gives a credential when it acts. Before this change, `key.created` and `oauth.grant_created` already made the row through their target, but with no label.
+> - `users::create`, `teams::create` and `catalogs::set_owner` are unchanged. Since `0014`, users and teams have had their row from the transaction that creates them (`users::create` through its `user.created` entry and `audit::team_ref` for the personal team, `teams::create` through `record_team`), and `set_owner` already resolves the new owner through `audit::team_ref`. Catalog owners are always teams, so there was nothing left to add.
+> - The backfill covers every team, as `0014` did, not only the catalog owners that `ensure_audit_rows` covered. It also uses `ON CONFLICT DO NOTHING` beside `WHERE NOT EXISTS`, so that a row an old replica makes during the rolling deploy is neither duplicated nor touched. Revoked keys get no row, as before.
+> - Tests: `every_new_user_key_grant_and_team_has_its_audit_row` (in `src/store/gates.rs`) covers a user, a team and the three key paths. The two grant paths are asserted in their existing tests, `codes::tests::redeem_turns_the_code_into_an_oauth_grant_once` and `grants::tests::a_self_issued_grant_records_its_user_levels_and_client`, because their fixtures (clients, sessions, ceilings) live there. `gates_load_writes_nothing` replaces `a_key_from_before_the_audit_log_gets_its_credential_id_at_load`: a key inserted without its row now has no credential id after a load. `the_backfill_creates_missing_rows_and_is_idempotent` is in `src/db.rs`.
 
 ---
 

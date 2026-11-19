@@ -938,6 +938,108 @@ mod tests {
         );
     }
 
+    /// Every audit row, as `(table, entity id, name or label, person's user)`,
+    /// sorted: what the backfill test compares.
+    async fn audit_rows(pool: &PgPool) -> Vec<(String, String, Option<String>, Option<String>)> {
+        let mut rows: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT 'person', user_id, name, user_id FROM audit_people \
+             UNION ALL SELECT 'team', a.team_id, a.name, p.user_id FROM audit_teams a \
+                 LEFT JOIN audit_people p ON p.id = a.person_id \
+             UNION ALL SELECT 'credential', a.credential_id, a.label, p.user_id \
+                 FROM audit_credentials a LEFT JOIN audit_people p ON p.id = a.person_id",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        // Sorted here, not by `ORDER BY`, whose collation may order `-`
+        // differently from Rust's byte order.
+        rows.sort();
+        rows
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_backfill_creates_missing_rows_and_is_idempotent() {
+        // Arrange: rows written directly, as before the audit log, so none
+        // has its audit row: bob with a personal team, a shared team, a key
+        // of bob's, a legacy key with no user, an OAuth grant and a revoked
+        // key. The fixture user's rows exist already, and one is stale (a
+        // renamed user): the backfill must leave it as it is.
+        let db = test_db().await;
+        sqlx::raw_sql(
+            "INSERT INTO users (id, name, display_name, created_at)
+                 VALUES ('u-bob', 'bob', 'Bob', now());
+             INSERT INTO teams (id, name, personal_of, created_at)
+                 VALUES ('t-bob', 'bob', 'u-bob', now());
+             INSERT INTO teams (id, name, created_at) VALUES ('t-family', 'family', now());
+             INSERT INTO api_keys (id, name, sha256, access, all_catalogs, actor, created_at,
+                                   user_id)
+                 VALUES ('k-bob', 'k-bob', sha256('k-bob'::bytea), 'read', true, 'laptop',
+                         now(), 'u-bob');
+             INSERT INTO api_keys (id, name, sha256, access, all_catalogs, actor, created_at)
+                 VALUES ('k-legacy', 'k-legacy', sha256('k-legacy'::bytea), 'read', true,
+                         'ci', now());
+             INSERT INTO oauth_clients (client_id, kind, redirect_uris, metadata, created_at)
+                 VALUES ('client', 'dcr', '{https://client.example.com/cb}', '{}', now());
+             INSERT INTO api_keys (id, name, kind, client_id, access, all_catalogs, actor,
+                                   created_at, user_id)
+                 VALUES ('g-bob', 'g-bob', 'oauth', 'client', 'read', true, 'Example Client',
+                         now(), 'u-bob');
+             INSERT INTO api_keys (id, name, sha256, access, all_catalogs, actor, created_at,
+                                   revoked_at)
+                 VALUES ('k-revoked', 'k-revoked', sha256('k-revoked'::bytea), 'read', true,
+                         'old', now(), now());
+             UPDATE audit_people SET name = 'stale' WHERE name = 'test-user';",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let fixture_team: String = sqlx::query_scalar(
+            "SELECT id FROM teams WHERE personal_of IS NOT NULL AND id <> 't-bob'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        let fixture_user: String = sqlx::query_scalar("SELECT id FROM users WHERE id <> 'u-bob'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        let row = |table: &str, id: &str, name: Option<&str>, user: Option<&str>| {
+            (
+                table.to_string(),
+                id.to_string(),
+                name.map(str::to_string),
+                user.map(str::to_string),
+            )
+        };
+
+        // Act
+        sqlx::raw_sql(include_str!("../migrations/0022_audit_backfill.sql"))
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let once = audit_rows(&db.pool).await;
+        sqlx::raw_sql(include_str!("../migrations/0022_audit_backfill.sql"))
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        // Assert: the rows the resolvers would have made, nothing for the
+        // revoked key, the stale row untouched, and a rerun adds nothing.
+        let mut expected = vec![
+            row("credential", "g-bob", Some("Example Client"), Some("u-bob")),
+            row("credential", "k-bob", Some("laptop"), Some("u-bob")),
+            row("credential", "k-legacy", Some("ci"), None),
+            row("person", &fixture_user, Some("stale"), Some(&fixture_user)),
+            row("person", "u-bob", Some("bob"), Some("u-bob")),
+            row("team", &fixture_team, None, Some(&fixture_user)),
+            row("team", "t-bob", None, Some("u-bob")),
+            row("team", "t-family", Some("family"), None),
+        ];
+        expected.sort();
+        assert_eq!(once, expected);
+        assert_eq!(audit_rows(&db.pool).await, once, "a rerun changes nothing");
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn maintenance_schema_preserves_existing_rows_and_defaults_to_opt_out() {
         let db = pg_support::TestDb::start().await;
