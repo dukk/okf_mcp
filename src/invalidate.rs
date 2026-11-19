@@ -634,11 +634,13 @@ mod tests {
         let running = Running::start().await;
         running.revoke_silently().await;
 
-        // End the listener's backend; sqlx reconnects, and the listener
+        // End this test's listener backend (the server is shared with other
+        // tests, each in its own database); sqlx reconnects, and the listener
         // catches up without any message.
         let ended: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) \
-             FROM pg_stat_activity WHERE query LIKE 'LISTEN%' AND pid <> pg_backend_pid()) t",
+             FROM pg_stat_activity WHERE query LIKE 'LISTEN%' \
+                   AND datname = current_database() AND pid <> pg_backend_pid()) t",
         )
         .fetch_one(&running.db.pool)
         .await
