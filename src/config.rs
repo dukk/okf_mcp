@@ -55,6 +55,10 @@ pub const DEFAULT_OVERLAY_CACHE_SIZE: usize = 64;
 /// The default `catalog_directory_entries`: catalog rows kept by name.
 pub const DEFAULT_CATALOG_DIRECTORY_ENTRIES: u64 = 100_000;
 
+/// The default `search_fanout_max`: the most catalogs `GET /api/v1/search`
+/// searches when the request names none (M18 spec Decision 8).
+pub const DEFAULT_SEARCH_FANOUT_MAX: u32 = 25;
+
 /// The default `catalog_ttl`: how long a cached catalog row is served.
 pub const DEFAULT_CATALOG_TTL: Duration = Duration::from_secs(10);
 
@@ -967,6 +971,10 @@ pub struct Config {
     /// for one that is lost, and the bound on a revocation's reach then.
     #[serde(with = "humantime_serde")]
     pub credential_ttl: Duration,
+    /// The most catalogs `GET /api/v1/search` searches when the request
+    /// names none (`25`, from 1 to 999): a key that reaches more must name
+    /// them, so one request cannot search every catalog in the system.
+    pub search_fanout_max: u32,
     /// The externally visible origin (`"https://okf.example.com"`). Setting
     /// it turns OAuth on: it is the issuer, and `<public_url>/mcp` is the
     /// resource tokens are issued for. Its host must be in `allowed_hosts`.
@@ -1016,6 +1024,7 @@ impl Default for Config {
             credential_cache_entries: DEFAULT_CREDENTIAL_CACHE_ENTRIES,
             user_cache_entries: DEFAULT_USER_CACHE_ENTRIES,
             credential_ttl: DEFAULT_CREDENTIAL_TTL,
+            search_fanout_max: DEFAULT_SEARCH_FANOUT_MAX,
             public_url: None,
             oauth: OAuthConfig::default(),
             auth: AuthConfig::default(),
@@ -1165,6 +1174,13 @@ impl Config {
         }
         if self.credential_ttl.is_zero() {
             return Err("credential_ttl must be more than zero".to_string());
+        }
+        // The cap is checked with one listing page of `search_fanout_max + 1`
+        // rows, and a page holds at most `MAX_PAGE` (1000).
+        if self.search_fanout_max == 0
+            || self.search_fanout_max >= crate::cache::directory::MAX_PAGE
+        {
+            return Err("search_fanout_max must be from 1 to 999".to_string());
         }
         if self.allowed_hosts.is_empty() {
             return Err(
@@ -1561,6 +1577,7 @@ mod tests {
         assert_eq!(config.credential_cache_entries, 100_000);
         assert_eq!(config.user_cache_entries, 100_000);
         assert_eq!(config.credential_ttl, Duration::from_secs(10));
+        assert_eq!(config.search_fanout_max, 25);
     }
 
     #[test]
@@ -1646,6 +1663,11 @@ mod tests {
             ("credential_cache_entries = 0\n", "credential_cache_entries"),
             ("user_cache_entries = 0\n", "user_cache_entries"),
             ("credential_ttl = \"0s\"\n", "credential_ttl"),
+            ("search_fanout_max = 0\n", "search_fanout_max"),
+            (
+                "search_fanout_max = 1000\n",
+                "search_fanout_max must be from 1 to 999",
+            ),
             (
                 "allowed_hosts = [\"\"]\n",
                 "allowed_hosts has a blank entry",

@@ -19,6 +19,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use similar::TextDiff;
 
+use crate::auth::Reach;
 use crate::catalog::Loaded;
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
@@ -121,45 +122,60 @@ pub(crate) async fn list_changesets(
     use crate::store::changesets;
 
     let principal = ctx.principal();
-    let catalog_ids: Vec<i64> = match params.catalog.as_deref() {
-        // `one` refuses a catalog the key does not reach; it admits
-        // nothing, and a list of changesets reads no catalog's contents.
-        // `one` checks the name and the incarnation whose changesets are
-        // listed; it admits nothing.
-        Some(name) => vec![ctx.one(Some(name)).await?.id()],
+    let admin = principal.access >= Access::Admin;
+    // The database narrows by key (unless admin) and catalog, so other
+    // keys' changesets and paths never leave it.
+    let key_filter = (!admin).then_some(principal.key_id.as_str());
+    let pool = ctx.app().pool();
+    let rows = match params.catalog.as_deref() {
+        // `one` refuses a catalog the key does not reach; it checks the name
+        // and the incarnation whose changesets are listed, and admits
+        // nothing: a list of changesets reads no catalog's contents.
+        Some(name) => {
+            let id = ctx.one(Some(name)).await?.id();
+            changesets::list_open(pool, &[id], key_filter).await?
+        }
         None => {
             // A list naming a bad catalog fails here as it does elsewhere.
             ctx.check_connection().await?;
-            let now = ctx.app().clock().now();
-            let mut ids = Vec::new();
-            for state in ctx.catalogs().values() {
-                // A closed catalog shows no changesets: its handles and
-                // paths are part of what suspension (M13) and a lock (M14)
-                // withhold. `offers` (reach) is checked first; the lock is
-                // checked against the row of the incarnation listed, not
-                // only its name.
-                if !ctx.offers(state.name()) {
+            // Narrowed in SQL to the catalogs the connection offers (its
+            // list, else the key's grants; every catalog for a key that
+            // reaches them all), without enumerating the catalogs first.
+            let names: Option<Vec<String>> = match (ctx.connection(), &principal.reach) {
+                (Some(list), _) if !list.is_empty() => Some(list.to_vec()),
+                (_, Reach::Catalogs(levels)) => Some(levels.keys().cloned().collect()),
+                (_, Reach::All) => None,
+            };
+            let rows = changesets::open_for_catalogs(pool, names.as_deref(), key_filter).await?;
+            // A closed catalog shows no changesets: its handles and paths are
+            // part of what suspension (M13) and a lock (M14) withhold.
+            // `offers` (reach) is checked first; the lock is checked against
+            // the incarnation each row belongs to, not only its name.
+            let mut open = Vec::with_capacity(rows.len());
+            for row in rows {
+                if !ctx.offers(&row.catalog) {
                     continue;
                 }
-                let row = match ctx.row(state).await {
-                    Ok(row) => row,
+                let catalog_id = row.changeset.catalog_id;
+                let catalog = match ctx.row_by_id(&row.catalog, catalog_id).await {
+                    Ok(catalog) => catalog,
                     // A failed read is not a closed catalog.
                     Err(error @ OkfError::Database { .. }) => return Err(error),
                     // Gone, or now another catalog: nothing of it to list.
                     Err(_) => continue,
                 };
-                if principal.check_open(&row, Access::Read, now).is_ok() {
-                    ids.push(state.id());
+                if principal.check_not_suspended(&catalog).is_ok()
+                    && ctx
+                        .check_contents_by_id(&row.catalog, catalog_id, Access::Read)
+                        .await
+                        .is_ok()
+                {
+                    open.push(row);
                 }
             }
-            ids
+            open
         }
     };
-    let admin = principal.access >= Access::Admin;
-    // The database narrows by key (unless admin) and catalog, so other
-    // keys' changesets and paths never leave it.
-    let key_filter = (!admin).then_some(principal.key_id.as_str());
-    let rows = changesets::list_open(ctx.app().pool(), &catalog_ids, key_filter).await?;
     let idle_since = idle_cutoff(
         ctx.app().clock().now(),
         ctx.app().config().session_idle_timeout,

@@ -1,19 +1,19 @@
 //! `list_catalogs`: the catalogs this connection offers and its selection.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use axum::http::request::Parts;
 use rmcp::handler::server::tool::Extension;
+use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{tool, tool_router, Json};
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
+use crate::cache::directory::DEFAULT_PAGE;
 use crate::clock::format_timestamp;
+use crate::error::OkfError;
+use crate::labels::catalog_label;
 use crate::mcp::context::ToolContext;
-use crate::mcp::OkfServer;
-use crate::store::catalogs::CatalogRow;
+use crate::mcp::{reply, OkfServer};
 use crate::store::teams::SuspendedCatalog;
 
 /// Why a listed catalog is unavailable: its owner team is suspended (M13).
@@ -64,12 +64,22 @@ pub struct CatalogInfo {
     pub suspended: Option<SuspensionInfo>,
 }
 
+/// `list_catalogs`' arguments.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+pub struct ListCatalogsParams {
+    /// The `next` of the previous call, for the page after it; omit it for the first page.
+    pub after: Option<String>,
+}
+
 /// `list_catalogs`' result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct CatalogList {
-    /// Every catalog this connection offers, by name: those the key reaches,
-    /// narrowed to the connection's list when it has one.
+    /// One page of the catalogs this connection offers, by name: those the
+    /// key reaches, narrowed to the connection's list when it has one.
     pub catalogs: Vec<CatalogInfo>,
+    /// Pass this as `after` for the next page; absent on the last page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
     /// The catalogs a call without a `catalog` argument reads, in order.
     pub selection: Vec<String>,
     /// Where writes go by default: the first of `selection`.
@@ -78,61 +88,48 @@ pub struct CatalogList {
     pub selection_error: Option<String>,
 }
 
-/// Lists the catalogs `ctx` offers ([`ToolContext::offers`]) and the
-/// connection's selection.
+/// Lists one page of the catalogs `ctx` offers ([`ToolContext::offers`])
+/// and the connection's selection (M18 spec Decision 7).
 ///
 /// # Arguments
 /// * `ctx` - the call's context.
+/// * `after` - the `next` of the previous page, if any.
 ///
 /// # Returns
-/// The list; a selection that fails is reported in `selection_error`
-/// rather than failing the call, since this is the tool to diagnose it with.
-/// A suspended catalog is listed with `suspended` set, and the selection
-/// leaves it out of a connection's list ([`crate::selection::resolve`]).
+/// The page, by name, with `next` while more follow; a selection that
+/// fails is reported in `selection_error` rather than failing the call,
+/// since this is the tool to diagnose it with. A suspended catalog is
+/// listed with `suspended` set, and the selection leaves it out of a
+/// connection's list ([`crate::selection::resolve`]). A catalog this
+/// replica has not loaded is left out of its page.
+///
+/// # Errors
+/// [`OkfError::InvalidPath`] for a malformed `after`;
+/// [`OkfError::Database`] if the catalog directory cannot be read.
 #[tracing::instrument(level = "debug", skip_all)]
-pub(crate) async fn list(ctx: &ToolContext) -> CatalogList {
-    let labels = ctx.labels();
-    let offered: Vec<String> = ctx
-        .catalogs()
-        .keys()
-        .filter(|name| ctx.offers(name))
-        .cloned()
-        .collect();
-    // The listed catalogs' directory rows, in one read, for their
-    // suspension. Display only: a failed read lists none as suspended, and
-    // the selection, which refuses a suspended catalog, reads its own.
-    let rows: HashMap<String, Arc<CatalogRow>> = ctx
+pub(crate) async fn list(ctx: &ToolContext, after: Option<&str>) -> Result<CatalogList, OkfError> {
+    let page = ctx
         .app()
         .directory()
-        .resolve_many(&offered)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|row| (row.name.clone(), row))
-        .collect();
-    let catalogs = ctx
-        .catalogs()
+        .offered_page(ctx.principal(), ctx.connection(), after, DEFAULT_PAGE)
+        .await?;
+    let catalogs = page
+        .items
         .iter()
-        .filter(|(name, _)| ctx.offers(name))
-        .map(|(name, state)| {
+        .filter_map(|row| {
+            let state = ctx.app().loaded_catalog(row)?;
             let loaded = state.current();
-            CatalogInfo {
-                name: name.clone(),
-                display_name: labels
-                    .catalog_display_name(name)
-                    .unwrap_or_default()
-                    .to_string(),
-                label: labels.catalog(name).unwrap_or(name).to_string(),
-                description: state.description().to_string(),
+            Some(CatalogInfo {
+                name: row.name.clone(),
+                display_name: row.display_name.clone(),
+                label: catalog_label(&row.display_name, &row.description),
+                description: row.description.clone(),
                 files: loaded.files(),
                 last_change: loaded.last_change().map(format_timestamp),
-                // Listed only after `offers` (reach), so a credential that does
-                // not reach a catalog never learns it is suspended.
-                suspended: rows
-                    .get(name)
-                    .and_then(|row| ctx.principal().suspension(row))
-                    .map(SuspensionInfo::from),
-            }
+                // Listed only after reach (the page), so a credential that
+                // does not reach a catalog never learns it is suspended.
+                suspended: ctx.principal().suspension(row).map(SuspensionInfo::from),
+            })
         })
         .collect();
     // The selection's names only, not its contents: nothing is admitted.
@@ -143,12 +140,13 @@ pub(crate) async fn list(ctx: &ToolContext) -> CatalogList {
         }
         Err(error) => (Vec::new(), None, Some(error.to_string())),
     };
-    CatalogList {
+    Ok(CatalogList {
         catalogs,
+        next: page.next,
         selection,
         write_target,
         selection_error,
-    }
+    })
 }
 
 // `#[tool_router]` is a macro that runs at compile time: it turns the
@@ -169,8 +167,10 @@ impl OkfServer {
                        tools and say `label` to people: those the API key can reach, limited to the \
                        connection's X-OKF-Catalogs list when it has one. A catalog whose \
                        team is suspended is listed with `suspended` set, and only export \
-                       works on it. Also this connection's selection: the catalogs a call \
-                       without a `catalog` argument reads, and the default write target.",
+                       works on it. Returns up to 100 catalogs, by name; when `next` is set, \
+                       call again with it as `after` for the rest. Also this connection's \
+                       selection: the catalogs a call without a `catalog` argument reads, and \
+                       the default write target.",
         annotations(
             title = "List Catalogs",
             read_only_hint = true,
@@ -182,10 +182,11 @@ impl OkfServer {
     async fn list_catalogs(
         &self,
         Extension(parts): Extension<Parts>,
+        Parameters(params): Parameters<ListCatalogsParams>,
     ) -> Result<Json<CatalogList>, CallToolResult> {
         // `?` returns the error result at once, like a Python early `return`.
         let ctx = self.context(&parts)?;
-        Ok(Json(list(&ctx).await))
+        reply(list(&ctx, params.after.as_deref()).await)
     }
 }
 
@@ -210,7 +211,9 @@ mod tests {
         .await;
         let key = principal(&["pg", "work"], None);
 
-        let listed = list(&context(&test, key, Some(&["work", "pg"]))).await;
+        let listed = list(&context(&test, key, Some(&["work", "pg"])), None)
+            .await
+            .unwrap();
 
         let names: Vec<&str> = listed.catalogs.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["pg", "work"]);
@@ -232,8 +235,12 @@ mod tests {
         .await;
         let key = principal(&["pg", "work"], Some("pg"));
 
-        let listed = list(&context(&test, Arc::clone(&key), Some(&["work"]))).await;
-        let mistyped = list(&context(&test, key, Some(&["work", "home"]))).await;
+        let listed = list(&context(&test, Arc::clone(&key), Some(&["work"])), None)
+            .await
+            .unwrap();
+        let mistyped = list(&context(&test, key, Some(&["work", "home"])), None)
+            .await
+            .unwrap();
 
         let names: Vec<&str> = listed.catalogs.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["work"]);
@@ -250,7 +257,9 @@ mod tests {
     async fn without_any_source_the_selection_says_why() {
         let test = app_with(&[("pg", &[])], Config::default()).await;
 
-        let listed = list(&context(&test, principal(&[], None), None)).await;
+        let listed = list(&context(&test, principal(&[], None), None), None)
+            .await
+            .unwrap();
 
         assert_eq!(listed.catalogs.len(), 1);
         assert!(listed.selection.is_empty());
@@ -289,10 +298,14 @@ mod tests {
             )
         };
 
-        let listed = list(&on(&reader, &["main", "other"]).await).await;
-        let only_suspended = list(&on(&reader, &["main"]).await).await;
-        let strangers = list(&on(&stranger, &["other"]).await).await;
-        let admins = list(&on(&root, &["main", "other"]).await).await;
+        let listed = list(&on(&reader, &["main", "other"]).await, None)
+            .await
+            .unwrap();
+        let only_suspended = list(&on(&reader, &["main"]).await, None).await.unwrap();
+        let strangers = list(&on(&stranger, &["other"]).await, None).await.unwrap();
+        let admins = list(&on(&root, &["main", "other"]).await, None)
+            .await
+            .unwrap();
 
         let main = listed.catalogs.iter().find(|c| c.name == "main").unwrap();
         assert_eq!(
@@ -331,6 +344,47 @@ mod tests {
             "an admin sees the mark"
         );
         assert_eq!(admins.selection, ["main", "other"], "and selects both");
+    }
+
+    /// M18 Task 10: `after` continues the list by name, narrowed as the
+    /// first page is, and a malformed one is refused.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn after_continues_the_list_and_a_malformed_one_is_refused() {
+        use crate::cache::directory::cursor_of;
+        let test = app_with(
+            &[("pg", &[]), ("work", &[]), ("home", &[])],
+            Config::default(),
+        )
+        .await;
+        let every = principal(&[], None);
+
+        let after_home = list(
+            &context(&test, Arc::clone(&every), None),
+            Some(&cursor_of("home")),
+        )
+        .await
+        .unwrap();
+        let narrowed = list(
+            &context(&test, Arc::clone(&every), Some(&["work", "home"])),
+            Some(&cursor_of("pg")),
+        )
+        .await
+        .unwrap();
+        let refused = list(&context(&test, every, None), Some("not a cursor")).await;
+
+        let names: Vec<&str> = after_home
+            .catalogs
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(names, ["pg", "work"]);
+        assert_eq!(after_home.next, None);
+        let names: Vec<&str> = narrowed.catalogs.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["work"], "the connection's list still narrows it");
+        assert!(
+            matches!(&refused, Err(OkfError::InvalidPath { path, .. }) if path == "after"),
+            "{refused:?}"
+        );
     }
 
     #[test]

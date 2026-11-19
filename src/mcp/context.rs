@@ -238,6 +238,21 @@ impl ToolContext {
         &self.catalogs
     }
 
+    /// The connection's catalog list (`X-OKF-Catalogs` or `?catalogs=`).
+    ///
+    /// # Returns
+    /// The names as the connection gave them, or `None` without a list.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn connection(&self) -> Option<&[String]> {
+        self.connection.as_deref()
+    }
+
     /// Does this call see `name`: the key reaches it and the connection's
     /// list, if it has one, names it? What a tool that lists catalogs (or
     /// what is in them) filters by, so an omitted catalog never shows.
@@ -367,14 +382,28 @@ impl ToolContext {
     /// retry sees the map catch up; [`OkfError::Database`].
     #[tracing::instrument(level = "trace", skip_all)]
     pub async fn row(&self, state: &CatalogState) -> Result<Arc<CatalogRow>, OkfError> {
-        let Some(row) = self.app.directory().resolve(state.name()).await? else {
+        self.row_by_id(state.name(), state.id()).await
+    }
+
+    /// [`ToolContext::row`] for a catalog known by its name and
+    /// `catalogs.id` only.
+    ///
+    /// # Errors
+    /// As [`ToolContext::row`].
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub(crate) async fn row_by_id(
+        &self,
+        catalog: &str,
+        catalog_id: i64,
+    ) -> Result<Arc<CatalogRow>, OkfError> {
+        let Some(row) = self.app.directory().resolve(catalog).await? else {
             return Err(OkfError::CatalogNotSelected {
-                catalog: state.name().to_string(),
+                catalog: catalog.to_string(),
             });
         };
-        if row.id != state.id() {
+        if row.id != catalog_id {
             return Err(OkfError::Busy {
-                reason: format!("catalog {:?} is being reloaded", state.name()),
+                reason: format!("catalog {catalog:?} is being reloaded"),
             });
         }
         Ok(row)
@@ -625,6 +654,29 @@ impl ToolContext {
         self.admission_to(state, access).await.map(drop)
     }
 
+    /// [`ToolContext::check_contents`] for a catalog a query named by its
+    /// name and `catalogs.id` (a changeset row), with no state loaded: the
+    /// same check, bound to that incarnation.
+    ///
+    /// # Arguments
+    /// * `catalog` - the catalog's name.
+    /// * `catalog_id` - the `catalogs.id` the row belongs to.
+    /// * `access` - what the call does with it.
+    ///
+    /// # Errors
+    /// As [`ToolContext::admission_to`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) async fn check_contents_by_id(
+        &self,
+        catalog: &str,
+        catalog_id: i64,
+        access: Access,
+    ) -> Result<(), OkfError> {
+        self.admission_by_id(catalog, catalog_id, access)
+            .await
+            .map(drop)
+    }
+
     /// The admission of this call's principal to `state` for `access`,
     /// decided by the catalog's directory row as it is now, which must be
     /// the incarnation this call reads (the state's `catalogs.id`;
@@ -649,7 +701,22 @@ impl ToolContext {
         state: &CatalogState,
         access: Access,
     ) -> Result<BoundAdmission, OkfError> {
-        let row = self.row(state).await?;
+        self.admission_by_id(state.name(), state.id(), access).await
+    }
+
+    /// [`ToolContext::admission_to`] for a catalog known by its name and
+    /// `catalogs.id` only (a row a query returned), with no state at hand.
+    ///
+    /// # Errors
+    /// As [`ToolContext::admission_to`].
+    #[tracing::instrument(level = "trace", skip_all)]
+    async fn admission_by_id(
+        &self,
+        catalog: &str,
+        catalog_id: i64,
+        access: Access,
+    ) -> Result<BoundAdmission, OkfError> {
+        let row = self.row_by_id(catalog, catalog_id).await?;
         let now = self.app.clock().now();
         // `?`: the row describes what is read, so its refusal stands.
         let admission = self.principal.admission(&row, access, now)?;

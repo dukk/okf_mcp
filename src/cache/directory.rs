@@ -27,8 +27,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use sqlx::PgPool;
 
+use crate::auth::{Principal, Reach};
 use crate::cache::{Bounded, CacheName, Limit};
 use crate::error::OkfError;
 use crate::invalidate::Invalidation;
@@ -47,6 +50,109 @@ pub const ABSENT_TTL: Duration = Duration::from_secs(5);
 struct Loaded {
     row: Option<Arc<CatalogRow>>,
     seen: u64,
+}
+
+/// How many rows a listing page holds when the client names no `limit`
+/// (spec Decision 7).
+pub const DEFAULT_PAGE: u32 = 100;
+
+/// The most rows a listing page holds, whatever `limit` asks for.
+pub const MAX_PAGE: u32 = 1000;
+
+/// One page of a listing and the cursor that continues it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Page<T> {
+    /// The page's items, in order.
+    pub items: Vec<T>,
+    /// What to send as `after` for the next page; `None` on the last page.
+    pub next: Option<String>,
+}
+
+impl Page<Arc<CatalogRow>> {
+    /// The first `size` of `rows` (sorted by name), with a cursor when more
+    /// follow.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
+    fn cut(mut rows: Vec<Arc<CatalogRow>>, size: usize) -> Self {
+        let more = rows.len() > size;
+        rows.truncate(size);
+        // Only a page that has a row after it gets a cursor: its last name.
+        let next = more
+            .then(|| rows.last().map(|row| cursor_of(&row.name)))
+            .flatten();
+        Self { items: rows, next }
+    }
+}
+
+/// The page size a listing serves for the client's `limit`.
+///
+/// # Arguments
+/// * `limit` - what the client asked for; `None` or 0 means the default.
+///
+/// # Returns
+/// [`DEFAULT_PAGE`] for none, else `limit` capped at [`MAX_PAGE`].
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: maps a value, no I/O"
+    )
+)]
+pub fn page_size(limit: Option<u32>) -> u32 {
+    match limit {
+        None | Some(0) => DEFAULT_PAGE,
+        Some(limit) => limit.min(MAX_PAGE),
+    }
+}
+
+/// The cursor of a page whose last catalog is `name`: unpadded base64url of
+/// the name, so clients treat it as opaque rather than as a name.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: maps a value, no I/O"
+    )
+)]
+pub(crate) fn cursor_of(name: &str) -> String {
+    URL_SAFE_NO_PAD.encode(name)
+}
+
+/// Reads a client's `after` cursor back into the catalog name it continues
+/// from. Surrounding whitespace is dropped and an empty value is no cursor.
+/// Anything this server could not have given (not canonical unpadded
+/// base64url, not UTF-8, or not a valid catalog name, a NUL included) is
+/// refused the same way, before any query runs.
+///
+/// # Arguments
+/// * `cursor` - the client's value, if any.
+///
+/// # Returns
+/// The name to continue after, or `None` for the first page.
+///
+/// # Errors
+/// [`OkfError::InvalidPath`] (400, naming `after`) for a malformed cursor.
+#[tracing::instrument(level = "trace", skip_all)]
+pub fn parse_cursor(cursor: Option<&str>) -> Result<Option<String>, OkfError> {
+    // `filter` turns `Some("")` into `None`: an empty field is no cursor.
+    let Some(cursor) = cursor.map(str::trim).filter(|cursor| !cursor.is_empty()) else {
+        return Ok(None);
+    };
+    URL_SAFE_NO_PAD
+        .decode(cursor)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .filter(|name| catalogs::is_valid_name(name))
+        .map(Some)
+        .ok_or_else(|| OkfError::InvalidPath {
+            path: "after".to_string(),
+            reason: "not a cursor this server gave: pass a listing's `next` as it came".to_string(),
+        })
 }
 
 /// Catalog rows by name, with absent names remembered briefly.
@@ -236,6 +342,101 @@ impl CatalogDirectory {
         }
         found.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(found)
+    }
+
+    /// The catalogs `principal` reaches, one page at a time, by name (spec
+    /// Decision 7): what every catalog listing returns.
+    ///
+    /// # Arguments
+    /// * `principal` - the caller.
+    /// * `after` - the `next` of the previous page, as the client sent it
+    ///   (see [`parse_cursor`]); `None` or empty for the first page.
+    /// * `limit` - the page size ([`page_size`]); held to 1 to [`MAX_PAGE`].
+    ///
+    /// # Returns
+    /// The page's rows, ordered by name, and the cursor of the page after.
+    ///
+    /// # Errors
+    /// As [`CatalogDirectory::offered_page`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn reachable_page(
+        &self,
+        principal: &Principal,
+        after: Option<&str>,
+        limit: u32,
+    ) -> Result<Page<Arc<CatalogRow>>, OkfError> {
+        self.offered_page(principal, None, after, limit).await
+    }
+
+    /// [`CatalogDirectory::reachable_page`] narrowed to an MCP connection's
+    /// catalog list, when it has one (`X-OKF-Catalogs`). The rows read are
+    /// not cached, as for [`CatalogDirectory::resolve_many`].
+    ///
+    /// * With a list, or for [`Reach::Catalogs`]: the listed or granted
+    ///   catalogs the principal reaches and that exist, read together
+    ///   (bounded by the list or the grants), then cut to the page.
+    /// * Otherwise ([`Reach::All`]): one query of up to `limit + 1` rows
+    ///   after the cursor, so `next` is set only when a row follows.
+    ///
+    /// Reach (and the list) is the only filter: suspension, maintenance and
+    /// unlocks are shown or checked by the caller, from the principal, as
+    /// before. The cursor only moves the start of the list, never widens
+    /// it, so a cursor naming a catalog the principal does not reach
+    /// reveals nothing.
+    ///
+    /// # Arguments
+    /// * `principal` - the caller.
+    /// * `connection` - the connection's list; `None` or empty for none.
+    /// * `after` - as for [`CatalogDirectory::reachable_page`].
+    /// * `limit` - as for [`CatalogDirectory::reachable_page`].
+    ///
+    /// # Returns
+    /// The page's rows, ordered by name, and the cursor of the page after.
+    ///
+    /// # Errors
+    /// [`OkfError::InvalidPath`] (400) for a malformed cursor, before any
+    /// read; [`OkfError::Database`] if the read fails.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn offered_page(
+        &self,
+        principal: &Principal,
+        connection: Option<&[String]>,
+        after: Option<&str>,
+        limit: u32,
+    ) -> Result<Page<Arc<CatalogRow>>, OkfError> {
+        let after = parse_cursor(after)?;
+        let limit = limit.clamp(1, MAX_PAGE);
+        // The bounded set of names to read, or `None` to page through every
+        // catalog. `filter` drops an empty list (no list at all).
+        let names: Option<Vec<String>> =
+            match (connection.filter(|list| !list.is_empty()), &principal.reach) {
+                (Some(list), _) => Some(
+                    list.iter()
+                        .filter(|name| principal.reaches(name))
+                        .cloned()
+                        .collect(),
+                ),
+                (None, Reach::Catalogs(levels)) => Some(levels.keys().cloned().collect()),
+                (None, Reach::All) => None,
+            };
+        let rows = match names {
+            Some(names) => {
+                let mut rows = self.resolve_many(&names).await?;
+                // `retain` keeps the rows after the cursor (sorted by name).
+                if let Some(after) = after.as_deref() {
+                    rows.retain(|row| row.name.as_str() > after);
+                }
+                rows
+            }
+            // One row more than the page, to know whether one follows.
+            None => catalogs::page(&self.pool, after.as_deref(), i64::from(limit) + 1)
+                .await?
+                .into_iter()
+                .map(Arc::new)
+                .collect(),
+        };
+        // A `u32` always fits a `usize` on the 64-bit targets this builds for.
+        Ok(Page::cut(rows, limit as usize))
     }
 
     /// Applies a change-feed message. Only [`Invalidation::CatalogMeta`] and
@@ -679,3 +880,8 @@ mod tests {
         assert!(directory.resolve("P G").await.unwrap().is_none());
     }
 }
+
+// Its own file: the listing's tests (M18 Task 10).
+#[cfg(test)]
+#[path = "directory_listing_tests.rs"]
+mod listing_tests;

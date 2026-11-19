@@ -74,7 +74,7 @@ export async function openUnlock(catalog, { onDone = () => {}, view = document.b
     // Settled one by one: a failed read falls back without losing the other.
     const [settings, catalogs] = await Promise.allSettled([
         api.get('/settings', { quiet: true }),
-        catalog === null ? api.get('/catalogs', { quiet: true }) : Promise.resolve(null),
+        catalog === null ? api.pages('/catalogs', 'catalogs', { quiet: true }) : Promise.resolve(null),
     ]);
     if (!ticket.current()) return;
     const max = maxHours(settings);

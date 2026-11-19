@@ -792,6 +792,29 @@ impl App {
         self.catalogs().get(name).cloned()
     }
 
+    /// The loaded state of the catalog a directory row describes, for a
+    /// listing's snapshot fields (files, concepts, last change). M18 Task 8
+    /// replaces it with a load through the catalog cache.
+    ///
+    /// # Arguments
+    /// * `row` - the catalog's row, as a listing read it.
+    ///
+    /// # Returns
+    /// Its state, or `None` if this replica has not loaded that catalog, or
+    /// holds another incarnation under its name (deleted and created again
+    /// since the last poll): a listing never mixes one catalog's row with
+    /// another's contents.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn loaded_catalog(&self, row: &catalogs::CatalogRow) -> Option<Arc<CatalogState>> {
+        self.catalog(&row.name).filter(|state| state.id() == row.id)
+    }
+
     /// One pass of the poll loop: reloads the settings and labels if
     /// `admin_generation` moved, and brings the catalogs in line with the
     /// catalog list. Pruning and the cluster counts are housekeeping jobs
