@@ -17,7 +17,7 @@
 import { h, fill, pill } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
-import { catalogLabel, named, userLabel } from '../core/labels.js';
+import { catalogLabel, ensureLabels, named, userLabel } from '../core/labels.js';
 import { toast } from '../core/toast.js';
 import { when } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
@@ -130,6 +130,9 @@ export async function render(main) {
         try {
             answer = await api.get(admin ? '/unlocks' : `/unlocks?${new URLSearchParams({ team: team.value })}`);
         } catch { /* toasted */ }
+        // An admin's rows name their users: read those labels (a failed
+        // read shows the slugs; it never stops the rows from drawing).
+        if (admin && answer !== null) await ensureLabels({ users: answer.unlocks.map(row => row.user) });
         if (mine !== loads || !main.isConnected) return;
         stale.hidden = answer !== null;
         if (answer !== null) rows = answer.unlocks;

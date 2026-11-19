@@ -467,7 +467,7 @@ async fn a_late_assign_never_replaces_a_newer_drawer_or_reopens_a_dismissed_one(
         ui.wait_text("#drawer-title", "bravo");
         ui.release_held();
         // The table follows the assign either way.
-        ui.wait_text("[data-test=key-user-alpha]", "alice");
+        ui.wait_text("[data-test=key-user-alpha]", "Alice Example");
         let replaced = ui.text("#drawer-title") != "bravo";
         // bravo's assign is held, and the drawer dismissed meanwhile.
         ui.click("#drawer-close");
@@ -481,7 +481,7 @@ async fn a_late_assign_never_replaces_a_newer_drawer_or_reopens_a_dismissed_one(
         ui.page.press_key(None, "Escape").expect("press Escape");
         ui.wait_hidden("#drawer");
         ui.release_held();
-        ui.wait_text("[data-test=key-user-bravo]", "alice");
+        ui.wait_text("[data-test=key-user-bravo]", "Alice Example");
         let reopened = ui.page.is_visible("#drawer").expect("visible");
         assert!(
             !replaced && !reopened,
@@ -511,7 +511,8 @@ async fn an_assigned_user_shows_when_reading_the_users_again_fails() {
         ui.fail_next("GET", "/api/v1/users", 503, "the server is unavailable");
         ui.click("#key-assign");
         ui.wait_text("#toasts", "alpha now belongs to alice");
-        ui.wait_text("#drawer dl.facts", "alice");
+        // By her label, from the users the drawer was drawn with.
+        ui.wait_text("#drawer dl.facts", "Alice Example");
     })
     .await;
     if !ran {
@@ -545,13 +546,14 @@ async fn an_older_writes_late_table_read_never_redraws_over_a_newer_write() {
         ui.select("#key-user-select", "alice");
         ui.click("#key-assign");
         ui.wait_text("#toasts", "alpha now belongs to alice");
-        ui.wait_text("#drawer dl.facts", "alice");
+        // By her label, from the users the drawer was drawn with.
+        ui.wait_text("#drawer dl.facts", "Alice Example");
         // The older write's late table answer must not redraw its answer
         // (no user change) over the newer one.
         ui.release_held();
         let facts = ui.text("#drawer dl.facts");
         assert!(
-            facts.contains("alice"),
+            facts.contains("Alice Example"),
             "the older write redrew the drawer: {facts}"
         );
     })
@@ -1155,4 +1157,153 @@ async fn the_console_colours_beat_picos_in_both_themes() {
     })
     .await;
     assert!(ran);
+}
+
+/// Creates `bob` ("Bob Builder"), a user no key belongs to, and gives the
+/// key `laptop` to `alice`, both by SQL.
+async fn bob_and_alices_laptop(server: &TestServer) {
+    let bob = NewUser {
+        name: "bob",
+        display_name: &okf_mcp::labels::DisplayName::parse("Bob Builder").unwrap(),
+    };
+    users::create(&server.db.pool, &bob, &AuditActor::cli(), Utc::now())
+        .await
+        .expect("create bob");
+    sqlx::query(
+        "UPDATE api_keys SET user_id = (SELECT id FROM users WHERE name = 'alice') \
+         WHERE name = 'laptop'",
+    )
+    .execute(&server.db.pool)
+    .await
+    .expect("give laptop to alice");
+}
+
+/// Issue #749: the shell no longer holds every user's label for an
+/// every-catalog admin; the keys table reads the labels of the users its
+/// rows name, and only those.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_keys_table_reads_the_labels_of_the_users_it_shows_only() {
+    let server = server().await;
+    let admin = server
+        .key("console-admin", Access::Admin, &[], Some("main"))
+        .await;
+    server
+        .key("laptop", Access::Read, &["main"], Some("main"))
+        .await;
+    alice(&server).await;
+    bob_and_alices_laptop(&server).await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/keys");
+        ui.wait_text("[data-test=key-user-laptop]", "Alice Example");
+        // Nobody shown is bob: his label was never read.
+        let bob = ui.eval(
+            "async () => (await import('/ui/js/core/labels.js')).userLabel('bob')",
+            json!(null),
+        );
+        assert_eq!(bob, json!("bob"), "a label of a user no row shows");
+        // A sort by User redraws the cells from the labels read with the
+        // rows (the third column).
+        ui.click("#keys-table th:nth-child(3)");
+        ui.wait_text("[data-test=key-user-laptop]", "Alice Example");
+    })
+    .await;
+}
+
+/// Issue #749 (`tools/agentic/lessons.md`: a failed side read never
+/// discards an answer): when the labels read fails, the keys still draw,
+/// their users by slug, with no toast.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_labels_read_still_draws_the_keys_by_slug() {
+    let server = server().await;
+    let admin = server
+        .key("console-admin", Access::Admin, &[], Some("main"))
+        .await;
+    server
+        .key("laptop", Access::Read, &["main"], Some("main"))
+        .await;
+    alice(&server).await;
+    bob_and_alices_laptop(&server).await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.wait_visible("#app");
+        ui.fail_next(
+            "GET",
+            "/api/v1/labels/named?users=alice",
+            503,
+            "labels are away",
+        );
+        ui.open("/keys");
+        ui.wait_text("[data-test=key-user-laptop]", "alice");
+        assert_eq!(ui.text("[data-test=key-user-laptop]"), "alice");
+        assert!(ui
+            .page
+            .is_visible("[data-test=key-laptop]")
+            .expect("visible"));
+        assert!(
+            !ui.text("#toasts").contains("labels are away"),
+            "{}",
+            ui.text("#toasts")
+        );
+        // The next load asks again, and names her.
+        ui.open("/teams");
+        ui.wait_visible("#teams-table");
+        ui.open("/keys");
+        ui.wait_text("[data-test=key-user-laptop]", "Alice Example");
+    })
+    .await;
+}
+
+/// Review of PR #754 (`tools/agentic/lessons.md`: overlapping reads draw
+/// only the newest answer): a labels read asked for before a refresh, and
+/// answering after a read asked for since, never replaces the newer label.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_late_labels_answer_never_replaces_a_newer_one() {
+    let server = server().await;
+    let admin = server
+        .key("console-admin", Access::Admin, &[], Some("main"))
+        .await;
+    alice(&server).await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.wait_visible("#app");
+        // The first read of alice's label reaches the server now (her old
+        // label), and its answer is held.
+        ui.hold_answer("GET", "/api/v1/labels/named?users=alice", || {
+            ui.eval(
+                "async () => { \
+                   const labels = await import('/ui/js/core/labels.js'); \
+                   window.firstRead = labels.ensureLabels({ users: ['alice'] }); \
+                   return true; }",
+                json!(null),
+            );
+        });
+        // She is renamed, the shell refreshes, and a newer read settles.
+        let newer = ui.eval(
+            "async () => { \
+               const { api } = await import('/ui/js/core/api.js'); \
+               const shell = await import('/ui/js/core/shell.js'); \
+               const labels = await import('/ui/js/core/labels.js'); \
+               await api.patch('/users/alice', { display_name: 'Alice Renamed' }); \
+               await shell.refreshIdentity(); \
+               await labels.ensureLabels({ users: ['alice'] }); \
+               return labels.userLabel('alice'); }",
+            json!(null),
+        );
+        assert_eq!(newer, json!("Alice Renamed"));
+        // The old answer arrives last; the newer label stays.
+        ui.release_held();
+        let shown = ui.eval(
+            "async () => { \
+               await window.firstRead; \
+               return (await import('/ui/js/core/labels.js')).userLabel('alice'); }",
+            json!(null),
+        );
+        assert_eq!(
+            shown,
+            json!("Alice Renamed"),
+            "the late answer replaced the newer label"
+        );
+    })
+    .await;
 }

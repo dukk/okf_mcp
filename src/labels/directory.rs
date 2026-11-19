@@ -277,41 +277,6 @@ impl Labels {
         self.users.get(slug).map(|label| &**label)
     }
 
-    /// Every user held (all of them, for the one reader that may see them
-    /// all: `GET /labels` for an every-catalog admin).
-    ///
-    /// # Returns
-    /// `(slug, label)` pairs in no particular order.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    pub fn users(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.users
-            .iter()
-            .map(|(slug, label)| (slug.as_str(), &**label))
-    }
-
-    /// Every team and its label.
-    ///
-    /// # Returns
-    /// `(slug, label)` pairs in no particular order.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    pub fn teams(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.teams
-            .iter()
-            .map(|(slug, label)| (slug.as_str(), &**label))
-    }
-
     /// A team's label.
     ///
     /// # Arguments

@@ -1835,7 +1835,10 @@ name, else its description (cut to 80 characters), else "Untitled catalog".
   length of a display name, never the text.
 - **Where labels show.** Views gain `label` fields, MCP results gain
   `catalog_label` (and `actor_label`), and the console resolves ids
-  through `GET /api/v1/labels`. Where two catalogs or teams share a label,
+  through `GET /api/v1/labels` (its own user and teams, and the catalogs
+  it reaches) and, for the other users and teams a view shows, `GET
+  /api/v1/labels/named`; pickers label users and teams from their own
+  rows. Where two catalogs or teams share a label,
   the console pickers add the owner team where that tells them apart, then
   the slug, repeatedly, until the option texts are distinct. A new catalog's root
   `index.md` heading is its display name, else `Catalog`. An export is
@@ -3745,7 +3748,8 @@ curl -s -H "Authorization: Bearer $OKF_MCP_KEY" \
 | `GET /api/v1/catalogs?after=&limit=` | any | One page of the catalogs the key reaches, by name (see [Catalog listings are paginated](#catalog-listings-are-paginated)), as `{catalogs, next}`, each catalog with `name`, `display_name`, `label` (the display name, else the description, else "Untitled catalog"), `description`, `owner_team` (`null` when unassigned), `owner_team_label`, `files`, `concepts`, `generation` (of the loaded snapshot, what `expect_generation` compares against), `last_change` (`null` when empty), `suspended` (`{team, notice}` while its owner team is suspended, otherwise `null`: a suspended catalog is listed, never hidden; see [Suspending a team](#suspending-a-team)) and `maintenance` (`on` or `off`) |
 | `POST /api/v1/catalogs` | admin, every catalog | `{name, display_name, description, owner}` (`display_name` and `description` optional, `display_name` checked as for users; `owner` required, a team's name). 201 with the new catalog's summary; 403 for a key granted named catalogs, since it would not reach the new one; 404 for an unknown owner; 409 for an invalid or taken name; 422 without `owner` or for a refused `display_name` |
 | `PATCH /api/v1/catalogs/{catalog}` | admin on the catalog; an owner of its owner team signed in to the console; a provisioner | `{display_name?, description?}`, at least one (`deny_unknown_fields`). Answers `{name, previous, description, previous_display_name, display_name, label}`. 422 for a refused `display_name`. The CLI is `catalog update` |
-| `GET /api/v1/labels?after=&limit=` | any credential; not a provisioner | `{users, teams, catalogs, next}`, each of the first three a map from id to label. `catalogs` is one page of the catalogs the caller reaches (paginated as `GET /api/v1/catalogs`; labels shared within a page are told apart). An admin that reaches every catalog gets every user and team; anyone else gets its own user, its teams and the owner teams of the catalogs on its page. The console reads it to show labels where an answer names something by id (see [Display names and labels](#display-names-and-labels)) |
+| `GET /api/v1/labels?after=&limit=` | any credential; not a provisioner | `{users, teams, catalogs, next}`, each of the first three a map from id to label. `catalogs` is one page of the catalogs the caller reaches (paginated as `GET /api/v1/catalogs`; labels shared within a page are told apart). Every caller, an admin that reaches every catalog included, gets its own user, its teams and the owner teams of the catalogs on its page. The console reads it to show labels where an answer names something by id (see [Display names and labels](#display-names-and-labels)) |
+| `GET /api/v1/labels/named?users=&teams=` | any credential; not a provisioner | `{users, teams}`, maps from id to label for the comma-separated ids named, at most 100 of each (more, or an unknown parameter, is 400). An admin key or session (which may list every user and team with their labels, `GET /api/v1/users` and `/teams`) gets every one that exists; anyone else only its own user and its own teams. An id that does not exist, or that the caller may not see, is absent. The console reads the labels of the users and teams a view shows with it |
 | `PUT /api/v1/catalogs/{catalog}/owner` | admin, every catalog | `{team}`. Makes the team the owner; answers `{name, previous, owner_team}` (`previous` is `null` for a legacy catalog). 404 for an unknown catalog or team, 422 without `team`. Ownership grants no access |
 | `GET /api/v1/catalogs/{catalog}/member-access` | admin | `{name, member_access}` (`none`, `read` or `write`): what members of the owner team reach through their own keys and grants |
 | `PUT /api/v1/catalogs/{catalog}/member-access` | admin, every catalog | Body `{access: "none"\|"read"\|"write"}`. Sets it, and every member's own keys and grants are capped again at once; answers `{name, previous, member_access}`. 400 for another value, 404 for an unknown catalog, 422 without `access` |
@@ -4448,6 +4452,20 @@ take the server out of service. Alert on the `error` log line, not on
     or `/me` reads `GET /me/ceiling` page by page (follow `next` as
     `after`), or `whoami`'s `levels` for the catalogs it lists. The console
     shipped with the server is already changed.
+  - **Labels are read for what is shown (issue #749).** `GET
+    /api/v1/labels` no longer gives an admin that reaches every catalog
+    every user and team: like anyone else, it gets its own user, its teams
+    and the owner teams of the catalogs on its page. The labels of other
+    users and teams come from the new `GET
+    /api/v1/labels/named?users=&teams=` (comma-separated ids, at most 100
+    of each; `{users, teams}`), which answers any admin for any user or
+    team (as `GET /users` and `GET /teams` already did) and anyone else for
+    its own user and teams only. The
+    views that list users and teams (`GET /users`, `GET /teams`) already
+    carry each row's `label`. What clients must change: a script that
+    looked up an arbitrary user's or team's label in `/labels` asks
+    `/labels/named` for it, or reads the `label` of the user or team view.
+    The console shipped with the server is already changed.
   - **Metrics removed:** `okf_poll_duration_seconds`,
     `okf_catalog_refreshes_total`, `okf_catalog_concepts` and
     `okf_catalog_generation` (and the `okf.poll` span). Added: the

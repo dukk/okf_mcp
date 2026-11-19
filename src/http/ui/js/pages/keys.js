@@ -14,14 +14,14 @@
 import { h, pill, fact } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
-import { catalogLabel, userLabel } from '../core/labels.js';
+import { catalogLabel, ensureLabels, userLabel } from '../core/labels.js';
 import { guard, once } from '../core/pending.js';
 import { toast } from '../core/toast.js';
 import { drawerTicket } from '../core/drawer.js';
 import { when } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
 import { confirmDialog } from '../components/confirm.js';
-import { assignControl, namesOf, picker } from '../components/picker.js';
+import { assignControl, picker, rowsOf, userChoices } from '../components/picker.js';
 import { showOnce } from '../components/secret.js';
 import { ACCESS_KIND } from '../components/levels.js';
 import { keyUserChanged, refreshUnassigned } from '../core/shell.js';
@@ -64,7 +64,8 @@ function isGrant(key) {
     return key.kind === 'oauth';
 }
 
-// The User cell of both tables; `prefix` is 'key' or 'code'.
+// The User cell of both tables; `prefix` is 'key' or 'code'. Its label is
+// read with the rows (ensureLabels), for the users the table shows.
 function userCell(prefix, row) {
     return h('span', { 'data-test': `${prefix}-user-${row.name}`, class: row.user ? 'mono' : 'muted' },
         row.user ? userLabel(row.user) : 'unassigned');
@@ -138,6 +139,9 @@ export async function render(main) {
         const mine = ++view.latest;
         try {
             const { keys } = await api.get('/keys');
+            // The labels of the users these rows name; a failed read shows
+            // their slugs, never stops the rows from drawing.
+            await ensureLabels({ users: keys.map(key => key.user) });
             if (!main.isConnected || mine !== view.latest) return;
             view.rows = new Map(keys.map(key => [key.id, key]));
             table.redraw(keys);
@@ -176,9 +180,10 @@ function readGrants(data) {
 }
 
 // The User picker both create forms share: required, with no default, so
-// every new credential's user is a deliberate choice.
+// every new credential's user is a deliberate choice. `users` is
+// userChoices' `{ names, labelOf }`.
 function userField(users) {
-    return h('label', {}, 'User', picker({ name: 'user', required: true }, users, null, userLabel));
+    return h('label', {}, 'User', picker({ name: 'user', required: true }, users.names, null, users.labelOf));
 }
 
 // The Assign (unassigned) or Change user control of a key's or code's
@@ -191,7 +196,7 @@ function userAssign(main, users, { prefix, row, path, ticket, after }) {
     return h('section', {},
         h('h3', {}, 'User'),
         assignControl({
-            names: users, labelOf: userLabel, current: row.user, label: row.user ? 'Change user' : 'Assign',
+            names: users.names, labelOf: users.labelOf, current: row.user, label: row.user ? 'Change user' : 'Assign',
             ids: { select: `${prefix}-user-select`, button: `${prefix}-assign` },
             assign: async user => {
                 let updated;
@@ -205,9 +210,10 @@ function userAssign(main, users, { prefix, row, path, ticket, after }) {
         }));
 }
 
-// The users for a picker, or null (toasted) when they cannot be read.
+// The users for a picker, as userChoices' `{ names, labelOf }` (labelled
+// from their own rows), or null (toasted) when they cannot be read.
 async function usersOrNull() {
-    try { return await namesOf('users'); } catch { return null; }
+    try { return userChoices(await rowsOf('users')); } catch { return null; }
 }
 
 // Draws of each key or sign-in code drawer, numbered per drawer (by its
@@ -302,7 +308,7 @@ async function showKey(main, key, reload, ticket = drawerTicket(main), previous 
         fact('Kind', grant ? 'OAuth grant' : 'API key'),
         grant ? fact('Client', key.client_name ?? 'unknown client') : null,
         fact('Actor', h('code', {}, key.actor)),
-        fact('User', key.user ? userLabel(key.user) : 'unassigned'),
+        fact('User', key.user ? users.labelOf(key.user) : 'unassigned'),
         fact('Access', pill(key.access, ACCESS_KIND[key.access])),
         fact('Catalogs', catalogsOf(key)),
         fact('Default', key.default_catalog ? catalogLabel(key.default_catalog) : '-'),
@@ -409,6 +415,7 @@ function codesPanel(main) {
         const mine = ++latest;
         try {
             const { codes, max_expiry_secs: maxSecs } = await api.get('/oauth/codes');
+            await ensureLabels({ users: codes.map(code => code.user) });
             if (typeof maxSecs === 'number') maxExpirySecs = maxSecs;
             if (main.isConnected && mine === latest) table.redraw(codes);
             return typeof maxSecs === 'number';
@@ -506,7 +513,7 @@ async function showCode(main, code, reload, ticket = drawerTicket(main), previou
     const facts = h('dl', { class: 'facts' },
         fact('Id', h('code', {}, code.id)),
         fact('Actor', h('code', {}, code.actor)),
-        fact('User', code.user ? userLabel(code.user) : 'unassigned'),
+        fact('User', code.user ? users.labelOf(code.user) : 'unassigned'),
         fact('Access', pill(code.access, ACCESS_KIND[code.access])),
         fact('Catalogs', catalogsOf(code)),
         fact('Default', code.default_catalog ? catalogLabel(code.default_catalog) : '-'),

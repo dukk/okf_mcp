@@ -14,8 +14,8 @@ import { latest } from '../core/latest.js';
 import { ago, count, when } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
 import { confirmDialog } from '../components/confirm.js';
-import { namesOf, picker } from '../components/picker.js';
-import { named, userLabel } from '../core/labels.js';
+import { picker, rowsOf, userChoices } from '../components/picker.js';
+import { named } from '../core/labels.js';
 import { canAdministerPeople, refreshIdentity } from '../core/shell.js';
 import { guard, once } from '../core/pending.js';
 
@@ -78,14 +78,14 @@ export async function render(main) {
     async function openCreate() {
         const ticket = drawerTicket(main);
         let users;
-        try { users = await namesOf('users'); } catch { return; }
+        try { users = userChoices(await rowsOf('users')); } catch { return; }
         if (!ticket.current()) return;
         const form = h('form', { id: 'team-form' },
             h('label', {}, 'Name',
                 h('input', { name: 'name', required: true, pattern: '[a-z0-9-]+', autocomplete: 'off',
                              placeholder: 'lowercase letters, digits and -' })),
             h('label', {}, 'Display name', h('input', { name: 'display_name', autocomplete: 'off' })),
-            h('label', {}, 'Owner', picker({ name: 'owner', required: true }, users, null, userLabel)),
+            h('label', {}, 'Owner', picker({ name: 'owner', required: true }, users.names, null, users.labelOf)),
             h('button', { type: 'submit' }, 'Create team'));
         form.addEventListener('submit', async event => {
             event.preventDefault();
@@ -152,7 +152,7 @@ export async function render(main) {
         // allSettled, unlike all, waits for both and reports each one's
         // value or failure, so one failed read cannot discard the other.
         const [teamRead, usersRead] = await Promise.allSettled([
-            known ?? api.get(`/teams/${enc(name)}`), namesOf('users')]);
+            known ?? api.get(`/teams/${enc(name)}`), rowsOf('users').then(userChoices)]);
         const teamStale = teamRead.status === 'rejected';
         const usersStale = usersRead.status === 'rejected';
         // A part that failed with nothing shown before: no drawer to keep
@@ -187,9 +187,9 @@ export async function render(main) {
             }, 'Remove');
             return h('li', {}, named(member.label, member.user), role, remove);
         }));
-        const candidates = users.filter(user => !team.members.some(member => member.user === user));
+        const candidates = users.names.filter(user => !team.members.some(member => member.user === user));
         const add = h('form', { id: 'member-form', class: 'inline-form' },
-            picker({ name: 'user', required: true, 'aria-label': 'User to add', disabled: !manager }, candidates, null, userLabel),
+            picker({ name: 'user', required: true, 'aria-label': 'User to add', disabled: !manager }, candidates, null, users.labelOf),
             roleSelect({ name: 'role', 'aria-label': 'Role', disabled: !manager }, 'member'),
             h('button', { type: 'submit', disabled: !manager || !candidates.length }, 'Add member'));
         add.addEventListener('submit', async event => {
@@ -200,7 +200,7 @@ export async function render(main) {
             try { answer = await api.put(`${base}/${enc(user)}`, { role: String(data.get('role') ?? 'member') }); } catch {
                 return;
             }
-            await changed(team.name, answer.team, { message: `Added ${userLabel(user)} to ${team.label}.` });
+            await changed(team.name, answer.team, { message: `Added ${users.labelOf(user)} to ${team.label}.` });
         });
         const suspension = suspensionSection(team, refusal);
         const reason = team.personal_of

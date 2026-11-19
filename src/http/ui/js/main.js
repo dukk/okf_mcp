@@ -4,6 +4,7 @@ import { store } from './core/store.js';
 import { api, ApiError, authHeaders, setUnauthorizedHandler } from './core/api.js';
 import { start, route } from './core/router.js';
 import { closeDrawer } from './core/drawer.js';
+import { forgetLabels } from './core/labels.js';
 import { toast } from './core/toast.js';
 import { applyBrand, refreshIdentity, refreshUnassigned, setSignedOutHandler } from './core/shell.js';
 import { refreshFindingsBadge } from './pages/findings.js';
@@ -60,7 +61,7 @@ setUnauthorizedHandler(() => {
     const hadKey = !!store.key;
     store.key = null;
     store.whoami = null;
-    store.labels = null;
+    forgetLabels();
     store.csrf = null;
     store.session = null;
     showLogin(hadKey ? 'The key was refused. Sign in again.' : 'Your session ended. Sign in again.');
@@ -107,7 +108,7 @@ async function endCookieSession() {
 function signedOut() {
     store.key = null;
     store.whoami = null;
-    store.labels = null;
+    forgetLabels();
     store.csrf = null;
     store.session = null;
     history.replaceState(null, '', '/ui/');

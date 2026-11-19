@@ -330,32 +330,6 @@ impl LabelLookup {
         Ok(loaded)
     }
 
-    /// Every user's and team's label, read now and not cached: for the one
-    /// reader that may see them all (`GET /labels` for an every-catalog
-    /// admin), whose answer is whole by design.
-    ///
-    /// # Returns
-    /// The labels of every user and team.
-    ///
-    /// # Errors
-    /// [`OkfError::Database`].
-    #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "labels.everyone"))]
-    pub async fn everyone(&self) -> Result<Labels, OkfError> {
-        use crate::labels::directory::{TeamRow, UserRow};
-        let (users, teams) = tokio::try_join!(
-            sqlx::query_as::<_, UserRow>(
-                "SELECT name, display_name, email::text AS email FROM users"
-            )
-            .fetch_all(&self.pool),
-            sqlx::query_as::<_, TeamRow>(
-                "SELECT t.name, t.display_name, u.name AS personal_of \
-                 FROM teams t LEFT JOIN users u ON u.id = t.personal_of",
-            )
-            .fetch_all(&self.pool),
-        )?;
-        Ok(Labels::from_rows(users, teams, Vec::new()))
-    }
-
     /// The slugs of the teams a user belongs to.
     ///
     /// # Arguments
@@ -638,15 +612,12 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn everyone_and_teams_of_read_whole_but_do_not_fill_the_cache() {
+    async fn teams_of_reads_the_users_teams_but_does_not_fill_the_cache() {
         let db = test_db().await;
         let labels = lookup(&db.pool);
 
-        let everyone = labels.everyone().await.unwrap();
         let teams = labels.teams_of(TEST_USER).await.unwrap();
 
-        assert!(everyone.users().any(|(slug, _)| slug == TEST_USER));
-        assert!(everyone.teams().any(|(slug, _)| slug == TEST_TEAM));
         assert_eq!(teams, [TEST_TEAM]);
         assert!(labels
             .cache
