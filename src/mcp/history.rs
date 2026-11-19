@@ -121,7 +121,7 @@ fn revision_limit(requested: Option<u32>) -> i64 {
 pub(crate) async fn history(ctx: &ToolContext, params: HistoryParams) -> Result<History, OkfError> {
     let limit = revision_limit(params.limit);
     let paths = candidates(&params.path);
-    for state in ctx.read_set(params.catalog.as_deref())? {
+    for state in ctx.read_set(params.catalog.as_deref()).await? {
         // Admitted right before its revisions are read, so a catalog after
         // the one that answers is never recorded (plan Decision 23). A
         // `Busy` here leaves the catalogs already read recorded: they were.

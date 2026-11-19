@@ -180,6 +180,7 @@ mod tests {
                 "changesets",
                 "documents",
                 "email_tokens",
+                "feedback",
                 "key_catalogs",
                 "maintenance_dispositions",
                 "maintenance_evidence",
