@@ -27,8 +27,8 @@ use crate::error::OkfError;
 use crate::okf::doc::Doc;
 use crate::okf::markdown::encode_link_path;
 use crate::okf::ops::replay::{
-    folder_heading, insert_index_bullet_text, lists_target, log_text, missing_heading,
-    new_index_text, root_index_text, ReplayOp, LOG_TEMPLATE,
+    already_lists, folder_heading, insert_index_bullet_text, lists_target, log_text,
+    missing_heading, new_index_text, root_index_text, ReplayOp, LOG_TEMPLATE,
 };
 use crate::okf::ops::{load_concept, refused, LogKind, OpContext, OpOutcome};
 use crate::okf::paths::{basename, dirname, is_concept, join};
@@ -113,6 +113,10 @@ pub(crate) struct Listing<'a> {
     pub(crate) summary: &'a str,
     /// The heading to list under, if any.
     pub(crate) section: Option<&'a str>,
+    /// Count an older raw (unencoded) bullet as already listing the
+    /// concept: `index` and `repair_indexes` do; creating a concept never
+    /// does, so a new concept always gets its working, encoded listing.
+    pub(crate) accept_raw: bool,
 }
 
 /// `cmd_index` after the concept is loaded: lists it in its folder's
@@ -139,9 +143,24 @@ pub(crate) fn list_concept(
         )));
     }
     let text = workspace.read_text(&index_path)?;
-    if lists_target(workspace, &text, &index_path, listing.concept) {
+    let listed = if listing.accept_raw {
+        already_lists(workspace, &text, &index_path, listing.concept)
+    } else {
+        lists_target(workspace, &text, &index_path, listing.concept)
+    };
+    if listed {
+        if !lists_target(workspace, &text, &index_path, listing.concept) {
+            // Only an older raw bullet lists it: no link resolves, so say so
+            // rather than append a second bullet beside it.
+            outcome.notes.push(format!(
+                "{index_path} lists /{} with a link that does not resolve; change its destination to {}",
+                listing.concept,
+                encode_link_path(basename(listing.concept))
+            ));
+        }
         return Ok(format!("{index_path}: already lists {}", listing.concept));
     }
+    require_link_back(workspace, &index_path, listing)?;
     let bullet = concept_bullet(listing);
     let updated = insert_index_bullet_text(&text, &bullet, listing.section, false)
         .ok_or_else(|| missing_heading(&index_path, listing.section.unwrap_or("")))?;
@@ -157,6 +176,39 @@ pub(crate) fn list_concept(
         },
     );
     Ok(message)
+}
+
+/// The #432 round trip: refuses a listing whose bullet no later run would
+/// read back as a listing of the concept (a label that cannot be written).
+/// `list_concept` runs it before writing; `create_concept` runs it before
+/// it writes anything.
+///
+/// # Arguments
+/// * `workspace` - the catalog.
+/// * `index_path` - the folder index the bullet would go in.
+/// * `listing` - what would be listed.
+///
+/// # Errors
+/// [`OkfError::Refused`] when the bullet does not link back.
+#[tracing::instrument(level = "trace", skip_all)]
+pub(crate) fn require_link_back(
+    workspace: &dyn Workspace,
+    index_path: &str,
+    listing: &Listing<'_>,
+) -> Result<(), OkfError> {
+    if links_back(
+        workspace,
+        index_path,
+        &concept_bullet(listing),
+        listing.concept,
+    ) {
+        return Ok(());
+    }
+    Err(refused(format!(
+        "no markdown link to /{} can be written in /{index_path} (its title or path cannot be \
+         escaped); list it by editing the index",
+        listing.concept
+    )))
 }
 
 /// The bullet [`list_concept`] writes: `* [<title>](<file name>) - <summary>`,
@@ -211,6 +263,7 @@ pub fn index(
         title,
         summary,
         section,
+        accept_raw: true,
     };
     let mut outcome = OpOutcome::default();
     let message = list_concept(workspace, &listing, &mut outcome)?;
@@ -517,7 +570,7 @@ fn repair_counted(workspace: &dyn Workspace) -> Result<(OpOutcome, usize), OkfEr
     for concept in concepts {
         let index_path = join(dirname(concept), INDEX);
         let text = workspace.read_text(&index_path)?;
-        if lists_target(workspace, &text, &index_path, concept) {
+        if already_lists(workspace, &text, &index_path, concept) {
             continue;
         }
         let about = ConceptAbout::read(workspace, concept)?;
@@ -530,6 +583,7 @@ fn repair_counted(workspace: &dyn Workspace) -> Result<(OpOutcome, usize), OkfEr
             title: &title,
             summary: about.description.as_deref().unwrap_or(CONCEPT_TODO),
             section: None,
+            accept_raw: true,
         };
         if !links_back(workspace, &index_path, &concept_bullet(&listing), concept) {
             outcome.notes.push(unlinkable_note(concept, &index_path));
@@ -784,6 +838,268 @@ mod tests {
 
         assert!(again.touched.is_empty());
         assert_eq!(again.message, "infra/index.md: already lists infra/ntp.md");
+    }
+
+    /// File names the issue (#453) names, one per character class.
+    const AWKWARD_NAMES: [&str; 6] = [
+        "a b.md",
+        "a).md",
+        "a#b.md",
+        "100%.md",
+        "a\u{a0}b.md",
+        "a:b.md",
+    ];
+
+    fn awkward_ws(name: &str, index: &str) -> MemWorkspace {
+        let ws = MemWorkspace::default();
+        ws.write_atomic("d/index.md", index).unwrap();
+        ws.write_atomic(
+            &format!("d/{name}"),
+            "---\ntype: Note\ntitle: Odd\ndescription: An odd one.\n---\n",
+        )
+        .unwrap();
+        ws
+    }
+
+    /// Every link in `text` resolves to a file that exists.
+    fn no_broken_link(ws: &MemWorkspace, text: &str) -> bool {
+        let links = crate::okf::markdown::find_links(text);
+        !links.is_empty()
+            && links.iter().all(|l| {
+                crate::okf::markdown::resolve_link(ws, &l.target, "d/index.md")
+                    .is_none_or(|r| ws.exists(&r.path))
+            })
+    }
+
+    #[test]
+    fn index_links_awkward_names_and_does_not_duplicate() {
+        for name in AWKWARD_NAMES {
+            let ws = awkward_ws(name, "# D\n\n# Concepts\n");
+            let concept = format!("d/{name}");
+
+            let first = index(&ws, &ctx(), &concept, "odd", None, None).unwrap();
+            let after_first = ws.read_to_string("d/index.md").unwrap();
+            let second = index(&ws, &ctx(), &concept, "odd", None, None).unwrap();
+
+            assert!(no_broken_link(&ws, &after_first), "{name}: {after_first}");
+            assert!(
+                lists_target(&ws, &after_first, "d/index.md", &concept),
+                "{name}"
+            );
+            assert!(second.touched.is_empty(), "{name}: duplicated");
+            assert_eq!(
+                ws.read_to_string("d/index.md").unwrap(),
+                after_first,
+                "{name}"
+            );
+            assert!(!first.touched.is_empty(), "{name}");
+        }
+    }
+
+    #[test]
+    fn index_does_not_duplicate_an_old_raw_bullet() {
+        // It is recognised and left alone, with a note: no replay op can
+        // rewrite a destination in place.
+        // Written before #632: the raw name, which no parser reads back as
+        // the concept for these names.
+        for name in AWKWARD_NAMES {
+            let raw = format!("# D\n\n# Concepts\n\n* [Odd]({name}) - An odd one.\n");
+            let ws = awkward_ws(name, &raw);
+            let concept = format!("d/{name}");
+
+            let outcome = index(&ws, &ctx(), &concept, "odd", None, None).unwrap();
+
+            assert_eq!(ws.read_to_string("d/index.md").unwrap(), raw, "{name}");
+            assert!(outcome.touched.is_empty(), "{name}");
+            // `100%.md` still resolves as written (a bare `%.` is no escape),
+            // so it is an ordinary listing; the rest are unresolvable.
+            let want = usize::from(name != "100%.md");
+            assert_eq!(outcome.notes.len(), want, "{name}: {:?}", outcome.notes);
+            // Repair and replay agree: neither appends a second bullet.
+            assert!(
+                !repair_indexes(&ws)
+                    .unwrap()
+                    .touched
+                    .contains(&"d/index.md".to_string()),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn repair_indexes_writes_the_bullet_index_writes() {
+        for name in AWKWARD_NAMES {
+            let by_index = awkward_ws(name, "# D\n\n# Concepts\n");
+            let concept = format!("d/{name}");
+            index(&by_index, &ctx(), &concept, "An odd one.", None, None).unwrap();
+            let by_repair = awkward_ws(name, "# D\n\n# Concepts\n");
+            by_repair.write_atomic("index.md", "# Root\n").unwrap();
+            by_repair.write_atomic("log.md", "# Log\n").unwrap();
+
+            repair_indexes(&by_repair).unwrap();
+
+            let expected = by_index.read_to_string("d/index.md").unwrap();
+            let got = by_repair.read_to_string("d/index.md").unwrap();
+            assert!(
+                got.contains(expected.lines().last().unwrap()),
+                "{name}: {got}"
+            );
+            assert!(no_broken_link(&by_repair, &got), "{name}: {got}");
+            let again = repair_indexes(&by_repair).unwrap();
+            assert!(!again.touched.contains(&"d/index.md".to_string()), "{name}");
+        }
+    }
+
+    #[test]
+    fn index_refuses_a_bullet_that_would_not_link_back() {
+        // A title ending in `\` swallows the label's closing `]`: the
+        // documented unrepresentable-label case beside `links_back`.
+        let ws = awkward_ws("plain.md", "# D\n\n# Concepts\n");
+
+        let error = index(&ws, &ctx(), "d/plain", "x", None, Some("Odd\\")).unwrap_err();
+
+        let reason = refusal(error);
+        assert!(
+            reason.contains("no markdown link to /d/plain.md can be written"),
+            "{reason}"
+        );
+        assert_eq!(
+            ws.read_to_string("d/index.md").unwrap(),
+            "# D\n\n# Concepts\n"
+        );
+    }
+
+    #[test]
+    fn replay_adds_the_working_bullet_beside_a_raw_one() {
+        // Replay cannot tell which files exist, so a raw match is never
+        // "already listed": the worst case is an old broken bullet beside
+        // a working one.
+        for name in ["a b.md", "a).md", "a#b.md", "a:b.md"] {
+            let raw = format!("# D\n\n# Concepts\n\n* [Odd]({name}) - old\n");
+            let bullet = format!("* [Odd]({}) - new", encode_link_path(name));
+            let op = ReplayOp::ListBullet {
+                target: format!("d/{name}"),
+                bullet: bullet.clone(),
+                section: None,
+                create_section: false,
+            };
+
+            let got = crate::okf::ops::replay("d/index.md", Some(&raw), &[op]).unwrap();
+
+            assert_eq!(got, format!("{raw}{bullet}\n"), "{name}");
+        }
+    }
+
+    #[test]
+    fn replay_keeps_the_staged_bullet_when_another_listing_reads_like_a_raw_one() {
+        // `d/a.md` and `d/a.md#b.md` exist; the index holds a working link to
+        // `d/a.md` whose text is `d/a.md#b.md`'s raw name.
+        let current = "# D\n\n# Concepts\n\n* [A](a.md#b.md) - a\n";
+        let bullet = "* [B](a.md%23b.md) - b";
+        let op = ReplayOp::ListBullet {
+            target: "d/a.md#b.md".to_string(),
+            bullet: bullet.to_string(),
+            section: None,
+            create_section: false,
+        };
+
+        let got = crate::okf::ops::replay("d/index.md", Some(current), &[op]).unwrap();
+
+        assert_eq!(got, format!("{current}{bullet}\n"));
+    }
+
+    #[test]
+    fn index_ignores_text_that_only_looks_like_a_raw_link() {
+        // None of these is a bullet older versions wrote, so the real
+        // listing is appended.
+        let lines = [
+            "* Old destination: ](a b.md)",
+            "* ![Odd](a b.md)",
+            "* `[Odd](a b.md)` in a code span",
+            "* see [Odd](a b.md) - prose before the link",
+            "* [Odd [x](a b.md) - unbalanced",
+            "  * [Odd](a b.md) - indented, not a bullet start",
+            "[Odd](a b.md) - not a bullet",
+        ];
+        for line in lines {
+            let existing = format!("# D\n\n# Concepts\n\n{line}\n");
+            let ws = awkward_ws("a b.md", &existing);
+
+            index(&ws, &ctx(), "d/a b.md", "x", None, None).unwrap();
+
+            let got = ws.read_to_string("d/index.md").unwrap();
+            assert!(got.contains("](a%20b.md)"), "{line}: {got}");
+        }
+    }
+
+    #[test]
+    fn index_lists_a_name_whose_raw_form_reads_as_another_working_link() {
+        // `* [A](a.md).md)` is a working link to `d/a.md`, not a raw
+        // listing of `d/a.md).md`; likewise `a.md#b.md` for `d/a.md#b.md`.
+        for (other, name) in [("a.md", "a.md).md"), ("a.md", "a.md#b.md")] {
+            let existing = format!("# D\n\n# Concepts\n\n* [A]({name}) - a\n");
+            let ws = awkward_ws(other, &existing);
+            let text = "---\ntype: Note\ntitle: B\ndescription: b\n---\n";
+            ws.write_atomic(&format!("d/{name}"), text).unwrap();
+            let encoded = encode_link_path(name);
+
+            index(&ws, &ctx(), &format!("d/{name}"), "b", None, None).unwrap();
+
+            let got = ws.read_to_string("d/index.md").unwrap();
+            assert!(got.contains(&format!("]({encoded})")), "{name}: {got}");
+            let again = repair_indexes(&ws).unwrap();
+            assert!(!again.touched.contains(&"d/index.md".to_string()), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_literal_percent_name_is_not_taken_for_an_encoded_one() {
+        // `d/a b.md` is listed as `a%20b.md`; `d/a%20b.md` is another file
+        // and needs its own bullet, `a%2520b.md`, from index, repair and replay.
+        let files = [("d/a b.md", "Space"), ("d/a%20b.md", "Percent")];
+        let make = || {
+            let ws = MemWorkspace::default();
+            ws.write_atomic("index.md", "# Root\n").unwrap();
+            ws.write_atomic("log.md", "# Log\n").unwrap();
+            ws.write_atomic("d/index.md", "# D\n\n# Concepts\n")
+                .unwrap();
+            for (path, title) in files {
+                let text = format!("---\ntype: Note\ntitle: {title}\ndescription: d\n---\n");
+                ws.write_atomic(path, &text).unwrap();
+            }
+            ws
+        };
+        let check = |ws: &MemWorkspace, how: &str| {
+            let text = ws.read_to_string("d/index.md").unwrap();
+            assert!(text.contains("](a%20b.md)"), "{how}: {text}");
+            assert!(text.contains("](a%2520b.md)"), "{how}: {text}");
+            assert_eq!(text.matches("* [").count(), 2, "{how}: {text}");
+        };
+
+        let by_index = make();
+        for (path, _) in files {
+            index(&by_index, &ctx(), path, "d", None, None).unwrap();
+        }
+        check(&by_index, "index");
+
+        let by_repair = make();
+        repair_indexes(&by_repair).unwrap();
+        check(&by_repair, "repair");
+
+        let ws = make();
+        let ops = [
+            ("d/a b.md", "* [Space](a%20b.md) - d"),
+            ("d/a%20b.md", "* [Percent](a%2520b.md) - d"),
+        ]
+        .map(|(target, bullet)| ReplayOp::ListBullet {
+            target: target.to_string(),
+            bullet: bullet.to_string(),
+            section: None,
+            create_section: false,
+        });
+        let got = crate::okf::ops::replay("d/index.md", Some("# D\n\n# Concepts\n"), &ops).unwrap();
+        ws.write_atomic("d/index.md", &got).unwrap();
+        check(&ws, "replay");
     }
 
     #[test]
