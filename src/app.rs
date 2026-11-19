@@ -5,7 +5,7 @@
 //! loop and its last result (design "Time").
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use sqlx::PgPool;
@@ -109,9 +109,6 @@ pub struct App {
     // by the first request after `credential_ttl` ([`App::fresh_settings`]).
     // The lock is held only to clone or swap.
     settings: RwLock<LoadedSettings>,
-    // Set when the settings must be checked before the next request uses
-    // them, whatever their age: after a reconnect or an M16 announcement.
-    settings_stale: AtomicBool,
     // Held while the settings are checked or reloaded, so callers that find
     // them expired together run one check (tokio's `Mutex`: it is held
     // across `.await`s).
@@ -121,13 +118,21 @@ pub struct App {
     // instead of checking again, so during a database outage one failing
     // check serves every request that queued behind it.
     settings_rounds: AtomicU64,
-    // How many times the settings were marked stale, and how many marks
-    // there had been when the last finished check began. A waiter shares a
-    // finished check only when no mark has landed since it began: a newer
-    // invalidation needs a check of its own, while the mark a failed check
-    // restored for its retry does not.
+    // How many times the settings were marked stale (a `Settings` message,
+    // a reconnect, an M16 announcement, a poll pass). They stay stale, for
+    // every caller, until a check that began after the last mark succeeds:
+    // `satisfied_marks` is the count such a check saw when it began, and is
+    // written only on success, so a failed or cancelled check satisfies
+    // nothing. `checked_marks` is the count the last finished check (failed
+    // or not) saw when it began: a waiter shares a finished failed check
+    // only when no mark has landed since it began.
     settings_marks: AtomicU64,
+    satisfied_marks: AtomicU64,
     checked_marks: AtomicU64,
+    // Test hook: a settings check waits for this lock after it began and
+    // before it reads the database, so a test can hold a check in flight.
+    #[cfg(test)]
+    pub(crate) settings_check_hold: tokio::sync::Mutex<()>,
     // Test counters: how many settings checks, and how many
     // `settings::load`s, ran after start-up.
     #[cfg(test)]
@@ -351,11 +356,13 @@ impl App {
                 generation: admin_generation,
                 validated_at,
             }),
-            settings_stale: AtomicBool::new(false),
             settings_reload: tokio::sync::Mutex::new(()),
             settings_rounds: AtomicU64::new(0),
             settings_marks: AtomicU64::new(0),
+            satisfied_marks: AtomicU64::new(0),
             checked_marks: AtomicU64::new(0),
+            #[cfg(test)]
+            settings_check_hold: tokio::sync::Mutex::new(()),
             #[cfg(test)]
             settings_checks: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
@@ -733,10 +740,12 @@ impl App {
         if checked_meanwhile && !marked_since {
             return self.settings();
         }
-        // Read before the check clears the flag: a mark that lands after
-        // this counts as newer than the check.
+        // The marks this check answers: one that lands after this read is
+        // newer than the check and stays unsatisfied. If this future is
+        // dropped (a cancelled request) before the check finishes, nothing
+        // below runs and nothing is satisfied.
         let marks = self.settings_marks.load(Ordering::Acquire);
-        self.revalidate_settings().await;
+        self.revalidate_settings(marks).await;
         self.checked_marks.store(marks, Ordering::Release);
         self.settings_rounds.fetch_add(1, Ordering::Release);
         self.settings()
@@ -751,12 +760,11 @@ impl App {
     }
 
     /// Marks the settings for a check before their next use, whatever their
-    /// age. The count goes first, so a check that clears the flag after
-    /// this has already counted the mark as newer than itself.
+    /// age: every caller from now on waits for a check that began after
+    /// this mark to succeed.
     #[tracing::instrument(level = "trace", skip_all)]
     fn mark_settings_stale(&self) {
         self.settings_marks.fetch_add(1, Ordering::AcqRel);
-        self.settings_stale.store(true, Ordering::Release);
     }
 
     /// The loaded settings if they are neither marked stale nor older than
@@ -767,10 +775,15 @@ impl App {
     /// The settings, or `None` when they must be checked first.
     #[tracing::instrument(level = "trace", skip_all)]
     fn settings_if_fresh(&self) -> Option<Arc<Settings>> {
-        if self.settings_stale.load(Ordering::Acquire) {
+        // Under the read lock: a successful check swaps the settings and
+        // satisfies its marks under the write lock, so no caller sees the
+        // marks satisfied with the settings from before.
+        let loaded = self.settings.read().expect("settings lock poisoned");
+        let unsatisfied = self.settings_marks.load(Ordering::Acquire)
+            != self.satisfied_marks.load(Ordering::Acquire);
+        if unsatisfied {
             return None;
         }
-        let loaded = self.settings.read().expect("settings lock poisoned");
         // `to_std` fails for a negative age.
         let age = self.clock.now().signed_duration_since(loaded.validated_at);
         let fresh = age
@@ -782,14 +795,19 @@ impl App {
     /// Checks the settings against `admin_generation` and reloads them if it
     /// moved. Called only under `settings_reload`. The counter is read
     /// before the settings, so a change committed between the two reads
-    /// moves it again and the next check reloads.
+    /// moves it again and the next check reloads. Nothing is changed until
+    /// the check succeeds, so a failed or cancelled one leaves the settings
+    /// as stale as they were.
+    ///
+    /// # Arguments
+    /// * `marks` - the stale marks counted before this check began, which a
+    ///   success satisfies.
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn revalidate_settings(&self) {
-        // Cleared before the read, so a mark that lands during it sets the
-        // flag again and the next request checks once more.
-        let was_stale = self.settings_stale.swap(false, Ordering::AcqRel);
+    async fn revalidate_settings(&self, marks: u64) {
         #[cfg(test)]
         self.settings_checks.fetch_add(1, Ordering::Relaxed);
+        #[cfg(test)]
+        drop(self.settings_check_hold.lock().await);
         let checked_at = self.clock.now();
         let loaded_generation = self
             .settings
@@ -826,11 +844,9 @@ impl App {
                     loaded.generation = generation;
                     loaded.settings = Arc::new(settings);
                 }
+                self.satisfied_marks.store(marks, Ordering::Release);
             }
             Err(error) => {
-                if was_stale {
-                    self.settings_stale.store(true, Ordering::Release);
-                }
                 split_event!(
                     warn,
                     { kind = error.kind(), },
@@ -2810,6 +2826,81 @@ mod tests {
             .expect("the waiter's task");
 
         assert_eq!(seen, 5, "the waiter checked for its own mark");
+    }
+
+    /// Holds a stale-triggered check in flight (past its start, before its
+    /// database read) and returns its task, for the in-flight tests. The
+    /// settings are young, so only the stale mark makes the check run.
+    async fn a_stale_check_held_in_flight(
+        app: &Arc<App>,
+    ) -> (tokio::sync::MutexGuard<'_, ()>, tokio::task::JoinHandle<()>) {
+        let hold = app.settings_check_hold.lock().await;
+        let checks_before = app.settings_checks.load(Ordering::Relaxed);
+        let check = {
+            let app = Arc::clone(app);
+            tokio::spawn(async move { app.reload_settings().await })
+        };
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while app.settings_checks.load(Ordering::Relaxed) == checks_before {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the check started within 30 s");
+        (hold, check)
+    }
+
+    /// A request that arrives while a stale-triggered check is in flight
+    /// waits for it and gets what it read, not the old settings: they stay
+    /// stale until a check that began after the mark has succeeded.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_request_during_a_stale_check_waits_for_its_answer() {
+        let db = test_db().await;
+        let (app, _clock) = app_with_movable_clock(&db.pool).await;
+        set_setting(&db.pool, settings::SettingKey::MaxKeysPerUser, "5").await;
+        let (hold, check) = a_stale_check_held_in_flight(&app).await;
+
+        let mut request = {
+            let app = Arc::clone(&app);
+            tokio::spawn(async move { app.fresh_settings().await.max_keys_per_user })
+        };
+        let answered_early = tokio::time::timeout(Duration::from_millis(300), &mut request)
+            .await
+            .is_ok();
+        drop(hold);
+        let answer = tokio::time::timeout(Duration::from_secs(30), request)
+            .await
+            .expect("the request within 30 s")
+            .expect("the request's task");
+        tokio::time::timeout(Duration::from_secs(30), check)
+            .await
+            .expect("the check within 30 s")
+            .expect("the check's task");
+
+        assert!(!answered_early, "the request waited for the check");
+        assert_eq!(answer, 5);
+    }
+
+    /// A check cancelled mid-read satisfies nothing: the next request,
+    /// though the settings are young, checks again and gets the new value.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_cancelled_check_leaves_the_settings_stale() {
+        let db = test_db().await;
+        let (app, _clock) = app_with_movable_clock(&db.pool).await;
+        set_setting(&db.pool, settings::SettingKey::MaxKeysPerUser, "5").await;
+        let (hold, check) = a_stale_check_held_in_flight(&app).await;
+
+        check.abort();
+        // `abort` only requests it: wait until the task is gone.
+        let _ = tokio::time::timeout(Duration::from_secs(30), check)
+            .await
+            .expect("the cancelled check ends within 30 s");
+        drop(hold);
+        let next = tokio::time::timeout(Duration::from_secs(30), app.fresh_settings())
+            .await
+            .expect("the next request within 30 s");
+
+        assert_eq!(next.max_keys_per_user, 5, "the next request checked");
     }
 
     /// A check that finds `admin_generation` unmoved loads nothing; one

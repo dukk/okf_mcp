@@ -17,7 +17,11 @@
   so the next request retries. A validation time in the future (the
   clock stepped back) counts as expired.
 - `App::reload_settings`: marks the settings stale and checks them at once
-  (a `Settings` message, a reconnect, an M16 announcement, a poll pass).
+  (a `Settings` message, a reconnect, an M16 announcement, a poll pass). A
+  mark keeps the settings stale for every caller until a check that began
+  after it succeeds (`satisfied_marks`, written only on success): a request
+  during an in-flight check waits for its answer, and a failed or cancelled
+  check satisfies nothing.
 - An HTTP middleware (`check_settings`) that calls `fresh_settings` before
   every route but `/healthz`, so what handlers read through the synchronous
   `App::settings` during a request is never older than `credential_ttl`.
@@ -42,6 +46,8 @@
   `concurrent_requests_share_one_failed_check`,
   `concurrent_requests_share_one_failed_check_after_a_stale_mark`,
   `a_mark_during_a_check_gets_a_check_of_its_own`,
+  `a_request_during_a_stale_check_waits_for_its_answer`,
+  `a_cancelled_check_leaves_the_settings_stale`,
   `a_clock_stepped_back_expires_the_settings` (`src/app.rs`);
   `a_request_checks_settings_older_than_the_credential_ttl`
   (`src/http/mod.rs`); `an_m16_announcement_marks_credentials_and_settings_stale`,
