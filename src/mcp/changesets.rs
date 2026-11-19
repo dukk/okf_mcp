@@ -777,9 +777,16 @@ pub(crate) async fn pending_changes(
     let bases = entries
         .iter()
         .map(|entry| (entry.path.as_str(), entry.base_revision));
+    // The changeset's latest base, not the request's pinned snapshot: the
+    // diff is against what the entries were made on.
+    let before = state.current().generation();
     let loaded = state
         .current_covering(pool, ctx.app().rebuild_locks(), bases)
         .await?;
+    ctx.app()
+        .catalog_cache()
+        .refreshed_if_moved(&state, before)
+        .await;
     let files = blocking(move || pending_files(&loaded, &entries)).await?;
     Ok(PendingChanges {
         catalog: state.name().to_string(),
@@ -1441,66 +1448,6 @@ mod publish_tests {
         assert_eq!(polls.len(), 2);
         // A root has no parent, so each pass starts a trace of its own.
         assert!(polls.iter().all(|span| span.parent.is_none()));
-        // A catalog's turn is a child of its pass.
-        let turn = spans
-            .iter()
-            .find(|span| span.name == "okf.catalog.refresh")
-            .expect("a catalog refresh span");
-        assert!(polls.iter().any(|poll| Some(poll.id) == turn.parent));
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn catalog_gauges_follow_the_snapshot() {
-        let (test, registry) = pg_with_metrics().await;
-        let state = test.app.catalog("pg").unwrap();
-        let concepts = state.current().snapshot().concepts().count();
-        let generation = state.current().generation();
-        assert!(concepts > 0);
-
-        let text = render(&registry);
-
-        assert!(
-            text.contains(&format!(
-                r#"okf_catalog_concepts{{catalog="pg"}} {concepts}"#
-            )),
-            "{text}"
-        );
-        assert!(
-            text.contains(&format!(
-                r#"okf_catalog_generation{{catalog="pg"}} {generation}"#
-            )),
-            "{text}"
-        );
-        // A publish moves the generation; the gauge follows after a poll.
-        let ctx = writer(&test, "writer-a", "pg").await;
-        let handle = open(&ctx).await;
-        body(&ctx, &handle, "/a.md", "# A\n\nNew.\n").await;
-        publish_as(&ctx, &handle, "edit a").await.unwrap();
-        test.app.poll().await.unwrap();
-        let text = render(&registry);
-        assert!(
-            text.contains(&format!(
-                r#"okf_catalog_generation{{catalog="pg"}} {}"#,
-                generation + 1
-            )),
-            "{text}"
-        );
-        // A deleted catalog's series is gone after the next poll.
-        catalogs::delete(
-            test.app.pool(),
-            "pg",
-            true,
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        test.app.poll().await.unwrap();
-        let text = render(&registry);
-        assert!(
-            !text.contains(r#"okf_catalog_concepts{catalog="pg"}"#),
-            "{text}"
-        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1533,13 +1480,8 @@ mod publish_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_poll_counts_catalog_refreshes_and_the_key_reload() {
+    async fn a_poll_counts_the_key_reload() {
         let (test, registry) = pg_with_metrics().await;
-        // The database moved past this snapshot (an import by another process).
-        sqlx::query("UPDATE catalogs SET generation = generation + 1 WHERE name = 'pg'")
-            .execute(test.app.pool())
-            .await
-            .unwrap();
         // A key change moves `admin_generation`, so the poll reloads the cache.
         let mut conn = test.app.pool().acquire().await.unwrap();
         crate::invalidate::invalidate(
@@ -1554,14 +1496,8 @@ mod publish_tests {
         test.app.poll().await.unwrap();
 
         let text = render(&registry);
-        assert!(
-            text.contains(r#"okf_catalog_refreshes_total{catalog="pg",result="reloaded"} 1"#),
-            "{text}"
-        );
-        assert!(
-            text.contains(r#"okf_catalog_refreshes_total{catalog="pg",result="unchanged"} 1"#),
-            "{text}"
-        );
+        // Catalogs are not polled (M18 Task 8): no refresh is counted.
+        assert!(!text.contains("okf_catalog_refreshes_total"), "{text}");
         assert!(
             text.contains(r#"okf_poll_duration_seconds_count{outcome="ok"} 2"#),
             "{text}"
@@ -1613,8 +1549,8 @@ mod publish_tests {
         publish(ctx, params).await
     }
 
-    fn published_text(test: &TestApp, path: &str) -> String {
-        let loaded = test.app.catalog("pg").unwrap().current();
+    async fn published_text(test: &TestApp, path: &str) -> String {
+        let loaded = test.app.catalog("pg").await.unwrap().unwrap().current();
         loaded
             .snapshot()
             .get(path)
@@ -1629,7 +1565,7 @@ mod publish_tests {
     /// Stores an entry directly, as no write tool would (a rule changed, a
     /// hand edit), to show publish checks again.
     async fn insert_entry(test: &TestApp, handle: &str, entry: EntryRow) {
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         let row = changeset_row(test, handle).await;
         let mut tx = test.app.pool().begin().await.unwrap();
         changesets::lock_catalog(&mut tx, state.id()).await.unwrap();
@@ -1668,7 +1604,7 @@ mod publish_tests {
         body(&ctx, &handle, "/a.md", "# A\n\nNew.\n").await;
         // Resolved while open, as the losing publish read it before the lock.
         let stale = changeset_row(&test, &handle).await;
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         publish_as(&ctx, &handle, "first").await.unwrap();
 
         let input = crate::store::publish::PublishInput {
@@ -1733,7 +1669,7 @@ mod publish_tests {
         let test = pg().await;
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         let before = catalogs::find(test.app.pool(), "pg")
             .await
             .unwrap()
@@ -1759,7 +1695,9 @@ mod publish_tests {
             .generation;
         assert_eq!(after, before + 1);
         assert_eq!(state.current().generation(), after);
-        assert!(published_text(&test, "a.md").ends_with("# A\n\nNew.\n"));
+        assert!(published_text(&test, "a.md")
+            .await
+            .ends_with("# A\n\nNew.\n"));
         let rows = history::revisions(test.app.pool(), state.id(), "a.md", 5)
             .await
             .unwrap();
@@ -1853,11 +1791,11 @@ mod publish_tests {
         assert!(refused.is_err(), "{refused:?}");
         assert_eq!(state_of(&test, &handle).await, ChangesetState::Open);
         assert_eq!(
-            published_text(&test, "a.md"),
+            published_text(&test, "a.md").await,
             NOTE,
             "the publish rolled back"
         );
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         let rows = history::revisions(test.app.pool(), state.id(), "a.md", 5)
             .await
             .unwrap();
@@ -1881,7 +1819,7 @@ mod publish_tests {
 
         assert!(published.report.published);
         assert_eq!(state_of(&test, &handle).await, ChangesetState::Published);
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         let rows = history::revisions(test.app.pool(), state.id(), "a.md", 5)
             .await
             .unwrap();
@@ -1978,7 +1916,7 @@ mod publish_tests {
         import(test.app.pool(), "pg", republished, &options)
             .await
             .unwrap();
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         let stale = state.current().generation();
         let size = test.app.pool().options().get_max_connections();
         let mut held = Vec::with_capacity(size as usize);
@@ -2000,7 +1938,7 @@ mod publish_tests {
         assert!(published.unwrap().report.published);
         assert!(state.current().generation() > stale);
         assert!(state.current().snapshot().get("z.md").is_some());
-        assert!(published_text(&test, "a.md").ends_with("Edited.\n"));
+        assert!(published_text(&test, "a.md").await.ends_with("Edited.\n"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2028,7 +1966,7 @@ mod publish_tests {
             .await
             .unwrap();
         assert_eq!(entries.len(), 1);
-        assert!(published_text(&test, "a.md").ends_with("From a.\n"));
+        assert!(published_text(&test, "a.md").await.ends_with("From a.\n"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2053,7 +1991,7 @@ mod publish_tests {
             .chain(&two.report.replayed)
             .collect();
         assert_eq!(replayed, ["/log.md"]);
-        let text = published_text(&test, "log.md");
+        let text = published_text(&test, "log.md").await;
         assert!(
             text.contains("* **Update:** from a") && text.contains("* **Update:** from b"),
             "{text}"
@@ -2073,7 +2011,7 @@ mod publish_tests {
         let published = publish_as(&second, &b, "list y").await.unwrap();
 
         assert_eq!(published.report.replayed, ["/infra/index.md"]);
-        let text = published_text(&test, "infra/index.md");
+        let text = published_text(&test, "infra/index.md").await;
         assert!(
             text.contains("[X](x.md) - the x") && text.contains("[Y](y.md) - the y"),
             "{text}"
@@ -2097,7 +2035,7 @@ mod publish_tests {
             .iter()
             .any(|finding| finding.file == "a.md" && finding.rule == "broken-link"));
         assert_eq!(state_of(&test, &handle).await, ChangesetState::Open);
-        assert_eq!(published_text(&test, "a.md"), NOTE);
+        assert_eq!(published_text(&test, "a.md").await, NOTE);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2122,7 +2060,7 @@ mod publish_tests {
         assert!(errors
             .iter()
             .any(|finding| finding.file == "hub.md" && finding.rule == "link-into-deleted"));
-        assert_eq!(published_text(&test, "infra/x.md"), X);
+        assert_eq!(published_text(&test, "infra/x.md").await, X);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2162,7 +2100,7 @@ mod publish_tests {
         import(test.app.pool(), "pg", files(&incoming), &options)
             .await
             .unwrap();
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         let stale = state.current().generation();
 
         let error = publish_as(&ctx, &handle, "drop y").await.unwrap_err();
@@ -2196,7 +2134,7 @@ mod publish_tests {
         let error = publish_as(&ctx, &handle, "leak").await.unwrap_err();
 
         assert_eq!(error.kind(), "SecretDetected");
-        assert_eq!(published_text(&test, "a.md"), NOTE);
+        assert_eq!(published_text(&test, "a.md").await, NOTE);
     }
 
     /// `(revision, deleted, content)` of a document row.
@@ -2237,7 +2175,7 @@ mod publish_tests {
         let first = publish_as(&ctx, &handle, "add b, drop y").await.unwrap();
         // A tombstone: the number moved on, the content and the snapshot entry are gone.
         let tombstone = document_row(&test, "infra/y.md").await;
-        let gone = test.app.catalog("pg").unwrap().current();
+        let gone = test.app.catalog("pg").await.unwrap().unwrap().current();
         assert_eq!(tombstone, (2, true, Vec::new()));
         assert!(gone.snapshot().get("infra/y.md").is_none());
         // The changeset is closed, so a new one brings y back on its tombstone.
@@ -2270,8 +2208,8 @@ mod publish_tests {
             second.report.revisions,
             [revision("/infra/y.md", 3, "create")]
         );
-        assert_eq!(published_text(&test, "b.md"), created);
-        assert_eq!(published_text(&test, "infra/y.md"), Y);
+        assert_eq!(published_text(&test, "b.md").await, created);
+        assert_eq!(published_text(&test, "infra/y.md").await, Y);
         assert_eq!(
             document_row(&test, "infra/y.md").await,
             (3, false, Y.as_bytes().to_vec())
@@ -2294,7 +2232,7 @@ mod publish_tests {
         let test = pg().await;
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         body(&ctx, &handle, "/a.md", "# A\n\nMine.\n").await;
         // A revision 2 of a.md that the publish lock should have ruled out
         // (a hand edit of the database): the backstop must report it.
@@ -2322,7 +2260,7 @@ mod publish_tests {
         ));
         assert_eq!(state_of(&test, &handle).await, ChangesetState::Open);
         assert_eq!(document_row(&test, "a.md").await.0, 1);
-        assert_eq!(published_text(&test, "a.md"), NOTE);
+        assert_eq!(published_text(&test, "a.md").await, NOTE);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2330,7 +2268,7 @@ mod publish_tests {
         let test = pg().await;
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         body(&ctx, &handle, "/a.md", "# A\n\nFirst.\n").await;
         // Hold the changeset's row lock, so the publish and then the write
         // queue on it in that order.
@@ -2387,7 +2325,7 @@ mod publish_tests {
         assert_eq!(refused.kind(), "Refused");
         let message = refused.to_string();
         assert!(message.contains("while this write waited"), "{message}");
-        assert_eq!(published_text(&test, "infra/y.md"), Y);
+        assert_eq!(published_text(&test, "infra/y.md").await, Y);
         let entries: i64 =
             sqlx::query_scalar("SELECT count(*) FROM changeset_entries WHERE path = 'infra/y.md'")
                 .fetch_one(test.app.pool())
@@ -2444,6 +2382,8 @@ mod changes_tests {
             .unwrap();
         test.app
             .catalog("pg")
+            .await
+            .unwrap()
             .unwrap()
             .refresh(test.app.pool(), test.app.rebuild_locks())
             .await
@@ -2603,7 +2543,7 @@ mod changes_tests {
             );
         }
         // The published documents are untouched.
-        let loaded = test.app.catalog("pg").unwrap().current();
+        let loaded = test.app.catalog("pg").await.unwrap().unwrap().current();
         assert_eq!(
             loaded.snapshot().get("a.md").map(|doc| doc.text()),
             Some(NOTE)
@@ -2635,7 +2575,7 @@ mod changes_tests {
         let test = pg().await;
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         body(&ctx, &handle, "/a.md", "First.\n").await;
         // Hold the changeset's row lock, so the discard and then the write
         // queue on it in that order.
@@ -2959,7 +2899,7 @@ mod changes_tests {
         let test = pg().await;
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         // `a.md` is a published file, so an entry under it can never apply
         // (no write tool stores one; a publish made after the edit can).
         let edit = PendingEdit {
@@ -3180,8 +3120,8 @@ mod restructure_publish_tests {
         publish(&session.ctx, params).await
     }
 
-    fn published_text(test: &TestApp, path: &str) -> String {
-        let loaded = test.app.catalog("pg").unwrap().current();
+    async fn published_text(test: &TestApp, path: &str) -> String {
+        let loaded = test.app.catalog("pg").await.unwrap().unwrap().current();
         loaded
             .snapshot()
             .get(path)
@@ -3215,7 +3155,7 @@ mod restructure_publish_tests {
     async fn a_published_move_deletes_the_old_path_and_creates_the_new_one() {
         let test = pg().await;
         let ctx = writer(&test, "writer-a", "pg").await;
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         moved(&ctx, "infra/x.md", "infra/z.md").await;
 
         let published = publish_as(&ctx, "move x").await.unwrap();
@@ -3243,9 +3183,13 @@ mod restructure_publish_tests {
         assert_eq!(old[0].message, "move x");
         assert_eq!((new.len(), new[0].op.as_str()), (1, "create"));
         assert!(tombstoned(&test, "infra/x.md").await);
-        assert_eq!(published_text(&test, "infra/z.md"), X);
-        assert!(published_text(&test, "hub.md").contains("[X](/infra/z.md)"));
-        assert!(published_text(&test, "infra/index.md").contains("* [X](z.md) - x"));
+        assert_eq!(published_text(&test, "infra/z.md").await, X);
+        assert!(published_text(&test, "hub.md")
+            .await
+            .contains("[X](/infra/z.md)"));
+        assert!(published_text(&test, "infra/index.md")
+            .await
+            .contains("* [X](z.md) - x"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -3260,7 +3204,7 @@ mod restructure_publish_tests {
         let published = publish_as(&mover, "rename y").await.unwrap();
 
         assert_eq!(published.report.replayed, ["/infra/index.md"]);
-        let index = published_text(&test, "infra/index.md");
+        let index = published_text(&test, "infra/index.md").await;
         assert!(index.contains("* [Y](w.md) - y"), "{index}");
         assert!(index.contains("* [Q](q.md) - q"), "{index}");
     }
@@ -3277,7 +3221,7 @@ mod restructure_publish_tests {
         let published = publish_as(&mover, "move x").await.unwrap();
 
         assert_eq!(published.report.replayed, ["/log.md"]);
-        let log = published_text(&test, "log.md");
+        let log = published_text(&test, "log.md").await;
         assert!(log.contains("* **Update:** from b"), "{log}");
         assert!(log.contains("Added [X](/infra/z.md)."), "{log}");
         assert!(!log.contains("/infra/x.md"), "{log}");
@@ -3413,7 +3357,7 @@ mod restructure_publish_tests {
                 ("/infra/y.md", "delete", 2)
             ]
         );
-        let index = published_text(&test, "infra/index.md");
+        let index = published_text(&test, "infra/index.md").await;
         assert!(
             !index.contains("[Y](y.md)") && index.contains("[Q](q.md)"),
             "{index}"
@@ -3438,11 +3382,18 @@ mod restructure_publish_tests {
                 ("/infra/part.md", "create", 1),
             ]
         );
-        assert!(published_text(&test, "infra/part.md").contains("Part text."));
+        assert!(published_text(&test, "infra/part.md")
+            .await
+            .contains("Part text."));
         assert!(published_text(&test, "infra/big.md")
+            .await
             .contains("## Part\n\n[Part](/infra/part.md): The part.\n"));
-        assert!(published_text(&test, "hub.md").contains("[the part](/infra/part.md)"));
-        assert!(published_text(&test, "infra/index.md").contains("* [Part](part.md) - The part."));
+        assert!(published_text(&test, "hub.md")
+            .await
+            .contains("[the part](/infra/part.md)"));
+        assert!(published_text(&test, "infra/index.md")
+            .await
+            .contains("* [Part](part.md) - The part."));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -3479,8 +3430,12 @@ mod restructure_publish_tests {
             !warnings.iter().any(|finding| finding.file == "c.md"),
             "{warnings:?}"
         );
-        assert!(published_text(&test, "infra/big.md").contains("## Part\n"));
-        assert!(published_text(&test, "infra/part.md").contains("Deep text."));
+        assert!(published_text(&test, "infra/big.md")
+            .await
+            .contains("## Part\n"));
+        assert!(published_text(&test, "infra/part.md")
+            .await
+            .contains("Deep text."));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -3511,7 +3466,7 @@ mod restructure_publish_tests {
                 ("/infra/y.md", "delete", 2)
             ]
         );
-        let index = published_text(&test, "infra/index.md");
+        let index = published_text(&test, "infra/index.md").await;
         assert!(!index.contains("y.md"), "{index}");
         assert!(index.contains("* [X](x.md) - x"), "{index}");
         assert!(tombstoned(&test, "infra/y.md").await);

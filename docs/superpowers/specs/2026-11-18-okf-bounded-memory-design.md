@@ -76,6 +76,21 @@ unchanged inside.
   measure on the real catalog and a synthetic large one, record the factor
   and the method in this spec). The cache's capacity is
   `catalog_cache_bytes`.
+  > **Corrected (issue #686, 2026-11-19).** The factor is **10**
+  > (`cache::catalogs::WEIGHT_FACTOR`; the weigher is
+  > `Loaded::stored_bytes * 10`, saturating at `u32::MAX`). Method
+  > (`tests/snapshot_weight.rs`, `--ignored`): a counting
+  > `#[global_allocator]` in its own test binary; synthetic catalogs of 500
+  > and 5,000 concepts (frontmatter, headings, prose, links to neighbours,
+  > about 850 bytes each) imported into Postgres; after a warm-up load of a
+  > small catalog, the bytes allocated minus freed across one
+  > `CatalogState::load` whose result is still held. Measured: 500
+  > documents, 3,870,753 B resident for 424,010 B stored (9.13); 5,000
+  > documents, 38,696,461 B for 4,285,010 B (9.03). The larger, 9.13, is
+  > rounded up to 10. No real catalog checkout was available to the run;
+  > the synthetic documents are prose-heavy, so a catalog of shorter, more
+  > linked documents may weigh somewhat more per byte.
+
 - **Loads are single-flight** (`try_get_with`): concurrent misses on one
   catalog build it once, through today's `CatalogState::load`.
 - **A stale hit refreshes in place** with today's `refresh_to`. Readers

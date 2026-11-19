@@ -907,6 +907,19 @@ impl CatalogCache {
 
 Publish (`src/store/publish.rs:303`) and HTTP import (`src/http/archives.rs:576`) keep refreshing the publisher's own entry directly (its `NOTIFY` arrives a moment later and is then a no-op).
 
+> **Corrected (issue #686, 2026-11-19).** As shipped (read `src/cache/catalogs.rs`, `src/app.rs`, `src/mcp/context.rs`):
+> - **The factor is 10** (`cache::catalogs::WEIGHT_FACTOR`; `cache::catalogs::weight(stored_bytes)` is the weigher, saturating at `u32::MAX`). `Loaded::stored_bytes()` is new. Method and numbers are in spec Decision 2; the measurement is `tests/snapshot_weight.rs` (`--ignored`).
+> - `CatalogCache::new(pool, budget_bytes, metrics)`: no TTL argument. Freshness is not the cache's: `get(row, rebuilds)` uses `get_or_load` and then compares the snapshot's generation with the row's, refreshing in place when behind (`get_or_revalidate`'s `check` runs only for stale-marked entries, so it could not do this). The snapshot cache's moka TTL is a fixed one-day backstop. There is **no `CatalogCache::mark_all_stale`**: a reconnect marks the directory stale (`App::apply_reconnect`, and `App::catch_up_catalogs`, which the M16 subscriber calls on a resubscribe, is now just that), and each use then rereads the row and catches the snapshot up.
+> - `apply` is `catch_up(id, generation, rebuilds) -> Result<CatchUp, OkfError>` (`NotResident | Current | Applied`): used by the change feed (`App::apply`), M16 announcements (`refresh_announced`) and the HTTP import. **Minimum generations (Decision 11)** are the cache's epoch fence: a `Catalog` message that finds the entry not resident calls `Bounded::invalidate(id)`, which moves the epoch of a load in flight (only then: no state otherwise), so that load is served but not kept. It is conservative (a load that already read the new generation is not kept either) and needs no per-id state.
+> - Re-weighing: `refreshed(id)` (the publisher's own refresh and every refresh inside the cache) and `refreshed_if_moved(state, before)` (an overlay build and `pending_changes`, which can refresh a state through `current_covering`).
+> - The broken map is `Bounded<(id, generation), ()>` (10,000 entries, one hour). A request for a broken generation gets the older snapshot if one is cached, else `CatalogNotSelected` (what an unloaded catalog answered before). A failed in-place refresh keeps serving the old snapshot.
+> - `CatalogMeta`: `App::forget_if_deleted(id, name)` drops a cached catalog whose name no longer resolves to that id (one directory read, only when it is cached); a description, owner or maintenance change keeps the snapshot.
+> - `App` keeps an async `catalog(name) -> Result<Option<Arc<CatalogState>>>` (row, then state; `None` for absent or unbuildable) for the archive routes and tests, and adds `listed_state(&row)` (`catalog_state` with `CatalogNotSelected` as `None`), which replaced `loaded_catalog`. Listings (`GET /catalogs`, MCP `list_catalogs`) load the page's catalogs one after another and leave out one that does not build; `/api/search` loads the catalogs it would search (it reads them anyway); **`GET /whoami` lists every reachable name without loading** (a behaviour change: before, a catalog this replica had not loaded was left out).
+> - `ToolContext` has no `Pinned` for catalogs (that name is the changeset's): `held: Mutex<HashMap<String, Held { state, snapshot }>>` plus `rows` (the rows `select` read, so `state` needs no second read). `select` looks up each candidate with the cached `directory.resolve`, not `resolve_many` (whose bulk reads are not cached, so every request would read the rows again; Task 7's note expected `resolve_many`). Reads use `ToolContext::snapshot(&state)` (not `snapshot(name)`): `view` and the three browse routes were the only production read sites; the rest of the `.current()` calls are writers (publish, `current_covering`) or tests. `state` is `pub(crate)`. `resolve_changeset` uses `catalogs::row_by_id` (added, with a test in `src/store/catalogs_rows_tests.rs`).
+> - `App::poll_pass` keeps only the key reload; `okf_catalog_refreshes_total` is still declared but no longer recorded (**Task 16** deletes it with `RefreshResult`). The `okf.catalog.refresh` span went with the loop. The Grafana example lost its two per-catalog panels, and its `$catalog` variable reads `okf_publish_duration_seconds_count`.
+> - `/healthz`'s field is `cached_catalogs` (a `u64`, `Bounded::entry_count`, added). `catalog_cache_bytes` is a `ByteSize` (`"1GiB"`).
+> - `tests/support/server.rs` now also forces `catalog_ttl = 1h` for `start_shared`/`sibling`, as the conventions ask, so a multi-replica pass proves `NOTIFY` carried a catalog change.
+
 - [ ] **Step 4: Run, full gates; update the spec's Decision 2 with the factor; commit** — `feat: catalogs load on demand into a bounded cache (M18 task 8)`.
 
 ---
@@ -916,7 +929,7 @@ Publish (`src/store/publish.rs:303`) and HTTP import (`src/http/archives.rs:576`
 **Files:** Modify `src/overlay.rs`, `src/config.rs`, `src/app.rs`.
 
 - [ ] **Step 1: Failing test:** `overlays_are_evicted_by_bytes_not_count`: `overlay_cache_bytes` fits two overlays of a test catalog; build three; the least recently used is gone.
-- [ ] **Step 2: Implement.** Replace the hand-rolled `HashMap` and `capacity` with `Bounded<i64 /* changeset id */, Arc<Overlay>>` (`CacheName::Overlay`, `Limit::Bytes`, `time_to_idle = session_idle_timeout` through a `Bounded::with_idle(Duration)` builder method added here), weighed with Task 8's weigher on the overlay's workspace. Keep the validity check (`built_at`) and `builds: KeyedLocks` as they are. Config: `overlay_cache_bytes` (default 256 MiB); `overlay_cache_size` still parses and logs `warn!("overlay_cache_size is deprecated and ignored; set overlay_cache_bytes")` at start-up.
+- [ ] **Step 2: Implement.** Replace the hand-rolled `HashMap` and `capacity` with `Bounded<i64 /* changeset id */, Arc<Overlay>>` (`CacheName::Overlay`, `Limit::Bytes`, `time_to_idle = session_idle_timeout` through a `Bounded::with_idle(Duration)` builder method added here), weighed with Task 8's weigher on the overlay's workspace (as shipped in issue #686: `cache::catalogs::weight(stored_bytes)`, where a snapshot's `stored_bytes` is `Loaded::stored_bytes()`; an overlay must sum its own files' sizes the same way). Keep the validity check (`built_at`) and `builds: KeyedLocks` as they are. Config: `overlay_cache_bytes` (default 256 MiB); `overlay_cache_size` still parses and logs `warn!("overlay_cache_size is deprecated and ignored; set overlay_cache_bytes")` at start-up.
 - [ ] **Step 3: Run, gates, commit** — `feat: overlays bounded in bytes (M18 task 9)`.
 
 ---
@@ -1194,7 +1207,7 @@ async fn run(job: Housekeeping, context: Data<HousekeepingContext>) -> Result<()
 
 **Files:** Modify `src/app.rs`, `src/http/mod.rs`, `src/config.rs`, `src/telemetry/metrics.rs`, `src/cli.rs`, `tests/support/server.rs`, any test that calls `app.poll()`.
 
-- [ ] **Step 1:** Delete `App::poll`, `poll_pass`, `poll_until`, the `polling` mutex, the `okf.poll` span and `poll_duration` metric, `catalog_refreshes` / `okf_catalog_refreshes_total` and `RefreshResult` (the per-catalog gauges went in Task 8). Remove them from `Metrics::FAMILIES`.
+- [ ] **Step 1:** Delete `App::poll`, `poll_pass`, `poll_until`, the `polling` mutex, the `okf.poll` span and `poll_duration` metric, `catalog_refreshes` / `okf_catalog_refreshes_total` and `RefreshResult` (the per-catalog gauges went in Task 8; since issue #686 nothing records `okf_catalog_refreshes_total`, and `poll_pass` only reloads the key cache). Remove them from `Metrics::FAMILIES`.
 - [ ] **Step 2:** `poll_interval` still parses and logs `warn!("poll_interval is deprecated and ignored")`.
 - [ ] **Step 3:** Every test that called `app.poll().await` to make a change visible now relies on `NOTIFY`: replace with a bounded wait helper `app.until_applied(|app| ..)` (lib) or `eventually` (integration). `grep -rn "\.poll()" src tests` must find nothing.
 - [ ] **Step 4:** Full gates; commit — `feat: remove the poll loop (M18 task 16)`.
@@ -1262,7 +1275,7 @@ async fn run(job: Housekeeping, context: Data<HousekeepingContext>) -> Result<()
   - `invalidate::{Invalidation, Message, CHANNEL, invalidate, listen}`, `App::{apply, apply_reconnect}`;
   - `cache::{Bounded, CacheName, Limit}`, `Bounded::{get_or_load, get_or_revalidate, peek, invalidate, invalidate_where, mark_all_stale, reweigh, with_weigher, with_metrics}`;
   - `cache::directory::{CatalogDirectory, Page}`, `CatalogDirectory::{resolve, resolve_many, reachable_page, apply}`; `store::catalogs::{CatalogRow, row_by_name, row_by_id, rows_by_names, page}`;
-  - `cache::catalogs::CatalogCache::{get, apply}`; `App::{catalog_row, catalog_state, publish_lock, directory}`;
+  - `cache::catalogs::CatalogCache::{get, catch_up, refreshed}` (issue #686: `apply` became `catch_up`); `App::{catalog_row, catalog_state, publish_lock, directory}`;
   - `cache::credentials::{Credentials, CredentialEntry, UserEntry, AccessFacts}`; `cache::labels::{LabelLookup, Wanted}`;
   - `housekeeping::{QUEUE, Task, Housekeeping, schedule, tick_until, spawn_worker}`; `mail::queue::{WorkerPool, prune_workers}`;
   - `bridge(app)` (Task 13).

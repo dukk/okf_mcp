@@ -229,6 +229,8 @@ async fn an_import_reports_its_counts_and_a_stale_generation_is_refused() {
     let generation = server
         .app
         .catalog("main")
+        .await
+        .unwrap()
         .expect("main")
         .current()
         .generation();
@@ -286,6 +288,8 @@ async fn an_import_reports_its_counts_and_a_stale_generation_is_refused() {
         server
             .app
             .catalog("main")
+            .await
+            .unwrap()
             .expect("main")
             .current()
             .generation(),
@@ -348,6 +352,8 @@ async fn an_export_or_import_in_flight_locks_the_catalog_and_admits_no_second_im
     let generation = server
         .app
         .catalog("main")
+        .await
+        .unwrap()
         .expect("main")
         .current()
         .generation();
@@ -406,6 +412,8 @@ async fn an_export_or_import_in_flight_locks_the_catalog_and_admits_no_second_im
         server
             .app
             .catalog("main")
+            .await
+            .unwrap()
             .expect("main")
             .current()
             .generation(),
@@ -447,6 +455,8 @@ async fn an_admin_signed_in_with_a_password_imports_an_archive() {
     let generation = server
         .app
         .catalog("main")
+        .await
+        .unwrap()
         .expect("main")
         .current()
         .generation();
@@ -496,7 +506,13 @@ async fn an_admin_signed_in_with_a_password_imports_an_archive() {
     if !ran {
         return;
     }
-    let current = server.app.catalog("main").expect("main").current();
+    let current = server
+        .app
+        .catalog("main")
+        .await
+        .unwrap()
+        .expect("main")
+        .current();
     assert_eq!(current.generation(), generation + 1);
 }
 
@@ -534,8 +550,19 @@ async fn a_member_imports_where_they_write_and_only_exports_where_they_read() {
         .expect("entitle");
     }
     server.app.poll().await.expect("poll");
-    let generation = |name: &str| server.app.catalog(name).expect(name).current().generation();
-    let (main_before, other_before) = (generation("main"), generation("other"));
+    // The generation `app` serves for catalog `name`.
+    async fn generation(app: &okf_mcp::app::App, name: &str) -> i64 {
+        app.catalog(name)
+            .await
+            .unwrap()
+            .expect(name)
+            .current()
+            .generation()
+    }
+    let (main_before, other_before) = (
+        generation(&server.app, "main").await,
+        generation(&server.app, "other").await,
+    );
     let archive = tarball(&[("index.md", "# Main\n\nImported by a member.\n")]);
 
     let ran = drive(console_base(&server), move |ui| {
@@ -583,9 +610,19 @@ async fn a_member_imports_where_they_write_and_only_exports_where_they_read() {
     if !ran {
         return;
     }
-    assert_eq!(generation("main"), main_before + 1);
-    assert_eq!(generation("other"), other_before, "nothing imported there");
-    let main = server.app.catalog("main").expect("main").current();
+    assert_eq!(generation(&server.app, "main").await, main_before + 1);
+    assert_eq!(
+        generation(&server.app, "other").await,
+        other_before,
+        "nothing imported there"
+    );
+    let main = server
+        .app
+        .catalog("main")
+        .await
+        .unwrap()
+        .expect("main")
+        .current();
     assert_eq!(
         main.workspace()
             .read_to_string("index.md")

@@ -673,6 +673,8 @@ mod tests {
         assert!(test
             .app
             .catalog("main")
+            .await
+            .unwrap()
             .expect("main")
             .current()
             .snapshot()
@@ -767,7 +769,13 @@ mod tests {
                 .any(|e| e["file"] == "/systems/zeta.md" && e["rule"] == "broken-link"),
             "{failing}"
         );
-        let snapshot = test.app.catalog("main").expect("main").current();
+        let snapshot = test
+            .app
+            .catalog("main")
+            .await
+            .unwrap()
+            .expect("main")
+            .current();
         assert!(snapshot
             .snapshot()
             .get("systems/gamma.md")

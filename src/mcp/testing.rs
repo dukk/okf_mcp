@@ -562,7 +562,12 @@ pub(crate) async fn open_at(
     catalog: &str,
     at: DateTime<Utc>,
 ) -> ChangesetRow {
-    let state = test.app.catalog(catalog).expect("a loaded catalog");
+    let state = test
+        .app
+        .catalog(catalog)
+        .await
+        .unwrap()
+        .expect("a loaded catalog");
     let principal = ctx.principal();
     let mut tx = test.app.pool().begin().await.expect("begin");
     changesets::lock_catalog(&mut tx, state.id())

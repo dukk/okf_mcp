@@ -116,22 +116,27 @@ impl OkfServer {
     }
 
     /// The `catalog` label and attribute for a call: the argument's value
-    /// when it names a loaded catalog, else `none`. A name the client typed
-    /// that no catalog bears never becomes a label or an attribute.
+    /// when it names an existing catalog, else `none`. A name the client
+    /// typed that no catalog bears never becomes a label or an attribute.
+    /// The check is a catalog directory lookup (no content is loaded); a
+    /// failed lookup counts as `none`.
     ///
     /// # Arguments
     /// * `arguments` - the call's arguments.
     ///
     /// # Returns
-    /// A loaded catalog's name, or `"none"`.
+    /// An existing catalog's name, or `"none"`.
     #[tracing::instrument(level = "trace", skip_all)]
-    fn catalog_label(&self, arguments: Option<&rmcp::model::JsonObject>) -> String {
-        arguments
+    async fn catalog_label(&self, arguments: Option<&rmcp::model::JsonObject>) -> String {
+        let named = arguments
             .and_then(|arguments| arguments.get("catalog"))
-            .and_then(serde_json::Value::as_str)
-            .filter(|name| self.app.catalog(name).is_some())
-            .unwrap_or("none")
-            .to_string()
+            .and_then(serde_json::Value::as_str);
+        match named {
+            Some(name) if matches!(self.app.catalog_row(name).await, Ok(Some(_))) => {
+                name.to_string()
+            }
+            _ => "none".to_string(),
+        }
     }
 
     /// Every tool: each module's router, joined with `+`.
@@ -219,7 +224,7 @@ impl ServerHandler for OkfServer {
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<CallToolResponse, rmcp::ErrorData> {
         let tool = tool_label(&request.name);
-        let catalog = self.catalog_label(request.arguments.as_ref());
+        let catalog = self.catalog_label(request.arguments.as_ref()).await;
         let parent = tool_span_parent(&context.extensions);
         let span = tracing::info_span!(
             parent: parent,

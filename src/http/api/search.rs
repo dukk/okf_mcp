@@ -92,18 +92,19 @@ async fn every_reachable(app: &App, principal: &Principal) -> Result<Vec<String>
     }
     // A closed catalog is not searched: a suspended team's (M13), or one the
     // key needs an unlock for (M14). Reach was checked by the page; naming
-    // one explicitly is refused by the selection. A catalog this replica has
-    // not loaded is left out, as before.
+    // one explicitly is refused by the selection. A catalog whose stored
+    // data does not build is left out, as one that was not loaded was
+    // before: each open one is loaded here, which the search does anyway.
     let now = app.clock().now();
-    Ok(page
-        .items
-        .iter()
-        .filter(|row| {
-            app.loaded_catalog(row).is_some()
-                && principal.check_open(&row.name, Access::Read, now).is_ok()
-        })
-        .map(|row| row.name.clone())
-        .collect())
+    let mut names = Vec::with_capacity(page.items.len());
+    for row in &page.items {
+        if principal.check_open(&row.name, Access::Read, now).is_ok()
+            && app.listed_state(row).await?.is_some()
+        {
+            names.push(row.name.clone());
+        }
+    }
+    Ok(names)
 }
 
 /// `GET /search`.

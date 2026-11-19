@@ -129,6 +129,7 @@ unknown keys are ignored, so one file serves every version.
 | `mail.provider` | `"log"` | `"smtp"`, `"postmark"`, `"ses"` or `"log"`. **`log` is for development only:** it writes each whole message, setup and reset links included, to the log at `info`, and delivers nothing |
 | `mail.from` | `"okf <okf@localhost>"` | The From address, such as `"okf <okf@example.com>"`; it must parse as one mailbox. Set it for `smtp`, `postmark` and `ses` (for `ses`, an identity verified in SES) |
 | `mail.worker` | none | Deprecated and ignored: every `serve` runs the mail worker, and logs a warning if the key is present. The workers share one pool of up to 3 connections per process, on top of `database_max_connections` |
+| `catalog_cache_bytes` | `"1GiB"` | The most memory this process's catalog snapshots may take, estimated from their stored size (`"512MiB"`, or a number of bytes). Catalogs load on first use, not at start-up; past the budget the least recently used one is dropped and loaded again when next read. A catalog larger than the whole budget is served but not kept |
 | `catalog_directory_entries` | `100000` | The most catalog rows the catalog directory keeps in memory, by name. It answers "does this catalog exist, and who owns it" without loading content |
 | `catalog_ttl` | `"10s"` | How long the directory serves a catalog row before reading it again. A change drops the row at once; this covers a change message that is lost. A name that does not exist is remembered for 5 seconds regardless |
 | `search_fanout_max` | `25` | The most catalogs `GET /api/v1/search` searches when the request names none, from 1 to 999. A credential that reaches more gets a 400 asking it to name the catalogs (`catalogs=`), so one request cannot search every catalog. MCP `search` is bounded by the connection's selection and does not use it |
@@ -1163,9 +1164,8 @@ the `okf.catalog` span attribute and the `catalog` metric label.
 
 Metric labels come from closed sets only: route templates, registered tool
 names (anything else is `other`), catalog names, and fixed outcome, method,
-rule, reason and status words. Only the gauges that enumerate loaded catalogs
-(`okf_catalog_concepts`, `okf_catalog_generation`) drop
-a deleted catalog's series at the next collection. The counters and histograms
+rule, reason and status words. No gauge has a series per catalog. The counters
+and histograms
 (`okf_catalog_refreshes_total`, `okf_publish_duration_seconds`, the tool and
 archive series) keep the series they recorded for that catalog until the
 process restarts, so a catalog created and deleted under many names leaves
@@ -1194,9 +1194,9 @@ label names (`http.route` is `http_route`), durations are in seconds, and a
 counter ends in `_total`. A histogram is three series (`_bucket`, `_sum`,
 `_count`) with buckets from 1 ms to 60 s. Every family except
 `okf_build_info`, `okf_telemetry_export_failures_total`, `okf_mail_queue_depth`,
-`okf_changesets_open` and the gauges that read loaded state
-(`okf_catalog_concepts`, `okf_catalog_generation`, `db_client_connection_count`)
-has no series until its first event, so a scrape of an idle server lists
+`okf_changesets_open` and the gauges that read live state
+(`db_client_connection_count`, and `okf_cache_entries` and `okf_cache_bytes`
+while their cache exists) has no series until its first event, so a scrape of an idle server lists
 fewer families than this table. Over OTLP the names are
 the dotted originals.
 
@@ -1213,8 +1213,6 @@ the dotted originals.
 | `okf_poll_duration_seconds` | histogram | `outcome` | One pass of the poll loop |
 | `okf_catalog_refreshes_total` | counter | `catalog`, `result` | Each catalog's turn in a pass: `unchanged`, `reloaded`, `loaded` or `failed` |
 | `okf_catalog_announcements_total` | counter | `result` | Catalog announcements handled, counting also each catalog found behind in the catch-up after a (re)subscribe: `applied` (rebuilt), `current` (already there), `unknown` (not loaded here, or deleted) or `failed`. Only with `[redis]` |
-| `okf_catalog_concepts` | gauge | `catalog` | Concepts in the current snapshot |
-| `okf_catalog_generation` | gauge | `catalog` | The snapshot's generation |
 | `okf_invalidations_queued_total` | counter | `kind` | Change-feed messages queued by this replica's write transactions; Postgres delivers one only if its transaction commits, so a rollback leaves this ahead of `received` (`catalog`, `catalog_meta`, `credential`, `user`, `team`, `settings`) |
 | `okf_invalidations_received_total` | counter | `kind` | Change-feed messages received and applied |
 | `okf_invalidations_unreadable_total` | counter | | Change-feed payloads this build could not read (each reloads the caches) |
@@ -1416,9 +1414,9 @@ git -C ~/notes archive --format=tar.gz HEAD |
 ```
 
 The server picks up a catalog created, updated or imported from the command
-line within `poll_interval` (`/healthz`'s `catalogs` counts it once it is
-loaded; a description change does not rebuild the catalog's snapshot); an
-import through the HTTP route is visible at once.
+line as soon as the change message reaches it (each catalog loads on its
+first read; a description change does not rebuild the catalog's snapshot);
+an import through the HTTP route is visible at once.
 
 `okf-mcp export` inside the pod must write under `/tmp` (or to `-`, stdout),
 the only writable path:
@@ -4128,12 +4126,14 @@ fails: [Redis](#redis)) and the rest 400.
 `GET /healthz` needs no key:
 
 ```json
-{"database": "ok", "catalogs": 2, "clock": {"ok": true, "checked_at": "2026-11-03T12:00:00Z", "offset_ms": 3, "stratum": 2}, "redis": "ok"}
+{"database": "ok", "cached_catalogs": 2, "clock": {"ok": true, "checked_at": "2026-11-03T12:00:00Z", "offset_ms": 3, "stratum": 2}, "redis": "ok"}
 ```
 
 - **Status:** 200 when the database answers `SELECT 1` within 2 seconds;
   otherwise 503 with `"database": "unreachable"`. Nothing else changes it.
-- **`catalogs`:** how many catalogs are loaded (a count, never names).
+- **`cached_catalogs`:** how many catalogs this replica holds in its catalog
+  cache now (a count, never names). Catalogs load on first use, so it starts
+  at 0 and moves with traffic; it is not the number of catalogs that exist.
 - **`redis`:** `"ok"` when Redis answers `PING` within 2 seconds, `"unavailable"`
   when it fails or is late, and `null` without `[redis]`. **It never changes
   the status code.** A Redis outage would otherwise mark every replica unready

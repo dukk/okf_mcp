@@ -171,8 +171,9 @@ impl TestServer {
     }
 
     /// As [`TestServer::start_with`], with `[redis]` on `redis`, the first of
-    /// a group of replicas. `poll_interval` is forced to one hour, so what a
-    /// test sees change was carried by Redis, not by the poll loop. The
+    /// a group of replicas. `poll_interval` and `catalog_ttl` are forced to
+    /// one hour, so what a test sees change was carried by Redis or the
+    /// change feed, not by the poll loop or a row's expiry. The
     /// caller keeps the `TestRedis` alive for the test.
     ///
     /// # Arguments
@@ -722,8 +723,8 @@ impl Drop for Sibling {
 /// * `pool` - a pool on the database, already migrated and imported.
 /// * `make_config` - builds the settings from the base URL.
 /// * `mail_worker` - whether `serve` runs the mail worker.
-/// * `redis` - `[redis]` on this server, if any; `poll_interval` is then one
-///   hour.
+/// * `redis` - `[redis]` on this server, if any; `poll_interval` and
+///   `catalog_ttl` are then one hour.
 ///
 /// # Returns
 /// The base URL, the app, the token that stops the server, and the task
@@ -749,6 +750,9 @@ async fn serve_app(
         Some(server) => {
             config.redis = Some(redis_config(server));
             config.poll_interval = Duration::from_secs(3600);
+            // The directory's backstop too (M18): a catalog change that
+            // reaches the other replica was carried by `NOTIFY`.
+            config.catalog_ttl = Duration::from_secs(3600);
             Some(redis_connect(server).await)
         }
         None => None,

@@ -176,14 +176,10 @@ async fn whoami(
         Some(name) => teams_of(app.pool(), name).await?,
         None => (Vec::new(), false),
     };
-    // The page is sorted by name; a catalog this replica has not loaded is
-    // left out, as before.
-    let catalogs = page
-        .items
-        .iter()
-        .filter(|row| app.loaded_catalog(row).is_some())
-        .map(|row| row.name.clone())
-        .collect();
+    // The page is sorted by name. Only names are listed, so nothing is
+    // loaded: every catalog the key reaches is named, whether or not this
+    // replica holds it in its cache (M18 Task 8).
+    let catalogs = page.items.iter().map(|row| row.name.clone()).collect();
     // `match` on a reference: `client_name` binds a `&Option<String>`.
     let (kind, client_name) = match &principal.kind {
         CredentialKind::ApiKey => ("key", None),

@@ -264,7 +264,7 @@ async fn tree(
     let state = ctx.one(Some(&catalog)).await?;
     // The tree lists the catalog's documents: a read of its contents.
     ctx.admit(&state, AccessKind::Read)?;
-    let loaded = state.current();
+    let loaded = ctx.snapshot(&state);
     let documents = loaded
         .snapshot()
         .docs()
@@ -312,7 +312,8 @@ async fn concept(
         },
     )
     .await?;
-    let loaded = ctx.one(Some(&concept.catalog)).await?.current();
+    let state = ctx.one(Some(&concept.catalog)).await?;
+    let loaded = ctx.snapshot(&state);
     // Rendering is CPU work proportional to the body: off the async threads.
     // `move` hands `concept` and `loaded` (an `Arc`) to the blocking thread.
     Ok(Json(blocking(move || with_html(concept, &loaded)).await))
@@ -496,7 +497,8 @@ async fn document(
         },
     )
     .await?;
-    let loaded = ctx.one(Some(&document.catalog)).await?.current();
+    let state = ctx.one(Some(&document.catalog)).await?;
+    let loaded = ctx.snapshot(&state);
     let view = blocking(move || {
         // A block, so the borrow of `document` ends before it moves below.
         let body_html = {

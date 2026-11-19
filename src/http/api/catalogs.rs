@@ -236,12 +236,14 @@ pub(crate) struct CatalogDeleted {
 /// any access level (M18 spec Decision 7).
 ///
 /// # Returns
-/// The page, by name, with `next` while more follow. A catalog this
-/// replica has not loaded (created since its last poll, or one whose data
-/// does not build) is left out of its page, as it was left out of the list.
+/// The page, by name, with `next` while more follow. Each listed catalog's
+/// snapshot fields (files, concepts, last change) come from the catalog
+/// cache, so a page loads at most its own catalogs. A catalog whose stored
+/// data does not build (or deleted since the page was read) is left out of
+/// its page, as it was left out of the list.
 ///
 /// # Errors
-/// 400 for a malformed `after`; 500 if the directory read fails.
+/// 400 for a malformed `after`; 500 if the directory read or a load fails.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn list_catalogs(
     State(app): State<Arc<App>>,
@@ -250,14 +252,12 @@ async fn list_catalogs(
 ) -> Result<Json<CatalogListing>, AppError> {
     let page = reachable_page(&app, &principal, &query).await?;
     let labels = app.keys().labels();
-    let catalogs = page
-        .items
-        .iter()
-        .filter_map(|row| {
-            app.loaded_catalog(row)
-                .map(|state| CatalogSummary::of(row, &state, &principal, &labels))
-        })
-        .collect();
+    let mut catalogs = Vec::with_capacity(page.items.len());
+    for row in &page.items {
+        if let Some(state) = app.listed_state(row).await? {
+            catalogs.push(CatalogSummary::of(row, &state, &principal, &labels));
+        }
+    }
     Ok(Json(CatalogListing {
         catalogs,
         next: page.next,
@@ -1160,11 +1160,16 @@ mod tests {
         assert_eq!(created["files"], 2);
         assert_eq!(created["concepts"], 0);
         assert!(created["last_change"].is_string(), "{created}");
-        let served = test.app.catalog("scratch").expect("loaded at once");
+        let served = test
+            .app
+            .catalog("scratch")
+            .await
+            .unwrap()
+            .expect("loaded at once");
         assert_eq!(served.current().files(), 2);
         assert!(served.current().snapshot().get("index.md").is_some());
         // Polled at once: loaded, and listed for a key that reaches it.
-        assert!(test.app.catalog("scratch").is_some());
+        assert!(test.app.catalog("scratch").await.unwrap().is_some());
         assert_eq!(names(&test, &root).await, ["main", "other", "scratch"]);
         assert_eq!(names(&test, &keys.read).await, ["main"]);
         assert_eq!(again, StatusCode::CONFLICT);
@@ -1234,7 +1239,7 @@ mod tests {
             None,
         )
         .await;
-        let still_there = test.app.catalog("main").is_some();
+        let still_there = test.app.catalog("main").await.unwrap().is_some();
         let (forced, deleted) = send(
             &test,
             "DELETE",
@@ -1255,7 +1260,9 @@ mod tests {
         assert!(still_there);
         assert_eq!(forced, StatusCode::OK);
         assert_eq!(deleted, json!({ "name": "main" }));
-        assert!(test.app.catalog("main").is_none());
+        // The delete's change message, as this replica's listener applies it.
+        test.app.catch_up_catalogs().await;
+        assert!(test.app.catalog("main").await.unwrap().is_none());
         assert!(names(&test, &keys.read).await.is_empty());
     }
 

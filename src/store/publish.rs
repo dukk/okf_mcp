@@ -323,15 +323,18 @@ async fn publish_locked(
     // Step 6, still under the in-process lock (the advisory lock ended with
     // the transaction): the next publish of this catalog checks against
     // this one's result. A failed refresh does not undo a committed publish;
-    // the poll loop retries it, and the next publish refreshes first.
+    // the next use retries it (it checks the snapshot against the catalog's
+    // row), and the next publish refreshes first. The cache then weighs the
+    // new snapshot (M18 Decision 2): one that no longer fits is dropped.
     if let Err(error) = state.refresh(app.pool(), app.rebuild_locks()).await {
         split_event!(
             error,
             { catalog = %state.name(), kind = error.kind(), },
             { %error, },
-            "refresh after publish failed; the poll loop retries"
+            "refresh after publish failed; the next use retries"
         );
     }
+    app.catalog_cache().refreshed(state.id()).await;
     app.overlays().forget(locked.id);
     Ok(PublishReport {
         published: true,
@@ -865,11 +868,14 @@ mod tests {
         // Arrange: two states of `pg`, and a changeset with one edit.
         const NOTE: &str = "---\ntype: Note\ntitle: B\ndescription: A note.\n---\n# B\n";
         let test = app_with(&[("pg", &[("a.md", NOTE)])], Config::default()).await;
-        let first = test.app.catalog("pg").expect("pg is loaded");
+        let first = test.app.catalog("pg").await.unwrap().expect("pg is loaded");
         let second = Arc::new(
-            CatalogState::load(test.app.pool(), "pg")
-                .await
-                .expect("load pg again"),
+            CatalogState::load(
+                test.app.pool(),
+                &test.app.catalog_row("pg").await.unwrap().expect("pg"),
+            )
+            .await
+            .expect("load pg again"),
         );
         assert!(!Arc::ptr_eq(&first, &second), "two separate states");
         let ctx = writer(&test, "writer", "pg").await;

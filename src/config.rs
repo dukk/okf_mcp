@@ -52,6 +52,9 @@ pub const DEFAULT_DATABASE_MAX_CONNECTIONS: u32 = 16;
 /// The default number of changeset overlays kept in memory.
 pub const DEFAULT_OVERLAY_CACHE_SIZE: usize = 64;
 
+/// The default `catalog_cache_bytes`: 1 GiB of estimated snapshot memory.
+pub const DEFAULT_CATALOG_CACHE_BYTES: u64 = 1024 * 1024 * 1024;
+
 /// The default `catalog_directory_entries`: catalog rows kept by name.
 pub const DEFAULT_CATALOG_DIRECTORY_ENTRIES: u64 = 100_000;
 
@@ -939,6 +942,12 @@ pub struct Config {
     /// The most changeset overlays kept in memory; past it, the least
     /// recently used one is dropped (and rebuilt if read again).
     pub overlay_cache_size: usize,
+    /// The most memory the catalog snapshots held in this process may take,
+    /// as estimated from their stored size (`"1GiB"`, or a number of bytes).
+    /// Catalogs load on first use; past the budget, the least recently used
+    /// is dropped and loaded again when next read. A catalog larger than the
+    /// whole budget is still served, but not kept.
+    pub catalog_cache_bytes: ByteSize,
     /// The most catalog rows the catalog directory keeps, by name (`100000`).
     /// A row is a few hundred bytes, so this bounds the directory at tens of
     /// megabytes however many catalogs exist.
@@ -996,6 +1005,7 @@ impl Default for Config {
             concept_outline_chars: DEFAULT_CONCEPT_OUTLINE_CHARS,
             database_max_connections: DEFAULT_DATABASE_MAX_CONNECTIONS,
             overlay_cache_size: DEFAULT_OVERLAY_CACHE_SIZE,
+            catalog_cache_bytes: ByteSize::b(DEFAULT_CATALOG_CACHE_BYTES),
             catalog_directory_entries: DEFAULT_CATALOG_DIRECTORY_ENTRIES,
             catalog_ttl: DEFAULT_CATALOG_TTL,
             search_fanout_max: DEFAULT_SEARCH_FANOUT_MAX,
@@ -1133,6 +1143,9 @@ impl Config {
         }
         if self.overlay_cache_size == 0 {
             return Err("overlay_cache_size must be more than zero".to_string());
+        }
+        if self.catalog_cache_bytes.as_u64() == 0 {
+            return Err("catalog_cache_bytes must be more than zero".to_string());
         }
         if self.catalog_directory_entries == 0 {
             return Err("catalog_directory_entries must be more than zero".to_string());
@@ -1537,6 +1550,7 @@ mod tests {
         assert_eq!(config.concept_outline_chars, 20_000);
         assert_eq!(config.database_max_connections, 16);
         assert_eq!(config.overlay_cache_size, 64);
+        assert_eq!(config.catalog_cache_bytes.as_u64(), 1024 * 1024 * 1024);
         assert_eq!(config.catalog_directory_entries, 100_000);
         assert_eq!(config.catalog_ttl, Duration::from_secs(10));
         assert_eq!(config.search_fanout_max, 25);
@@ -1617,6 +1631,7 @@ mod tests {
             ("allowed_hosts = []\n", "allowed_hosts"),
             ("database_max_connections = 0\n", "database_max_connections"),
             ("overlay_cache_size = 0\n", "overlay_cache_size"),
+            ("catalog_cache_bytes = 0\n", "catalog_cache_bytes"),
             (
                 "catalog_directory_entries = 0\n",
                 "catalog_directory_entries",
