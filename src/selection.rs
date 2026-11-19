@@ -319,14 +319,14 @@ fn only_reachable<'a>(principal: &'a Principal, exists: &impl Fn(&str) -> bool) 
 /// # Returns
 /// The selection: the argument if set, else the connection's list, else
 /// the key's default, else the server's, else the only catalog the key
-/// reaches ([`only_reachable`]: never for [`Reach::All`]); without
+/// reaches (`only_reachable`: never for [`Reach::All`]); without
 /// duplicates.
 ///
 /// # Errors
 /// [`OkfError::CatalogNotSelected`] naming the first catalog that does not
 /// exist, that the key does not reach, or (in the argument) that the
 /// connection's list leaves out; [`OkfError::Refused`]
-/// ([`NOTHING_SELECTED`]) if no source names a catalog and the key does not
+/// (`NOTHING_SELECTED`) if no source names a catalog and the key does not
 /// reach exactly one; then, for a named, default or only catalog that is
 /// closed to the
 /// key, its refusal: [`OkfError::Suspended`] (for a credential below admin)
