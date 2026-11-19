@@ -467,7 +467,7 @@ async fn a_late_assign_never_replaces_a_newer_drawer_or_reopens_a_dismissed_one(
         ui.wait_text("#drawer-title", "bravo");
         ui.release_held();
         // The table follows the assign either way.
-        ui.wait_text("[data-test=key-user-alpha]", "alice");
+        ui.wait_text("[data-test=key-user-alpha]", "Alice Example");
         let replaced = ui.text("#drawer-title") != "bravo";
         // bravo's assign is held, and the drawer dismissed meanwhile.
         ui.click("#drawer-close");
@@ -481,7 +481,7 @@ async fn a_late_assign_never_replaces_a_newer_drawer_or_reopens_a_dismissed_one(
         ui.page.press_key(None, "Escape").expect("press Escape");
         ui.wait_hidden("#drawer");
         ui.release_held();
-        ui.wait_text("[data-test=key-user-bravo]", "alice");
+        ui.wait_text("[data-test=key-user-bravo]", "Alice Example");
         let reopened = ui.page.is_visible("#drawer").expect("visible");
         assert!(
             !replaced && !reopened,
