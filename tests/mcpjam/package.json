@@ -1,0 +1,19 @@
+{
+  "name": "okf-mcp-mcpjam-scenarios",
+  "private": true,
+  "description": "Deterministic replays of the MCPJam swarm goals against a local or remote okf-mcp, no LLM inference",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@mcpjam/sdk": "10.11.0",
+    "@types/node": "22.19.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12"
+  }
+}
