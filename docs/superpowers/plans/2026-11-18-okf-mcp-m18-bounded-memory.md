@@ -804,6 +804,8 @@ async fn state(&self, name: &str) -> Result<Arc<CatalogState>, OkfError>; // no 
 
 `selection::resolve` keeps a sync `exists` closure: `select` first collects the candidate names (connection list, argument, key default, server default), checks their existence in one step (here: the map; in Task 8: `directory.resolve_many`), then passes a `HashSet` to `resolve`. `state` returns `CatalogNotSelected` instead of panicking for a missing name.
 
+> **Corrected (issue #685, 2026-11-19).** Task 7 shipped with `select` still passing `resolve` a sync closure over the copied map (`self.catalogs.contains_key(name)`), not a precomputed `HashSet`: with the map as the source the two are equivalent, and building the set needs the candidate names, which only Task 8's `directory.resolve_many` makes worth collecting. Task 8 changes `select` (in `src/mcp/context.rs`) to collect the candidates, resolve them in one step and pass the set. Also, `mcp::catalogs::list` (the `list_catalogs` tool's body, `src/mcp/catalogs.rs`) became `async` because it calls `select`; Task 10 rewrites it as a query and must keep it `async`. `state` returns `CatalogNotSelected { catalog }` (the variant's only field).
+
 - [ ] **Step 2:** Add `.await` at every caller. `gate.sh lint` lists them; no other change.
 
 - [ ] **Step 3:** Full gates (the existing tests are the test); commit — `refactor: async catalog resolution in ToolContext (M18 task 7)`.

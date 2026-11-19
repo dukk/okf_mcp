@@ -15,7 +15,7 @@ use opentelemetry::KeyValue;
 use super::otlp::{ExportFailures, FailureReason, Signal};
 use crate::app::App;
 use crate::config::MailProvider;
-use crate::mcp::annotations::{DESTRUCTIVE, READS, STAGED};
+use crate::mcp::annotations::{DESTRUCTIVE, EXTERNAL, READS, STAGED};
 use crate::store::sign_in_events::{Method, Outcome as SignInOutcome};
 
 /// Seconds-histogram boundaries: 1 ms to 60 s. The SDK's defaults are
@@ -1180,6 +1180,7 @@ pub fn tool_label(name: &str) -> &'static str {
         .iter()
         .chain(STAGED)
         .chain(DESTRUCTIVE)
+        .chain(EXTERNAL)
         .find(|known| **known == name)
         .copied()
         .unwrap_or("other")
