@@ -459,11 +459,13 @@ pub fn starter_files(
 /// Existing text is added to, with one exception: headings, prose, bullets
 /// and summaries stay as they are, and a target an index already links
 /// (however it is worded) is not listed again. The exception is a raw
-/// (unencoded) concept listing that versions before issue #453 wrote, such
-/// as `* [A](a b.md) - x`, whose link never resolves (issue #717): its
-/// destination is percent-encoded in place (`* [A](a%20b.md) - x`, label
-/// and summary kept), or the bullet is removed when another bullet already
-/// links the concept; each gets a note quoting the bullet. Only a bullet
+/// (unencoded) concept or folder listing that versions before issue #453
+/// wrote, such as `* [A](a b.md) - x` or, under `# Sections`,
+/// `* [My docs](my docs/) - x`, whose link never resolves (issues #717 and
+/// #731): its destination is percent-encoded in place
+/// (`* [A](a%20b.md) - x`, label and summary kept), or the bullet is
+/// removed when another bullet already links the concept or folder; each
+/// gets a note quoting the bullet. Only a bullet
 /// `lists_raw_target` accepts is touched, so a link that resolves to an
 /// existing document, or a name holding a `%XX` escape, is left alone.
 /// Running it twice changes nothing the second time. A file or folder no
@@ -496,22 +498,24 @@ pub fn repair_indexes(workspace: &dyn Workspace) -> Result<OpOutcome, OkfError> 
 }
 
 /// [`repair_indexes`]' fix of the raw (unencoded) bullets older versions
-/// wrote for `concept` (issue #717): each bullet
+/// wrote for `target`, a concept (issue #717) or a folder's `index.md` in
+/// its parent's `# Sections` (issue #731): each bullet
 /// [`crate::okf::ops::replay::first_raw_listing`] finds (exactly
 /// `lists_raw_target`'s rules, so a bullet whose parsed link resolves to an
 /// existing document is never touched) is removed when another bullet
-/// already links the concept, else its destination is percent-encoded,
+/// already links the target, else its destination is percent-encoded,
 /// keeping the label and the text after it. Each fix is a
 /// [`ReplayOp::RewriteRawListing`] and a note quoting both lines. A rewrite
-/// that would not read back as a listing of the concept is skipped with a
+/// that would not read back as a listing of the target is skipped with a
 /// note (it cannot happen with an encoded destination; the check is the
 /// same round trip every listing gets).
 ///
 /// # Arguments
 /// * `workspace` - the catalog.
-/// * `text` - the folder index, as read.
+/// * `text` - the index holding the listings, as read.
 /// * `index_path` - its catalog-relative path.
-/// * `concept` - the concept's catalog-relative path.
+/// * `target` - the catalog-relative path listed: a concept, or a
+///   folder's `index.md`.
 /// * `outcome` - gains the index's ops and notes.
 ///
 /// # Returns
@@ -524,43 +528,48 @@ fn rewrite_raw_listings(
     workspace: &dyn Workspace,
     text: &str,
     index_path: &str,
-    concept: &str,
+    target: &str,
     outcome: &mut OpOutcome,
 ) -> Result<(String, usize), OkfError> {
+    // Notes name a folder as `/d/my docs/`, as the folder pass's other notes
+    // do; a concept never ends in `/index.md`, so it is named as it is.
+    let shown = target
+        .strip_suffix("/index.md")
+        .map_or_else(|| target.to_string(), |dir| format!("{dir}/"));
     let mut current = text.to_string();
     let mut fixed = 0_usize;
     // Each pass removes one raw bullet (a rewritten destination is encoded,
     // so it is never raw again), so the loop ends.
-    while let Some(raw) = first_raw_listing(workspace, &current, index_path, concept) {
-        if !links_back(workspace, index_path, &raw.fixed, concept) {
+    while let Some(raw) = first_raw_listing(workspace, &current, index_path, target) {
+        if !links_back(workspace, index_path, &raw.fixed, target) {
             outcome.notes.push(format!(
-                "did not rewrite the raw listing of /{concept} in /{index_path}: {} \
+                "did not rewrite the raw listing of /{shown} in /{index_path}: {} \
                  would not link back",
                 raw.fixed
             ));
             break;
         }
         let Some((updated, removed)) = rewrite_raw_listing_text(
-            workspace, &current, index_path, concept, &raw.line, &raw.fixed,
+            workspace, &current, index_path, target, &raw.line, &raw.fixed,
         ) else {
             // Unreachable: `first_raw_listing` took the line from `current`.
             break;
         };
         outcome.notes.push(if removed {
             format!(
-                "removed the raw listing of /{concept} from /{index_path}, beside a working one: {}",
+                "removed the raw listing of /{shown} from /{index_path}, beside a working one: {}",
                 raw.line
             )
         } else {
             format!(
-                "rewrote the raw listing of /{concept} in /{index_path}: {} -> {}",
+                "rewrote the raw listing of /{shown} in /{index_path}: {} -> {}",
                 raw.line, raw.fixed
             )
         });
         outcome.record(
             index_path,
             ReplayOp::RewriteRawListing {
-                target: concept.to_string(),
+                target: target.to_string(),
                 line: raw.line,
                 fixed: raw.fixed,
             },
@@ -648,8 +657,14 @@ fn repair_counted(workspace: &dyn Workspace) -> Result<(OpOutcome, RepairCounts)
             counts.placeholders += 1;
         }
         let parent_index = join(dirname(folder), INDEX);
-        let parent_text = workspace.read_text(&parent_index)?;
-        if !lists_target(workspace, &parent_text, &parent_index, &index_path) {
+        let read = workspace.read_text(&parent_index)?;
+        // A raw `# Sections` bullet older versions wrote for the folder is
+        // fixed first, as a concept's is below (issue #731), so the check
+        // after it sees a working listing and appends no second one.
+        let (parent_text, fixed) =
+            rewrite_raw_listings(workspace, &read, &parent_index, &index_path, &mut outcome)?;
+        counts.rewritten += fixed;
+        if !already_lists(workspace, &parent_text, &parent_index, &index_path) {
             let bullet = folder_bullet(folder, &parent_text);
             if !links_back(workspace, &parent_index, &bullet, &index_path) {
                 outcome
@@ -1174,6 +1189,252 @@ mod tests {
                 );
                 assert!(repair_indexes(&ws).unwrap().touched.is_empty(), "{lines:?}");
             }
+        }
+    }
+
+    /// The raw folder names older versions wrote unencoded under
+    /// `# Sections` (issue #731): one per character that ends or changes a
+    /// destination.
+    const RAW_FOLDERS: [&str; 4] = ["a b", "a)b", "a#b", "a:b"];
+
+    /// A catalog whose `d/index.md` holds `sections` under `# Sections`, with
+    /// each folder in `folders` inside `d/` complete (its index lists its one
+    /// concept), so a repair touches only `d/index.md`.
+    fn folder_ws(folders: &[&str], sections: &str) -> MemWorkspace {
+        let ws = MemWorkspace::default();
+        ws.write_atomic("index.md", "# Root\n\n# Sections\n\n* [D](d/) - d\n")
+            .unwrap();
+        ws.write_atomic("log.md", "# Log\n").unwrap();
+        ws.write_atomic(
+            "d/index.md",
+            &format!("# D\n\nAbout d.\n\n# Sections\n\n{sections}\n"),
+        )
+        .unwrap();
+        for folder in folders {
+            ws.write_atomic(&format!("d/{folder}/index.md"), "# N\n\n* [C](c.md) - c\n")
+                .unwrap();
+            ws.write_atomic(
+                &format!("d/{folder}/c.md"),
+                "---\ntype: Note\ntitle: C\ndescription: c\n---\n",
+            )
+            .unwrap();
+        }
+        ws
+    }
+
+    #[test]
+    fn repair_indexes_rewrites_each_raw_folder_form_in_place() {
+        // The folder link old versions wrote (`name/`), the index file
+        // itself (`name/index.md`), each relative and `/`-absolute, with a
+        // fragment and trailing text: only the destination changes, nothing
+        // is appended, and a second run changes nothing.
+        for name in RAW_FOLDERS {
+            let encoded = encode_link_path(name);
+            let mut cases = vec![
+                (
+                    format!("* [Odd]({name}/) - TODO: describe this folder"),
+                    format!("* [Odd]({encoded}/) - TODO: describe this folder"),
+                ),
+                (
+                    format!("- [O\\]dd]({name}/index.md#part) and more"),
+                    format!("- [O\\]dd]({encoded}/index.md#part) and more"),
+                ),
+            ];
+            // `/d/a:b/` is no URI (a scheme cannot start with `/`): it is a
+            // working link, so it is not a raw listing (see below).
+            if name != "a:b" {
+                cases.push((
+                    format!("* [Odd](/d/{name}/) - x"),
+                    format!("* [Odd](/d/{encoded}/) - x"),
+                ));
+                cases.push((
+                    format!("* [Odd](/d/{name}/index.md)"),
+                    format!("* [Odd](/d/{encoded}/index.md)"),
+                ));
+            }
+            for (raw, fixed) in cases {
+                let ws = folder_ws(&[name], &format!("{raw}\n* [X](x/) - x"));
+                let target = format!("d/{name}/index.md");
+
+                let outcome = repair_indexes(&ws).unwrap();
+
+                let got = ws.read_to_string("d/index.md").unwrap();
+                assert_eq!(
+                    got,
+                    format!("# D\n\nAbout d.\n\n# Sections\n\n{fixed}\n* [X](x/) - x\n"),
+                    "{raw}"
+                );
+                assert!(lists_target(&ws, &got, "d/index.md", &target), "{raw}");
+                assert_eq!(outcome.touched, ["d/index.md"], "{raw}");
+                assert_eq!(
+                    outcome.replay["d/index.md"],
+                    [ReplayOp::RewriteRawListing {
+                        target,
+                        line: raw.clone(),
+                        fixed: fixed.clone(),
+                    }],
+                    "{raw}"
+                );
+                assert_eq!(
+                    outcome.notes,
+                    [format!(
+                        "rewrote the raw listing of /d/{name}/ in /d/index.md: {raw} -> {fixed}"
+                    )],
+                    "{raw}"
+                );
+                assert!(
+                    outcome.message.contains("fixed 1 raw listing(s)"),
+                    "{}",
+                    outcome.message
+                );
+                let again = repair_indexes(&ws).unwrap();
+                assert!(
+                    again.touched.is_empty() && again.notes.is_empty(),
+                    "{raw}: {again:?}"
+                );
+                assert_eq!(ws.read_to_string("d/index.md").unwrap(), got, "{raw}");
+            }
+        }
+    }
+
+    #[test]
+    fn repair_indexes_rewrites_a_raw_folder_bullet_in_the_root_index() {
+        // A top-level folder: its listing sits in the root `index.md`.
+        let ws = MemWorkspace::default();
+        ws.write_atomic(
+            "index.md",
+            "# Root\n\n# Sections\n\n* [My docs](my docs/) - mine\n",
+        )
+        .unwrap();
+        ws.write_atomic("log.md", "# Log\n").unwrap();
+        ws.write_atomic("my docs/index.md", "# My docs\n\n* [C](c.md) - c\n")
+            .unwrap();
+        ws.write_atomic(
+            "my docs/c.md",
+            "---\ntype: Note\ntitle: C\ndescription: c\n---\n",
+        )
+        .unwrap();
+
+        let outcome = repair_indexes(&ws).unwrap();
+
+        assert_eq!(
+            ws.read_to_string("index.md").unwrap(),
+            "# Root\n\n# Sections\n\n* [My docs](my%20docs/) - mine\n"
+        );
+        assert_eq!(outcome.touched, ["index.md"], "{outcome:?}");
+        assert!(repair_indexes(&ws).unwrap().touched.is_empty());
+    }
+
+    #[test]
+    fn repair_indexes_keeps_an_absolute_colon_folder_link_that_already_resolves() {
+        let sections = "* [Odd](/d/a:b/) - x";
+        let ws = folder_ws(&["a:b"], sections);
+
+        let outcome = repair_indexes(&ws).unwrap();
+
+        assert!(outcome.touched.is_empty(), "{outcome:?}");
+        assert_eq!(
+            ws.read_to_string("d/index.md").unwrap(),
+            format!("# D\n\nAbout d.\n\n# Sections\n\n{sections}\n")
+        );
+    }
+
+    #[test]
+    fn repair_indexes_removes_a_raw_folder_duplicate_beside_a_working_bullet() {
+        // Either order, a second raw copy, and a working bullet in each form
+        // the parser reads as the folder: one working bullet is left, never
+        // a second one appended.
+        for name in RAW_FOLDERS {
+            let encoded = encode_link_path(name);
+            let raw = format!("* [Odd]({name}/) - old");
+            for working in [
+                format!("* [Odd]({encoded}/) - new"),
+                format!("* [Odd]({encoded}/index.md) - new"),
+                format!("* [Odd]({encoded}) - new"),
+            ] {
+                for lines in [
+                    vec![raw.clone(), working.clone()],
+                    vec![working.clone(), raw.clone()],
+                    vec![raw.clone(), working.clone(), raw.clone()],
+                ] {
+                    let ws = folder_ws(&[name], &lines.join("\n"));
+
+                    let outcome = repair_indexes(&ws).unwrap();
+
+                    let got = ws.read_to_string("d/index.md").unwrap();
+                    assert_eq!(
+                        got,
+                        format!("# D\n\nAbout d.\n\n# Sections\n\n{working}\n"),
+                        "{lines:?}"
+                    );
+                    let removals = lines.len() - 1;
+                    assert_eq!(outcome.replay["d/index.md"].len(), removals, "{lines:?}");
+                    assert_eq!(
+                        outcome.notes,
+                        vec![
+                            format!(
+                                "removed the raw listing of /d/{name}/ from /d/index.md, \
+                                 beside a working one: {raw}"
+                            );
+                            removals
+                        ],
+                        "{lines:?}"
+                    );
+                    assert!(repair_indexes(&ws).unwrap().touched.is_empty(), "{lines:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn repair_indexes_leaves_a_raw_folder_name_with_a_percent_escape_alone() {
+        // `x%41 y/` decodes to `xA y/`: its raw form cannot be told from an
+        // encoded name, so the bullet is not a raw listing (rule 2). The
+        // folder gets its own, encoded bullet and the old line stays.
+        let name = "x%41 y";
+        let raw = format!("* [Odd]({name}/) - old");
+        let ws = folder_ws(&[name], &raw);
+
+        let outcome = repair_indexes(&ws).unwrap();
+
+        let got = ws.read_to_string("d/index.md").unwrap();
+        assert!(got.contains(&format!("{raw}\n")), "{got}");
+        assert!(got.contains("](x%2541%20y/)"), "{got}");
+        assert!(!outcome.replay["d/index.md"]
+            .iter()
+            .any(|op| matches!(op, ReplayOp::RewriteRawListing { .. })));
+        assert!(repair_indexes(&ws).unwrap().touched.is_empty());
+    }
+
+    #[test]
+    fn repair_indexes_leaves_a_folder_link_to_another_existing_document_alone() {
+        // With a folder `d/a` beside `d/a)b` and `d/a#b`, `[A](a)b/)` and
+        // `[A](a#b/)` are working links to `d/a/index.md` (rule 3): never
+        // rewritten. Each other folder gets its own encoded bullet, and
+        // `d/a` is not listed again.
+        for name in ["a)b", "a#b"] {
+            let line = format!("* [A]({name}/) - a");
+            let ws = folder_ws(&["a", name], &line);
+
+            let outcome = repair_indexes(&ws).unwrap();
+
+            let got = ws.read_to_string("d/index.md").unwrap();
+            assert!(
+                got.starts_with(&format!("# D\n\nAbout d.\n\n# Sections\n\n{line}\n")),
+                "{got}"
+            );
+            assert!(
+                got.contains(&format!("]({}/)", encode_link_path(name))),
+                "{got}"
+            );
+            assert_eq!(got.matches("](a/)").count(), 0, "{got}");
+            assert!(
+                outcome.replay["d/index.md"]
+                    .iter()
+                    .all(|op| matches!(op, ReplayOp::ListBullet { .. })),
+                "{name}: {outcome:?}"
+            );
+            assert!(repair_indexes(&ws).unwrap().touched.is_empty(), "{name}");
         }
     }
 
