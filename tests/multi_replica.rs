@@ -7,6 +7,11 @@
 //! tests (milestone 16 Task 5) open a session on one replica and use it, or
 //! are refused, on the other.
 
+// The tests' futures hold whole servers, whose router's middleware stack
+// nests deeply enough to overflow the default query depth (128) when their
+// layout is computed, as in the library (`src/lib.rs`).
+#![recursion_limit = "256"]
+
 mod support;
 
 use std::time::Duration;
@@ -1112,7 +1117,14 @@ async fn housekeeping_runs_each_slot_once_across_two_serving_replicas() {
 async fn a_catalog_imported_through_the_store_is_served_on_both_replicas() {
     let redis = TestRedis::start().await;
     let (a, b, _admin) = pair(&redis).await;
-    let before = a.app.catalog("main").expect("main").current().generation();
+    let before = a
+        .app
+        .catalog("main")
+        .await
+        .unwrap()
+        .expect("main")
+        .current()
+        .generation();
     let audit = AuditActor::cli();
     let options = okf_mcp::store::import::ImportOptions {
         replace: true,
@@ -1134,12 +1146,69 @@ async fn a_catalog_imported_through_the_store_is_served_on_both_replicas() {
     let generation = report.changed.expect("the import wrote").generation;
     assert!(generation > before);
 
-    let at = |app: &okf_mcp::app::App| {
+    // Each replica's own lookup: the row its directory holds, and the
+    // snapshot its cache serves for that row.
+    async fn at(app: &okf_mcp::app::App, generation: i64) -> bool {
         app.catalog("main")
+            .await
+            .unwrap()
             .is_some_and(|state| state.current().generation() == generation)
+    }
+    eventually!(
+        "A serves the imported generation",
+        at(&a.app, generation).await
+    );
+    eventually!(
+        "B serves the imported generation",
+        at(&b.app, generation).await
+    );
+}
+
+/// A catalog created through the store on one replica's pool, as
+/// `okf-mcp catalog create` does, is readable on the other with no poll and
+/// no Redis announcement: the create's `catalog_meta` `NOTIFY` makes B's
+/// directory forget that the name was absent, and the catalog loads on its
+/// first read there.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_catalog_created_on_one_replica_is_readable_on_the_other() {
+    let redis = TestRedis::start().await;
+    let (a, b, admin) = pair(&redis).await;
+    // B looks for it first, so its directory remembers that it is absent.
+    assert!(b.app.catalog("notes").await.unwrap().is_none());
+
+    let new = okf_mcp::store::catalogs::NewCatalog {
+        name: "notes",
+        display_name: &okf_mcp::labels::DisplayName::default(),
+        description: "",
+        owner_team: OWNER,
     };
-    eventually!("A serves the imported generation", at(&a.app));
-    eventually!("B serves the imported generation", at(&b.app));
+    okf_mcp::store::catalogs::create(&a.db.pool, &new, &AuditActor::cli(), Utc::now())
+        .await
+        .expect("create notes");
+
+    async fn readable(app: &okf_mcp::app::App) -> bool {
+        app.catalog("notes").await.unwrap().is_some()
+    }
+    eventually!("B serves the new catalog", readable(&b.app).await);
+    // And over MCP, through B's tool path.
+    let client = tokio::time::timeout(WAIT, async {
+        let url = b.mcp_url();
+        a.client_at(&admin, &url, &[]).await
+    })
+    .await
+    .expect("connecting to B in time")
+    .expect("a client on B");
+    let read = call(
+        &client,
+        "read_document",
+        json!({"catalog": "notes", "path": "/index.md"}),
+    )
+    .await;
+    assert_ne!(
+        read.is_error,
+        Some(true),
+        "B reads the new catalog: {read:?}"
+    );
 }
 
 /// Revokes `key` through the store on the pool, as `okf-mcp key revoke`

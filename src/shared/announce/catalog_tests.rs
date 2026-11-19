@@ -109,14 +109,18 @@ async fn published_edit(ctx: &ToolContext, path: &str, old: &str, new: &str) {
     publish_now(ctx, &handle).await;
 }
 
-/// `path` as `read_document` answers it on `ctx`'s app.
+/// `path` as `read_document` answers it on `ctx`'s app, in a call of its
+/// own (a fresh context: a call pins the snapshot it reads, M18 Decision 3).
 async fn read(ctx: &ToolContext, path: &str, changeset: Option<&str>) -> String {
     let params = ReadDocumentParams {
         path: Some(path.to_string()),
         catalog: Some("pg".to_string()),
         changeset: changeset.map(str::to_string),
     };
-    read_document(ctx, params).await.expect("the read").text
+    read_document(&ctx.fresh(), params)
+        .await
+        .expect("the read")
+        .text
 }
 
 /// Waits (bounded by [`WAIT`]) until `read` of `path` on `ctx` contains
@@ -165,25 +169,42 @@ async fn a_publish_on_one_replica_propagates_to_the_other_promptly_without_a_pol
         "the second publish reached B through its announcement"
     );
     let stored = stored_generation(&a.app, "pg").await;
-    let state = b.catalog("pg").expect("B holds pg");
+    let state = b.catalog("pg").await.unwrap().expect("B holds pg");
     assert_eq!(state.current().generation(), stored.generation);
 }
 
-/// A lost announcement (B not subscribed when A published) is caught up
-/// at B's next poll, the backstop.
+/// A lost announcement (B not subscribed when A published, and no change
+/// feed in a unit test) is caught up once B's directory row expires
+/// (`catalog_ttl`, the backstop of M18 Decision 13): the next use reads the
+/// row again and refreshes the snapshot to it.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_lost_announcement_is_caught_up_at_the_poll() {
-    let (a, b, _redis) = pair().await;
+async fn a_lost_announcement_is_caught_up_when_the_row_expires() {
+    let files: &[(&str, &str)] = &[
+        ("index.md", INDEX),
+        ("infra/index.md", INFRA),
+        ("infra/x.md", X),
+    ];
+    let config = Config {
+        catalog_ttl: Duration::from_millis(500),
+        ..Config::default()
+    };
+    let (a, b, _redis) = tokio::time::timeout(
+        Duration::from_secs(120),
+        replica_pair(&[("pg", files)], config),
+    )
+    .await
+    .expect("starting two replicas within 120 s");
     let on_a = writer(&a, "alice", "pg").await;
     let on_b = alice_on(&b);
+    // B holds pg (its row and snapshot) before A publishes.
+    read(&on_b, "/index.md", None).await;
 
     published_edit(&on_a, "/index.md", "- systems", "- the systems").await;
     let before = read(&on_b, "/index.md", None).await;
-    b.poll().await.expect("B's poll");
-    let after = read(&on_b, "/index.md", None).await;
+    let after = until_read(&on_b, "/index.md", "the systems").await;
 
     assert!(!before.contains("the systems"), "no announcement reached B");
-    assert!(after.contains("the systems"), "{after}");
+    assert!(after, "B caught up once its row expired");
 }
 
 /// A subscriber that starts after a publish catches up when it subscribes:
@@ -193,6 +214,8 @@ async fn a_subscriber_catches_up_on_a_missed_publish_when_it_subscribes() {
     let (a, b, _redis) = pair().await;
     let on_a = writer(&a, "alice", "pg").await;
     let on_b = alice_on(&b);
+    // B holds pg before A publishes.
+    read(&on_b, "/index.md", None).await;
     published_edit(&on_a, "/index.md", "- systems", "- the systems").await;
     assert!(!read(&on_b, "/index.md", None).await.contains("the systems"));
 
@@ -213,6 +236,8 @@ async fn pending_changes_on_a_lagging_replica_refreshes_and_never_reports_a_base
     let (a, b, _redis) = pair().await;
     let on_a = writer(&a, "alice", "pg").await;
     let on_b = alice_on(&b);
+    // B holds pg before A publishes.
+    read(&on_b, "/index.md", None).await;
     // 1. Published on A; B has no subscriber.
     published_edit(&on_a, "/index.md", "- systems", "- the systems").await;
     // 2. B still serves the older revision.
@@ -254,7 +279,7 @@ async fn pending_changes_on_a_lagging_replica_refreshes_and_never_reports_a_base
         file.diff
     );
     let stored = stored_generation(&a.app, "pg").await;
-    let state = b.catalog("pg").expect("B holds pg");
+    let state = b.catalog("pg").await.unwrap().expect("B holds pg");
     assert_eq!(
         state.current().generation(),
         stored.generation,
@@ -362,9 +387,10 @@ async fn pending_changes_refuses_a_snapshot_behind_a_base_it_cannot_catch_up_to(
 async fn racing_announcements_and_refreshes_rebuild_once_and_never_go_back() {
     let (a, b, _redis) = pair().await;
     let on_a = writer(&a, "alice", "pg").await;
+    // B holds pg before A publishes.
+    let state = b.catalog("pg").await.unwrap().expect("B holds pg");
     published_edit(&on_a, "/index.md", "- systems", "- the systems").await;
     let change = stored_generation(&a.app, "pg").await;
-    let state = b.catalog("pg").expect("B holds pg");
 
     let raced = tokio::time::timeout(WAIT, async {
         tokio::join!(
@@ -419,6 +445,8 @@ async fn racing_announcements_and_refreshes_rebuild_once_and_never_go_back() {
 async fn an_announcement_racing_the_poll_ends_at_the_stored_generation() {
     let (a, b, _redis) = pair().await;
     let on_a = writer(&a, "alice", "pg").await;
+    // B holds pg before A publishes.
+    b.catalog("pg").await.unwrap().expect("B holds pg");
     published_edit(&on_a, "/index.md", "- systems", "- the systems").await;
     let change = stored_generation(&a.app, "pg").await;
 
@@ -436,13 +464,13 @@ async fn an_announcement_racing_the_poll_ends_at_the_stored_generation() {
         ),
         "{announced:?}"
     );
-    let state = b.catalog("pg").expect("B holds pg");
+    let state = b.catalog("pg").await.unwrap().expect("B holds pg");
     assert_eq!(state.current().generation(), change.generation);
 }
 
-/// An announcement of a catalog B has not loaded (unknown, or created since
-/// B's last poll) loads nothing, and one of a catalog deleted since is
-/// answered without a panic; the poll loop owns the catalog map.
+/// An announcement of a catalog B has not cached (unknown, or created since)
+/// loads nothing, and one of a catalog deleted since is answered without a
+/// panic; catalogs load on their first use.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_announcement_of_a_catalog_not_loaded_or_deleted_loads_nothing() {
     let (a, b, _redis) = pair().await;
@@ -488,11 +516,17 @@ async fn an_announcement_of_a_catalog_not_loaded_or_deleted_loads_nothing() {
     assert_eq!(none, AnnouncementResult::Unknown);
     assert_eq!(new, AnnouncementResult::Unknown);
     assert_eq!(gone, AnnouncementResult::Unknown);
-    let names: Vec<String> = b.catalogs().keys().cloned().collect();
-    assert_eq!(names, ["pg"], "nothing loaded; pg waits for the poll");
-    b.poll().await.expect("B's poll");
-    let names: Vec<String> = b.catalogs().keys().cloned().collect();
-    assert_eq!(names, ["work"], "the poll drops pg and loads work");
+    for id in [pg.catalog_id, work.catalog_id] {
+        assert!(
+            b.catalog_cache().resident(id).await.is_none(),
+            "an announcement loads nothing"
+        );
+    }
+    // Each use reads the directory (here marked stale, as after a
+    // resubscribe) and loads on demand: work is served, pg is gone.
+    b.catch_up_catalogs().await;
+    assert!(b.catalog("work").await.unwrap().is_some());
+    assert!(b.catalog("pg").await.unwrap().is_none());
 }
 
 /// Without `[redis]` nothing changes: there is no subscriber, a publish

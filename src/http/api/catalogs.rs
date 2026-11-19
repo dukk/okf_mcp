@@ -236,12 +236,14 @@ pub(crate) struct CatalogDeleted {
 /// any access level (M18 spec Decision 7).
 ///
 /// # Returns
-/// The page, by name, with `next` while more follow. A catalog this
-/// replica has not loaded (created since its last poll, or one whose data
-/// does not build) is left out of its page, as it was left out of the list.
+/// The page, by name, with `next` while more follow. Each listed catalog's
+/// snapshot fields (files, concepts, last change) come from the catalog
+/// cache, so a page loads at most its own catalogs. A catalog whose stored
+/// data does not build (or deleted since the page was read) is left out of
+/// its page, as it was left out of the list.
 ///
 /// # Errors
-/// 400 for a malformed `after`; 500 if the directory read fails.
+/// 400 for a malformed `after`; 500 if the directory read or a load fails.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn list_catalogs(
     State(app): State<Arc<App>>,
@@ -256,14 +258,12 @@ async fn list_catalogs(
         }
     }
     let labels = app.labels().labels_for(&wanted).await?;
-    let catalogs = page
-        .items
-        .iter()
-        .filter_map(|row| {
-            app.loaded_catalog(row)
-                .map(|state| CatalogSummary::of(row, &state, &principal, &labels))
-        })
-        .collect();
+    let mut catalogs = Vec::with_capacity(page.items.len());
+    for row in &page.items {
+        if let Some(state) = app.listed_state(row).await? {
+            catalogs.push(CatalogSummary::of(row, &state, &principal, &labels));
+        }
+    }
     Ok(Json(CatalogListing {
         catalogs,
         next: page.next,
@@ -1184,11 +1184,16 @@ mod tests {
         assert_eq!(created["files"], 2);
         assert_eq!(created["concepts"], 0);
         assert!(created["last_change"].is_string(), "{created}");
-        let served = test.app.catalog("scratch").expect("loaded at once");
+        let served = test
+            .app
+            .catalog("scratch")
+            .await
+            .unwrap()
+            .expect("loaded at once");
         assert_eq!(served.current().files(), 2);
         assert!(served.current().snapshot().get("index.md").is_some());
         // Polled at once: loaded, and listed for a key that reaches it.
-        assert!(test.app.catalog("scratch").is_some());
+        assert!(test.app.catalog("scratch").await.unwrap().is_some());
         assert_eq!(names(&test, &root).await, ["main", "other", "scratch"]);
         assert_eq!(names(&test, &keys.read).await, ["main"]);
         assert_eq!(again, StatusCode::CONFLICT);
@@ -1258,7 +1263,7 @@ mod tests {
             None,
         )
         .await;
-        let still_there = test.app.catalog("main").is_some();
+        let still_there = test.app.catalog("main").await.unwrap().is_some();
         let (forced, deleted) = send(
             &test,
             "DELETE",
@@ -1279,8 +1284,61 @@ mod tests {
         assert!(still_there);
         assert_eq!(forced, StatusCode::OK);
         assert_eq!(deleted, json!({ "name": "main" }));
-        assert!(test.app.catalog("main").is_none());
+        // No listener runs here: the route applied its own write.
+        assert!(test.app.catalog("main").await.unwrap().is_none());
         assert!(names(&test, &keys.read).await.is_empty());
+    }
+
+    /// Read-your-writes on the replica that made a write: with no change
+    /// feed listener running (none does in a unit test), a REST write's own
+    /// invalidations reach this replica's directory before it answers, so
+    /// the very next read sees the cached row replaced.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_rest_admin_write_is_seen_by_the_next_read_on_this_replica() {
+        let test = app().await;
+        let keys = keys(&test).await;
+        // Cached before the write, as a catalog in use is.
+        let before = test.app.catalog_row("main").await.unwrap().expect("main");
+        assert_ne!(before.description, "Changed through the API.");
+
+        let (status, _) = send(
+            &test,
+            "PATCH",
+            "/api/v1/catalogs/main",
+            Some(&keys.admin),
+            Some(json!({ "description": "Changed through the API." })),
+        )
+        .await;
+        let after = test.app.catalog_row("main").await.unwrap().expect("main");
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(after.description, "Changed through the API.");
+    }
+
+    /// As above, for labels: a REST rename reaches this replica's label
+    /// cache before the route answers, so the next labels read shows it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_rest_rename_is_seen_by_the_next_labels_read_on_this_replica() {
+        let test = app().await;
+        let keys = keys(&test).await;
+        let mut wanted = crate::labels::directory::Wanted::default();
+        wanted.catalog("main");
+        // Cached before the write.
+        let before = test.app.labels().labels_for(&wanted).await.unwrap();
+        assert_ne!(before.catalog("main"), Some("Renamed Main"));
+
+        let (status, _) = send(
+            &test,
+            "PATCH",
+            "/api/v1/catalogs/main",
+            Some(&keys.admin),
+            Some(json!({ "display_name": "Renamed Main" })),
+        )
+        .await;
+        let after = test.app.labels().labels_for(&wanted).await.unwrap();
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(after.catalog("main"), Some("Renamed Main"));
     }
 
     #[tokio::test(flavor = "multi_thread")]

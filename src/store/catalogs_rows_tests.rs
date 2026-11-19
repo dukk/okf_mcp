@@ -1,5 +1,5 @@
-//! Tests for the directory's queries: [`row_by_name`], [`rows_by_names`]
-//! and [`page`] (M18 Task 5).
+//! Tests for the directory's queries: [`row_by_name`], [`row_by_id`],
+//! [`rows_by_names`] and [`page`] (M18 Tasks 5 and 8).
 
 use chrono::{DateTime, TimeZone, Utc};
 use sqlx::PgPool;
@@ -118,6 +118,24 @@ async fn an_unknown_or_malformed_name_has_no_row() {
     // A NUL would be a database error if it were bound.
     assert_eq!(row_by_name(&db.pool, "p\0g").await.unwrap(), None);
     assert_eq!(row_by_name(&db.pool, "").await.unwrap(), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn row_by_id_reads_that_incarnation_only() {
+    let db = test_db().await;
+    seed(&db.pool, "pg", TEST_TEAM).await;
+    let first = row_by_name(&db.pool, "pg").await.unwrap().unwrap();
+    delete(&db.pool, "pg", false, &AuditActor::cli(), now())
+        .await
+        .unwrap();
+    seed(&db.pool, "pg", TEST_TEAM).await;
+    let second = row_by_name(&db.pool, "pg").await.unwrap().unwrap();
+
+    let found = row_by_id(&db.pool, second.id).await.unwrap();
+    let gone = row_by_id(&db.pool, first.id).await.unwrap();
+
+    assert_eq!(found, Some(second));
+    assert_eq!(gone, None, "the deleted catalog's id reaches nothing");
 }
 
 #[tokio::test(flavor = "multi_thread")]

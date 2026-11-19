@@ -2,6 +2,12 @@
 //! against the real server. Each journey skips when no Chromium is found
 //! (set RUSTWRIGHT_CHROMIUM); `just test-ui` runs them.
 
+// The journeys' futures hold the whole router, whose middleware stack
+// (settings check, own-writes capture, telemetry) nests deeply enough to
+// overflow the default query depth (128) when their layout is computed, as
+// in the library (`src/lib.rs`).
+#![recursion_limit = "256"]
+
 #[path = "../support/mod.rs"]
 mod support;
 

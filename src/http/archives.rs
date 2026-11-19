@@ -170,10 +170,11 @@ fn note_unlocked(
 }
 
 /// Records the span's `okf.catalog` for a catalog the request has been
-/// admitted to and that is loaded, and returns that catalog's own name.
-/// A name that no loaded catalog bears (an unknown or refused path segment)
-/// is recorded nowhere: neither the span nor a metric label takes a raw
-/// path value, only one validated against server state.
+/// admitted to and that exists, and returns that catalog's own name.
+/// A name that no catalog bears (an unknown or refused path segment) is
+/// recorded nowhere: neither the span nor a metric label takes a raw path
+/// value, only one validated against the catalog directory (a failed
+/// lookup counts as none).
 ///
 /// # Arguments
 /// * `span` - the handler's span, captured before this function's own
@@ -182,10 +183,10 @@ fn note_unlocked(
 /// * `name` - the catalog, from the path, already admitted.
 ///
 /// # Returns
-/// The loaded catalog's name, or `None`.
+/// The catalog's name, or `None`.
 #[tracing::instrument(level = "trace", skip_all)]
-fn resolved_catalog(span: &tracing::Span, app: &App, name: &str) -> Option<String> {
-    let catalog = app.catalog(name)?.name().to_owned();
+async fn resolved_catalog(span: &tracing::Span, app: &App, name: &str) -> Option<String> {
+    let catalog = app.catalog_row(name).await.ok()??.name.clone();
     span.record("okf.catalog", catalog.as_str());
     Some(catalog)
 }
@@ -364,7 +365,7 @@ async fn export_catalog(
     };
     // Only now is the name admitted: the span and the metrics take the
     // loaded catalog's own name, never the path segment.
-    transfer.admit(resolved_catalog(&transfer.span, &app, &name));
+    transfer.admit(resolved_catalog(&transfer.span, &app, &name).await);
     let exported = export(app.pool(), &name, Vec::new(), &options).await;
     transfer.finish(
         exported
@@ -498,7 +499,7 @@ async fn import_catalog(
     let admission = principal.admission(&row, Access::Write, app.clock().now())?;
     // Only now is the name admitted: the span and the metrics take the
     // loaded catalog's own name, never the path segment.
-    transfer.admit(resolved_catalog(&transfer.span, &app, &name));
+    transfer.admit(resolved_catalog(&transfer.span, &app, &name).await);
     let mut uploaded = None;
     // An `async` block, so every early return below (a refusal, a timeout)
     // still passes through the measurement after it.
@@ -557,24 +558,38 @@ async fn import_catalog(
                 },
                 other => other,
             })?;
-        // Swap the new snapshot in now, not at the next poll. The import has
-        // committed, so a failed refresh must not turn it into an error (a
-        // retry would then get 409): log it and leave it to the poll loop. A
-        // catalog the app has not loaded yet arrives with the next poll. So does
+        // Swap the new snapshot in now, not when the change message arrives.
+        // The import has committed, so a failed refresh must not turn it into
+        // an error (a retry would then get 409): log it and leave it to the
+        // next use, which checks the snapshot against the catalog's row. A
+        // catalog this replica has not cached loads on its first use. So does
         // a committed import whose client disconnects (dropping this future)
         // during the refresh; a disconnect during `import` itself drops its
         // transaction, which rolls back, and nothing is imported.
         // Committed: tell the other replicas, on its own task (issue #659).
         if let Some(change) = report.changed {
             app.announce_catalog(change);
-        }
-        if let Some(state) = app.catalog(&name) {
-            if let Err(error) = state.refresh(app.pool(), app.rebuild_locks()).await {
+            // This replica's own write, applied before the answer (in
+            // process, no I/O): the directory drops its row behind the new
+            // generation, so the next read loads the import even when the
+            // catalog is not cached (one remembered as broken at the old
+            // generation included). The change feed delivers the same
+            // message later; applying it twice is harmless.
+            app.apply_own_writes(&[crate::invalidate::Invalidation::Catalog {
+                id: change.catalog_id,
+                generation: change.generation,
+            }])
+            .await;
+            let caught_up = app
+                .catalog_cache()
+                .catch_up(change.catalog_id, change.generation, app.rebuild_locks())
+                .await;
+            if let Err(error) = caught_up {
                 split_event!(
                     error,
                     { catalog = %name, kind = error.kind(), },
                     { %error, },
-                    "refresh after import failed; the poll loop retries"
+                    "refresh after import failed; the next use retries"
                 );
             }
         }
@@ -805,7 +820,7 @@ mod tests {
         assert_eq!(imported.1["updated"], serde_json::json!(["index.md"]));
         assert_eq!(after_import, (before.0 + 1, 2));
         // The route swapped the snapshot in before answering.
-        let current = test.app.catalog("pg").expect("pg").current();
+        let current = test.app.catalog("pg").await.unwrap().expect("pg").current();
         assert_eq!(current.generation(), before.0 + 1);
     }
 
@@ -817,7 +832,14 @@ mod tests {
     async fn a_slow_upload_is_503_and_imports_nothing() {
         let test = app_with(&[("pg", &[])], Config::default()).await;
         let before = stored(&test).await;
-        let files_before = test.app.catalog("pg").unwrap().current().files();
+        let files_before = test
+            .app
+            .catalog("pg")
+            .await
+            .unwrap()
+            .unwrap()
+            .current()
+            .files();
         let archive = tarball();
         let (head, tail) = archive.split_at(archive.len() / 2);
         // An in-memory pipe: the request body reads `reader` as `writer`
@@ -852,7 +874,13 @@ mod tests {
         assert!(late.is_err(), "the late bytes were read: {late:?}");
         assert_eq!(stored(&test).await, before);
         assert_eq!(
-            test.app.catalog("pg").unwrap().current().files(),
+            test.app
+                .catalog("pg")
+                .await
+                .unwrap()
+                .unwrap()
+                .current()
+                .files(),
             files_before
         );
     }
@@ -860,7 +888,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_refresh_failing_after_a_committed_import_still_reports_the_import() {
         let test = app_with(&[("pg", &[])], Config::default()).await;
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         let loaded_at = state.current().generation();
         // The fault: the import's generation bump (its last write, in its
         // transaction) also stores a row no workspace accepts, so the import
@@ -891,8 +919,9 @@ mod tests {
         let snapshot_after_import = state.current().generation();
         // A retry of the same upload: the catalog is no longer empty.
         let (retry_status, retry) = status_and_json(import().await.unwrap()).await;
-        // Repair the data by hand, then let the poll loop's next pass retry
-        // the refresh.
+        // Repair the data by hand; the next use reads the catalog's row
+        // (here marked stale, as the import's change message would) and
+        // retries the refresh.
         sqlx::raw_sql(
             "DROP TRIGGER break_the_refresh ON catalogs; \
              DELETE FROM documents WHERE path = '../escape.md';",
@@ -900,7 +929,8 @@ mod tests {
         .execute(test.app.pool())
         .await
         .unwrap();
-        test.app.poll().await.unwrap();
+        test.app.catch_up_catalogs().await;
+        test.app.catalog("pg").await.unwrap().expect("pg");
 
         // Reported as the import it was, not as a failure.
         assert_eq!(status, StatusCode::OK);
@@ -914,10 +944,58 @@ mod tests {
             retry["message"],
             "catalog \"pg\" is not empty; add ?replace=true to replace its contents"
         );
-        // The poll pass swapped the import in.
+        // The next use swapped the import in, in place.
         let current = state.current();
         assert_eq!(current.generation(), loaded_at + 1);
         assert_eq!(current.files(), 1);
+    }
+
+    /// A catalog remembered as broken at its generation, repaired by a
+    /// replacing import through this route, is readable on this replica at
+    /// once: no listener runs in a unit test, and the route's router here
+    /// has no other layer, so only the route's own write can tell the
+    /// directory.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_broken_catalog_repaired_by_an_import_is_readable_at_once() {
+        use crate::okf::workspace::Workspace as _;
+        let test = app_with(&[("pg", &[])], Config::default()).await;
+        let id = test.app.catalog_row("pg").await.unwrap().expect("pg").id;
+        // A row no workspace accepts, at a new generation.
+        sqlx::query(
+            "INSERT INTO documents (catalog_id, path, content, executable, revision, \
+                                    updated_at, updated_by) \
+             VALUES ($1, '../escape.md', '', false, 1, now(), 'test')",
+        )
+        .bind(id)
+        .execute(test.app.pool())
+        .await
+        .unwrap();
+        sqlx::query("UPDATE catalogs SET generation = generation + 1 WHERE id = $1")
+            .bind(id)
+            .execute(test.app.pool())
+            .await
+            .unwrap();
+        test.app.catch_up_catalogs().await;
+        // Its cold load fails and is remembered as broken at that generation.
+        assert!(test.app.catalog("pg").await.unwrap().is_none());
+
+        let request = Request::post("/catalogs/pg/import?replace=true")
+            .body(Body::from(tarball()))
+            .expect("request");
+        let (status, _) =
+            status_and_json(router(&test, admin()).oneshot(request).await.unwrap()).await;
+        let state = test.app.catalog("pg").await.unwrap();
+
+        assert_eq!(status, StatusCode::OK);
+        let state = state.expect("readable at once");
+        assert_eq!(
+            state
+                .current()
+                .workspace()
+                .read_to_string("index.md")
+                .unwrap(),
+            "# Index\n"
+        );
     }
 
     /// An admin's import into `test`'s `pg`, with `query` ("" or "?...").

@@ -110,6 +110,38 @@ pub(crate) fn routes(app: &Arc<App>) -> Router<Arc<App>> {
         .layer(middleware::map_response(api_headers))
 }
 
+/// Runs the handler, collecting the invalidations its writes queued, and
+/// applies them to this replica's directory and credential caches before the response
+/// goes out ([`App::apply_own_writes`]): in-process cache drops only, so
+/// nothing after the commit waits on I/O.
+///
+/// # Arguments
+/// * `app` - the application.
+/// * `request` - the request.
+/// * `next` - the handler.
+///
+/// # Returns
+/// The handler's response, unchanged.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "wraps every HTTP request, an unmatched path included, which must make no span"
+    )
+)]
+pub(crate) async fn apply_own_writes(
+    axum::extract::State(app): axum::extract::State<Arc<App>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let (response, written) = crate::invalidate::capturing(next.run(request)).await;
+    // Most requests write nothing: then nothing runs (and no span opens).
+    if !written.is_empty() {
+        app.apply_own_writes(&written).await;
+    }
+    response
+}
+
 /// Adds the headers every API response carries: never cached (keys and
 /// catalog content are private), never content-sniffed. Also reused by the
 /// open passkey routes (Task 8), which sit outside `/api/v1`.
@@ -336,11 +368,13 @@ pub(crate) async fn reachable_page(
         .await
 }
 
-/// After an administrative change: polls, so this replica's caches and
-/// catalog list reflect it for the next request (until Task 16 of
-/// milestone 18 removes the poll), and tells milestone 16 replicas to check
-/// `admin_generation` ([`App::bridge_to_m16`]). The change has committed, so
-/// a failed poll is logged, not returned: the poll loop retries it.
+/// After an administrative change: polls, so this replica's key cache
+/// reflects it for the next request (until Task 16 of milestone 18 removes
+/// the poll; the catalog directory is updated from the request's own
+/// invalidations: `apply_own_writes`), and tells milestone 16 replicas to
+/// check `admin_generation` ([`App::bridge_to_m16`]). The change has
+/// committed, so a failed poll is logged, not returned: the poll loop
+/// retries it.
 ///
 /// # Arguments
 /// * `app` - the application. An `&Arc<App>` argument coerces to `&App`

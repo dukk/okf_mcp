@@ -275,16 +275,15 @@ impl Metrics {
         "okf_mail_queue_depth",
         "okf_changesets_open",
     ];
-    // The catalog gauges join them once `App::load_with_metrics` registers
-    // them (`observe_catalogs`), and the pool gauge (`observe_pool`); the
-    // catalog ones have a series only per loaded catalog.
+    // The pool gauge joins them once `App::load_with_metrics` registers it
+    // (`observe_pool`).
 
     /// Every Prometheus family the server can export, as `/metrics` names
     /// it: the four in [`Metrics::FAMILIES`], plus each one that appears
     /// only once its event has happened (a counter or histogram has no
-    /// series until the first record) or once a catalog is loaded (the
-    /// observable gauges [`Metrics::observe_catalogs`] and
-    /// [`Metrics::observe_pool`] register). The Grafana example's test
+    /// series until the first record) or once an `App` or a cache exists
+    /// (the observable gauges [`Metrics::observe_pool`] and
+    /// [`Metrics::observe_cache`] register). The Grafana example's test
     /// (`tests/grafana_dashboard.rs`) checks the dashboard against this
     /// list, and the `all_families_...` unit test checks the list against
     /// the instruments, so a renamed instrument fails a test.
@@ -326,11 +325,8 @@ impl Metrics {
         // cache is alive.
         "okf_cache_entries",
         "okf_cache_bytes",
-        // Registered by `observe_catalogs` and `observe_pool`: they need a
-        // loaded `App`, so their own tests (`app.rs`, `mcp/changesets.rs`)
-        // check the rendered names.
-        "okf_catalog_concepts",
-        "okf_catalog_generation",
+        // Registered by `observe_pool`: it needs a loaded `App`, so its own
+        // test (`app.rs`) checks the rendered name.
         "db_client_connection_count",
     ];
 
@@ -621,53 +617,6 @@ impl Metrics {
         self.inner
             .redis_errors
             .add(1, &[KeyValue::new("operation", op.as_str())]);
-    }
-
-    /// Registers the catalog gauges: `okf.catalog.concepts` and
-    /// `okf.catalog.generation`, one series per loaded catalog. Each
-    /// callback holds only a [`Weak`] handle, so the meter provider (which
-    /// outlives the app) keeps no strong cycle, and reads what `app` already
-    /// holds: a scrape never queries Postgres.
-    ///
-    /// # Arguments
-    /// * `app` - the app to read; a callback finding it dropped reports
-    ///   nothing.
-    #[tracing::instrument(level = "trace", skip_all)]
-    pub fn observe_catalogs(&self, app: Weak<App>) {
-        // The gauge handles may be dropped: a callback stays registered with
-        // the provider (see `observe_export_failures`).
-        let concepts = app.clone();
-        self.meter
-            .u64_observable_gauge("okf.catalog.concepts")
-            .with_description("Concept documents in each catalog's current snapshot.")
-            .with_callback(move |observer| {
-                let Some(app) = concepts.upgrade() else {
-                    return;
-                };
-                for (name, state) in app.catalogs().iter() {
-                    let count = state.current().snapshot().concepts().count();
-                    observer.observe(
-                        u64::try_from(count).unwrap_or(u64::MAX),
-                        &[KeyValue::new("catalog", name.clone())],
-                    );
-                }
-            })
-            .build();
-        self.meter
-            .i64_observable_gauge("okf.catalog.generation")
-            .with_description("Each catalog's current snapshot generation.")
-            .with_callback(move |observer| {
-                let Some(app) = app.upgrade() else {
-                    return;
-                };
-                for (name, state) in app.catalogs().iter() {
-                    observer.observe(
-                        state.current().generation(),
-                        &[KeyValue::new("catalog", name.clone())],
-                    );
-                }
-            })
-            .build();
     }
 
     /// The instruments on the global meter provider: a no-op until `serve`
@@ -1406,12 +1355,8 @@ mod tests {
     #[test]
     fn all_families_names_every_family_the_instruments_render() {
         use crate::mcp::testing::local_metrics;
-        // The three gauges that read a loaded `App`.
-        const NEEDS_APP: [&str; 3] = [
-            "okf_catalog_concepts",
-            "okf_catalog_generation",
-            "db_client_connection_count",
-        ];
+        // The gauge that reads a loaded `App`.
+        const NEEDS_APP: [&str; 1] = ["db_client_connection_count"];
         let (_provider, metrics, registry) = local_metrics();
         let elapsed = Duration::from_millis(5);
 

@@ -915,7 +915,7 @@ impl OkfServer {
         title = "Add Index Entry",
         description = "List a concept in its folder's index.md as `* \
                        [Title](name.md) - summary`, in the changeset `changeset` names (open one \
-                       with open_changeset); nothing happens if it is already linked. Replayed at \
+                       with open_changeset); nothing happens if it is already linked (a name with a space, `)`, `#` or `:` is written percent-encoded, e.g. `a%20b.md`; an older raw bullet for it counts as linked, with a note). Replayed at \
                        publish onto an index.md that changed meanwhile, unless a free edit of \
                        that index.md follows. Write access.",
         annotations(
@@ -996,7 +996,7 @@ mod tests {
 
     /// The text of `path` as reads through the changeset `handle` see it.
     async fn seen(ctx: &ToolContext, handle: &str, path: &str) -> String {
-        let state = ctx.app().catalog("pg").unwrap();
+        let state = ctx.app().catalog("pg").await.unwrap().unwrap();
         let pinned = ctx.pin(Some(handle)).await.unwrap();
         let view = ctx.view(&state, pinned.as_ref()).await.unwrap();
         view.snapshot()
@@ -1230,7 +1230,7 @@ mod bookkeeping_tests {
 
     /// The text of `path` as reads through the changeset `handle` see it.
     async fn seen(ctx: &ToolContext, handle: &str, path: &str) -> String {
-        let state = ctx.app().catalog("pg").unwrap();
+        let state = ctx.app().catalog("pg").await.unwrap().unwrap();
         let pinned = ctx.pin(Some(handle)).await.unwrap();
         let view = ctx.view(&state, pinned.as_ref()).await.unwrap();
         view.snapshot()
@@ -1604,8 +1604,8 @@ mod repair_tests {
         .await
     }
 
-    fn published_text(test: &TestApp, path: &str) -> Option<String> {
-        let loaded = test.app.catalog("pg").unwrap().current();
+    async fn published_text(test: &TestApp, path: &str) -> Option<String> {
+        let loaded = test.app.catalog("pg").await.unwrap().unwrap().current();
         loaded
             .snapshot()
             .get(path)
@@ -1682,7 +1682,7 @@ mod repair_tests {
 
         assert!(published.report.published, "{published:?}");
         assert_eq!(logged.touched, ["/log.md"]);
-        let root = published_text(&test, "index.md").unwrap();
+        let root = published_text(&test, "index.md").await.unwrap();
         assert!(
             root.contains("* [Hello](hello.md) - The first note."),
             "{root}"
@@ -1694,11 +1694,12 @@ mod repair_tests {
         );
         // The nested indexes are created and linked from their parents.
         assert!(root.contains("* [Infra](infra/) - "), "{root}");
-        let infra = published_text(&test, "infra/index.md").unwrap();
+        let infra = published_text(&test, "infra/index.md").await.unwrap();
         assert!(infra.contains("* [Hosts](hosts/) - "), "{infra}");
-        let hosts = published_text(&test, "infra/hosts/index.md").unwrap();
+        let hosts = published_text(&test, "infra/hosts/index.md").await.unwrap();
         assert!(hosts.contains("* [Web](web.md) - A host."), "{hosts}");
         assert!(published_text(&test, "log.md")
+            .await
             .unwrap()
             .contains("* **Update:** Added the first notes."));
     }
@@ -1747,7 +1748,7 @@ mod repair_tests {
         // The import's index.md is revision 2, so the edit based on
         // revision 1 conflicts instead of overwriting it.
         assert!(matches!(refused, OkfError::Conflict { .. }), "{refused:?}");
-        assert_eq!(published_text(&test, "index.md").unwrap(), imported);
+        assert_eq!(published_text(&test, "index.md").await.unwrap(), imported);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1755,7 +1756,7 @@ mod repair_tests {
         let test = legacy().await;
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
-        assert_eq!(published_text(&test, "index.md"), None);
+        assert_eq!(published_text(&test, "index.md").await, None);
 
         let refused = create_concept(&ctx, concept("/b", "B", "b", &handle))
             .await
@@ -1790,10 +1791,10 @@ mod repair_tests {
             "{report:?}"
         );
         // Staged: nothing is live before publish.
-        assert_eq!(published_text(&test, "index.md"), None);
+        assert_eq!(published_text(&test, "index.md").await, None);
         let published = publish_as(&ctx, &handle).await.unwrap();
         assert!(published.report.published);
-        let root = published_text(&test, "index.md").unwrap();
+        let root = published_text(&test, "index.md").await.unwrap();
         assert!(
             root.starts_with("---\nokf_version: \"0.2\"\n---\n"),
             "{root}"
@@ -1803,10 +1804,10 @@ mod repair_tests {
             root.contains("* [Infra](infra/) - TODO: describe this folder"),
             "{root}"
         );
-        let infra = published_text(&test, "infra/index.md").unwrap();
+        let infra = published_text(&test, "infra/index.md").await.unwrap();
         assert!(infra.contains("* [NTP](ntp.md) - Hosts sync."), "{infra}");
         assert_eq!(
-            published_text(&test, "log.md").unwrap(),
+            published_text(&test, "log.md").await.unwrap(),
             "# Knowledge Catalog Update Log\n"
         );
 
@@ -1832,7 +1833,7 @@ mod repair_tests {
         let refused = repair(&reader, &handle).await.unwrap_err();
 
         assert!(matches!(refused, OkfError::Forbidden { .. }), "{refused:?}");
-        assert_eq!(published_text(&test, "index.md"), None);
+        assert_eq!(published_text(&test, "index.md").await, None);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1870,17 +1871,20 @@ mod repair_tests {
         .await
         .unwrap();
         publish_as(&second, &second_handle).await.unwrap();
-        let curated_root = published_text(&test, "index.md").unwrap();
-        let curated_infra = published_text(&test, "infra/index.md").unwrap();
+        let curated_root = published_text(&test, "index.md").await.unwrap();
+        let curated_infra = published_text(&test, "infra/index.md").await.unwrap();
 
         // The first repair replays onto the curated files: nothing is
         // overwritten, and nothing listed twice.
         let published = publish_as(&first, &first_handle).await.unwrap();
 
         assert!(published.report.published, "{published:?}");
-        assert_eq!(published_text(&test, "index.md").unwrap(), curated_root);
         assert_eq!(
-            published_text(&test, "infra/index.md").unwrap(),
+            published_text(&test, "index.md").await.unwrap(),
+            curated_root
+        );
+        assert_eq!(
+            published_text(&test, "infra/index.md").await.unwrap(),
             curated_infra
         );
         assert!(curated_root.contains("Curated words.") && curated_infra.contains("Our systems."));

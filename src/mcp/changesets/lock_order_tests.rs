@@ -148,7 +148,13 @@ async fn a_publish_holding_its_changeset_finishes_before_its_users_deletion() {
     let alice = Arc::new(user_context(&test, "alice", Access::Write, false).await);
     let handle = open(&alice).await;
     body(&alice, &handle, "# A\n\nAlice.\n").await;
-    let catalog_id = test.app.catalog("pg").expect("catalog pg").id();
+    let catalog_id = test
+        .app
+        .catalog("pg")
+        .await
+        .unwrap()
+        .expect("catalog pg")
+        .id();
     let mut holder = test.app.pool().begin().await.expect("begin the holder");
     sqlx::query("SELECT id FROM catalogs WHERE id = $1 FOR NO KEY UPDATE")
         .bind(catalog_id)

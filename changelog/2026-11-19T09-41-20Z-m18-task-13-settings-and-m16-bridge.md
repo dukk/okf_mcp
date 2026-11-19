@@ -22,6 +22,13 @@
   failed: the loaded settings serve, nothing is satisfied, callers queued
   behind it share it, and the next request retries. Test
   `a_blocked_settings_check_answers_within_its_bound` (through the router).
+- `App::apply_own_writes` (Task 8) marks the settings stale for a `Settings`
+  invalidation the request's own writes queued, so the writing replica's next
+  request checks them whatever their age (an in-process mark, no read). Test
+  `an_own_settings_write_reaches_the_next_request`.
+- `tests/ui_e2e/main.rs` and `tests/multi_replica.rs` raise `recursion_limit`
+  to 256, as `src/lib.rs` does: with both router middlewares, their futures'
+  layout overflows the default query depth.
 - `App::reload_settings`: marks the settings stale and checks them at once
   (a `Settings` message, a reconnect, an M16 announcement, a poll pass). A
   mark keeps the settings stale for every caller until a check that began

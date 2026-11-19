@@ -232,7 +232,12 @@ mod tests {
     /// # Returns
     /// The run id and the finding id.
     async fn seed(test: &TestApp) -> (String, String) {
-        let state = test.app.catalog("main").expect("main is loaded");
+        let state = test
+            .app
+            .catalog("main")
+            .await
+            .unwrap()
+            .expect("main is loaded");
         let pool = test.app.pool();
         let now = test.app.clock().now();
         let reporter = Actor {

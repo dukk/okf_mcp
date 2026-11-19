@@ -700,7 +700,7 @@ mod tests {
         import(test.app.pool(), "pg", republished, &options)
             .await
             .unwrap();
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         state
             .refresh(test.app.pool(), test.app.rebuild_locks())
             .await
@@ -781,7 +781,7 @@ mod tests {
         let author = writer(&test, "writer-a", "pg").await;
         let handle = open(&author).await;
         let other_handle = open(&author).await;
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         let pinned = author.changeset(&handle, Access::Read).await.unwrap();
         let other = author.changeset(&other_handle, Access::Read).await.unwrap();
         // The view before the write, to show the write invalidates the cache.

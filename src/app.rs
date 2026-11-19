@@ -1,10 +1,10 @@
 //! The server's shared state (design "Architecture"): the database, the
-//! configuration, the clock, the credential caches and every catalog held in
-//! memory, the poll loop that notices changes made outside the server
+//! configuration, the clock, the credential caches, the catalog directory
+//! and the catalog cache (catalogs load on demand, M18 Decisions 2 and 6),
+//! the change feed's handlers, the poll loop that still reloads the settings
 //! (design "Noticing changes made outside the server"), and the clock check
 //! loop and its last result (design "Time").
 
-use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use crate::auth::{Admission, Principal};
+use crate::cache::catalogs::{CatalogCache, CatchUp};
 use crate::cache::credentials::{AccessView, CredentialLimits, Credentials};
 use crate::cache::directory::CatalogDirectory;
 use crate::cache::labels::{LabelLookup, DEFAULT_LABEL_CACHE_ENTRIES};
@@ -31,20 +32,11 @@ use crate::oidc::OidcProviders;
 use crate::overlay::Overlays;
 use crate::shared;
 use crate::store::audit::{self, AccessKind, AccessRecord};
-use crate::store::catalogs::CatalogGeneration;
+use crate::store::catalogs::{CatalogGeneration, CatalogRow};
 use crate::store::settings::{self, Settings};
 use crate::store::{catalogs, unlocks};
-use crate::telemetry::metrics::{AnnouncementResult, Metrics, Outcome, RefreshResult};
-use crate::telemetry::subscriber::{split_event, LOCAL_ONLY};
-
-/// Every loaded catalog, by name (a `BTreeMap`, so iteration is in name
-/// order, like `catalog list`).
-pub type Catalogs = BTreeMap<String, Arc<CatalogState>>;
-
-/// Catalogs whose stored data failed to build into a snapshot: each one's id,
-/// and the generation that failed. Building the same generation again would
-/// fail the same way, so it is retried only once the generation moves.
-type Broken = HashMap<i64, i64>;
+use crate::telemetry::metrics::{AnnouncementResult, Metrics, Outcome};
+use crate::telemetry::subscriber::split_event;
 
 /// The longest a settings check may take. A check runs before every
 /// request whose settings expired, outside the routes' own timeouts, so a
@@ -99,11 +91,12 @@ pub struct App {
     // Each catalog's rebuild lock (`CatalogState::refresh`), by catalog id,
     // for the same reason.
     rebuild_locks: KeyedLocks,
-    // Catalog rows by name with their access facts (M18 Decision 6). Nothing
-    // reads it yet but tests: later tasks move the map's readers onto it.
+    // Catalog rows by name with their access facts (M18 Decision 6): what
+    // "does this catalog exist" and every snapshot's freshness are read from.
     directory: CatalogDirectory,
-    // As in `CatalogState`: the lock is held only to clone or swap the `Arc`.
-    catalogs: RwLock<Arc<Catalogs>>,
+    // Catalog snapshots by id, loaded on demand and bounded in estimated
+    // bytes (M18 Decision 2).
+    catalog_cache: CatalogCache,
     // The `admin_generation` the poll pass last marked the credential caches
     // and the catalog directory stale at (or the one this instance started
     // at). The pass reads the counter itself: a change no message described
@@ -151,11 +144,9 @@ pub struct App {
     pub(crate) m16_announcements: std::sync::atomic::AtomicUsize,
     // Held for a whole `poll` pass. Without it, two overlapping passes (the
     // loop and a test's or a later milestone's direct call) could swap older
-    // labels in after newer ones while storing the newer counter.
-    // tokio's `Mutex`: it is held across `.await`s. It also guards the
-    // pass's own memory, the broken catalogs: a Rust mutex owns the data it
-    // protects, which can only be reached through the lock.
-    polling: tokio::sync::Mutex<Broken>,
+    // Held for a whole `poll` pass, so passes never overlap (tokio's
+    // `Mutex`: it is held across `.await`s).
+    polling: tokio::sync::Mutex<()>,
     // The last clock check (design "Time"); `None` until the first one, and
     // always without a `time_server`. Written by the check loop only.
     clock_status: RwLock<Option<ClockStatus>>,
@@ -189,12 +180,9 @@ pub struct App {
 }
 
 impl App {
-    /// Loads the key cache, the effective settings and every catalog's
-    /// snapshot.
-    ///
-    /// A catalog whose snapshot fails to build is logged and left out, as
-    /// [`App::poll`] does, and a later poll tries it again (see there for
-    /// when): one bad catalog never takes the others offline.
+    /// Loads the key cache and the effective settings. No catalog is
+    /// loaded: each loads into the catalog cache on its first use (M18 spec
+    /// Decision 2), so start-up does not grow with the number of catalogs.
     ///
     /// # Arguments
     /// * `pool` - the database (migrated).
@@ -208,8 +196,7 @@ impl App {
     /// [`OkfError::Config`] (path `[redis]`) from [`shared::Redis::connect`]
     /// when `[redis]` is set and its variable is unset or blank, its value is
     /// not a Redis URL, or Redis does not answer `PING`;
-    /// [`OkfError::Database`] reading the counter, the keys, the settings or
-    /// the list;
+    /// [`OkfError::Database`] reading the counter, the keys or the settings;
     /// [`OkfError::Config`] from [`OAuth::new`] or [`Passkeys::new`], or from
     /// [`crate::mail::from_config`] (a mail secret missing from the
     /// environment, or no AWS region for SES) or [`OidcProviders::new`] (an
@@ -300,24 +287,6 @@ impl App {
             },
             metrics.clone(),
         );
-        let mut loaded = Catalogs::new();
-        let mut broken = Broken::new();
-        for row in catalogs::list(&pool).await? {
-            match CatalogState::load(&pool, &row.name).await {
-                Ok(state) => {
-                    loaded.insert(row.name, Arc::new(state));
-                }
-                // Not in the map, so a later poll tries to load it again
-                // (unless it was deleted meanwhile).
-                Err(error) => note_failure(&mut broken, &row, "load", &error),
-            }
-        }
-        // `if let Some(name) = ...`: Python's `if (name := ...) is not None`.
-        if let Some(name) = &config.default_catalog {
-            if !loaded.contains_key(name) {
-                tracing::warn!(catalog = %name, "default_catalog is not loaded (yet)");
-            }
-        }
         let oauth = OAuth::new(&config, redis.as_ref())?;
         let sessions = SessionBindings::new(redis.as_ref(), config.session_idle_timeout);
         let overlays = Overlays::new(config.session_idle_timeout, config.overlay_cache_size);
@@ -343,6 +312,21 @@ impl App {
             config.catalog_ttl,
             metrics.clone(),
         );
+        // `if let Some(name) = ...`: Python's `if (name := ...) is not None`.
+        // One directory read, not a load: the catalog loads when first used.
+        if let Some(name) = &config.default_catalog {
+            // Boxed: the directory's lookup is a deep future (moka's single
+            // flight), and inlining it here pushed rustc's layout query past
+            // its recursion limit for callers that nest this load.
+            if Box::pin(directory.resolve(name)).await?.is_none() {
+                tracing::warn!(catalog = %name, "default_catalog does not exist (yet)");
+            }
+        }
+        let catalog_cache = CatalogCache::new(
+            pool.clone(),
+            config.catalog_cache_bytes.as_u64(),
+            metrics.clone(),
+        );
         let app = Arc::new(Self {
             pool,
             config,
@@ -356,7 +340,7 @@ impl App {
             publish_locks: KeyedLocks::new(),
             rebuild_locks: KeyedLocks::new(),
             directory,
-            catalogs: RwLock::new(Arc::new(loaded)),
+            catalog_cache,
             swept_generation: AtomicI64::new(admin_generation),
             settings: RwLock::new(LoadedSettings {
                 settings: Arc::new(settings),
@@ -376,7 +360,7 @@ impl App {
             settings_loads: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
             m16_announcements: std::sync::atomic::AtomicUsize::new(0),
-            polling: tokio::sync::Mutex::new(broken),
+            polling: tokio::sync::Mutex::new(()),
             clock_status: RwLock::new(None),
             oauth,
             sign_in_limits: SignInLimits::new(),
@@ -391,7 +375,6 @@ impl App {
         });
         // `Arc::downgrade`: the gauges' callbacks live in the meter provider,
         // which outlives the app, so they hold a weak handle (no cycle).
-        app.metrics.observe_catalogs(Arc::downgrade(&app));
         app.metrics.observe_pool(Arc::downgrade(&app));
         Ok(app)
     }
@@ -470,6 +453,15 @@ impl App {
     )]
     pub fn directory(&self) -> &CatalogDirectory {
         &self.directory
+    }
+
+    /// The catalog cache: snapshots by catalog id, loaded on demand.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor")
+    )]
+    pub fn catalog_cache(&self) -> &CatalogCache {
+        &self.catalog_cache
     }
 
     /// The instruments this app records on.
@@ -1009,83 +1001,109 @@ impl App {
             .expect("clock status lock poisoned") = Some(status);
     }
 
-    /// Every loaded catalog, as of now. Cheap (an `Arc` clone); one call
-    /// gives a consistent view to check names against and take states from.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    pub fn catalogs(&self) -> Arc<Catalogs> {
-        Arc::clone(&self.catalogs.read().expect("catalog map lock poisoned"))
-    }
-
-    /// One catalog's state.
+    /// The directory row of catalog `name`: whether it exists, and its
+    /// owner, description and access facts, without loading its content.
     ///
     /// # Arguments
     /// * `name` - the catalog's name.
     ///
     /// # Returns
-    /// Its state, or `None` if no such catalog is loaded.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    pub fn catalog(&self, name: &str) -> Option<Arc<CatalogState>> {
-        self.catalogs().get(name).cloned()
+    /// The row, or `None` if there is no such catalog.
+    ///
+    /// # Errors
+    /// As [`CatalogDirectory::resolve`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn catalog_row(&self, name: &str) -> Result<Option<Arc<CatalogRow>>, OkfError> {
+        self.directory.resolve(name).await
     }
 
-    /// The loaded state of the catalog a directory row describes, for a
-    /// listing's snapshot fields (files, concepts, last change). M18 Task 8
-    /// replaces it with a load through the catalog cache.
+    /// The state of the catalog `row` describes, at `row.generation` or
+    /// newer: from the catalog cache, refreshed in place, or loaded. The
+    /// state is that incarnation's (`row.id`), never another catalog's
+    /// created since under the name.
     ///
     /// # Arguments
-    /// * `row` - the catalog's row, as a listing read it.
+    /// * `row` - the catalog's directory row ([`App::catalog_row`]).
     ///
     /// # Returns
-    /// Its state, or `None` if this replica has not loaded that catalog, or
-    /// holds another incarnation under its name (deleted and created again
-    /// since the last poll): a listing never mixes one catalog's row with
-    /// another's contents.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    pub fn loaded_catalog(&self, row: &catalogs::CatalogRow) -> Option<Arc<CatalogState>> {
-        self.catalog(&row.name).filter(|state| state.id() == row.id)
+    /// The state.
+    ///
+    /// # Errors
+    /// As [`CatalogCache::get`]: [`OkfError::CatalogNotSelected`] for a
+    /// catalog deleted since, or whose stored data does not build;
+    /// [`OkfError::Database`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn catalog_state(&self, row: &CatalogRow) -> Result<Arc<CatalogState>, OkfError> {
+        self.catalog_cache.get(row, &self.rebuild_locks).await
     }
 
-    /// One pass of the poll loop: checks the settings, reloads the labels if
-    /// `admin_generation` moved, and brings the catalogs in line with the
-    /// catalog list. Pruning and the cluster counts are housekeeping jobs
-    /// ([`crate::housekeeping`]), run once per cluster, not per pass.
+    /// [`App::catalog_state`] for a listing's row: the state for a listed
+    /// catalog's snapshot fields, or `None` for one to leave out of the
+    /// page because it was deleted since the page was read or its stored
+    /// data does not build (as a catalog that was not loaded was left out
+    /// before milestone 18).
     ///
-    /// A catalog that fails to load or refresh, or a key reload (or the
-    /// `admin_generation` read before it) that fails, is logged and the rest
-    /// of the pass goes ahead. A key reload, or a
-    /// catalog that failed on a database error, is retried at the next pass.
-    /// A catalog whose stored data would not build is retried only once its
-    /// `generation` moves (an import or publish), since the same data would
-    /// fail the same way: until then a refresh keeps the old snapshot, and a
-    /// catalog never loaded stays out. A catalog deleted and created again
-    /// under the same name counts as never loaded: if the new one fails to
-    /// load, the name is missing until it does, since the old content no
-    /// longer exists to serve. Passes never overlap: a call made while another runs waits for
-    /// it, then makes its own pass.
+    /// # Arguments
+    /// * `row` - a listed catalog's row.
+    ///
+    /// # Returns
+    /// The state, or `None`.
+    ///
+    /// # Errors
+    /// [`OkfError::Database`], or [`OkfError::Busy`] for a load shared with
+    /// another request that failed.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn listed_state(
+        &self,
+        row: &CatalogRow,
+    ) -> Result<Option<Arc<CatalogState>>, OkfError> {
+        match self.catalog_state(row).await {
+            Ok(state) => Ok(Some(state)),
+            Err(OkfError::CatalogNotSelected { .. }) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// The state of catalog `name`: [`App::catalog_row`], then
+    /// [`App::catalog_state`]. For a caller that has only a name and no
+    /// request context (the archive routes, tests).
+    ///
+    /// # Arguments
+    /// * `name` - the catalog's name.
+    ///
+    /// # Returns
+    /// The state, or `None` if there is no such catalog, or it was deleted
+    /// meanwhile, or its stored data does not build (as a catalog that was
+    /// not loaded answered before).
+    ///
+    /// # Errors
+    /// [`OkfError::Database`], or [`OkfError::Busy`] for a load shared with
+    /// another request that failed.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn catalog(&self, name: &str) -> Result<Option<Arc<CatalogState>>, OkfError> {
+        match self.catalog_row(name).await? {
+            Some(row) => self.listed_state(&row).await,
+            None => Ok(None),
+        }
+    }
+
+    /// One pass of the poll loop: checks the settings, and marks every
+    /// cached credential, user, label and catalog row stale if
+    /// `admin_generation` moved since the last pass. Catalogs are not
+    /// polled: the change feed refreshes a cached catalog, and every use
+    /// checks its snapshot against the directory row (M18 Task 8). Pruning
+    /// and the cluster counts are housekeeping jobs ([`crate::housekeeping`]),
+    /// run once per cluster, not per pass.
+    ///
+    /// A key reload (or the `admin_generation` read before it) that fails is
+    /// logged and retried at the next pass. Passes never overlap: a call
+    /// made while another runs waits for it, then makes its own pass.
     ///
     /// # Returns
     /// `Ok(())` once the pass is done.
     ///
     /// # Errors
-    /// [`OkfError::Database`] reading the catalog list.
+    /// None today; the `Result` stays for the callers (`settle`).
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(uninstrumented_fn, reason = "makes the okf.poll root span itself")
@@ -1113,17 +1131,15 @@ impl App {
         allow(uninstrumented_fn, reason = "runs inside the okf.poll span")
     )]
     async fn poll_pass(&self) -> Result<(), OkfError> {
-        // The guard releases the mutex when the function returns; through
-        // it (`*broken`, like a reference) the pass reads and replaces the
-        // broken catalogs.
-        let mut broken = self.polling.lock().await;
+        let _pass = self.polling.lock().await;
         self.reload_settings().await;
         match catalogs::admin_generation(&self.pool).await {
             Ok(generation) => {
                 // `admin_generation` moved since the last pass's sweep: a
                 // change no message described may be among those, so every
                 // cached credential, user, label and catalog row is reread on
-                // its next use. The poll loop's backstop, until it is removed
+                // its next use (and with a row, its catalog's snapshot is
+                // checked). The poll loop's backstop, until it is removed
                 // (Task 16).
                 if generation != self.swept_generation.load(Ordering::Relaxed) {
                     self.credentials.mark_all_stale();
@@ -1141,87 +1157,6 @@ impl App {
                 );
             }
         }
-        let current = self.catalogs();
-        let mut next = Catalogs::new();
-        // Rebuilt each pass, so a deleted catalog's entry goes with it.
-        let mut still_broken = Broken::new();
-        for row in catalogs::list(&self.pool).await? {
-            // This very generation already failed to build: don't try again.
-            let failed_before = broken.get(&row.id) == Some(&row.generation);
-            if failed_before {
-                still_broken.insert(row.id, row.generation);
-            }
-            // The same id: the same catalog. A different id under the same
-            // name: deleted and created again, so load it from scratch.
-            let existing = current.get(&row.name).filter(|state| state.id() == row.id);
-            // One span per catalog's turn; its `okf.refresh.result` is set
-            // below, and the awaits that do the work run inside it.
-            let turn = tracing::info_span!(
-                "okf.catalog.refresh",
-                okf.catalog = %row.name,
-                okf.refresh.result = tracing::field::Empty,
-            );
-            let mut result = RefreshResult::Unchanged;
-            let state = match existing {
-                Some(state) => {
-                    // Outside the snapshot, so a `catalog update` or
-                    // owner change shows without a rebuild.
-                    state.set_description(&row.description);
-                    state.set_owner_team(row.owner_team.as_deref());
-                    let behind = row.generation > state.current().generation();
-                    if behind && failed_before {
-                        // This generation already failed to build: the turn
-                        // is skipped, but it is still a failed one.
-                        result = RefreshResult::Failed;
-                    } else if behind {
-                        match state
-                            .refresh(&self.pool, &self.rebuild_locks)
-                            .instrument(turn.clone())
-                            .await
-                        {
-                            Ok(true) => result = RefreshResult::Reloaded,
-                            Ok(false) => {}
-                            Err(error) => {
-                                // The old snapshot stays in place.
-                                result = RefreshResult::Failed;
-                                note_failure(&mut still_broken, &row, "refresh", &error);
-                            }
-                        }
-                    }
-                    Arc::clone(state)
-                }
-                None if failed_before => {
-                    // Still failed at this generation: it is a turn too, so
-                    // it counts and the span says so.
-                    self.metrics
-                        .catalog_refresh(&row.name, RefreshResult::Failed);
-                    turn.record("okf.refresh.result", RefreshResult::Failed.as_str());
-                    continue;
-                }
-                None => match CatalogState::load(&self.pool, &row.name)
-                    .instrument(turn.clone())
-                    .await
-                {
-                    Ok(state) => {
-                        tracing::info!(catalog = %row.name, "catalog loaded");
-                        result = RefreshResult::Loaded;
-                        Arc::new(state)
-                    }
-                    Err(error) => {
-                        note_failure(&mut still_broken, &row, "load", &error);
-                        self.metrics
-                            .catalog_refresh(&row.name, RefreshResult::Failed);
-                        turn.record("okf.refresh.result", RefreshResult::Failed.as_str());
-                        continue;
-                    }
-                },
-            };
-            self.metrics.catalog_refresh(&row.name, result);
-            turn.record("okf.refresh.result", result.as_str());
-            next.insert(row.name, state);
-        }
-        *self.catalogs.write().expect("catalog map lock poisoned") = Arc::new(next);
-        *broken = still_broken;
         Ok(())
     }
 
@@ -1265,21 +1200,19 @@ impl App {
         tokio::spawn(shared::announce::publish_catalog(redis, change).in_current_span());
     }
 
-    /// Answers one catalog announcement: refreshes the loaded catalog with
+    /// Answers one catalog announcement: refreshes the cached catalog with
     /// that id unless its snapshot already reached the announced
-    /// generation. Each call is the root of its own trace
-    /// (`okf.catalog.announcement`) and is counted in
+    /// generation ([`CatalogCache::catch_up`]). Each call is the root of its
+    /// own trace (`okf.catalog.announcement`) and is counted in
     /// `okf.catalog.announcements`.
     ///
-    /// A catalog this replica has not loaded (created since its last poll,
-    /// or one that failed to load) is left alone, and so is one deleted
-    /// since: the poll loop owns the catalog map and loads or drops it, so
-    /// announcements never load anything (no load storm). Concurrent
-    /// refreshes of one catalog, from here, the poll loop or a local
-    /// publish, are serialized by [`CatalogState::refresh`]'s rebuild lock:
-    /// the first rebuilds, the rest see the generation already reached and
-    /// return, so a snapshot never moves back and a generation is built
-    /// once.
+    /// A catalog this replica has not cached is left alone (it loads when
+    /// first used), and so is one deleted since: announcements never load
+    /// anything (no load storm). Concurrent refreshes of one catalog, from
+    /// here, the change feed, a request or a local publish, are serialized
+    /// by [`CatalogState::refresh`]'s rebuild lock: the first rebuilds, the
+    /// rest see the generation already reached and return, so a snapshot
+    /// never moves back and a generation is built once.
     ///
     /// # Arguments
     /// * `change` - the announced catalog and generation.
@@ -1327,34 +1260,25 @@ impl App {
         change: CatalogGeneration,
         span: &tracing::Span,
     ) -> AnnouncementResult {
-        // A linear search: the map is keyed by name, and an announcement
-        // names the id, which a catalog created again under the name does not
-        // share.
-        let state = self
-            .catalogs()
-            .values()
-            .find(|state| state.id() == change.catalog_id)
-            .cloned();
-        let Some(state) = state else {
-            return AnnouncementResult::Unknown;
-        };
-        span.record("okf.catalog", state.name());
-        // Already there (this replica's own publish, the poll loop, or an
-        // earlier announcement): not even a database read.
-        if change.generation <= state.current().generation() {
-            return AnnouncementResult::Current;
+        if let Some(state) = self.catalog_cache.resident(change.catalog_id).await {
+            span.record("okf.catalog", state.name());
         }
-        match state.refresh(&self.pool, &self.rebuild_locks).await {
-            Ok(true) => AnnouncementResult::Applied,
-            Ok(false) => AnnouncementResult::Current,
-            // Deleted since this replica's last poll, which drops it.
-            Err(OkfError::CatalogNotSelected { .. }) => AnnouncementResult::Unknown,
+        let caught_up = self
+            .catalog_cache
+            .catch_up(change.catalog_id, change.generation, &self.rebuild_locks)
+            .await;
+        match caught_up {
+            Ok(CatchUp::Applied) => AnnouncementResult::Applied,
+            Ok(CatchUp::Current) => AnnouncementResult::Current,
+            Ok(CatchUp::NotResident) | Err(OkfError::CatalogNotSelected { .. }) => {
+                AnnouncementResult::Unknown
+            }
             Err(error) => {
                 split_event!(
                     error,
-                    { catalog = %state.name(), kind = error.kind(), },
+                    { catalog_id = change.catalog_id, kind = error.kind(), },
                     { %error, },
-                    "refresh after an announcement failed; the poll loop retries"
+                    "refresh after an announcement failed; the next use retries"
                 );
                 AnnouncementResult::Failed
             }
@@ -1363,12 +1287,15 @@ impl App {
 
     /// Applies one change-feed message to this replica's caches: the
     /// catalog directory, the credential, user and label caches, the catalog
-    /// map and the settings.
+    /// cache and the settings.
     ///
-    /// A `Catalog` message refreshes that catalog if it is loaded and
-    /// behind; a catalog not loaded is left to the poll loop. A `Settings`
-    /// message reloads the settings. The caches apply every other kind
-    /// themselves.
+    /// A `Catalog` message refreshes that catalog if it is cached and behind
+    /// (the body of [`App::apply_catalog_announcement`]). A `CatalogMeta`
+    /// message for a catalog that no longer exists under that id (deleted)
+    /// drops it from the catalog cache; a catalog that merely changed its
+    /// description, owner or maintenance keeps its snapshot, since those
+    /// live in the directory row. A `Settings` message reloads the settings.
+    /// The caches apply every other kind themselves.
     ///
     /// # Arguments
     /// * `message` - what changed.
@@ -1377,12 +1304,15 @@ impl App {
         use crate::invalidate::Invalidation;
         // The directory and the credentials first: they are a few map
         // operations, and nothing below should be able to delay dropping a
-        // row or a revoked credential.
+        // row or a revoked credential; the catalog cache below reads the
+        // row the directory now holds.
         self.directory.apply(&message.invalidation).await;
         self.credentials.apply(&message.invalidation).await;
         self.labels.apply(&message.invalidation).await;
         match &message.invalidation {
             Invalidation::Catalog { id, generation } => {
+                // The announcement's body, without its span and counter:
+                // this is the change feed, counted by its own metrics.
                 self.refresh_announced(
                     CatalogGeneration {
                         catalog_id: *id,
@@ -1393,25 +1323,77 @@ impl App {
                 .await;
             }
             Invalidation::Settings => self.reload_settings().await,
-            Invalidation::CatalogMeta { .. }
-            | Invalidation::User { .. }
+            Invalidation::CatalogMeta { id, name } => {
+                self.forget_if_deleted(*id, name).await;
+            }
+            Invalidation::User { .. }
             | Invalidation::Team { .. }
             | Invalidation::Credential { .. } => {}
         }
     }
 
+    /// Applies this replica's own writes to its catalog directory, its
+    /// credential, user and label caches and its settings before the request
+    /// that made them answers ([`crate::invalidate::capturing`]):
+    /// the next request on this replica reads the new rows, without waiting
+    /// for the change feed to deliver the same messages. Only in-process
+    /// cache drops; nothing here reads the database (a dropped row is read
+    /// again by the next lookup, and a snapshot behind its row is refreshed
+    /// on its next use). The change feed still applies each message in full
+    /// when it arrives.
+    ///
+    /// # Arguments
+    /// * `written` - the invalidations the request's writes queued.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn apply_own_writes(&self, written: &[crate::invalidate::Invalidation]) {
+        for invalidation in written {
+            self.directory.apply(invalidation).await;
+            self.credentials.apply(invalidation).await;
+            self.labels.apply(invalidation).await;
+            // A mark, not a reload: the next request checks the settings
+            // ([`App::fresh_settings`]) whatever their age.
+            if matches!(invalidation, crate::invalidate::Invalidation::Settings) {
+                self.mark_settings_stale();
+            }
+        }
+    }
+
+    /// Drops catalog `id` from the catalog cache if `name` no longer names
+    /// it (the catalog was deleted, perhaps created again under the name).
+    /// A catalog that is not cached costs nothing; one that is costs one
+    /// directory read, at the rate of administrative writes.
+    ///
+    /// # Arguments
+    /// * `id` - the catalog's id, from the message.
+    /// * `name` - its name, from the message.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn forget_if_deleted(&self, id: i64, name: &str) {
+        if self.catalog_cache.resident(id).await.is_none() {
+            return;
+        }
+        // A failed read is treated as gone: the entry is only a cache, and
+        // the next use loads it again if the catalog is still there.
+        let still_there = matches!(
+            self.directory.resolve(name).await,
+            Ok(Some(row)) if row.id == id
+        );
+        if !still_there {
+            self.catalog_cache.forget(id).await;
+        }
+    }
+
     /// After the change feed's connection was lost (or a payload could not
     /// be read): messages sent meanwhile are gone, so every cache is
-    /// suspect. The directory, credential, user and label caches mark every
-    /// entry stale; the settings are checked; every loaded catalog that is
-    /// behind is refreshed.
+    /// suspect (spec Decision 12). The directory, credential, user and label
+    /// caches mark every entry stale (each is read again on its next use,
+    /// and with a catalog's row its cached snapshot is checked); the
+    /// settings are checked.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn apply_reconnect(&self) {
-        self.directory.mark_all_stale().await;
+        self.catch_up_catalogs().await;
         self.credentials.mark_all_stale();
         self.labels.mark_all_stale();
         self.reload_settings().await;
-        self.catch_up_catalogs().await;
     }
 
     /// M16 bridge (spec Decision 14): remove in the release after 0.23.
@@ -1430,41 +1412,15 @@ impl App {
         self.reload_settings().await;
     }
 
-    /// Refreshes every loaded catalog whose generation in the database is
-    /// newer than its snapshot: what the catalog subscriber does when it
-    /// (re)subscribes, since announcements sent while it was not subscribed
-    /// are lost. One read of the catalog list, then one
-    /// [`App::apply_catalog_announcement`] per catalog that is behind; a
-    /// catalog not loaded here is left to the poll loop, as for an
-    /// announcement. A failed list read is logged; the poll loop covers it.
+    /// Makes every cached catalog revalidate on its next use: what the
+    /// catalog subscriber does when it (re)subscribes, since announcements
+    /// sent while it was not subscribed are lost, and what a lost change
+    /// feed does. The directory's rows are marked stale, so each is read
+    /// again on its next use, and [`App::catalog_state`] refreshes a
+    /// snapshot that is behind its row. Nothing is read now (no load storm).
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn catch_up_catalogs(&self) {
-        let rows = match catalogs::list(&self.pool).await {
-            Ok(rows) => rows,
-            Err(error) => {
-                split_event!(
-                    error,
-                    { kind = error.kind(), },
-                    { %error, },
-                    "reading the catalog list to catch up failed; the poll loop covers it"
-                );
-                return;
-            }
-        };
-        let loaded = self.catalogs();
-        for row in rows {
-            let behind = loaded
-                .get(&row.name)
-                .filter(|state| state.id() == row.id)
-                .is_some_and(|state| row.generation > state.current().generation());
-            if behind {
-                self.apply_catalog_announcement(CatalogGeneration {
-                    catalog_id: row.id,
-                    generation: row.generation,
-                })
-                .await;
-            }
-        }
+        self.directory.mark_all_stale().await;
     }
 
     /// Runs [`App::poll`] every `poll_interval` until `shutdown` is cancelled.
@@ -1573,48 +1529,6 @@ impl App {
     }
 }
 
-/// Logs a catalog that failed to load or refresh and, if its stored data is
-/// to blame, remembers its generation as broken.
-///
-/// A catalog deleted since this pass listed it is not a failure: it is gone
-/// from the next list, so it is only noted at debug level. A database error
-/// is logged but not remembered, so the next pass retries at once.
-///
-/// # Arguments
-/// * `broken` - the broken catalogs, to add to.
-/// * `row` - the catalog's row from this pass's list.
-/// * `action` - `"load"` or `"refresh"`, for the log line.
-/// * `error` - what went wrong.
-#[tracing::instrument(level = "trace", skip_all)]
-fn note_failure(broken: &mut Broken, row: &catalogs::Catalog, action: &str, error: &OkfError) {
-    let retry = match error {
-        OkfError::CatalogNotSelected { .. } => {
-            tracing::debug!(catalog = %row.name, "{action} skipped: the catalog was deleted");
-            return;
-        }
-        // Transient: the next pass tries again, as for a database error.
-        OkfError::Database { .. } | OkfError::Busy { .. } => "at the next poll",
-        // Every other error comes from the stored data, so the same
-        // generation would fail the same way. (`_` matches any variant.)
-        _ => {
-            broken.insert(row.id, row.generation);
-            "when the catalog changes"
-        }
-    };
-    tracing::error!(
-        catalog = %row.name,
-        generation = row.generation,
-        kind = error.kind(),
-        "{action} failed; retrying {retry}"
-    );
-    tracing::error!(
-        target: LOCAL_ONLY,
-        catalog = %row.name,
-        %error,
-        "{action} failed; retrying {retry} (detail)"
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1663,74 +1577,6 @@ mod tests {
             .unwrap()
     }
 
-    fn names(app: &App) -> Vec<String> {
-        app.catalogs().keys().cloned().collect()
-    }
-
-    /// Stores a row no workspace accepts (a path escaping the catalog), so
-    /// the catalog's snapshot fails to build.
-    async fn break_catalog(pool: &PgPool, catalog_id: i64) {
-        sqlx::query(
-            "INSERT INTO documents (catalog_id, path, content, executable, revision, \
-                                    updated_at, updated_by) \
-             VALUES ($1, '../escape.md', '', false, 1, now(), 'test')",
-        )
-        .bind(catalog_id)
-        .execute(pool)
-        .await
-        .unwrap();
-    }
-
-    /// Removes the row [`break_catalog`] stored, without moving the
-    /// catalog's generation (as a hand repair in SQL would).
-    async fn repair_catalog(pool: &PgPool, catalog_id: i64) {
-        sqlx::query("DELETE FROM documents WHERE catalog_id = $1 AND path = '../escape.md'")
-            .bind(catalog_id)
-            .execute(pool)
-            .await
-            .unwrap();
-    }
-
-    /// Moves a catalog's generation, as an import or publish does.
-    async fn bump_generation(pool: &PgPool, catalog_id: i64) {
-        sqlx::query("UPDATE catalogs SET generation = generation + 1 WHERE id = $1")
-            .bind(catalog_id)
-            .execute(pool)
-            .await
-            .unwrap();
-    }
-
-    #[test]
-    fn only_data_failures_are_remembered_as_broken() {
-        let row = catalogs::Catalog {
-            id: 7,
-            name: "pg".to_string(),
-            display_name: String::new(),
-            description: String::new(),
-            generation: 3,
-            created_at: Utc::now(),
-            owner_team: None,
-        };
-        let deleted = OkfError::CatalogNotSelected {
-            catalog: "pg".to_string(),
-        };
-        let database = OkfError::Database {
-            source: sqlx::Error::PoolTimedOut,
-        };
-        let bad_data = OkfError::InvalidPath {
-            path: "../escape.md".to_string(),
-            reason: "escapes the catalog".to_string(),
-        };
-        let mut broken = Broken::new();
-
-        note_failure(&mut broken, &row, "load", &deleted);
-        note_failure(&mut broken, &row, "load", &database);
-        assert!(broken.is_empty());
-        note_failure(&mut broken, &row, "refresh", &bad_data);
-
-        assert_eq!(broken, Broken::from([(7, 3)]));
-    }
-
     /// A change-feed message as the listener would parse it off the wire.
     fn message(invalidation: crate::invalidate::Invalidation) -> crate::invalidate::Message {
         crate::invalidate::Message {
@@ -1762,19 +1608,38 @@ mod tests {
         let db = test_db().await;
         let id = create_pg(&db.pool).await;
         let app = app(&db.pool).await;
-        let before = app.catalog("pg").unwrap().current().generation();
+        let before = app
+            .catalog("pg")
+            .await
+            .unwrap()
+            .unwrap()
+            .current()
+            .generation();
 
         // Written on the pool directly, as another replica would.
         import_files(&db.pool, "pg", &[("a.md", "# A\n")], false).await;
         let generation = catalogs::list(&db.pool).await.unwrap()[0].generation;
         assert!(generation > before);
-        assert_eq!(app.catalog("pg").unwrap().current().generation(), before);
+        assert_eq!(
+            app.catalog("pg")
+                .await
+                .unwrap()
+                .unwrap()
+                .current()
+                .generation(),
+            before
+        );
 
         app.apply(&message(Invalidation::Catalog { id, generation }))
             .await;
 
         assert_eq!(
-            app.catalog("pg").unwrap().current().generation(),
+            app.catalog("pg")
+                .await
+                .unwrap()
+                .unwrap()
+                .current()
+                .generation(),
             generation
         );
     }
@@ -1943,7 +1808,13 @@ mod tests {
         create_pg(&db.pool).await;
         let key = new_key(&db.pool, "reader").await;
         let app = app(&db.pool).await;
-        let before = app.catalog("pg").unwrap().current().generation();
+        let before = app
+            .catalog("pg")
+            .await
+            .unwrap()
+            .unwrap()
+            .current()
+            .generation();
 
         import_files(&db.pool, "pg", &[("a.md", "# A\n")], false).await;
         key_rows::revoke(
@@ -1955,125 +1826,227 @@ mod tests {
         .await
         .unwrap();
 
-        // Today's caches have no stale flag: reloading is the equivalent.
+        // The directory is marked stale: the next use reads the row again
+        // and refreshes the cached snapshot to it.
         app.apply_reconnect().await;
 
-        assert!(app.catalog("pg").unwrap().current().generation() > before);
+        assert!(
+            app.catalog("pg")
+                .await
+                .unwrap()
+                .unwrap()
+                .current()
+                .generation()
+                > before
+        );
         assert!(app.find_key(&key).await.unwrap().is_none());
     }
 
+    /// Creates catalog `name`, owned by the fixture team.
+    async fn create(pool: &PgPool, name: &str) -> catalogs::Catalog {
+        catalogs::create(
+            pool,
+            &crate::store::catalogs::NewCatalog {
+                name,
+                display_name: &crate::labels::DisplayName::default(),
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap()
+    }
+
+    /// Runs `write` and applies every change-feed message it sent, as this
+    /// replica's listener would.
+    async fn applied(app: &App, write: impl std::future::Future<Output = ()>) {
+        let sent = crate::invalidate::testing::invalidations_of(app.pool(), write).await;
+        for invalidation in sent {
+            app.apply(&message(invalidation)).await;
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread")]
-    async fn load_holds_every_catalog_and_live_key() {
+    async fn load_holds_no_catalog_and_every_live_key() {
         let db = test_db().await;
-        catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "pg",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "work",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
+        create(&db.pool, "pg").await;
+        create(&db.pool, "work").await;
         import_files(&db.pool, "pg", &[("a.md", "# A\n")], false).await;
         let key = new_key(&db.pool, "reader").await;
 
         let app = app(&db.pool).await;
 
-        assert_eq!(names(&app), ["pg", "work"]);
-        assert_eq!(app.catalog("pg").unwrap().current().files(), 1);
+        app.catalog_cache().settle().await;
+        assert_eq!(
+            app.catalog_cache().cached(),
+            0,
+            "nothing loaded at start-up"
+        );
         assert_eq!(app.find_key(&key).await.unwrap().unwrap().key_id, "reader");
+        // Each catalog loads on its first use.
+        let pg = app.catalog("pg").await.unwrap().unwrap();
+        assert_eq!(pg.current().files(), 1);
+        assert!(app.catalog("work").await.unwrap().is_some());
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn poll_notices_imports_new_and_deleted_catalogs_and_revoked_keys() {
+    async fn catalogs_changed_beside_the_server_are_served_after_their_messages() {
         let db = test_db().await;
-        catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "pg",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "gone",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        let key = new_key(&db.pool, "reader").await;
+        create(&db.pool, "pg").await;
+        create(&db.pool, "gone").await;
         let app = app(&db.pool).await;
-        let pg_before = app.catalog("pg").unwrap();
+        let pg_before = app.catalog("pg").await.unwrap().unwrap();
+        assert!(app.catalog("gone").await.unwrap().is_some());
+        assert!(app.catalog("work").await.unwrap().is_none());
 
         // Changes made by the subcommands, beside the running server.
-        import_files(&db.pool, "pg", &[("a.md", "# A\n")], false).await;
-        catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "work",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        catalogs::delete(
-            &db.pool,
-            "gone",
-            false,
-            &crate::store::audit::AuditActor::cli(),
-            chrono::Utc::now(),
-        )
-        .await
-        .unwrap();
-        key_rows::revoke(
-            &db.pool,
-            "reader",
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        app.poll().await.unwrap();
+        applied(&app, async {
+            import_files(&db.pool, "pg", &[("a.md", "# A\n")], false).await;
+            create(&db.pool, "work").await;
+            catalogs::delete(&db.pool, "gone", false, &AuditActor::cli(), Utc::now())
+                .await
+                .unwrap();
+        })
+        .await;
 
-        assert_eq!(names(&app), ["pg", "work"]);
         // The same state, refreshed in place: readers holding it see the new snapshot.
-        let pg_after = app.catalog("pg").unwrap();
+        let pg_after = app.catalog("pg").await.unwrap().unwrap();
         assert!(Arc::ptr_eq(&pg_before, &pg_after));
         assert_eq!(pg_after.current().files(), 1);
+        assert!(app.catalog("work").await.unwrap().is_some());
+        assert!(app.catalog("gone").await.unwrap().is_none());
+    }
+
+    /// A write's own invalidations, collected around it and applied here,
+    /// reach the directory and the label cache at once, with no listener
+    /// and no poll (the `settle` a REST route also runs would hide this).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn own_writes_reach_the_directory_and_the_labels() {
+        let db = test_db().await;
+        create(&db.pool, "pg").await;
+        let app = app(&db.pool).await;
+        let mut wanted = crate::labels::directory::Wanted::default();
+        wanted.catalog("pg");
+        // Both cached before the write.
+        let row = app.catalog_row("pg").await.unwrap().expect("pg");
+        app.labels().labels_for(&wanted).await.unwrap();
+        let renamed = crate::labels::DisplayName::parse("Renamed").unwrap();
+        let change = catalogs::DetailsChange {
+            catalog: "pg",
+            display_name: Some(&renamed),
+            description: Some("Changed."),
+            owner: None,
+        };
+
+        let ((), written) = crate::invalidate::capturing(async {
+            catalogs::update_details(&db.pool, &change, &AuditActor::cli(), Utc::now())
+                .await
+                .unwrap();
+        })
+        .await;
+        app.apply_own_writes(&written).await;
+
+        assert!(!written.is_empty(), "the write queued its invalidations");
+        let after = app.catalog_row("pg").await.unwrap().expect("pg");
+        assert_ne!(after.description, row.description);
+        let labels = app.labels().labels_for(&wanted).await.unwrap();
+        assert_eq!(labels.catalog("pg"), Some("Renamed"));
+    }
+
+    /// A settings write's own `Settings` invalidation, applied here, makes
+    /// this replica's next request check the settings although they are
+    /// young: the writer reads its own write with no listener and no poll.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_own_settings_write_reaches_the_next_request() {
+        let db = test_db().await;
+        let app = app(&db.pool).await;
+        let before = app.fresh_settings().await.max_keys_per_user;
+
+        let ((), written) = crate::invalidate::capturing(async {
+            set_setting(&db.pool, settings::SettingKey::MaxKeysPerUser, "5").await;
+        })
+        .await;
+        app.apply_own_writes(&written).await;
+
+        assert_eq!(before, 20);
+        assert_eq!(
+            written,
+            [crate::invalidate::Invalidation::Settings],
+            "the write queued its invalidation"
+        );
+        assert_eq!(app.fresh_settings().await.max_keys_per_user, 5);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn poll_notices_revoked_keys() {
+        let db = test_db().await;
+        let key = new_key(&db.pool, "reader").await;
+        let app = app(&db.pool).await;
+        // Cached first: lib tests run no listener, so only the poll's
+        // backstop drops it.
+        assert!(app.find_key(&key).await.unwrap().is_some());
+
+        key_rows::revoke(&db.pool, "reader", &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap();
+        app.poll().await.unwrap();
+
         assert!(app.find_key(&key).await.unwrap().is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_catalog_created_again_under_its_name_is_loaded_from_scratch() {
+        let db = test_db().await;
+        let first = create(&db.pool, "pg").await;
+        let app = app(&db.pool).await;
+        let old = app.catalog("pg").await.unwrap().unwrap();
+        assert_eq!(old.id(), first.id);
+
+        applied(&app, async {
+            catalogs::delete(&db.pool, "pg", false, &AuditActor::cli(), Utc::now())
+                .await
+                .unwrap();
+            create(&db.pool, "pg").await;
+        })
+        .await;
+
+        let pg = app.catalog("pg").await.unwrap().unwrap();
+        assert_ne!(pg.id(), first.id);
+        assert!(app.catalog_cache().resident(first.id).await.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_re_created_catalog_that_fails_to_load_is_not_served_as_the_old_one() {
+        let db = test_db().await;
+        create(&db.pool, "pg").await;
+        import_files(&db.pool, "pg", &[("a.md", "# A\n")], false).await;
+        let app = app(&db.pool).await;
+        assert!(app.catalog("pg").await.unwrap().is_some());
+
+        applied(&app, async {
+            catalogs::delete(&db.pool, "pg", false, &AuditActor::cli(), Utc::now())
+                .await
+                .unwrap();
+            let again = create(&db.pool, "pg").await;
+            // A row no workspace accepts (a path escaping the catalog).
+            sqlx::query(
+                "INSERT INTO documents (catalog_id, path, content, executable, revision, \
+                                        updated_at, updated_by) \
+                 VALUES ($1, '../escape.md', '', false, 1, now(), 'test')",
+            )
+            .bind(again.id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        })
+        .await;
+
+        assert!(
+            app.catalog("pg").await.unwrap().is_none(),
+            "the deleted catalog is not served"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2099,344 +2072,6 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn poll_picks_up_a_new_description_without_a_rebuild() {
-        let db = test_db().await;
-        catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "pg",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "copy",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        let app = app(&db.pool).await;
-        let pg = app.catalog("pg").unwrap();
-        let before = pg.current();
-
-        let change = catalogs::DetailsChange {
-            catalog: "pg",
-            display_name: None,
-            description: Some("source of truth"),
-            owner: None,
-        };
-        catalogs::update_details(
-            &db.pool,
-            &change,
-            &crate::store::audit::AuditActor::cli(),
-            chrono::Utc::now(),
-        )
-        .await
-        .unwrap();
-        app.poll().await.unwrap();
-
-        assert_eq!(&*pg.description(), "source of truth");
-        // `Arc::ptr_eq`: the very same snapshot object, so nothing was rebuilt.
-        assert!(Arc::ptr_eq(&before, &app.catalog("pg").unwrap().current()));
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn poll_picks_up_a_new_owner_without_a_rebuild() {
-        let db = test_db().await;
-        let alice = crate::store::users::NewUser {
-            name: "alice",
-            display_name: &crate::labels::DisplayName::default(),
-        };
-        crate::store::users::create(&db.pool, &alice, &AuditActor::cli(), Utc::now())
-            .await
-            .unwrap();
-        catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "pg",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        let app = app(&db.pool).await;
-        let pg = app.catalog("pg").unwrap();
-        let before = pg.current();
-        assert_eq!(pg.owner_team().as_deref(), Some(crate::db::TEST_TEAM));
-
-        catalogs::set_owner(
-            &db.pool,
-            "pg",
-            "alice",
-            &crate::store::audit::AuditActor::cli(),
-            chrono::Utc::now(),
-        )
-        .await
-        .unwrap();
-        app.poll().await.unwrap();
-
-        assert_eq!(pg.owner_team().as_deref(), Some("alice"));
-        assert!(Arc::ptr_eq(&before, &app.catalog("pg").unwrap().current()));
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn poll_reloads_a_catalog_created_again_under_the_same_name() {
-        let db = test_db().await;
-        catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "pg",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "first",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        let app = app(&db.pool).await;
-        let first_id = app.catalog("pg").unwrap().id();
-
-        catalogs::delete(
-            &db.pool,
-            "pg",
-            false,
-            &crate::store::audit::AuditActor::cli(),
-            chrono::Utc::now(),
-        )
-        .await
-        .unwrap();
-        catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "pg",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "second",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        app.poll().await.unwrap();
-
-        let pg = app.catalog("pg").unwrap();
-        assert_ne!(pg.id(), first_id);
-        assert_eq!(&*pg.description(), "second");
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_catalog_that_fails_to_load_is_skipped_until_it_changes() {
-        let db = test_db().await;
-        catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "pg",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        let bad = catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "bad",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        break_catalog(&db.pool, bad.id).await;
-
-        // At startup and at a poll alike, the other catalogs go ahead.
-        let app = app(&db.pool).await;
-        assert_eq!(names(&app), ["pg"]);
-        app.poll().await.unwrap();
-        assert_eq!(names(&app), ["pg"]);
-        // Repaired behind the server's back: the generation it failed at is
-        // not built again, so the repair goes unnoticed...
-        repair_catalog(&db.pool, bad.id).await;
-        app.poll().await.unwrap();
-        assert_eq!(names(&app), ["pg"]);
-        // ...until the catalog changes, as an import would change it.
-        bump_generation(&db.pool, bad.id).await;
-        app.poll().await.unwrap();
-
-        assert_eq!(names(&app), ["bad", "pg"]);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_failed_refresh_keeps_the_old_snapshot_until_the_catalog_changes() {
-        let db = test_db().await;
-        let pg = catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "pg",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        import_files(&db.pool, "pg", &[("a.md", "# A\n")], false).await;
-        let app = app(&db.pool).await;
-        break_catalog(&db.pool, pg.id).await;
-        bump_generation(&db.pool, pg.id).await;
-
-        app.poll().await.unwrap();
-        let loaded = app.catalog("pg").unwrap().current();
-        assert_eq!((loaded.generation(), loaded.files()), (1, 1));
-        // Not rebuilt at the generation that failed, even once it would build.
-        repair_catalog(&db.pool, pg.id).await;
-        app.poll().await.unwrap();
-        assert_eq!(app.catalog("pg").unwrap().current().generation(), 1);
-        bump_generation(&db.pool, pg.id).await;
-        app.poll().await.unwrap();
-
-        let loaded = app.catalog("pg").unwrap().current();
-        assert_eq!((loaded.generation(), loaded.files()), (3, 1));
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_catalog_that_stays_unloadable_counts_a_failed_refresh_every_pass() {
-        let (test, registry) =
-            crate::mcp::testing::app_with_metrics(&[], crate::config::Config::default()).await;
-        let pool = test.app.pool().clone();
-        let pg = catalogs::create(
-            &pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "pg",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        import_files(&pool, "pg", &[("a.md", "# A\n")], false).await;
-        break_catalog(&pool, pg.id).await;
-
-        // The first pass tries the load and fails; the second skips the
-        // generation that already failed. Both are turns that failed.
-        test.app.poll().await.unwrap();
-        test.app.poll().await.unwrap();
-
-        assert!(test.app.catalog("pg").is_none());
-        let text = crate::mcp::testing::render(&registry);
-        assert!(
-            text.contains(r#"okf_catalog_refreshes_total{catalog="pg",result="failed"} 2"#),
-            "{text}"
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_loaded_catalog_that_keeps_failing_to_refresh_counts_failed_every_pass() {
-        use crate::telemetry::subscriber::capture::{SeenValue, SpanRecorder};
-
-        let (test, registry) = crate::mcp::testing::app_with_metrics(
-            &[("pg", &[("a.md", "# A\n")])],
-            crate::config::Config::default(),
-        )
-        .await;
-        let pool = test.app.pool().clone();
-        let id = test.app.catalog("pg").unwrap().id();
-        break_catalog(&pool, id).await;
-        bump_generation(&pool, id).await;
-        let recorder = SpanRecorder::new();
-
-        // The first pass tries the refresh and fails; the second skips the
-        // generation that already failed. Both are turns that failed.
-        recorder.run(async {
-            test.app.poll().await.unwrap();
-            test.app.poll().await.unwrap();
-        });
-
-        // The old snapshot still serves.
-        assert!(test.app.catalog("pg").is_some());
-        let text = crate::mcp::testing::render(&registry);
-        assert!(
-            text.contains(r#"okf_catalog_refreshes_total{catalog="pg",result="failed"} 2"#),
-            "{text}"
-        );
-        let results: Vec<_> = recorder
-            .finished()
-            .iter()
-            .filter(|span| span.name == "okf.catalog.refresh")
-            .map(|span| span.field("okf.refresh.result").cloned())
-            .collect();
-        let failed = Some(SeenValue::Text("failed".to_string()));
-        assert_eq!(results, [failed.clone(), failed]);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_re_created_catalog_that_fails_to_load_drops_the_old_one() {
-        let db = test_db().await;
-        catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "pg",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        import_files(&db.pool, "pg", &[("a.md", "# A\n")], false).await;
-        let app = app(&db.pool).await;
-        catalogs::delete(
-            &db.pool,
-            "pg",
-            false,
-            &crate::store::audit::AuditActor::cli(),
-            chrono::Utc::now(),
-        )
-        .await
-        .unwrap();
-        let again = catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "pg",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        break_catalog(&db.pool, again.id).await;
-
-        app.poll().await.unwrap();
-
-        assert!(
-            app.catalog("pg").is_none(),
-            "the deleted catalog is not served"
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
     async fn a_failed_reload_does_not_stop_the_pass_and_is_retried() {
         let db = test_db().await;
         let key = new_key(&db.pool, "reader").await;
@@ -2452,19 +2087,6 @@ mod tests {
         )
         .await
         .unwrap();
-        catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "work",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
         set_setting(&db.pool, settings::SettingKey::MaxKeysPerUser, "5").await;
         // With the settings table out of the way, the settings check fails.
         sqlx::query("ALTER TABLE server_settings RENAME TO server_settings_away")
@@ -2473,7 +2095,6 @@ mod tests {
             .unwrap();
 
         app.poll().await.unwrap();
-        assert_eq!(names(&app), ["work"], "the catalog part of the pass ran");
         assert!(
             app.find_key(&key).await.unwrap().is_none(),
             "the sweep does not wait for the settings"
@@ -2623,28 +2244,16 @@ mod tests {
     async fn a_failed_admin_generation_read_does_not_stop_the_pass() {
         let db = test_db().await;
         let app = app(&db.pool).await;
-        catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "work",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
         // With the counter's table out of the way, reading it fails.
         sqlx::query("ALTER TABLE server_state RENAME TO server_state_away")
             .execute(&db.pool)
             .await
             .unwrap();
 
-        app.poll().await.unwrap();
+        // Logged, not returned: the pass still completes.
+        let passed = app.poll().await;
 
-        assert_eq!(names(&app), ["work"]);
+        assert!(passed.is_ok());
     }
 
     /// A clock a test moves by hand.
@@ -3147,10 +2756,10 @@ mod tests {
 
         // Within a few intervals the loop has picked the new catalog up.
         let started = Instant::now();
-        while app.catalog("pg").is_none() && started.elapsed() < PATIENCE {
+        while app.catalog("pg").await.unwrap().is_none() && started.elapsed() < PATIENCE {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        let seen = app.catalog("pg").is_some();
+        let seen = app.catalog("pg").await.unwrap().is_some();
         shutdown.cancel();
 
         assert!(seen, "the poll loop never loaded the new catalog");
