@@ -7,6 +7,11 @@
 //! tests (milestone 16 Task 5) open a session on one replica and use it, or
 //! are refused, on the other.
 
+// The server's async bodies, wrapped by `#[instrument]`, nest deeply enough that
+// the nightly toolchain `cargo dylint` builds with overflows its default query
+// depth (128) computing a test future's layout (as for the library, `src/lib.rs`).
+#![recursion_limit = "256"]
+
 mod support;
 
 use std::time::Duration;

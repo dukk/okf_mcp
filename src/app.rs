@@ -240,7 +240,11 @@ impl App {
         );
         let oauth = OAuth::new(&config, redis.as_ref())?;
         let sessions = SessionBindings::new(redis.as_ref(), config.session_idle_timeout);
-        let overlays = Overlays::new(config.session_idle_timeout, config.overlay_cache_size);
+        let overlays = Overlays::new(
+            config.session_idle_timeout,
+            config.overlay_cache_bytes.as_u64(),
+            metrics.clone(),
+        );
         let mailer = crate::mail::from_config(&config.mail).await?;
         // A `[feedback] api_key_env` that names an unset variable fails
         // start-up here, as a mail secret does.

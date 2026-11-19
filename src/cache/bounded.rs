@@ -251,6 +251,7 @@ pub struct Bounded<K, V> {
     name: CacheName,
     limit: Limit,
     ttl: Duration,
+    idle: Option<Duration>,
     weigher: Option<Weigher<K, V>>,
     metrics: Option<Metrics>,
     cache: Cache<K, Entry<V>>,
@@ -296,6 +297,7 @@ where
             name,
             limit,
             ttl,
+            idle: None,
             weigher: None,
             metrics: None,
             cache: Cache::builder().build(),
@@ -332,6 +334,24 @@ where
         self
     }
 
+    /// Also drops an entry that has not been read or stored for `idle`
+    /// (moka's time to idle), whatever its time to live. Call it before
+    /// [`Bounded::with_metrics`] and before the cache is used.
+    ///
+    /// # Arguments
+    /// * `idle` - how long an entry may go unused.
+    ///
+    /// # Returns
+    /// The cache.
+    #[tracing::instrument(level = "trace", skip_all)]
+    #[must_use]
+    pub fn with_idle(mut self, idle: Duration) -> Self {
+        debug_assert!(self.probe.is_none(), "with_idle goes before with_metrics");
+        self.idle = Some(idle);
+        self.cache = self.build_cache();
+        self
+    }
+
     /// Records `okf.cache.*` on `metrics`, and registers the size gauges.
     /// Call it last, before the cache is used.
     ///
@@ -364,6 +384,9 @@ where
         let mut builder = Cache::builder()
             .max_capacity(capacity)
             .time_to_live(self.ttl);
+        if let Some(idle) = self.idle {
+            builder = builder.time_to_idle(idle);
+        }
         if let Some(weigher) = self.weigher.clone() {
             builder = builder.weigher(move |key: &K, entry: &Entry<V>| weigher(key, &entry.value));
         }
@@ -599,6 +622,21 @@ where
         let value = checked?.unwrap_or(entry.value);
         self.keep(&key, value.clone(), stamp, &flight).await;
         Ok(value)
+    }
+
+    /// Stores `value` under `key`, replacing what is there, unless an
+    /// invalidation of `key` overtakes the store, or the value is heavier
+    /// than the whole budget (then `key`'s old entry is dropped too). For a
+    /// value built by the caller, which does its own single-flight.
+    ///
+    /// # Arguments
+    /// * `key` - the key.
+    /// * `value` - the value to keep.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub async fn insert(&self, key: K, value: V) {
+        let flight = self.begin(&key);
+        let stamp = self.stale_before.load(Ordering::SeqCst);
+        self.keep(&key, value, stamp, &flight).await;
     }
 
     /// The cached value without loading it or counting a request (tests,
@@ -1350,6 +1388,32 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(300)).await;
         cache.get_or_load(1, load).await.unwrap();
         assert_eq!(loads.load(Ordering::SeqCst), 2, "an expired entry reloads");
+    }
+
+    #[tokio::test]
+    async fn an_idle_entry_expires_but_a_used_one_stays() {
+        // moka reads the real clock, so this test cannot pause tokio's.
+        let cache = Bounded::<i64, i64>::new(CacheName::Overlay, Limit::Entries(10), TTL)
+            .with_idle(Duration::from_millis(400));
+        cache.insert(1, 10).await;
+        cache.insert(2, 20).await;
+
+        for _ in 0..4 {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            assert_eq!(cache.peek(&1).await, Some(10), "a read keeps it alive");
+        }
+
+        assert_eq!(cache.peek(&2).await, None, "the unread entry went idle");
+    }
+
+    #[tokio::test]
+    async fn an_insert_overtaken_by_nothing_is_kept_and_replaces() {
+        let cache = Bounded::<i64, i64>::new(CacheName::Overlay, Limit::Entries(10), TTL);
+
+        cache.insert(1, 10).await;
+        cache.insert(1, 11).await;
+
+        assert_eq!(cache.peek(&1).await, Some(11));
     }
 
     #[tokio::test]

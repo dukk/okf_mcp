@@ -80,7 +80,7 @@
 - Iterations of the map: `src/mcp/catalogs.rs:91`, `src/mcp/changesets.rs:133`, `src/http/api/catalogs.rs:246`, `src/http/api/search.rs:91`, `src/http/api/identity.rs:171`, `src/http/api/labels.rs:122`, `src/telemetry/metrics.rs:493, 510, 525`, `src/http/mod.rs:229` (`/healthz` count), `src/mcp/mod.rs:114` (`catalog_label` existence).
 - `CatalogState` (`src/catalog.rs:155`): `publishing` is locked at `src/store/publish.rs:201` and `src/mcp/changesets.rs:592`; `rebuilding` only in `refresh_to` (`src/catalog.rs:415`). Refresh callers: `src/store/publish.rs:303, 368`, `src/http/archives.rs:577`, `src/app.rs:744`.
 - `KeyedLocks` (`src/keyed_lock.rs`): `lock(&self, key: i64) -> KeyedGuard<'_>`, cancel-safe, entries removed when unused.
-- `Overlays` (`src/overlay.rs:257`): hand-rolled LRU by count (`overlay_cache_size`, default 64, `src/config.rs:48`).
+- `Overlays` (`src/overlay.rs:257`): hand-rolled LRU by count (`overlay_cache_size`, default 64, `src/config.rs:48`) before Task 9 (issue #687); now a `Bounded` weighed in bytes.
 - `catalogs.name` is `UNIQUE` (`migrations/0001_schema.sql:14`).
 - `bump_admin_generation(conn)` (`src/store/catalogs.rs:1036`) has 37 non-test call sites, all inside the write's transaction; no SQL trigger bumps it. The per-function list is in Task 2.
 - `KeyCache::read` (`src/auth.rs:954`) runs `key_rows::list`, `ceiling::ceilings`, `users::auth_by_id`, `teams::suspended_catalogs`, `Labels::load`, then `gates::load` (`src/store/gates.rs:37`), which first **writes** missing audit rows (`ensure_audit_rows`, `:157`). *(Task 3, issue #681: no longer; `gates::load` writes nothing.)*
@@ -931,6 +931,14 @@ Publish (`src/store/publish.rs:303`) and HTTP import (`src/http/archives.rs:576`
 
 - [ ] **Step 1: Failing test:** `overlays_are_evicted_by_bytes_not_count`: `overlay_cache_bytes` fits two overlays of a test catalog; build three; the least recently used is gone.
 - [ ] **Step 2: Implement.** Replace the hand-rolled `HashMap` and `capacity` with `Bounded<i64 /* changeset id */, Arc<Overlay>>` (`CacheName::Overlay`, `Limit::Bytes`, `time_to_idle = session_idle_timeout` through a `Bounded::with_idle(Duration)` builder method added here), weighed with Task 8's weigher on the overlay's workspace (as shipped in issue #686: `cache::catalogs::weight(stored_bytes, files)`, where a snapshot's are `Loaded::stored_bytes()` and `Loaded::files()`; an overlay must count its own files and their sizes the same way). Keep the validity check (`built_at`) and `builds: KeyedLocks` as they are. Config: `overlay_cache_bytes` (default 256 MiB); `overlay_cache_size` still parses and logs `warn!("overlay_cache_size is deprecated and ignored; set overlay_cache_bytes")` at start-up.
+> **Corrected (issue #687, 2026-11-19).** As shipped (read `src/overlay.rs`):
+> - `Overlays::new(idle, budget_bytes, metrics)`; the cache is `Bounded<i64, Arc<Overlay>>` with `Limit::Bytes`, a one-day `time_to_live` backstop and `time_to_idle = session_idle_timeout` through the new `Bounded::with_idle`. `Bounded::insert(key, value)` is new too (the caller builds, so it does its own single flight through `builds`).
+> - The weight is `cache::catalogs::weight(stored_bytes, files)` over the overlay's own workspace, through the new `MemWorkspace::totals()`, computed once at build (an `Overlay` is immutable, so nothing needs re-weighing; `Overlay::weight`). The shared base is not counted: the catalog cache weighs it. An overlay of many empty files is charged `PER_FILE_BYTES` each.
+> - `Overlays::forget`, `lookup` and `store` are `async`; `forget`'s three callers (`write.rs`, `mcp/changesets.rs`, `store/publish.rs`) `.await` it. `forget` is `Bounded::invalidate`, so a store of an overlay being built is dropped if it races a forget.
+> - The idle sweep and the least-recently-used scan are moka's: which overlay goes first when the budget is exceeded is moka's admission policy, not strict LRU, so the test asserts the count and the byte gauge.
+> - `store` checks for a newer cached build with `peek`, then inserts: two steps, not atomic. Two builds finishing together can leave the older; `lookup` drops an entry older than the row it is asked for, so the next read rebuilds.
+> - Config: `overlay_cache_bytes: ByteSize` (default 256 MiB, must be positive); `overlay_cache_size` is `Option<usize>`, ignored, and `Config::deprecation_warnings` reports it (the existing start-up warning path, not a new `warn!`).
+
 - [ ] **Step 3: Run, gates, commit** — `feat: overlays bounded in bytes (M18 task 9)`.
 
 ---

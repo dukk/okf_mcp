@@ -49,8 +49,8 @@ pub const DEFAULT_CONCEPT_OUTLINE_CHARS: usize = 20_000;
 /// The default database pool size.
 pub const DEFAULT_DATABASE_MAX_CONNECTIONS: u32 = 16;
 
-/// The default number of changeset overlays kept in memory.
-pub const DEFAULT_OVERLAY_CACHE_SIZE: usize = 64;
+/// The default `overlay_cache_bytes`: 256 MiB of estimated overlay memory.
+pub const DEFAULT_OVERLAY_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// The default `catalog_cache_bytes`: 1 GiB of estimated snapshot memory.
 pub const DEFAULT_CATALOG_CACHE_BYTES: u64 = 1024 * 1024 * 1024;
@@ -950,9 +950,15 @@ pub struct Config {
     /// `serve`'s workers do not count against it: they share one pool of up
     /// to `mail::queue::WORKER_POOL_SIZE` (3) connections of their own.
     pub database_max_connections: u32,
-    /// The most changeset overlays kept in memory; past it, the least
-    /// recently used one is dropped (and rebuilt if read again).
-    pub overlay_cache_size: usize,
+    /// The most memory the changeset overlays held in this process may take,
+    /// estimated as a catalog snapshot's is, over the overlay's own files
+    /// (`"256MiB"`, or a number of bytes). Past it, the least recently used
+    /// is dropped (and rebuilt if read again); an overlay larger than the
+    /// whole budget is served but not kept.
+    pub overlay_cache_bytes: ByteSize,
+    /// Deprecated and ignored: use `overlay_cache_bytes`. Still read so an
+    /// old configuration starts (`deprecation_warnings` names it).
+    pub overlay_cache_size: Option<usize>,
     /// The most memory the catalog snapshots held in this process may take,
     /// as estimated from their stored size (`"1GiB"`, or a number of bytes).
     /// Catalogs load on first use; past the budget, the least recently used
@@ -1027,7 +1033,8 @@ impl Default for Config {
             maintenance_review_intervals: BTreeMap::new(),
             concept_outline_chars: DEFAULT_CONCEPT_OUTLINE_CHARS,
             database_max_connections: DEFAULT_DATABASE_MAX_CONNECTIONS,
-            overlay_cache_size: DEFAULT_OVERLAY_CACHE_SIZE,
+            overlay_cache_bytes: ByteSize::b(DEFAULT_OVERLAY_CACHE_BYTES),
+            overlay_cache_size: None,
             catalog_cache_bytes: ByteSize::b(DEFAULT_CATALOG_CACHE_BYTES),
             catalog_directory_entries: DEFAULT_CATALOG_DIRECTORY_ENTRIES,
             catalog_ttl: DEFAULT_CATALOG_TTL,
@@ -1125,6 +1132,9 @@ impl Config {
         if self.mail.worker.is_some() {
             warnings.push("mail.worker is deprecated and ignored: every serve runs the worker");
         }
+        if self.overlay_cache_size.is_some() {
+            warnings.push("overlay_cache_size is deprecated and ignored; set overlay_cache_bytes");
+        }
         warnings
     }
 
@@ -1140,7 +1150,7 @@ impl Config {
     /// so every request would get 403 with no hint why), or a blank
     /// `time_server` or one with surrounding whitespace (which the lookup
     /// would fail on every check, seen only as a `warn`), or a zero
-    /// `database_max_connections` or `overlay_cache_size`, a zero OAuth
+    /// `database_max_connections` or `overlay_cache_bytes`, a zero OAuth
     /// lifetime, an `[auth]` value out of range (see `AuthConfig`), a
     /// `[mail]` section that cannot send (see `MailConfig`), or a
     /// `public_url` that is not an `https` origin (`http` on
@@ -1167,8 +1177,8 @@ impl Config {
         if self.database_max_connections == 0 {
             return Err("database_max_connections must be more than zero".to_string());
         }
-        if self.overlay_cache_size == 0 {
-            return Err("overlay_cache_size must be more than zero".to_string());
+        if self.overlay_cache_bytes.as_u64() == 0 {
+            return Err("overlay_cache_bytes must be more than zero".to_string());
         }
         if self.catalog_cache_bytes.as_u64() == 0 {
             return Err("catalog_cache_bytes must be more than zero".to_string());
@@ -1584,7 +1594,8 @@ mod tests {
         );
         assert_eq!(config.concept_outline_chars, 20_000);
         assert_eq!(config.database_max_connections, 16);
-        assert_eq!(config.overlay_cache_size, 64);
+        assert_eq!(config.overlay_cache_bytes.as_u64(), 256 * 1024 * 1024);
+        assert_eq!(config.overlay_cache_size, None);
         assert_eq!(config.catalog_cache_bytes.as_u64(), 1024 * 1024 * 1024);
         assert_eq!(config.catalog_directory_entries, 100_000);
         assert_eq!(config.catalog_ttl, Duration::from_secs(10));
@@ -1605,7 +1616,7 @@ mod tests {
                     time_server = \"ntp.example\"\n\
                     concept_outline_chars = 500\n\
                     database_max_connections = 32\n\
-                    overlay_cache_size = 8\n\
+                    overlay_cache_bytes = \"8MiB\"\n\
                     a_later_key = true\n";
 
         let config = Config::from_toml(text).unwrap();
@@ -1619,7 +1630,7 @@ mod tests {
         assert_eq!(config.time_server.as_deref(), Some("ntp.example"));
         assert_eq!(config.concept_outline_chars, 500);
         assert_eq!(config.database_max_connections, 32);
-        assert_eq!(config.overlay_cache_size, 8);
+        assert_eq!(config.overlay_cache_bytes.as_u64(), 8 * 1024 * 1024);
     }
 
     #[test]
@@ -1668,7 +1679,7 @@ mod tests {
             ("session_idle_timeout = \"0s\"\n", "session_idle_timeout"),
             ("allowed_hosts = []\n", "allowed_hosts"),
             ("database_max_connections = 0\n", "database_max_connections"),
-            ("overlay_cache_size = 0\n", "overlay_cache_size"),
+            ("overlay_cache_bytes = 0\n", "overlay_cache_bytes"),
             ("catalog_cache_bytes = 0\n", "catalog_cache_bytes"),
             (
                 "catalog_directory_entries = 0\n",
@@ -1998,6 +2009,17 @@ mod tests {
         assert_eq!(
             config.deprecation_warnings(),
             ["mail.worker is deprecated and ignored: every serve runs the worker"]
+        );
+    }
+
+    #[test]
+    fn overlay_cache_size_parses_with_a_warning_and_is_ignored() {
+        let config = Config::from_toml("overlay_cache_size = 0\n").unwrap();
+
+        assert!(config.validate().is_ok(), "an old configuration starts");
+        assert_eq!(
+            config.deprecation_warnings(),
+            ["overlay_cache_size is deprecated and ignored; set overlay_cache_bytes"]
         );
     }
 
