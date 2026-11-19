@@ -973,6 +973,30 @@ mod tests {
     }
 
     #[test]
+    fn index_ignores_text_that_only_looks_like_a_raw_link() {
+        // None of these is a bullet older versions wrote, so the real
+        // listing is appended.
+        let lines = [
+            "* Old destination: ](a b.md)",
+            "* ![Odd](a b.md)",
+            "* `[Odd](a b.md)` in a code span",
+            "* see [Odd](a b.md) - prose before the link",
+            "* [Odd [x](a b.md) - unbalanced",
+            "  * [Odd](a b.md) - indented, not a bullet start",
+            "[Odd](a b.md) - not a bullet",
+        ];
+        for line in lines {
+            let existing = format!("# D\n\n# Concepts\n\n{line}\n");
+            let ws = awkward_ws("a b.md", &existing);
+
+            index(&ws, &ctx(), "d/a b.md", "x", None, None).unwrap();
+
+            let got = ws.read_to_string("d/index.md").unwrap();
+            assert!(got.contains("](a%20b.md)"), "{line}: {got}");
+        }
+    }
+
+    #[test]
     fn index_lists_a_name_whose_raw_form_reads_as_another_working_link() {
         // `* [A](a.md).md)` is a working link to `d/a.md`, not a raw
         // listing of `d/a.md).md`; likewise `a.md#b.md` for `d/a.md#b.md`.

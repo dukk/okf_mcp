@@ -261,6 +261,8 @@ pub(crate) fn lists_target(
 ///
 /// The rule, conservative on purpose (a rare duplicate bullet is far better
 /// than a missing listing): a bullet is a raw listing of `target` only when
+/// 0. it has the shape older versions wrote, `* [label](destination...`,
+///    with the link first in the bullet (see `legacy_destination_start`);
 /// 1. its destination, as written between `](` and the `)` or `#` that
 ///    follows it, equals the target's raw name (not merely a prefix the
 ///    parser reads: `[A](a.md).md)` is a working link to `a.md`, so it is
@@ -308,23 +310,60 @@ pub(crate) fn lists_raw_target(
         .filter(|raw| py_unquote(raw) == raw.as_str())
         .any(|raw| {
             text.split('\n').filter(|line| is_bullet(line)).any(|line| {
-                let parsed = find_links(line);
-                line.match_indices(&format!("]({raw}")).any(|(at, _)| {
-                    let start = at + 2;
-                    let rest = &line[start + raw.len()..];
-                    // Rule 1: the destination ends here, as written.
-                    (rest.starts_with(')') || rest.starts_with('#'))
-                        // Rule 3: the parsed link at this spot, if any, is broken.
-                        && parsed
-                            .iter()
-                            .find(|link| link.target_range.start == start)
-                            .is_none_or(|link| {
-                                resolve_link(workspace, &link.target, index)
-                                    .is_none_or(|r| !workspace.exists(&r.path))
-                            })
-                })
+                let Some(start) = legacy_destination_start(line) else {
+                    return false;
+                };
+                let Some(rest) = line[start..].strip_prefix(raw.as_str()) else {
+                    return false;
+                };
+                // Rule 1: the destination ends here, as written.
+                (rest.starts_with(')') || rest.starts_with('#'))
+                    // Rule 3: the parsed link at this spot, if any, is broken.
+                    && find_links(line)
+                        .iter()
+                        .find(|link| link.target_range.start == start)
+                        .is_none_or(|link| {
+                            resolve_link(workspace, &link.target, index)
+                                .is_none_or(|r| !workspace.exists(&r.path))
+                        })
             })
         })
+}
+
+/// Where the destination starts in a bullet written the way older versions
+/// wrote one: `* [label](destination...` with the link as the first thing in
+/// the bullet. The label follows the link grammar (it ends at the first
+/// unescaped `]`) and must hold no unescaped `[`, which older versions
+/// escaped; anything else (no label, an image `![..]`, a link inside a code
+/// span or after prose, unbalanced brackets) is not a legacy listing. A false
+/// "no" only leaves a duplicate bullet; a false "yes" drops a listing.
+///
+/// # Returns
+/// The byte offset in `line` just after `](`, or `None`.
+#[tracing::instrument(level = "trace", skip_all)]
+fn legacy_destination_start(line: &str) -> Option<usize> {
+    let rest = line
+        .strip_prefix("* ")
+        .or_else(|| line.strip_prefix("- "))?;
+    let after_marker = line.len() - rest.len();
+    let label = rest.strip_prefix('[')?;
+    let mut chars = label.char_indices();
+    while let Some((i, ch)) = chars.next() {
+        match ch {
+            // A backslash escapes the next character (the LINK grammar).
+            '\\' => {
+                chars.next();
+            }
+            '[' => return None,
+            ']' => {
+                let tail = &label[i + 1..];
+                let _ = tail.strip_prefix('(')?;
+                return Some(after_marker + 1 + i + 2);
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// [`lists_target`], or [`lists_raw_target`]: does `text` list `target` in
