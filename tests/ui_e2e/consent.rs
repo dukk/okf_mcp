@@ -5,6 +5,9 @@
 //! third journey's redirect URI redirects again, to yet another origin (as
 //! `www.` to the bare domain does): Approve must still get there, which a
 //! 303 under the consent page's `form-action` could not (issue #435).
+//! With only one catalog offered, Advanced Options starts closed: Approve
+//! as shown grants that catalog at write as the default, and opening the
+//! disclosure lets the person change that (issue #718).
 
 use axum::extract::RawQuery;
 use axum::response::{Html, Redirect};
@@ -327,4 +330,90 @@ async fn a_person_signs_in_on_the_way_and_approves_from_their_ceiling() {
         .expect("cached grant");
     assert_eq!(principal.level("main"), Some(Access::Write));
     assert_eq!(principal.level("other"), None);
+}
+
+/// Signs alice in on the way to a consent page that offers only `main`, at
+/// `access`, runs `choose` there, approves, and returns the grant (or
+/// `None` when the browser could not start).
+async fn approve_the_only_catalog(
+    access: Access,
+    choose: impl FnOnce(&Ui) + Send + 'static,
+) -> Option<KeyRecord> {
+    let journey = Journey::start().await;
+    journey
+        .server
+        .user_with_password("alice", "alice@example.com", PASSWORD)
+        .await;
+    ceiling::entitle(
+        &journey.server.db.pool,
+        &NewEntitlement {
+            user: "alice",
+            catalog: "main",
+            access,
+        },
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("entitle");
+    let authorize = journey.authorize(&[]);
+    let landing = journey.landing.clone();
+
+    let ran = drive(journey.server.base.clone(), move |ui| {
+        ui.page
+            .goto(&authorize, GotoOptions::default())
+            .expect("open the authorize URL");
+        ui.wait_visible("#signin-form");
+        ui.fill("#signin-email", "alice@example.com");
+        ui.fill("#signin-password", PASSWORD);
+        ui.click("#signin-submit");
+        ui.wait_visible("#consent-approve");
+        // One catalog: Advanced Options starts closed, its controls hidden.
+        ui.wait_visible("#consent-advanced-toggle");
+        ui.wait_hidden("#consent-catalog-main");
+        ui.wait_hidden("#consent-default");
+        ui.wait_visible("#consent-preset");
+        choose(ui);
+        ui.click("#consent-approve");
+        assert_back_at_the_client(ui, &landing);
+    })
+    .await;
+    if !ran {
+        return None;
+    }
+    let grants = journey.grants().await;
+    assert_eq!(grants.len(), 1);
+    Some(grants[0].clone())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_only_catalogs_collapsed_defaults_approve_write_as_the_default() {
+    let Some(grant) = approve_the_only_catalog(Access::Write, |_| {}).await else {
+        return;
+    };
+    assert!(grant.self_issued);
+    assert_eq!(
+        grant.catalog_access,
+        [("main".to_string(), Access::Write)].into_iter().collect()
+    );
+    assert_eq!(grant.default_catalog.as_deref(), Some("main"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn advanced_options_open_to_change_the_only_catalogs_defaults() {
+    let Some(grant) = approve_the_only_catalog(Access::Write, |ui| {
+        ui.click("#consent-advanced-toggle");
+        ui.wait_visible("#consent-catalog-main");
+        ui.select("#consent-level-main", "read");
+        ui.select("#consent-default", "");
+    })
+    .await
+    else {
+        return;
+    };
+    assert_eq!(
+        grant.catalog_access,
+        [("main".to_string(), Access::Read)].into_iter().collect()
+    );
+    assert_eq!(grant.default_catalog, None);
 }
