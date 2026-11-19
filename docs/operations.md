@@ -2441,7 +2441,7 @@ feedback worker posts it:
 - a 2xx marks the row `sent` and stores Forminit's `submission.hashId`
   (`submission_id`);
 - a 429, a 5xx or a network error is retried, 30 seconds later and then
-  doubling up to an hour, for 10 tries (about five hours), then the row is
+  doubling up to an hour, for 10 tries (about three hours), then the row is
   `failed`;
 - any other 4xx (`FORM_NOT_FOUND`, `FORM_DISABLED`, a validation error) marks
   it `failed` at once with Forminit's error code in `last_error`, never

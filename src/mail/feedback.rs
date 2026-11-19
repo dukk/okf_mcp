@@ -64,8 +64,8 @@ pub const MAX_TOOL_BYTES: usize = 64;
 pub const MAX_CLIENT_CHARS: usize = 100;
 
 /// How many times a submission is posted before it is given up on
-/// (`failed`) after retryable errors. With the backoff, the last try is
-/// about five hours after the first.
+/// (`failed`) after retryable errors. With the backoff (30 s doubling,
+/// capped at an hour), the last try is about three hours after the first.
 pub const MAX_TRIES: i32 = 10;
 
 /// apalis's own `max_attempts`: more than [`MAX_TRIES`], so the row's count,
@@ -1415,6 +1415,33 @@ pub(crate) mod tests {
             Some("gave up after 10 tries: forminit answered 503")
         );
         assert_eq!(mock.seen().len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn serve_refuses_to_start_when_the_key_variable_is_unset() {
+        let db = test_db().await;
+        let config = crate::config::Config {
+            feedback: Some(FeedbackConfig {
+                api_key_env: Some("OKF_TEST_FEEDBACK_KEY_UNSET_674".to_string()),
+                ..FeedbackConfig::for_form(FORM)
+            }),
+            ..crate::config::Config::default()
+        };
+
+        let loaded = App::load(db.pool.clone(), config, Arc::new(FixedClock(now()))).await;
+
+        match loaded {
+            Err(error @ OkfError::Config { .. }) => {
+                assert!(
+                    error
+                        .to_string()
+                        .contains("OKF_TEST_FEEDBACK_KEY_UNSET_674"),
+                    "{error}"
+                );
+            }
+            Err(other) => panic!("not a config error: {other}"),
+            Ok(_) => panic!("the app loaded without its key"),
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
