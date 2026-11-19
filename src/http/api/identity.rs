@@ -21,6 +21,7 @@ use crate::clock::format_timestamp;
 use crate::error::OkfError;
 use crate::http::console_session::{self, ConsoleSession};
 use crate::http::AppError;
+use crate::labels::directory::Wanted;
 use crate::store::keys::{self as key_rows, Access};
 use crate::store::{user_sessions, users};
 
@@ -190,9 +191,18 @@ async fn whoami(
         CredentialKind::OAuth { client_name, .. } => ("oauth", client_name.clone()),
         CredentialKind::Session { .. } => ("session", None),
     };
-    let user_label = user
-        .as_deref()
-        .and_then(|name| app.labels().user(name).map(str::to_string));
+    let user_label = match user.as_deref() {
+        Some(name) => {
+            let mut wanted = Wanted::default();
+            wanted.user(name);
+            app.labels()
+                .labels_for(&wanted)
+                .await?
+                .user(name)
+                .map(str::to_string)
+        }
+        None => None,
+    };
     Ok(Json(WhoAmI {
         key_id: principal.key_id.clone(),
         name,

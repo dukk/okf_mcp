@@ -53,7 +53,7 @@ use crate::http::api::{
     require_admin, require_every_catalog, require_manager, require_reader, settle,
 };
 use crate::http::AppError;
-use crate::labels::directory::Labels;
+use crate::labels::directory::{Labels, Wanted};
 use crate::labels::{team_label, user_label, DisplayName};
 use crate::mail::invite;
 use crate::store::audit::AuditActor;
@@ -273,14 +273,61 @@ pub(crate) struct TeamView {
 }
 
 impl TeamView {
+    /// The views of team records, with the labels of every user they show
+    /// read together (members and personal owners).
+    ///
+    /// # Arguments
+    /// * `app` - the application, for its label lookup.
+    /// * `records` - the teams.
+    ///
+    /// # Returns
+    /// One view per record, in order.
+    ///
+    /// # Errors
+    /// [`OkfError::Database`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) async fn many(app: &App, records: Vec<TeamRecord>) -> Result<Vec<Self>, OkfError> {
+        let mut wanted = Wanted::default();
+        for record in &records {
+            if let Some(user) = record.personal_of.as_deref() {
+                wanted.user(user);
+            }
+            for member in &record.members {
+                wanted.user(&member.user);
+            }
+        }
+        let labels = app.labels().labels_for(&wanted).await?;
+        Ok(records
+            .into_iter()
+            .map(|record| Self::of(record, &labels))
+            .collect())
+    }
+
+    /// [`TeamView::many`] for one record.
+    ///
+    /// # Arguments
+    /// * `app` - the application, for its label lookup.
+    /// * `record` - the team.
+    ///
+    /// # Returns
+    /// Its view.
+    ///
+    /// # Errors
+    /// [`OkfError::Database`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) async fn one(app: &App, record: TeamRecord) -> Result<Self, OkfError> {
+        let mut views = Self::many(app, vec![record]).await?;
+        Ok(views.remove(0))
+    }
+
     /// The view of a team record.
     ///
     /// The record cannot see the user a personal team is named after, so
-    /// the labels come from the directory the key cache holds.
+    /// the labels come from the lookup ([`TeamView::many`] reads them).
     ///
     /// # Arguments
     /// * `record` - the team.
-    /// * `labels` - the directory, read after the write's `settle`.
+    /// * `labels` - the labels of the users the record shows.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -288,7 +335,7 @@ impl TeamView {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    pub(crate) fn of(record: TeamRecord, labels: &Labels) -> Self {
+    fn of(record: TeamRecord, labels: &Labels) -> Self {
         let TeamRecord {
             name,
             display_name,
@@ -940,12 +987,7 @@ async fn list_teams(
     Extension(principal): Extension<Arc<Principal>>,
 ) -> Result<Json<TeamList>, AppError> {
     require_reader(&principal)?;
-    let labels = app.labels();
-    let teams = teams::list(app.pool())
-        .await?
-        .into_iter()
-        .map(|record| TeamView::of(record, &labels))
-        .collect();
+    let teams = TeamView::many(&app, teams::list(app.pool()).await?).await?;
     Ok(Json(TeamList { teams }))
 }
 
@@ -976,7 +1018,7 @@ async fn create_team(
     settle(&app).await;
     Ok((
         StatusCode::CREATED,
-        Json(TeamView::of(created, &app.labels())),
+        Json(TeamView::one(&app, created).await?),
     ))
 }
 
@@ -992,7 +1034,7 @@ async fn team_detail(
 ) -> Result<Json<TeamView>, AppError> {
     require_reader(&principal)?;
     let record = teams::find(app.pool(), &name).await?;
-    Ok(Json(TeamView::of(record, &app.labels())))
+    Ok(Json(TeamView::one(&app, record).await?))
 }
 
 /// `DELETE /teams/{name}`: deletes a shared team that owns no catalog.
@@ -1043,7 +1085,7 @@ async fn set_member(
     settle(&app).await;
     Ok(Json(MembershipChanged {
         change: change_name(change),
-        team: TeamView::of(teams::find(app.pool(), &team).await?, &app.labels()),
+        team: TeamView::one(&app, teams::find(app.pool(), &team).await?).await?,
     }))
 }
 
@@ -1067,7 +1109,7 @@ async fn remove_member(
     teams::remove_member(app.pool(), &team, &user, &actor, app.clock().now()).await?;
     settle(&app).await;
     let record = teams::find(app.pool(), &team).await?;
-    Ok(Json(TeamView::of(record, &app.labels())))
+    Ok(Json(TeamView::one(&app, record).await?))
 }
 
 /// `PUT /teams/{name}/suspension`: suspends the team (or replaces its
@@ -1101,7 +1143,7 @@ async fn set_suspension(
         teams::unsuspend(app.pool(), &name, &actor, now).await?
     };
     settle(&app).await;
-    Ok(Json(TeamView::of(team, &app.labels())))
+    Ok(Json(TeamView::one(&app, team).await?))
 }
 
 /// `PATCH /users/{name}`'s and `PATCH /me`'s body: the new display name.
@@ -1178,7 +1220,7 @@ async fn update_team(
     teams::set_display_name(app.pool(), &change, &actor, app.clock().now()).await?;
     settle(&app).await;
     let record = teams::find(app.pool(), &name).await?;
-    Ok(Json(TeamView::of(record, &app.labels())))
+    Ok(Json(TeamView::one(&app, record).await?))
 }
 
 /// `GET /unassigned`: every key, grant, code and catalog without a user or

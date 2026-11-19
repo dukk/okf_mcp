@@ -24,8 +24,9 @@ use serde::Serialize;
 use super::{reachable_page, require_every_catalog, PageQuery};
 use crate::app::App;
 use crate::auth::Principal;
+use crate::error::OkfError;
 use crate::http::AppError;
-use crate::labels::directory::Labels;
+use crate::labels::directory::Wanted;
 
 /// This area's routes.
 #[cfg_attr(
@@ -56,7 +57,7 @@ pub(crate) struct LabelsView {
 }
 
 /// The labels of `slugs`, as `(slug, label)` pairs, for a team or a user
-/// the directory may not know (created since it loaded: skipped).
+/// that may not exist (deleted since: skipped).
 #[tracing::instrument(level = "trace", skip_all)]
 fn known<'a, 'l>(
     slugs: impl IntoIterator<Item = &'a str>,
@@ -68,52 +69,75 @@ fn known<'a, 'l>(
         .collect()
 }
 
-/// The labels `principal` may see (see the module docs for the scope).
+/// The labels `principal` may see (see the module docs for the scope),
+/// read for exactly the slugs the answer holds.
 ///
 /// # Arguments
-/// * `labels` - the key cache's directory.
+/// * `app` - the application, for its label lookup.
 /// * `reachable` - the page of catalogs `principal` reaches, which only the
 ///   caller can name.
 /// * `principal` - the caller.
 ///
 /// # Returns
 /// The view.
+///
+/// # Errors
+/// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all)]
-fn scoped(labels: &Labels, reachable: &[&str], principal: &Principal) -> LabelsView {
-    if require_every_catalog(principal).is_ok() {
-        return LabelsView {
-            users: labels
+async fn scoped(
+    app: &App,
+    reachable: &[&str],
+    principal: &Principal,
+) -> Result<LabelsView, OkfError> {
+    let lookup = app.labels();
+    let every = require_every_catalog(principal).is_ok();
+    let mut wanted = Wanted::default();
+    for catalog in reachable {
+        wanted.catalog(catalog);
+    }
+    // An every-catalog admin sees every user and team: those are read whole
+    // below, not named here. Anyone else sees itself and its teams.
+    let mut own_teams = Vec::new();
+    if let (false, Some(user)) = (every, principal.user.as_deref()) {
+        wanted.user(user);
+        own_teams = lookup.teams_of(user).await?;
+        for team in &own_teams {
+            wanted.team(team);
+        }
+    }
+    // Includes the owner teams of the catalogs on the page.
+    let labels = lookup.labels_with_owners(&wanted).await?;
+    let catalogs = labels
+        .catalog_choices(reachable.iter().copied())
+        .into_iter()
+        .collect();
+    if every {
+        let everyone = lookup.everyone().await?;
+        return Ok(LabelsView {
+            users: everyone
                 .users()
                 .map(|(slug, label)| (slug.to_string(), label.to_string()))
                 .collect(),
-            teams: labels
+            teams: everyone
                 .teams()
                 .map(|(slug, label)| (slug.to_string(), label.to_string()))
                 .collect(),
-            catalogs: labels
-                .catalog_choices(reachable.iter().copied())
-                .into_iter()
-                .collect(),
+            catalogs,
             next: None,
-        };
+        });
     }
-    let own_teams = principal
-        .user
-        .as_deref()
-        .into_iter()
-        .flat_map(|user| labels.teams_of(user));
     let owner_teams = reachable
         .iter()
         .filter_map(|catalog| labels.catalog_owner(catalog));
-    LabelsView {
+    Ok(LabelsView {
         users: known(principal.user.as_deref(), |user| labels.user(user)),
-        teams: known(own_teams.chain(owner_teams), |team| labels.team(team)),
-        catalogs: labels
-            .catalog_choices(reachable.iter().copied())
-            .into_iter()
-            .collect(),
+        teams: known(
+            own_teams.iter().map(String::as_str).chain(owner_teams),
+            |team| labels.team(team),
+        ),
+        catalogs,
         next: None,
-    }
+    })
 }
 
 /// `GET /labels?after=&limit=`.
@@ -133,9 +157,8 @@ async fn labels(
 ) -> Result<Json<LabelsView>, AppError> {
     let page = reachable_page(&app, &principal, &query).await?;
     let reachable: Vec<&str> = page.items.iter().map(|row| row.name.as_str()).collect();
-    let directory = app.labels();
     Ok(Json(LabelsView {
         next: page.next,
-        ..scoped(&directory, &reachable, &principal)
+        ..scoped(&app, &reachable, &principal).await?
     }))
 }

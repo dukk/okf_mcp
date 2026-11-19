@@ -468,10 +468,25 @@ impl CatalogDirectory {
                     })
                     .await;
             }
-            Invalidation::Credential { .. }
-            | Invalidation::User { .. }
-            | Invalidation::Team { .. }
-            | Invalidation::Settings => {}
+            // A suspended row holds its team's label (and a personal team's
+            // holds its owner's): drop those the change can touch.
+            Invalidation::Team { id } => {
+                self.rows
+                    .invalidate_where(|_, row| {
+                        row.row.as_ref().is_some_and(|row| {
+                            row.suspended.is_some() && row.owner_team_id.as_deref() == Some(id)
+                        })
+                    })
+                    .await;
+            }
+            Invalidation::User { .. } => {
+                self.rows
+                    .invalidate_where(|_, row| {
+                        row.row.as_ref().is_some_and(|row| row.suspended.is_some())
+                    })
+                    .await;
+            }
+            Invalidation::Credential { .. } | Invalidation::Settings => {}
         }
     }
 

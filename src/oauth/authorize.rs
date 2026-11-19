@@ -35,7 +35,7 @@ use crate::error::OkfError;
 use crate::http::console_session::{cookie, signed_in_user, COOKIE};
 use crate::http::signin::cross_site;
 use crate::keys;
-use crate::labels::directory::Labels;
+use crate::labels::directory::{Labels, Wanted};
 use crate::labels::user_label;
 use crate::maintenance::types::new_id;
 use crate::oauth::clients;
@@ -334,6 +334,49 @@ fn view(pending_id: &str, pending: &PendingAuthorization) -> PageView {
         client_host,
         verified: pending.client.kind == ClientKind::Cimd,
     }
+}
+
+/// The labels a sign-in code's summary shows: its catalogs, its default
+/// and its user.
+///
+/// # Arguments
+/// * `app` - the application, for its label lookup.
+/// * `record` - the code.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all)]
+async fn summary_labels(app: &App, record: &SignInCodeRecord) -> Result<Labels, OkfError> {
+    let mut wanted = Wanted::default();
+    for slug in record.catalogs.iter().chain(record.default_catalog.iter()) {
+        wanted.catalog(slug);
+    }
+    if let Some(user) = &record.user {
+        wanted.user(user);
+    }
+    app.labels().labels_with_owners(&wanted).await
+}
+
+/// The labels a consent page shows: the catalogs it offers.
+///
+/// # Arguments
+/// * `app` - the application, for its label lookup.
+/// * `pending` - the request; its `consent` is set (an unset one offers
+///   nothing).
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all)]
+async fn consent_labels(app: &App, pending: &PendingAuthorization) -> Result<Labels, OkfError> {
+    let mut wanted = Wanted::default();
+    for slug in pending
+        .consent
+        .iter()
+        .flat_map(|consent| consent.offered.keys())
+    {
+        wanted.catalog(slug);
+    }
+    app.labels().labels_with_owners(&wanted).await
 }
 
 /// What a sign-in code grants, as step 2 states it.
@@ -750,7 +793,10 @@ async fn authorize(
         query: query_string,
     };
     let page = match &user {
-        Some(user) => user_consent_page(&pending_id, &pending, (user, &app.labels()), None, &brand),
+        Some(user) => match consent_labels(&app, &pending).await {
+            Ok(labels) => user_consent_page(&pending_id, &pending, (user, &labels), None, &brand),
+            Err(error) => return server_error(&error, &brand),
+        },
         None => consent::code_page(&view(&pending_id, &pending), None, &brand),
     };
     // `insert` is `false` when the bounded memory map is full: an
@@ -1063,10 +1109,14 @@ async fn check_code(
                 Ok(None) => return consent::error_page(StatusCode::BAD_REQUEST, EXPIRED, &brand),
                 Err(error) => return server_error(&error, &brand),
             }
+            let labels = match summary_labels(app, &record).await {
+                Ok(labels) => labels,
+                Err(error) => return server_error(&error, &brand),
+            };
             decision.accept();
             consent::summary_page(
                 &view(pending_id, pending),
-                &summary(&record, &app.labels()),
+                &summary(&record, &labels),
                 &summary_nonce,
                 &brand,
             )
@@ -1225,10 +1275,14 @@ async fn consent_as_user(
     let chosen = match chosen_levels(&form.choices, &consent.offered) {
         Ok(chosen) => chosen,
         Err(Choice::Empty) => {
+            let labels = match consent_labels(app, pending).await {
+                Ok(labels) => labels,
+                Err(error) => return server_error(&error, brand),
+            };
             return user_consent_page(
                 &form.pending,
                 pending,
-                (&user, &app.labels()),
+                (&user, &labels),
                 Some(NOTHING_CHOSEN),
                 brand,
             );
@@ -1248,10 +1302,14 @@ async fn consent_as_user(
         .as_deref()
         .filter(|name| !name.is_empty());
     if default_catalog.is_some_and(|name| !chosen.contains_key(name)) {
+        let labels = match consent_labels(app, pending).await {
+            Ok(labels) => labels,
+            Err(error) => return server_error(&error, brand),
+        };
         return user_consent_page(
             &form.pending,
             pending,
-            (&user, &app.labels()),
+            (&user, &labels),
             Some(DEFAULT_NOT_CHOSEN),
             brand,
         );
@@ -2475,7 +2533,6 @@ mod tests {
             Vec::new(),
             vec![team("t-a", "Acme"), team("t-b", "Other team")],
             vec![catalog("notes-a", "t-a"), catalog("notes-b", "t-b")],
-            Vec::new(),
         )
     }
 

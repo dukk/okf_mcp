@@ -429,6 +429,7 @@ mod tests {
                     suspended: suspended.contains(name).then(|| SuspendedRow {
                         team: "family".to_string(),
                         notice: None,
+                        team_label: "family".to_string(),
                     }),
                     maintenance_off: false,
                     audit_team: None,

@@ -97,6 +97,7 @@ async fn a_row_carries_the_owner_and_its_access_facts() {
         Some(SuspendedRow {
             team: "ops".to_owned(),
             notice: Some("billing".to_owned()),
+            team_label: crate::labels::team_label("", None),
         })
     );
     assert!(quiet.maintenance_off);

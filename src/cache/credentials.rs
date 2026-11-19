@@ -52,7 +52,6 @@ use crate::clock::Clock;
 use crate::error::OkfError;
 use crate::invalidate::Invalidation;
 use crate::keys;
-use crate::labels::directory::Labels;
 use crate::store::ceiling::{self, Ceiling};
 use crate::store::gates::{self, UserGates};
 use crate::store::keys::{self as key_rows, CredentialRecord, KeyKind, KeyRecord};
@@ -79,8 +78,6 @@ pub struct UserEntry {
 pub struct AccessView {
     /// The `require_unlock` setting.
     pub require_unlock: bool,
-    /// The label directory (for a suspension notice's labels).
-    pub labels: Arc<Labels>,
 }
 
 /// A test hook that holds a load after it has read the database and before
@@ -186,7 +183,7 @@ impl Credentials {
     /// # Arguments
     /// * `presented` - the key from the request (never logged or kept: the
     ///   cache is keyed by its SHA-256).
-    /// * `view` - the settings and labels the principal is built with.
+    /// * `view` - the settings the principal is built with.
     ///
     /// # Returns
     /// Its principal, or `None` for an unknown, revoked or expired key.
@@ -437,7 +434,6 @@ fn facts_of(
         user: user.map(|user| Arc::clone(&user.gates)),
         credential,
         require_unlock: view.require_unlock,
-        labels: Arc::clone(&view.labels),
     })
 }
 
