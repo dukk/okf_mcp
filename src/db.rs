@@ -1014,12 +1014,12 @@ mod tests {
         };
 
         // Act
-        sqlx::raw_sql(include_str!("../migrations/0022_audit_backfill.sql"))
+        sqlx::raw_sql(include_str!("../migrations/0023_audit_backfill.sql"))
             .execute(&db.pool)
             .await
             .unwrap();
         let once = audit_rows(&db.pool).await;
-        sqlx::raw_sql(include_str!("../migrations/0022_audit_backfill.sql"))
+        sqlx::raw_sql(include_str!("../migrations/0023_audit_backfill.sql"))
             .execute(&db.pool)
             .await
             .unwrap();

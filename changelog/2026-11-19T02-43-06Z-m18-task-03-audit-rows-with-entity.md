@@ -4,7 +4,7 @@ Issue #681, milestone 18 (bounded memory), spec Decision 20.
 
 ## Added
 
-- `migrations/0022_audit_backfill.sql`. It creates the missing `audit_people` row for every user, the missing `audit_teams` row for every team, and the missing `audit_credentials` row for every live key and grant. The credential rows carry the owner's person and, as their label, the credential's `actor`. These are the rows the SQL resolvers would make. The migration inserts only, with `WHERE NOT EXISTS` and `ON CONFLICT DO NOTHING`, so a rerun changes nothing and no existing row is locked or refreshed.
+- `migrations/0023_audit_backfill.sql`. It creates the missing `audit_people` row for every user, the missing `audit_teams` row for every team, and the missing `audit_credentials` row for every live key and grant. The credential rows carry the owner's person and, as their label, the credential's `actor`. These are the rows the SQL resolvers would make. The migration inserts only, with `WHERE NOT EXISTS` and `ON CONFLICT DO NOTHING`, so a rerun changes nothing and no existing row is locked or refreshed.
 - `audit::credential_created(conn, credential_id, label)`. It creates a new key's or grant's audit row, with its label, in the transaction that inserts the credential.
 - Tests:
   - `store::gates::tests::every_new_user_key_grant_and_team_has_its_audit_row`

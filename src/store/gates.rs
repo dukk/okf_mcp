@@ -17,7 +17,7 @@ use crate::store::{settings, unlocks};
 
 /// Loads the gates. Writes nothing: every user, team and live credential
 /// already has the audit row its access is recorded with, made in the
-/// transaction that created it (or by `migrations/0022_audit_backfill.sql`
+/// transaction that created it (or by `migrations/0023_audit_backfill.sql`
 /// for older ones; M18 spec Decision 20). Reads every map in one
 /// read-only `REPEATABLE READ` transaction, so memberships, entitlements,
 /// admins, unlocks, the `require_unlock` setting and catalog scopes
