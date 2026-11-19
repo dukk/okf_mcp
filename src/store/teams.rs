@@ -970,44 +970,6 @@ pub async fn unsuspend(
     find(pool, name).await
 }
 
-/// Every catalog whose owner team is suspended, by catalog name: what the
-/// key cache gives every principal.
-///
-/// # Arguments
-/// * `pool` - the database.
-///
-/// # Returns
-/// The map; empty when no team is suspended.
-///
-/// # Errors
-/// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.suspended_catalogs"))]
-pub async fn suspended_catalogs(
-    pool: &PgPool,
-) -> Result<HashMap<String, SuspendedCatalog>, OkfError> {
-    let rows = sqlx::query_as::<_, (String, String, Option<String>)>(
-        "SELECT c.name, t.name, t.suspension_notice \
-         FROM catalogs c JOIN teams t ON t.id = c.owner_team_id \
-         WHERE t.suspended_at IS NOT NULL",
-    )
-    .fetch_all(pool)
-    .await?;
-    Ok(rows
-        .into_iter()
-        .map(|(catalog, team, notice)| {
-            // The slugs stand in until `KeyCache::read` fills in the labels
-            // from the directory it loads beside this map.
-            let suspended = SuspendedCatalog {
-                catalog_label: catalog.clone(),
-                team_label: team.clone(),
-                team,
-                notice,
-            };
-            (catalog, suspended)
-        })
-        .collect())
-}
-
 /// A team row held `FOR UPDATE` by the caller's transaction.
 struct LockedTeam {
     /// Its `teams.id`.
@@ -1881,61 +1843,6 @@ mod tests {
             lifted,
             Err(OkfError::UnknownName { noun: "team", .. })
         ));
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn suspended_catalogs_names_each_catalog_of_a_suspended_team() {
-        let db = test_db().await;
-        family(&db.pool).await;
-        crate::store::catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "shared",
-                display_name: &DisplayName::default(),
-                description: "",
-                owner_team: "family",
-            },
-            &AuditActor::cli(),
-            now(),
-        )
-        .await
-        .unwrap();
-        crate::store::catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "mine",
-                display_name: &DisplayName::default(),
-                description: "",
-                owner_team: TEST_USER,
-            },
-            &AuditActor::cli(),
-            now(),
-        )
-        .await
-        .unwrap();
-        suspend(
-            &db.pool,
-            "family",
-            Some("Paused."),
-            &AuditActor::cli(),
-            now(),
-        )
-        .await
-        .unwrap();
-
-        let map = suspended_catalogs(&db.pool).await.unwrap();
-
-        assert_eq!(map.len(), 1, "only the suspended team's catalog: {map:?}");
-        assert_eq!(
-            map.get("shared"),
-            Some(&SuspendedCatalog {
-                team: "family".to_string(),
-                notice: Some("Paused.".to_string()),
-                // Slugs until the key cache fills in the labels.
-                catalog_label: "shared".to_string(),
-                team_label: "family".to_string(),
-            })
-        );
     }
 
     // ---- The audit log (M14 Task 6b) ----

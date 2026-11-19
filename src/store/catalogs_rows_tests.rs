@@ -69,8 +69,7 @@ async fn a_row_carries_the_owner_and_its_access_facts() {
     let quiet = row_by_name(&db.pool, "quiet").await.unwrap().unwrap();
     let legacy = row_by_name(&db.pool, "legacy").await.unwrap().unwrap();
 
-    // The values the key cache holds today (`teams::suspended_catalogs`,
-    // `gates::load`), read once.
+    // The values the access checks read, from one row each.
     let found = find(&db.pool, "plain").await.unwrap();
     assert_eq!(plain.id, found.id);
     assert_eq!(plain.generation, found.generation);
@@ -100,9 +99,6 @@ async fn a_row_carries_the_owner_and_its_access_facts() {
             notice: Some("billing".to_owned()),
         })
     );
-    let suspended = teams::suspended_catalogs(&db.pool).await.unwrap();
-    assert_eq!(suspended.len(), 1);
-    assert_eq!(suspended["held"].team, "ops");
     assert!(quiet.maintenance_off);
     assert!(!held.maintenance_off);
 

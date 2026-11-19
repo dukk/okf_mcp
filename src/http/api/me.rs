@@ -1942,8 +1942,8 @@ mod tests {
         assert_eq!(foreign.as_u16(), 404);
         assert_eq!(own.as_u16(), 200, "{view}");
         assert!(view["revoked_at"].is_string());
-        assert!(test.app.keys().find_grant(&grants[0]).is_none());
-        assert!(test.app.keys().find_grant(&grants[1]).is_some());
+        assert!(test.app.find_grant(&grants[0]).await.unwrap().is_none());
+        assert!(test.app.find_grant(&grants[1]).await.unwrap().is_some());
     }
 
     #[tokio::test]

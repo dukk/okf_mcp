@@ -99,7 +99,7 @@ async fn a_provisioner_runs_the_signup_and_offboarding_routes() {
     assert!(alice.actor_operator);
     assert_eq!(alice.source, "api");
     let credential: String = sqlx::query_scalar("SELECT c.credential_id FROM audit_entries e JOIN audit_credentials c ON c.id = e.actor_credential_ref WHERE e.action = 'user.invited'").fetch_one(test.app.pool()).await.unwrap();
-    let cached = crate::mcp::testing::cached_principal(&test, &key);
+    let cached = crate::mcp::testing::cached_principal(&test, &key).await;
     assert_eq!(credential, cached.key_id);
 }
 

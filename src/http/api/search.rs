@@ -100,7 +100,7 @@ async fn every_reachable(app: &App, principal: &Principal) -> Result<Vec<String>
         .iter()
         .filter(|row| {
             app.loaded_catalog(row).is_some()
-                && principal.check_open(&row.name, Access::Read, now).is_ok()
+                && principal.check_open(row, Access::Read, now).is_ok()
         })
         .map(|row| row.name.clone())
         .collect())

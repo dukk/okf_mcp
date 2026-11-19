@@ -237,8 +237,9 @@ async fn approve_with_a_code(journey: Journey) {
     assert!(journey
         .server
         .app
-        .keys()
         .find_grant(&grants[0].id)
+        .await
+        .unwrap()
         .is_some());
 }
 
@@ -322,8 +323,9 @@ async fn a_person_signs_in_on_the_way_and_approves_from_their_ceiling() {
     let principal = journey
         .server
         .app
-        .keys()
         .find_grant(&grant.id)
+        .await
+        .unwrap()
         .expect("cached grant");
     assert_eq!(principal.level("main"), Some(Access::Write));
     assert_eq!(principal.level("other"), None);

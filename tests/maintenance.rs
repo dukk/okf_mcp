@@ -99,7 +99,14 @@ async fn maintenance_http_lease_uses_credential_identity() {
     assert!(lease["pin"]["path"].as_str().unwrap().starts_with('/'));
     let renewed = call(&client, "maintenance_renew", renew_args(lease, "renew")).await;
     assert_eq!(structured(&renewed)["catalog"], "pg");
-    let id = server.app.keys().find(&key).unwrap().key_id.clone();
+    let id = server
+        .app
+        .find_key(&key)
+        .await
+        .unwrap()
+        .unwrap()
+        .key_id
+        .clone();
     let stored: String =
         sqlx::query_scalar("SELECT credential_id FROM maintenance_runs WHERE id=$1")
             .bind(claimed["run_id"].as_str().unwrap())
@@ -170,7 +177,16 @@ async fn maintenance_http_lease_uses_credential_identity() {
         .is_err());
     }
     let replacement = server.reporter_key("same-name", &["pg"]).await;
-    assert_ne!(server.app.keys().find(&replacement).unwrap().key_id, id);
+    assert_ne!(
+        server
+            .app
+            .find_key(&replacement)
+            .await
+            .unwrap()
+            .unwrap()
+            .key_id,
+        id
+    );
     let replacement = server.client(&replacement, None).await.unwrap();
     let foreign = error(
         &call(
@@ -707,7 +723,14 @@ async fn maintenance_http_reauthorizes_successful_replays_and_allows_plain_reads
     let lease = &claimed["leases"][0];
     let args = submit_args(lease, "submitted");
     let receipt = structured(&call(&client, "maintenance_submit", args.clone()).await).clone();
-    let id = server.app.keys().find(&key).unwrap().key_id.clone();
+    let id = server
+        .app
+        .find_key(&key)
+        .await
+        .unwrap()
+        .unwrap()
+        .key_id
+        .clone();
     keys::set_maintenance_report_target(
         &server.db.pool,
         &id,
@@ -801,7 +824,14 @@ async fn maintenance_close_requires_reporting_for_own_run_even_with_write() {
     let key = server
         .key("writer-owner", Access::Write, &["pg"], None)
         .await;
-    let id = server.app.keys().find(&key).unwrap().key_id.clone();
+    let id = server
+        .app
+        .find_key(&key)
+        .await
+        .unwrap()
+        .unwrap()
+        .key_id
+        .clone();
     keys::set_maintenance_report_target(
         &server.db.pool,
         &id,
@@ -837,7 +867,14 @@ async fn maintenance_close_owner_replay_is_stable_after_access_upgrade() {
     let run = claim(&client, "claim", 1).await;
     let args = json!({"catalog":"pg","run_id":run["run_id"],"state":"cancelled","rationale":"Owner cancellation.","idempotency_key":"close"});
     let closed = structured(&call(&client, "maintenance_close", args.clone()).await).clone();
-    let id = server.app.keys().find(&key).unwrap().key_id.clone();
+    let id = server
+        .app
+        .find_key(&key)
+        .await
+        .unwrap()
+        .unwrap()
+        .key_id
+        .clone();
     sqlx::query("UPDATE api_keys SET access='write' WHERE id=$1")
         .bind(&id)
         .execute(&server.db.pool)
@@ -864,7 +901,10 @@ async fn maintenance_close_owner_replay_is_stable_after_access_upgrade() {
     .await
     .unwrap();
     server.app.poll().await.unwrap();
-    assert_eq!(server.app.keys().find(&key).unwrap().access, Access::Write);
+    assert_eq!(
+        server.app.find_key(&key).await.unwrap().unwrap().access,
+        Access::Write
+    );
     assert_eq!(
         closed,
         structured(&call(&client, "maintenance_close", args).await).clone()

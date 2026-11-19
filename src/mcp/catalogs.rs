@@ -29,14 +29,14 @@ pub struct SuspensionInfo {
 
 // `From` is Rust's conversion trait (like a Python `from_x` classmethod);
 // implementing it also gives `.into()` and lets `.map(SuspensionInfo::from)`
-// convert a borrowed cache entry into an owned listing field.
-impl From<&SuspendedCatalog> for SuspensionInfo {
+// turn a principal's view of a suspension into a listing field.
+impl From<SuspendedCatalog> for SuspensionInfo {
     #[tracing::instrument(level = "trace", skip_all)]
-    fn from(suspended: &SuspendedCatalog) -> Self {
+    fn from(suspended: SuspendedCatalog) -> Self {
         Self {
-            team: suspended.team.clone(),
-            team_label: suspended.team_label.clone(),
-            notice: suspended.notice.clone(),
+            team: suspended.team,
+            team_label: suspended.team_label,
+            notice: suspended.notice,
         }
     }
 }
@@ -128,10 +128,7 @@ pub(crate) async fn list(ctx: &ToolContext, after: Option<&str>) -> Result<Catal
                 last_change: loaded.last_change().map(format_timestamp),
                 // Listed only after reach (the page), so a credential that
                 // does not reach a catalog never learns it is suspended.
-                suspended: ctx
-                    .principal()
-                    .suspension(&row.name)
-                    .map(SuspensionInfo::from),
+                suspended: ctx.principal().suspension(row).map(SuspensionInfo::from),
             })
         })
         .collect();
@@ -293,14 +290,22 @@ mod tests {
         let stranger = stored_secret(&test, "stranger", Access::Read, &["other"], false).await;
         let root = stored_secret(&test, "root", Access::Admin, &[], false).await;
         suspend_catalogs(&test, &["main"]).await;
-        let on = |secret: &str, connection: &[&str]| {
-            context(&test, cached_principal(&test, secret), Some(connection))
+        let on = async |secret: &str, connection: &[&str]| {
+            context(
+                &test,
+                cached_principal(&test, secret).await,
+                Some(connection),
+            )
         };
 
-        let listed = list(&on(&reader, &["main", "other"]), None).await.unwrap();
-        let only_suspended = list(&on(&reader, &["main"]), None).await.unwrap();
-        let strangers = list(&on(&stranger, &["other"]), None).await.unwrap();
-        let admins = list(&on(&root, &["main", "other"]), None).await.unwrap();
+        let listed = list(&on(&reader, &["main", "other"]).await, None)
+            .await
+            .unwrap();
+        let only_suspended = list(&on(&reader, &["main"]).await, None).await.unwrap();
+        let strangers = list(&on(&stranger, &["other"]).await, None).await.unwrap();
+        let admins = list(&on(&root, &["main", "other"]).await, None)
+            .await
+            .unwrap();
 
         let main = listed.catalogs.iter().find(|c| c.name == "main").unwrap();
         assert_eq!(

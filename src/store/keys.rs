@@ -913,6 +913,82 @@ pub(crate) async fn resolve_grants(
     Ok((granted, default_id))
 }
 
+// The key-record SELECT, shared by `list`, `record_by_hash` and
+// `record_by_id` (a macro so `concat!` can add each query's extra columns
+// and put its `WHERE` before the shared `GROUP BY` at compile time). `levels` is aggregated in the same
+// order as `catalogs`, so the two arrays pair up; `COALESCE(g.access,
+// k.access)` resolves a NULL level to the key's own.
+macro_rules! select_key_records {
+    ($extra:literal, $filter:literal) => {
+        concat!(
+            "SELECT ",
+            $extra,
+            "k.id, k.name, k.sha256, k.access, k.maintenance_report, k.provisioner, \
+                    k.all_catalogs, d.name AS default_catalog, k.actor, k.created_at, \
+                    k.revoked_at, k.expires_at, k.kind, k.client_id, oc.client_name, \
+                    u.name AS user, k.user_id, k.self_issued, \
+                    (SELECT max(t.created_at) FROM oauth_tokens t WHERE t.grant_id = k.id) \
+                        AS last_activity, \
+                    COALESCE(array_agg(c.name ORDER BY c.name) FILTER (WHERE c.name IS NOT NULL), \
+                             '{}'::text[]) AS catalogs, \
+                    COALESCE(array_agg(COALESCE(g.access, k.access) ORDER BY c.name) \
+                                 FILTER (WHERE c.name IS NOT NULL), \
+                             '{}'::text[]) AS levels \
+             FROM api_keys k \
+             LEFT JOIN catalogs d ON d.id = k.default_catalog_id \
+             LEFT JOIN oauth_clients oc ON oc.client_id = k.client_id \
+             LEFT JOIN users u ON u.id = k.user_id \
+             LEFT JOIN key_catalogs g ON g.key_id = k.id \
+             LEFT JOIN catalogs c ON c.id = g.catalog_id ",
+            $filter,
+            " GROUP BY k.id, d.name, oc.client_name, u.name"
+        )
+    };
+}
+
+impl From<KeyRow> for KeyRecord {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
+    fn from(row: KeyRow) -> Self {
+        let catalog_access =
+            row.catalogs
+                .iter()
+                .cloned()
+                .zip(row.levels.iter().map(|level| {
+                    Access::parse(level).expect("the schema checks key_catalogs.access")
+                }))
+                .collect();
+        KeyRecord {
+            id: row.id,
+            name: row.name,
+            sha256: row.sha256,
+            access: Access::parse(&row.access).expect("the schema checks api_keys.access"),
+            provisioner: row.provisioner,
+            maintenance_report: row.maintenance_report,
+            all_catalogs: row.all_catalogs,
+            catalogs: row.catalogs,
+            catalog_access,
+            default_catalog: row.default_catalog,
+            actor: row.actor,
+            created_at: row.created_at,
+            revoked_at: row.revoked_at,
+            expires_at: row.expires_at,
+            kind: KeyKind::parse(&row.kind).expect("the schema checks api_keys.kind"),
+            client_id: row.client_id,
+            client_name: row.client_name,
+            user: row.user,
+            user_id: row.user_id,
+            self_issued: row.self_issued,
+            last_activity: row.last_activity,
+        }
+    }
+}
+
 /// Every key, by id, with its granted catalogs.
 ///
 /// # Arguments
@@ -925,66 +1001,106 @@ pub(crate) async fn resolve_grants(
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "keys.list"))]
 pub async fn list(pool: &PgPool) -> Result<Vec<KeyRecord>, OkfError> {
-    // `levels` is aggregated in the same order as `catalogs`, so the two
-    // arrays pair up; `COALESCE(g.access, k.access)` resolves a NULL level
-    // to the key's own.
-    let rows = sqlx::query_as::<_, KeyRow>(
-        "SELECT k.id, k.name, k.sha256, k.access, k.maintenance_report, k.provisioner, k.all_catalogs, \
-                d.name AS default_catalog, k.actor, k.created_at, k.revoked_at, k.expires_at, \
-                k.kind, k.client_id, oc.client_name, u.name AS user, k.user_id, k.self_issued, \
-                (SELECT max(t.created_at) FROM oauth_tokens t WHERE t.grant_id = k.id) \
-                    AS last_activity, \
-                COALESCE(array_agg(c.name ORDER BY c.name) FILTER (WHERE c.name IS NOT NULL), \
-                         '{}'::text[]) AS catalogs, \
-                COALESCE(array_agg(COALESCE(g.access, k.access) ORDER BY c.name) \
-                             FILTER (WHERE c.name IS NOT NULL), \
-                         '{}'::text[]) AS levels \
-         FROM api_keys k \
-         LEFT JOIN catalogs d ON d.id = k.default_catalog_id \
-         LEFT JOIN oauth_clients oc ON oc.client_id = k.client_id \
-         LEFT JOIN users u ON u.id = k.user_id \
-         LEFT JOIN key_catalogs g ON g.key_id = k.id \
-         LEFT JOIN catalogs c ON c.id = g.catalog_id \
-         GROUP BY k.id, d.name, oc.client_name, u.name ORDER BY k.name, k.actor, k.created_at, k.id",
-    )
+    let rows = sqlx::query_as::<_, KeyRow>(concat!(
+        select_key_records!("", ""),
+        " ORDER BY k.name, k.actor, k.created_at, k.id"
+    ))
     .fetch_all(pool)
     .await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            let catalog_access = row
-                .catalogs
-                .iter()
-                .cloned()
-                .zip(row.levels.iter().map(|level| {
-                    Access::parse(level).expect("the schema checks key_catalogs.access")
-                }))
-                .collect();
-            KeyRecord {
-                id: row.id,
-                name: row.name,
-                sha256: row.sha256,
-                access: Access::parse(&row.access).expect("the schema checks api_keys.access"),
-                provisioner: row.provisioner,
-                maintenance_report: row.maintenance_report,
-                all_catalogs: row.all_catalogs,
-                catalogs: row.catalogs,
-                catalog_access,
-                default_catalog: row.default_catalog,
-                actor: row.actor,
-                created_at: row.created_at,
-                revoked_at: row.revoked_at,
-                expires_at: row.expires_at,
-                kind: KeyKind::parse(&row.kind).expect("the schema checks api_keys.kind"),
-                client_id: row.client_id,
-                client_name: row.client_name,
-                user: row.user,
-                user_id: row.user_id,
-                self_issued: row.self_issued,
-                last_activity: row.last_activity,
-            }
-        })
-        .collect())
+    // `KeyRecord::from` is the `From<KeyRow>` above.
+    Ok(rows.into_iter().map(KeyRecord::from).collect())
+}
+
+/// A key or grant with the audit id its accesses are recorded with: what
+/// the credential cache holds (M18 Decision 9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CredentialRecord {
+    /// The row.
+    pub record: KeyRecord,
+    /// Its `audit_credentials` id; `None` for a row without one (a key from
+    /// before the audit log that the backfill did not see).
+    pub audit_credential: Option<i64>,
+}
+
+/// [`KeyRow`] with its audit id, as `record_by_hash` and `record_by_id`
+/// select it.
+#[derive(sqlx::FromRow)]
+struct CredentialRow {
+    // `flatten`: the key's columns are read into the nested struct.
+    #[sqlx(flatten)]
+    key: KeyRow,
+    audit_credential: Option<i64>,
+}
+
+impl From<CredentialRow> for CredentialRecord {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
+    fn from(row: CredentialRow) -> Self {
+        Self {
+            record: KeyRecord::from(row.key),
+            audit_credential: row.audit_credential,
+        }
+    }
+}
+
+/// The key whose secret hashes to `sha256`, with its audit id, in one
+/// query: what the credential cache loads an API key with (M18 Decision 9).
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `sha256` - the presented key's SHA-256 ([`crate::keys::hash`]).
+///
+/// # Returns
+/// Its record, revoked or not, or `None` for no such key. An OAuth grant has
+/// no hash, so it is never found here.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "keys.record_by_hash"))]
+pub async fn record_by_hash(
+    pool: &PgPool,
+    sha256: &[u8; 32],
+) -> Result<Option<CredentialRecord>, OkfError> {
+    let row = sqlx::query_as::<_, CredentialRow>(select_key_records!(
+        "(SELECT a.id FROM audit_credentials a WHERE a.credential_id = k.id) \
+             AS audit_credential, ",
+        "WHERE k.sha256 = $1"
+    ))
+    // `as_slice`: Postgres's `bytea` binds from a byte slice.
+    .bind(sha256.as_slice())
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(CredentialRecord::from))
+}
+
+/// The key or grant with this id, with its audit id, in one query: what the
+/// credential cache loads an OAuth grant with (M18 Decision 9).
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `id` - its `api_keys.id`.
+///
+/// # Returns
+/// Its record, revoked or not, or `None` for no such row.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "keys.record_by_id"))]
+pub async fn record_by_id(pool: &PgPool, id: &str) -> Result<Option<CredentialRecord>, OkfError> {
+    let row = sqlx::query_as::<_, CredentialRow>(select_key_records!(
+        "(SELECT a.id FROM audit_credentials a WHERE a.credential_id = k.id) \
+             AS audit_credential, ",
+        "WHERE k.id = $1"
+    ))
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(CredentialRecord::from))
 }
 
 /// Sets the independent maintenance-report capability on an active key.
@@ -2665,25 +2781,78 @@ mod tests {
                 .expect("a key row has a hash"),
             &replacement.key
         ));
-        let cache = crate::auth::KeyCache::from_records(
-            records,
-            std::collections::HashMap::new(),
-            Default::default(),
-            Default::default(),
-            now(),
-        );
+        // What the credential cache loads for each secret: one row by hash.
+        let live = |found: Option<CredentialRecord>| {
+            found.is_some_and(|found| found.record.revoked_at.is_none())
+        };
+        let by_hash = async |key: &str| record_by_hash(&db.pool, &crate::keys::hash(key)).await;
         assert!(
-            cache.find(&first.key, now()).is_none(),
+            !live(by_hash(&first.key).await.unwrap()),
             "the revoked key is refused"
         );
         assert!(
-            cache.find(&second.key, now()).is_some(),
+            live(by_hash(&second.key).await.unwrap()),
             "the other actor still works"
         );
         assert!(
-            cache.find(&replacement.key, now()).is_some(),
+            live(by_hash(&replacement.key).await.unwrap()),
             "the reissued key works"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn one_credential_is_read_by_hash_or_by_id_with_its_audit_id() {
+        let db = test_db().await;
+        let created = create_with_id(
+            &db.pool,
+            &NewKey {
+                name: "laptop",
+                access: Access::Read,
+                maintenance_report: false,
+                grants: Grants::All,
+                default_catalog: None,
+                actor: "laptop",
+                user: crate::db::TEST_USER,
+                self_issued: false,
+                expires_at: None,
+                levels: &[],
+            },
+            &crate::store::audit::AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        let audit_id: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM audit_credentials WHERE credential_id = $1")
+                .bind(&created.id)
+                .fetch_optional(&db.pool)
+                .await
+                .unwrap();
+
+        let by_hash = record_by_hash(&db.pool, &crate::keys::hash(&created.key))
+            .await
+            .unwrap()
+            .expect("found by its secret's hash");
+        let by_id = record_by_id(&db.pool, &created.id)
+            .await
+            .unwrap()
+            .expect("found by id");
+        let unknown = record_by_hash(&db.pool, &crate::keys::hash("okf_nope"))
+            .await
+            .unwrap();
+        let listed = list(&db.pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|record| record.id == created.id)
+            .unwrap();
+
+        assert_eq!(by_hash, by_id);
+        assert_eq!(by_hash.record, listed, "the same record `list` reads");
+        assert!(audit_id.is_some());
+        assert_eq!(by_hash.audit_credential, audit_id);
+        assert_eq!(unknown, None);
+        assert_eq!(record_by_id(&db.pool, "no-such-id").await.unwrap(), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]

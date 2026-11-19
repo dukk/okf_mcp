@@ -133,7 +133,7 @@ async fn labels(
 ) -> Result<Json<LabelsView>, AppError> {
     let page = reachable_page(&app, &principal, &query).await?;
     let reachable: Vec<&str> = page.items.iter().map(|row| row.name.as_str()).collect();
-    let directory = app.keys().labels();
+    let directory = app.labels();
     Ok(Json(LabelsView {
         next: page.next,
         ..scoped(&directory, &reachable, &principal)

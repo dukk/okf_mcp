@@ -117,7 +117,7 @@ pub(crate) async fn run(ctx: &ToolContext, params: SearchParams) -> Result<Searc
     require_selected(pinned.as_ref(), &states)?;
     // A search reads every catalog before it answers: all are admitted at
     // once, or none (a refused call queues no read).
-    ctx.admit_all(&states, AccessKind::Read)?;
+    ctx.admit_all(&states, AccessKind::Read).await?;
     let query = SearchQuery {
         text: params.query,
         concept_type: params.concept_type,

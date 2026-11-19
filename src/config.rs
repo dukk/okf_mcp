@@ -62,6 +62,17 @@ pub const DEFAULT_SEARCH_FANOUT_MAX: u32 = 25;
 /// The default `catalog_ttl`: how long a cached catalog row is served.
 pub const DEFAULT_CATALOG_TTL: Duration = Duration::from_secs(10);
 
+/// The default `credential_cache_entries`: keys and OAuth grants kept, by
+/// hash and by id.
+pub const DEFAULT_CREDENTIAL_CACHE_ENTRIES: u64 = 100_000;
+
+/// The default `user_cache_entries`: users kept, by id.
+pub const DEFAULT_USER_CACHE_ENTRIES: u64 = 100_000;
+
+/// The default `credential_ttl`: how long a cached credential or user is
+/// served before it is read again.
+pub const DEFAULT_CREDENTIAL_TTL: Duration = Duration::from_secs(10);
+
 /// The default lifetime of an OAuth access token.
 pub const DEFAULT_ACCESS_TOKEN_TTL: Duration = Duration::from_secs(60 * 60);
 
@@ -948,6 +959,18 @@ pub struct Config {
     /// one that is lost.
     #[serde(with = "humantime_serde")]
     pub catalog_ttl: Duration,
+    /// The most keys and OAuth grants the credential cache keeps (`100000`
+    /// each, by hash and by id). Only live credentials that were used are
+    /// kept; an unknown one is never cached.
+    pub credential_cache_entries: u64,
+    /// The most users the user cache keeps, by id (`100000`): each one's
+    /// admin flag, ceiling, teams, entitlements and live unlocks.
+    pub user_cache_entries: u64,
+    /// How long a cached credential or user is served before it is read
+    /// again (`"10s"`). Invalidations drop one sooner; this is the backstop
+    /// for one that is lost, and the bound on a revocation's reach then.
+    #[serde(with = "humantime_serde")]
+    pub credential_ttl: Duration,
     /// The most catalogs `GET /api/v1/search` searches when the request
     /// names none (`25`, from 1 to 999): a key that reaches more must name
     /// them, so one request cannot search every catalog in the system.
@@ -998,6 +1021,9 @@ impl Default for Config {
             overlay_cache_size: DEFAULT_OVERLAY_CACHE_SIZE,
             catalog_directory_entries: DEFAULT_CATALOG_DIRECTORY_ENTRIES,
             catalog_ttl: DEFAULT_CATALOG_TTL,
+            credential_cache_entries: DEFAULT_CREDENTIAL_CACHE_ENTRIES,
+            user_cache_entries: DEFAULT_USER_CACHE_ENTRIES,
+            credential_ttl: DEFAULT_CREDENTIAL_TTL,
             search_fanout_max: DEFAULT_SEARCH_FANOUT_MAX,
             public_url: None,
             oauth: OAuthConfig::default(),
@@ -1139,6 +1165,15 @@ impl Config {
         }
         if self.catalog_ttl.is_zero() {
             return Err("catalog_ttl must be more than zero".to_string());
+        }
+        if self.credential_cache_entries == 0 {
+            return Err("credential_cache_entries must be more than zero".to_string());
+        }
+        if self.user_cache_entries == 0 {
+            return Err("user_cache_entries must be more than zero".to_string());
+        }
+        if self.credential_ttl.is_zero() {
+            return Err("credential_ttl must be more than zero".to_string());
         }
         // The cap is checked with one listing page of `search_fanout_max + 1`
         // rows, and a page holds at most `MAX_PAGE` (1000).
@@ -1539,6 +1574,9 @@ mod tests {
         assert_eq!(config.overlay_cache_size, 64);
         assert_eq!(config.catalog_directory_entries, 100_000);
         assert_eq!(config.catalog_ttl, Duration::from_secs(10));
+        assert_eq!(config.credential_cache_entries, 100_000);
+        assert_eq!(config.user_cache_entries, 100_000);
+        assert_eq!(config.credential_ttl, Duration::from_secs(10));
         assert_eq!(config.search_fanout_max, 25);
     }
 
@@ -1622,6 +1660,9 @@ mod tests {
                 "catalog_directory_entries",
             ),
             ("catalog_ttl = \"0s\"\n", "catalog_ttl"),
+            ("credential_cache_entries = 0\n", "credential_cache_entries"),
+            ("user_cache_entries = 0\n", "user_cache_entries"),
+            ("credential_ttl = \"0s\"\n", "credential_ttl"),
             ("search_fanout_max = 0\n", "search_fanout_max"),
             (
                 "search_fanout_max = 1000\n",

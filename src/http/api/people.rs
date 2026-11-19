@@ -940,7 +940,7 @@ async fn list_teams(
     Extension(principal): Extension<Arc<Principal>>,
 ) -> Result<Json<TeamList>, AppError> {
     require_reader(&principal)?;
-    let labels = app.keys().labels();
+    let labels = app.labels();
     let teams = teams::list(app.pool())
         .await?
         .into_iter()
@@ -976,7 +976,7 @@ async fn create_team(
     settle(&app).await;
     Ok((
         StatusCode::CREATED,
-        Json(TeamView::of(created, &app.keys().labels())),
+        Json(TeamView::of(created, &app.labels())),
     ))
 }
 
@@ -992,7 +992,7 @@ async fn team_detail(
 ) -> Result<Json<TeamView>, AppError> {
     require_reader(&principal)?;
     let record = teams::find(app.pool(), &name).await?;
-    Ok(Json(TeamView::of(record, &app.keys().labels())))
+    Ok(Json(TeamView::of(record, &app.labels())))
 }
 
 /// `DELETE /teams/{name}`: deletes a shared team that owns no catalog.
@@ -1043,7 +1043,7 @@ async fn set_member(
     settle(&app).await;
     Ok(Json(MembershipChanged {
         change: change_name(change),
-        team: TeamView::of(teams::find(app.pool(), &team).await?, &app.keys().labels()),
+        team: TeamView::of(teams::find(app.pool(), &team).await?, &app.labels()),
     }))
 }
 
@@ -1067,7 +1067,7 @@ async fn remove_member(
     teams::remove_member(app.pool(), &team, &user, &actor, app.clock().now()).await?;
     settle(&app).await;
     let record = teams::find(app.pool(), &team).await?;
-    Ok(Json(TeamView::of(record, &app.keys().labels())))
+    Ok(Json(TeamView::of(record, &app.labels())))
 }
 
 /// `PUT /teams/{name}/suspension`: suspends the team (or replaces its
@@ -1101,7 +1101,7 @@ async fn set_suspension(
         teams::unsuspend(app.pool(), &name, &actor, now).await?
     };
     settle(&app).await;
-    Ok(Json(TeamView::of(team, &app.keys().labels())))
+    Ok(Json(TeamView::of(team, &app.labels())))
 }
 
 /// `PATCH /users/{name}`'s and `PATCH /me`'s body: the new display name.
@@ -1178,7 +1178,7 @@ async fn update_team(
     teams::set_display_name(app.pool(), &change, &actor, app.clock().now()).await?;
     settle(&app).await;
     let record = teams::find(app.pool(), &name).await?;
-    Ok(Json(TeamView::of(record, &app.keys().labels())))
+    Ok(Json(TeamView::of(record, &app.labels())))
 }
 
 /// `GET /unassigned`: every key, grant, code and catalog without a user or
@@ -1758,7 +1758,14 @@ mod tests {
         let ceiling_now = ceiling::ceiling_of(test.app.pool(), "alice")
             .await
             .expect("ceiling");
-        let cached = test.app.keys().ceiling_of(&detail_id(&test, "alice").await);
+        let cached = test
+            .app
+            .credentials()
+            .user(&detail_id(&test, "alice").await)
+            .await
+            .unwrap()
+            .map(|user| user.ceiling.clone())
+            .unwrap_or_default();
         let (admin, _) = put("main", "admin").await;
         let (bogus, _) = put("main", "owner").await;
         let (unknown_catalog, _) = put("nowhere", "read").await;
@@ -2578,7 +2585,15 @@ mod tests {
         // The legacy insert bumps no generation, so the admin key is created
         // after it: its create bumps, and its poll loads both.
         let root = every_catalog_admin(&test).await;
-        assert_eq!(test.app.keys().find(&legacy).expect("cached").user, None);
+        assert_eq!(
+            test.app
+                .find_key(&legacy)
+                .await
+                .unwrap()
+                .expect("cached")
+                .user,
+            None
+        );
 
         let (status, _) = send(
             &test,
@@ -2593,8 +2608,9 @@ mod tests {
         assert_eq!(status.as_u16(), 200);
         assert_eq!(
             test.app
-                .keys()
-                .find(&legacy)
+                .find_key(&legacy)
+                .await
+                .unwrap()
                 .expect("cached")
                 .user
                 .as_deref(),

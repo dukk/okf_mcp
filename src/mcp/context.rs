@@ -2,8 +2,7 @@
 //! catalogs, one view of the catalog map, and the changeset a handle names
 //! ([`Pinned`]).
 
-use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use axum::http::request::Parts;
@@ -18,6 +17,7 @@ use crate::labels::directory::Labels;
 use crate::overlay::View;
 use crate::selection::{connection_catalogs, in_scope, resolve, Selection, Sources};
 use crate::store::audit::{AccessKind, AccessRecord, AuditActor, Source};
+use crate::store::catalogs::CatalogRow;
 use crate::store::changesets::{self, ChangesetRow, ChangesetState};
 use crate::store::keys::Access;
 
@@ -201,13 +201,13 @@ impl ToolContext {
         &self.principal
     }
 
-    /// The label directory, as of the key cache's last reload.
+    /// The label directory, as of its last reload.
     ///
     /// # Returns
     /// The shared directory (a pointer copy).
     #[tracing::instrument(level = "trace", skip_all)]
     pub fn labels(&self) -> Arc<Labels> {
-        self.app.keys().labels()
+        self.app.labels()
     }
 
     /// A catalog's label for a tool output.
@@ -314,11 +314,156 @@ impl ToolContext {
             server_default: self.app.config().default_catalog.as_deref(),
             now: self.app.clock().now(),
         };
+        let rows = self.candidate_rows(&sources).await?;
         // The closure borrows `self.catalogs`, so `resolve` checks names
-        // against the same map `states` then reads.
+        // against the same map `states` then reads, and the closed checks
+        // against the rows read now.
         resolve(&self.principal, sources, |name| {
-            self.catalogs.contains_key(name)
+            if self.catalogs.contains_key(name) {
+                // `as_ref` turns the `&Arc<CatalogRow>` into `&CatalogRow`.
+                rows.get(name).map(AsRef::as_ref)
+            } else {
+                None
+            }
         })
+    }
+
+    /// The directory rows of every catalog a selection from `sources` can
+    /// name and the key reaches: a handful, each from the directory's cache
+    /// when it is there.
+    ///
+    /// # Errors
+    /// [`OkfError::Database`] when a row's read fails.
+    #[tracing::instrument(level = "trace", skip_all)]
+    async fn candidate_rows(
+        &self,
+        sources: &Sources<'_>,
+    ) -> Result<HashMap<String, Arc<CatalogRow>>, OkfError> {
+        // `chain` joins the sources into one sequence of names, like
+        // `itertools.chain` in Python.
+        // Collected before the first `.await`: a lazy iterator held across
+        // one would have to be `Send` for every lifetime, which this one is
+        // not.
+        let names: Vec<&str> = sources
+            .argument
+            .into_iter()
+            .chain(sources.connection)
+            .flatten()
+            .map(|name| name.as_str())
+            .chain(self.principal.default_catalog.as_deref())
+            .chain(sources.server_default)
+            .collect();
+        let mut rows = HashMap::new();
+        for name in names {
+            if rows.contains_key(name) || !self.principal.reaches(name) {
+                continue;
+            }
+            if let Some(row) = self.app.directory().resolve(name).await? {
+                rows.insert(name.to_string(), row);
+            }
+        }
+        Ok(rows)
+    }
+
+    /// The directory row of `state`'s catalog, as it is now: what every
+    /// check against that catalog's access facts reads.
+    ///
+    /// # Arguments
+    /// * `state` - a catalog from this call's map.
+    ///
+    /// # Returns
+    /// The row of the same incarnation.
+    ///
+    /// # Errors
+    /// [`OkfError::CatalogNotSelected`] when the catalog no longer exists
+    /// (deleted since the map was taken); [`OkfError::Busy`] when the name
+    /// is now another catalog (deleted and created again since): nothing
+    /// is decided for one incarnation with the facts of another, and a
+    /// retry sees the map catch up; [`OkfError::Database`].
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub async fn row(&self, state: &CatalogState) -> Result<Arc<CatalogRow>, OkfError> {
+        self.row_by_id(state.name(), state.id()).await
+    }
+
+    /// [`ToolContext::row`] for a catalog known by its name and
+    /// `catalogs.id` only.
+    ///
+    /// # Errors
+    /// As [`ToolContext::row`].
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub(crate) async fn row_by_id(
+        &self,
+        catalog: &str,
+        catalog_id: i64,
+    ) -> Result<Arc<CatalogRow>, OkfError> {
+        let Some(row) = self.app.directory().resolve(catalog).await? else {
+            return Err(OkfError::CatalogNotSelected {
+                catalog: catalog.to_string(),
+            });
+        };
+        if row.id != catalog_id {
+            return Err(OkfError::Busy {
+                reason: format!("catalog {catalog:?} is being reloaded"),
+            });
+        }
+        Ok(row)
+    }
+
+    /// [`Principal::require`] on `state`'s catalog, with its row as it is
+    /// now ([`ToolContext::row`]).
+    ///
+    /// # Arguments
+    /// * `access` - the level the operation needs.
+    /// * `state` - a catalog from this call's map.
+    ///
+    /// # Errors
+    /// As [`ToolContext::row`], then as [`Principal::require`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn require(&self, access: Access, state: &CatalogState) -> Result<(), OkfError> {
+        // Reach and level first, so a key that does not reach the catalog
+        // learns nothing from the row's lookup.
+        self.principal.require_level(access, state.name())?;
+        self.principal.require(access, &*self.row(state).await?)
+    }
+
+    /// [`Principal::require_contents`] on `state`'s catalog, with its row as
+    /// it is now ([`ToolContext::row`]).
+    ///
+    /// # Arguments
+    /// * `access` - the level the operation needs.
+    /// * `state` - a catalog from this call's map.
+    ///
+    /// # Returns
+    /// The admission.
+    ///
+    /// # Errors
+    /// As [`ToolContext::row`], then as [`Principal::require_contents`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn require_contents(
+        &self,
+        access: Access,
+        state: &CatalogState,
+    ) -> Result<Admission, OkfError> {
+        self.principal.require_level(access, state.name())?;
+        let row = self.row(state).await?;
+        self.principal
+            .require_contents(access, &row, self.app.clock().now())
+    }
+
+    /// [`Principal::require_maintenance_report`] on `state`'s catalog, with
+    /// its row as it is now ([`ToolContext::row`]).
+    ///
+    /// # Arguments
+    /// * `state` - a catalog from this call's map.
+    ///
+    /// # Errors
+    /// As [`ToolContext::row`], then as
+    /// [`Principal::require_maintenance_report`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn require_maintenance_report(&self, state: &CatalogState) -> Result<(), OkfError> {
+        self.principal.require_level(Access::Read, state.name())?;
+        self.principal
+            .require_maintenance_report(&*self.row(state).await?)
     }
 
     /// The states of the selected catalogs, in order.
@@ -395,19 +540,18 @@ impl ToolContext {
         // The selection checked the name; every caller acts on this state's
         // `catalogs.id`, so check the incarnation too (records nothing):
         // an unlock of a deleted catalog must not reach its replacement.
-        self.check_contents(&state, Access::Read)?;
+        self.check_contents(&state, Access::Read).await?;
         Ok(state)
     }
 
     /// Notes one access to `state`'s contents for the audit log: at most
     /// once per call, catalog and kind (one request, one count), and only
     /// for an admission that is recorded. The admission and the scope come
-    /// from gates that describe the incarnation this call reads (the
-    /// state's `catalogs.id`): the principal's own, else the key cache's
-    /// current ones, which `App::poll` publishes before the catalog map
-    /// that goes with them. The identities and scope are fixed now
-    /// ([`Principal::access_record`]); the write runs in the background
-    /// ([`App::note_access`]), off the request path.
+    /// from the catalog's directory row as it is now, which must describe
+    /// the incarnation this call reads (the state's `catalogs.id`). The
+    /// identities and scope are fixed now ([`Principal::access_record`]);
+    /// the write runs in the background ([`App::note_access`]), off the
+    /// request path.
     ///
     /// # Arguments
     /// * `state` - a catalog this call reaches at the level `kind` needs,
@@ -415,17 +559,19 @@ impl ToolContext {
     /// * `kind` - what the call does with its contents.
     ///
     /// # Errors
-    /// The refusal of the gates that describe the incarnation read (an
-    /// unlock of a deleted catalog does not open its replacement); or
-    /// [`OkfError::Busy`] for an admin credential, or one admitted under an
-    /// unlock, when no gates know the incarnation read (the catalog was
-    /// deleted and created again, or created, while the cache and the map
-    /// were being reloaded): its access may be recorded, and is neither
-    /// recorded under the wrong catalog or team nor left out. A retry sees
-    /// a settled cache. See [`ToolContext::admission_to`].
+    /// As [`ToolContext::admission_to`]: the refusal of the row that
+    /// describes the incarnation read (an unlock of a deleted catalog does
+    /// not open its replacement), or [`OkfError::Busy`] when the name is
+    /// now another catalog than the one this call's map holds: its access
+    /// is neither recorded under the wrong catalog or team nor left out. A
+    /// retry sees the map catch up.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn admit(&self, state: &CatalogState, kind: AccessKind) -> Result<(), OkfError> {
-        if let Some(admitted) = self.admission_of(state, kind)? {
+    pub(crate) async fn admit(
+        &self,
+        state: &CatalogState,
+        kind: AccessKind,
+    ) -> Result<(), OkfError> {
+        if let Some(admitted) = self.admission_of(state, kind).await? {
             self.note(admitted, kind);
         }
         Ok(())
@@ -441,19 +587,17 @@ impl ToolContext {
     /// * `kind` - what the call does with their contents.
     ///
     /// # Errors
-    /// [`OkfError::Busy`] as `ToolContext::admit`, for any of them.
+    /// As `ToolContext::admit`, for any of them.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn admit_all(
+    pub(crate) async fn admit_all(
         &self,
         states: &[Arc<CatalogState>],
         kind: AccessKind,
     ) -> Result<(), OkfError> {
-        // `collect` into a `Result` stops at the first error, like a loop
-        // that returns early.
-        let admitted = states
-            .iter()
-            .map(|state| self.admission_of(state, kind))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut admitted = Vec::with_capacity(states.len());
+        for state in states {
+            admitted.push(self.admission_of(state, kind).await?);
+        }
         // `flatten` skips the `None`s (reads that record nothing).
         for admitted in admitted.into_iter().flatten() {
             self.note(admitted, kind);
@@ -468,7 +612,7 @@ impl ToolContext {
     /// # Errors
     /// As `ToolContext::admit`.
     #[tracing::instrument(level = "trace", skip_all)]
-    fn admission_of(
+    async fn admission_of(
         &self,
         state: &CatalogState,
         kind: AccessKind,
@@ -477,26 +621,23 @@ impl ToolContext {
             AccessKind::Write => Access::Write,
             AccessKind::Read | AccessKind::Export => Access::Read,
         };
-        let Some(bound) = self.admission_to(state, access)? else {
-            return Ok(None);
-        };
+        let bound = self.admission_to(state, access).await?;
         if !bound.admission.is_recorded() {
             return Ok(None);
         }
         let record =
-            bound
-                .principal
+            self.principal
                 .access_record(&self.requester, state.name(), bound.scope, bound.now);
         Ok(Some((record, bound.admission)))
     }
 
     /// Checks that this call may reach `state`'s contents for `access`,
-    /// decided by gates that describe that very incarnation
+    /// decided by the directory row of that very incarnation
     /// ([`ToolContext::admission_to`]): for a path that reads or writes by
     /// `state.id()` without admitting (a changeset list, opening a
     /// changeset). Name-based checks (the selection, `require_contents`)
-    /// alone would let an old principal's unlock of a deleted catalog
-    /// reach its replacement.
+    /// alone would let an unlock of a deleted catalog reach its
+    /// replacement.
     ///
     /// # Arguments
     /// * `state` - a catalog from this call's map.
@@ -505,17 +646,17 @@ impl ToolContext {
     /// # Errors
     /// As [`ToolContext::admission_to`].
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn check_contents(
+    pub(crate) async fn check_contents(
         &self,
         state: &CatalogState,
         access: Access,
     ) -> Result<(), OkfError> {
-        self.admission_to(state, access).map(drop)
+        self.admission_to(state, access).await.map(drop)
     }
 
     /// [`ToolContext::check_contents`] for a catalog a query named by its
     /// name and `catalogs.id` (a changeset row), with no state loaded: the
-    /// same gates, bound to that incarnation.
+    /// same check, bound to that incarnation.
     ///
     /// # Arguments
     /// * `catalog` - the catalog's name.
@@ -525,46 +666,42 @@ impl ToolContext {
     /// # Errors
     /// As [`ToolContext::admission_to`].
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn check_contents_by_id(
+    pub(crate) async fn check_contents_by_id(
         &self,
         catalog: &str,
         catalog_id: i64,
         access: Access,
     ) -> Result<(), OkfError> {
-        self.admission_by_id(catalog, catalog_id, access).map(drop)
+        self.admission_by_id(catalog, catalog_id, access)
+            .await
+            .map(drop)
     }
 
-    /// The admission of this call's principal to `state` for `access`, from
-    /// gates that describe the incarnation this call reads (the state's
-    /// `catalogs.id`): the principal's own, else the key cache's current
-    /// ones, which `App::poll` publishes before the catalog map that goes
-    /// with them. A refusal from those gates is returned, never turned into
-    /// an unrecorded success: a principal admitted by name through an
-    /// unlock of a deleted catalog is refused its replacement here.
+    /// The admission of this call's principal to `state` for `access`,
+    /// decided by the catalog's directory row as it is now, which must be
+    /// the incarnation this call reads (the state's `catalogs.id`;
+    /// [`ToolContext::row`]). The principal's facts were assembled for this
+    /// request and match catalogs by id, so a refusal from them stands and
+    /// is returned, never turned into an unrecorded success.
     ///
     /// # Arguments
     /// * `state` - a catalog from this call's map.
     /// * `access` - what the call does with it.
     ///
     /// # Returns
-    /// The admission with the gates and scope it was decided by, or `None`
-    /// when no gates know the incarnation and nothing about the access
-    /// would be recorded (a non-admin, not unlocked: let through
-    /// unrecorded, as before M14).
+    /// The admission with the scope it was decided for.
     ///
     /// # Errors
-    /// As [`Principal::admission`] from the gates that know the
-    /// incarnation; [`OkfError::Busy`] when none do and the access could be
-    /// recorded (an admin credential, or one admitted under an unlock): its
-    /// access is neither recorded under the wrong catalog nor let through.
-    /// A retry sees a settled cache.
+    /// As [`ToolContext::row`]: [`OkfError::Busy`] when the name is now
+    /// another catalog, [`OkfError::CatalogNotSelected`] when it is gone;
+    /// then as [`Principal::admission`].
     #[tracing::instrument(level = "trace", skip_all)]
-    fn admission_to(
+    async fn admission_to(
         &self,
         state: &CatalogState,
         access: Access,
-    ) -> Result<Option<BoundAdmission<'_>>, OkfError> {
-        self.admission_by_id(state.name(), state.id(), access)
+    ) -> Result<BoundAdmission, OkfError> {
+        self.admission_by_id(state.name(), state.id(), access).await
     }
 
     /// [`ToolContext::admission_to`] for a catalog known by its name and
@@ -573,42 +710,21 @@ impl ToolContext {
     /// # Errors
     /// As [`ToolContext::admission_to`].
     #[tracing::instrument(level = "trace", skip_all)]
-    fn admission_by_id(
+    async fn admission_by_id(
         &self,
         catalog: &str,
         catalog_id: i64,
         access: Access,
-    ) -> Result<Option<BoundAdmission<'_>>, OkfError> {
+    ) -> Result<BoundAdmission, OkfError> {
+        let row = self.row_by_id(catalog, catalog_id).await?;
         let now = self.app.clock().now();
-        // The principal as it is when its gates know this incarnation, else
-        // a copy carrying the cache's current gates (`Cow` holds either,
-        // like a value that is "maybe a reference").
-        let principal = match self.principal.scope_of(catalog, catalog_id) {
-            Some(_) => Cow::Borrowed(&*self.principal),
-            None => Cow::Owned(Principal {
-                gates: self.app.keys().gates(),
-                ..(*self.principal).clone()
-            }),
-        };
-        if let Some(scope) = principal.scope_of(catalog, catalog_id) {
-            // `?`: these gates describe what is read, so their refusal stands.
-            let admission = principal.admission(catalog, access, now)?;
-            return Ok(Some(BoundAdmission {
-                principal,
-                admission,
-                scope,
-                now,
-            }));
-        }
-        // No gates know this incarnation: only the principal's own (older)
-        // view of the name is left. Its refusal stands too.
-        let stale = self.principal.admission(catalog, access, now)?;
-        if self.principal.access == Access::Admin || stale.is_recorded() {
-            return Err(OkfError::Busy {
-                reason: format!("catalog {catalog:?} is being reloaded"),
-            });
-        }
-        Ok(None)
+        // `?`: the row describes what is read, so its refusal stands.
+        let admission = self.principal.admission(&row, access, now)?;
+        Ok(BoundAdmission {
+            admission,
+            scope: CatalogScope::of(&row),
+            now,
+        })
     }
 
     /// Notes an admitted access, once per call, catalog and kind.
@@ -676,7 +792,7 @@ impl ToolContext {
         state: &CatalogState,
         pinned: Option<&Pinned>,
     ) -> Result<View, OkfError> {
-        self.admit(state, AccessKind::Read)?;
+        self.admit(state, AccessKind::Read).await?;
         // `filter` keeps the pinned changeset only if it is in this catalog.
         match pinned.filter(|pinned| pinned.state.id() == state.id()) {
             None => Ok(View::Published(state.current())),
@@ -766,7 +882,7 @@ impl ToolContext {
         } else {
             AccessKind::Read
         };
-        self.admit(&pinned.state, kind)?;
+        self.admit(&pinned.state, kind).await?;
         Ok(pinned)
     }
 
@@ -805,9 +921,8 @@ impl ToolContext {
             return Err(unknown());
         }
         // The whole content check, the unlock last (M14 Task 9b): it refuses
-        // here, before `changeset` admits, because `admit` ignores refusals.
-        self.principal
-            .require_contents(access, state.name(), self.app.clock().now())?;
+        // here, before `changeset` admits.
+        self.require_contents(access, &state).await?;
         // Only a discarded changeset gets the 24-hour hint: the prune is one
         // way to be discarded, and a published one was never pruned.
         let hint = match row.state {
@@ -839,13 +954,12 @@ impl ToolContext {
     }
 }
 
-/// An admission and the gates that decided it ([`ToolContext::admission_to`]).
-struct BoundAdmission<'a> {
-    /// The principal with the gates that know the incarnation.
-    principal: Cow<'a, Principal>,
+/// An admission and the incarnation it was decided for
+/// ([`ToolContext::admission_to`]).
+struct BoundAdmission {
     /// How it is let in.
     admission: Admission,
-    /// The incarnation, as those gates hold it.
+    /// The incarnation, from its directory row.
     scope: CatalogScope,
     /// When it was decided (server clock).
     now: DateTime<Utc>,
@@ -1163,8 +1277,8 @@ mod tests {
         let stranger = stored_secret(&test, "stranger", Access::Read, &["work"], false).await;
         let root = stored_secret(&test, "root", Access::Admin, &[], false).await;
         suspend_catalogs(&test, &["pg"]).await;
-        let on = |secret: &str, connection: Option<&[&str]>| {
-            context(&test, cached_principal(&test, secret), connection)
+        let on = async |secret: &str, connection: Option<&[&str]>| {
+            context(&test, cached_principal(&test, secret).await, connection)
         };
         // Each path's answer for `catalog` (`None`: the connection's list),
         // as the selected names or the error's kind.
@@ -1239,53 +1353,58 @@ mod tests {
         };
 
         expect(
-            &paths(&on(&member, None), Some("pg")).await,
+            &paths(&on(&member, None).await, Some("pg")).await,
             "Suspended",
             "named",
         );
         expect(
-            &paths(&on(&member, Some(&["pg", "work"])), Some("pg")).await,
+            &paths(&on(&member, Some(&["pg", "work"])).await, Some("pg")).await,
             "Suspended",
             "named on a connection listing it",
         );
         expect(
-            &paths(&on(&member, Some(&["pg", "work"])), None).await,
+            &paths(&on(&member, Some(&["pg", "work"])).await, None).await,
             "work",
             "a mixed connection list keeps the active catalog",
         );
         expect(
-            &paths(&on(&member, Some(&["pg"])), None).await,
+            &paths(&on(&member, Some(&["pg"])).await, None).await,
             "Suspended",
             "a connection list of only suspended catalogs",
         );
         expect(
-            &paths(&on(&stranger, None), Some("pg")).await,
+            &paths(&on(&stranger, None).await, Some("pg")).await,
             "CatalogNotSelected",
             "a key that does not reach pg never learns it is suspended",
         );
         expect(
-            &paths(&on(&root, None), Some("pg")).await,
+            &paths(&on(&root, None).await, Some("pg")).await,
             "pg",
             "an admin, named",
         );
         expect(
-            &paths(&on(&root, Some(&["pg", "work"])), None).await,
+            &paths(&on(&root, Some(&["pg", "work"])).await, None).await,
             "pg,work",
             "an admin keeps the whole connection list",
         );
         assert!(on(&member, Some(&["pg", "work"]))
+            .await
             .check_connection()
             .await
             .is_ok());
         assert!(matches!(
-            on(&member, Some(&["pg"])).check_connection().await,
+            on(&member, Some(&["pg"])).await.check_connection().await,
             Err(OkfError::Suspended { .. })
         ));
         assert!(matches!(
-            on(&stranger, Some(&["pg"])).check_connection().await,
+            on(&stranger, Some(&["pg"])).await.check_connection().await,
             Err(OkfError::CatalogNotSelected { .. })
         ));
-        assert!(on(&root, Some(&["pg"])).check_connection().await.is_ok());
+        assert!(on(&root, Some(&["pg"]))
+            .await
+            .check_connection()
+            .await
+            .is_ok());
     }
 
     /// M14 Task 7a: a tool call's audit actor carries the request's
