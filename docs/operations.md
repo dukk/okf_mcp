@@ -3752,8 +3752,13 @@ work side by side on the same `/mcp` URL.
 
 A person connecting a client signs in on the consent page with their
 account: `/oauth/authorize` sends them to `/signin` first, after checking the
-client and its redirect URI. They tick catalogs, choose `read` or `write` for
-each within their ceiling, pick a default and approve. The grant is
+client and its redirect URI. Under **Advanced Options** they tick catalogs,
+choose `read` or `write` for each within their ceiling, pick a default and
+approve. With several catalogs to offer, Advanced Options starts open and
+nothing is preselected. With exactly one it starts closed, with that catalog
+ticked, at `write` if their ceiling allows it (else `read`), and as the
+default; the page says so above the form, so approving as shown grants
+exactly that. Opening Advanced Options changes it. The grant is
 **self-issued**: it belongs to them, its actor is the client's name, and it
 is capped at their ceiling and lowered when the ceiling is
 ([Signing in and self-service](#signing-in-and-self-service)). The approval
