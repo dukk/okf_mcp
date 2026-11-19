@@ -269,11 +269,11 @@ impl ToolContext {
     /// [`OkfError::Suspended`] when every listed catalog is suspended (and
     /// the key is not admin), as [`resolve`] refuses such a list.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn check_connection(&self) -> Result<(), OkfError> {
+    pub async fn check_connection(&self) -> Result<(), OkfError> {
         match self.connection.as_deref() {
             // With a list, `select(None)` resolves to exactly that list.
             // `map(drop)` discards the selection, keeping only `Ok(())`.
-            Some(list) if !list.is_empty() => self.select(None).map(drop),
+            Some(list) if !list.is_empty() => self.select(None).await.map(drop),
             _ => Ok(()),
         }
     }
@@ -292,7 +292,7 @@ impl ToolContext {
     /// # Errors
     /// As [`resolve`].
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn select(&self, argument: Option<&[String]>) -> Result<Selection, OkfError> {
+    pub async fn select(&self, argument: Option<&[String]>) -> Result<Selection, OkfError> {
         let sources = Sources {
             argument,
             connection: self.connection.as_deref(),
@@ -317,13 +317,16 @@ impl ToolContext {
     /// # Errors
     /// As [`ToolContext::select`].
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn states(&self, argument: Option<&[String]>) -> Result<Vec<Arc<CatalogState>>, OkfError> {
-        let selection = self.select(argument)?;
-        Ok(selection
-            .catalogs()
-            .iter()
-            .map(|name| self.state(name))
-            .collect())
+    pub async fn states(
+        &self,
+        argument: Option<&[String]>,
+    ) -> Result<Vec<Arc<CatalogState>>, OkfError> {
+        let selection = self.select(argument).await?;
+        let mut states = Vec::with_capacity(selection.catalogs().len());
+        for name in selection.catalogs() {
+            states.push(self.state(name).await?);
+        }
+        Ok(states)
     }
 
     /// The read set of a tool with a single `catalog` argument: that catalog,
@@ -338,12 +341,16 @@ impl ToolContext {
     /// # Errors
     /// As [`ToolContext::select`].
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn read_set(&self, catalog: Option<&str>) -> Result<Vec<Arc<CatalogState>>, OkfError> {
+    pub async fn read_set(
+        &self,
+        catalog: Option<&str>,
+    ) -> Result<Vec<Arc<CatalogState>>, OkfError> {
         // `select` takes a slice of `String`s, so the name is copied into one
         // `String` (a small allocation); `std::slice::from_ref` then views it
         // as a one-element slice without also allocating a `Vec`.
         let argument = catalog.map(str::to_string);
         self.states(argument.as_ref().map(std::slice::from_ref))
+            .await
     }
 
     /// The one catalog a call acts on: `catalog`, else the first selected.
@@ -363,11 +370,13 @@ impl ToolContext {
     /// As [`ToolContext::select`]; then as `ToolContext::check_contents`
     /// for the state's incarnation.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn one(&self, catalog: Option<&str>) -> Result<Arc<CatalogState>, OkfError> {
+    pub async fn one(&self, catalog: Option<&str>) -> Result<Arc<CatalogState>, OkfError> {
         let argument = catalog.map(str::to_string);
-        let selection = self.select(argument.as_ref().map(std::slice::from_ref))?;
+        let selection = self
+            .select(argument.as_ref().map(std::slice::from_ref))
+            .await?;
         // `write_target` is the first selected catalog.
-        let state = self.state(selection.write_target());
+        let state = self.state(selection.write_target()).await?;
         // The selection checked the name; every caller acts on this state's
         // `catalogs.id`, so check the incarnation too (records nothing):
         // an unlock of a deleted catalog must not reach its replacement.
@@ -658,14 +667,14 @@ impl ToolContext {
     /// changeset, the connection's selection); as [`require_selected`] for an
     /// explicit `catalog` that is not the changeset's.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn report_catalog(
+    pub async fn report_catalog(
         &self,
         catalog: Option<&str>,
         pinned: Option<&Pinned>,
     ) -> Result<Arc<CatalogState>, OkfError> {
         // `or_else` runs the closure only when `catalog` is `None`.
         let name = catalog.or_else(|| pinned.map(|pinned| pinned.state.name()));
-        let state = self.one(name)?;
+        let state = self.one(name).await?;
         require_selected(pinned, std::slice::from_ref(&state))?;
         Ok(state)
     }
@@ -719,7 +728,7 @@ impl ToolContext {
     /// admission.
     #[tracing::instrument(level = "debug", skip_all)]
     async fn resolve_changeset(&self, handle: &str, access: Access) -> Result<Pinned, OkfError> {
-        self.check_connection()?;
+        self.check_connection().await?;
         // A closure, so each refusal below builds its own error value.
         let unknown = || OkfError::UnknownChangeset {
             changeset: handle.to_string(),
@@ -765,13 +774,18 @@ impl ToolContext {
     }
 
     /// The state of a catalog `select` returned.
+    ///
+    /// # Errors
+    /// [`OkfError::CatalogNotSelected`] for a name not in this call's map
+    /// (never a panic: a later task resolves it from a directory that can miss).
     #[tracing::instrument(level = "trace", skip_all)]
-    fn state(&self, name: &str) -> Arc<CatalogState> {
-        let state = self
-            .catalogs
+    async fn state(&self, name: &str) -> Result<Arc<CatalogState>, OkfError> {
+        self.catalogs
             .get(name)
-            .expect("select only returns names in this call's map");
-        Arc::clone(state)
+            .map(Arc::clone)
+            .ok_or_else(|| OkfError::CatalogNotSelected {
+                catalog: name.to_string(),
+            })
     }
 }
 
@@ -846,13 +860,13 @@ mod tests {
         let on_default = context(&test, principal(&["pg", "home"], None), None);
         let argument = ["pg".to_string()];
 
-        let states = on_connection.states(None).unwrap();
-        let chosen = on_connection.states(Some(&argument)).unwrap();
-        let read_set = on_connection.read_set(Some("pg")).unwrap();
-        let escaped = on_connection.read_set(Some("home")).unwrap_err();
-        let first = on_connection.one(None).unwrap();
-        let fallback = on_default.read_set(None).unwrap();
-        let unreachable = on_default.one(Some("work")).unwrap_err();
+        let states = on_connection.states(None).await.unwrap();
+        let chosen = on_connection.states(Some(&argument)).await.unwrap();
+        let read_set = on_connection.read_set(Some("pg")).await.unwrap();
+        let escaped = on_connection.read_set(Some("home")).await.unwrap_err();
+        let first = on_connection.one(None).await.unwrap();
+        let fallback = on_default.read_set(None).await.unwrap();
+        let unreachable = on_default.one(Some("work")).await.unwrap_err();
 
         assert_eq!(names(&states), ["work", "pg"]);
         assert_eq!(names(&chosen), ["pg"]);
@@ -1135,21 +1149,29 @@ mod tests {
                 (
                     "select",
                     ctx.select(argument.as_deref())
+                        .await
                         .map_or_else(kind, |selection| selection.catalogs().join(",")),
                 ),
                 (
                     "states",
-                    ctx.states(argument.as_deref()).map_or_else(kind, named),
+                    ctx.states(argument.as_deref())
+                        .await
+                        .map_or_else(kind, named),
                 ),
-                ("read_set", ctx.read_set(catalog).map_or_else(kind, named)),
+                (
+                    "read_set",
+                    ctx.read_set(catalog).await.map_or_else(kind, named),
+                ),
                 (
                     "one",
                     ctx.one(catalog)
+                        .await
                         .map_or_else(kind, |state| state.name().to_string()),
                 ),
                 (
                     "report_catalog",
                     ctx.report_catalog(catalog, None)
+                        .await
                         .map_or_else(kind, |state| state.name().to_string()),
                 ),
                 ("search", searched.unwrap_or_else(kind)),
@@ -1203,16 +1225,17 @@ mod tests {
         );
         assert!(on(&member, Some(&["pg", "work"]))
             .check_connection()
+            .await
             .is_ok());
         assert!(matches!(
-            on(&member, Some(&["pg"])).check_connection(),
+            on(&member, Some(&["pg"])).check_connection().await,
             Err(OkfError::Suspended { .. })
         ));
         assert!(matches!(
-            on(&stranger, Some(&["pg"])).check_connection(),
+            on(&stranger, Some(&["pg"])).check_connection().await,
             Err(OkfError::CatalogNotSelected { .. })
         ));
-        assert!(on(&root, Some(&["pg"])).check_connection().is_ok());
+        assert!(on(&root, Some(&["pg"])).check_connection().await.is_ok());
     }
 
     /// M14 Task 7a: a tool call's audit actor carries the request's

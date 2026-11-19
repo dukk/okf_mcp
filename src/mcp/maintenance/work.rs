@@ -114,7 +114,7 @@ pub(crate) async fn maintenance_claim(
     ctx: &ToolContext,
     params: MaintenanceClaimParams,
 ) -> Result<MaintenanceResult<ClaimResult>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
+    let state = ctx.one(Some(&params.catalog)).await?;
     ctx.principal().require_maintenance_report(state.name())?;
     let mut result = runs::claim(
         ctx.app().pool(),
@@ -137,7 +137,7 @@ pub(crate) async fn maintenance_renew(
     ctx: &ToolContext,
     params: MaintenanceRenewParams,
 ) -> Result<MaintenanceResult<Lease>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
+    let state = ctx.one(Some(&params.catalog)).await?;
     ctx.principal().require_maintenance_report(state.name())?;
     let mut result = runs::renew(
         ctx.app().pool(),
@@ -159,7 +159,7 @@ pub(crate) async fn maintenance_read_revision(
     ctx: &ToolContext,
     params: MaintenanceReadRevisionParams,
 ) -> Result<MaintenanceResult<evidence::PinnedConcept>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
+    let state = ctx.one(Some(&params.catalog)).await?;
     // Refused before `admit` below, which ignores refusals.
     ctx.principal()
         .require_contents(Access::Read, state.name(), ctx.app().clock().now())?;
@@ -183,7 +183,7 @@ pub(crate) async fn maintenance_submit(
     ctx: &ToolContext,
     params: MaintenanceSubmitParams,
 ) -> Result<MaintenanceResult<Receipt>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
+    let state = ctx.one(Some(&params.catalog)).await?;
     ctx.principal().require_maintenance_report(state.name())?;
     let result = reports::submit(
         ctx.app().pool(),
@@ -204,7 +204,7 @@ pub(crate) async fn maintenance_close(
     ctx: &ToolContext,
     params: MaintenanceCloseParams,
 ) -> Result<MaintenanceResult<runs::RunSummary>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
+    let state = ctx.one(Some(&params.catalog)).await?;
     // Ordinary Write is an operator override, never a client-supplied option.
     // It acts on the catalog as a write, so it needs the unlock a write
     // would (M14 Task 9b); without one, only the caller's own run closes.
