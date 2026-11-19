@@ -1205,8 +1205,11 @@ mod tests {
         ws.write_atomic("index.md", "# Root\n\n# Sections\n\n* [D](d/) - d\n")
             .unwrap();
         ws.write_atomic("log.md", "# Log\n").unwrap();
-        ws.write_atomic("d/index.md", &format!("# D\n\nAbout d.\n\n# Sections\n\n{sections}\n"))
-            .unwrap();
+        ws.write_atomic(
+            "d/index.md",
+            &format!("# D\n\nAbout d.\n\n# Sections\n\n{sections}\n"),
+        )
+        .unwrap();
         for folder in folders {
             ws.write_atomic(&format!("d/{folder}/index.md"), "# N\n\n* [C](c.md) - c\n")
                 .unwrap();
@@ -1298,8 +1301,11 @@ mod tests {
     fn repair_indexes_rewrites_a_raw_folder_bullet_in_the_root_index() {
         // A top-level folder: its listing sits in the root `index.md`.
         let ws = MemWorkspace::default();
-        ws.write_atomic("index.md", "# Root\n\n# Sections\n\n* [My docs](my docs/) - mine\n")
-            .unwrap();
+        ws.write_atomic(
+            "index.md",
+            "# Root\n\n# Sections\n\n* [My docs](my docs/) - mine\n",
+        )
+        .unwrap();
         ws.write_atomic("log.md", "# Log\n").unwrap();
         ws.write_atomic("my docs/index.md", "# My docs\n\n* [C](c.md) - c\n")
             .unwrap();
