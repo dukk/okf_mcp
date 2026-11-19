@@ -453,7 +453,37 @@ where
             return Ok(entry.value);
         }
         self.count(Lookup::Stale);
+        self.revalidate(key, entry, load, check).await
+    }
+
+    /// Revalidates `seen`, a stale entry read earlier. The flight is
+    /// registered first and the entry read again: an invalidation that ran
+    /// between the first read and the registration removed the entry and
+    /// bumped no epoch, so without the second read `check` could keep the
+    /// invalidated value. If the entry is gone, load it.
+    #[tracing::instrument(level = "trace", skip_all)]
+    async fn revalidate<F, Fut, C, CFut>(
+        &self,
+        key: K,
+        seen: Entry<V>,
+        load: F,
+        check: C,
+    ) -> Result<V, OkfError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<V, OkfError>>,
+        C: FnOnce(V) -> CFut,
+        CFut: Future<Output = Result<Option<V>, OkfError>>,
+    {
         let flight = self.begin(&key);
+        let Some(entry) = self.cache.get(&key).await else {
+            drop(flight);
+            return self.load_once(key, load).await;
+        };
+        if self.is_fresh(&entry) {
+            return Ok(entry.value);
+        }
+        debug_assert!(entry.stamp >= seen.stamp, "an entry only gets fresher");
         let stamp = self.stale_before.load(Ordering::SeqCst);
         let started = Instant::now();
         let checked = check(entry.value.clone()).await;
@@ -854,6 +884,29 @@ mod tests {
             2
         );
         assert_eq!(cache.peek(&1).await, Some(2), "a replacement is kept");
+    }
+
+    #[tokio::test]
+    async fn an_entry_invalidated_before_revalidation_registers_is_not_kept() {
+        let cache = Bounded::<i64, i64>::new(CacheName::Credential, Limit::Entries(10), TTL);
+        cache.get_or_load(1, || async { Ok(1) }).await.unwrap();
+        cache.mark_all_stale();
+        // The stale entry is read, then an invalidation lands before the
+        // revalidation registers its flight (no epoch to bump yet).
+        let seen = cache.cache.get(&1).await.expect("cached");
+        cache.invalidate(&1).await;
+        let checks = AtomicUsize::new(0);
+        let keep = |_: i64| async {
+            checks.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        };
+        let served = cache
+            .revalidate(1, seen, || async { Ok(2) }, keep)
+            .await
+            .unwrap();
+        assert_eq!(served, 2, "the invalidated value is replaced by a load");
+        assert_eq!(checks.load(Ordering::SeqCst), 0, "the check never saw it");
+        assert_eq!(cache.peek(&1).await, Some(2));
     }
 
     #[tokio::test]

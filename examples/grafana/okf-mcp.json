@@ -3364,7 +3364,7 @@
     {
       "type": "timeseries",
       "title": "Cache lookups by cache and result",
-      "description": "Failed Redis calls per interval, by operation (only with [redis]).",
+      "description": "Bounded cache lookups per second, by cache and result (hit, miss, or a stale entry that was revalidated or reloaded).",
       "targets": [
         {
           "datasource": {
@@ -3426,7 +3426,7 @@
     {
       "type": "timeseries",
       "title": "Cache evictions by cache and cause",
-      "description": "Failed Redis calls per interval, by operation (only with [redis]).",
+      "description": "Entries removed from each bounded cache per interval, by cause: size (cache full), ttl (expired) or invalidated.",
       "targets": [
         {
           "datasource": {
@@ -3488,7 +3488,7 @@
     {
       "type": "timeseries",
       "title": "Cache entries",
-      "description": "Failed Redis calls per interval, by operation (only with [redis]).",
+      "description": "Entries currently held by each bounded cache.",
       "targets": [
         {
           "datasource": {
@@ -3550,7 +3550,7 @@
     {
       "type": "timeseries",
       "title": "Cache bytes",
-      "description": "Failed Redis calls per interval, by operation (only with [redis]).",
+      "description": "Estimated bytes held by each cache that is limited by bytes (caches limited by entry count report nothing).",
       "targets": [
         {
           "datasource": {
@@ -3566,7 +3566,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "bytes",
           "custom": {
             "drawStyle": "bars",
             "lineWidth": 1,
@@ -3612,7 +3612,7 @@
     {
       "type": "heatmap",
       "title": "Cache load duration",
-      "description": "Archive export and import durations.",
+      "description": "Bounded cache load durations (the loader for a miss or a stale entry), across all caches.",
       "targets": [
         {
           "datasource": {
@@ -3701,7 +3701,7 @@
     {
       "type": "timeseries",
       "title": "Cache load duration quantiles",
-      "description": "p50, p95 and p99 archive duration, by direction.",
+      "description": "p50, p95 and p99 bounded cache load duration, by cache.",
       "targets": [
         {
           "datasource": {
