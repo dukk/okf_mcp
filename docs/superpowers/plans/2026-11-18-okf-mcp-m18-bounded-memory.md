@@ -1364,7 +1364,6 @@ Found by the review bot on milestone PR #747: for an every-catalog admin, `GET /
 - **Tests.** `labels_tests::labels_scope` (the admin's page holds its own user and teams), `labels_named_answers_an_admin_any_and_others_only_their_own`, `labels_named_refuses_a_typo_and_too_many_slugs`, `an_admin_labels_page_reads_a_bounded_number_of_rows` (50,000 users and personal teams seeded by SQL; the cold admin page returns under 100 rows, a full named request under 250, counted with `rows_returned::counting`); browser journeys `keys::the_keys_table_reads_the_labels_of_the_users_it_shows_only`, `keys::a_failed_labels_read_still_draws_the_keys_by_slug`, `unlocks::an_admin_reads_another_staff_members_unlock_by_label`, and the existing picker and keys label journeys.
 - **Not changed.** `GET /users` and `GET /teams` (whole admin listings, with labels) and the shell following every `/whoami` and `/labels` page are as before: each page is now bounded, but a refresh still reads every page.
 
-||||||| 0052d03
 ## Self-review
 
 - **Spec coverage.**
