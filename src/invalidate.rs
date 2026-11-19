@@ -247,6 +247,36 @@ async fn connect(pool: &PgPool) -> Result<PgListener, OkfError> {
     )
 )]
 pub async fn listen(app: Arc<App>, shutdown: CancellationToken) {
+    listen_signalling(app, shutdown, None).await;
+}
+
+/// [`listen`], telling `caught_up` (if given) each time the listener has
+/// finished a full catch-up (`App::apply_reconnect`): after connecting,
+/// after a lost connection, and after an unreadable payload. A test waits
+/// on it to know the subscription is live before it sends a message.
+///
+/// # Arguments
+/// * `app` - the replica's shared state.
+/// * `shutdown` - cancelled to stop.
+/// * `caught_up` - notified after each catch-up; `Notify` keeps one permit,
+///   so a signal sent before the test waits is not lost.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "long-lived loop; each message gets its own root span"
+    )
+)]
+async fn listen_signalling(
+    app: Arc<App>,
+    shutdown: CancellationToken,
+    caught_up: Option<Arc<tokio::sync::Notify>>,
+) {
+    let signal = || {
+        if let Some(caught_up) = &caught_up {
+            caught_up.notify_one();
+        }
+    };
     let mut backoff = Backoff::new(BACKOFF_FIRST, BACKOFF_MAX);
     loop {
         let connected = tokio::select! {
@@ -270,14 +300,23 @@ pub async fn listen(app: Arc<App>, shutdown: CancellationToken) {
         };
         // A fresh connection: anything sent while we had none is lost.
         app.apply_reconnect().await;
+        signal();
         backoff.reset();
         loop {
             tokio::select! {
                 () = shutdown.cancelled() => return,
                 received = listener.try_recv() => match received {
-                    Ok(Some(notification)) => apply_payload(&app, notification.payload()).await,
+                    Ok(Some(notification)) => {
+                        // `None`: unreadable, so `apply_payload` caught up.
+                        if apply_payload(&app, notification.payload()).await.is_none() {
+                            signal();
+                        }
+                    }
                     // Lost and already re-established by sqlx.
-                    Ok(None) => app.apply_reconnect().await,
+                    Ok(None) => {
+                        app.apply_reconnect().await;
+                        signal();
+                    }
                     // A failure sqlx could not repair: connect again.
                     Err(error) => {
                         let error = OkfError::from(error);
@@ -296,25 +335,32 @@ pub async fn listen(app: Arc<App>, shutdown: CancellationToken) {
 }
 
 /// Parses one payload and applies it; one that cannot be read is treated as
-/// a reconnect, for safety (spec "Error handling").
+/// a reconnect, for safety (spec "Error handling"). The received count and
+/// the lag are recorded after the message is applied, so the lag is the
+/// time from send until this replica's caches had the change.
 ///
 /// # Arguments
 /// * `app` - the replica's shared state.
 /// * `payload` - the `NOTIFY` payload.
+///
+/// # Returns
+/// The lag recorded, or `None` for an unreadable payload.
 #[tracing::instrument(level = "debug", skip_all)]
-async fn apply_payload(app: &App, payload: &str) {
+async fn apply_payload(app: &App, payload: &str) -> Option<Duration> {
     let metrics = Metrics::global();
     let Some(message) = Message::parse(payload) else {
         metrics.invalidation_unreadable();
         app.apply_reconnect().await;
-        return;
+        return None;
     };
     let kind = message.invalidation.kind();
-    metrics.invalidation_received(kind, message.lag(Utc::now().timestamp_millis()));
     // `parent: None`: a background root, like each poll pass.
     let span =
         tracing::info_span!(parent: None, "okf.invalidate.apply", okf.invalidation.kind = kind);
     app.apply(&message).instrument(span).await;
+    let lag = message.lag(Utc::now().timestamp_millis());
+    metrics.invalidation_received(kind, lag);
+    Some(lag)
 }
 
 #[cfg(test)]
@@ -453,31 +499,94 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn the_listener_applies_a_committed_message_to_the_caches() {
-        use crate::clock::SystemClock;
-        use crate::config::Config;
-        use crate::store::keys as key_rows;
+    /// A running listener on a fresh app with one key, caught up and
+    /// subscribed: the test waits for the listener's own catch-up signal.
+    struct Running {
+        db: crate::db::pg_support::TestDb,
+        app: Arc<App>,
+        key: String,
+        caught_up: Arc<tokio::sync::Notify>,
+        shutdown: CancellationToken,
+        task: tokio::task::JoinHandle<()>,
+    }
 
-        let db = crate::db::test_db().await;
-        let key = key_rows::insert_legacy_test_key(
-            &db.pool,
-            "reader",
-            key_rows::Access::Read,
-            "tester",
-            Utc::now(),
-        )
-        .await;
-        let app = App::load(db.pool.clone(), Config::default(), Arc::new(SystemClock))
+    impl Running {
+        async fn start() -> Self {
+            use crate::clock::SystemClock;
+            use crate::config::Config;
+            use crate::store::keys as key_rows;
+
+            let db = crate::db::test_db().await;
+            let key = key_rows::insert_legacy_test_key(
+                &db.pool,
+                "reader",
+                key_rows::Access::Read,
+                "tester",
+                Utc::now(),
+            )
+            .await;
+            let app = App::load(db.pool.clone(), Config::default(), Arc::new(SystemClock))
+                .await
+                .unwrap();
+            assert!(app.keys().find(&key).is_some());
+            let caught_up = Arc::new(tokio::sync::Notify::new());
+            let shutdown = CancellationToken::new();
+            let task = tokio::spawn(listen_signalling(
+                Arc::clone(&app),
+                shutdown.clone(),
+                Some(Arc::clone(&caught_up)),
+            ));
+            let running = Self {
+                db,
+                app,
+                key,
+                caught_up,
+                shutdown,
+                task,
+            };
+            running
+                .wait_caught_up("the first subscription and catch-up")
+                .await;
+            running
+        }
+
+        async fn wait_caught_up(&self, what: &str) {
+            timeout(WAIT, self.caught_up.notified())
+                .await
+                .unwrap_or_else(|_| panic!("timed out waiting for {what}"));
+        }
+
+        /// Revokes the key in the store, which bumps `admin_generation`
+        /// but sends nothing.
+        async fn revoke_silently(&self) {
+            use crate::store::keys as key_rows;
+            key_rows::revoke(
+                &self.db.pool,
+                "reader",
+                &crate::store::audit::AuditActor::cli(),
+                Utc::now(),
+            )
             .await
             .unwrap();
-        assert!(app.keys().find(&key).is_some());
-        let shutdown = CancellationToken::new();
-        let listener = tokio::spawn(listen(Arc::clone(&app), shutdown.clone()));
+            assert!(self.app.keys().find(&self.key).is_some());
+        }
 
-        // Revoke inside one transaction that also sends the message, as a
-        // store function will after Task 2.
-        let mut tx = db.pool.begin().await.unwrap();
+        async fn stop(self) {
+            self.shutdown.cancel();
+            timeout(WAIT, self.task)
+                .await
+                .expect("the listener stopped within the wait")
+                .unwrap();
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_listener_applies_a_notification_that_arrives_after_it_is_caught_up() {
+        let running = Running::start().await;
+
+        // The subscription is live and the initial catch-up is done, so only
+        // the notification can remove the key: revoke and send in one commit.
+        let mut tx = running.db.pool.begin().await.unwrap();
         sqlx::query("UPDATE api_keys SET revoked_at = now() WHERE id = 'reader'")
             .execute(&mut *tx)
             .await
@@ -492,20 +601,88 @@ mod tests {
         .unwrap();
         tx.commit().await.unwrap();
 
-        // The listener may still be connecting when the message is sent; its
-        // first action on connecting is a full reload, so either path ends here.
         timeout(WAIT, async {
-            while app.keys().find(&key).is_some() {
+            while running.app.keys().find(&running.key).is_some() {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
         })
         .await
-        .expect("the revoked key left the cache within the wait");
+        .expect("the notification removed the revoked key within the wait");
+        running.stop().await;
+    }
 
-        shutdown.cancel();
-        timeout(WAIT, listener)
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unreadable_payload_makes_the_listener_catch_up() {
+        let running = Running::start().await;
+        running.revoke_silently().await;
+
+        sqlx::query("SELECT pg_notify($1, 'not json')")
+            .bind(CHANNEL)
+            .execute(&running.db.pool)
             .await
-            .expect("the listener stopped within the wait")
             .unwrap();
+
+        running
+            .wait_caught_up("the catch-up after an unreadable payload")
+            .await;
+        assert!(running.app.keys().find(&running.key).is_none());
+        running.stop().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_dropped_listener_connection_makes_the_listener_catch_up() {
+        let running = Running::start().await;
+        running.revoke_silently().await;
+
+        // End the listener's backend; sqlx reconnects, and the listener
+        // catches up without any message.
+        let ended: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) \
+             FROM pg_stat_activity WHERE query LIKE 'LISTEN%' AND pid <> pg_backend_pid()) t",
+        )
+        .fetch_one(&running.db.pool)
+        .await
+        .unwrap();
+        assert_eq!(ended, 1, "exactly one listener backend");
+
+        running
+            .wait_caught_up("the catch-up after a lost connection")
+            .await;
+        assert!(running.app.keys().find(&running.key).is_none());
+        running.stop().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_lag_includes_the_time_the_application_waited() {
+        let db = crate::db::test_db().await;
+        let app = App::load(
+            db.pool.clone(),
+            crate::config::Config::default(),
+            Arc::new(crate::clock::SystemClock),
+        )
+        .await
+        .unwrap();
+        let payload = Invalidation::Settings.to_payload(Utc::now().timestamp_millis());
+
+        // Block the generation read the reload starts with.
+        let mut blocker = db.pool.begin().await.unwrap();
+        sqlx::query("LOCK TABLE server_state IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *blocker)
+            .await
+            .unwrap();
+        let applying = tokio::spawn({
+            let app = Arc::clone(&app);
+            async move { apply_payload(&app, &payload).await }
+        });
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(!applying.is_finished(), "the apply must be blocked");
+        blocker.commit().await.unwrap();
+
+        let lag = timeout(WAIT, applying)
+            .await
+            .expect("the apply finished once unblocked")
+            .unwrap()
+            .expect("a readable payload");
+        assert!(lag >= Duration::from_millis(400), "{lag:?}");
     }
 }
