@@ -125,7 +125,7 @@ pub(crate) async fn history(ctx: &ToolContext, params: HistoryParams) -> Result<
         // Admitted right before its revisions are read, so a catalog after
         // the one that answers is never recorded (plan Decision 23). A
         // `Busy` here leaves the catalogs already read recorded: they were.
-        ctx.admit(&state, AccessKind::Read)?;
+        ctx.admit(&state, AccessKind::Read).await?;
         for path in &paths {
             // `.await` suspends this call until Postgres answers, freeing the
             // thread for other requests meanwhile.

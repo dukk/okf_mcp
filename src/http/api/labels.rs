@@ -125,6 +125,6 @@ async fn labels(
         .map(String::as_str)
         .filter(|catalog| principal.reaches(catalog))
         .collect();
-    let directory = app.keys().labels();
+    let directory = app.labels();
     Ok(Json(scoped(&directory, &reachable, &principal)))
 }

@@ -4,6 +4,7 @@
 //! mounted again under `/api/v1` with the same handlers, body cap and
 //! deadline as `/catalogs/{name}/export|import`.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
@@ -24,7 +25,7 @@ use crate::labels::{catalog_label, DisplayName};
 use crate::mcp::catalogs::SuspensionInfo;
 use crate::okf::ops::STARTER_FILE_COUNT;
 use crate::store::audit::AuditActor;
-use crate::store::catalogs::{self as catalog_rows, MaintenanceChange, Switch};
+use crate::store::catalogs::{self as catalog_rows, CatalogRow, MaintenanceChange, Switch};
 use crate::store::ceiling::{self, MemberAccess};
 use crate::store::keys::Access;
 use crate::telemetry::subscriber::split_event;
@@ -104,7 +105,9 @@ impl CatalogSummary {
     /// * `state` - its state.
     /// * `principal` - the caller, which must reach the catalog (its
     ///   suspension is shown only to those who do).
-    /// * `labels` - the key cache's directory, for the labels.
+    /// * `labels` - the label directory.
+    /// * `row` - its directory row, for its suspension and maintenance
+    ///   switch (`None`: deleted since the map was taken).
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -112,7 +115,13 @@ impl CatalogSummary {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    fn of(name: &str, state: &CatalogState, principal: &Principal, labels: &Labels) -> Self {
+    fn of(
+        name: &str,
+        state: &CatalogState,
+        principal: &Principal,
+        labels: &Labels,
+        row: Option<&CatalogRow>,
+    ) -> Self {
         // `current()` is an `Arc` of the loaded snapshot: one consistent
         // generation, file count and concept count.
         let loaded = state.current();
@@ -138,8 +147,10 @@ impl CatalogSummary {
             concepts: loaded.snapshot().concepts().count(),
             generation: loaded.generation(),
             last_change: loaded.last_change().map(format_timestamp),
-            suspended: principal.suspension(name).map(SuspensionInfo::from),
-            maintenance: Switch::from(!principal.gates.maintenance_off.contains(name)),
+            suspended: row
+                .and_then(|row| principal.suspension(row))
+                .map(SuspensionInfo::from),
+            maintenance: Switch::from(!row.is_some_and(|row| row.maintenance_off)),
         }
     }
 }
@@ -244,11 +255,27 @@ async fn list_catalogs(
 ) -> Result<Json<CatalogListing>, AppError> {
     // Held in a local so the map outlives the iteration that borrows it.
     let loaded = app.catalogs();
-    let labels = app.keys().labels();
+    let labels = app.labels();
+    let reached: Vec<String> = loaded
+        .keys()
+        .filter(|name| principal.reaches(name))
+        .cloned()
+        .collect();
+    // Their directory rows in one read: suspension and maintenance.
+    let rows: HashMap<String, Arc<CatalogRow>> = app
+        .directory()
+        .resolve_many(&reached)
+        .await?
+        .into_iter()
+        .map(|row| (row.name.clone(), row))
+        .collect();
     let catalogs = loaded
         .iter()
         .filter(|(name, _)| principal.reaches(name))
-        .map(|(name, state)| CatalogSummary::of(name, state, &principal, &labels))
+        .map(|(name, state)| {
+            let row = rows.get(name.as_str()).map(AsRef::as_ref);
+            CatalogSummary::of(name, state, &principal, &labels, row)
+        })
         .collect();
     Ok(Json(CatalogListing { catalogs }))
 }
@@ -299,13 +326,12 @@ async fn create_catalog(
         "catalog created"
     );
     settle(&app).await;
-    // The owner may be a suspended team. Creating bumps the admin generation,
-    // so the poll `settle` ran reloaded the cache's suspension map; if that
-    // poll failed, this reads null until the next one, as for every team write.
-    let suspended = app
-        .keys()
-        .suspensions()
-        .get(&row.name)
+    // The owner may be a suspended team: read the new row's access facts
+    // from the database (one query), not from the directory, which may
+    // still remember the name as absent until the create's message lands.
+    let suspended = catalog_rows::row_by_name(app.pool(), &row.name)
+        .await?
+        .and_then(|created| principal.suspension(&created))
         .map(SuspensionInfo::from);
     // Built from the row, not the loaded state: a new catalog holds only its
     // starter files (a root index.md and a log.md, no concepts), written
@@ -319,7 +345,7 @@ async fn create_catalog(
         owner_team_label: row
             .owner_team
             .as_deref()
-            .and_then(|team| app.keys().labels().team(team).map(str::to_string)),
+            .and_then(|team| app.labels().team(team).map(str::to_string)),
         owner_team: row.owner_team,
         files: STARTER_FILE_COUNT,
         concepts: 0,
@@ -341,24 +367,32 @@ async fn create_catalog(
 /// suspended. Anyone else goes on to the store, which refuses a non-owner.
 ///
 /// # Arguments
-/// * `app` - the application, for the team memberships the key cache holds.
+/// * `app` - the application, for the catalog's row and the team labels.
 /// * `principal` - the caller.
 /// * `catalog` - the catalog to edit.
 ///
 /// # Errors
-/// [`OkfError::Suspended`].
+/// [`OkfError::Suspended`]; [`OkfError::Database`] when the row's read fails.
 #[tracing::instrument(level = "debug", skip_all)]
-fn refuse_suspended_owner(app: &App, principal: &Principal, catalog: &str) -> Result<(), OkfError> {
-    let Some(suspended) = principal.suspension(catalog) else {
+async fn refuse_suspended_owner(
+    app: &App,
+    principal: &Principal,
+    catalog: &str,
+) -> Result<(), OkfError> {
+    // An unknown catalog is not suspended: the store refuses it.
+    let Some(row) = app.directory().resolve(catalog).await? else {
         return Ok(());
     };
-    let labels = app.keys().labels();
+    let Some(suspended) = principal.suspension(&row) else {
+        return Ok(());
+    };
+    let labels = app.labels();
     let in_team = principal
         .user
         .as_deref()
         .is_some_and(|user| labels.teams_of(user).any(|team| team == suspended.team));
     if in_team || principal.reaches(catalog) {
-        principal.check_not_suspended(catalog)
+        principal.check_not_suspended(&row)
     } else {
         Ok(())
     }
@@ -402,14 +436,17 @@ async fn update_catalog(
     // lists every combination: a provisioner and an admin pass as they are;
     // a console session may still be an owner; any other credential gets
     // the admin refusal.
-    let owner = match (
-        principal.provisioner,
-        principal.require(Access::Admin, &catalog),
-        &principal.kind,
-    ) {
+    let admin = principal
+        .require_in(app.directory(), Access::Admin, &catalog)
+        .await;
+    let owner = match (principal.provisioner, admin, &principal.kind) {
         (true, _, _) | (false, Ok(()), _) => None,
+        // A failed read of the catalog's row is not a refusal.
+        (false, Err(error @ (OkfError::Database { .. } | OkfError::Busy { .. })), _) => {
+            return Err(error.into())
+        }
         (false, Err(_), CredentialKind::Session { user_id }) => {
-            refuse_suspended_owner(&app, &principal, &catalog)?;
+            refuse_suspended_owner(&app, &principal, &catalog).await?;
             Some(user_id.as_str())
         }
         (false, Err(refusal), CredentialKind::ApiKey | CredentialKind::OAuth { .. }) => {
@@ -597,7 +634,9 @@ async fn member_access(
     Extension(principal): Extension<Arc<Principal>>,
     Path(catalog): Path<String>,
 ) -> Result<Json<MemberAccessView>, AppError> {
-    principal.require(Access::Admin, &catalog)?;
+    principal
+        .require_in(app.directory(), Access::Admin, &catalog)
+        .await?;
     let access = ceiling::member_access(app.pool(), &catalog).await?;
     Ok(Json(MemberAccessView {
         name: catalog,
@@ -664,7 +703,9 @@ async fn delete_catalog(
     Query(query): Query<DeleteQuery>,
 ) -> Result<Json<CatalogDeleted>, AppError> {
     if !principal.provisioner {
-        principal.require(Access::Admin, &catalog)?;
+        principal
+            .require_in(app.directory(), Access::Admin, &catalog)
+            .await?;
     }
     catalog_rows::delete(app.pool(), &catalog, query.force, &actor, app.clock().now())
         .await

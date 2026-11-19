@@ -1,5 +1,8 @@
 //! `list_catalogs`: the catalogs this connection offers and its selection.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use axum::http::request::Parts;
 use rmcp::handler::server::tool::Extension;
 use rmcp::model::CallToolResult;
@@ -10,6 +13,7 @@ use serde::Serialize;
 use crate::clock::format_timestamp;
 use crate::mcp::context::ToolContext;
 use crate::mcp::OkfServer;
+use crate::store::catalogs::CatalogRow;
 use crate::store::teams::SuspendedCatalog;
 
 /// Why a listed catalog is unavailable: its owner team is suspended (M13).
@@ -25,14 +29,14 @@ pub struct SuspensionInfo {
 
 // `From` is Rust's conversion trait (like a Python `from_x` classmethod);
 // implementing it also gives `.into()` and lets `.map(SuspensionInfo::from)`
-// convert a borrowed cache entry into an owned listing field.
-impl From<&SuspendedCatalog> for SuspensionInfo {
+// turn a principal's view of a suspension into a listing field.
+impl From<SuspendedCatalog> for SuspensionInfo {
     #[tracing::instrument(level = "trace", skip_all)]
-    fn from(suspended: &SuspendedCatalog) -> Self {
+    fn from(suspended: SuspendedCatalog) -> Self {
         Self {
-            team: suspended.team.clone(),
-            team_label: suspended.team_label.clone(),
-            notice: suspended.notice.clone(),
+            team: suspended.team,
+            team_label: suspended.team_label,
+            notice: suspended.notice,
         }
     }
 }
@@ -88,6 +92,24 @@ pub struct CatalogList {
 #[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn list(ctx: &ToolContext) -> CatalogList {
     let labels = ctx.labels();
+    let offered: Vec<String> = ctx
+        .catalogs()
+        .keys()
+        .filter(|name| ctx.offers(name))
+        .cloned()
+        .collect();
+    // The listed catalogs' directory rows, in one read, for their
+    // suspension. Display only: a failed read lists none as suspended, and
+    // the selection, which refuses a suspended catalog, reads its own.
+    let rows: HashMap<String, Arc<CatalogRow>> = ctx
+        .app()
+        .directory()
+        .resolve_many(&offered)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| (row.name.clone(), row))
+        .collect();
     let catalogs = ctx
         .catalogs()
         .iter()
@@ -106,7 +128,10 @@ pub(crate) async fn list(ctx: &ToolContext) -> CatalogList {
                 last_change: loaded.last_change().map(format_timestamp),
                 // Listed only after `offers` (reach), so a credential that does
                 // not reach a catalog never learns it is suspended.
-                suspended: ctx.principal().suspension(name).map(SuspensionInfo::from),
+                suspended: rows
+                    .get(name)
+                    .and_then(|row| ctx.principal().suspension(row))
+                    .map(SuspensionInfo::from),
             }
         })
         .collect();
@@ -256,14 +281,18 @@ mod tests {
         let stranger = stored_secret(&test, "stranger", Access::Read, &["other"], false).await;
         let root = stored_secret(&test, "root", Access::Admin, &[], false).await;
         suspend_catalogs(&test, &["main"]).await;
-        let on = |secret: &str, connection: &[&str]| {
-            context(&test, cached_principal(&test, secret), Some(connection))
+        let on = async |secret: &str, connection: &[&str]| {
+            context(
+                &test,
+                cached_principal(&test, secret).await,
+                Some(connection),
+            )
         };
 
-        let listed = list(&on(&reader, &["main", "other"])).await;
-        let only_suspended = list(&on(&reader, &["main"])).await;
-        let strangers = list(&on(&stranger, &["other"])).await;
-        let admins = list(&on(&root, &["main", "other"])).await;
+        let listed = list(&on(&reader, &["main", "other"]).await).await;
+        let only_suspended = list(&on(&reader, &["main"]).await).await;
+        let strangers = list(&on(&stranger, &["other"]).await).await;
+        let admins = list(&on(&root, &["main", "other"]).await).await;
 
         let main = listed.catalogs.iter().find(|c| c.name == "main").unwrap();
         assert_eq!(

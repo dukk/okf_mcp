@@ -461,8 +461,7 @@ pub(crate) fn principal_with_reporting(
         kind: CredentialKind::ApiKey,
         user: None,
         user_id: None,
-        gates: Default::default(),
-        suspended: Default::default(),
+        facts: Default::default(),
     })
 }
 
@@ -767,13 +766,17 @@ pub(crate) async fn stored_secret(
     secret
 }
 
-/// The principal the key cache holds now for `secret`, as the auth layer
-/// would put it in a request.
+/// The principal the credential cache assembles now for `secret`, as the
+/// auth layer would put it in a request.
 ///
 /// # Panics
-/// If the cache does not know the key.
-pub(crate) fn cached_principal(test: &TestApp, secret: &str) -> Arc<Principal> {
-    test.app.keys().find(secret).expect("the key is cached")
+/// If the key is unknown, revoked or expired, or its load fails.
+pub(crate) async fn cached_principal(test: &TestApp, secret: &str) -> Arc<Principal> {
+    test.app
+        .find_key(secret)
+        .await
+        .unwrap()
+        .expect("the key is cached")
 }
 
 /// Creates user `staff` (display name "Staff Member", outside every test

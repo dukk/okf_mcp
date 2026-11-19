@@ -263,7 +263,7 @@ async fn tree(
     let ctx = context(&app, principal, requester);
     let state = ctx.one(Some(&catalog)).await?;
     // The tree lists the catalog's documents: a read of its contents.
-    ctx.admit(&state, AccessKind::Read)?;
+    ctx.admit(&state, AccessKind::Read).await?;
     let loaded = state.current();
     let documents = loaded
         .snapshot()
@@ -430,7 +430,10 @@ async fn revision(
 ) -> Result<Json<RevisionView>, AppError> {
     // This reads the store directly, so it checks access itself, the unlock
     // included (before the principal moves into the context).
-    principal.require_contents(Access::Read, &catalog, app.clock().now())?;
+    let row = principal
+        .reached_row(app.directory(), Access::Read, &catalog)
+        .await?;
+    principal.require_contents(Access::Read, &row, app.clock().now())?;
     let ctx = context(&app, principal, requester);
     // `history` resolves the path as the History tab spelled it (`.md`
     // optional) and answers 404 for a path that never existed.
@@ -538,10 +541,13 @@ async fn recent_changes(
     // route does: the unlock first (before the principal moves into the
     // context), then the catalog's selection and its admission, which also
     // binds the read to the incarnation admitted.
-    principal.require_contents(Access::Read, &catalog, app.clock().now())?;
+    let row = principal
+        .reached_row(app.directory(), Access::Read, &catalog)
+        .await?;
+    principal.require_contents(Access::Read, &row, app.clock().now())?;
     let ctx = context(&app, principal, requester);
     let state = ctx.one(Some(&catalog)).await?;
-    ctx.admit(&state, AccessKind::Read)?;
+    ctx.admit(&state, AccessKind::Read).await?;
     // The parameters are checked only once the catalog is admitted, so a
     // refusal never depends on them.
     // `transpose` turns Option<Result<..>> into Result<Option<..>> for `?`.
@@ -1099,7 +1105,7 @@ mod tests {
         use crate::mcp::testing::{pending_entry, PendingEdit};
         let ctx = crate::mcp::testing::context(
             test,
-            crate::mcp::testing::cached_principal(test, key),
+            crate::mcp::testing::cached_principal(test, key).await,
             None,
         );
         let opened = open_changeset(

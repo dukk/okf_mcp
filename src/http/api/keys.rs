@@ -320,13 +320,15 @@ pub(crate) fn requested_grants<'a>(
         }
         Grants::All
     } else {
+        // The caller is an admin credential, which suspension never
+        // refuses: reach and level are the whole check.
         for catalog in catalogs {
-            principal.require(Access::Admin, catalog)?;
+            principal.require_level(Access::Admin, catalog)?;
         }
         Grants::Catalogs(catalogs)
     };
     if let Some(name) = default_catalog {
-        principal.require(Access::Admin, name)?;
+        principal.require_level(Access::Admin, name)?;
     }
     Ok(grants)
 }
@@ -588,7 +590,8 @@ async fn grant_catalog(
     Path((id, catalog)): Path<(String, String)>,
 ) -> Result<Json<KeyView>, AppError> {
     require_admin(&principal)?;
-    principal.require(Access::Admin, &catalog)?;
+    // An admin credential: suspension never refuses it.
+    principal.require_level(Access::Admin, &catalog)?;
     let target = managed(&app, &principal, &id).await?;
     key_rows::grant_by_id(app.pool(), &target.id, &catalog, &audit, app.clock().now()).await?;
     changed(&app, &principal, &target.id).await
@@ -607,7 +610,8 @@ async fn ungrant_catalog(
     Path((id, catalog)): Path<(String, String)>,
 ) -> Result<Json<KeyView>, AppError> {
     require_admin(&principal)?;
-    principal.require(Access::Admin, &catalog)?;
+    // An admin credential: suspension never refuses it.
+    principal.require_level(Access::Admin, &catalog)?;
     let target = managed(&app, &principal, &id).await?;
     key_rows::ungrant_by_id(app.pool(), &target.id, &catalog, &audit, app.clock().now()).await?;
     changed(&app, &principal, &target.id).await

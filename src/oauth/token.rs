@@ -24,7 +24,7 @@ use crate::error::OkfError;
 use crate::keys;
 use crate::oauth::error::OAuthError;
 use crate::oauth::state::{code_key, AuthorizationCode};
-use crate::oauth::{access, pkce, OAuth};
+use crate::oauth::{pkce, OAuth};
 use crate::store::oauth::tokens::{
     self as token_rows, LiveAccessToken, NewToken, RefreshUse, RevokedToken, TokenKind,
 };
@@ -274,13 +274,18 @@ async fn revoke_family(app: &App, oauth: &OAuth, family_id: &str) -> Result<(), 
 }
 
 /// The grant's client, if the grant is live and has one.
+///
+/// # Errors
+/// [`OkfError::Database`] when the grant's load fails.
 #[tracing::instrument(level = "trace", skip_all)]
-fn grant_client(app: &App, grant_id: &str) -> Option<String> {
-    // `?` on an `Option` returns `None` early, as on a `Result`.
-    match &app.keys().find_grant(grant_id)?.kind {
+async fn grant_client(app: &App, grant_id: &str) -> Result<Option<String>, OkfError> {
+    let Some(principal) = app.find_grant(grant_id).await? else {
+        return Ok(None);
+    };
+    Ok(match &principal.kind {
         CredentialKind::OAuth { client_id, .. } => client_id.clone(),
         CredentialKind::ApiKey | CredentialKind::Session { .. } => None,
-    }
+    })
 }
 
 /// `POST /oauth/token`. One `okf.oauth.token` span per request; its grant
@@ -416,9 +421,9 @@ async fn exchange_code(
             "code_verifier does not match".to_string(),
         ));
     }
-    // A grant made on another replica may not have reached this key cache
-    // yet: `find_grant` catches up before refusing (spec Decision 14).
-    if access::find_grant(app, &stored.grant_id).await.is_none() {
+    // The credential cache reads a grant it does not hold, so one made on
+    // another replica is found at once.
+    if app.find_grant(&stored.grant_id).await?.is_none() {
         return Err(OAuthError::InvalidGrant(
             "the grant was revoked".to_string(),
         ));
@@ -480,70 +485,53 @@ async fn refresh(app: &App, oauth: &OAuth, form: &TokenForm) -> Result<TokenResp
     let presented = required(&form.refresh_token, "refresh_token")?;
     let client_id = required(&form.client_id, "client_id")?;
     let now = app.clock().now();
-    // At most two passes: the second only after catching the key cache up
-    // on a grant it did not hold (spec Decision 14).
-    let mut caught_up = false;
-    loop {
-        let mut tx = app.pool().begin().await.map_err(OkfError::from)?;
-        // `return match`: every arm but the catch-up's `continue` ends the call.
-        return match token_rows::use_refresh(&mut tx, &keys::hash(presented), now).await? {
-            RefreshUse::Unknown => Err(OAuthError::InvalidGrant(
-                "unknown, expired or revoked refresh token".to_string(),
-            )),
-            RefreshUse::Reused { family_id } => {
-                // Nothing was written; dropping `tx` rolls back and releases the
-                // row lock before the revocation updates the row.
-                drop(tx);
-                revoke_family(app, oauth, &family_id).await?;
-                Err(OAuthError::InvalidGrant(
-                    "the refresh token was already used".to_string(),
-                ))
+    let mut tx = app.pool().begin().await.map_err(OkfError::from)?;
+    match token_rows::use_refresh(&mut tx, &keys::hash(presented), now).await? {
+        RefreshUse::Unknown => Err(OAuthError::InvalidGrant(
+            "unknown, expired or revoked refresh token".to_string(),
+        )),
+        RefreshUse::Reused { family_id } => {
+            // Nothing was written; dropping `tx` rolls back and releases the
+            // row lock before the revocation updates the row.
+            drop(tx);
+            revoke_family(app, oauth, &family_id).await?;
+            Err(OAuthError::InvalidGrant(
+                "the refresh token was already used".to_string(),
+            ))
+        }
+        RefreshUse::Rotated {
+            grant_id,
+            family_id,
+            resource,
+        } => {
+            // Each refusal returns before `commit`, so dropping `tx` rolls
+            // back the `used_at` mark and the rightful client can still use
+            // the token. The credential cache reads a grant it does not
+            // hold (one made on another replica), so there is no retry.
+            if grant_client(app, &grant_id).await?.as_deref() != Some(client_id) {
+                return Err(OAuthError::InvalidGrant(
+                    "the refresh token belongs to another client".to_string(),
+                ));
             }
-            RefreshUse::Rotated {
-                grant_id,
-                family_id,
-                resource,
-            } => {
-                // A live row whose grant this key cache lacks: the grant may
-                // come from another replica, not announced here yet. Roll back
-                // first (dropping `tx` releases the row locks), so the catch-up
-                // never waits on the poll pass while holding them, then run the
-                // refresh again once.
-                if !caught_up && app.keys().find_grant(&grant_id).is_none() && app.redis().is_some()
-                {
-                    drop(tx);
-                    app.catch_up_keys().await;
-                    caught_up = true;
-                    continue;
-                }
-                // Each refusal returns before `commit`, so dropping `tx` rolls
-                // back the `used_at` mark and the rightful client can still use
-                // the token.
-                if grant_client(app, &grant_id).as_deref() != Some(client_id) {
-                    return Err(OAuthError::InvalidGrant(
-                        "the refresh token belongs to another client".to_string(),
-                    ));
-                }
-                if form
-                    .resource
-                    .as_deref()
-                    .is_some_and(|asked| asked != resource)
-                {
-                    return Err(OAuthError::InvalidTarget(
-                        "resource differs from the original grant".to_string(),
-                    ));
-                }
-                let binding = Binding {
-                    grant_id: &grant_id,
-                    family_id: &family_id,
-                    resource: &resource,
-                };
-                let minted = mint(&mut tx, oauth, binding, now).await?;
-                tx.commit().await.map_err(OkfError::from)?;
-                app.metrics().oauth_token_issued(Grant::RefreshToken);
-                Ok(remember(oauth, minted))
+            if form
+                .resource
+                .as_deref()
+                .is_some_and(|asked| asked != resource)
+            {
+                return Err(OAuthError::InvalidTarget(
+                    "resource differs from the original grant".to_string(),
+                ));
             }
-        };
+            let binding = Binding {
+                grant_id: &grant_id,
+                family_id: &family_id,
+                resource: &resource,
+            };
+            let minted = mint(&mut tx, oauth, binding, now).await?;
+            tx.commit().await.map_err(OkfError::from)?;
+            app.metrics().oauth_token_issued(Grant::RefreshToken);
+            Ok(remember(oauth, minted))
+        }
     }
 }
 
@@ -1175,13 +1163,9 @@ mod tests {
         async fn a_code_minted_on_one_replica_is_exchanged_on_the_other_once(server: TestRedis) {
             let (a, b, _server) = oauth_replica_pair_on(server).await;
             let code = authorization_code(&a).await;
-            let grant = stored_on(&a.app, &code)
-                .await
-                .expect("A stored the code")
-                .grant_id;
-            // B runs no subscriber in a lib pair, so it has not heard of the
-            // grant: the exchange must catch up on it (spec Decision 14).
-            assert!(b.keys().find_grant(&grant).is_none(), "B lacks the grant");
+            // B runs no subscriber in a lib pair and has never read the
+            // grant: its credential cache reads it on first use.
+            stored_on(&a.app, &code).await.expect("A stored the code");
 
             let (status, first) = exchange_on(&b, &code).await;
 

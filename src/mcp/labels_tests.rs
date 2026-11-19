@@ -66,7 +66,12 @@ async fn list_catalogs_names_a_suspended_team_by_label() {
     )
     .await;
 
-    let listed = list(&context(&test, cached_principal(&test, &reader), None)).await;
+    let listed = list(&context(
+        &test,
+        cached_principal(&test, &reader).await,
+        None,
+    ))
+    .await;
 
     let suspended = listed.catalogs[0].suspended.as_ref().expect("suspended");
     assert_eq!(suspended.team, "family");
@@ -225,7 +230,9 @@ async fn the_suspended_error_names_label_and_id() {
     .await;
 
     let refused = cached_principal(&test, &reader)
-        .require(Access::Read, "m-1")
+        .await
+        .require_in(test.app.directory(), Access::Read, "m-1")
+        .await
         .unwrap_err();
 
     assert!(matches!(refused, OkfError::Suspended { .. }));

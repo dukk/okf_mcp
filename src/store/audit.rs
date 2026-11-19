@@ -2012,14 +2012,7 @@ mod tests {
             .unwrap()
             .unwrap();
         // A real console-session principal: its `actor` is the user's name.
-        // (M13's three arguments; Task 7b adds the gates: pass
-        // `Default::default()` once more.)
-        let principal = Principal::for_session(
-            &alice,
-            Default::default(),
-            Default::default(),
-            Default::default(),
-        );
+        let principal = Principal::for_session(&alice, Default::default(), Default::default());
         let requester = Requester {
             ip: None,
             source: Source::Console,

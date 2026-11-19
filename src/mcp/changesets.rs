@@ -130,19 +130,29 @@ pub(crate) async fn list_changesets(
         None => {
             // A list naming a bad catalog fails here as it does elsewhere.
             ctx.check_connection().await?;
-            ctx.catalogs()
-                .values()
-                // A closed catalog shows no changesets: its handles and paths
-                // are part of what suspension (M13) and a lock (M14) withhold.
-                // `offers` (reach) is checked first; the lock is checked
-                // against the incarnation listed, not only its name.
-                .filter(|state| {
-                    ctx.offers(state.name())
-                        && principal.check_not_suspended(state.name()).is_ok()
-                        && ctx.check_contents(state, Access::Read).is_ok()
-                })
-                .map(|state| state.id())
-                .collect()
+            let now = ctx.app().clock().now();
+            let mut ids = Vec::new();
+            for state in ctx.catalogs().values() {
+                // A closed catalog shows no changesets: its handles and
+                // paths are part of what suspension (M13) and a lock (M14)
+                // withhold. `offers` (reach) is checked first; the lock is
+                // checked against the row of the incarnation listed, not
+                // only its name.
+                if !ctx.offers(state.name()) {
+                    continue;
+                }
+                let row = match ctx.row(state).await {
+                    Ok(row) => row,
+                    // A failed read is not a closed catalog.
+                    Err(error @ OkfError::Database { .. }) => return Err(error),
+                    // Gone, or now another catalog: nothing of it to list.
+                    Err(_) => continue,
+                };
+                if principal.check_open(&row, Access::Read, now).is_ok() {
+                    ids.push(state.id());
+                }
+            }
+            ids
         }
     };
     let admin = principal.access >= Access::Admin;
@@ -267,11 +277,10 @@ pub(crate) async fn open_changeset(
     let now = ctx.app().clock().now();
     // The changeset's writes go to the catalog's contents, so they need
     // what any write does, the unlock included (M14 Task 9b).
-    principal.require_contents(Access::Write, state.name(), now)?;
-    // An unlock is of one catalog incarnation: one let in by gates that
-    // predate this call's catalog map (the catalog was created again under
-    // its name) must not open a changeset in the replacement (PR #442).
-    ctx.check_contents(&state, Access::Write)?;
+    // Decided by the row of this very incarnation: an unlock is of one
+    // catalog incarnation, and one of a catalog created again under its
+    // name must not open a changeset in the replacement (PR #442).
+    ctx.require_contents(Access::Write, &state).await?;
     // The lock order of every changeset write: the catalog row first, so a
     // concurrent `catalog delete` either waits for this or is seen here.
     let mut tx = ctx.app().pool().begin().await?;
@@ -1012,12 +1021,8 @@ mod open_tests {
             is_admin: true,
         };
         // An admin session: it passes every level check.
-        let session = crate::auth::Principal::for_session(
-            &user,
-            Default::default(),
-            Default::default(),
-            Default::default(),
-        );
+        let session =
+            crate::auth::Principal::for_session(&user, Default::default(), Default::default());
         let ctx = crate::mcp::testing::context(&test, std::sync::Arc::new(session), None);
 
         let refused = open_changeset(
@@ -1047,7 +1052,7 @@ mod open_tests {
         let secret = staff_root(&test).await;
         let ctx = context(
             &test,
-            cached_principal(&test, &secret),
+            cached_principal(&test, &secret).await,
             Some(&["main", "other"]),
         );
         let named = |name: &str| ListParams {
@@ -3554,8 +3559,8 @@ mod suspension_tests {
     const NOTE: &str = "---\ntype: Note\ntitle: A\ndescription: A note.\n---\n# A\n";
 
     /// A connection of the key behind `secret`, as the cache holds it now.
-    fn connect(test: &TestApp, secret: &str) -> ToolContext {
-        context(test, cached_principal(test, secret), None)
+    async fn connect(test: &TestApp, secret: &str) -> ToolContext {
+        context(test, cached_principal(test, secret).await, None)
     }
 
     /// Opens a changeset in `catalog` and edits `a.md` in it.
@@ -3686,23 +3691,23 @@ mod suspension_tests {
         let writer = stored_secret(&test, "writer", Access::Write, &["pg", "work"], false).await;
         let stranger = stored_secret(&test, "stranger", Access::Write, &["work"], false).await;
         let root = stored_secret(&test, "root", Access::Admin, &[], false).await;
-        let handle = open_with_edit(&connect(&test, &writer), "pg").await;
-        let in_work = open_with_edit(&connect(&test, &writer), "work").await;
-        let roots = open_with_edit(&connect(&test, &root), "pg").await;
+        let handle = open_with_edit(&connect(&test, &writer).await, "pg").await;
+        let in_work = open_with_edit(&connect(&test, &writer).await, "work").await;
+        let roots = open_with_edit(&connect(&test, &root).await, "pg").await;
 
         suspend_catalogs(&test, &["pg"]).await;
-        let suspended = every_path(&connect(&test, &writer), "pg", &handle).await;
+        let suspended = every_path(&connect(&test, &writer).await, "pg", &handle).await;
         let refused = open_changeset(
-            &connect(&test, &writer),
+            &connect(&test, &writer).await,
             OpenParams {
                 catalog: Some("pg".to_string()),
             },
         )
         .await
         .unwrap_err();
-        let elsewhere = every_path(&connect(&test, &writer), "work", &in_work).await;
-        let strangers = every_path(&connect(&test, &stranger), "pg", &handle).await;
-        let admins = every_path(&connect(&test, &root), "pg", &roots).await;
+        let elsewhere = every_path(&connect(&test, &writer).await, "work", &in_work).await;
+        let strangers = every_path(&connect(&test, &stranger).await, "pg", &handle).await;
+        let admins = every_path(&connect(&test, &root).await, "pg", &roots).await;
 
         for (tool, kind) in &suspended {
             assert_eq!(kind, "Suspended", "{tool} on the suspended catalog");
@@ -3733,7 +3738,7 @@ mod suspension_tests {
 
         lift_suspension(&test).await;
         let lifted = pending_changes(
-            &connect(&test, &writer),
+            &connect(&test, &writer).await,
             PendingParams {
                 changeset: handle.clone(),
             },
@@ -3769,27 +3774,31 @@ mod suspension_tests {
         let writer = stored_secret(&test, "writer", Access::Write, &["pg", "work"], false).await;
         let stranger = stored_secret(&test, "stranger", Access::Write, &["work"], false).await;
         let root = stored_secret(&test, "root", Access::Admin, &[], false).await;
-        open_with_edit(&connect(&test, &writer), "pg").await;
-        open_with_edit(&connect(&test, &writer), "work").await;
+        open_with_edit(&connect(&test, &writer).await, "pg").await;
+        open_with_edit(&connect(&test, &writer).await, "work").await;
         let all = || ListParams { catalog: None };
         let named = |catalog: &str| ListParams {
             catalog: Some(catalog.to_string()),
         };
-        let on = |secret: &str, connection: &[&str]| {
-            context(&test, cached_principal(&test, secret), Some(connection))
+        let on = async |secret: &str, connection: &[&str]| {
+            context(
+                &test,
+                cached_principal(&test, secret).await,
+                Some(connection),
+            )
         };
 
         suspend_catalogs(&test, &["pg"]).await;
-        let plain = list_changesets(&connect(&test, &writer), all())
+        let plain = list_changesets(&connect(&test, &writer).await, all())
             .await
             .unwrap();
-        let mixed = list_changesets(&on(&writer, &["pg", "work"]), all())
+        let mixed = list_changesets(&on(&writer, &["pg", "work"]).await, all())
             .await
             .unwrap();
-        let only_suspended = list_changesets(&on(&writer, &["pg"]), all()).await;
-        let refused = list_changesets(&connect(&test, &writer), named("pg")).await;
-        let unreached = list_changesets(&connect(&test, &stranger), named("pg")).await;
-        let admin = list_changesets(&connect(&test, &root), all())
+        let only_suspended = list_changesets(&on(&writer, &["pg"]).await, all()).await;
+        let refused = list_changesets(&connect(&test, &writer).await, named("pg")).await;
+        let unreached = list_changesets(&connect(&test, &stranger).await, named("pg")).await;
+        let admin = list_changesets(&connect(&test, &root).await, all())
             .await
             .unwrap();
 
@@ -3810,7 +3819,7 @@ mod suspension_tests {
         assert_eq!(catalogs_of(&admin), ["pg", "work"], "an admin is exempt");
 
         lift_suspension(&test).await;
-        let lifted = list_changesets(&connect(&test, &writer), all())
+        let lifted = list_changesets(&connect(&test, &writer).await, all())
             .await
             .unwrap();
         assert_eq!(

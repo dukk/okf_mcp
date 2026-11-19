@@ -1,10 +1,10 @@
 //! A user's ceiling (spec "The ceiling"): the most a self-issued credential
 //! may reach. It is the catalogs owned by the user's teams, at each one's
 //! `member_access`, merged with the user's entitlements (`user_catalogs`);
-//! the higher level wins. Every write here that changes a ceiling bumps
-//! `admin_generation`, so running servers re-cap within one poll.
+//! the higher level wins. Every write here that changes a ceiling sends its
+//! user's or team's invalidation, so every replica re-caps at once.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use serde_json::json;
@@ -118,30 +118,29 @@ pub struct Entitlement {
 /// One catalog of one user's ceiling, as the query below returns it.
 #[derive(sqlx::FromRow)]
 struct CeilingRow {
-    user_id: String,
     catalog: String,
     // `true` when any source gives write: the higher level wins.
     write: bool,
 }
 
-/// Every user's ceiling (or one user's, with `$1`), one row per user and
-/// catalog. The union is the two sources; `bool_or` merges them.
+/// One user's ceiling (`$1`), one row per catalog. The union is the two
+/// sources; `bool_or` merges them.
 const CEILING_ROWS: &str = "\
-    SELECT s.user_id, c.name AS catalog, bool_or(s.access = 'write') AS write \
+    SELECT c.name AS catalog, bool_or(s.access = 'write') AS write \
     FROM (SELECT m.user_id, c.id AS catalog_id, c.member_access AS access \
           FROM team_members m JOIN catalogs c ON c.owner_team_id = m.team_id \
           WHERE c.member_access <> 'none' \
           UNION ALL \
           SELECT e.user_id, e.catalog_id, e.access FROM user_catalogs e) s \
     JOIN catalogs c ON c.id = s.catalog_id \
-    WHERE $1::text IS NULL OR s.user_id = $1 \
-    GROUP BY s.user_id, c.name";
+    WHERE s.user_id = $1 \
+    GROUP BY c.name";
 
-/// The ceiling rows of every user, or of the user with this id.
+/// The ceiling rows of the user with this id.
 ///
 /// # Arguments
 /// * `executor` - a `&PgPool`, or `&mut *tx` to read inside a transaction.
-/// * `user_id` - one user's id, or `None` for every user.
+/// * `user_id` - the user's id.
 ///
 /// # Errors
 /// [`OkfError::Database`].
@@ -150,7 +149,7 @@ const CEILING_ROWS: &str = "\
 #[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.ceiling_rows"))]
 async fn ceiling_rows(
     executor: impl PgExecutor<'_>,
-    user_id: Option<&str>,
+    user_id: &str,
 ) -> Result<Vec<CeilingRow>, OkfError> {
     Ok(sqlx::query_as::<_, CeilingRow>(CEILING_ROWS)
         .bind(user_id)
@@ -219,29 +218,6 @@ fn check_names(user: Option<&str>, catalog: &str) -> Result<(), OkfError> {
     Ok(())
 }
 
-/// Every user's ceiling, for the key cache.
-///
-/// # Arguments
-/// * `pool` - the database.
-///
-/// # Returns
-/// The ceilings by user id; a user with an empty ceiling is absent.
-///
-/// # Errors
-/// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.ceilings"))]
-pub async fn ceilings(pool: &PgPool) -> Result<HashMap<String, Ceiling>, OkfError> {
-    let mut by_user: HashMap<String, Ceiling> = HashMap::new();
-    for row in ceiling_rows(pool, None).await? {
-        // `entry(..).or_default()`: Python's `setdefault(key, {})`.
-        by_user
-            .entry(row.user_id)
-            .or_default()
-            .insert(row.catalog, row_level(row.write));
-    }
-    Ok(by_user)
-}
-
 /// One user's ceiling.
 ///
 /// # Arguments
@@ -256,7 +232,7 @@ pub async fn ceilings(pool: &PgPool) -> Result<HashMap<String, Ceiling>, OkfErro
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.ceiling_of"))]
 pub async fn ceiling_of(pool: &PgPool, user: &str) -> Result<Ceiling, OkfError> {
     let user_id = users::id_by_name(pool, user).await?;
-    Ok(one_ceiling(ceiling_rows(pool, Some(&user_id)).await?))
+    Ok(one_ceiling(ceiling_rows(pool, &user_id).await?))
 }
 
 /// One user's ceiling, by id, read inside the caller's transaction: what
@@ -277,7 +253,7 @@ pub(crate) async fn ceiling_in(
     conn: &mut PgConnection,
     user_id: &str,
 ) -> Result<Ceiling, OkfError> {
-    Ok(one_ceiling(ceiling_rows(conn, Some(user_id)).await?))
+    Ok(one_ceiling(ceiling_rows(conn, user_id).await?))
 }
 
 /// Sets what members of a catalog's owning team may reach, and records
@@ -785,18 +761,17 @@ mod tests {
 
         let alice = ceiling_of(&db.pool, "alice").await.unwrap();
         let bob = ceiling_of(&db.pool, "bob").await.unwrap();
-        let everyone = ceilings(&db.pool).await.unwrap();
 
         assert_eq!(
             alice,
             ceiling(&[("shared", Access::Write), ("solo", Access::Write)])
         );
         assert_eq!(bob, ceiling(&[("shared", Access::Write)]));
-        assert_eq!(everyone.get(&id(&db.pool, "alice").await), Some(&alice));
-        assert_eq!(everyone.get(&id(&db.pool, "bob").await), Some(&bob));
+        assert_eq!(by_id(&db.pool, &id(&db.pool, "alice").await).await, alice);
+        assert_eq!(by_id(&db.pool, &id(&db.pool, "bob").await).await, bob);
         assert_eq!(
-            everyone.get(&id(&db.pool, TEST_USER).await),
-            Some(&ceiling(&[("other", Access::Write)]))
+            by_id(&db.pool, &id(&db.pool, TEST_USER).await).await,
+            ceiling(&[("other", Access::Write)])
         );
     }
 
@@ -1052,12 +1027,14 @@ mod tests {
         let generation = catalogs::admin_generation(pool).await.unwrap();
         assert!(generation > *last, "{step}: the generation moved");
         *last = generation;
-        let found = ceilings(pool)
-            .await
-            .unwrap()
-            .remove(user_id)
-            .unwrap_or_default();
+        let found = by_id(pool, user_id).await;
         assert_eq!(found, expected, "{step}");
+    }
+
+    /// One user's ceiling by id, as the user cache reads it.
+    async fn by_id(pool: &PgPool, user_id: &str) -> Ceiling {
+        let mut conn = pool.acquire().await.unwrap();
+        ceiling_in(&mut conn, user_id).await.unwrap()
     }
 
     /// Every write that can change a ceiling's inputs (team membership,
@@ -1211,7 +1188,7 @@ mod tests {
         .await
         .unwrap();
         let carol = id(pool, "carol").await;
-        assert!(ceilings(pool).await.unwrap().contains_key(&carol));
+        assert!(!by_id(pool, &carol).await.is_empty());
         last = catalogs::admin_generation(pool).await.unwrap();
         users::delete(
             pool,

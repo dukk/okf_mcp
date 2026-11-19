@@ -1472,7 +1472,7 @@ mod tests {
         .await
         .unwrap();
         // The running app learns of the setting as a server would.
-        test.app.reload_keys_now(false).await;
+        test.app.reload_settings_now(false).await;
         for days in [61, 59] {
             let mut tx = pool.begin().await.unwrap();
             audit::record(

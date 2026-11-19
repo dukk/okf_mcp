@@ -88,12 +88,20 @@ async fn search(
         // the key needs an unlock for (M14). Reach is checked first; naming
         // one explicitly is refused by the selection.
         let now = app.clock().now();
-        app.catalogs()
+        let reached: Vec<String> = app
+            .catalogs()
             .keys()
-            .filter(|name| {
-                principal.reaches(name) && principal.check_open(name, Access::Read, now).is_ok()
-            })
+            .filter(|name| principal.reaches(name))
             .cloned()
+            .collect();
+        // Their directory rows in one read (ordered by name), for the
+        // closed checks.
+        app.directory()
+            .resolve_many(&reached)
+            .await?
+            .into_iter()
+            .filter(|row| principal.check_open(row, Access::Read, now).is_ok())
+            .map(|row| row.name.clone())
             .collect()
     } else {
         named

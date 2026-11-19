@@ -14,13 +14,14 @@ use serde::Deserialize;
 
 use crate::app::App;
 use crate::archive::read_tarball;
-use crate::auth::{Admission, Principal};
+use crate::auth::{Admission, CatalogScope, Principal};
 use crate::error::OkfError;
 use crate::http::requester::Requester;
 use crate::http::{timeout_layer_after, AppError, REQUEST_TIMEOUT};
 use crate::labels::export_stem;
 use crate::mcp::blocking;
 use crate::store::audit::{AccessKind, AuditActor};
+use crate::store::catalogs::CatalogRow;
 use crate::store::export::{export, ExportOptions};
 use crate::store::import::{import, ImportOptions, ImportScope};
 use crate::store::keys::Access;
@@ -136,30 +137,6 @@ fn body_limit(max_import_bytes: u64) -> usize {
     usize::try_from(max_import_bytes.saturating_add(slack)).unwrap_or(usize::MAX)
 }
 
-/// The `catalogs.id` the principal's gates hold for `name`: the catalog
-/// incarnation its admission was decided for. The gates are loaded by name
-/// in one snapshot, so every membership, entitlement or unlock that admits
-/// the principal names a catalog they hold; `None` (gates built outside the
-/// key cache, or a catalog created since they loaded) means no admission
-/// depended on a name the gates resolved.
-///
-/// # Arguments
-/// * `principal` - the caller.
-/// * `name` - the catalog's name.
-///
-/// # Returns
-/// The id the store must still find, if any.
-#[cfg_attr(
-    dylint_lib = "hyp_tracing",
-    allow(
-        uninstrumented_fn,
-        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-    )
-)]
-fn admitted_id(principal: &Principal, name: &str) -> Option<i64> {
-    principal.gates.catalogs.get(name).map(|scope| scope.id)
-}
-
 /// Counts an export or import under an unlock on that unlock (M14 Task 9b),
 /// in the background. Any other admission records nothing here: the export
 /// and import write their own entries.
@@ -168,7 +145,7 @@ fn admitted_id(principal: &Principal, name: &str) -> Option<i64> {
 /// * `app` - the shared state.
 /// * `principal` - the caller.
 /// * `requester` - its address and source.
-/// * `name` - the catalog.
+/// * `row` - the catalog's directory row the admission was decided with.
 /// * `admission` - how the caller was let in.
 /// * `kind` - [`AccessKind::Export`] or [`AccessKind::Write`].
 #[tracing::instrument(level = "trace", skip_all)]
@@ -176,7 +153,7 @@ fn note_unlocked(
     app: &App,
     principal: &Principal,
     requester: &Requester,
-    name: &str,
+    row: &CatalogRow,
     admission: Admission,
     kind: AccessKind,
 ) {
@@ -184,13 +161,11 @@ fn note_unlocked(
     let Admission::Unlocked { .. } = admission else {
         return;
     };
-    // The gates that admitted it hold the catalog the unlock is on (one
-    // snapshot, and an unlock belongs to one catalog), so its scope is
-    // there; the tally needs only the unlock's id.
-    if let Some(scope) = principal.gates.catalogs.get(name).copied() {
-        let record = principal.access_record(requester, name, scope, app.clock().now());
-        app.note_access(record, kind, admission);
-    }
+    // The row that admitted it is of the catalog the unlock is on (an
+    // unlock matches by `catalogs.id`); the tally needs only the unlock's id.
+    let scope = CatalogScope::of(row);
+    let record = principal.access_record(requester, &row.name, scope, app.clock().now());
+    app.note_access(record, kind, admission);
 }
 
 /// Records the span's `okf.catalog` for a catalog the request has been
@@ -368,10 +343,14 @@ async fn export_catalog(
     // members can take their data; reach and read access still apply.
     // Before any check, so a refusal still ends the span with an error.
     let mut transfer = Transfer::begin(tracing::Span::current(), &app, Direction::Export);
-    principal.require_export(&name)?;
+    // `reached_row` checks reach and read access (the whole of
+    // `require_export`) before it reads the catalog's row.
+    let row = principal
+        .reached_row(app.directory(), Access::Read, &name)
+        .await?;
     // Then the unlock (M14 Task 9b), before anything is read or recorded.
     let now = app.clock().now();
-    let admission = principal.admission(&name, Access::Read, now)?;
+    let admission = principal.admission(&row, Access::Read, now)?;
     // M3's export builds the whole tarball in memory (a `Vec<u8>`).
     // The generation is for the command line's `import --expect-generation`.
     let actor = AuditActor::of(&principal, &requester);
@@ -379,8 +358,8 @@ async fn export_catalog(
         audit: &actor,
         now,
         // The incarnation the admission was decided for: the store refuses
-        // a catalog created again under this name since the gates loaded.
-        expect_catalog_id: admitted_id(&principal, &name),
+        // a catalog created again under this name since its row was read.
+        expect_catalog_id: Some(row.id),
     };
     // Only now is the name admitted: the span and the metrics take the
     // loaded catalog's own name, never the path segment.
@@ -397,14 +376,13 @@ async fn export_catalog(
         &app,
         &principal,
         &requester,
-        &name,
+        &row,
         admission,
         AccessKind::Export,
     );
     // The stem is ASCII letters, digits and '-', and `name` is `[a-z0-9-]+`:
     // both are safe in a header.
     let stem = app
-        .keys()
         .labels()
         .catalog(&name)
         .map(export_stem)
@@ -506,10 +484,13 @@ async fn import_catalog(
     // does not reach the catalog gets 404, one that reaches it read-only
     // gets 403, and a non-admin cannot import into a suspended catalog.
     // Import is a write, so `write` is enough (issue #260).
-    principal.require(Access::Write, &name)?;
+    let row = principal
+        .reached_row(app.directory(), Access::Write, &name)
+        .await?;
+    principal.require(Access::Write, &row)?;
     // An import rewrites the catalog's contents: a write, which needs the
     // unlock a write does (M14 Task 9b). Checked before the body is read.
-    let admission = principal.admission(&name, Access::Write, app.clock().now())?;
+    let admission = principal.admission(&row, Access::Write, app.clock().now())?;
     // Only now is the name admitted: the span and the metrics take the
     // loaded catalog's own name, never the path segment.
     transfer.admit(resolved_catalog(&transfer.span, &app, &name));
@@ -555,7 +536,7 @@ async fn import_catalog(
             },
             expect_generation: query.expect_generation,
             // As for export: the store checks it under the catalog's lock.
-            expect_catalog_id: admitted_id(&principal, &name),
+            expect_catalog_id: Some(row.id),
             actor: &principal.actor,
             audit: &actor,
             now: app.clock().now(),
@@ -596,7 +577,7 @@ async fn import_catalog(
             &app,
             &principal,
             &requester,
-            &name,
+            &row,
             admission,
             AccessKind::Write,
         );
@@ -841,6 +822,9 @@ mod tests {
         // `tail` is copied into the task (`to_vec`): a spawned task must own
         // what it uses (`'static`), as it may outlive this function.
         let tail = tail.to_vec();
+        // The catalog's row is read (and cached) before time is paused: a
+        // pooled query under a paused clock would time out at once.
+        test.app.directory().resolve("pg").await.unwrap();
         tokio::time::pause();
         let sender = tokio::spawn(async move {
             tokio::time::sleep(REQUEST_TIMEOUT + Duration::from_secs(1)).await;
@@ -1032,9 +1016,9 @@ mod tests {
         suspend_catalogs(&test, &["pg"]).await;
         // Each request goes through the routes with the principal the key
         // cache holds now, as the auth layer would add it.
-        let call = |secret: &str, request: Request<Body>| {
-            let caller = cached_principal(&test, secret);
-            router(&test, caller).oneshot(request)
+        let call = async |secret: &str, request: Request<Body>| {
+            let caller = cached_principal(&test, secret).await;
+            router(&test, caller).oneshot(request).await
         };
         let export = || {
             Request::get("/catalogs/pg/export")
@@ -1113,7 +1097,7 @@ mod tests {
         )
         .await
         .unwrap();
-        test.app.reload_keys_now(false).await;
+        test.app.reload_settings_now(false).await;
         let exported = router(&test, admin())
             .oneshot(
                 Request::get("/catalogs/pg/export")
@@ -1342,6 +1326,9 @@ mod tests {
         let (test, registry) =
             crate::mcp::testing::app_with_metrics(&[("pg", &[])], Config::default()).await;
         let pool = test.app.pool().clone();
+        // The catalog's directory row is cached first, as for any catalog in
+        // use: the wait below is the export's own.
+        test.app.directory().resolve("pg").await.unwrap();
         // Hold every connection, so the export waits for one until the
         // route's deadline drops it.
         let mut held = Vec::new();

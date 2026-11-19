@@ -571,8 +571,9 @@ impl TestServer {
         let key = self.key(name, Access::Read, catalogs, None).await;
         let id = self
             .app
-            .keys()
-            .find(&key)
+            .find_key(&key)
+            .await
+            .unwrap()
             .expect("created principal")
             .key_id
             .clone();
