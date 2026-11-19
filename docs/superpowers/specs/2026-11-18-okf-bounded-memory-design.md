@@ -178,7 +178,10 @@ expiry is still checked on every request.
 
 - **TTL backstop:** `credential_ttl`, default 10s, the same bound
   `poll_interval` gives a lost announcement today. Revocation is never
-  weaker than now.
+  weaker than now. Settings, which principal assembly reads (for example
+  `require_unlock`), get the same backstop: the first request after the TTL
+  reloads them once, so a lost `settings` message is also bounded by
+  `credential_ttl`.
 - **Unknown credentials are not cached.** A bad token costs one indexed
   query; the existing rate limiters guard guessing. This removes the
   window in which a newly created key is refused on another replica, so
@@ -256,6 +259,15 @@ by concurrent loads, not by the population or the change history. A
 `catalog` message also raises an in-flight load's minimum generation, so a
 load that read an older generation is never cached; a load that starts
 after the message reads after the writer's commit and needs none.
+
+Some invalidations name an entry indirectly: a `credential` message names
+a key id, but the hash cache is keyed by hash; a `team` message drops
+every user in the team. These scan the resident entries, so a load still
+in flight, whose key is known only from its result, cannot be matched.
+Each cache therefore also keeps one cache-wide fence counter. An indirect
+invalidation raises it, and a load that started before the raise serves
+its result to its own request but does not cache it. That costs one
+counter, and the loads in flight at such a moment go uncached.
 
 ### 12. Reconnects mark everything stale
 

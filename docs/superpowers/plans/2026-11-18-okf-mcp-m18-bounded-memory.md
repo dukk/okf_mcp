@@ -106,7 +106,7 @@
 | 5 | `cache::directory::CatalogDirectory` and the store queries behind it (row by name with access facts, list by names, paginated list) |
 | 6 | Publish and rebuild locks move from `CatalogState` to `KeyedLocks` on `App` |
 | 7 | `ToolContext` resolution async (`select`, `one`, `states`, `read_set`, `report_catalog`, `changeset`), still over the map; all callers `.await` |
-| 8 | `cache::catalogs::CatalogCache` replaces the `Catalogs` map: nothing loaded at start-up, per-request pinning, negative cache, weight factor measured; description and owner from the directory |
+| 8 | `cache::catalogs::CatalogCache` replaces the `Catalogs` map: nothing loaded at start-up, per-request pinning of the snapshot, negative cache, weight factor measured; description and owner from the directory; the per-catalog gauges and `/healthz`'s catalog count removed with the map |
 | 9 | Overlays weighed in bytes (`overlay_cache_bytes`); `overlay_cache_size` deprecated |
 | 10 | Paginated catalog listings (`GET /api/v1/catalogs`, identity, labels, MCP `list_catalogs`), `list_changesets` without a scan, the `/api/search` fan-out cap, the console following `next` |
 | 11 | `cache::credentials`: credential and user caches replace `KeyCache` for authentication, sessions and OAuth grants; suspension and gates checked against the directory |
@@ -114,7 +114,7 @@
 | 13 | Settings on invalidation; `admin_generation` reads reduced to settings; the M16 announcement bridge (spec Decision 14) |
 | 14 | #458: worker pool shared and bounded, heartbeat 10 s x 6, `mail.worker` deprecated, `prune_workers`, shutdown grace |
 | 15 | `src/housekeeping.rs`: the `housekeeping` queue, the slot ticker, the five tasks, `cluster_stats` table and gauges |
-| 16 | The poll loop, `settle`, `poll_interval`, `okf.poll`, `okf_catalog_refreshes_total` and the per-catalog gauges removed; `/healthz` without the catalog count |
+| 16 | The poll loop, `settle`, `poll_interval`, `okf.poll` and `okf_catalog_refreshes_total` removed |
 | 17 | Docs: `docs/operations.md`, `docs/reference/`, the server design note, release notes draft |
 | 18 | Scale test (ignored by default), smoke test, README, milestone changelog |
 
@@ -177,10 +177,10 @@ Each line is `task (the tasks it needs)`. A task starts when every task in its p
 
 ```
 wave 1:  1 ()     3 ()     4 ()     6 ()     7 ()     14 ()
-wave 2:  2 (1)    5 (1, 4)    9 (4)    15 (14)
-wave 3:  8 (2, 5, 6, 7)    11 (2, 3, 5)
-wave 4:  10 (8)    12 (11)    13 (11)
-wave 5:  16 (8, 10, 11, 12, 13, 15)
+wave 2:  2 (1)    5 (1, 4)    15 (14)
+wave 3:  10 (5, 7)    11 (2, 3, 5)
+wave 4:  8 (2, 5, 6, 7, 10)    12 (11)    13 (11)
+wave 5:  9 (8)    16 (8, 10, 11, 12, 13, 15)
 wave 6:  17 (all feature tasks)
 wave 7:  18 (all)
 ```
@@ -188,9 +188,10 @@ wave 7:  18 (all)
 Why each edge, and the shared files to merge with care:
 - **2 needs 1** (`invalidate`). 2 is the wide one: 37 call sites in 14 store files. Nothing else in waves 1-2 edits those store files except 3, which touches the *create* functions of users, keys, teams and grants: 3 adds audit inserts near the top of each, 2 swaps the bump at the end. Keep both.
 - **5 needs 1 and 4**: the directory is a `Bounded` cache and registers with `invalidate::apply`.
-- **8 needs 2, 5, 6 and 7**: the cache is invalidated by `catalog` messages (2), resolves rows through the directory (5), relies on locks outside the entry (6) and on async resolution (7). 7 and 8 both edit `src/mcp/context.rs`.
+- **8 needs 2, 5, 6, 7 and 10**: the cache is invalidated by `catalog` messages (2), resolves rows through the directory (5), relies on locks outside the entry (6) and on async resolution (7). 8 removes `App::catalogs()` and `ToolContext::catalogs()`, so every caller that enumerates the map must already be gone: 10 converts the listings, and 8 itself takes the rest (the per-catalog gauges, the `/healthz` count, tests). 7 and 8 both edit `src/mcp/context.rs`.
+- **10 needs 5 and 7** (it used to need 8): listings page through the directory (5) with async resolution (7), and read the snapshot fields of the listed page through today's `App::catalog(name)`; 8 later swaps that one call for `catalog_state`. 10 and 11 run together and both touch `src/mcp/context.rs` (listing callers vs `admission_to`): keep both.
+- **9 needs 8**: overlays use 8's measured weigher.
 - **11 needs 2, 3 and 5**: credential and user messages (2), audit ids read with the entity (3), suspension and gates from the directory (5). 11 and 8 both edit `src/app.rs` (different fields) and `src/mcp/context.rs` (`admission_to` vs resolution): keep both.
-- **10 needs 8**: listings read summary fields from the directory and the cache.
 - **12 and 13 need 11**: both remove what is left of `KeyCache`.
 - **15 needs 14**: the housekeeping worker uses 14's shared worker pool and timing.
 - **16 needs every task that stops reading the poll's output.** 17 documents what shipped; 18 is last.
@@ -615,6 +616,14 @@ async fn an_epoch_outlives_the_entry_until_the_older_load_finishes() {
 }
 
 #[tokio::test]
+async fn an_indirect_invalidation_fences_a_load_in_flight() {
+    // A load of key 1 is held; `invalidate_where` matches nothing resident
+    // (the cache is empty), yet the held load must not be cached.
+    /* hold get_or_load(1) on a oneshot, invalidate_where(|_, _| true), release:
+       the caller gets the value, peek(&1) is None */
+}
+
+#[tokio::test]
 async fn a_stale_entry_is_revalidated_on_next_use() { /* insert, mark_all_stale(), get_or_revalidate calls `check` once and keeps the value when `check` says it is current */ }
 
 #[tokio::test]
@@ -676,6 +685,7 @@ Implementation notes for the engineer:
 - `Bounded` has no eviction listener for epochs (the listener only counts evictions for metrics).
 - Minimum generations (Decision 11, used by Task 8) follow the same rule: `InFlight` also carries `min_generation: Option<i64>`, raised by a `Catalog` message only while a load is in flight. A load that starts after the message was applied reads after the writer's commit (Postgres delivers `NOTIFY` at commit), so it needs no minimum.
 - `invalidate_where` uses `iter()` (sync) and calls `invalidate` for each match; the cache is bounded, so the scan is bounded. Do not enable moka's `support_invalidation_closures` (it keeps predicates around).
+- **Indirect invalidations fence every in-flight load.** A predicate sees only resident entries, so it cannot reach a load whose identity is known only from its result (a `by_hash` load of a key being revoked by id; a user load overtaken by a `Team` message). `Bounded` therefore keeps one cache-wide `fence: AtomicU64`. Each load records it at start, next to its key's epoch. `invalidate_where` increments the fence *before* scanning, and a load inserts only if both its key's epoch and the fence are unchanged; otherwise it serves its result uncached, exactly like a direct overtake. The cost is that an indirect invalidation leaves the loads in flight at that moment uncached (they are still served, and the next request loads again). At administrative write rates, tens per second, that is negligible. The state is one counter, so memory stays bounded.
 - Over-budget values: with `Limit::Bytes(n)`, a value whose weight exceeds `n` is returned to the callers of that load and then invalidated, so it is never kept. Concurrent callers still share the one load (moka's single flight); a later request loads it again. Log a warn with the weight, at most once per key per hour.
 - Metrics (`src/telemetry/metrics.rs`): `okf.cache.requests{cache,result=hit|miss|stale}`, `okf.cache.evictions{cache,cause=size|ttl|invalidated}` from the eviction listener (`RemovalCause::Size` -> `size`, `Expired` -> `ttl`, `Explicit` -> `invalidated`, `Replaced` not counted), `okf.cache.entries{cache}` and `okf.cache.bytes{cache}` as observable gauges over `entry_count()`/`weighted_size()`, `okf.cache.load.duration{cache,outcome}`.
 
@@ -800,7 +810,7 @@ async fn state(&self, name: &str) -> Result<Arc<CatalogState>, OkfError>; // no 
 
 **Files:**
 - Create: `src/cache/catalogs.rs`.
-- Modify: `src/app.rs`, `src/catalog.rs`, `src/mcp/context.rs`, `src/mcp/mod.rs`, `src/store/publish.rs`, `src/http/archives.rs`, `src/invalidate.rs`, `src/config.rs`, `src/telemetry/metrics.rs`, `tests/multi_replica.rs`, the spec (weight factor).
+- Modify: `src/app.rs`, `src/catalog.rs`, `src/mcp/context.rs`, `src/mcp/mod.rs`, `src/store/publish.rs`, `src/http/archives.rs`, `src/invalidate.rs`, `src/config.rs`, `src/telemetry/metrics.rs`, `src/http/mod.rs` (`/healthz`), `src/http/api/access_tests.rs`, `tests/multi_replica.rs`, the spec (weight factor).
 
 - [ ] **Step 1: Measure the weight factor.** Measure, don't guess. In an `#[ignore]` test `measure_snapshot_overhead`, build snapshots of (a) a 500-document synthetic catalog with links and frontmatter, (b) a 5,000-document one, and measure the allocator delta with a counting `#[global_allocator]` wrapper in that test binary only (`tests/snapshot_weight.rs`, its own binary so the allocator affects nothing else). Report `resident / stored_bytes` for each; pick the larger, round up, and record method and numbers in spec Decision 2 ("Corrected (issue #N)"). The production weigher is `stored_bytes * FACTOR`, clamped to `u32::MAX`.
 
@@ -841,8 +851,9 @@ impl CatalogCache {
 - `catalogs`, `catalogs()`, `catalog()` and the `Broken` map are removed. New: `App::catalog_row(name) -> Result<Option<Arc<CatalogRow>>>` (directory) and `App::catalog_state(&CatalogRow) -> Result<Arc<CatalogState>>` (cache).
 - `load_with_redis` no longer lists or loads catalogs; it checks `default_catalog` with one `directory.resolve`.
 - `poll_pass` drops the catalog loop (the rest of the poll stays until Task 16).
+- The remaining map enumerations go here, since the map does: the `okf.catalog.concepts` and `okf.catalog.generation` gauges (`src/telemetry/metrics.rs:493`, `:510`, `:525`) and `/healthz`'s `catalogs` count (`src/http/mod.rs:229`; replace it with `"cached_catalogs"` from the cache's entry count and update the healthz shape tests). Task 16 then only removes the poll's own metrics. Listing callers were converted in Task 10; `rg 'catalogs\(\)' src` must find none outside tests before this task's PR opens.
 
-`ToolContext`: drops the `catalogs` field; adds `pinned: Mutex<HashMap<String, Pinned>>`, `Pinned { row: Arc<CatalogRow>, state: Arc<CatalogState>, snapshot: Arc<Loaded> }`. Pinning a `CatalogState` alone does not pin a snapshot: `current` is a `RwLock<Arc<Loaded>>` swapped by every in-place refresh. On first use of a catalog, `ToolContext` resolves the row and state and takes `state.current()` once, as `snapshot`. Request reads go through `ToolContext::snapshot(name) -> Arc<Loaded>`; `state(name)` remains for writers that must see the latest (publish under its lock, overlay builds keyed by changeset, which validate against the current generation themselves). Convert the read sites that call `.current()` on a context's state (`grep -rn '\.current()' src/mcp src/http`, about 60) to `snapshot`; any that must stay on `state().current()` gets a one-line comment saying why. `resolve_changeset` finds the catalog by `row.catalog_id` through a new `catalogs::row_by_id` (add to Task 5's queries here) instead of scanning. `ToolContext::catalogs()` is removed; its callers are Task 10's (listings) and the tests.
+`ToolContext`: drops the `catalogs` field; adds `pinned: Mutex<HashMap<String, Pinned>>`, `Pinned { row: Arc<CatalogRow>, state: Arc<CatalogState>, snapshot: Arc<Loaded> }`. Pinning a `CatalogState` alone does not pin a snapshot: `current` is a `RwLock<Arc<Loaded>>` swapped by every in-place refresh. On first use of a catalog, `ToolContext` resolves the row and state and takes `state.current()` once, as `snapshot`. Request reads go through `ToolContext::snapshot(name) -> Arc<Loaded>`; `state(name)` remains for writers that must see the latest (publish under its lock, overlay builds keyed by changeset, which validate against the current generation themselves). Convert the read sites that call `.current()` on a context's state (`grep -rn '\.current()' src/mcp src/http`, about 60) to `snapshot`; any that must stay on `state().current()` gets a one-line comment saying why. `resolve_changeset` finds the catalog by `row.catalog_id` through a new `catalogs::row_by_id` (add to Task 5's queries here) instead of scanning. `ToolContext::catalogs()` is removed; Task 10 already converted its listing callers, and its test callers (`src/http/api/access_tests.rs`) read `ctx.state(name)` instead.
 
 `src/mcp/mod.rs:114` (`catalog_label` existence for telemetry): use `directory.resolve`.
 
@@ -852,7 +863,7 @@ Publish (`src/store/publish.rs:303`) and HTTP import (`src/http/archives.rs:576`
 
 ---
 
-### Task 9: Overlays weighed in bytes (spec Decision 5)
+### Task 9: Overlays weighed in bytes (spec Decision 5; needs Task 8's weigher)
 
 **Files:** Modify `src/overlay.rs`, `src/config.rs`, `src/app.rs`.
 
@@ -864,7 +875,9 @@ Publish (`src/store/publish.rs:303`) and HTTP import (`src/http/archives.rs:576`
 
 ### Task 10: Listings are queries; the search fan-out cap (spec Decisions 7, 8)
 
-**Files:** Modify `src/http/api/catalogs.rs`, `src/http/api/identity.rs`, `src/http/api/labels.rs`, `src/http/api/search.rs`, `src/mcp/catalogs.rs`, `src/mcp/changesets.rs`, `src/config.rs`, the console views that list catalogs (find them with `grep -rn "api/v1/catalogs\|catalogs\"" src/http/console`), `docs/reference/` (Task 17 finishes the prose).
+Runs before Task 8 and removes every enumeration of the catalog map from the listing paths, so Task 8 can delete the map. Summary fields come from the `CatalogRow` (description, owner, label); the snapshot fields (`files`, `concepts`, `last_change`) of the page being returned come from today's `App::catalog(name)`, one per listed catalog, which Task 8 replaces with `catalog_state`. Callers that still need the map after this task: the per-catalog gauges and `/healthz` (Task 8 removes them) and tests.
+
+**Files:** Modify `src/http/api/catalogs.rs`, `src/http/api/identity.rs`, `src/http/api/labels.rs`, `src/http/api/search.rs`, `src/mcp/catalogs.rs`, `src/mcp/changesets.rs`, `src/mcp/context.rs` (`ToolContext::catalogs()` loses its listing callers), `src/config.rs`, the console views that list catalogs (find them with `grep -rn "api/v1/catalogs\|catalogs\"" src/http/console`), `docs/reference/` (Task 17 finishes the prose).
 
 - [ ] **Step 1: One helper** (`src/cache/directory.rs`):
 
@@ -879,7 +892,7 @@ pub struct Page<T> { pub items: Vec<T>, pub next: Option<String> }
 
 `next` is the last name of a full page, opaque to clients (base64url of the name, so a client cannot depend on it being a name).
 
-- [ ] **Step 2: Failing tests**, one per endpoint: with an all-reach admin key and 7 catalogs, `?limit=3` returns 3, 3, 1 with `next` set, set, absent; a `Reach::Catalogs` key gets its catalogs in one page and no `next`. `CatalogSummary` fields are unchanged; `files`, `concepts` and `last_change` (which need a snapshot) are read through `catalog_state` for each listed catalog, which loads at most `limit` catalogs. `/api/search` with 26 reachable catalogs and none named answers 400 with `"name the catalogs to search (at most 25 are searched by default)"`; with 25 it searches all.
+- [ ] **Step 2: Failing tests**, one per endpoint: with an all-reach admin key and 7 catalogs, `?limit=3` returns 3, 3, 1 with `next` set, set, absent; a `Reach::Catalogs` key gets its catalogs in one page and no `next`. `CatalogSummary` fields are unchanged; `files`, `concepts` and `last_change` (which need a snapshot) are read through `App::catalog(name)` for each listed catalog (Task 8 changes this to `catalog_state`, which loads at most `limit` catalogs). `/api/search` with 26 reachable catalogs and none named answers 400 with `"name the catalogs to search (at most 25 are searched by default)"`; with 25 it searches all.
 - [ ] **Step 3: Implement** the endpoints over `reachable_page`: `GET /api/v1/catalogs?after=&limit=` (default 100, max 1000), identity's `catalogs` and the labels endpoint's catalog list (same parameters, `next` beside the list), MCP `list_catalogs` (an optional `after` argument and a `next` field in its result). `list_changesets` without `catalog` filters changesets by the principal in SQL (`changesets::open_for_catalogs(names)` over the reachable names; for `Reach::All`, no catalog filter) instead of scanning the map. Config: `search_fanout_max` (default 25).
 - [ ] **Step 4: The console** follows `next` where it lists catalogs (a "Load more" control, vanilla JS, as the rest of the console).
 - [ ] **Step 5: Run, gates, commit** — `feat: paginated catalog listings and a search fan-out cap (M18 task 10)`.
@@ -904,6 +917,8 @@ The largest task. Keep `Principal`'s public shape; change where its parts come f
   - `a_key_is_found_with_one_query_and_then_from_cache`.
   - `a_revoked_key_is_refused_after_its_credential_invalidation`.
   - `a_self_issued_key_is_capped_by_its_users_current_ceiling`: change the user's team membership; after the `Team` invalidation the key's reach shrinks.
+  - `a_key_revoked_while_its_hash_lookup_is_loading_is_not_cached`: hold a `find` (the `by_hash` load) with a test hook, revoke the key and `apply` its `Credential { key_id }` while it is held, release: that request may use the result it loaded, but the next `find` reloads and refuses the key.
+  - `a_user_load_overtaken_by_a_team_invalidation_is_not_cached`: hold a `user` load, remove the user from a team and `apply` the `Team` message, release: the next `user` reads the new memberships.
   - `a_suspension_closes_the_catalog_for_every_cached_principal`: suspend the owner team; after `CatalogMeta`, `principal.require(Read, catalog)` is `Suspended` (read through the directory).
   - `an_unknown_credential_is_not_cached` (two lookups, two queries).
   - `entries_expire_after_credential_ttl` (`tokio::time::pause`).
@@ -939,8 +954,8 @@ impl Credentials {
 ```
 
 - `find` and `find_grant` build the principal with today's `principal_of` logic (cap a self-issued reach by `UserEntry::ceiling`), and **not** cached as a whole: entries are cached, the cheap assembly runs per request, so a user change needs only the user entry dropped.
-- `Principal`'s `suspended: Arc<Suspensions>` and `gates: Arc<AccessGates>` are replaced by `access: Arc<AccessFacts>`, where `AccessFacts` holds the user's `UserGates`, the credential's audit id, the `require_unlock` setting at assembly time, and a handle to the directory. `suspension(catalog)`, `check_not_suspended`, `admission`, `scope_of` and `access_record` read the catalog's facts through the directory row of the catalog being checked. Because the directory is async and these methods are sync today, `ToolContext` and the HTTP extractors resolve the catalog's row first (they already do so for the snapshot after Task 8) and pass `&CatalogRow` in: `principal.check_open(&row, access, now)`, `principal.require(access, &row)`. Change each call site listed in Verified facts accordingly; the compiler finds them.
-- `apply`: `Credential { key_id }` invalidates `by_id[key_id]` and every `by_hash` entry whose `record.id == key_id` (`invalidate_where`); `User { id }` invalidates `users[id]`; `Team { id }` invalidates every user whose `teams` contains `id`; `CatalogMeta` and `Settings` touch nothing here (facts are read per request from the directory and settings).
+- `Principal`'s `suspended: Arc<Suspensions>` and `gates: Arc<AccessGates>` are replaced by `access: Arc<AccessFacts>`, where `AccessFacts` holds the user's `UserGates`, the credential's audit id, the `require_unlock` setting at assembly time, and a handle to the directory. `suspension(catalog)`, `check_not_suspended`, `admission`, `scope_of` and `access_record` read the catalog's facts through the directory row of the catalog being checked. Because the directory is async and these methods are sync today, `ToolContext` and the HTTP extractors resolve the catalog's row first (through the directory (Task 5), pinning it in `ToolContext` for the request; Task 8 later adds the state and snapshot to the same pinned entry) and pass `&CatalogRow` in: `principal.check_open(&row, access, now)`, `principal.require(access, &row)`. Change each call site listed in Verified facts accordingly; the compiler finds them.
+- `apply`: `Credential { key_id }` invalidates `by_id[key_id]` and every `by_hash` entry whose `record.id == key_id` (`invalidate_where`); `User { id }` invalidates `users[id]`; `Team { id }` invalidates every user whose `teams` contains `id` (both predicate invalidations also fence in-flight loads of their cache, Task 4); `CatalogMeta` and `Settings` touch nothing here (facts are read per request from the directory and settings).
 - `Keys` and `KeyCache` are deleted, along with `App::keys()`, `reload_keys_now`, `reload_moved_keys`'s key reload and `catch_up_keys`. `BearerVerifier for Keys` becomes `for Credentials`. Settings stay on the `admin_generation` reload until Task 13. Labels stay on a `Labels::load` held by `App` and reloaded on any `User`, `Team` or `CatalogMeta` until Task 12 (a temporary, explicitly bounded regression: note it in the PR).
 - `session_user` and `session_principal` (`src/http/console_session.rs:333`, `:376`) lose their cache-then-database fallback: the cache loads on miss.
 - `src/oauth/access.rs` `find_grant` (`:327`) calls `credentials.find_grant` once; the catch-up retry goes.
@@ -977,13 +992,16 @@ Each caller builds its `Wanted` from what it is about to render (the audit page'
 
 ### Task 13: Settings on invalidation, and the M16 bridge (spec Decisions 9, 14)
 
-**Files:** Modify `src/app.rs`, `src/invalidate.rs`, `src/shared/announce.rs`, `src/http/api/mod.rs`, `tests/multi_replica.rs`.
+**Files:** Modify `src/app.rs`, `src/invalidate.rs`, `src/shared/announce.rs`, `src/http/api/mod.rs`, `src/cache/credentials.rs` and the request extractors (`fresh_settings` per request), `tests/multi_replica.rs`.
 
 - [ ] **Step 1: Failing tests:**
   - `a_settings_invalidation_reloads_the_settings` (lib).
+  - `settings_are_revalidated_after_the_ttl_without_a_notification` (lib): build the `App` with the listener disabled and a test clock, change `require_unlock` through the store directly (its `NOTIFY` reaches no one), advance the clock past `credential_ttl`, then assemble a principal (`credentials.find`): it carries the new `require_unlock`, and `app.settings()` returns the new value.
+  - `concurrent_requests_past_the_ttl_reload_settings_once` (lib): ten `fresh_settings()` calls past the TTL run one `settings::load`.
   - `an_m16_announcement_marks_credentials_and_settings_stale` (lib, through `announce::run` with the test `Source`): the next `find` re-reads the key.
   - `an_administrative_http_write_publishes_the_m16_announcement` (`tests/multi_replica.rs`, Redis on): subscribe to the M16 channel and assert a message after `POST /api/v1/keys/{id}/revoke`.
 - [ ] **Step 2: Implement.**
+  - **Settings get the same TTL backstop as credentials (spec Decision 9).** `App.settings` becomes `RwLock<Arc<LoadedSettings>>`, `LoadedSettings { settings: Arc<Settings>, validated_at: Instant }`. New `App::fresh_settings(&self) -> Result<Arc<Settings>, OkfError>`: if `validated_at` is older than `credential_ttl`, or the settings are marked stale (reconnect, M16 announcement), reload them through a `tokio::sync::Mutex<()>` so concurrent callers run one `settings::load` (re-check the age after taking the lock), then return them. Principal assembly (`Credentials::find`, `find_grant`, `session_principal`) and the HTTP request extractors call `fresh_settings` once per request; the ~40 sync `App::settings()` readers keep reading the loaded copy, which is therefore never older than the TTL plus one request. A load failure keeps serving the old settings, logs at `warn`, and leaves `validated_at` unchanged so the next request retries.
   - `App::apply(Settings)` reloads `settings::load`. `reload_moved_keys` and the `admin_generation`/`announced_generation` atomics go; `settle` (`src/http/api/mod.rs:306`) becomes `bridge(app)`: when `[redis]` is set, `announce::publish(redis, None)` so M16 replicas reload; otherwise nothing. Every `settle` call site keeps calling it, renamed. `src/oauth/authorize.rs:1141`'s `app.poll()` becomes `bridge(app)` too.
   - `announce::listen` stays subscribed; any message calls `app.apply_m16_announcement()`: `credentials.mark_all_stale()`, labels and settings reload. It no longer calls `reload_keys_now` (gone in Task 11).
   - Each bridge item carries `// M16 bridge (spec Decision 14): remove in the release after 0.23.` so Task 18's follow-up issue can grep them.
@@ -1102,8 +1120,8 @@ async fn run(job: Housekeeping, context: Data<HousekeepingContext>) -> Result<()
 
 **Files:** Modify `src/app.rs`, `src/http/mod.rs`, `src/config.rs`, `src/telemetry/metrics.rs`, `src/cli.rs`, `tests/support/server.rs`, any test that calls `app.poll()`.
 
-- [ ] **Step 1:** Delete `App::poll`, `poll_pass`, `poll_until`, the `polling` mutex, the `okf.poll` span and `poll_duration` metric, `catalog_refreshes` / `okf_catalog_refreshes_total` and `RefreshResult`, and the `okf.catalog.concepts` and `okf.catalog.generation` gauges (`src/telemetry/metrics.rs:493`, `:510`). Remove them from `Metrics::FAMILIES`.
-- [ ] **Step 2:** `poll_interval` still parses and logs `warn!("poll_interval is deprecated and ignored")`. `/healthz` drops `catalogs` (`src/http/mod.rs:229`); add `"cached_catalogs"` from the cache's entry count if the healthz tests want a number (they assert the shape: update them).
+- [ ] **Step 1:** Delete `App::poll`, `poll_pass`, `poll_until`, the `polling` mutex, the `okf.poll` span and `poll_duration` metric, `catalog_refreshes` / `okf_catalog_refreshes_total` and `RefreshResult` (the per-catalog gauges went in Task 8). Remove them from `Metrics::FAMILIES`.
+- [ ] **Step 2:** `poll_interval` still parses and logs `warn!("poll_interval is deprecated and ignored")`.
 - [ ] **Step 3:** Every test that called `app.poll().await` to make a change visible now relies on `NOTIFY`: replace with a bounded wait helper `app.until_applied(|app| ..)` (lib) or `eventually` (integration). `grep -rn "\.poll()" src tests` must find nothing.
 - [ ] **Step 4:** Full gates; commit — `feat: remove the poll loop (M18 task 16)`.
 
