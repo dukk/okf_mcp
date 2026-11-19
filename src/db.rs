@@ -106,6 +106,8 @@ pub async fn migrate(pool: &PgPool) -> Result<(), OkfError> {
     // One connection holds the lock for the cleanup and the migrations, so
     // two replicas starting together never drop an index the other is
     // still building (one being built CONCURRENTLY is INVALID until done).
+    // The migrator runs on that same connection: a pool of one
+    // (`database_max_connections = 1`) has no second to give it.
     let mut conn = pool.acquire().await?;
     sqlx::query("SELECT pg_advisory_lock($1)")
         .bind(CONCURRENT_INDEX_LOCK)
@@ -113,7 +115,10 @@ pub async fn migrate(pool: &PgPool) -> Result<(), OkfError> {
         .await?;
     // The lock is released below whatever this returns, so no `?` here.
     let migrated = match drop_invalid_indexes(&mut conn).await {
-        Ok(_) => MIGRATOR.run(pool).await.map_err(OkfError::from),
+        // `&mut *conn`: the pooled connection itself (sqlx's migrator takes
+        // its own advisory lock on it, and runs `no-transaction` files on
+        // it outside any transaction, as on a pool).
+        Ok(_) => MIGRATOR.run(&mut *conn).await.map_err(OkfError::from),
         Err(error) => Err(OkfError::from(error)),
     };
     // Released on every path; a lost connection releases it too.
@@ -121,6 +126,8 @@ pub async fn migrate(pool: &PgPool) -> Result<(), OkfError> {
         .bind(CONCURRENT_INDEX_LOCK)
         .execute(&mut *conn)
         .await?;
+    // Back to the pool before apalis' setup, which takes one of its own.
+    drop(conn);
     migrated?;
     // `::<()>`: `setup` is defined on `PostgresStorage<()>`; the job type
     // a storage carries does not matter for creating the schema.
@@ -1837,5 +1844,34 @@ mod tests {
                 .await
                 .unwrap();
         assert!(recorded, "the rebuilt migration is recorded");
+    }
+
+    /// Review of PR #739: with a pool of one connection (the smallest
+    /// `database_max_connections`), `migrate` finishes on a fresh database
+    /// and on one already migrated, instead of waiting for a second
+    /// connection the pool cannot give.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn migrate_needs_only_one_connection() {
+        let db = pg_support::TestDb::start().await;
+        let one = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(std::time::Duration::from_secs(5))
+            .connect(&db.url)
+            .await
+            .unwrap();
+        for state in ["fresh", "already migrated"] {
+            tokio::time::timeout(std::time::Duration::from_secs(120), super::migrate(&one))
+                .await
+                .unwrap_or_else(|_| panic!("migrating a {state} database timed out"))
+                .unwrap_or_else(|error| panic!("migrating a {state} database: {error}"));
+        }
+        let applied: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
+            .fetch_one(&one)
+            .await
+            .unwrap();
+        assert_eq!(
+            applied,
+            i64::try_from(super::MIGRATOR.iter().count()).unwrap()
+        );
     }
 }
