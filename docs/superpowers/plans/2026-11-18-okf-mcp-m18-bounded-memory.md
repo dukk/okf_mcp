@@ -456,7 +456,7 @@ pub async fn apply(&self, message: &invalidate::Message) {
 pub async fn apply_reconnect(&self) {
     self.reload_keys_now(false).await;
     for state in self.catalogs().values() {
-        if let Err(error) = state.refresh(&self.pool).await { /* split_event!(warn ...) */ }
+        if let Err(error) = state.refresh(&self.pool, &self.rebuild_locks).await { /* split_event!(warn ...) */ }
     }
 }
 ```
@@ -778,6 +778,11 @@ Absent entries: store `None` with a 5 s lifetime by checking `loaded_at` in `get
 - [ ] **Step 1: Failing test** (`src/store/publish.rs` tests): `publishes_of_one_catalog_serialize_across_two_states`: build two separate `CatalogState`s for the same catalog (as an eviction and reload would), start two publishes through each, and assert they never overlap (record entry and exit in a shared `Mutex<Vec<_>>`). Today this fails: each state has its own `publishing` mutex.
 
 - [ ] **Step 2: Implement.** `App` gains `publish_locks: KeyedLocks` and `rebuild_locks: KeyedLocks`. `CatalogState::publish_lock()` is removed; callers use `app.publish_lock(state.id()).await` (returns `KeyedGuard<'_>`). `refresh_to` takes the rebuild lock from a `&KeyedLocks` argument passed by its callers (`refresh`, `refresh_locked`), so `CatalogState` holds no mutex. Update the doc comments at `src/catalog.rs:177` and `src/overlay.rs` that describe the in-process half of the publish lock.
+
+> **Corrected (issue #684, 2026-11-19).** As shipped:
+> - `CatalogState::refresh(pool, rebuilds: &KeyedLocks)`, `refresh_locked(conn, rebuilds)` and `current_covering(pool, rebuilds, bases)` all take the rebuild locks, since `current_covering` refreshes too; so does `Overlays::get(pool, rebuilds, state, changeset)`, which calls it. Callers pass `app.rebuild_locks()` (`&KeyedLocks`). `App::publish_lock(catalog_id) -> KeyedGuard<'_>` is as planned.
+> - `src/overlay.rs` had no comment about the publish lock; its only change is the `rebuilds` argument. `src/keyed_lock.rs`'s module doc now names catalog ids too.
+> - The test cannot see two publishes overlap from outside: their transactions serialize on the advisory lock anyway, and the in-process lock's job is the refresh after commit. So `publishes_of_one_catalog_serialize_across_two_states` holds `app.publish_lock(id)` as a publish through the first state would, publishes through a second `CatalogState::load` of the catalog, and asserts it waits (changeset still open) until the guard drops, then publishes. `catalog::tests::refreshes_of_two_states_share_the_rebuild_lock` does the same for the rebuild lock.
 
 - [ ] **Step 3: Run** `gate.sh narrow publish` and `gate.sh narrow lock_order` (`src/mcp/changesets/lock_order_tests.rs` must pass unchanged); full gates; commit — `refactor: per-catalog locks outside the snapshot (M18 task 6)`.
 
