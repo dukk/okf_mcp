@@ -302,3 +302,65 @@ async fn a_failed_labels_read_keeps_the_console_open_and_clears_stale_labels() {
     })
     .await;
 }
+
+/// Answers the page's `GET /api/v1/labels` pages from `arg.pages` (by the
+/// `after` they were asked with, `""` for the first), without reaching the
+/// server: a caller that reaches more catalogs than one page holds.
+const TWO_LABEL_PAGES: &str = "(arg) => {
+    const original = window.fetch;
+    window.fetch = (input, init) => {
+        const url = new URL(String(input), window.location.origin);
+        if (((init && init.method) || 'GET') === 'GET' && url.pathname === '/api/v1/labels') {
+            const page = arg.pages[url.searchParams.get('after') ?? ''];
+            return Promise.resolve(new Response(JSON.stringify(page),
+                { status: 200, headers: { 'Content-Type': 'application/json' } }));
+        }
+        return original(input, init);
+    };
+    return true;
+}";
+
+/// M18 Task 10 (review of PR #712): `GET /labels` scopes `teams` to the
+/// owner teams of the catalogs on its page, so the shell keeps every page's
+/// teams as well as its catalogs, and a team named only on page two keeps
+/// its label.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_shell_keeps_the_owner_team_labels_of_every_labels_page() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.wait_visible("#app");
+        ui.eval(
+            TWO_LABEL_PAGES,
+            serde_json::json!({ "pages": {
+                "": { "users": { "alice": "Alice" }, "teams": { "first-team": "First Team" },
+                      "catalogs": { "a": "Catalog A" }, "next": "YQ" },
+                "YQ": { "users": { "alice": "Alice" }, "teams": { "second-team": "Second Team" },
+                        "catalogs": { "b": "Catalog B" } },
+            } }),
+        );
+        let shown = ui.eval(
+            "async () => { \
+               const shell = await import('/ui/js/core/shell.js'); \
+               const labels = await import('/ui/js/core/labels.js'); \
+               await shell.refreshIdentity(); \
+               return [labels.teamLabel('first-team'), labels.teamLabel('second-team'), \
+                       labels.catalogLabel('a'), labels.catalogLabel('b'), \
+                       labels.userLabel('alice')]; }",
+            serde_json::json!(null),
+        );
+        assert_eq!(
+            shown,
+            serde_json::json!([
+                "First Team",
+                "Second Team",
+                "Catalog A",
+                "Catalog B",
+                "Alice"
+            ]),
+            "every page's labels are kept"
+        );
+    })
+    .await;
+}

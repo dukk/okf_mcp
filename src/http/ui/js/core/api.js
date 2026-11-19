@@ -106,19 +106,32 @@ function pageQuery(path, cursor = null) {
     return `${path}${path.includes('?') ? '&' : '?'}${params}`;
 }
 
+// A plain JSON object (not an array, not null): a map such as /labels'
+// `teams`, which the server scopes to the page it answers with.
+const isMap = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+
 // GETs every page of a listing, following `next` as `after` until the last
-// page, and answers the first page with `field` holding every page's items
-// (an array is joined, an object's entries are merged). For the views that
-// need the whole list at once (a picker, the catalog switcher, the labels
-// table); a list a person scrolls uses Load more instead. Each page is one
-// bounded request. Rejects as api.get does.
+// page, and answers the first page with `field` (the listed array) holding
+// every page's items, and every map field of the answer holding every
+// page's entries: GET /labels scopes `teams` (the owner teams) to the
+// catalogs on its page, so a team named only on a later page must not be
+// lost. Other fields (whoami's own `teams` list, its flags) are the same on
+// every page and are taken from the first. For the views that need the
+// whole list at once (a picker, the catalog switcher, the labels table); a
+// list a person scrolls uses Load more instead. Each page is one bounded
+// request. Rejects as api.get does.
 async function pages(path, field, opts) {
     const answer = await request('GET', pageQuery(path), opts);
     let cursor = answer.next ?? null;
     while (cursor !== null) {
         const page = await request('GET', pageQuery(path, cursor), opts);
-        const items = page[field];
-        answer[field] = Array.isArray(items) ? answer[field].concat(items) : { ...answer[field], ...items };
+        for (const [key, value] of Object.entries(page)) {
+            if (key === field && Array.isArray(value)) {
+                answer[key] = (answer[key] ?? []).concat(value);
+            } else if (isMap(value)) {
+                answer[key] = { ...(isMap(answer[key]) ? answer[key] : {}), ...value };
+            }
+        }
         // A cursor that does not move would never end: stop at it.
         const next = page.next ?? null;
         cursor = next === cursor ? null : next;
