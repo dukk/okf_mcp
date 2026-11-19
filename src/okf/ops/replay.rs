@@ -328,8 +328,11 @@ pub(crate) fn lists_target(
 /// * `workspace` - tells which documents exist (rule 3).
 /// * `text` - an `index.md`, with universal newlines.
 /// * `index` - its catalog-relative path; the raw destination is the
-///   target relative to its folder, or `/`-absolute.
-/// * `target` - the catalog-relative path listed.
+///   target relative to its folder, or `/`-absolute (for a folder's
+///   `index.md`, also the folder link `name/` or `/folder/`; see
+///   `raw_names`).
+/// * `target` - the catalog-relative path listed: a concept, or a
+///   folder's `index.md` (`repair_indexes`' `# Sections` pass, issue #731).
 #[cfg_attr(
     dylint_lib = "hyp_tracing",
     allow(
@@ -359,6 +362,44 @@ pub(crate) struct RawListing {
     pub(crate) fixed: String,
 }
 
+/// The destinations, as written, that an unencoded listing of `target` in
+/// `index` can have (rule 1 of [`lists_raw_target`]): `target` relative to
+/// the index's folder (when it lies inside it) and `/`-absolute. A folder's
+/// `index.md` also has the folder link older versions wrote under
+/// `# Sections` (issue #731): `name/` and `/folder/`, beside the
+/// `name/index.md` and `/folder/index.md` that name the file itself. A
+/// concept never ends in `/index.md`, so its names are unchanged.
+///
+/// # Arguments
+/// * `index` - the `index.md` holding the listing.
+/// * `target` - the catalog-relative path listed.
+///
+/// # Returns
+/// The candidate raw names, before rule 2 and the "would encoding change
+/// it" filter.
+#[tracing::instrument(level = "trace", skip_all)]
+fn raw_names(index: &str, target: &str) -> Vec<String> {
+    let folder = crate::okf::paths::dirname(index);
+    // `target` relative to `folder`, or `None` when it lies outside it.
+    let relative = |path: &str| -> Option<String> {
+        if folder.is_empty() {
+            Some(path.to_string())
+        } else {
+            path.strip_prefix(folder)
+                .and_then(|rest| rest.strip_prefix('/'))
+                .map(str::to_string)
+        }
+    };
+    let mut raws: Vec<String> = relative(target).into_iter().collect();
+    raws.push(format!("/{target}"));
+    if let Some(dir) = target.strip_suffix("/index.md") {
+        let dir_link = format!("{dir}/");
+        raws.extend(relative(&dir_link));
+        raws.push(format!("/{dir_link}"));
+    }
+    raws
+}
+
 /// The first bullet of `text` that [`lists_raw_target`] counts as a raw
 /// listing of `target`, by exactly its rules 0-3, and the line it would be
 /// rewritten to.
@@ -375,17 +416,7 @@ pub(crate) fn first_raw_listing(
     index: &str,
     target: &str,
 ) -> Option<RawListing> {
-    let folder = crate::okf::paths::dirname(index);
-    let relative = if folder.is_empty() {
-        Some(target)
-    } else {
-        target
-            .strip_prefix(folder)
-            .and_then(|rest| rest.strip_prefix('/'))
-    };
-    let mut raws: Vec<String> = relative.into_iter().map(str::to_string).collect();
-    raws.push(format!("/{target}"));
-    let raws: Vec<String> = raws
+    let raws: Vec<String> = raw_names(index, target)
         .into_iter()
         .filter(|raw| encode_link_path(raw) != raw.as_str())
         .filter(|raw| py_unquote(raw) == raw.as_str())
@@ -1592,6 +1623,84 @@ mod tests {
             let line = format!("* [Odd]({name}) - old");
             let current = format!("# D\n\n{line}\n");
             let ops = [rewrite(name, &line)];
+
+            let got = replay("d/index.md", Some(&current), &ops).unwrap();
+
+            assert_eq!(got, current, "{name}");
+        }
+    }
+
+    /// A [`ReplayOp::RewriteRawListing`] of the folder `d/<name>`'s listing
+    /// in `d/index.md`, as `repair_indexes` records it (issue #731).
+    fn rewrite_folder(name: &str, line: &str) -> ReplayOp {
+        let start = legacy_destination_start(line).unwrap();
+        assert!(line[start..].starts_with(name), "{line}");
+        let rest = &line[start + name.len()..];
+        ReplayOp::RewriteRawListing {
+            target: format!("d/{name}/index.md"),
+            line: line.to_string(),
+            fixed: format!("{}{}{rest}", &line[..start], encode_link_path(name)),
+        }
+    }
+
+    #[test]
+    fn rewrite_raw_folder_listing_replays_onto_newer_text_and_idempotently() {
+        for name in ["a b", "a:b"] {
+            let line = format!("* [Odd]({name}/) - odd");
+            let current = format!("# D\n\nNew prose.\n\n# Sections\n\n{line}\n* [New](new/) - n\n");
+            let ops = [rewrite_folder(name, &line)];
+
+            let once = replay("d/index.md", Some(&current), &ops).unwrap();
+            let twice = replay("d/index.md", Some(&once), &ops).unwrap();
+
+            let fixed = format!("* [Odd]({}/) - odd", encode_link_path(name));
+            assert_eq!(
+                once,
+                format!("# D\n\nNew prose.\n\n# Sections\n\n{fixed}\n* [New](new/) - n\n"),
+                "{name}"
+            );
+            assert_eq!(twice, once, "{name}");
+        }
+    }
+
+    #[test]
+    fn rewrite_raw_folder_listing_replay_never_loses_the_listing() {
+        let line = "* [Odd](a b/) - old";
+        let ops = [rewrite_folder("a b", line)];
+        // A working bullet added meanwhile, as a folder link or the index
+        // file: the raw one is a duplicate and goes.
+        for working in ["* [Odd](a%20b/) - new", "* [Odd](a%20b/index.md) - new"] {
+            let beside = format!("# D\n\n{line}\n{working}\n");
+            assert_eq!(
+                replay("d/index.md", Some(&beside), &ops).unwrap(),
+                format!("# D\n\n{working}\n"),
+                "{working}"
+            );
+        }
+        // Replay cannot tell that `a%20b` (no slash) is a directory, so it
+        // does not count as a working listing: the raw bullet is rewritten,
+        // never dropped (two working bullets are left, which is safe).
+        let unslashed = format!("# D\n\n{line}\n* [Odd](a%20b) - new\n");
+        assert_eq!(
+            replay("d/index.md", Some(&unslashed), &ops).unwrap(),
+            "# D\n\n* [Odd](a%20b/) - old\n* [Odd](a%20b) - new\n"
+        );
+        // The working bullet the repair saw was removed meanwhile: the raw
+        // one is rewritten.
+        assert_eq!(
+            replay("d/index.md", Some(&format!("# D\n\n{line}\n")), &ops).unwrap(),
+            "# D\n\n* [Odd](a%20b/) - old\n"
+        );
+    }
+
+    #[test]
+    fn rewrite_raw_folder_listing_replay_leaves_a_parsed_link_alone() {
+        // `a)b/` and `a#b/` read as a link to `d/a`, which replay cannot tell
+        // is missing (a concurrent change may have created it): left.
+        for name in ["a)b", "a#b"] {
+            let line = format!("* [Odd]({name}/) - old");
+            let current = format!("# D\n\n{line}\n");
+            let ops = [rewrite_folder(name, &line)];
 
             let got = replay("d/index.md", Some(&current), &ops).unwrap();
 
