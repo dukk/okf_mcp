@@ -148,15 +148,14 @@ impl TestServer {
         Self::start_serving(catalogs_and_files, make_config, false).await
     }
 
-    /// As [`TestServer::start_with`], optionally running the mail worker
-    /// (`[mail] worker` as the settings say), for tests that watch a queued
+    /// As [`TestServer::start_with`], optionally running the mail worker,
+    /// for tests that watch a queued
     /// mail get sent. The other starters only enqueue.
     ///
     /// # Arguments
     /// * `catalogs_and_files` - as for `start`.
     /// * `make_config` - builds the settings from `http://127.0.0.1:<port>`.
-    /// * `mail_worker` - `true` keeps the settings' `mail.worker` (on by
-    ///   default); `false` turns the worker off.
+    /// * `mail_worker` - `true` runs the worker; `false` turns it off.
     ///
     /// # Returns
     /// The running server.
@@ -677,7 +676,7 @@ impl Drop for Sibling {
 /// # Arguments
 /// * `pool` - a pool on the database, already migrated and imported.
 /// * `make_config` - builds the settings from the base URL.
-/// * `mail_worker` - whether the settings' `mail.worker` stands.
+/// * `mail_worker` - whether `serve` runs the mail worker.
 /// * `redis` - `[redis]` on this server, if any; `poll_interval` is then one
 ///   hour.
 ///
@@ -701,7 +700,6 @@ async fn serve_app(
     let base = format!("http://{}", listener.local_addr().expect("address"));
     let mut config = make_config(&base);
     // Test servers only enqueue unless a test asks for the worker.
-    config.mail.worker &= mail_worker;
     let shared = match redis {
         Some(server) => {
             config.redis = Some(redis_config(server));
@@ -720,10 +718,13 @@ async fn serve_app(
     .await
     .expect("app loads");
     let shutdown = CancellationToken::new();
-    let served = tokio::spawn(okf_mcp::http::serve(
+    let served = tokio::spawn(okf_mcp::http::serve_with(
         Arc::clone(&app),
         listener,
         shutdown.clone(),
+        okf_mcp::http::ServeOptions {
+            worker: mail_worker,
+        },
     ));
     (base, app, shutdown, served)
 }

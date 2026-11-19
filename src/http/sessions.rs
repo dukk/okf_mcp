@@ -467,10 +467,11 @@ mod tests {
                 .expect("bind");
             let endpoint = format!("http://{}/mcp", listener.local_addr().expect("address"));
             let shutdown = tokio_util::sync::CancellationToken::new();
-            let served = tokio::spawn(crate::http::serve(
+            let served = tokio::spawn(crate::http::serve_with(
                 Arc::clone(&test.app),
                 listener,
                 shutdown.clone(),
+                crate::http::ServeOptions::NO_WORKER,
             ));
             let store = test.app.sessions().store().expect("Redis bindings");
             store.fail_next_store();

@@ -5,16 +5,20 @@
 //! 1. [`enqueue`] renders the template and inserts one `apalis.jobs` row in
 //!    queue [`QUEUE`] with `max_attempts` [`MAX_ATTEMPTS`]. The payload is
 //!    the rendered [`Mail`], the template's name and `queued_at`.
-//! 2. A worker in each `serve` process ([`spawn_worker`]) fetches it. apalis
+//! 2. A worker in every `serve` process ([`spawn_worker`]) fetches it. apalis
 //!    takes jobs with `FOR UPDATE SKIP LOCKED` and marks them as its own, so
-//!    two workers (two replicas) never take the same job.
+//!    two workers (two replicas) never take the same job. A replica that
+//!    dies loses its job to another one after [`ORPHAN_TIMEOUT`] (one
+//!    minute); delivery is at least once. The workers share one
+//!    [`WorkerPool`] of [`WORKER_POOL_SIZE`] connections, so N replicas
+//!    open `3 * N` beside the request pools.
 //! 3. The handler sends once. Success: `Done`. A permanent error: an
 //!    `AbortError`, so apalis marks the job `Killed` and never fetches it
 //!    again. A retryable error within [`RETRY_WINDOW_HOURS`] of `queued_at`:
 //!    the handler moves `run_at` to now plus the backoff and returns a plain
 //!    error, so apalis marks it `Failed` with one more attempt and fetches it
 //!    again once `run_at` passes. After the window: an `AbortError`.
-//! 4. [`list`], [`retry`], [`delete`] and [`prune`] read and write
+//! 4. [`list`], [`retry`], [`delete`], [`prune`] and [`prune_workers`] read and write
 //!    `apalis.jobs` in SQL, where apalis-postgres has no API.
 
 use std::sync::Arc;
@@ -66,18 +70,67 @@ pub const POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// How long a worker that stopped on an error waits before starting again.
 const RESTART_DELAY: Duration = Duration::from_secs(30);
 
-/// How often a worker tells apalis it is alive (apalis's default).
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+/// How often a worker tells apalis it is alive (apalis's default is 30 s;
+/// 10 s shortens the orphan timeout to a minute, issue #458).
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 
-/// The connections the worker's own pool may open: one held by LISTEN, one
-/// for the fetch, ack and heartbeat cycle, and two for handlers
-/// rescheduling at the same time. Never taken from the request pool, so
-/// `database_max_connections` stays the request side's alone.
-pub const WORKER_POOL_SIZE: u32 = 4;
+/// How many heartbeats a worker may miss before apalis counts it dead and
+/// re-enqueues its jobs (apalis-postgres's default is 10).
+const MISSED_HEARTBEATS: usize = 6;
+
+/// The orphan timeout: how long a dead replica's mail stays `sending`
+/// before another replica takes it back (`HEARTBEAT_INTERVAL` times
+/// `MISSED_HEARTBEATS`, one minute).
+pub const ORPHAN_TIMEOUT: Duration =
+    Duration::from_secs(HEARTBEAT_INTERVAL.as_secs() * MISSED_HEARTBEATS as u64);
+
+/// [`prune_workers`] keeps the row of a worker seen within this many orphan
+/// timeouts, so a worker that is merely slow is never pruned.
+const WORKER_ROW_ORPHAN_TIMEOUTS: u32 = 10;
+
+/// The connections the process's one worker pool may open: the mail
+/// worker's LISTEN, the mail worker's fetch, ack, heartbeat and the handler's
+/// reschedule writes, and the housekeeping worker's fetch, ack and heartbeat
+/// (it polls, with no LISTEN). Never taken from the request pool, so
+/// `database_max_connections` stays the request side's alone. A deployment
+/// of N replicas opens at most `3 * N` of them in all.
+pub const WORKER_POOL_SIZE: u32 = 3;
 
 /// The `application_name` the worker's connections carry, so an operator
 /// (or a test) can tell them apart in `pg_stat_activity`.
 pub const WORKER_APPLICATION_NAME: &str = "okf-mail-worker";
+
+/// The process's one pool for background workers: [`spawn_worker`] and
+/// housekeeping's worker share it (so the connection cost per replica is
+/// [`WORKER_POOL_SIZE`] however many workers run). Cloning it shares the
+/// pool; whoever created it closes it once every worker has stopped.
+#[derive(Clone)]
+pub struct WorkerPool {
+    pool: PgPool,
+}
+
+impl WorkerPool {
+    /// Builds the pool (lazily: it connects on first use).
+    ///
+    /// # Arguments
+    /// * `pool` - the request pool, whose connect options are copied.
+    ///
+    /// # Returns
+    /// A pool of at most [`WORKER_POOL_SIZE`] connections named
+    /// [`WORKER_APPLICATION_NAME`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn new(pool: &PgPool) -> Self {
+        Self {
+            pool: worker_pool(pool),
+        }
+    }
+
+    /// Closes the pool once every worker that uses it has stopped.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn close(&self) {
+        self.pool.close().await;
+    }
+}
 
 /// How long sent mail jobs are kept.
 const DONE_RETENTION_DAYS: i64 = 7;
@@ -435,11 +488,42 @@ pub async fn prune(pool: &PgPool, now: DateTime<Utc>) -> Result<u64, OkfError> {
     .rows_affected())
 }
 
+/// Deletes the `apalis.workers` rows of workers that stopped for good: last
+/// seen over ten orphan timeouts ago and referenced by no job. Every start
+/// and every restart after a database outage registers a new row, and
+/// nothing else removes them. A row a job still names (`lock_by`, a foreign
+/// key) is kept, whatever the job's state: a `Running` job's worker is
+/// alive or about to be declared dead by apalis, and the row of a worker
+/// that finished jobs goes once [`prune`] deletes those jobs.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `now` - the server clock.
+///
+/// # Returns
+/// How many rows were deleted.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
+pub async fn prune_workers(pool: &PgPool, now: DateTime<Utc>) -> Result<u64, OkfError> {
+    let timeouts =
+        TimeDelta::from_std(ORPHAN_TIMEOUT * WORKER_ROW_ORPHAN_TIMEOUTS).map_err(queue_error)?;
+    Ok(sqlx::query(
+        "DELETE FROM apalis.workers w WHERE w.last_seen < $1 \
+         AND NOT EXISTS (SELECT 1 FROM apalis.jobs j WHERE j.lock_by = w.id)",
+    )
+    .bind(now - timeouts)
+    .execute(pool)
+    .await?
+    .rows_affected())
+}
+
 /// What the job handler needs, given to apalis as worker data (cloned per
 /// job: every field is a cheap handle).
 #[derive(Clone)]
 pub(crate) struct MailContext {
-    /// The worker's own pool ([`worker_pool`]): apalis's LISTEN, fetches,
+    /// The process's [`WorkerPool`]: apalis's LISTEN, fetches,
     /// acks and heartbeats, and the handler's reschedules.
     pub pool: PgPool,
     /// The provider.
@@ -662,6 +746,9 @@ pub(crate) struct WorkerTiming {
     pub heartbeat: Duration,
     /// How long to wait before restarting after a backend error.
     pub restart: Duration,
+    /// How many heartbeats may be missed before a worker's jobs are
+    /// re-enqueued.
+    pub missed_heartbeats: usize,
 }
 
 impl WorkerTiming {
@@ -670,23 +757,29 @@ impl WorkerTiming {
         poll: POLL_INTERVAL,
         heartbeat: HEARTBEAT_INTERVAL,
         restart: RESTART_DELAY,
+        missed_heartbeats: MISSED_HEARTBEATS,
     };
 }
 
-/// Starts the mail worker for a serving process (`http::serve` calls it,
-/// unless `[mail] worker = false`).
+/// Starts the mail worker for a serving process (`http::serve` calls it on
+/// every replica, unless a test turns it off through `ServeOptions`).
 ///
 /// # Arguments
-/// * `app` - the shared state (its pool's connect options, mailer and clock).
+/// * `app` - the shared state (its mailer and clock).
+/// * `pool` - the process's worker pool; it stays open when the worker ends.
 /// * `shutdown` - cancelled when the server stops.
 ///
 /// # Returns
 /// The worker's task; it ends once `shutdown` is cancelled and the job in
 /// hand (if any) is finished.
 #[tracing::instrument(level = "debug", skip_all)]
-pub fn spawn_worker(app: Arc<App>, shutdown: CancellationToken) -> JoinHandle<()> {
+pub fn spawn_worker(
+    app: Arc<App>,
+    pool: &WorkerPool,
+    shutdown: CancellationToken,
+) -> JoinHandle<()> {
     let context = MailContext {
-        pool: worker_pool(app.pool()),
+        pool: pool.pool.clone(),
         mailer: Arc::clone(app.mailer()),
         clock: app.clock_handle(),
         metrics: app.metrics().clone(),
@@ -697,10 +790,11 @@ pub fn spawn_worker(app: Arc<App>, shutdown: CancellationToken) -> JoinHandle<()
 
 /// Runs one apalis worker on [`QUEUE`] until `shutdown`, restarting it
 /// after `timing.restart` if it stops on an error (a lost database, say).
-/// It closes `context.pool` when it ends.
+/// It leaves `context.pool` open: the pool's owner closes it.
 ///
 /// # Arguments
-/// * `context` - what the handler needs; its pool is the worker's own.
+/// * `context` - what the handler needs; its pool is the process's
+///   [`WorkerPool`].
 /// * `name` - the worker's name ([`worker_name`]); a restart registers as
 ///   `<name>-<restarts>`, a row of its own, so apalis's session-scoped lock
 ///   on the old row can never refuse it.
@@ -718,7 +812,6 @@ pub(crate) fn run_worker(
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         run_until_cancelled(&context, &name, timing, &shutdown).await;
-        context.pool.close().await;
     })
 }
 
@@ -740,7 +833,8 @@ async fn run_until_cancelled(
     for restarts in 0_u64.. {
         let config = QueueConfig::default()
             .queue(QUEUE)
-            .heartbeat_interval(timing.heartbeat);
+            .heartbeat_interval(timing.heartbeat)
+            .missed_heartbeats(timing.missed_heartbeats);
         let backend = PostgresStorage::<SendMail>::new(&context.pool)
             .with_config(config)
             .with_pubsub()
@@ -830,6 +924,7 @@ mod tests {
         poll: Duration::from_millis(100),
         heartbeat: Duration::from_secs(1),
         restart: Duration::from_millis(200),
+        missed_heartbeats: MISSED_HEARTBEATS,
     };
 
     /// Runs one worker named `name` on `own_pool` (a [`worker_pool`], as
@@ -861,8 +956,14 @@ mod tests {
 
     fn start_context(context: MailContext, name: &str) -> (CancellationToken, JoinHandle<()>) {
         let shutdown = CancellationToken::new();
+        let pool = context.pool.clone();
         let worker = run_worker(context, name.to_string(), FAST, shutdown.clone());
-        (shutdown, worker)
+        // `run_worker` leaves the pool to its owner (here, the test).
+        let closed = tokio::spawn(async move {
+            let _ = worker.await;
+            pool.close().await;
+        });
+        (shutdown, closed)
     }
 
     fn start(pool: &PgPool, mailer: Arc<Scripted>) -> (CancellationToken, JoinHandle<()>) {
@@ -1503,6 +1604,131 @@ mod tests {
             by_worker,
             ["okf-mail-a-1", "okf-mail-b-2"],
             "both workers took mail"
+        );
+    }
+
+    /// A worker that dies without shutting down (its task is aborted, as a
+    /// killed pod's would be) loses its mail to another worker once its
+    /// heartbeat stops: `missed_heartbeats` (6) times the heartbeat. Timing
+    /// is production's, scaled from 10 s to 1 s, so the orphan timeout is
+    /// 6 s; the wait is bounded at 60 s because load on the machine delays
+    /// the surviving worker's heartbeat, which does the re-enqueue.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_dead_workers_job_returns_within_a_minute() {
+        let db = test_db().await;
+        // The first worker's send never finishes: it dies holding the mail.
+        let stuck = Arc::new(Scripted {
+            delay: Duration::from_secs(3600),
+            ..Scripted::default()
+        });
+        let context = context_with(
+            worker_pool(&db.pool),
+            Arc::clone(&stuck),
+            Metrics::global(),
+            MailProvider::Log,
+        );
+        // `run_worker`'s own handle, not `start_context`'s wrapper: aborting
+        // the wrapper would leave the worker task running.
+        let dead = run_worker(
+            context,
+            "okf-mail-dead".to_string(),
+            FAST,
+            CancellationToken::new(),
+        );
+        wait_listening(&db.pool, 1).await;
+        enqueue_claimed_by(&db.pool, "alice@example.com", "okf-mail-dead").await;
+        wait_for(&db.pool, "Running", 0).await;
+        // Kill it: no shutdown signal, no ack, no further heartbeat.
+        dead.abort();
+        let _ = dead.await;
+
+        let rescuer = Scripted::with(vec![]);
+        let (stop_live, live) =
+            start_on(worker_pool(&db.pool), Arc::clone(&rescuer), "okf-mail-live");
+        let sent = tokio::time::timeout(Duration::from_secs(60), async {
+            while rescuer.sent() == 0 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await;
+        stop(stop_live, live).await;
+
+        assert!(
+            sent.is_ok(),
+            "another worker sent the dead worker's mail within 60 s"
+        );
+        assert_eq!(rescuer.sent(), 1);
+        assert_eq!(stuck.sent(), 0, "the dead worker never finished its send");
+        assert_eq!(state(&db.pool).await.0, "Done");
+    }
+
+    /// Inserts an `apalis.workers` row last seen `age` before `now()`.
+    async fn insert_worker(pool: &PgPool, id: &str, age: TimeDelta) {
+        sqlx::query(
+            "INSERT INTO apalis.workers (id, worker_type, storage_name, layers, last_seen) \
+             VALUES ($1, $2, 'PostgresStorage', '', $3)",
+        )
+        .bind(id)
+        .bind(QUEUE)
+        .bind(now() - age)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stale_worker_rows_are_pruned_and_live_ones_kept() {
+        let db = test_db().await;
+        insert_worker(&db.pool, "stale", TimeDelta::hours(1)).await;
+        insert_worker(&db.pool, "holds-a-job", TimeDelta::hours(1)).await;
+        insert_worker(&db.pool, "recent", TimeDelta::seconds(30)).await;
+        enqueue(&db.pool, "alice@example.com", &Template::Test, now())
+            .await
+            .unwrap();
+        sqlx::query("UPDATE apalis.jobs SET status = 'Running', lock_by = 'holds-a-job'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let pruned = prune_workers(&db.pool, now()).await.unwrap();
+
+        assert_eq!(pruned, 1);
+        let left: Vec<String> = sqlx::query_scalar("SELECT id FROM apalis.workers ORDER BY id")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(left, ["holds-a-job", "recent"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stale_worker_row_that_finished_jobs_goes_once_the_jobs_do() {
+        let db = test_db().await;
+        insert_worker(&db.pool, "finished", TimeDelta::days(9)).await;
+        enqueue(&db.pool, "alice@example.com", &Template::Test, now())
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE apalis.jobs SET status = 'Done', lock_by = 'finished', \
+             done_at = $1 - interval '8 days'",
+        )
+        .bind(now())
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        // The foreign key from the job keeps the row for now (and the
+        // delete must not fail on it).
+        assert_eq!(prune_workers(&db.pool, now()).await.unwrap(), 0);
+        assert_eq!(prune(&db.pool, now()).await.unwrap(), 1);
+        assert_eq!(prune_workers(&db.pool, now()).await.unwrap(), 1);
+    }
+
+    #[test]
+    fn the_orphan_timeout_is_one_minute() {
+        assert_eq!(ORPHAN_TIMEOUT, Duration::from_secs(60));
+        assert_eq!(
+            WorkerTiming::SERVE.heartbeat * WorkerTiming::SERVE.missed_heartbeats as u32,
+            ORPHAN_TIMEOUT
         );
     }
 
