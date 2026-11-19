@@ -1,0 +1,476 @@
+//! Catalog generation announcements between two replicas (issue #659), and
+//! the refresh on a changeset whose base is newer than a replica's snapshot.
+//!
+//! [`replica_pair`] loads two apps on one database and one Redis with
+//! `poll_interval = 1h`, and no poll loop runs in a unit test: a replica's
+//! snapshot moves only through what a test calls or the announcement
+//! subscriber it starts.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use tokio_util::sync::CancellationToken;
+
+use super::listen_catalogs;
+use crate::app::App;
+use crate::config::Config;
+use crate::db::redis_support::TestRedis;
+use crate::error::OkfError;
+use crate::mcp::changesets::{pending_changes, publish, PendingParams, PublishParams};
+use crate::mcp::context::ToolContext;
+use crate::mcp::documents::{read_document, ReadDocumentParams};
+use crate::mcp::testing::{app_with, open, principal_as, replica_pair, writer, TestApp};
+use crate::mcp::writes::{edit_document, EditDocumentParams};
+use crate::store::audit::AuditActor;
+use crate::store::catalogs::{self, CatalogGeneration};
+use crate::store::keys::Access;
+use crate::telemetry::metrics::AnnouncementResult;
+
+/// The longest any wait for a replica may take.
+const WAIT: Duration = Duration::from_secs(10);
+
+const INDEX: &str = "# PG\n\n# Sections\n\n* [Infra](/infra/index.md) - systems\n";
+const INFRA: &str = "# Infra\n\n# Concepts\n\n* [X](x.md) - x\n";
+const X: &str = "---\ntype: Note\ntitle: X\ndescription: X.\n---\n# X\n";
+
+/// Two replicas sharing one catalog `pg`.
+async fn pair() -> (TestApp, Arc<App>, TestRedis) {
+    let files: &[(&str, &str)] = &[
+        ("index.md", INDEX),
+        ("infra/index.md", INFRA),
+        ("infra/x.md", X),
+    ];
+    tokio::time::timeout(
+        Duration::from_secs(120),
+        replica_pair(&[("pg", files)], Config::default()),
+    )
+    .await
+    .expect("starting two replicas within 120 s")
+}
+
+/// A running catalog subscriber.
+struct Listener {
+    shutdown: CancellationToken,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Listener {
+    /// Starts `app`'s catalog subscriber and waits until Redis counts it.
+    async fn start(app: &Arc<App>) -> Self {
+        let (shutdown, task) = crate::shared::testing::listening_for_catalogs(app).await;
+        Self { shutdown, task }
+    }
+
+    /// Stops the subscriber and waits for it.
+    async fn stop(self) {
+        self.shutdown.cancel();
+        tokio::time::timeout(WAIT, self.task)
+            .await
+            .expect("the subscriber stops")
+            .expect("the subscriber's task");
+    }
+}
+
+/// `alice`'s connection on `app`, the key `writer` stored on the first app.
+fn alice_on(app: &Arc<App>) -> ToolContext {
+    ToolContext::new(
+        Arc::clone(app),
+        principal_as("alice", Access::Write, &[], Some("pg")),
+        None,
+    )
+}
+
+/// Replaces `old` with `new` in `path` in the changeset `handle`.
+async fn edit(ctx: &ToolContext, handle: &str, path: &str, old: &str, new: &str) {
+    let params = EditDocumentParams {
+        path: path.to_string(),
+        old_str: old.to_string(),
+        new_str: new.to_string(),
+        replace_all: false,
+        changeset: handle.to_string(),
+    };
+    edit_document(ctx, params).await.expect("the edit");
+}
+
+/// Publishes the changeset `handle`.
+async fn publish_now(ctx: &ToolContext, handle: &str) {
+    let params = PublishParams {
+        message: "test".to_string(),
+        changeset: handle.to_string(),
+    };
+    let published = publish(ctx, params).await.expect("the publish");
+    assert!(published.report.published, "something was published");
+}
+
+/// One changeset that replaces `old` with `new` in `path`, published.
+async fn published_edit(ctx: &ToolContext, path: &str, old: &str, new: &str) {
+    let handle = open(ctx).await;
+    edit(ctx, &handle, path, old, new).await;
+    publish_now(ctx, &handle).await;
+}
+
+/// `path` as `read_document` answers it on `ctx`'s app.
+async fn read(ctx: &ToolContext, path: &str, changeset: Option<&str>) -> String {
+    let params = ReadDocumentParams {
+        path: Some(path.to_string()),
+        catalog: Some("pg".to_string()),
+        changeset: changeset.map(str::to_string),
+    };
+    read_document(ctx, params).await.expect("the read").text
+}
+
+/// Waits until `read` of `path` on `ctx` contains `text`.
+async fn until_read(ctx: &ToolContext, path: &str, text: &str) -> bool {
+    tokio::time::timeout(WAIT, async {
+        while !read(ctx, path, None).await.contains(text) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
+/// The catalog's generation in the database.
+async fn stored_generation(app: &App, name: &str) -> CatalogGeneration {
+    let row = catalogs::find(app.pool(), name).await.expect("the catalog");
+    CatalogGeneration {
+        catalog_id: row.id,
+        generation: row.generation,
+    }
+}
+
+/// The acceptance criterion: a publish on A is read on B well within
+/// `poll_interval`, with no poll. The first publish lets B's subscriber
+/// finish its catch-up on subscribing, so the second can reach B only
+/// through its announcement.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_publish_on_one_replica_is_read_on_the_other_without_a_poll() {
+    let (a, b, _redis) = pair().await;
+    let on_a = writer(&a, "alice", "pg").await;
+    let on_b = alice_on(&b);
+    let listener = Listener::start(&b).await;
+
+    published_edit(&on_a, "/index.md", "- systems", "- the systems").await;
+    let first = until_read(&on_b, "/index.md", "the systems").await;
+    published_edit(&on_a, "/index.md", "- the systems", "- all systems").await;
+    let second = until_read(&on_b, "/index.md", "all systems").await;
+    listener.stop().await;
+
+    assert!(first, "B read the first publish");
+    assert!(second, "B read the second publish through its announcement");
+    let stored = stored_generation(&a.app, "pg").await;
+    let state = b.catalog("pg").expect("B holds pg");
+    assert_eq!(state.current().generation(), stored.generation);
+}
+
+/// A lost announcement (B not subscribed when A published) is caught up
+/// at B's next poll, the backstop.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_lost_announcement_is_caught_up_at_the_poll() {
+    let (a, b, _redis) = pair().await;
+    let on_a = writer(&a, "alice", "pg").await;
+    let on_b = alice_on(&b);
+
+    published_edit(&on_a, "/index.md", "- systems", "- the systems").await;
+    let before = read(&on_b, "/index.md", None).await;
+    b.poll().await.expect("B's poll");
+    let after = read(&on_b, "/index.md", None).await;
+
+    assert!(!before.contains("the systems"), "no announcement reached B");
+    assert!(after.contains("the systems"), "{after}");
+}
+
+/// A subscriber that starts after a publish catches up when it subscribes:
+/// Redis does not replay the announcement it missed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_subscriber_catches_up_on_a_missed_publish_when_it_subscribes() {
+    let (a, b, _redis) = pair().await;
+    let on_a = writer(&a, "alice", "pg").await;
+    let on_b = alice_on(&b);
+    published_edit(&on_a, "/index.md", "- systems", "- the systems").await;
+    assert!(!read(&on_b, "/index.md", None).await.contains("the systems"));
+
+    let listener = Listener::start(&b).await;
+    let caught_up = until_read(&on_b, "/index.md", "the systems").await;
+    listener.stop().await;
+
+    assert!(caught_up, "B caught up on subscribing");
+}
+
+/// The issue's four steps: a publish of `/index.md` (B not told), B still
+/// reads the old revision, a new changeset edits `/index.md` on the newer
+/// revision, and `pending_changes` is asked on B. B refreshes before
+/// diffing: the base is current, not stale, and the published line is not
+/// shown as added again.
+#[tokio::test(flavor = "multi_thread")]
+async fn pending_changes_on_a_lagging_replica_refreshes_and_never_reports_a_base_ahead() {
+    let (a, b, _redis) = pair().await;
+    let on_a = writer(&a, "alice", "pg").await;
+    let on_b = alice_on(&b);
+    // 1. Published on A; B has no subscriber.
+    published_edit(&on_a, "/index.md", "- systems", "- the systems").await;
+    // 2. B still serves the older revision.
+    assert!(!read(&on_b, "/index.md", None).await.contains("the systems"));
+    // 3. An edit made on A's newer snapshot: its base is the new revision.
+    let handle = open(&on_a).await;
+    edit(
+        &on_a,
+        &handle,
+        "/index.md",
+        "- the systems",
+        "- all systems",
+    )
+    .await;
+
+    // 4. `pending_changes` on B.
+    let params = PendingParams {
+        changeset: handle.clone(),
+    };
+    let pending = pending_changes(&on_b, params)
+        .await
+        .expect("pending_changes");
+
+    let file = &pending.files[0];
+    assert_eq!(file.path, "/index.md");
+    assert!(file.base_revision.is_some(), "{file:?}");
+    assert_eq!(file.current_revision, file.base_revision, "{file:?}");
+    assert!(!file.stale, "{file:?}");
+    assert!(
+        file.diff
+            .contains("-* [Infra](/infra/index.md) - the systems"),
+        "{}",
+        file.diff
+    );
+    assert!(
+        file.diff
+            .contains("+* [Infra](/infra/index.md) - all systems"),
+        "{}",
+        file.diff
+    );
+    let stored = stored_generation(&a.app, "pg").await;
+    let state = b.catalog("pg").expect("B holds pg");
+    assert_eq!(
+        state.current().generation(),
+        stored.generation,
+        "B refreshed"
+    );
+}
+
+/// A read through a changeset on a lagging replica refreshes first, so a
+/// file the changeset does not touch shows the text the entries were made
+/// on, not an older one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_through_a_changeset_on_a_lagging_replica_sees_its_base() {
+    let (a, b, _redis) = pair().await;
+    let on_a = writer(&a, "alice", "pg").await;
+    let on_b = alice_on(&b);
+    let both = open(&on_a).await;
+    edit(&on_a, &both, "/index.md", "- systems", "- the systems").await;
+    edit(&on_a, &both, "/infra/index.md", "- x", "- ex").await;
+    publish_now(&on_a, &both).await;
+    let handle = open(&on_a).await;
+    edit(
+        &on_a,
+        &handle,
+        "/index.md",
+        "- the systems",
+        "- all systems",
+    )
+    .await;
+
+    let untouched = read(&on_b, "/infra/index.md", Some(&handle)).await;
+    let touched = read(&on_b, "/index.md", Some(&handle)).await;
+
+    assert!(untouched.contains("- ex"), "{untouched}");
+    assert!(touched.contains("all systems"), "{touched}");
+}
+
+/// The invariant in `pending_changes`' response builder: a snapshot that
+/// is still behind an entry's base (a refresh that could not catch up, here
+/// forced by a base no publish wrote) is refused as busy, never reported
+/// with `current_revision < base_revision`.
+#[tokio::test(flavor = "multi_thread")]
+async fn pending_changes_refuses_a_snapshot_behind_a_base_it_cannot_catch_up_to() {
+    let (a, _b, _redis) = pair().await;
+    let on_a = writer(&a, "alice", "pg").await;
+    let handle = open(&on_a).await;
+    edit(&on_a, &handle, "/index.md", "- systems", "- the systems").await;
+    sqlx::query("UPDATE changeset_entries SET base_revision = base_revision + 5")
+        .execute(a.app.pool())
+        .await
+        .expect("move the base ahead");
+
+    let params = PendingParams { changeset: handle };
+    let refused = pending_changes(&on_a, params).await;
+
+    assert!(
+        matches!(refused, Err(OkfError::Busy { ref reason }) if reason.contains("older than")),
+        "{refused:?}"
+    );
+}
+
+/// Announcements racing direct refreshes of one catalog rebuild it once,
+/// and an announcement of an older generation leaves it alone. Refreshes
+/// are serialized by `CatalogState`'s rebuild lock and skip a generation
+/// already reached.
+#[tokio::test(flavor = "multi_thread")]
+async fn racing_announcements_and_refreshes_rebuild_once_and_never_go_back() {
+    let (a, b, _redis) = pair().await;
+    let on_a = writer(&a, "alice", "pg").await;
+    published_edit(&on_a, "/index.md", "- systems", "- the systems").await;
+    let change = stored_generation(&a.app, "pg").await;
+    let state = b.catalog("pg").expect("B holds pg");
+
+    let raced = tokio::time::timeout(WAIT, async {
+        tokio::join!(
+            b.apply_catalog_announcement(change),
+            b.apply_catalog_announcement(change),
+            b.apply_catalog_announcement(change),
+            state.refresh(b.pool()),
+            state.refresh(b.pool()),
+        )
+    })
+    .await
+    .expect("the race settles");
+    let (one, two, three, four, five) = raced;
+    let applied = [one, two, three]
+        .iter()
+        .filter(|result| **result == AnnouncementResult::Applied)
+        .count();
+    let refreshed = [four.expect("refresh"), five.expect("refresh")]
+        .iter()
+        .filter(|swapped| **swapped)
+        .count();
+    let after = state.current();
+    let older = CatalogGeneration {
+        generation: change.generation - 1,
+        ..change
+    };
+    let stale = b.apply_catalog_announcement(older).await;
+    let again = b.apply_catalog_announcement(change).await;
+
+    assert_eq!(applied + refreshed, 1, "one rebuild");
+    for result in [one, two, three] {
+        assert!(
+            matches!(
+                result,
+                AnnouncementResult::Applied | AnnouncementResult::Current
+            ),
+            "{result:?}"
+        );
+    }
+    assert_eq!(after.generation(), change.generation);
+    assert_eq!(stale, AnnouncementResult::Current);
+    assert_eq!(again, AnnouncementResult::Current);
+    assert!(
+        Arc::ptr_eq(&after, &state.current()),
+        "nothing rebuilt since"
+    );
+}
+
+/// The same race with B's poll pass in it: the snapshot ends at the stored
+/// generation, whoever got there.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_announcement_racing_the_poll_ends_at_the_stored_generation() {
+    let (a, b, _redis) = pair().await;
+    let on_a = writer(&a, "alice", "pg").await;
+    published_edit(&on_a, "/index.md", "- systems", "- the systems").await;
+    let change = stored_generation(&a.app, "pg").await;
+
+    let (announced, polled) = tokio::time::timeout(WAIT, async {
+        tokio::join!(b.apply_catalog_announcement(change), b.poll())
+    })
+    .await
+    .expect("the race settles");
+
+    polled.expect("B's poll");
+    assert!(
+        matches!(
+            announced,
+            AnnouncementResult::Applied | AnnouncementResult::Current
+        ),
+        "{announced:?}"
+    );
+    let state = b.catalog("pg").expect("B holds pg");
+    assert_eq!(state.current().generation(), change.generation);
+}
+
+/// An announcement of a catalog B has not loaded (unknown, or created since
+/// B's last poll) loads nothing, and one of a catalog deleted since is
+/// answered without a panic; the poll loop owns the catalog map.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_announcement_of_a_catalog_not_loaded_or_deleted_loads_nothing() {
+    let (a, b, _redis) = pair().await;
+    let pg = stored_generation(&a.app, "pg").await;
+    let created = catalogs::create(
+        a.app.pool(),
+        &catalogs::NewCatalog {
+            name: "work",
+            display_name: &crate::labels::DisplayName::default(),
+            description: "",
+            owner_team: crate::db::TEST_TEAM,
+        },
+        &AuditActor::cli(),
+        chrono::Utc::now(),
+    )
+    .await
+    .expect("create work");
+    let work = stored_generation(&a.app, "work").await;
+    assert_eq!(work.catalog_id, created.id);
+    let unknown = CatalogGeneration {
+        catalog_id: i64::MAX,
+        generation: 1,
+    };
+
+    let none = b.apply_catalog_announcement(unknown).await;
+    let new = b.apply_catalog_announcement(work).await;
+    catalogs::delete(
+        a.app.pool(),
+        "pg",
+        true,
+        &AuditActor::cli(),
+        chrono::Utc::now(),
+    )
+    .await
+    .expect("delete pg");
+    let gone = b
+        .apply_catalog_announcement(CatalogGeneration {
+            generation: pg.generation + 1,
+            ..pg
+        })
+        .await;
+
+    assert_eq!(none, AnnouncementResult::Unknown);
+    assert_eq!(new, AnnouncementResult::Unknown);
+    assert_eq!(gone, AnnouncementResult::Unknown);
+    let names: Vec<String> = b.catalogs().keys().cloned().collect();
+    assert_eq!(names, ["pg"], "nothing loaded; pg waits for the poll");
+    b.poll().await.expect("B's poll");
+    let names: Vec<String> = b.catalogs().keys().cloned().collect();
+    assert_eq!(names, ["work"], "the poll drops pg and loads work");
+}
+
+/// Without `[redis]` nothing changes: there is no subscriber, a publish
+/// announces nothing (and does not fail), and its own snapshot still moves
+/// at once.
+#[tokio::test(flavor = "multi_thread")]
+async fn without_redis_a_publish_refreshes_only_its_own_replica() {
+    let files: &[(&str, &str)] = &[
+        ("index.md", INDEX),
+        ("infra/index.md", INFRA),
+        ("infra/x.md", X),
+    ];
+    let test = app_with(&[("pg", files)], Config::default()).await;
+    assert!(test.app.redis().is_none());
+    let ctx = writer(&test, "alice", "pg").await;
+
+    let listened = tokio::time::timeout(
+        WAIT,
+        listen_catalogs(Arc::clone(&test.app), CancellationToken::new()),
+    )
+    .await;
+    published_edit(&ctx, "/index.md", "- systems", "- the systems").await;
+
+    assert!(listened.is_ok(), "the subscriber returns at once");
+    assert!(read(&ctx, "/index.md", None).await.contains("the systems"));
+}

@@ -29,6 +29,7 @@ use crate::oidc::OidcProviders;
 use crate::overlay::Overlays;
 use crate::shared;
 use crate::store::audit::{self, AccessKind, AccessRecord};
+use crate::store::catalogs::CatalogGeneration;
 use crate::store::oauth::{
     clients as oauth_clients, codes as sign_in_codes, tokens as oauth_tokens,
 };
@@ -36,7 +37,7 @@ use crate::store::settings::{self, Settings};
 use crate::store::{
     catalogs, changesets, email_tokens, keys, sign_in_events, unlocks, user_sessions,
 };
-use crate::telemetry::metrics::{Metrics, Outcome, RefreshResult};
+use crate::telemetry::metrics::{AnnouncementResult, Metrics, Outcome, RefreshResult};
 use crate::telemetry::subscriber::{split_event, LOCAL_ONLY};
 
 /// Every loaded catalog, by name (a `BTreeMap`, so iteration is in name
@@ -830,6 +831,158 @@ impl App {
     )]
     pub fn loaded_admin_generation(&self) -> i64 {
         self.admin_generation.load(Ordering::Relaxed)
+    }
+
+    /// Tells the other replicas that a catalog's published generation moved
+    /// (issue #659), after the write that moved it committed. Best effort and
+    /// detached: the publish happens on its own task, so a slow or failing
+    /// Redis never delays the caller's answer; a failure is counted and
+    /// logged, and the other replicas' poll loops cover it. Does nothing
+    /// without `[redis]`.
+    ///
+    /// # Arguments
+    /// * `change` - the catalog and the generation its write committed.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn announce_catalog(&self, change: CatalogGeneration) {
+        let Some(redis) = self.redis.clone() else {
+            return;
+        };
+        // `in_current_span` keeps the publish under the caller's trace,
+        // although the task may outlive the caller.
+        tokio::spawn(shared::announce::publish_catalog(redis, change).in_current_span());
+    }
+
+    /// Answers one catalog announcement: refreshes the loaded catalog with
+    /// that id unless its snapshot already reached the announced
+    /// generation. Each call is the root of its own trace
+    /// (`okf.catalog.announcement`) and is counted in
+    /// `okf.catalog.announcements`.
+    ///
+    /// A catalog this replica has not loaded (created since its last poll,
+    /// or one that failed to load) is left alone, and so is one deleted
+    /// since: the poll loop owns the catalog map and loads or drops it, so
+    /// announcements never load anything (no load storm). Concurrent
+    /// refreshes of one catalog, from here, the poll loop or a local
+    /// publish, are serialized by [`CatalogState::refresh`]'s rebuild lock:
+    /// the first rebuilds, the rest see the generation already reached and
+    /// return, so a snapshot never moves back and a generation is built
+    /// once.
+    ///
+    /// # Arguments
+    /// * `change` - the announced catalog and generation.
+    ///
+    /// # Returns
+    /// What the announcement came to.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "makes the okf.catalog.announcement root span itself"
+        )
+    )]
+    pub async fn apply_catalog_announcement(
+        &self,
+        change: CatalogGeneration,
+    ) -> AnnouncementResult {
+        // `parent: None`: a background root, like each poll pass.
+        let span = tracing::info_span!(
+            parent: None,
+            "okf.catalog.announcement",
+            okf.catalog = tracing::field::Empty,
+            okf.announcement.result = tracing::field::Empty,
+        );
+        let result = self
+            .refresh_announced(change, &span)
+            .instrument(span.clone())
+            .await;
+        span.record("okf.announcement.result", result.as_str());
+        self.metrics.catalog_announcement(result);
+        result
+    }
+
+    /// The body of [`App::apply_catalog_announcement`], inside its span.
+    ///
+    /// # Arguments
+    /// * `change` - the announced catalog and generation.
+    /// * `span` - the announcement's span, to record the catalog's name on.
+    ///
+    /// # Returns
+    /// What the announcement came to.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn refresh_announced(
+        &self,
+        change: CatalogGeneration,
+        span: &tracing::Span,
+    ) -> AnnouncementResult {
+        // A linear search: the map is keyed by name, and an announcement
+        // names the id, which a catalog created again under the name does not
+        // share.
+        let state = self
+            .catalogs()
+            .values()
+            .find(|state| state.id() == change.catalog_id)
+            .cloned();
+        let Some(state) = state else {
+            return AnnouncementResult::Unknown;
+        };
+        span.record("okf.catalog", state.name());
+        // Already there (this replica's own publish, the poll loop, or an
+        // earlier announcement): not even a database read.
+        if change.generation <= state.current().generation() {
+            return AnnouncementResult::Current;
+        }
+        match state.refresh(&self.pool).await {
+            Ok(true) => AnnouncementResult::Applied,
+            Ok(false) => AnnouncementResult::Current,
+            // Deleted since this replica's last poll, which drops it.
+            Err(OkfError::CatalogNotSelected { .. }) => AnnouncementResult::Unknown,
+            Err(error) => {
+                split_event!(
+                    error,
+                    { catalog = %state.name(), kind = error.kind(), },
+                    { %error, },
+                    "refresh after an announcement failed; the poll loop retries"
+                );
+                AnnouncementResult::Failed
+            }
+        }
+    }
+
+    /// Refreshes every loaded catalog whose generation in the database is
+    /// newer than its snapshot: what the catalog subscriber does when it
+    /// (re)subscribes, since announcements sent while it was not subscribed
+    /// are lost. One read of the catalog list, then one
+    /// [`App::apply_catalog_announcement`] per catalog that is behind; a
+    /// catalog not loaded here is left to the poll loop, as for an
+    /// announcement. A failed list read is logged; the poll loop covers it.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn catch_up_catalogs(&self) {
+        let rows = match catalogs::list(&self.pool).await {
+            Ok(rows) => rows,
+            Err(error) => {
+                split_event!(
+                    error,
+                    { kind = error.kind(), },
+                    { %error, },
+                    "reading the catalog list to catch up failed; the poll loop covers it"
+                );
+                return;
+            }
+        };
+        let loaded = self.catalogs();
+        for row in rows {
+            let behind = loaded
+                .get(&row.name)
+                .filter(|state| state.id() == row.id)
+                .is_some_and(|state| row.generation > state.current().generation());
+            if behind {
+                self.apply_catalog_announcement(CatalogGeneration {
+                    catalog_id: row.id,
+                    generation: row.generation,
+                })
+                .await;
+            }
+        }
     }
 
     /// Reloads the key cache and the settings if `admin_generation` moved

@@ -753,9 +753,16 @@ pub(crate) async fn pending_changes(
     use crate::store::changesets;
 
     let Pinned { state, row } = ctx.changeset(&params.changeset, Access::Read).await?;
-    let entries = changesets::entries(ctx.app().pool(), row.id).await?;
-    let loaded = state.current();
-    let files = blocking(move || pending_files(&loaded, &entries)).await;
+    let pool = ctx.app().pool();
+    let entries = changesets::entries(pool, row.id).await?;
+    // An entry made on another replica (or before this one's snapshot moved)
+    // can have a base newer than the snapshot here: refresh before diffing,
+    // or the diff would be against older text (issue #659).
+    let bases = entries
+        .iter()
+        .map(|entry| (entry.path.as_str(), entry.base_revision));
+    let loaded = state.current_covering(pool, bases).await?;
+    let files = blocking(move || pending_files(&loaded, &entries)).await?;
     Ok(PendingChanges {
         catalog: state.name().to_string(),
         catalog_label: ctx.catalog_label(state.name()),
@@ -772,11 +779,20 @@ pub(crate) async fn pending_changes(
 ///
 /// # Returns
 /// One [`PendingFile`] per entry, in the same order.
+///
+/// # Errors
+/// [`OkfError::Busy`] if a path's published revision in `loaded` is older
+/// than its entry's base: the snapshot is behind the changeset, and a diff
+/// against it would show published text as pending (issue #659). The
+/// response never reports `current_revision < base_revision`;
+/// [`CatalogState::current_covering`](crate::catalog::CatalogState::current_covering)
+/// refreshes first, so only a snapshot that a refresh could not bring up to
+/// date reaches this.
 #[tracing::instrument(level = "trace", skip_all)]
 fn pending_files(
     loaded: &Loaded,
     entries: &[crate::store::changesets::EntryRow],
-) -> Vec<PendingFile> {
+) -> Result<Vec<PendingFile>, OkfError> {
     // The diffs are independent: rayon's `par_iter` spreads them over the
     // CPU pool, and `collect` keeps the entries' (path) order.
     entries
@@ -789,8 +805,21 @@ fn pending_files(
                 (Some(_), Some(_)) => "update",
             };
             let current_revision = loaded.revision(&entry.path);
+            // The invariant: a published revision is never older than the
+            // base an entry was made on.
+            if let (Some(base), Some(current)) = (entry.base_revision, current_revision) {
+                if current < base {
+                    return Err(OkfError::Busy {
+                        reason: format!(
+                            "this replica's snapshot of /{} is at revision {current}, older than \
+                             the changeset's base revision {base}",
+                            entry.path
+                        ),
+                    });
+                }
+            }
             let old = published.as_ref().map(|file| file.content.as_slice());
-            PendingFile {
+            Ok(PendingFile {
                 path: format!("/{}", entry.path),
                 change,
                 base_revision: entry.base_revision,
@@ -798,7 +827,7 @@ fn pending_files(
                 stale: entry.base_revision != current_revision,
                 replayable: entry.replay.is_some(),
                 diff: unified_diff(&entry.path, old, entry.content.as_deref()),
-            }
+            })
         })
         .collect()
 }

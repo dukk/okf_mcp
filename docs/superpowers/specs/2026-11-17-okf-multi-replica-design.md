@@ -70,6 +70,17 @@ The last two are not part of this milestone.
 - **A shared catalog snapshot**, or pub/sub invalidation of snapshots. Each
   instance refreshes its snapshots on its own poll. A publish on A is
   visible on B within `poll_interval`. This is documented, not fixed.
+
+  > **Corrected (issue #659, 2026-11-19).** Snapshots are now announced:
+  > after a publish, an import or a repair commits, the writer publishes
+  > `<catalog id> <generation>` on `{p}catalog-generation`, and each
+  > instance's catalog subscriber refreshes that catalog
+  > (`App::apply_catalog_announcement`), skipping a generation it already
+  > reached and leaving a catalog it has not loaded to the poll loop. The
+  > subscriber shares the `admin_generation` subscriber's loop (reconnect,
+  > backoff, a catch-up on every resubscribe); the poll stays the backstop.
+  > `pending_changes` and reads through a changeset also refresh a snapshot
+  > older than an entry's base. Snapshots themselves stay per instance.
 - **SSE resumption (`EventStore`).** `sse_retry` stays off. A `GET /mcp`
   stream belongs to one instance, and a client that loses it reconnects.
 - **Rate limits (#357) and the mail worker (#458).** The Redis connection
@@ -376,7 +387,7 @@ src/shared/
   mod.rs        Redis: the handle (standalone or cluster connection, prefix, metrics), connect, start-up checks, key names, subscribe
   ephemeral.rs  Ephemeral<V> and Index: memory or Redis, the envelope, the Lua compare-and-set
   sessions.rs   RedisSessions (rmcp SessionStore) and the binding admit/bind/release scripts
-  announce.rs   admin_generation announcements: publish, the subscriber task, the CLI announcement
+  announce.rs   admin_generation and catalog generation announcements (#659): publish, the subscriber tasks, the CLI announcement
 ```
 
 `App` holds `Option<shared::Redis>` (`App::redis`). Every component that has

@@ -320,7 +320,23 @@ impl Overlays {
         let _building = self.builds.lock(changeset.id).await;
         // Read the state again: a build that finished while this one waited
         // may be the overlay wanted, and the published state may have moved.
-        self.lookup_or_build(pool, state, changeset).await
+        let now = Instant::now();
+        if let Some(overlay) = self.lookup(changeset, state.current().generation(), now) {
+            return Ok(overlay);
+        }
+        let entries = changesets::entries(pool, changeset.id).await?;
+        // Unlike `get_in`, a read may take a second connection: so before
+        // building, bring a snapshot that is behind the entries' bases up to
+        // date (an entry made on another replica, issue #659). Otherwise the
+        // paths the changeset does not touch would show older text than the
+        // entries were made on.
+        let bases = entries
+            .iter()
+            .map(|entry| (entry.path.as_str(), entry.base_revision));
+        let base = state.current_covering(pool, bases).await?;
+        let overlay = Arc::new(build_overlay(base, changeset, entries).await?);
+        self.store(Arc::clone(&overlay), now);
+        Ok(overlay)
     }
 
     /// As [`Overlays::get`], for a write that holds a connection (its

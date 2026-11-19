@@ -122,6 +122,36 @@ impl RefreshResult {
     }
 }
 
+/// What one catalog announcement came to on the replica that received it
+/// (issue #659): a closed set for the `result` label of
+/// `okf.catalog.announcements`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnouncementResult {
+    /// The catalog's snapshot was rebuilt to the announced generation or a
+    /// newer one.
+    Applied,
+    /// Nothing to rebuild: the snapshot already reached that generation (its
+    /// own publish, the poll loop or an earlier announcement got there).
+    Current,
+    /// This replica has not loaded the catalog, or it was deleted: the poll
+    /// loop loads or drops it.
+    Unknown,
+    /// The refresh failed; the old snapshot stays and the poll loop retries.
+    Failed,
+}
+
+impl AnnouncementResult {
+    /// The label value (also the `okf.announcement.result` span attribute).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Applied => "applied",
+            Self::Current => "current",
+            Self::Unknown => "unknown",
+            Self::Failed => "failed",
+        }
+    }
+}
+
 /// The `rule` label for a lint finding's rule id: the id itself when it is
 /// one of the lint's own fixed rules, `secret` for every `secret:<id>` rule
 /// (the token table is the lint's, and a label need not name which pattern
@@ -196,6 +226,7 @@ struct Instruments {
     lint_rejections: Counter<u64>,
     poll_duration: Histogram<f64>,
     catalog_refreshes: Counter<u64>,
+    catalog_announcements: Counter<u64>,
     keycache_reloads: Counter<u64>,
     redis_errors: Counter<u64>,
     // Task 3: HTTP and MCP.
@@ -252,6 +283,7 @@ impl Metrics {
         "okf_lint_rejections_total",
         "okf_poll_duration_seconds",
         "okf_catalog_refreshes_total",
+        "okf_catalog_announcements_total",
         "okf_keycache_reloads_total",
         "okf_redis_errors_total",
         "okf_auth_attempts_total",
@@ -307,6 +339,12 @@ impl Metrics {
                 catalog_refreshes: meter
                     .u64_counter("okf.catalog.refreshes")
                     .with_description("Each catalog's turn in a poll pass, by result.")
+                    .build(),
+                catalog_announcements: meter
+                    .u64_counter("okf.catalog.announcements")
+                    .with_description(
+                        "Catalog generation announcements received from Redis, by result.",
+                    )
                     .build(),
                 keycache_reloads: meter
                     .u64_counter("okf.keycache.reloads")
@@ -445,6 +483,17 @@ impl Metrics {
                 KeyValue::new("result", result.as_str()),
             ],
         );
+    }
+
+    /// Counts one catalog announcement received (issue #659).
+    ///
+    /// # Arguments
+    /// * `result` - what it came to.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn catalog_announcement(&self, result: AnnouncementResult) {
+        self.inner
+            .catalog_announcements
+            .add(1, &[KeyValue::new("result", result.as_str())]);
     }
 
     /// Counts one key cache and settings reload.
@@ -1143,6 +1192,7 @@ mod tests {
         metrics.lint_rejection("notes", "orphan");
         metrics.poll(Outcome::Ok, elapsed);
         metrics.catalog_refresh("notes", RefreshResult::Reloaded);
+        metrics.catalog_announcement(AnnouncementResult::Applied);
         metrics.keycache_reload(Outcome::Ok);
         metrics.redis_error(RedisOp::Get);
         metrics.http_request("GET", "/health", 200, elapsed);
@@ -1173,6 +1223,14 @@ mod tests {
         for name in Metrics::FAMILIES {
             assert!(Metrics::ALL_FAMILIES.contains(name), "{name}");
         }
+    }
+
+    #[test]
+    fn announcement_result_labels_are_fixed() {
+        assert_eq!(AnnouncementResult::Applied.as_str(), "applied");
+        assert_eq!(AnnouncementResult::Current.as_str(), "current");
+        assert_eq!(AnnouncementResult::Unknown.as_str(), "unknown");
+        assert_eq!(AnnouncementResult::Failed.as_str(), "failed");
     }
 
     #[test]
