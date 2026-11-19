@@ -2060,8 +2060,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Catalog refreshes by result",
-      "description": "Each catalog's turn in a poll pass, by result.",
+      "title": "Catalog refreshes and announcements by result",
+      "description": "Each catalog's turn in a poll pass, by result; and catalog announcements received from other replicas (with [redis]), by result.",
       "targets": [
         {
           "datasource": {
@@ -2071,6 +2071,17 @@
           "refId": "A",
           "expr": "sum by (catalog, result) (increase(okf_catalog_refreshes_total{job=~\"$job\",catalog=~\"$catalog\"}[$__rate_interval]))",
           "legendFormat": "{{catalog}} {{result}}",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "B",
+          "expr": "sum by (result) (increase(okf_catalog_announcements_total{job=~\"$job\"}[$__rate_interval]))",
+          "legendFormat": "announcement {{result}}",
           "range": true,
           "instant": false
         }

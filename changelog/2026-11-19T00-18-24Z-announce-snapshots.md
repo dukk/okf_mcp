@@ -3,7 +3,7 @@
 ## Added
 - Catalog generation announcements over Redis (`{p}catalog-generation`, payload `<catalog id> <generation>`). A publish and an HTTP import announce after they commit, on a detached task; the command line announces each `import` and `catalog repair-indexes` it committed (even when a later catalog in a repair batch fails).
 - A catalog subscriber on every serving replica (`shared::announce::listen_catalogs`). It refreshes the named catalog through `CatalogState::refresh`, so a generation already reached is skipped and concurrent refreshes (announcement, poll, local publish) build once under the catalog's rebuild lock. It catches up on every loaded catalog when it (re)subscribes, and leaves a catalog it has not loaded, or has deleted, to the poll loop. It shares the `admin_generation` subscriber's loop (reconnect, backoff, grace) through a `Handler` trait.
-- `okf_catalog_announcements_total{result}` (`applied`, `current`, `unknown`, `failed`) and an `okf.catalog.announcement` root span per announcement received.
+- `okf_catalog_announcements_total{result}` (`applied`, `current`, `unknown`, `failed`) and an `okf.catalog.announcement` root span per announcement received. The example Grafana dashboard's catalog refresh panel shows it too.
 - `CatalogState::current_covering`: the snapshot, refreshed first when a changeset entry's base revision is newer than it.
 
 ## Changed
