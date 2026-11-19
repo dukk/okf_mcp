@@ -38,13 +38,16 @@ How a session usually goes:
   edit, `publish`, `discard`, `revert` and `pending_changes`. Reads take it too, to see the
   drafts. Nothing is visible to others until `publish`.
 
-A tool is one of four kinds:
+A tool is one of five kinds:
 
 - read-only: it changes nothing.
 - staged: it adds an entry to a changeset, which `discard` drops and `publish` applies.
 - maintenance: a step in a maintenance run (claim, renew, submit, dispose). It takes no
   changeset and is saved at once, so `discard` does not undo it; it never touches a concept.
 - destructive: it deletes, or cannot be undone from inside the server.
+- external: it sends something to a service outside the server (`send_feedback`, offered
+  only when the operator configured it). It changes no catalog.
+
 ";
 
 /// The tool's description without the trailing reference link `OkfServer::tools` adds.
@@ -151,10 +154,12 @@ fn cell(text: &str) -> String {
 /// * `tool` - a tool from the router.
 ///
 /// # Returns
-/// `read-only`, `staged`, `maintenance` or `destructive`.
+/// `read-only`, `staged`, `maintenance`, `destructive` or `external`.
 fn class(tool: &Tool) -> &'static str {
     let hints = tool.annotations.as_ref();
-    if hints.and_then(|h| h.read_only_hint) == Some(true) {
+    if hints.and_then(|h| h.open_world_hint) == Some(true) {
+        "external"
+    } else if hints.and_then(|h| h.read_only_hint) == Some(true) {
         "read-only"
     } else if hints.and_then(|h| h.destructive_hint) == Some(true) {
         "destructive"
@@ -395,7 +400,7 @@ fn the_reference_lists_every_tool_with_a_heading_its_link_points_at() {
     let page = render();
     let tools = OkfServer::tools().list_all();
 
-    assert_eq!(tools.len(), 42);
+    assert_eq!(tools.len(), 43);
     for tool in &tools {
         assert!(
             page.contains(&format!("\n## `{}`\n", tool.name)),

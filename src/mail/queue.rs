@@ -452,11 +452,26 @@ pub(crate) struct MailContext {
     pub provider: MailProvider,
 }
 
-/// Moves a job's `run_at` to now plus its backoff: 30 s doubling per
-/// attempt so far, capped at an hour. In SQL, on the database's clock,
-/// which is the one apalis compares `run_at` with.
+/// Moves a mail job's `run_at` to now plus its backoff ([`reschedule_job`]).
 #[tracing::instrument(level = "debug", skip_all)]
 async fn reschedule(pool: &PgPool, id: &str) -> Result<(), OkfError> {
+    reschedule_job(pool, QUEUE, id).await
+}
+
+/// Moves a job's `run_at` to now plus its backoff: 30 s doubling per
+/// attempt so far, capped at an hour. In SQL, on the database's clock,
+/// which is the one apalis compares `run_at` with. Shared by every queue on
+/// `apalis.jobs` (mail, and feedback since issue #674).
+///
+/// # Arguments
+/// * `pool` - the worker's pool.
+/// * `queue` - the job's queue (`apalis.jobs.job_type`).
+/// * `id` - the job id.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) async fn reschedule_job(pool: &PgPool, queue: &str, id: &str) -> Result<(), OkfError> {
     // `attempts` is the count before this try is acked (0 on the first
     // failure), so the first retry waits 30 s. `LEAST(attempts, 16)` keeps
     // `power` small; the hour cap is reached at 7 already.
@@ -466,7 +481,7 @@ async fn reschedule(pool: &PgPool, id: &str) -> Result<(), OkfError> {
          WHERE id = $1 AND job_type = $2",
     )
     .bind(id)
-    .bind(QUEUE)
+    .bind(queue)
     .bind(BACKOFF_MAX_SECS)
     .bind(BACKOFF_FIRST_SECS)
     .execute(pool)
@@ -577,6 +592,19 @@ async fn deliver(
 /// `okf-mail-<host>-<pid>`.
 #[tracing::instrument(level = "trace", skip_all)]
 fn worker_name() -> String {
+    process_worker_name("okf-mail")
+}
+
+/// A worker name unique per host and process: `<prefix>-<host>-<pid>`, so
+/// replicas never share an `apalis.workers` row.
+///
+/// # Arguments
+/// * `prefix` - the queue's worker prefix (`okf-mail`, `okf-feedback`).
+///
+/// # Returns
+/// The name.
+#[tracing::instrument(level = "trace", skip_all)]
+pub(crate) fn process_worker_name(prefix: &str) -> String {
     // `$HOSTNAME`, else the kernel's name for the host, else a placeholder.
     let host = std::env::var("HOSTNAME")
         .ok()
@@ -584,7 +612,7 @@ fn worker_name() -> String {
         .map(|host| host.trim().to_string())
         .filter(|host| !host.is_empty())
         .unwrap_or_else(|| "host".to_string());
-    format!("okf-mail-{host}-{}", std::process::id())
+    format!("{prefix}-{host}-{}", std::process::id())
 }
 
 /// The worker's own pool: the same database and credentials as `pool`, at
@@ -598,15 +626,30 @@ fn worker_name() -> String {
 /// A new pool; closing it leaves `pool` untouched.
 #[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn worker_pool(pool: &PgPool) -> PgPool {
+    worker_pool_named(pool, WORKER_APPLICATION_NAME, WORKER_POOL_SIZE)
+}
+
+/// A worker's own pool: the same database and credentials as `pool`, at
+/// most `size` connections, named `application_name`. It connects lazily.
+///
+/// # Arguments
+/// * `pool` - the request pool, whose connect options are copied.
+/// * `application_name` - what `pg_stat_activity` shows for it.
+/// * `size` - its most connections.
+///
+/// # Returns
+/// A new pool; closing it leaves `pool` untouched.
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) fn worker_pool_named(pool: &PgPool, application_name: &str, size: u32) -> PgPool {
     // `connect_options()` is shared (`Arc`); `as_ref().clone()` copies it so
     // the name can be changed for this pool only.
     let options = pool
         .connect_options()
         .as_ref()
         .clone()
-        .application_name(WORKER_APPLICATION_NAME);
+        .application_name(application_name);
     PgPoolOptions::new()
-        .max_connections(WORKER_POOL_SIZE)
+        .max_connections(size)
         .connect_lazy_with(options)
 }
 
