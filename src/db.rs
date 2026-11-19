@@ -1042,6 +1042,91 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn the_backfill_waits_for_a_deletion_and_recreates_nothing_it_forgot() {
+        use std::time::Duration;
+        // Arrange: bob, with a key and a grant that never acted (no audit
+        // rows), is being deleted by an old replica during a rolling deploy:
+        // `users::delete` holds him `FOR UPDATE` and has run `forget_person`,
+        // but has not yet deleted the row.
+        let db = test_db().await;
+        sqlx::raw_sql(
+            "INSERT INTO users (id, name, display_name, created_at)
+                 VALUES ('u-bob', 'bob', 'Bob', now());
+             INSERT INTO api_keys (id, name, sha256, access, all_catalogs, actor, created_at,
+                                   user_id)
+                 VALUES ('k-bob', 'k-bob', sha256('k-bob'::bytea), 'read', true, 'laptop',
+                         now(), 'u-bob');",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let mut deletion = db.pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM users WHERE id = 'u-bob' FOR UPDATE")
+            .execute(&mut *deletion)
+            .await
+            .unwrap();
+        crate::store::audit::forget_person(&mut deletion, "u-bob")
+            .await
+            .unwrap();
+
+        // Act: the backfill starts while the deletion is in progress, which
+        // then commits once the backfill waits on bob's row (or, without the
+        // owner lock, once the backfill has already finished).
+        let pool = db.pool.clone();
+        let backfill = tokio::spawn(async move {
+            sqlx::raw_sql(include_str!("../migrations/0023_audit_backfill.sql"))
+                .execute(&pool)
+                .await
+        });
+        let waited = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let waiting: i64 = sqlx::query_scalar(
+                    "SELECT count(*) FROM pg_stat_activity \
+                     WHERE datname = current_database() AND wait_event_type = 'Lock'",
+                )
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+                if waiting > 0 || backfill.is_finished() {
+                    return waiting > 0;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the backfill neither waited on a lock nor finished within 30 s");
+        sqlx::query("DELETE FROM users WHERE id = 'u-bob'")
+            .execute(&mut *deletion)
+            .await
+            .unwrap();
+        deletion.commit().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(30), backfill)
+            .await
+            .expect("the backfill finished within 30 s of the deletion")
+            .unwrap()
+            .unwrap();
+
+        // Assert: nothing names bob or his key again.
+        let left: Vec<(String, String, Option<String>, Option<String>)> = audit_rows(&db.pool)
+            .await
+            .into_iter()
+            .filter(|(_, id, name, user)| {
+                id == "u-bob"
+                    || id == "k-bob"
+                    || name.as_deref() == Some("bob")
+                    || name.as_deref() == Some("laptop")
+                    || user.as_deref() == Some("u-bob")
+            })
+            .collect();
+        assert_eq!(
+            left,
+            [],
+            "the backfill re-created what forget_person cleared"
+        );
+        assert!(waited, "the backfill waited for the deletion's lock");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn maintenance_schema_preserves_existing_rows_and_defaults_to_opt_out() {
         let db = pg_support::TestDb::start().await;
         for migration in [

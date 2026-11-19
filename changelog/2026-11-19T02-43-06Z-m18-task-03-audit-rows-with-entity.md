@@ -4,12 +4,13 @@ Issue #681, milestone 18 (bounded memory), spec Decision 20.
 
 ## Added
 
-- `migrations/0023_audit_backfill.sql`. It creates the missing `audit_people` row for every user, the missing `audit_teams` row for every team, and the missing `audit_credentials` row for every live key and grant. The credential rows carry the owner's person and, as their label, the credential's `actor`. These are the rows the SQL resolvers would make. The migration inserts only, with `WHERE NOT EXISTS` and `ON CONFLICT DO NOTHING`, so a rerun changes nothing and no existing row is locked or refreshed.
+- `migrations/0023_audit_backfill.sql`. It creates the missing `audit_people` row for every user, the missing `audit_teams` row for every team, and the missing `audit_credentials` row for every live key and grant. The credential rows carry the owner's person and, as their label, the credential's `actor`. These are the rows the SQL resolvers would make. The migration inserts only, with `WHERE NOT EXISTS` and `ON CONFLICT DO NOTHING`, so a rerun changes nothing and no existing row is locked or refreshed. It first locks every user `FOR KEY SHARE`, in the users' lock order (admins by id, then the others), and locks each owner again in the credential insert, as the resolvers lock them. A user an old replica is deleting during the rolling deploy is therefore waited for and skipped, never re-created after `forget_person` (PR #705 review). A legacy key with no user is held `FOR SHARE`, so that a concurrent `assign_user` is waited for too.
 - `audit::credential_created(conn, credential_id, label)`. It creates a new key's or grant's audit row, with its label, in the transaction that inserts the credential.
 - Tests:
   - `store::gates::tests::every_new_user_key_grant_and_team_has_its_audit_row`
   - `store::gates::tests::gates_load_writes_nothing`
   - `db::tests::the_backfill_creates_missing_rows_and_is_idempotent`
+  - `db::tests::the_backfill_waits_for_a_deletion_and_recreates_nothing_it_forgot`, which forces the interleaving: a deletion holding the user after `forget_person`, then the backfill, then the deletion commits
   - new audit-row assertions in `codes::tests::redeem_turns_the_code_into_an_oauth_grant_once` and `grants::tests::a_self_issued_grant_records_its_user_levels_and_client`
   - the test helper `audit::testing::credential_row`
 
