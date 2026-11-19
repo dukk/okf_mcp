@@ -332,6 +332,23 @@ async fn a_person_signs_in_on_the_way_and_approves_from_their_ceiling() {
     assert_eq!(principal.level("other"), None);
 }
 
+/// Whether the consent page's Advanced Options disclosure is open now.
+fn disclosure_open(ui: &Ui) -> bool {
+    ui.eval(
+        "() => document.querySelector('#consent-advanced').open",
+        serde_json::json!(null),
+    ) == serde_json::json!(true)
+}
+
+/// Whether `selector` is rendered now, by `Element.checkVisibility`, which
+/// counts content a closed `<details>` hides (unlike a bounding box).
+fn rendered(ui: &Ui, selector: &str) -> bool {
+    ui.eval(
+        "(selector) => document.querySelector(selector).checkVisibility()",
+        serde_json::json!(selector),
+    ) == serde_json::json!(true)
+}
+
 /// Signs alice in on the way to a consent page that offers only `main`, at
 /// `access`, runs `choose` there, approves, and returns the grant (or
 /// `None` when the browser could not start).
@@ -368,11 +385,15 @@ async fn approve_the_only_catalog(
         ui.fill("#signin-password", PASSWORD);
         ui.click("#signin-submit");
         ui.wait_visible("#consent-approve");
-        // One catalog: Advanced Options starts closed, its controls hidden.
+        // One catalog: Advanced Options starts closed, its controls not
+        // rendered. `wait_hidden` cannot tell: Chromium hides a closed
+        // `<details>`'s content with `content-visibility`, and a forced
+        // layout still gives it a box, so ask `checkVisibility` instead.
         ui.wait_visible("#consent-advanced-toggle");
-        ui.wait_hidden("#consent-catalog-main");
-        ui.wait_hidden("#consent-default");
         ui.wait_visible("#consent-preset");
+        assert!(!disclosure_open(ui), "Advanced Options starts closed");
+        assert!(!rendered(ui, "#consent-catalog-main"));
+        assert!(!rendered(ui, "#consent-default"));
         choose(ui);
         ui.click("#consent-approve");
         assert_back_at_the_client(ui, &landing);
@@ -403,7 +424,9 @@ async fn the_only_catalogs_collapsed_defaults_approve_write_as_the_default() {
 async fn advanced_options_open_to_change_the_only_catalogs_defaults() {
     let Some(grant) = approve_the_only_catalog(Access::Write, |ui| {
         ui.click("#consent-advanced-toggle");
-        ui.wait_visible("#consent-catalog-main");
+        assert!(disclosure_open(ui), "the summary opens Advanced Options");
+        assert!(rendered(ui, "#consent-catalog-main"));
+        assert!(rendered(ui, "#consent-default"));
         ui.select("#consent-level-main", "read");
         ui.select("#consent-default", "");
     })
