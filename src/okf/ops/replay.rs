@@ -161,7 +161,7 @@ pub fn replay(path: &str, current: Option<&str>, ops: &[ReplayOp]) -> Result<Str
                 create_section,
             } => {
                 let base = universal_newlines(present(path, &text)?);
-                if already_lists(&no_dirs, &base, path, target) {
+                if lists_target(&no_dirs, &base, path, target) {
                     None
                 } else {
                     let section = section.as_deref();
@@ -259,25 +259,29 @@ pub(crate) fn lists_target(
 /// that differs from the written one; for any other name this is `false`
 /// (the ordinary check already sees its link).
 ///
-/// The rule that keeps this from claiming another concept's listing: a
-/// destination that reads as a working link belongs to the document it
-/// resolves to. So a bullet is a raw listing of `target` only when its
-/// destination equals the target's raw name AND
-/// 1. the name holds no valid `%XX` escape (`py_unquote` leaves it alone):
+/// The rule, conservative on purpose (a rare duplicate bullet is far better
+/// than a missing listing): a bullet is a raw listing of `target` only when
+/// 1. its destination, as written between `](` and the `)` or `#` that
+///    follows it, equals the target's raw name (not merely a prefix the
+///    parser reads: `[A](a.md).md)` is a working link to `a.md`, so it is
+///    not a raw listing of `a.md).md`);
+/// 2. the name holds no valid `%XX` escape (`py_unquote` leaves it alone):
 ///    `a%20b.md` as a raw name is indistinguishable from the encoded name
-///    of `a b.md`, which is that file's listing, never this one's (replay
-///    cannot check which files exist, so the rule is on the text); and
-/// 2. the destination does not resolve to a document that exists in
-///    `workspace` other than `target` itself (`a#b.md` reads as a link to `a` plus a fragment; if `a`
-///    exists the bullet lists it). Replay passes an empty workspace, where
-///    only rule 1 applies.
+///    of `a b.md`, which is that file's listing; and
+/// 3. the link [`find_links`] parses at that spot (if any) is broken: it
+///    resolves to no document that exists in `workspace`. A link that
+///    resolves to any existing document, another concept included, is that
+///    document's listing (`a#b.md` reads as a link to `a` plus a fragment).
 ///
-/// A literal-percent name with a valid-looking escape therefore never
-/// matches an old raw bullet: it gets a second, working bullet, which is
-/// the safe side of an ambiguous case.
+/// Publish replay does not call this: it has no view of which files exist,
+/// so it cannot apply rule 3, and a wrong "already listed" there would
+/// silently drop the staged listing. Replay counts only a bullet whose
+/// parsed link resolves to the target ([`lists_target`]); after a concurrent
+/// change the worst case is an old broken raw bullet beside a new working
+/// one, which lint shows and the author can remove.
 ///
 /// # Arguments
-/// * `workspace` - tells which documents exist (rule 2).
+/// * `workspace` - tells which documents exist (rule 3).
 /// * `text` - an `index.md`, with universal newlines.
 /// * `index` - its catalog-relative path; the raw destination is the
 ///   target relative to its folder, or `/`-absolute.
@@ -302,21 +306,31 @@ pub(crate) fn lists_raw_target(
     raws.iter()
         .filter(|raw| encode_link_path(raw) != raw.as_str())
         .filter(|raw| py_unquote(raw) == raw.as_str())
-        .filter(|raw| {
-            resolve_link(workspace, raw, index)
-                .is_none_or(|resolved| resolved.path == target || !workspace.exists(&resolved.path))
-        })
         .any(|raw| {
-            text.split('\n').any(|line| {
-                is_bullet(line)
-                    && (line.contains(&format!("]({raw})")) || line.contains(&format!("]({raw}#")))
+            text.split('\n').filter(|line| is_bullet(line)).any(|line| {
+                let parsed = find_links(line);
+                line.match_indices(&format!("]({raw}")).any(|(at, _)| {
+                    let start = at + 2;
+                    let rest = &line[start + raw.len()..];
+                    // Rule 1: the destination ends here, as written.
+                    (rest.starts_with(')') || rest.starts_with('#'))
+                        // Rule 3: the parsed link at this spot, if any, is broken.
+                        && parsed
+                            .iter()
+                            .find(|link| link.target_range.start == start)
+                            .is_none_or(|link| {
+                                resolve_link(workspace, &link.target, index)
+                                    .is_none_or(|r| !workspace.exists(&r.path))
+                            })
+                })
             })
         })
 }
 
 /// [`lists_target`], or [`lists_raw_target`]: does `text` list `target` in
-/// any form, working or an older raw one? What `index`, `repair_indexes` and
-/// replay use to decide that a concept is already listed.
+/// any form, working or an older raw one? What `index` and `repair_indexes`
+/// use to decide that a concept is already listed (replay uses only
+/// [`lists_target`]).
 #[cfg_attr(
     dylint_lib = "hyp_tracing",
     allow(

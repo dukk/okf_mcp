@@ -934,19 +934,61 @@ mod tests {
     }
 
     #[test]
-    fn replay_does_not_duplicate_a_raw_bullet() {
+    fn replay_adds_the_working_bullet_beside_a_raw_one() {
+        // Replay cannot tell which files exist, so a raw match is never
+        // "already listed": the worst case is an old broken bullet beside
+        // a working one.
         for name in ["a b.md", "a).md", "a#b.md", "a:b.md"] {
             let raw = format!("# D\n\n# Concepts\n\n* [Odd]({name}) - old\n");
+            let bullet = format!("* [Odd]({}) - new", encode_link_path(name));
             let op = ReplayOp::ListBullet {
                 target: format!("d/{name}"),
-                bullet: format!("* [Odd]({}) - new", encode_link_path(name)),
+                bullet: bullet.clone(),
                 section: None,
                 create_section: false,
             };
 
             let got = crate::okf::ops::replay("d/index.md", Some(&raw), &[op]).unwrap();
 
-            assert_eq!(got, raw, "{name}");
+            assert_eq!(got, format!("{raw}{bullet}\n"), "{name}");
+        }
+    }
+
+    #[test]
+    fn replay_keeps_the_staged_bullet_when_another_listing_reads_like_a_raw_one() {
+        // `d/a.md` and `d/a.md#b.md` exist; the index holds a working link to
+        // `d/a.md` whose text is `d/a.md#b.md`'s raw name.
+        let current = "# D\n\n# Concepts\n\n* [A](a.md#b.md) - a\n";
+        let bullet = "* [B](a.md%23b.md) - b";
+        let op = ReplayOp::ListBullet {
+            target: "d/a.md#b.md".to_string(),
+            bullet: bullet.to_string(),
+            section: None,
+            create_section: false,
+        };
+
+        let got = crate::okf::ops::replay("d/index.md", Some(current), &[op]).unwrap();
+
+        assert_eq!(got, format!("{current}{bullet}\n"));
+    }
+
+    #[test]
+    fn index_lists_a_name_whose_raw_form_reads_as_another_working_link() {
+        // `* [A](a.md).md)` is a working link to `d/a.md`, not a raw
+        // listing of `d/a.md).md`; likewise `a.md#b.md` for `d/a.md#b.md`.
+        for (other, name) in [("a.md", "a.md).md"), ("a.md", "a.md#b.md")] {
+            let existing = format!("# D\n\n# Concepts\n\n* [A]({name}) - a\n");
+            let ws = awkward_ws(other, &existing);
+            let text = "---\ntype: Note\ntitle: B\ndescription: b\n---\n";
+            ws.write_atomic(&format!("d/{name}"), text).unwrap();
+            let encoded = encode_link_path(name);
+
+            index(&ws, &ctx(), &format!("d/{name}"), "b", None, None).unwrap();
+
+            let got = ws.read_to_string("d/index.md").unwrap();
+            assert!(got.contains(&format!("]({encoded})")), "{name}: {got}");
+            let again = repair_indexes(&ws).unwrap();
+            assert!(!again.touched.contains(&"d/index.md".to_string()), "{name}");
         }
     }
 
