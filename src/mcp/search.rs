@@ -112,7 +112,7 @@ pub struct SkippedCatalog {
 /// fail a search across every catalog.
 #[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn run(ctx: &ToolContext, params: SearchParams) -> Result<SearchResult, OkfError> {
-    let states = ctx.states(params.catalogs.as_deref())?;
+    let states = ctx.states(params.catalogs.as_deref()).await?;
     let pinned = ctx.pin(params.changeset.as_deref()).await?;
     require_selected(pinned.as_ref(), &states)?;
     // A search reads every catalog before it answers: all are admitted at

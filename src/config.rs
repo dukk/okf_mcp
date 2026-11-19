@@ -581,6 +581,203 @@ impl MailConfig {
     }
 }
 
+/// The default `[feedback] max_per_hour`: submissions one credential may
+/// make in any hour.
+pub const DEFAULT_FEEDBACK_MAX_PER_HOUR: u32 = 10;
+
+/// The most `[feedback] max_per_hour` may be set to.
+pub const MAX_FEEDBACK_MAX_PER_HOUR: u32 = 1000;
+
+/// The default `[feedback] retention`: how long forwarded feedback is kept.
+pub const DEFAULT_FEEDBACK_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
+/// The shortest `[feedback] retention`: one day, longer than the hour the
+/// rate limit counts back over, so pruning never hides a recent submission.
+pub const MIN_FEEDBACK_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// The longest `[feedback] retention`: ten years.
+pub const MAX_FEEDBACK_RETENTION: Duration = Duration::from_secs(10 * 366 * 24 * 60 * 60);
+
+/// The longest Forminit form id accepted, in bytes.
+pub const MAX_FORMINIT_FORM_ID_BYTES: usize = 64;
+
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "serde default for a config key, read before the subscriber exists"
+    )
+)]
+fn default_feedback_max_per_hour() -> u32 {
+    DEFAULT_FEEDBACK_MAX_PER_HOUR
+}
+
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "serde default for a config key, read before the subscriber exists"
+    )
+)]
+fn default_feedback_retention() -> Duration {
+    DEFAULT_FEEDBACK_RETENTION
+}
+
+/// Is `name` usable as an environment variable's name: one or more ASCII
+/// letters, digits and `_`?
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "config check run once at start-up, like `Config::validate`"
+    )
+)]
+fn is_env_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+/// The `[feedback]` table (issue #674). Absent: `send_feedback` is not
+/// offered and nothing is sent anywhere. Present: the tool queues each
+/// submission and a worker forwards it to the operator's Forminit form,
+/// `https://forminit.com/f/<forminit_form_id>`.
+// `deny_unknown_fields`: a misspelt key (or an `api_key = ...` that would put
+// the key in the file) is a parse error instead of being ignored.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeedbackConfig {
+    /// The Forminit form's id: the last segment of its endpoint URL. Not a
+    /// secret. 1 to 64 ASCII letters, digits, `-` and `_`, so it can only
+    /// ever name a path segment under `https://forminit.com/f/`.
+    pub forminit_form_id: String,
+    /// The environment variable holding the form's API key (sent as
+    /// `X-API-KEY`), if any. Without a key Forminit accepts one submission
+    /// per 5 seconds per address; with one, 5 per second.
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    /// Whether `serve` runs the feedback worker (default `true`). With
+    /// several replicas, set it on exactly one, as `[mail] worker`.
+    #[serde(default = "default_true")]
+    pub worker: bool,
+    /// Submissions one credential may make in any hour (default 10).
+    #[serde(default = "default_feedback_max_per_hour")]
+    pub max_per_hour: u32,
+    /// How long forwarded (`sent`) feedback is kept before the poll loop
+    /// deletes it (default `"30d"`, at least `"1d"`).
+    #[serde(default = "default_feedback_retention", with = "humantime_serde")]
+    pub retention: Duration,
+    /// Test only: the origin the form's URL is built on instead of
+    /// `https://forminit.com` (a mock server). Not readable from TOML, and
+    /// not compiled outside tests.
+    #[cfg(test)]
+    #[serde(skip)]
+    pub base_url_for_tests: Option<String>,
+}
+
+impl FeedbackConfig {
+    /// A `[feedback]` table for `form_id` with every other key at its
+    /// default.
+    ///
+    /// # Arguments
+    /// * `form_id` - the Forminit form id.
+    ///
+    /// # Returns
+    /// The table.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+        )
+    )]
+    #[must_use]
+    pub fn for_form(form_id: &str) -> Self {
+        Self {
+            forminit_form_id: form_id.to_string(),
+            api_key_env: None,
+            worker: true,
+            max_per_hour: DEFAULT_FEEDBACK_MAX_PER_HOUR,
+            retention: DEFAULT_FEEDBACK_RETENTION,
+            #[cfg(test)]
+            base_url_for_tests: None,
+        }
+    }
+
+    /// Checks what serde cannot.
+    ///
+    /// # Returns
+    /// `Ok(())` when the table is usable.
+    ///
+    /// # Errors
+    /// A message naming the bad key: a `forminit_form_id` that is empty,
+    /// over 64 bytes or holds a character outside `[A-Za-z0-9_-]` (so it can
+    /// never change the URL's host or path); an `api_key_env` that is not a
+    /// variable name; a `max_per_hour` of 0 or over 1000; a `retention`
+    /// under a day or over ten years.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "config check run once at start-up, like `Config::validate`"
+        )
+    )]
+    pub fn validate(&self) -> Result<(), String> {
+        if !is_forminit_form_id(&self.forminit_form_id) {
+            return Err(format!(
+                "feedback.forminit_form_id must be 1 to {MAX_FORMINIT_FORM_ID_BYTES} of A-Z, a-z, 0-9, - and _"
+            ));
+        }
+        if self
+            .api_key_env
+            .as_deref()
+            .is_some_and(|name| !is_env_name(name))
+        {
+            return Err(
+                "feedback.api_key_env must name an environment variable (letters, digits and _)"
+                    .to_string(),
+            );
+        }
+        if self.max_per_hour == 0 || self.max_per_hour > MAX_FEEDBACK_MAX_PER_HOUR {
+            return Err(format!(
+                "feedback.max_per_hour must be 1 to {MAX_FEEDBACK_MAX_PER_HOUR}"
+            ));
+        }
+        if self.retention < MIN_FEEDBACK_RETENTION || self.retention > MAX_FEEDBACK_RETENTION {
+            return Err(
+                "feedback.retention must be at least 1 day and at most 10 years".to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Is `id` a usable Forminit form id: 1 to [`MAX_FORMINIT_FORM_ID_BYTES`]
+/// ASCII letters, digits, `-` and `_`? Nothing else can appear, so the id
+/// is one path segment and can never add a `/`, `?`, `#`, `@` or `..`.
+///
+/// # Arguments
+/// * `id` - the configured id.
+///
+/// # Returns
+/// Whether it is acceptable.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "config check run once at start-up, like `Config::validate`"
+    )
+)]
+#[must_use]
+pub fn is_forminit_form_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= MAX_FORMINIT_FORM_ID_BYTES
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
 /// The longest `[redis] key_prefix` accepted, in bytes.
 const MAX_REDIS_KEY_PREFIX_BYTES: usize = 64;
 
@@ -747,6 +944,9 @@ pub struct Config {
     /// Shared state for several `serve` replicas (`[redis]`); `None` keeps
     /// everything in memory.
     pub redis: Option<RedisConfig>,
+    /// The `send_feedback` tool's destination (`[feedback]`); `None` turns
+    /// the tool off.
+    pub feedback: Option<FeedbackConfig>,
 }
 
 impl Default for Config {
@@ -779,6 +979,7 @@ impl Default for Config {
             mail: MailConfig::default(),
             telemetry: TelemetryConfig::default(),
             redis: None,
+            feedback: None,
         }
     }
 }
@@ -882,7 +1083,8 @@ impl Config {
     /// `[mail]` section that cannot send (see `MailConfig`), or a
     /// `public_url` that is not an `https` origin (`http` on
     /// a loopback host only) whose host `allowed_hosts` admits, or an
-    /// `[[auth.oidc]]` provider that cannot work (see `validate_oidc`).
+    /// `[[auth.oidc]]` provider that cannot work (see `validate_oidc`), or a
+    /// `[feedback]` table that cannot work (see `FeedbackConfig::validate`).
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -960,6 +1162,9 @@ impl Config {
         self.telemetry.validate()?;
         if let Some(redis) = &self.redis {
             redis.validate()?;
+        }
+        if let Some(feedback) = &self.feedback {
+            feedback.validate()?;
         }
         self.validate_metrics_listen()?;
         self.validate_oidc()?;
@@ -1880,5 +2085,121 @@ client_secret_env = "OKF_OIDC_EXAMPLE_SECRET"
             Config::from_toml(&text).is_err(),
             "secrets come from the environment only"
         );
+    }
+
+    #[test]
+    fn feedback_is_off_by_default_and_parses_with_defaults() {
+        let off = Config::from_toml("").unwrap();
+        let on = Config::from_toml(
+            "[feedback]\nforminit_form_id = \"form-placeholder_1\"\n\
+             api_key_env = \"OKF_MCP_FORMINIT_API_KEY\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(off.feedback, None);
+        let feedback = on.feedback.clone().expect("the table");
+        assert_eq!(feedback.forminit_form_id, "form-placeholder_1");
+        assert_eq!(
+            feedback.api_key_env.as_deref(),
+            Some("OKF_MCP_FORMINIT_API_KEY")
+        );
+        assert!(feedback.worker);
+        assert_eq!(feedback.max_per_hour, 10);
+        assert_eq!(feedback.retention, Duration::from_secs(30 * 24 * 60 * 60));
+        assert_eq!(on.validate(), Ok(()));
+    }
+
+    #[test]
+    fn feedback_parses_every_key() {
+        let config = Config::from_toml(
+            "[feedback]\nforminit_form_id = \"abc\"\nworker = false\n\
+             max_per_hour = 25\nretention = \"7d\"\n",
+        )
+        .unwrap();
+
+        let feedback = config.feedback.expect("the table");
+        assert!(!feedback.worker);
+        assert_eq!(feedback.max_per_hour, 25);
+        assert_eq!(feedback.retention, Duration::from_secs(7 * 24 * 60 * 60));
+        assert_eq!(feedback.api_key_env, None);
+    }
+
+    #[test]
+    fn a_form_id_that_could_change_the_url_is_refused() {
+        let long = "a".repeat(65);
+        for id in [
+            "",
+            "a/b",
+            "../x",
+            "a?b=1",
+            "a#b",
+            "a@evil.example",
+            "a b",
+            "a.b",
+            "a%2Fb",
+            &long,
+        ] {
+            let config = Config {
+                feedback: Some(FeedbackConfig::for_form(id)),
+                ..Config::default()
+            };
+            let refused = config.validate().unwrap_err();
+            assert!(
+                refused.contains("feedback.forminit_form_id"),
+                "{id:?}: {refused}"
+            );
+        }
+        for id in ["a", "Abc-123_x", &"z".repeat(64)] {
+            assert!(is_forminit_form_id(id), "{id:?}");
+        }
+    }
+
+    #[test]
+    fn feedback_rejects_unknown_keys_and_bad_values() {
+        // A key in the file, or a misspelling, is a parse error.
+        for text in [
+            "[feedback]\nforminit_form_id = \"a\"\napi_key = \"zq-secret\"\n",
+            "[feedback]\nforminit_form_id = \"a\"\nmax_per_hr = 3\n",
+            "[feedback]\napi_key_env = \"X\"\n",
+        ] {
+            assert!(Config::from_toml(text).is_err(), "{text}");
+        }
+        for (change, key) in [
+            (
+                (|feedback: &mut FeedbackConfig| {
+                    feedback.api_key_env = Some("HAS SPACE".to_string())
+                }) as fn(&mut FeedbackConfig),
+                "feedback.api_key_env",
+            ),
+            (
+                |feedback| feedback.api_key_env = Some(String::new()),
+                "feedback.api_key_env",
+            ),
+            (
+                |feedback| feedback.max_per_hour = 0,
+                "feedback.max_per_hour",
+            ),
+            (
+                |feedback| feedback.max_per_hour = 1001,
+                "feedback.max_per_hour",
+            ),
+            (
+                |feedback| feedback.retention = Duration::from_secs(60 * 60),
+                "feedback.retention",
+            ),
+            (
+                |feedback| feedback.retention = Duration::from_secs(11 * 366 * 24 * 60 * 60),
+                "feedback.retention",
+            ),
+        ] {
+            let mut feedback = FeedbackConfig::for_form("a");
+            change(&mut feedback);
+            let config = Config {
+                feedback: Some(feedback),
+                ..Config::default()
+            };
+            let refused = config.validate().unwrap_err();
+            assert!(refused.contains(key), "{refused}");
+        }
     }
 }

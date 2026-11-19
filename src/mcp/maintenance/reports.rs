@@ -142,7 +142,7 @@ pub(crate) async fn maintenance_list_runs(
     ctx: &ToolContext,
     params: MaintenanceListRunsParams,
 ) -> Result<MaintenanceResult<runs::Page<runs::RunSummary>>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
+    let state = ctx.one(Some(&params.catalog)).await?;
     ctx.principal().require(Access::Read, state.name())?;
     let result = runs::list_runs(
         ctx.app().pool(),
@@ -160,7 +160,7 @@ pub(crate) async fn maintenance_get_run(
     ctx: &ToolContext,
     params: MaintenanceGetRunParams,
 ) -> Result<MaintenanceResult<runs::RunReport>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
+    let state = ctx.one(Some(&params.catalog)).await?;
     // The whole content check, before `admit`, which ignores refusals.
     ctx.principal()
         .require_contents(Access::Read, state.name(), ctx.app().clock().now())?;
@@ -203,7 +203,7 @@ pub(crate) async fn maintenance_list_findings_by(
     params: MaintenanceListFindingsParams,
     disposition: Option<Disposition>,
 ) -> Result<MaintenanceResult<runs::Page<reports::FindingRecord>>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
+    let state = ctx.one(Some(&params.catalog)).await?;
     // The whole content check, before `admit`, which ignores refusals.
     ctx.principal()
         .require_contents(Access::Read, state.name(), ctx.app().clock().now())?;
@@ -229,7 +229,7 @@ pub(crate) async fn maintenance_get_finding(
     ctx: &ToolContext,
     params: MaintenanceGetFindingParams,
 ) -> Result<MaintenanceResult<reports::FindingRecord>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
+    let state = ctx.one(Some(&params.catalog)).await?;
     // The whole content check, before `admit`, which ignores refusals.
     ctx.principal()
         .require_contents(Access::Read, state.name(), ctx.app().clock().now())?;
@@ -258,7 +258,7 @@ pub(crate) async fn maintenance_finding_counts(
     ctx: &ToolContext,
     catalog: &str,
 ) -> Result<MaintenanceResult<reports::FindingCounts>, OkfError> {
-    let state = ctx.one(Some(catalog))?;
+    let state = ctx.one(Some(catalog)).await?;
     ctx.principal().require(Access::Read, state.name())?;
     let counts = reports::count_findings(ctx.app().pool(), state.id()).await?;
     Ok(MaintenanceResult::new(state.name(), counts))
@@ -269,7 +269,7 @@ pub(crate) async fn maintenance_dispose(
     ctx: &ToolContext,
     params: MaintenanceDisposeParams,
 ) -> Result<MaintenanceResult<reports::FindingRecord>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
+    let state = ctx.one(Some(&params.catalog)).await?;
     ctx.principal().require(Access::Write, state.name())?;
     let mut result = reports::dispose(
         ctx.app().pool(),

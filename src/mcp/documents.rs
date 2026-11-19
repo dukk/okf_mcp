@@ -381,7 +381,7 @@ async fn read_set(
     catalog: Option<&str>,
     changeset: Option<&str>,
 ) -> Result<(Vec<Arc<CatalogState>>, Option<Pinned>), OkfError> {
-    let states = ctx.read_set(catalog)?;
+    let states = ctx.read_set(catalog).await?;
     let pinned = ctx.pin(changeset).await?;
     require_selected(pinned.as_ref(), &states)?;
     Ok((states, pinned))

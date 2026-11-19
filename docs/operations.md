@@ -133,6 +133,11 @@ unknown keys are ignored, so one file serves every version.
 | `mail.smtp.host`, `mail.smtp.port`, `mail.smtp.starttls`, `mail.smtp.username`, `mail.smtp.password_env` | none, `587`, `true`, none, none | The SMTP relay. `starttls = true` requires STARTTLS; `false` is TLS from the first byte (port 465); there is no plain-text mode. `username` and `password_env` (the environment variable holding the password) go together |
 | `mail.postmark.token_env`, `mail.postmark.message_stream` | none, `"outbound"` | Postmark's server token (by environment variable) and message stream |
 | `mail.ses.region` | none | The AWS region SES sends in. Unset, the AWS SDK's own resolution decides (`AWS_REGION`, then the profile, then instance metadata). The `[mail.ses]` table is optional; there is no credential key ([Mail](#mail)) |
+| `feedback.forminit_form_id` | none | The `[feedback]` table turns on the `send_feedback` tool (the [Feedback](#feedback) section); without it the tool is not offered and nothing is sent anywhere. The id of the Forminit form feedback is posted to, `https://forminit.com/f/<forminit_form_id>`: 1 to 64 of `A-Z`, `a-z`, `0-9`, `-` and `_`. Not a secret. Unknown keys in this table are an error |
+| `feedback.api_key_env` | none | The environment variable holding the form's API key, sent as `X-API-KEY`. Optional, but without a key Forminit takes one submission per 5 seconds from the server's address (5 per second with one), and a protected form needs it |
+| `feedback.worker` | `true` | Run the feedback worker in `serve`. With several replicas, turn it on for one only. Its own pool opens up to 3 connections, on top of `database_max_connections` |
+| `feedback.max_per_hour` | `10` | Submissions one credential (API key or OAuth grant) may make in any hour, 1 to 1000. Counted in Postgres, so it holds across replicas |
+| `feedback.retention` | `"30d"` | How long forwarded feedback is kept before the hourly prune deletes it, 1 day to 10 years. Failed feedback is kept |
 | `redis.url_env` | none | The `[redis]` table turns on shared state for several replicas (the [Redis](#redis) section). `url_env` is required: the name of the environment variable holding the URL, `redis://` or `rediss://`, which may carry a password (so it never goes in the file). Unknown keys in this table are an error |
 | `redis.key_prefix` | `"okf:"` | Starts every key and channel, so one Redis can serve several deployments. 1 to 64 bytes, with no whitespace, control character or brace: it goes inside the hash tag `{<key_prefix>}` |
 | `redis.mode` | `"standalone"` | `"standalone"` for one Redis or Valkey primary (or a managed primary endpoint), `"cluster"` for a cluster-aware client: ElastiCache Serverless, which runs only in cluster mode, and other clusters |
@@ -179,10 +184,15 @@ it refuses a `from` that is not one address, an `smtp` provider without a
 `[mail.smtp]` table, with a blank host, port 0, or `username` without
 `password_env` (or the reverse), and a `postmark` provider without a
 `[mail.postmark]` table or with a blank `token_env` or `message_stream`,
-and an `ses` provider with a blank `region`.
+and an `ses` provider with a blank `region`. For `[feedback]` it refuses a
+`forminit_form_id` that breaks the rule in the table (so it can never change
+the URL's host or path), an `api_key_env` that is not a variable name, and
+`max_per_hour` or `retention` out of range; like `[redis]`, the table
+refuses a key it does not know, so an inline `api_key` is an error.
 `serve` also refuses to start when a variable named by `client_secret_env`,
-`password_env` or `token_env` is unset or empty, naming the variable (never
-a value), and when the `ses` provider finds no AWS region. The other
+`password_env`, `token_env` or `feedback.api_key_env` is unset or empty,
+naming the variable (never a value), and when the `ses` provider finds no
+AWS region. The other
 subcommands never read those variables nor look for AWS credentials:
 `user invite` and `mail test` only queue mail, which a running server sends.
 
@@ -592,9 +602,16 @@ two). What `[redis]` does not share:
   in hand, for at most `worker_shutdown_grace` (30 seconds by default, the
   longest a provider may take); keep `terminationGracePeriodSeconds` above it.
   The hourly prune deletes the `apalis.workers` rows of stopped replicas.
+- **The feedback worker** runs on every replica with `[feedback]` unless
+  `[feedback] worker = false`, like the mail worker: turn it on for one
+  replica, the same way. Fetching a job is exclusive in normal operation, so
+  two workers do not normally post the same job, but delivery is
+  at-least-once (see [Feedback](#feedback)), and one worker is enough. The
+  feedback rate limit is counted in Postgres, so unlike the
+  limits above it holds across replicas.
 - **Pruning.** Every replica's poll loop prunes the OAuth tables, unbound
-  registered clients, console sessions, mail jobs, sign-in events and
-  emailed-link tokens (hourly), the audit log (daily) and empty changesets
+  registered clients, console sessions, mail jobs, forwarded feedback,
+  sign-in events and emailed-link tokens (hourly), the audit log (daily) and empty changesets
   (every pass). The deletes are idempotent, so this wastes a little work and
   does nothing wrong.
 - **`okf_mcp_sessions_active`** counts the sessions each replica holds. A
@@ -884,7 +901,8 @@ spec:
 ```
 
 The mail worker runs on every replica: see "Several replicas: what stays per
-replica". Set `terminationGracePeriodSeconds` above `worker_shutdown_grace`.
+replica", and set `terminationGracePeriodSeconds` above `worker_shutdown_grace`. With
+`[feedback]` so does the feedback worker unless `[feedback] worker = false`.
 
 **The Service:** it sets no `ipFamilyPolicy`. On a dual-stack cluster the
 server listens on both families (`listen = "[::]:8080"`), so any policy works,
@@ -2393,6 +2411,68 @@ arrives from `mail.from`. A `retrying` entry whose error names
 `AccessDenied` or a credential failure points at the Pod Identity
 association or the role's policy; `MessageRejected` (failed at once)
 usually means an unverified identity or a sandbox recipient.
+
+### Feedback
+
+With a `[feedback]` table, the `send_feedback` tool lets an agent, or a user
+through their agent, send the operator feedback about using the server:
+something confusing, broken, missing or good. It is posted to a
+[Forminit](https://forminit.com) form. Without the table the tool is not in
+`tools/list`, the server instructions do not mention it, and nothing is sent.
+
+```toml
+[feedback]
+forminit_form_id = "<form id>"            # not a secret
+api_key_env = "OKF_MCP_FORMINIT_API_KEY"  # optional: the variable holding the X-API-KEY
+# worker = true                           # one replica only, as [mail] worker
+# max_per_hour = 10                       # per credential
+# retention = "30d"                       # how long sent feedback is kept
+```
+
+What a submission holds, and nothing else: text blocks `message`, `kind`
+(`bug`, `confusing`, `missing`, `praise` or `other`), `from` (`user` or
+`agent`), `tool` (when given), `server_version`, `client` (the MCP client's
+name from `initialize`), `credential_kind` (`api_key` or `oauth`) and
+`feedback_id` (the feedback's own random id, the one the tool returns); a
+`rating` block (1 to 5) when given; and a `sender` block whose `userId` is
+the credential's user slug (`unassigned` for a legacy key no user owns).
+No email, display name, key name, token or catalog content is sent unless
+it is in the message. The tool's description tells agents so, and to ask
+the user before including catalog content or personal details.
+
+Any credential can send, `read` included, and no catalog is needed. A
+message is at most 4,000 characters, and each credential may send
+`max_per_hour` (10) in any hour; both are refused with `LimitExceeded`
+(`limit` `feedback_message` or `feedback_rate`).
+
+The tool never calls Forminit. It stores a `feedback` row (`pending`) and,
+in the same transaction, a `send_feedback` job in the `apalis` queue the
+mail uses (the job holds only the row's id), and answers with the id. The
+feedback worker posts it:
+
+- a 2xx marks the row `sent` and stores Forminit's `submission.hashId`
+  (`submission_id`);
+- a 429, a 5xx or a network error is retried, 30 seconds later and then
+  doubling up to an hour, for 10 tries (about three hours), then the row is
+  `failed`;
+- any other 4xx (`FORM_NOT_FOUND`, `FORM_DISABLED`, a validation error) marks
+  it `failed` at once with Forminit's error code in `last_error`, never
+  retried.
+
+Delivery is at-least-once. A worker takes a job exclusively in normal
+operation (`FOR UPDATE SKIP LOCKED`), but a retry after an unconfirmed or
+unrecorded acceptance can post a duplicate: a timeout after Forminit took
+the post, or a failure to mark the row `sent` afterwards, sends it again on
+the next try, possibly from another replica. A duplicate carries the same
+`feedback_id`, so de-duplicate on that field in Forminit.
+
+The hourly prune deletes `sent` rows `retention` (30 days) after they were
+sent. `failed` rows stay, for the operator to read:
+
+```sql
+SELECT id, status, attempts, last_error, created_at
+FROM feedback WHERE status <> 'sent' ORDER BY created_at;
+```
 
 ### Settings
 

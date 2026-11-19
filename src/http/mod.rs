@@ -734,6 +734,15 @@ pub async fn serve_with(
     let mail_worker = worker_pool
         .as_ref()
         .map(|pool| crate::mail::queue::spawn_worker(Arc::clone(&app), pool, shutdown.clone()));
+    // The feedback worker (issue #674): only with `[feedback]` and its
+    // `worker` switch on, so one replica forwards.
+    let feedback_worker = app
+        .config()
+        .feedback
+        .as_ref()
+        .is_some_and(|feedback| feedback.worker)
+        .then(|| crate::mail::feedback::spawn_worker(Arc::clone(&app), shutdown.clone()))
+        .flatten();
     let stop = shutdown.clone();
     // `async move { ... }` is a future that resolves once the token is
     // cancelled; axum then stops accepting and waits for open connections.
@@ -805,6 +814,16 @@ pub async fn serve_with(
             }
         }
         worker_pool.close().await;
+    }
+    if let Some(feedback_worker) = feedback_worker {
+        if let Err(error) = feedback_worker.await {
+            split_event!(
+                error,
+                {},
+                { %error, },
+                "the feedback worker panicked"
+            );
+        }
     }
     // The access counts still being written (plan Decision 5), bounded so a
     // database that stopped answering cannot hold the shutdown forever.
