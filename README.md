@@ -42,8 +42,8 @@ on it: `lint`, the links report, `oldest`, `sprawl` and the secret scan, plus
 ranked `search`. (Their JSON matches `okf.py`'s, compared as parsed values, which
 the parity tests check.) Catalogs live in Postgres: every file
 is a row holding its exact bytes and execute bit, with an append-only revision
-history, and each catalog's snapshot is built from its rows and swapped when
-the catalog changes. The `okf-mcp` command line administers catalogs and API
+history, and each catalog's snapshot is built from its rows on first use, kept within
+a memory budget (`catalog_cache_bytes`) and swapped when the catalog changes. The `okf-mcp` command line administers catalogs and API
 keys and imports and exports catalogs, and `okf-mcp serve` serves the catalogs
 over MCP streamable HTTP with bearer-key auth: every read tool, the export and
 import routes and `/healthz`, and the write tools: each connection's edits
@@ -66,8 +66,9 @@ below cover local use.
 `okf-mcp serve` runs as one replica by default, because its short-lived state
 (MCP sessions, OAuth consent pages and codes, sign-ins in progress) lives in
 the process's memory. With a `[redis]` table that state moves to Redis or
-Valkey, and several replicas can run behind one Service; the key cache and the
-OAuth access-token cache learn of a revocation on every replica at once. Set
+Valkey, and several replicas can run behind one Service; changes to keys, users, teams, settings
+and catalogs reach every replica through Postgres change messages, and the
+OAuth access-token cache learns of a revocation on every replica at once. Set
 `mode = "cluster"` for a cluster such as ElastiCache Serverless (which needs a
 `rediss://` URL). Without `[redis]` nothing changes. `docs/operations.md`
 ("Redis") covers the `[redis]` settings, the caveats and what happens when Redis is down.
@@ -185,8 +186,8 @@ that human review. Exit 0 never establishes factual freshness.
 ## Running the server
 
 `okf-mcp serve` (also what `okf-mcp` with no subcommand runs) applies the
-migrations, loads every catalog's snapshot, starts the poll loop and serves
-HTTP until SIGINT or SIGTERM:
+migrations, starts the change-feed listener and the background workers, and
+serves HTTP until SIGINT or SIGTERM:
 
     export DATABASE_URL=postgres://okf@localhost/okf   # never logged
     okf-mcp serve --config okf-mcp.toml --listen 127.0.0.1:8080
@@ -199,13 +200,13 @@ ignored, so one file serves every version:
 listen = "0.0.0.0:8080"            # the default
 allowed_hosts = ["okf-mcp.example"] # /mcp Host names (default: loopback)
 default_catalog = "pg"             # for a key with no default of its own
-poll_interval = "10s"              # how often to look for CLI changes
 session_idle_timeout = "2h"        # an idle MCP session is closed after this; also
                                    # when an untouched changeset counts as idle
 max_import_bytes = "64MiB"         # uncompressed total of an import
 concept_outline_chars = 20000      # get_concept outlines a longer body
 database_max_connections = 16      # database pool size, per process
-overlay_cache_size = 64            # open changesets' views kept in memory
+catalog_cache_bytes = "1GiB"         # catalog snapshots kept in memory
+overlay_cache_bytes = "256MiB"       # open changesets' views kept in memory
 maintenance_review_intervals = { pg = "30d" } # per-catalog; default 30d, minimum 1d
 time_server = "time.example.com"   # NTP server for the clock check (default: none)
 ```
@@ -214,15 +215,16 @@ time_server = "time.example.com"   # NTP server for the clock check (default: no
 policy and OIDC providers) and `[mail]` are described, with every other key,
 in `docs/operations.md`, section 3.
 
-A zero `poll_interval` or `session_idle_timeout`, an empty `allowed_hosts`
+A zero `session_idle_timeout`, an empty `allowed_hosts`
 or a blank entry in it, or a blank or padded `time_server`, is refused at
 load. Behind an ingress,
 `allowed_hosts` must name the public hostname (rmcp's DNS-rebinding check
 answers any other `Host` on `/mcp` with 403).
 
 Create a catalog, fill it and make a key with the subcommands; the server
-notices each change within `poll_interval`, without a restart (a revoked key
-stops working at the next poll too):
+notices each change within a fraction of a second, without a restart (each
+command sends a Postgres change message; a lost one is covered by
+`catalog_ttl` and `credential_ttl`, 10 seconds by default):
 
     okf-mcp user create alice
     okf-mcp catalog create pg --description "pgrace's catalog" --owner alice
@@ -446,7 +448,7 @@ own keys, grants, sign-in methods and sessions; admins also get Settings
 
 Browse shows a catalog's tree, each concept rendered (raw HTML in a concept
 is shown as text, never run), its links, history and revision diffs, and
-Search searches every catalog the key reaches. Recent changes
+Search searches the catalogs the key reaches (the console names every one of them, so `search_fanout_max` does not cap it; that cap applies to an HTTP API search that names none). Recent changes
 (`/ui/#/recent`) lists the revisions published in the selected catalog,
 every document's, newest first, and opens each one's diff.
 
@@ -615,9 +617,11 @@ key's actor.
 - `src/catalog.rs` - `CatalogState`: a catalog's snapshot, loaded from its
   rows and rebuilt and swapped when its generation moves; lint with revision
   times.
-- `src/auth.rs` - the key cache and the bearer middleware; `src/selection.rs` -
+- `src/auth.rs` - the bearer middleware and the `Principal`, assembled from
+  the credential caches (`src/cache/`, the bounded caches of milestone 18); `src/selection.rs` -
   which catalogs a call acts on; `src/app.rs` - the
-  shared state and the poll loop (which also prunes empty changesets).
+  shared state and the change-feed handling (`src/invalidate.rs`); `src/housekeeping.rs` -
+  the once-per-cluster pruning jobs.
 - `src/overlay.rs` - a changeset's view (the published files with its entries
   applied), cached per changeset; `src/write.rs` - the one path every write
   tool takes into its changeset.
