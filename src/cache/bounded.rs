@@ -113,7 +113,7 @@ pub enum Eviction {
     Size,
     /// The entry outlived the time to live.
     Ttl,
-    /// It was dropped on purpose (an invalidation, or a value not kept).
+    /// It was dropped on purpose (an invalidation).
     Invalidated,
 }
 
