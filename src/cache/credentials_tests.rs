@@ -16,6 +16,7 @@ use crate::db::{test_db, TEST_TEAM, TEST_USER};
 use crate::invalidate::testing::invalidations_of;
 use crate::labels::DisplayName;
 use crate::mcp::testing::{local_metrics, render};
+use crate::rows_returned::RowsReturned;
 use crate::store::audit::AuditActor;
 use crate::store::catalogs::{self, NewCatalog};
 use crate::store::keys::{Access, Grants, NewKey};
