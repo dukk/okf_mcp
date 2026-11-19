@@ -53,7 +53,7 @@ const WARM_PAGE_BOUND: Duration = Duration::from_millis(50);
 /// Every wait is bounded by this.
 const BOUND: Duration = Duration::from_secs(120);
 
-/// The body of every seeded document, about 60 bytes.
+/// The body of every seeded document, 51 bytes.
 const NOTE: &str = "---\ntype: Note\ntitle: Note\n---\n# Note\nA tiny note.\n";
 
 /// Seeds [`SEEDED`] catalogs (one tiny document each, owned by a team nobody is in) and [`SEEDED`] users, each with a read key whose secret is
