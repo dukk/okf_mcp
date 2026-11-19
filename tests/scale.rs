@@ -50,6 +50,8 @@ const RSS_SLACK: u64 = 200 * 1024 * 1024;
 const COLD_PAGE_BOUND: Duration = Duration::from_millis(200);
 /// The same page again (the plan's 50 ms).
 const WARM_PAGE_BOUND: Duration = Duration::from_millis(50);
+/// The default page size of the listing routes.
+const FIRST_PAGE_SIZE: usize = 100;
 /// Every wait is bounded by this.
 const BOUND: Duration = Duration::from_secs(120);
 
@@ -276,8 +278,14 @@ async fn a_million_catalogs_and_users_stay_within_bounds() {
     // the first one pays for (the key load, the pool, 100 snapshot loads)
     // shows against the repeats.
     let mut timings = Vec::new();
-    let mut listed = 0;
-    for target in [url.clone(), url.clone(), format!("{url}?limit=10")] {
+    // Each page must be complete: its size is what the request asked for
+    // (the fixture has far more catalogs), and `next` must continue it.
+    let requests = [
+        (url.clone(), FIRST_PAGE_SIZE),
+        (url.clone(), FIRST_PAGE_SIZE),
+        (format!("{url}?limit=10"), 10),
+    ];
+    for (target, expected) in requests {
         let started = Instant::now();
         let response = tokio::time::timeout(BOUND, client.get(&target).bearer_auth(&admin).send())
             .await
@@ -287,15 +295,20 @@ async fn a_million_catalogs_and_users_stay_within_bounds() {
         let body: serde_json::Value = response.json().await.expect("a JSON listing");
         timings.push(started.elapsed());
         assert!(status.is_success(), "{status}: {body}");
-        listed = listed.max(body["catalogs"].as_array().map_or(0, Vec::len));
+        let listed = body["catalogs"].as_array().map_or(0, Vec::len);
+        assert_eq!(listed, expected, "{target} listed {listed} catalogs");
+        assert!(
+            body["next"].as_str().is_some_and(|next| !next.is_empty()),
+            "{target} has more catalogs, so it needs a next cursor: {}",
+            body["next"]
+        );
     }
     let first_page = timings[0];
     eprintln!(
-        "GET /api/v1/catalogs: first request {:.2?} ({listed} catalogs), repeat {:.2?}, \
+        "GET /api/v1/catalogs: first request {:.2?} ({FIRST_PAGE_SIZE} catalogs), repeat {:.2?}, \
          limit=10 {:.2?}",
         timings[0], timings[1], timings[2]
     );
-    assert!(listed > 0);
     // The plan's 50 ms holds for a page whose snapshots are loaded. The
     // first request of a default page (100 catalogs) also loads 100
     // snapshots one after another and the key's principal, so it is held to
