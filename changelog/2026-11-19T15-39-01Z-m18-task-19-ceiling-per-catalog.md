@@ -55,4 +55,4 @@ authenticate and held a million-entry map in one cache entry.
 - `GET /me`, `GET /session` and the consent page still show the whole
   ceiling, read from the database on request; their answers grow with it.
   Paging them is a follow-up (#736).
-- Scale run: A release run of the reworked test (2026-11-19, alone on the machine): the administrator's first authentication 3.20 ms (15 µs again), against about 820 ms before; 10,000 keys p50 0.34 ms, p99 0.55 ms; credential entries 5,000 at the 5,000 limit with `credential_ttl` 1 h; first listing page 18.65 ms, repeat 0.94 ms. A run that overlapped my own test builds measured 1.12 s for the same authentication: contention, gone when run alone.
+- Scale run: A release run of the reworked test (2026-11-19, alone on the machine): the administrator's first authentication 3.20 ms (15 µs again), against about 820 ms before; 10,000 keys p50 0.34 ms, p99 0.55 ms; credential entries 5,000 at the 5,000 limit with `credential_ttl` 1 h; first listing page 18.65 ms, repeat 0.94 ms.
