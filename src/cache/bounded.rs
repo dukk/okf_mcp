@@ -52,8 +52,10 @@ pub enum CacheName {
     Overlay,
     /// Catalog rows by name.
     Directory,
-    /// Credentials.
+    /// API keys, by hash.
     Credential,
+    /// OAuth grants, by id.
+    Grant,
     /// Users.
     User,
     /// Labels.
@@ -68,6 +70,7 @@ impl CacheName {
             Self::Overlay => "overlay",
             Self::Directory => "directory",
             Self::Credential => "credential",
+            Self::Grant => "grant",
             Self::User => "user",
             Self::Labels => "labels",
         }
@@ -156,6 +159,9 @@ enum Load<V> {
     Failed,
     /// The loader succeeded but its value must not be kept.
     Uncached(V),
+    /// The loader found nothing, which is never cached
+    /// ([`Bounded::get_or_load_present`]).
+    Absent,
 }
 
 /// The gauges' view of a cache: a second handle on the moka cache, held
@@ -417,6 +423,40 @@ where
         self.load_once(key, load).await
     }
 
+    /// As [`Bounded::get_or_load`] for a loader that may find nothing: a
+    /// value found is cached as usual, and nothing found is never cached, so
+    /// the next lookup of that key loads again (M18 spec Decision 9: an
+    /// unknown credential costs one query per lookup and takes no room).
+    /// Callers that miss together still share one load, found or not.
+    ///
+    /// # Arguments
+    /// * `key` - the key.
+    /// * `load` - reads the value, or `None` when there is none.
+    ///
+    /// # Returns
+    /// The value, or `None`.
+    ///
+    /// # Errors
+    /// As [`Bounded::get_or_load`].
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub async fn get_or_load_present<F, Fut>(&self, key: K, load: F) -> Result<Option<V>, OkfError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Option<V>, OkfError>>,
+    {
+        if let Some(entry) = self.cache.get(&key).await {
+            if self.is_fresh(&entry) {
+                self.count(Lookup::Hit);
+                return Ok(Some(entry.value));
+            }
+            self.count(Lookup::Stale);
+            self.cache.invalidate(&key).await;
+        } else {
+            self.count(Lookup::Miss);
+        }
+        self.load_present_once(key, load).await
+    }
+
     /// As [`Bounded::get_or_load`], except that an entry marked stale is
     /// first passed to `check`, which returns `Ok(None)` to keep it or
     /// `Ok(Some(new))` to replace it. Revalidations are not single flight.
@@ -648,6 +688,21 @@ where
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<V, OkfError>>,
     {
+        // `map(Some)` wraps the value, so the loader never finds nothing.
+        let found = self
+            .load_present_once(key, || async { load().await.map(Some) })
+            .await?;
+        Ok(found.expect("a loader that always returns a value found one"))
+    }
+
+    /// Runs `load` for one of the callers that miss on `key` together; a
+    /// load that finds nothing (`Ok(None)`) is shared but not cached.
+    #[tracing::instrument(level = "trace", skip_all)]
+    async fn load_present_once<F, Fut>(&self, key: K, load: F) -> Result<Option<V>, OkfError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Option<V>, OkfError>>,
+    {
         // The leader parks its `Flight` here, so the key stays registered
         // until moka has inserted the value and the check below has run: an
         // invalidation landing in between is seen by that check.
@@ -662,7 +717,8 @@ where
                 let result = load().await;
                 self.record_load(started, result.is_ok());
                 let value = match result {
-                    Ok(value) => value,
+                    Ok(Some(value)) => value,
+                    Ok(None) => return Err(Load::Absent),
                     Err(error) => {
                         *locked(&own_error) = Some(error);
                         return Err(Load::Failed);
@@ -681,10 +737,11 @@ where
                 if flight.is_some_and(|flight| !flight.current()) {
                     self.cache.invalidate(&key).await;
                 }
-                Ok(entry.value)
+                Ok(Some(entry.value))
             }
             Err(shared) => match &*shared {
-                Load::Uncached(value) => Ok(value.clone()),
+                Load::Uncached(value) => Ok(Some(value.clone())),
+                Load::Absent => Ok(None),
                 Load::Failed => Err(locked(&own_error).take().unwrap_or_else(|| OkfError::Busy {
                     reason: "a load this request shared failed".to_string(),
                 })),
@@ -784,6 +841,40 @@ mod tests {
         .expect("the two loads finish");
         assert_eq!((a.unwrap(), b.unwrap()), (Arc::from("v"), Arc::from("v")));
         assert_eq!(loads.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn nothing_found_is_shared_but_never_cached() {
+        let cache = Bounded::<i64, i64>::new(CacheName::Credential, Limit::Entries(10), TTL);
+        let loads = AtomicUsize::new(0);
+        let absent = || async {
+            loads.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(MS_50).await;
+            Ok::<_, OkfError>(None)
+        };
+
+        let (a, b) = timeout(BOUND, async {
+            tokio::join!(
+                cache.get_or_load_present(1, absent),
+                cache.get_or_load_present(1, absent)
+            )
+        })
+        .await
+        .expect("the two loads finish");
+        let again = cache.get_or_load_present(1, absent).await.unwrap();
+        let found = cache
+            .get_or_load_present(2, || async { Ok::<_, OkfError>(Some(7)) })
+            .await
+            .unwrap();
+
+        assert_eq!((a.unwrap(), b.unwrap(), again), (None, None, None));
+        assert_eq!(
+            loads.load(Ordering::SeqCst),
+            2,
+            "one shared load, then one more"
+        );
+        assert_eq!(cache.peek(&1).await, None, "nothing found is not cached");
+        assert_eq!((found, cache.peek(&2).await), (Some(7), Some(7)));
     }
 
     #[tokio::test]

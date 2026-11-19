@@ -68,7 +68,7 @@ async fn user_context(test: &TestApp, name: &str, access: Access, admin: bool) -
         .expect("create the key")
         .key;
     test.app.poll().await.expect("poll the key in");
-    context(test, cached_principal(test, &secret), None)
+    context(test, cached_principal(test, &secret).await, None)
 }
 
 async fn body(ctx: &ToolContext, handle: &str, text: &str) {

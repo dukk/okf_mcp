@@ -286,6 +286,16 @@ async fn every_export_is_recorded_whoever_asks() {
     );
 }
 
+/// Applies the change message `catalog`'s create sent to the app's catalog
+/// directory, as the change feed would (lib tests run no listener).
+async fn tell_directory(test: &TestApp, catalog: &str) {
+    let invalidation = crate::invalidate::Invalidation::CatalogMeta {
+        id: catalog_id(test, catalog).await,
+        name: catalog.to_string(),
+    };
+    test.app.directory().apply(&invalidation).await;
+}
+
 /// Deletes `main` and creates it again for a new team `acme` of a new user
 /// `bob` (so the test user is not a member of the replacement).
 async fn replace_main_for_acme(test: &TestApp) {
@@ -326,15 +336,15 @@ async fn a_read_of_an_old_catalog_map_under_newer_gates_is_refused_not_misrecord
     // `main` is cached (its row and its snapshot) before it is replaced.
     test.app.catalog("main").await.unwrap().expect("main");
     replace_main_for_acme(&test).await;
-    // The key cache (and its gates) moves to the replacement while the
-    // catalog directory and cache still hold the old `main` (its messages
-    // have not arrived).
-    test.app.keys().reload(test.app.pool()).await.unwrap();
+    // This call resolves the old `main` (its row and snapshot are cached)
+    // before the replacement's change message reaches the directory.
     let ctx = crate::mcp::testing::context(
         &test,
-        crate::mcp::testing::cached_principal(&test, &staff),
+        crate::mcp::testing::cached_principal(&test, &staff).await,
         None,
     );
+    ctx.state("main").await.unwrap();
+    tell_directory(&test, "main").await;
     assert_eq!(
         ctx.state("main").await.unwrap().id(),
         original,
@@ -345,7 +355,7 @@ async fn a_read_of_an_old_catalog_map_under_newer_gates_is_refused_not_misrecord
     // on the map's state refuses it the same way.
     let state = ctx.state("main").await.unwrap();
     let selected = ctx.one(Some("main")).await.map(drop);
-    let refused = ctx.admit(&state, audit::AccessKind::Read);
+    let refused = ctx.admit(&state, audit::AccessKind::Read).await;
     assert!(
         matches!(selected, Err(crate::error::OkfError::Busy { .. })),
         "{selected:?}"
@@ -365,13 +375,13 @@ async fn an_old_principal_reading_a_new_catalog_map_is_admitted_as_the_new_catal
     // The test user's every-catalog admin key: a member of the old `main`'s
     // owner team, not of the replacement's.
     let root = crate::http::api::testing::every_catalog_admin(&test).await;
-    let old_principal = crate::mcp::testing::cached_principal(&test, &root);
+    let old_principal = crate::mcp::testing::cached_principal(&test, &root).await;
     replace_main_for_acme(&test).await;
     test.app.poll().await.unwrap();
     let ctx = crate::mcp::testing::context(&test, old_principal, None);
 
     let state = ctx.one(Some("main")).await.unwrap();
-    ctx.admit(&state, audit::AccessKind::Read).unwrap();
+    ctx.admit(&state, audit::AccessKind::Read).await.unwrap();
     settle_access(&test).await;
 
     let reads = admin_reads(&test).await;
@@ -413,10 +423,10 @@ async fn an_export_whose_entry_cannot_be_written_answers_500_without_an_archive(
 }
 
 /// A tool context for `secret` on a connection of `main` then `other`.
-fn on_main_and_other(test: &TestApp, secret: &str) -> crate::mcp::context::ToolContext {
+async fn on_main_and_other(test: &TestApp, secret: &str) -> crate::mcp::context::ToolContext {
     crate::mcp::testing::context(
         test,
-        crate::mcp::testing::cached_principal(test, secret),
+        crate::mcp::testing::cached_principal(test, secret).await,
         Some(&["main", "other"]),
     )
 }
@@ -429,8 +439,8 @@ async fn a_read_that_answers_from_the_first_catalog_records_only_that_one() {
     let staff = staff_root(&test).await;
     // `main`, listed first, answers each: both catalogs have `index.md`'s
     // history, and only `main` has the concept.
-    let history_ctx = on_main_and_other(&test, &staff);
-    let concept_ctx = on_main_and_other(&test, &staff);
+    let history_ctx = on_main_and_other(&test, &staff).await;
+    let concept_ctx = on_main_and_other(&test, &staff).await;
 
     let found = history(
         &history_ctx,
@@ -474,10 +484,10 @@ async fn a_search_refused_after_one_catalog_passes_queues_no_read() {
     use crate::mcp::search::{run, SearchParams};
     let test = app().await;
     let staff = staff_root(&test).await;
-    // `other` is replaced and only the key cache reloaded: `main` passes
-    // its check, `other` (still the old map's) cannot.
-    // `other` is cached (row and snapshot) before it is replaced.
-    test.app.catalog("other").await.unwrap().expect("other");
+    // `other` is replaced after this call resolved it: `main` passes its
+    // check, `other` (the call still holds the old one) cannot.
+    let ctx = on_main_and_other(&test, &staff).await;
+    ctx.state("other").await.unwrap();
     let cli = AuditActor::cli();
     catalogs::delete(test.app.pool(), "other", true, &cli, Utc::now())
         .await
@@ -491,8 +501,7 @@ async fn a_search_refused_after_one_catalog_passes_queues_no_read() {
     catalogs::create(test.app.pool(), &other, &cli, Utc::now())
         .await
         .unwrap();
-    test.app.keys().reload(test.app.pool()).await.unwrap();
-    let ctx = on_main_and_other(&test, &staff);
+    tell_directory(&test, "other").await;
 
     let refused = run(
         &ctx,
@@ -532,12 +541,12 @@ async fn a_maintenance_mutation_records_no_read_and_a_revision_read_records_one(
     let staff = staff_root(&test).await;
     let claim_ctx = crate::mcp::testing::context(
         &test,
-        crate::mcp::testing::cached_principal(&test, &staff),
+        crate::mcp::testing::cached_principal(&test, &staff).await,
         None,
     );
     let read_ctx = crate::mcp::testing::context(
         &test,
-        crate::mcp::testing::cached_principal(&test, &staff),
+        crate::mcp::testing::cached_principal(&test, &staff).await,
         None,
     );
 
@@ -667,10 +676,10 @@ async fn import_main(
 }
 
 /// The staff key's MCP context, as a tool call would build it.
-fn staff_context(test: &TestApp, secret: &str) -> crate::mcp::context::ToolContext {
+async fn staff_context(test: &TestApp, secret: &str) -> crate::mcp::context::ToolContext {
     crate::mcp::testing::context(
         test,
-        crate::mcp::testing::cached_principal(test, secret),
+        crate::mcp::testing::cached_principal(test, secret).await,
         None,
     )
 }
@@ -701,7 +710,7 @@ async fn with_require_unlock_staff_need_an_unlock_for_reads_writes_and_exports()
     let (locked, refused) = send(&test, "GET", tree, Some(&staff), None).await;
     let (locked_export, _) = send(&test, "GET", export, Some(&staff), None).await;
     let (locked_import, import_refused) = import_main(&test, &staff, archive()).await;
-    let locked_open = open_main(&staff_context(&test, &staff)).await;
+    let locked_open = open_main(&staff_context(&test, &staff).await).await;
     let (member, _) = send(&test, "GET", tree, Some(&scoped.read), None).await;
     let (member_export, _) = send(&test, "GET", export, Some(&scoped.read), None).await;
     let (listing, _) = send(&test, "GET", "/api/v1/catalogs", Some(&staff), None).await;
@@ -741,11 +750,12 @@ async fn with_require_unlock_staff_need_an_unlock_for_reads_writes_and_exports()
     let (open, _) = send(&test, "GET", tree, Some(&staff), None).await;
     send(&test, "GET", tree, Some(&staff), None).await;
     let (exported, _) = send(&test, "GET", export, Some(&staff), None).await;
-    let ctx = staff_context(&test, &staff);
+    let ctx = staff_context(&test, &staff).await;
     let handle = open_main(&ctx)
         .await
         .expect("an unlocked admin opens a changeset");
     let write = staff_context(&test, &staff)
+        .await
         .changeset(&handle, Access::Write)
         .await
         .map(drop);
@@ -772,6 +782,7 @@ async fn with_require_unlock_staff_need_an_unlock_for_reads_writes_and_exports()
     test.app.poll().await.unwrap();
     let (ended, _) = send(&test, "GET", tree, Some(&staff), None).await;
     let ended_write = staff_context(&test, &staff)
+        .await
         .changeset(&handle, Access::Write)
         .await
         .map(drop);
@@ -861,7 +872,7 @@ async fn the_maintenance_runner_reads_without_an_unlock_until_the_catalog_opts_o
     let (exempt, _) = send(&test, "GET", tree, Some(&runner), None).await;
     let (exempt_export, _) = send(&test, "GET", export, Some(&runner), None).await;
     let (writer_reads, _) = send(&test, "GET", tree, Some(&writing_runner), None).await;
-    let writer_opens = open_main(&staff_context(&test, &writing_runner)).await;
+    let writer_opens = open_main(&staff_context(&test, &writing_runner).await).await;
     let mut tx = test.app.pool().begin().await.unwrap();
     let id: i64 = sqlx::query_scalar(
         "UPDATE catalogs SET maintenance = false WHERE name = 'main' RETURNING id",
@@ -920,15 +931,15 @@ async fn an_unlocked_read_of_an_old_catalog_map_is_refused_not_left_out() {
     test.app.catalog("main").await.unwrap().expect("main");
     replace_main_for_acme(&test).await;
     let id = create_unlock(&test, "main").await;
-    // The key cache (its gates now hold the unlock of the replacement)
-    // moves while the catalog directory and cache still hold the old
-    // `main` (its messages have not arrived).
-    test.app.keys().reload(test.app.pool()).await.unwrap();
+    // This call resolves the old `main` (its row and snapshot are cached)
+    // before the replacement's change message reaches the directory.
     let ctx = crate::mcp::testing::context(
         &test,
-        crate::mcp::testing::cached_principal(&test, &reader),
+        crate::mcp::testing::cached_principal(&test, &reader).await,
         None,
     );
+    ctx.state("main").await.unwrap();
+    tell_directory(&test, "main").await;
     assert_eq!(
         ctx.state("main").await.unwrap().id(),
         original,
@@ -939,7 +950,7 @@ async fn an_unlocked_read_of_an_old_catalog_map_is_refused_not_left_out() {
     // on the map's state refuses it the same way.
     let state = ctx.state("main").await.unwrap();
     let selected = ctx.one(Some("main")).await.map(drop);
-    let refused = ctx.admit(&state, audit::AccessKind::Read);
+    let refused = ctx.admit(&state, audit::AccessKind::Read).await;
     assert!(
         matches!(selected, Err(crate::error::OkfError::Busy { .. })),
         "{selected:?}"
@@ -965,7 +976,7 @@ async fn a_changeset_list_leaves_out_a_catalog_whose_unlock_ended() {
     require_unlock(&test).await;
     unlock(&test, "main").await;
     let other = unlock(&test, "other").await;
-    let ctx = staff_context(&test, &staff);
+    let ctx = staff_context(&test, &staff).await;
     for catalog in ["main", "other"] {
         let params = crate::mcp::changesets::OpenParams {
             catalog: Some(catalog.to_string()),
@@ -978,12 +989,12 @@ async fn a_changeset_list_leaves_out_a_catalog_whose_unlock_ended() {
         .await
         .unwrap();
     test.app.poll().await.unwrap();
-    let listed = |catalog: Option<&str>| {
-        let ctx = staff_context(&test, &staff);
+    let listed = async |catalog: Option<&str>| {
+        let ctx = staff_context(&test, &staff).await;
         let params = crate::mcp::changesets::ListParams {
             catalog: catalog.map(str::to_string),
         };
-        async move { crate::mcp::changesets::list_changesets(&ctx, params).await }
+        crate::mcp::changesets::list_changesets(&ctx, params).await
     };
 
     let unnamed = listed(None).await.unwrap();
@@ -1002,8 +1013,9 @@ async fn a_changeset_list_leaves_out_a_catalog_whose_unlock_ended() {
 }
 
 /// Unlocks `main` for an admin `staff`, then replaces `main` with a
-/// one-document catalog of team `acme` without polling, so the key cache
-/// still admits through the old catalog's unlock (PR #442 review).
+/// one-document catalog of team `acme` without polling or applying any
+/// change message, so the caches still admit through the old catalog's
+/// unlock (PR #442 review).
 ///
 /// # Returns
 /// The staff key's secret, the old unlock's id and the replacement's id.
@@ -1012,6 +1024,11 @@ async fn stale_unlock_of_a_replaced_main(test: &TestApp) -> (String, i64, i64) {
     make_staff_admin(test).await;
     require_unlock(test).await;
     let id = unlock(test, "main").await;
+    // The caches hold the old `main`'s row and the user's unlock of it; no
+    // change message reaches them after the replacement (lib tests run no
+    // listener), as on a replica whose messages are late.
+    test.app.directory().resolve("main").await.unwrap();
+    crate::mcp::testing::cached_principal(test, &staff).await;
     replace_main_for_acme(test).await;
     let replacement = catalog_id(test, "main").await;
     import_private_index(test).await;
@@ -1040,9 +1057,9 @@ async fn replacement_contents(test: &TestApp, id: i64) -> (i64, Vec<(String, Vec
 async fn a_stale_unlock_exports_nothing_of_the_catalog_that_replaced_its_own() {
     let test = app().await;
     let (staff, id, replacement) = stale_unlock_of_a_replaced_main(&test).await;
-    // Still the old gates: the cache was not reloaded.
-    let cached = crate::mcp::testing::cached_principal(&test, &staff);
-    assert_ne!(cached.gates.catalogs["main"].id, replacement);
+    // Still the old row: the directory was told nothing.
+    let cached = test.app.directory().resolve("main").await.unwrap().unwrap();
+    assert_ne!(cached.id, replacement);
 
     let (status, body) = send(
         &test,
@@ -1110,7 +1127,7 @@ async fn old_unlock_against_a_new_map(
     make_staff_admin(test).await;
     require_unlock(test).await;
     unlock(test, "main").await;
-    let old_principal = crate::mcp::testing::cached_principal(test, &staff);
+    let old_principal = crate::mcp::testing::cached_principal(test, &staff).await;
     // The replacement and its document, without a poll in between.
     replace_main_for_acme(test).await;
     import_private_index(test).await;

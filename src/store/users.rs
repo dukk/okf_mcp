@@ -2,8 +2,6 @@
 //! user also creates its personal team, so every user can own catalogs.
 //! Users are addressed by name; ids stay inside SQL.
 
-use std::collections::HashMap;
-
 use chrono::{DateTime, Utc};
 use serde_json::json;
 use sqlx::{PgConnection, PgPool};
@@ -690,8 +688,8 @@ pub async fn set_email(
             .bind(&user_id)
             .execute(&mut *tx)
             .await?;
-        // The key cache holds every user's email for console sessions
-        // (`auth_by_id`), so a change reloads it.
+        // The user cache holds the email for console sessions, so a change
+        // drops its entry.
         invalidate(&mut tx, &[Invalidation::user(&user_id)]).await?;
         // Never the address: only that it changed (spec "People in entries").
         let details = json!({ "cleared": email.is_none() });
@@ -932,7 +930,7 @@ pub async fn find_record_by_email(
 /// The user with id `user_id`.
 ///
 /// # Arguments
-/// * `pool` - the database.
+/// * `executor` - a pool, connection or transaction.
 /// * `user_id` - a `users.id`.
 ///
 /// # Returns
@@ -941,39 +939,18 @@ pub async fn find_record_by_email(
 /// # Errors
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.find_auth"))]
-pub async fn find_auth(pool: &PgPool, user_id: &str) -> Result<Option<UserAuth>, OkfError> {
+pub async fn find_auth(
+    executor: impl sqlx::PgExecutor<'_>,
+    user_id: &str,
+) -> Result<Option<UserAuth>, OkfError> {
     Ok(sqlx::query_as::<_, UserAuth>(concat!(
         "SELECT ",
         user_auth_columns!(),
         " FROM users u WHERE u.id = $1"
     ))
     .bind(user_id)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?)
-}
-
-/// Every user's sign-in identity, by id, for the key cache: console
-/// sessions are built from it without a query.
-///
-/// # Arguments
-/// * `pool` - the database.
-///
-/// # Returns
-/// The users, keyed by id.
-///
-/// # Errors
-/// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.auth_by_id"))]
-pub async fn auth_by_id(pool: &PgPool) -> Result<HashMap<String, UserAuth>, OkfError> {
-    let users =
-        sqlx::query_as::<_, UserAuth>(concat!("SELECT ", user_auth_columns!(), " FROM users u"))
-            .fetch_all(pool)
-            .await?;
-    // `(user.id.clone(), user)`: the map owns a copy of the id as its key.
-    Ok(users
-        .into_iter()
-        .map(|user| (user.id.clone(), user))
-        .collect())
 }
 
 /// What a user deletion removed.
@@ -1493,11 +1470,11 @@ pub(crate) mod tests {
             .await
             .unwrap()
             .unwrap();
-        let by_id = auth_by_id(&db.pool).await.unwrap();
+        let by_id = find_auth(&db.pool, &by_email.id).await.unwrap().unwrap();
 
         // Assert
         assert_eq!(by_email.display_name, "Alice Example");
-        assert_eq!(by_id[&by_email.id].display_name, "Alice Example");
+        assert_eq!(by_id.display_name, "Alice Example");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1617,7 +1594,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn auth_by_id_holds_every_user_by_id() {
+    async fn find_auth_reads_one_user_by_id() {
         let db = test_db().await;
         let alice = seed_user(&db.pool, "alice", Some("alice@example.com")).await;
         set_admin(
@@ -1632,20 +1609,18 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-
-        let users = auth_by_id(&db.pool).await.unwrap();
-
         let stored = find_by_email(&db.pool, "alice@example.com")
             .await
             .unwrap()
             .expect("alice");
-        assert_eq!(users.get(&stored.id), Some(&stored));
+
+        let found = find_auth(&db.pool, &stored.id).await.unwrap();
+        let unknown = find_auth(&db.pool, "no-such-id").await.unwrap();
+
+        assert_eq!(found.as_ref(), Some(&stored));
         assert!(stored.is_admin);
         assert_eq!(stored.name, alice.name);
-        assert!(
-            users.values().any(|user| user.name == crate::db::TEST_USER),
-            "every user, not only those with an email"
-        );
+        assert_eq!(unknown, None);
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -4,6 +4,7 @@
 
 pub mod bounded;
 pub mod catalogs;
+pub mod credentials;
 pub mod directory;
 
 pub use bounded::{Bounded, CacheName, Limit};

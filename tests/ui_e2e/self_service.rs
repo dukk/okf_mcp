@@ -386,8 +386,9 @@ async fn a_member_creates_a_key_within_the_ceiling_and_sees_its_secret_once() {
     let secret = shown.lock().expect("the secret's lock").clone();
     let principal = server
         .app
-        .keys()
-        .find(&secret)
+        .find_key(&secret)
+        .await
+        .unwrap()
         .expect("the secret signs in");
     assert_eq!(principal.key_id, key.id);
 }

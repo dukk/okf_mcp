@@ -750,13 +750,7 @@ async fn authorize(
         query: query_string,
     };
     let page = match &user {
-        Some(user) => user_consent_page(
-            &pending_id,
-            &pending,
-            (user, &app.keys().labels()),
-            None,
-            &brand,
-        ),
+        Some(user) => user_consent_page(&pending_id, &pending, (user, &app.labels()), None, &brand),
         None => consent::code_page(&view(&pending_id, &pending), None, &brand),
     };
     // `insert` is `false` when the bounded memory map is full: an
@@ -1072,7 +1066,7 @@ async fn check_code(
             decision.accept();
             consent::summary_page(
                 &view(pending_id, pending),
-                &summary(&record, &app.keys().labels()),
+                &summary(&record, &app.labels()),
                 &summary_nonce,
                 &brand,
             )
@@ -1136,12 +1130,11 @@ async fn finish(
     if let Err(error) = oauth.pending.remove(pending_id).await {
         return server_error(&error, &brand);
     }
-    // Creating the grant bumped admin_generation, so this loads it into the
-    // key cache before the client's token request can arrive. Only the keys
-    // are reloaded (not every catalog, as a full poll pass does), and the
-    // new generation is announced to the other replicas. A failure is
-    // logged inside; the next poll pass retries.
-    app.reload_keys_now(true).await;
+    // The credential cache reads the new grant on first use, so nothing
+    // needs loading here. Creating it bumped admin_generation: announce it
+    // to milestone 16 replicas, which still reload on announcements. A
+    // failure is logged inside; the next poll pass retries.
+    app.reload_settings_now(true).await;
     let (code, family_id) = match (
         keys::generate_with(keys::AUTHORIZATION_CODE_PREFIX),
         new_id(),
@@ -1235,7 +1228,7 @@ async fn consent_as_user(
             return user_consent_page(
                 &form.pending,
                 pending,
-                (&user, &app.keys().labels()),
+                (&user, &app.labels()),
                 Some(NOTHING_CHOSEN),
                 brand,
             );
@@ -1258,7 +1251,7 @@ async fn consent_as_user(
         return user_consent_page(
             &form.pending,
             pending,
-            (&user, &app.keys().labels()),
+            (&user, &app.labels()),
             Some(DEFAULT_NOT_CHOSEN),
             brand,
         );
@@ -1765,8 +1758,9 @@ mod tests {
         assert_eq!(waiting.resource, oauth.settings.resource);
         let principal = test
             .app
-            .keys()
             .find_grant(&waiting.grant_id)
+            .await
+            .unwrap()
             .expect("cached grant");
         assert_eq!(principal.actor, "example-actor");
         assert_eq!(principal.access, Access::Write);
@@ -2060,8 +2054,9 @@ mod tests {
             .expect("the code is stored");
         let principal = test
             .app
-            .keys()
             .find_grant(&waiting.grant_id)
+            .await
+            .unwrap()
             .expect("cached grant");
         assert_eq!(principal.access, Access::Write);
         let read_live = code_rows::find_live(test.app.pool(), &read_code, now)
@@ -2579,7 +2574,12 @@ mod tests {
         assert!(target.as_str().starts_with(REDIRECT_URI));
         assert_eq!(param(&target, "state").as_deref(), Some("xyz"));
         let grant = grant_of(&test, &target).await;
-        let principal = test.app.keys().find_grant(&grant).expect("cached grant");
+        let principal = test
+            .app
+            .find_grant(&grant)
+            .await
+            .unwrap()
+            .expect("cached grant");
         assert_eq!(principal.user.as_deref(), Some("alice"));
         assert_eq!(principal.actor, "Example Client");
         assert_eq!(principal.level("main"), Some(Access::Write));
@@ -2615,8 +2615,9 @@ mod tests {
         let grant = grant_of(&test, &forwarded(status, &headers, &body)).await;
         let granted = test
             .app
-            .keys()
             .find_grant(&grant)
+            .await
+            .unwrap()
             .expect("cached")
             .level("main");
 
@@ -2635,8 +2636,9 @@ mod tests {
         test.app.poll().await.expect("reload");
         let lowered = test
             .app
-            .keys()
             .find_grant(&grant)
+            .await
+            .unwrap()
             .expect("cached")
             .level("main");
         ceiling::unentitle(
@@ -2651,8 +2653,9 @@ mod tests {
         test.app.poll().await.expect("reload");
         let removed = test
             .app
-            .keys()
             .find_grant(&grant)
+            .await
+            .unwrap()
             .map(|principal| principal.level("main"));
 
         assert_eq!(granted, Some(Access::Write));

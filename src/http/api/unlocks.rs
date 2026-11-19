@@ -275,13 +275,14 @@ async fn create_unlock(
     // Only operator staff make unlocks (spec Part 6, decided 2026-11-15,
     // issue #447): the credential's own user must be an admin user, so the
     // audit log's granting person is always staff. Refused here, from the
-    // key cache, before any target is chosen; `unlocks::create` checks it
-    // again under the user's lock, so a demotion committed meanwhile is
-    // refused too.
+    // user cache (as of this request), before any target is chosen;
+    // `unlocks::create` checks it again under the user's lock, so a
+    // demotion committed meanwhile is refused too.
     let staff = principal
-        .user_id
+        .facts
+        .user
         .as_deref()
-        .is_some_and(|id| principal.gates.admins.contains(id));
+        .is_some_and(|user| user.is_admin);
     if !staff {
         return Err(OkfError::Forbidden {
             reason: format!("{own:?} is not an admin user; only operator staff make unlocks"),

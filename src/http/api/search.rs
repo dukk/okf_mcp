@@ -98,7 +98,7 @@ async fn every_reachable(app: &App, principal: &Principal) -> Result<Vec<String>
     let now = app.clock().now();
     let mut names = Vec::with_capacity(page.items.len());
     for row in &page.items {
-        if principal.check_open(&row.name, Access::Read, now).is_ok()
+        if principal.check_open(row, Access::Read, now).is_ok()
             && app.listed_state(row).await?.is_some()
         {
             names.push(row.name.clone());

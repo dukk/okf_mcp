@@ -135,6 +135,9 @@ unknown keys are ignored, so one file serves every version.
 | `catalog_cache_bytes` | `"1GiB"` | The most memory this process's catalog snapshots may take, estimated from their stored size (`"512MiB"`, or a number of bytes). Catalogs load on first use, not at start-up; past the budget the least recently used one is dropped and loaded again when next read. A catalog larger than the whole budget is served but not kept |
 | `catalog_directory_entries` | `100000` | The most catalog rows the catalog directory keeps in memory, by name. It answers "does this catalog exist, and who owns it" without loading content |
 | `catalog_ttl` | `"10s"` | How long the directory serves a catalog row before reading it again, and so the longest a replica serves an older snapshot of a catalog whose change message it missed (each use refreshes the snapshot to its row). A change drops the row at once; this covers a change message that is lost while the listener stays connected (a reconnect marks every row stale). A name that does not exist is remembered for 5 seconds regardless |
+| `credential_cache_entries` | `100000` | The most API keys and OAuth grants each credential cache keeps in memory (one by key hash, one by grant id). A key or grant is read from the database the first time it is used; an unknown one is never cached |
+| `user_cache_entries` | `100000` | The most users the user cache keeps in memory: each one's admin flag, ceiling, teams, entitlements and live unlocks, read on first use |
+| `credential_ttl` | `"10s"` | How long a cached key, grant or user is served before it is read again. A change (a revocation, a team or admin change) drops it on every replica at once; this bounds how long one survives a change message that is lost |
 | `search_fanout_max` | `25` | The most catalogs `GET /api/v1/search` searches when the request names none, from 1 to 999. A credential that reaches more gets a 400 asking it to name the catalogs (`catalogs=`), so one request cannot search every catalog. MCP `search` is bounded by the connection's selection and does not use it |
 | `worker_shutdown_grace` | `"30s"` | How long `serve` waits, once told to stop, for the mail worker to finish the mail in hand. Set the pod's `terminationGracePeriodSeconds` a few seconds above it |
 | `mail.smtp.host`, `mail.smtp.port`, `mail.smtp.starttls`, `mail.smtp.username`, `mail.smtp.password_env` | none, `587`, `true`, none, none | The SMTP relay. `starttls = true` requires STARTTLS; `false` is TLS from the first byte (port 465); there is no plain-text mode. `username` and `password_env` (the environment variable holding the password) go together |
@@ -162,7 +165,8 @@ unknown keys are ignored, so one file serves every version.
 
 The server refuses to start (and every subcommand refuses to run) with a zero
 `poll_interval`, `session_idle_timeout`, `worker_shutdown_grace`,
-`database_max_connections`, `overlay_cache_size`, `catalog_directory_entries` or `catalog_ttl`, a `search_fanout_max` outside 1 to 999, an empty `allowed_hosts` or a blank
+`database_max_connections`, `overlay_cache_size`, `catalog_directory_entries`, `catalog_ttl`,
+`credential_cache_entries`, `user_cache_entries` or `credential_ttl`, a `search_fanout_max` outside 1 to 999, an empty `allowed_hosts` or a blank
 entry in it, or a `time_server` that is blank or has surrounding whitespace.
 `maintenance_review_intervals` also rejects invalid catalog names, malformed
 durations, durations below 86,400 seconds and durations beyond the supported
@@ -1226,7 +1230,7 @@ the dotted originals.
 | `okf_invalidations_received_total` | counter | `kind` | Change-feed messages received and applied |
 | `okf_invalidations_unreadable_total` | counter | | Change-feed payloads this build could not read (each reloads the caches) |
 | `okf_invalidations_lag_seconds` | histogram | | Time from a message's send to its application on this replica |
-| `okf_keycache_reloads_total` | counter | `outcome` | Key cache and settings reloads |
+| `okf_keycache_reloads_total` | counter | `outcome` | Settings and label reloads (named for the key cache they used to include; keys and users load on demand since milestone 18) |
 | `okf_redis_errors_total` | counter | `operation` | Failed Redis calls. `operation` is `connect`, `get`, `set`, `take`, `update`, `remove`, `index`, `admit`, `bind`, `publish`, `subscribe`, `counter` or `decode` (a stored value that would not decode). A failed or late `/healthz` `PING` counts as `get`. Only with `[redis]` |
 | `okf_auth_attempts_total` | counter | `method`, `outcome` | Sign-in attempts. `method` is `password`, `passkey`, `oidc` or `setup`; `outcome` is `ok`, `failed` or `locked` |
 | `okf_oauth_tokens_issued_total` | counter | `grant` | Token pairs issued: `authorization_code` or `refresh_token` |
@@ -2226,7 +2230,7 @@ token derived from it, stored hashed too.
 - **What a session reaches.** An admin user's session is an admin that
   reaches every catalog, as an every-catalog admin key is. A member's
   session reaches exactly its ceiling, at the ceiling's levels. The admin
-  flag and the ceiling are read from the key cache on every request.
+  flag and the ceiling are read from the user cache on every request.
 - **No changesets.** A session never owns a changeset, so MCP writes still
   need a key or a grant. An admin user's session may still publish or
   discard any key's changeset from the Changesets page, recorded as that

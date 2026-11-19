@@ -880,7 +880,7 @@ impl From<CatalogRowColumns> for CatalogRow {
         )
     )]
     fn from(columns: CatalogRowColumns) -> Self {
-        // The same rule as `teams::suspended_catalogs`: a suspended owner.
+        // A catalog is suspended when its owner team is.
         let suspended = columns
             .suspended
             .then(|| columns.owner_team.clone())
@@ -905,9 +905,8 @@ impl From<CatalogRowColumns> for CatalogRow {
 }
 
 // The directory's SELECT, shared by the four queries below. The owner,
-// suspension, maintenance and audit-team columns are the ones
-// `teams::suspended_catalogs` and `gates::load` read, so a row holds the
-// values the key cache holds today.
+// suspension, maintenance and audit-team columns are what every access
+// check reads about the catalog it acts on (M18 spec Decision 9).
 macro_rules! select_catalog_rows {
     () => {
         "SELECT c.id, c.name, c.display_name, c.description, c.generation, \

@@ -766,7 +766,7 @@ mod tests {
             let app = App::load(db.pool.clone(), Config::default(), Arc::new(SystemClock))
                 .await
                 .unwrap();
-            assert!(app.keys().find(&key).is_some());
+            assert!(app.find_key(&key).await.unwrap().is_some());
             let caught_up = Arc::new(tokio::sync::Notify::new());
             let shutdown = CancellationToken::new();
             let task = tokio::spawn(listen_signalling(
@@ -799,6 +799,9 @@ mod tests {
         /// can remove the key then. (The store's `keys::revoke` now sends a
         /// `credential` message, which the listener could apply first.)
         async fn revoke_silently(&self) {
+            // Cached first: keys load on demand, and only a cached one can
+            // outlive its revocation.
+            assert!(self.app.find_key(&self.key).await.unwrap().is_some());
             let mut tx = self.db.pool.begin().await.unwrap();
             sqlx::query("UPDATE api_keys SET revoked_at = now() WHERE id = 'reader'")
                 .execute(&mut *tx)
@@ -806,7 +809,7 @@ mod tests {
                 .unwrap();
             bump_admin_generation(&mut tx).await.unwrap();
             tx.commit().await.unwrap();
-            assert!(self.app.keys().find(&self.key).is_some());
+            assert!(self.app.find_key(&self.key).await.unwrap().is_some());
         }
 
         async fn stop(self) {
@@ -840,7 +843,7 @@ mod tests {
         tx.commit().await.unwrap();
 
         timeout(WAIT, async {
-            while running.app.keys().find(&running.key).is_some() {
+            while running.app.find_key(&running.key).await.unwrap().is_some() {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
         })
@@ -863,7 +866,7 @@ mod tests {
         running
             .wait_caught_up("the catch-up after an unreadable payload")
             .await;
-        assert!(running.app.keys().find(&running.key).is_none());
+        assert!(running.app.find_key(&running.key).await.unwrap().is_none());
         running.stop().await;
     }
 
@@ -888,7 +891,7 @@ mod tests {
         running
             .wait_caught_up("the catch-up after a lost connection")
             .await;
-        assert!(running.app.keys().find(&running.key).is_none());
+        assert!(running.app.find_key(&running.key).await.unwrap().is_none());
         // The catch-up is signalled only once the replacement connection is
         // subscribed: a commit after the catch-up's reads is then delivered.
         let listening: i64 = sqlx::query_scalar(

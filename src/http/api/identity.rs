@@ -188,7 +188,7 @@ async fn whoami(
     };
     let user_label = user
         .as_deref()
-        .and_then(|name| app.keys().labels().user(name).map(str::to_string));
+        .and_then(|name| app.labels().user(name).map(str::to_string));
     Ok(Json(WhoAmI {
         key_id: principal.key_id.clone(),
         name,
@@ -252,7 +252,12 @@ async fn session(
     // everything, so its own ceiling is shown for information.
     let ceiling = match &principal.reach {
         Reach::Catalogs(levels) => levels.clone(),
-        Reach::All => app.keys().ceiling_of(&user_id),
+        Reach::All => app
+            .credentials()
+            .user(&user_id)
+            .await?
+            .map(|user| user.ceiling.clone())
+            .unwrap_or_default(),
     };
     Ok(Json(SessionView {
         user: user.name,

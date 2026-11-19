@@ -572,8 +572,9 @@ impl TestServer {
         let key = self.key(name, Access::Read, catalogs, None).await;
         let id = self
             .app
-            .keys()
-            .find(&key)
+            .find_key(&key)
+            .await
+            .unwrap()
             .expect("created principal")
             .key_id
             .clone();
@@ -750,8 +751,10 @@ async fn serve_app(
         Some(server) => {
             config.redis = Some(redis_config(server));
             config.poll_interval = Duration::from_secs(3600);
-            // The directory's backstop too (M18): a catalog change that
-            // reaches the other replica was carried by `NOTIFY`.
+            // Neither the poll, the credential TTL nor the directory's TTL
+            // may do a change message's work: a two-replica test passes
+            // only through it.
+            config.credential_ttl = Duration::from_secs(3600);
             config.catalog_ttl = Duration::from_secs(3600);
             Some(redis_connect(server).await)
         }

@@ -192,8 +192,13 @@ mod tests {
     }
 
     /// The MCP tool context of the key `secret`, from the REST API.
-    fn ctx_of(test: &TestApp, secret: &str) -> ToolContext {
-        let principal = test.app.keys().find(secret).expect("a live key");
+    async fn ctx_of(test: &TestApp, secret: &str) -> ToolContext {
+        let principal = test
+            .app
+            .find_key(secret)
+            .await
+            .unwrap()
+            .expect("a live key");
         let requester = Requester {
             ip: None,
             source: Source::Api,
@@ -205,7 +210,7 @@ mod tests {
     /// returns the handle.
     async fn open_empty(test: &TestApp, secret: &str) -> String {
         open_changeset(
-            &ctx_of(test, secret),
+            &ctx_of(test, secret).await,
             OpenParams {
                 catalog: Some("main".to_string()),
             },
@@ -706,7 +711,7 @@ mod tests {
             revision: 1,
             changeset: no_op.clone(),
         };
-        revert(&ctx_of(&test, &keys.write), same)
+        revert(&ctx_of(&test, &keys.write).await, same)
             .await
             .expect("stage the published text");
 
@@ -811,7 +816,7 @@ mod tests {
 
         let (status, refused) = publish_with(&test, &keys.write, &writers, "Gamma").await;
         let tool = publish(
-            &ctx_of(&test, &keys.write),
+            &ctx_of(&test, &keys.write).await,
             PublishParams {
                 message: "Gamma".to_string(),
                 changeset: writers.clone(),
@@ -869,13 +874,13 @@ mod tests {
             .expect("invalidate");
         tx.commit().await.expect("commit");
         test.app.poll().await.expect("poll");
-        let tool = |secret: &str, handle: &str| {
-            let ctx = ctx_of(&test, secret);
+        let tool = async |secret: &str, handle: &str| {
+            let ctx = ctx_of(&test, secret).await;
             let params = PublishParams {
                 message: "Publish".to_string(),
                 changeset: handle.to_string(),
             };
-            async move { publish(&ctx, params).await }
+            publish(&ctx, params).await
         };
 
         let (unlock, needs) = publish_with(&test, &staff, &locked, "Publish").await;

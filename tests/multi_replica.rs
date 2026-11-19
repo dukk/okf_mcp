@@ -34,29 +34,18 @@ fn pg() -> Vec<(&'static str, Files)> {
 
 /// Retries `check` every 50 ms until it is true, or panics naming `what`
 /// after [`WAIT`].
-async fn eventually(what: &str, check: impl Fn() -> bool) {
-    let waited = tokio::time::timeout(WAIT, async {
-        while !check() {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await;
-    assert!(waited.is_ok(), "timed out waiting until {what}");
-}
-
-/// As [`eventually`], for a check that has to await (a catalog lookup).
-async fn eventually_async<F, Fut>(what: &str, check: F)
-where
-    F: Fn() -> Fut,
-    Fut: std::future::Future<Output = bool>,
-{
-    let waited = tokio::time::timeout(WAIT, async {
-        while !check().await {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await;
-    assert!(waited.is_ok(), "timed out waiting until {what}");
+macro_rules! eventually {
+    // A macro rather than a function so the check can `.await` (an async
+    // closure borrowing the test's locals is not expressible here).
+    ($what:expr, $check:expr) => {{
+        let waited = tokio::time::timeout(WAIT, async {
+            while !$check {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+        assert!(waited.is_ok(), "timed out waiting until {}", $what);
+    }};
 }
 
 /// Two replicas on one Redis, with an admin key known to both.
@@ -65,10 +54,10 @@ async fn pair(redis: &TestRedis) -> (TestServer, Sibling, String) {
     let b = a.sibling(redis, |_| Config::default()).await;
     let admin = a.key("admin", Access::Admin, &[], None).await;
     // B has not polled: wait until it holds the admin key through Redis.
-    eventually("B knows the admin key", || {
-        b.app.keys().find(&admin).is_some()
-    })
-    .await;
+    eventually!(
+        "B knows the admin key",
+        b.app.find_key(&admin).await.unwrap().is_some()
+    );
     (a, b, admin)
 }
 
@@ -88,9 +77,19 @@ async fn api(method: reqwest::Method, base: &str, path: &str, key: &str, body: s
 async fn revoked_key_is_refused_on_the_other(redis: &TestRedis) {
     let (a, b, admin) = pair(redis).await;
     let key = a.key("reader", Access::Read, &[], None).await;
-    eventually("B knows the new key", || b.app.keys().find(&key).is_some()).await;
+    eventually!(
+        "B knows the new key",
+        b.app.find_key(&key).await.unwrap().is_some()
+    );
 
-    let id = b.app.keys().find(&key).expect("cached").key_id.clone();
+    let id = b
+        .app
+        .find_key(&key)
+        .await
+        .unwrap()
+        .expect("cached")
+        .key_id
+        .clone();
     api(
         reqwest::Method::POST,
         &a.base,
@@ -100,10 +99,10 @@ async fn revoked_key_is_refused_on_the_other(redis: &TestRedis) {
     )
     .await;
 
-    eventually("B refuses the revoked key", || {
-        b.app.keys().find(&key).is_none()
-    })
-    .await;
+    eventually!(
+        "B refuses the revoked key",
+        b.app.find_key(&key).await.unwrap().is_none()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -145,7 +144,10 @@ async fn a_user_deleted_on_one_replica_loses_access_on_the_other() {
         .await
         .expect("create alice's key");
     a.app.poll().await.expect("A's poll");
-    eventually("B knows alice's key", || b.app.keys().find(&key).is_some()).await;
+    eventually!(
+        "B knows alice's key",
+        b.app.find_key(&key).await.unwrap().is_some()
+    );
 
     api(
         reqwest::Method::DELETE,
@@ -156,10 +158,10 @@ async fn a_user_deleted_on_one_replica_loses_access_on_the_other() {
     )
     .await;
 
-    eventually("B no longer finds alice's key", || {
-        b.app.keys().find(&key).is_none()
-    })
-    .await;
+    eventually!(
+        "B no longer finds alice's key",
+        b.app.find_key(&key).await.unwrap().is_none()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -167,10 +169,10 @@ async fn a_team_suspended_on_one_replica_closes_its_catalogs_on_the_other() {
     let redis = TestRedis::start().await;
     let (a, b, admin) = pair(&redis).await;
     let reader = a.key("reader", Access::Read, &[], None).await;
-    eventually("B knows the reader", || {
-        b.app.keys().find(&reader).is_some()
-    })
-    .await;
+    eventually!(
+        "B knows the reader",
+        b.app.find_key(&reader).await.unwrap().is_some()
+    );
     let args = json!({"catalog": "main", "path": "a"});
     let client = tokio::time::timeout(WAIT, async {
         let url = b.mcp_url();
@@ -238,10 +240,10 @@ async fn a_grant_revoked_on_one_replica_is_refused_on_the_other() {
         .key_id
         .clone();
     a.app.poll().await.expect("A's poll");
-    eventually("B knows the grant", || {
-        b.app.keys().find_grant(&grant_id).is_some()
-    })
-    .await;
+    eventually!(
+        "B knows the grant",
+        b.app.find_grant(&grant_id).await.unwrap().is_some()
+    );
 
     keys::revoke_by_id(&a.db.pool, &grant_id, &AuditActor::cli(), Utc::now())
         .await
@@ -249,10 +251,10 @@ async fn a_grant_revoked_on_one_replica_is_refused_on_the_other() {
     // What `settle` does after a change made through the API.
     a.app.poll().await.expect("A's poll");
 
-    eventually("B refuses the revoked grant", || {
-        b.app.keys().find_grant(&grant_id).is_none()
-    })
-    .await;
+    eventually!(
+        "B refuses the revoked grant",
+        b.app.find_grant(&grant_id).await.unwrap().is_none()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -260,28 +262,48 @@ async fn a_change_still_announces_after_a_non_announcing_reload_saw_it_first() {
     let redis = TestRedis::start().await;
     let (a, b, _admin) = pair(&redis).await;
     let key = a.key("reader", Access::Read, &[], None).await;
-    eventually("B knows the key", || b.app.keys().find(&key).is_some()).await;
-    let id = a.app.keys().find(&key).expect("cached").key_id.clone();
+    eventually!(
+        "B knows the key",
+        b.app.find_key(&key).await.unwrap().is_some()
+    );
+    let id = a
+        .app
+        .find_key(&key)
+        .await
+        .unwrap()
+        .expect("cached")
+        .key_id
+        .clone();
 
     // A change made through the store, as the CLI would: nothing settles yet.
     keys::revoke_by_id(&a.db.pool, &id, &AuditActor::cli(), Utc::now())
         .await
         .expect("revoke");
     // A reload that does not announce still loads the new generation.
-    a.app.catch_up_keys().await;
-    assert!(a.app.keys().find(&key).is_none(), "A loaded the change");
+    a.app.reload_settings_now(false).await;
+    assert!(
+        a.app.find_key(&key).await.unwrap().is_none(),
+        "A loaded the change"
+    );
     // The poll `settle` makes next must still announce it.
     a.app.poll().await.expect("A's poll");
 
-    eventually("B refuses the key A's silent reload saw first", || {
-        b.app.keys().find(&key).is_none()
-    })
-    .await;
+    eventually!(
+        "B refuses the key A's silent reload saw first",
+        b.app.find_key(&key).await.unwrap().is_none()
+    );
 }
 
 /// Revokes `key` on A through the store and polls A, which announces.
 async fn revoke_on_a(a: &TestServer, key: &str) {
-    let id = a.app.keys().find(key).expect("cached").key_id.clone();
+    let id = a
+        .app
+        .find_key(key)
+        .await
+        .unwrap()
+        .expect("cached")
+        .key_id
+        .clone();
     keys::revoke_by_id(&a.db.pool, &id, &AuditActor::cli(), Utc::now())
         .await
         .expect("revoke");
@@ -297,15 +319,18 @@ async fn a_subscriber_whose_connection_is_killed_still_learns_of_a_revoke() {
     let redis = TestRedis::start().await;
     let (a, b, _admin) = pair(&redis).await;
     let key = a.key("reader", Access::Read, &[], None).await;
-    eventually("B knows the key", || b.app.keys().find(&key).is_some()).await;
+    eventually!(
+        "B knows the key",
+        b.app.find_key(&key).await.unwrap().is_some()
+    );
 
     kill_pubsub_connections(&redis).await;
     revoke_on_a(&a, &key).await;
 
-    eventually("B refuses the key after resubscribing", || {
-        b.app.keys().find(&key).is_none()
-    })
-    .await;
+    eventually!(
+        "B refuses the key after resubscribing",
+        b.app.find_key(&key).await.unwrap().is_none()
+    );
 }
 
 /// `CLIENT KILL TYPE pubsub`: ends every subscriber connection.
@@ -329,10 +354,10 @@ async fn session_pair(redis: &TestRedis, config: Config) -> (TestServer, Sibling
     let a = TestServer::start_shared(pg(), redis, |_| config.clone()).await;
     let b = a.sibling(redis, |_| config.clone()).await;
     let key = a.key("reader", Access::Read, &[], Some("main")).await;
-    eventually("B knows the reader key", || {
-        b.app.keys().find(&key).is_some()
-    })
-    .await;
+    eventually!(
+        "B knows the reader key",
+        b.app.find_key(&key).await.unwrap().is_some()
+    );
     (a, b, key)
 }
 
@@ -417,10 +442,10 @@ async fn another_key_on_that_session_is_refused_on_either_replica() {
     let redis = TestRedis::start().await;
     let (a, b, owner) = session_pair(&redis, Config::default()).await;
     let intruder = a.key("intruder", Access::Read, &[], Some("main")).await;
-    eventually("B knows the intruder key", || {
-        b.app.keys().find(&intruder).is_some()
-    })
-    .await;
+    eventually!(
+        "B knows the intruder key",
+        b.app.find_key(&intruder).await.unwrap().is_some()
+    );
     let session = open_ready(&a.mcp_url(), &owner).await;
 
     let mut refusals = Vec::new();
@@ -474,14 +499,21 @@ async fn a_revoked_keys_session_is_refused_on_every_replica() {
     let redis = TestRedis::start().await;
     let (a, b, admin) = pair(&redis).await;
     let key = a.key("reader", Access::Read, &[], Some("main")).await;
-    eventually("B knows the reader key", || {
-        b.app.keys().find(&key).is_some()
-    })
-    .await;
+    eventually!(
+        "B knows the reader key",
+        b.app.find_key(&key).await.unwrap().is_some()
+    );
     let session = open_ready(&a.mcp_url(), &key).await;
     assert_eq!(tools_list(&b.mcp_url(), &key, &session).await, 200);
 
-    let id = a.app.keys().find(&key).expect("cached").key_id.clone();
+    let id = a
+        .app
+        .find_key(&key)
+        .await
+        .unwrap()
+        .expect("cached")
+        .key_id
+        .clone();
     api(
         reqwest::Method::POST,
         &a.base,
@@ -490,10 +522,10 @@ async fn a_revoked_keys_session_is_refused_on_every_replica() {
         serde_json::Value::Null,
     )
     .await;
-    eventually("B refuses the revoked key", || {
-        b.app.keys().find(&key).is_none()
-    })
-    .await;
+    eventually!(
+        "B refuses the revoked key",
+        b.app.find_key(&key).await.unwrap().is_none()
+    );
 
     assert_eq!(tools_list(&a.mcp_url(), &key, &session).await, 401);
     assert_eq!(tools_list(&b.mcp_url(), &key, &session).await, 401);
@@ -551,10 +583,10 @@ async fn delete_ends_the_session_everywhere() {
     let redis = TestRedis::start().await;
     let (a, b, owner) = session_pair(&redis, Config::default()).await;
     let intruder = a.key("intruder", Access::Read, &[], Some("main")).await;
-    eventually("B knows the intruder key", || {
-        b.app.keys().find(&intruder).is_some()
-    })
-    .await;
+    eventually!(
+        "B knows the intruder key",
+        b.app.find_key(&intruder).await.unwrap().is_some()
+    );
     let handle = support::server::redis_connect(&redis).await;
 
     // Another key's DELETE on B is refused and releases nothing.
@@ -776,10 +808,10 @@ async fn a_publish_on_one_replica_propagates_to_the_other_promptly() {
     let a = TestServer::start_shared(indexed(), &redis, |_| Config::default()).await;
     let b = a.sibling(&redis, |_| Config::default()).await;
     let writer = a.key("writer", Access::Write, &[], Some("main")).await;
-    eventually("B knows the writer", || {
-        b.app.keys().find(&writer).is_some()
-    })
-    .await;
+    eventually!(
+        "B knows the writer",
+        b.app.find_key(&writer).await.unwrap().is_some()
+    );
     let on_a = a.client(&writer, None).await.expect("a client on A");
     let on_b = tokio::time::timeout(WAIT, a.client_at(&writer, &b.mcp_url(), &[]))
         .await
@@ -924,14 +956,14 @@ async fn a_catalog_imported_through_the_store_is_served_on_both_replicas() {
             .unwrap()
             .is_some_and(|state| state.current().generation() == generation)
     }
-    eventually_async("A serves the imported generation", || {
-        at(&a.app, generation)
-    })
-    .await;
-    eventually_async("B serves the imported generation", || {
-        at(&b.app, generation)
-    })
-    .await;
+    eventually!(
+        "A serves the imported generation",
+        at(&a.app, generation).await
+    );
+    eventually!(
+        "B serves the imported generation",
+        at(&b.app, generation).await
+    );
 }
 
 /// A catalog created through the store on one replica's pool, as
@@ -959,7 +991,7 @@ async fn a_catalog_created_on_one_replica_is_readable_on_the_other() {
     async fn readable(app: &okf_mcp::app::App) -> bool {
         app.catalog("notes").await.unwrap().is_some()
     }
-    eventually_async("B serves the new catalog", || readable(&b.app)).await;
+    eventually!("B serves the new catalog", readable(&b.app).await);
     // And over MCP, through B's tool path.
     let client = tokio::time::timeout(WAIT, async {
         let url = b.mcp_url();
@@ -984,7 +1016,14 @@ async fn a_catalog_created_on_one_replica_is_readable_on_the_other() {
 /// Revokes `key` through the store on the pool, as `okf-mcp key revoke`
 /// does: no `settle`, no poll, no Redis announcement.
 async fn revoke_through_the_store(a: &TestServer, key: &str) {
-    let id = a.app.keys().find(key).expect("cached").key_id.clone();
+    let id = a
+        .app
+        .find_key(key)
+        .await
+        .unwrap()
+        .expect("cached")
+        .key_id
+        .clone();
     keys::revoke_by_id(&a.db.pool, &id, &AuditActor::cli(), Utc::now())
         .await
         .expect("revoke");
@@ -997,12 +1036,21 @@ async fn a_key_revoked_through_the_store_is_refused_on_the_other_replica() {
     let redis = TestRedis::start().await;
     let (a, b, _admin) = pair(&redis).await;
     let key = a.key("reader", Access::Read, &[], None).await;
-    eventually("B knows the key", || b.app.keys().find(&key).is_some()).await;
+    eventually!(
+        "B knows the key",
+        b.app.find_key(&key).await.unwrap().is_some()
+    );
 
     revoke_through_the_store(&a, &key).await;
 
-    eventually("B refuses the key", || b.app.keys().find(&key).is_none()).await;
-    eventually("A refuses the key", || a.app.keys().find(&key).is_none()).await;
+    eventually!(
+        "B refuses the key",
+        b.app.find_key(&key).await.unwrap().is_none()
+    );
+    eventually!(
+        "A refuses the key",
+        a.app.find_key(&key).await.unwrap().is_none()
+    );
 }
 
 /// Ends every change-feed `LISTEN` backend of the test's database (both
@@ -1029,14 +1077,17 @@ async fn a_killed_listener_connection_reloads_on_reconnect() {
     let redis = TestRedis::start().await;
     let (a, b, _admin) = pair(&redis).await;
     let key = a.key("reader", Access::Read, &[], None).await;
-    eventually("B knows the key", || b.app.keys().find(&key).is_some()).await;
+    eventually!(
+        "B knows the key",
+        b.app.find_key(&key).await.unwrap().is_some()
+    );
 
     let ended = kill_listener_connections(&a.db.pool).await;
     assert!(ended >= 1, "at least B's listener backend was ended");
     revoke_through_the_store(&a, &key).await;
 
-    eventually("B refuses the key after reconnecting", || {
-        b.app.keys().find(&key).is_none()
-    })
-    .await;
+    eventually!(
+        "B refuses the key after reconnecting",
+        b.app.find_key(&key).await.unwrap().is_none()
+    );
 }

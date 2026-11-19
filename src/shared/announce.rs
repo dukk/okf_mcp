@@ -205,7 +205,7 @@ pub async fn listen(app: Arc<App>, shutdown: CancellationToken) {
         channel: CHANNEL,
     };
     run(
-        &KeyCache(&app),
+        &AdminChanges(&app),
         &redis,
         &source,
         RESUBSCRIBE_GRACE,
@@ -259,20 +259,23 @@ trait Handler: Send + Sync {
     async fn message(&self, payload: &[u8]);
 }
 
-/// The `admin_generation` subscriber: reloads the key cache.
-struct KeyCache<'a>(&'a App);
+/// The `admin_generation` subscriber: an announcement this replica has not
+/// already caught up with (an M16 replica's change, which sends no change
+/// message) marks the credential caches stale and reloads the settings and
+/// labels ([`App::apply_m16_announcement`]).
+struct AdminChanges<'a>(&'a App);
 
 #[async_trait::async_trait]
-impl Handler for KeyCache<'_> {
+impl Handler for AdminChanges<'_> {
     #[tracing::instrument(level = "debug", skip_all)]
     async fn subscribed(&self) {
-        self.0.reload_keys_now(false).await;
+        self.0.apply_m16_announcement().await;
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
     async fn message(&self, payload: &[u8]) {
         if announced_generation(payload) != Some(self.0.loaded_admin_generation()) {
-            self.0.reload_keys_now(false).await;
+            self.0.apply_m16_announcement().await;
         }
     }
 }
@@ -479,7 +482,7 @@ mod catch_up_tests {
     use tokio_util::sync::CancellationToken;
 
     use super::listen;
-    use super::{run, Events, KeyCache, Source};
+    use super::{run, AdminChanges, Events, Source};
     use crate::config::Config;
     use crate::mcp::testing::replica_pair;
     use crate::shared::SubscriptionEvent;
@@ -503,8 +506,8 @@ mod catch_up_tests {
     }
 
     /// Attempt 1: `Disconnected` and nothing more. Attempt 2: fails.
-    /// Attempt 3: `Subscribed`. Records whether the key was still cached when
-    /// each attempt began.
+    /// Attempt 3: `Subscribed`. Records whether B had still not caught up with
+    /// the revocation (its loaded `admin_generation`) when each attempt began.
     struct Outage {
         attempts: std::sync::Mutex<Vec<bool>>,
         holds_key: Box<dyn Fn() -> bool + Send + Sync>,
@@ -548,8 +551,17 @@ mod catch_up_tests {
         let b = second;
         let key = crate::mcp::testing::staff_root(&first).await;
         a.poll().await.expect("A's poll");
-        b.reload_keys_now(false).await;
-        let id = a.keys().find(&key).expect("cached").key_id.clone();
+        b.reload_settings_now(false).await;
+        // What B has caught up with: the revocation below moves it, and
+        // only B's reload (the announcement subscriber's) catches up.
+        let before = b.loaded_admin_generation();
+        let id = a
+            .find_key(&key)
+            .await
+            .unwrap()
+            .expect("cached")
+            .key_id
+            .clone();
         crate::store::keys::revoke_by_id(a.pool(), &id, &AuditActor::cli(), chrono::Utc::now())
             .await
             .expect("revoke");
@@ -558,12 +570,12 @@ mod catch_up_tests {
         let holder = b.clone();
         let source = Outage {
             attempts: std::sync::Mutex::new(Vec::new()),
-            holds_key: Box::new(move || holder.keys().find(&key).is_some()),
+            holds_key: Box::new(move || holder.loaded_admin_generation() == before),
         };
         let shutdown = CancellationToken::new();
         let redis = b.redis().expect("B's redis").clone();
         let finished = tokio::time::timeout(Duration::from_secs(20), async {
-            let handler = KeyCache(&b);
+            let handler = AdminChanges(&b);
             let looped = run(
                 &handler,
                 &redis,
@@ -610,21 +622,30 @@ mod catch_up_tests {
         let b = second;
         let key = crate::mcp::testing::staff_root(&first).await;
         a.poll().await.expect("A's poll");
-        b.reload_keys_now(false).await;
-        assert!(b.keys().find(&key).is_some(), "B holds the key");
+        b.reload_settings_now(false).await;
+        assert!(b.find_key(&key).await.unwrap().is_some(), "B holds the key");
 
-        let id = a.keys().find(&key).expect("cached").key_id.clone();
+        let id = a
+            .find_key(&key)
+            .await
+            .unwrap()
+            .expect("cached")
+            .key_id
+            .clone();
         crate::store::keys::revoke_by_id(a.pool(), &id, &AuditActor::cli(), chrono::Utc::now())
             .await
             .expect("revoke");
         // Announced to nobody: B has no subscription yet.
         a.poll().await.expect("A's poll");
-        assert!(b.keys().find(&key).is_some(), "B has not heard of it");
+        assert!(
+            b.find_key(&key).await.unwrap().is_some(),
+            "B has not heard of it"
+        );
 
         let shutdown = CancellationToken::new();
         let listener = tokio::spawn(listen(b.clone(), shutdown.clone()));
         let waited = tokio::time::timeout(Duration::from_secs(10), async {
-            while b.keys().find(&key).is_some() {
+            while b.find_key(&key).await.unwrap().is_some() {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
         })
