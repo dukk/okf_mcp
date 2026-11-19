@@ -190,7 +190,30 @@ impl TestServer {
         redis: &TestRedis,
         make_config: impl FnOnce(&str) -> Config,
     ) -> Self {
-        Self::start_inner(catalogs_and_files, make_config, false, Some(redis)).await
+        Self::start_shared_serving(catalogs_and_files, redis, make_config, false).await
+    }
+
+    /// As [`TestServer::start_shared`], optionally running the background
+    /// workers (mail and housekeeping) and the housekeeping ticker.
+    ///
+    /// # Arguments
+    /// * `catalogs_and_files` - as for `start`.
+    /// * `redis` - the Redis every replica of the test shares.
+    /// * `make_config` - builds the settings from `http://127.0.0.1:<port>`.
+    /// * `worker` - `true` runs the workers; `false` turns them off.
+    ///
+    /// # Returns
+    /// The running server.
+    ///
+    /// # Panics
+    /// As [`TestServer::start_shared`].
+    pub async fn start_shared_serving(
+        catalogs_and_files: Vec<(&str, Files)>,
+        redis: &TestRedis,
+        make_config: impl FnOnce(&str) -> Config,
+        worker: bool,
+    ) -> Self {
+        Self::start_inner(catalogs_and_files, make_config, worker, Some(redis)).await
     }
 
     /// Another replica: a new `App` (its own pool on the same database, its
@@ -210,10 +233,32 @@ impl TestServer {
         redis: &TestRedis,
         make_config: impl FnOnce(&str) -> Config,
     ) -> Sibling {
+        self.sibling_serving(redis, make_config, false).await
+    }
+
+    /// As [`TestServer::sibling`], optionally running the background workers
+    /// (mail and housekeeping) and the housekeeping ticker.
+    ///
+    /// # Arguments
+    /// * `redis` - the Redis the first replica uses.
+    /// * `make_config` - builds the settings from the new server's base URL.
+    /// * `worker` - `true` runs the workers; `false` turns them off.
+    ///
+    /// # Returns
+    /// The running replica; it does not own the database.
+    ///
+    /// # Panics
+    /// As [`TestServer::sibling`].
+    pub async fn sibling_serving(
+        &self,
+        redis: &TestRedis,
+        make_config: impl FnOnce(&str) -> Config,
+        worker: bool,
+    ) -> Sibling {
         let pool = okf_mcp::db::connect(&self.db.url, self.app.config().database_max_connections)
             .await
             .expect("a second pool on the test database");
-        let (base, app, shutdown, served) = serve_app(pool, make_config, false, Some(redis)).await;
+        let (base, app, shutdown, served) = serve_app(pool, make_config, worker, Some(redis)).await;
         Sibling {
             base,
             app,

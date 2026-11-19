@@ -19,8 +19,6 @@
 //! it never waits for anyone. A deadlock Postgres still detects is
 //! [`OkfError::Busy`], through `From<sqlx::Error>`.
 
-use std::collections::BTreeMap;
-
 use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgExecutor, PgPool};
 
@@ -670,20 +668,22 @@ pub async fn prune_empty(
     Ok(pruned)
 }
 
-/// The statement behind [`open_counts`]; `changesets_open` (migration 0018)
+/// The statement behind [`open_total`]; `changesets_open` (migration 0018)
 /// serves its filter, and a test plans it.
-const OPEN_COUNTS_SQL: &str = "SELECT c.name, count(*) FROM changesets s \
-     JOIN catalogs c ON c.id = s.catalog_id WHERE s.state = 'open' GROUP BY c.name";
+const OPEN_TOTAL_SQL: &str = "SELECT count(*) FROM changesets WHERE state = 'open'";
 
-/// How many changesets are open in each catalog that has any, by name.
-/// One grouped read: the poll pass stores it for `okf.changesets.open`.
+/// How many changesets are open, in every catalog. One count over the
+/// partial index of open rows: the `cluster_stats` housekeeping job stores
+/// it for `okf.changesets.open` (M18 spec Decision 16).
+///
+/// # Returns
+/// The number of open changesets.
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.open_counts"))]
-pub async fn open_counts(pool: &PgPool) -> Result<BTreeMap<String, i64>, OkfError> {
-    let rows: Vec<(String, i64)> = sqlx::query_as(OPEN_COUNTS_SQL).fetch_all(pool).await?;
-    Ok(rows.into_iter().collect())
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.open_total"))]
+pub async fn open_total(pool: &PgPool) -> Result<i64, OkfError> {
+    Ok(sqlx::query_scalar(OPEN_TOTAL_SQL).fetch_one(pool).await?)
 }
 
 #[cfg(test)]
@@ -1161,7 +1161,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn open_counts_reads_open_rows_through_the_partial_index() {
+    async fn open_total_reads_open_rows_through_the_partial_index() {
         let db = test_db().await;
         let catalog_id = setup(&db.pool).await;
         // A long history of closed changesets, and two open ones.
@@ -1181,15 +1181,15 @@ mod tests {
             .await
             .unwrap();
 
-        let counts = open_counts(&db.pool).await.unwrap();
-        // The statement `open_counts` runs, planned.
+        let total = open_total(&db.pool).await.unwrap();
+        // The statement `open_total` runs, planned.
         let plan: Vec<String> = // `AssertSqlSafe`: the text is a constant of this module.
-        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("EXPLAIN {OPEN_COUNTS_SQL}")))
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("EXPLAIN {OPEN_TOTAL_SQL}")))
             .fetch_all(&db.pool)
             .await
             .unwrap();
 
-        assert_eq!(counts, BTreeMap::from([("pg".to_string(), 2)]));
+        assert_eq!(total, 2);
         let plan = plan.join("\n");
         assert!(plan.contains("changesets_open"), "{plan}");
         assert!(!plan.contains("Seq Scan on changesets"), "{plan}");

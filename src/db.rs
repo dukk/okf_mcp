@@ -178,6 +178,7 @@ mod tests {
                 "catalogs",
                 "changeset_entries",
                 "changesets",
+                "cluster_stats",
                 "documents",
                 "email_tokens",
                 "feedback",
