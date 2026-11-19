@@ -125,6 +125,18 @@ impl WorkerPool {
         }
     }
 
+    /// The pool itself, for a worker to run on.
+    ///
+    /// # Returns
+    /// The shared pool (a cheap handle; clone it to keep one).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor")
+    )]
+    pub(crate) fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+
     /// Closes the pool once every worker that uses it has stopped.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn close(&self) {
@@ -311,17 +323,22 @@ pub async fn list(pool: &PgPool) -> Result<Vec<QueuedMail>, OkfError> {
     .await?)
 }
 
-/// Counts the jobs not yet sent, by status, and hands the counts to the
-/// depth gauge. A scrape then reads these numbers and never queries
-/// Postgres. The poll calls it each tick. A failure is logged and leaves
-/// the last counts in place.
+/// Counts the jobs not yet sent, by status. The `cluster_stats`
+/// housekeeping job stores the counts in the `cluster_stats` row, which
+/// every replica's `okf.mail.queue.depth` gauge reads (M18 spec Decision 16),
+/// so a scrape never queries Postgres.
 ///
 /// # Arguments
 /// * `pool` - the database.
-/// * `metrics` - the instruments holding the gauge's numbers.
+///
+/// # Returns
+/// `(status, jobs)` for each status with jobs; a missing status has none.
+///
+/// # Errors
+/// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all)]
-pub async fn record_depth(pool: &PgPool, metrics: &Metrics) {
-    let counted = sqlx::query_as::<_, (String, i64)>(concat!(
+pub async fn depth(pool: &PgPool) -> Result<Vec<(MailStatus, i64)>, OkfError> {
+    let rows = sqlx::query_as::<_, (String, i64)>(concat!(
         "SELECT ",
         status_sql!(),
         " AS status, count(*) FROM apalis.jobs \
@@ -329,25 +346,12 @@ pub async fn record_depth(pool: &PgPool, metrics: &Metrics) {
     ))
     .bind(QUEUE)
     .fetch_all(pool)
-    .await;
-    match counted {
-        Ok(rows) => {
-            let counts: Vec<(MailStatus, i64)> = rows
-                .iter()
-                .filter_map(|(status, jobs)| MailStatus::parse(status).map(|known| (known, *jobs)))
-                .collect();
-            metrics.set_mail_queue_depth(&counts);
-        }
-        Err(error) => {
-            let error = OkfError::from(error);
-            split_event!(
-                warn,
-                { kind = error.kind(), },
-                { %error, },
-                "counting the mail queue failed"
-            );
-        }
-    }
+    .await?;
+    // `filter_map` drops a status this build does not know (none today).
+    Ok(rows
+        .into_iter()
+        .filter_map(|(status, jobs)| MailStatus::parse(&status).map(|known| (known, jobs)))
+        .collect())
 }
 
 /// Whether `id` can be a job id (a ULID: ASCII letters and digits). Text
@@ -461,7 +465,8 @@ pub async fn delete(pool: &PgPool, id: &str) -> Result<(), OkfError> {
 }
 
 /// Deletes sent jobs finished over 7 days before `now`, and failed ones
-/// over 30 (spec "Secrets in payloads"). Called by `App::poll`'s hourly prune.
+/// over 30 (spec "Secrets in payloads"). Called by the hourly `prune_oauth`
+/// housekeeping job ([`crate::housekeeping`]).
 ///
 /// # Arguments
 /// * `pool` - the database.
@@ -1361,17 +1366,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn mail_queue_depth_gauge() {
-        use crate::mcp::testing::{app_with_metrics, local_metrics, render, sample_of};
-        let depth = |text: &str, status: &str| {
-            sample_of(
-                text,
-                &format!("okf_mail_queue_depth{{status=\"{status}\"}}"),
-            )
-        };
-        let (_provider, metrics, registry) = local_metrics();
+    async fn depth_counts_the_unsent_jobs_by_status() {
         let db = test_db().await;
-        let before = render(&registry);
         for to in ["a@example.com", "b@example.com", "c@example.com"] {
             enqueue(&db.pool, to, &Template::Test, now()).await.unwrap();
         }
@@ -1383,28 +1379,23 @@ mod tests {
         .execute(&db.pool)
         .await
         .unwrap();
-        let unread = render(&registry);
+        // A job of another queue is not mail.
+        sqlx::query(
+            "INSERT INTO apalis.jobs (id, job_type, job, status, attempts, max_attempts, run_at) \
+             VALUES ('other', 'housekeeping', convert_to('{}', 'UTF8'), 'Pending', 0, 3, now())",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
 
-        record_depth(&db.pool, &metrics).await;
-        let counted = render(&registry);
+        let mut counted = depth(&db.pool).await.unwrap();
+        counted.sort_by_key(|(status, _)| status.as_str());
 
-        // Every status is a series from the first scrape, zero until a count.
-        for status in ["pending", "sending", "retrying", "failed"] {
-            assert_eq!(depth(&before, status), Some(0.0), "{before}");
-            assert_eq!(depth(&unread, status), Some(0.0), "a scrape reads no rows");
-        }
-        assert_eq!(depth(&counted, "pending"), Some(2.0), "{counted}");
-        assert_eq!(depth(&counted, "failed"), Some(1.0), "{counted}");
-        assert_eq!(depth(&counted, "sending"), Some(0.0), "{counted}");
-
-        // The poll fills it.
-        let (test, app_registry) = app_with_metrics(&[], crate::config::Config::default()).await;
-        enqueue(test.app.pool(), "d@example.com", &Template::Test, now())
-            .await
-            .unwrap();
-        test.app.poll().await.unwrap();
-        let polled = render(&app_registry);
-        assert_eq!(depth(&polled, "pending"), Some(1.0), "{polled}");
+        assert_eq!(
+            counted,
+            [(MailStatus::Failed, 1), (MailStatus::Pending, 2)],
+            "Done is not counted; a missing status has no row"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
