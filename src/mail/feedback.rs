@@ -902,7 +902,8 @@ async fn run_until_cancelled(
     for restarts in 0_u64.. {
         let config = QueueConfig::default()
             .queue(QUEUE)
-            .heartbeat_interval(timing.heartbeat);
+            .heartbeat_interval(timing.heartbeat)
+            .missed_heartbeats(timing.missed_heartbeats);
         let backend = PostgresStorage::<FeedbackJob>::new(&context.pool)
             .with_config(config)
             .with_pubsub()
@@ -1084,6 +1085,7 @@ pub(crate) mod tests {
         poll: Duration::from_millis(100),
         heartbeat: Duration::from_secs(1),
         restart: Duration::from_millis(200),
+        ..WorkerTiming::SERVE
     };
 
     fn start(pool: &PgPool, forminit: Forminit) -> (CancellationToken, JoinHandle<()>) {

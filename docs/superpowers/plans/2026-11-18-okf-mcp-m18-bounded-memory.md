@@ -1031,6 +1031,12 @@ Each caller builds its `Wanted` from what it is about to render (the audit page'
   - `pub async fn prune_workers(pool: &PgPool, now: DateTime<Utc>) -> Result<u64, OkfError>`: `DELETE FROM apalis.workers w WHERE w.last_seen < $1 AND NOT EXISTS (SELECT 1 FROM apalis.jobs j WHERE j.lock_by = w.id AND j.status IN ('Queued','Running'))` with `$1 = now - 10 x orphan timeout`. Called from the poll's hourly prune for now; Task 15 moves it.
   - `mail.worker`: still deserializes; `Config::validate` logs `warn!("mail.worker is deprecated and ignored: every serve runs the worker")`. `serve` always spawns the worker; tests stop it through a new `App`/`serve` constructor flag (`ServeOptions { worker: bool }`), which `tests/support/server.rs` (`serve_app`) and `src/mcp/testing.rs` set.
   - Shutdown: `worker_shutdown_grace` (default 30 s): `serve` waits for the worker's `run_until` at most that long, then logs and returns.
+
+> **Corrected (issue #692, 2026-11-18).** What shipped differs from the bullets above in four places; read `src/mail/queue.rs`, `src/http/mod.rs` and `src/config.rs`.
+> - `prune_workers` keeps every worker row that **any** job still names (`NOT EXISTS (SELECT 1 FROM apalis.jobs j WHERE j.lock_by = w.id)`), not only `Queued`/`Running` ones: `apalis.jobs.lock_by` is a foreign key with no `ON DELETE`, so deleting the row of a worker that finished jobs (`Done`, `Killed`) fails. apalis clears `lock_by` when it re-enqueues a dead worker's job, so a dead worker's row is prunable at once; the row of a worker that sent mail goes after `queue::prune` deletes those jobs (7 days). `App::prune_oauth` calls it right after `queue::prune`.
+> - `WorkerPool` is `Clone` and owned by `serve`, which creates it (`WorkerPool::new(app.pool())`), passes `&WorkerPool` to `spawn_worker(app, &pool, shutdown)` and calls `WorkerPool::close().await` after the workers stop. `run_worker` no longer closes the pool, so Task 15's `spawn_worker` must take `&WorkerPool` the same way and must not close it. `housekeeping::spawn_worker(app, pool: WorkerPool, ..)` below should read `pool: &WorkerPool`.
+> - The deprecation warning is not logged by `Config::validate` (it runs before the log subscriber exists). `mail.worker` is now `Option<bool>`, `Config::deprecation_warnings()` returns the message, and `serve_with` logs it at `warn`.
+> - `http::serve` stays (it calls `serve_with` with `ServeOptions::default()`, `worker: true`); `http::serve_with(app, listener, shutdown, ServeOptions)` takes the flag. `ServeOptions::NO_WORKER` is what the unit-test servers use, and `tests/support/server.rs` passes `ServeOptions { worker: mail_worker, .. }`. `src/mcp/testing.rs` no longer sets `mail.worker`.
 - [ ] **Step 3: Run, gates, commit** — `feat: an HA-tolerant worker on every replica (M18 task 14, closes #458)`.
 
 ---
@@ -1108,7 +1114,7 @@ pub async fn schedule(pool: &PgPool, task: Task, slot: i64) -> Result<(), OkfErr
 pub async fn tick_until(app: Arc<App>, shutdown: CancellationToken);
 
 /// The worker (Task 14's pool), and the handler that runs one job.
-pub fn spawn_worker(app: Arc<App>, pool: WorkerPool, shutdown: CancellationToken) -> JoinHandle<()>;
+pub fn spawn_worker(app: Arc<App>, pool: &WorkerPool, shutdown: CancellationToken) -> JoinHandle<()>;
 async fn run(job: Housekeeping, context: Data<HousekeepingContext>) -> Result<(), BoxDynError>;
 ```
 
