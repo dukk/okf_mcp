@@ -773,6 +773,11 @@ pub async fn serve_with(
         Arc::clone(&app),
         shutdown.clone(),
     ));
+    // Applies the Postgres change feed (milestone 18) to this replica's caches.
+    let invalidations = tokio::spawn(crate::invalidate::listen(
+        Arc::clone(&app),
+        shutdown.clone(),
+    ));
     let clock_checker = tokio::spawn(Arc::clone(&app).check_clock_until(shutdown.clone()));
     // The workers' one pool, shared by every worker this process runs.
     // `bool::then` runs the closure only for `true`, giving an `Option`.
@@ -835,6 +840,14 @@ pub async fn serve_with(
             {},
             { %error, },
             "the catalog announcement subscriber panicked"
+        );
+    }
+    if let Err(error) = invalidations.await {
+        split_event!(
+            error,
+            {},
+            { %error, },
+            "the change feed listener panicked"
         );
     }
     if let Err(error) = clock_checker.await {
