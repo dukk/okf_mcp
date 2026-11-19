@@ -20,10 +20,19 @@
 //! 4. [`prune`] (the poll loop's hourly pass) deletes `sent` rows past
 //!    `[feedback] retention`, and the finished jobs that named them.
 //!
+//! Delivery is at-least-once. Fetching a job is exclusive in normal
+//! operation (apalis takes it `FOR UPDATE SKIP LOCKED`), but a try whose
+//! acceptance was unconfirmed (a timeout after Forminit took the post) or
+//! unrecorded (marking the row `sent` failed) is retried, possibly on
+//! another replica, and can post a duplicate. Every submission carries the
+//! row's id as its `feedback_id` block, so the operator can de-duplicate in
+//! Forminit.
+//!
 //! What is forwarded is exactly `submission`'s blocks: the message, kind,
 //! origin (`from`), tool, server version, MCP client name, credential kind,
-//! rating and the user's slug as the sender's `userId`. Never an email,
-//! display name, key name, token or catalog content.
+//! the feedback's own id, rating and the user's slug as the sender's
+//! `userId`. Never an email, display name, key name, token or catalog
+//! content.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -595,9 +604,11 @@ fn text_block(name: &str, value: &str) -> Value {
 }
 
 /// The JSON submission for a stored row: text blocks `message`, `kind`,
-/// `from`, `tool` (when given), `server_version`, `client` and
-/// `credential_kind`; a `rating` block when given; and the `sender` block
-/// with `userId`, the one sender field Forminit requires. Nothing else.
+/// `from`, `tool` (when given), `server_version`, `client`,
+/// `credential_kind` and `feedback_id` (the row's random id, for
+/// de-duplicating a retried post); a `rating` block when given; and the
+/// `sender` block with `userId`, the one sender field Forminit requires.
+/// Nothing else.
 ///
 /// # Arguments
 /// * `row` - the stored feedback.
@@ -617,6 +628,7 @@ pub(crate) fn submission(row: &StoredFeedback) -> Value {
     blocks.push(text_block("server_version", &row.server_version));
     blocks.push(text_block("client", &row.client));
     blocks.push(text_block("credential_kind", &row.credential_kind));
+    blocks.push(text_block("feedback_id", &row.id));
     if let Some(rating) = row.rating {
         blocks.push(json!({"type": "rating", "name": "rating", "value": rating}));
     }
@@ -746,8 +758,10 @@ async fn forward(
             )
             .await
             {
-                // Forminit has it; a retry would post it again, which is
-                // better than leaving the row pending for good.
+                // Forminit has it; the retry posts it again (a duplicate,
+                // with the same `feedback_id` block), which is better than
+                // leaving the row pending for good. Delivery is
+                // at-least-once.
                 return (Err(Box::new(error)), "retry");
             }
             tracing::info!(feedback = %feedback_id, "feedback forwarded");
@@ -1050,8 +1064,8 @@ pub(crate) mod tests {
         }
     }
 
-    /// The exact submission [`sample`] makes.
-    fn sample_body() -> Value {
+    /// The exact submission [`sample`] makes, stored as feedback `id`.
+    fn sample_body(id: &str) -> Value {
         json!({"blocks": [
             {"type": "text", "name": "message", "value": "the publish error was hard to read"},
             {"type": "text", "name": "kind", "value": "confusing"},
@@ -1060,6 +1074,7 @@ pub(crate) mod tests {
             {"type": "text", "name": "server_version", "value": env!("CARGO_PKG_VERSION")},
             {"type": "text", "name": "client", "value": "MCPJam"},
             {"type": "text", "name": "credential_kind", "value": "api_key"},
+            {"type": "text", "name": "feedback_id", "value": id},
             {"type": "rating", "name": "rating", "value": 3},
             {"type": "sender", "properties": {"userId": "alice"}},
         ]})
@@ -1161,7 +1176,7 @@ pub(crate) mod tests {
             ..row.clone()
         };
 
-        assert_eq!(submission(&row), sample_body());
+        assert_eq!(submission(&row), sample_body("id"));
         let bare_body = submission(&bare);
         let names: Vec<&str> = bare_body["blocks"]
             .as_array()
@@ -1179,6 +1194,7 @@ pub(crate) mod tests {
                 "server_version",
                 "client",
                 "credential_kind",
+                "feedback_id",
                 "sender"
             ]
         );
@@ -1226,8 +1242,10 @@ pub(crate) mod tests {
     async fn a_post_carries_the_key_only_when_one_is_configured() {
         let (origin, mock) = mock_forminit(vec![]).await;
 
-        let with_key = client_on(&origin, Some(API_KEY)).post(&sample_body()).await;
-        let without = client_on(&origin, None).post(&sample_body()).await;
+        let with_key = client_on(&origin, Some(API_KEY))
+            .post(&sample_body("id"))
+            .await;
+        let without = client_on(&origin, None).post(&sample_body("id")).await;
 
         assert_eq!(with_key, Ok(Some("hash0001".to_string())));
         assert_eq!(without, Ok(Some("hash0001".to_string())));
@@ -1239,7 +1257,7 @@ pub(crate) mod tests {
             .to_str()
             .unwrap()
             .starts_with("okf-mcp/"));
-        assert_eq!(seen[0].2, sample_body());
+        assert_eq!(seen[0].2, sample_body("id"));
         assert!(seen[1].1.get("x-api-key").is_none());
     }
 
@@ -1263,10 +1281,10 @@ pub(crate) mod tests {
 
         let mut answers = Vec::new();
         for _ in 0..5 {
-            answers.push(client.post(&sample_body()).await);
+            answers.push(client.post(&sample_body("id")).await);
         }
         let unreachable = client_on("http://127.0.0.1:9", None)
-            .post(&sample_body())
+            .post(&sample_body("id"))
             .await;
 
         assert_eq!(
@@ -1305,7 +1323,7 @@ pub(crate) mod tests {
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].0, FORM);
         assert_eq!(seen[0].1["x-api-key"], API_KEY);
-        assert_eq!(seen[0].2, sample_body());
+        assert_eq!(seen[0].2, sample_body(&id));
         assert_eq!(job_status(&db.pool).await, "Done");
         // The job carries the id only, never the message.
         let payload: String =

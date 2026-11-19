@@ -39,8 +39,8 @@ pub(crate) const DESCRIPTION: &str = "Send feedback about using Telekin (somethi
     content, personal details or anything the user hasn't agreed to share. When the user asks \
     you to send feedback, send the user's own words and set `from` to `user`; when you report \
     your own experience, set `from` to `agent`. What is sent: message, kind, from, tool, \
-    rating, the server version, your MCP client's name, the credential kind (api_key or oauth) \
-    and your user name as the sender's userId. No email, display name, key name, token or \
+    rating, the server version, your MCP client's name, the credential kind (api_key or oauth), \
+    the feedback's id and your user name as the sender's userId. No email, display name, key name, token or \
     catalog content is sent unless it is in the message. A message is at most 4,000 characters, \
     and each credential may send a limited number per hour (10 by default). Returns the \
     feedback's id at once; delivery happens in the background.";
@@ -313,7 +313,8 @@ mod tests {
             "send the user's own words",
             "No email, display name, key name, token or catalog content is sent",
             "message, kind, from, tool, rating, the server version, your MCP client's name, \
-             the credential kind (api_key or oauth) and your user name as the sender's userId",
+             the credential kind (api_key or oauth), the feedback's id and your user name as the \
+             sender's userId",
         ] {
             assert!(description.contains(required), "missing {required:?}");
         }
@@ -667,6 +668,7 @@ mod tests {
                 {"type": "text", "name": "server_version", "value": env!("CARGO_PKG_VERSION")},
                 {"type": "text", "name": "client", "value": "probe"},
                 {"type": "text", "name": "credential_kind", "value": "api_key"},
+                {"type": "text", "name": "feedback_id", "value": id},
                 {"type": "rating", "name": "rating", "value": 4},
                 {"type": "sender", "properties": {"userId": crate::db::TEST_USER}},
             ]})

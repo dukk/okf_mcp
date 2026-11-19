@@ -595,8 +595,10 @@ two). What `[redis]` does not share:
   serving Deployment's.
 - **The feedback worker** runs on every replica with `[feedback]` unless
   `[feedback] worker = false`, like the mail worker: turn it on for one
-  replica, the same way. Two workers never post the same job, but one is
-  enough. The feedback rate limit is counted in Postgres, so unlike the
+  replica, the same way. Fetching a job is exclusive in normal operation, so
+  two workers do not normally post the same job, but delivery is
+  at-least-once (see [Feedback](#feedback)), and one worker is enough. The
+  feedback rate limit is counted in Postgres, so unlike the
   limits above it holds across replicas.
 - **Pruning.** Every replica's poll loop prunes the OAuth tables, unbound
   registered clients, console sessions, mail jobs, forwarded feedback,
@@ -2421,7 +2423,8 @@ api_key_env = "OKF_MCP_FORMINIT_API_KEY"  # optional: the variable holding the X
 What a submission holds, and nothing else: text blocks `message`, `kind`
 (`bug`, `confusing`, `missing`, `praise` or `other`), `from` (`user` or
 `agent`), `tool` (when given), `server_version`, `client` (the MCP client's
-name from `initialize`) and `credential_kind` (`api_key` or `oauth`); a
+name from `initialize`), `credential_kind` (`api_key` or `oauth`) and
+`feedback_id` (the feedback's own random id, the one the tool returns); a
 `rating` block (1 to 5) when given; and a `sender` block whose `userId` is
 the credential's user slug (`unassigned` for a legacy key no user owns).
 No email, display name, key name, token or catalog content is sent unless
@@ -2446,6 +2449,13 @@ feedback worker posts it:
 - any other 4xx (`FORM_NOT_FOUND`, `FORM_DISABLED`, a validation error) marks
   it `failed` at once with Forminit's error code in `last_error`, never
   retried.
+
+Delivery is at-least-once. A worker takes a job exclusively in normal
+operation (`FOR UPDATE SKIP LOCKED`), but a retry after an unconfirmed or
+unrecorded acceptance can post a duplicate: a timeout after Forminit took
+the post, or a failure to mark the row `sent` afterwards, sends it again on
+the next try, possibly from another replica. A duplicate carries the same
+`feedback_id`, so de-duplicate on that field in Forminit.
 
 The hourly prune deletes `sent` rows `retention` (30 days) after they were
 sent. `failed` rows stay, for the operator to read:
