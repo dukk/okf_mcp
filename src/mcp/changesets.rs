@@ -246,7 +246,7 @@ impl OkfServer {
 /// `open_changeset`'s arguments.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 pub struct OpenParams {
-    /// The catalog id (the `name` from `list_catalogs`; default: this connection's write target).
+    /// The catalog id (the `name` from `list_catalogs`; default: this connection's write target; when `list_catalogs` shows none, pass `catalog`).
     pub catalog: Option<String>,
 }
 
