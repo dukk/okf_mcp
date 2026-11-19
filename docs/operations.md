@@ -1810,7 +1810,8 @@ do; the command line needs only the database, as every subcommand does.
   select their catalog first (`open_changeset`, the maintenance tools).
 - **Connection lists drop, named catalogs refuse.** A call that names a
   suspended catalog (an argument, the key's default or the server's
-  `default_catalog`) is refused with `Suspended`. A call that falls back to
+  `default_catalog`, or the only catalog a key is granted, which it selects
+  when nothing else does) is refused with `Suspended`. A call that falls back to
   the connection's list (`X-OKF-Catalogs`) leaves suspended catalogs out and
   reads the rest, so one suspended team doesn't break a connection that also
   reads other teams' catalogs; only a list whose every catalog is suspended

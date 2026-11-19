@@ -36,7 +36,7 @@ const DEFAULT_N: usize = 5;
 // its input schema, with the doc comments as the fields' descriptions.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 pub struct CatalogParam {
-    /// The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog).
+    /// The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog; when `list_catalogs` shows an empty selection, pass `catalog`).
     pub catalog: Option<String>,
     /// Read through this changeset's drafts (its handle); the report then runs on its catalog unless `catalog` names it.
     pub changeset: Option<String>,
@@ -76,7 +76,7 @@ pub struct OpenQuestions {
 /// `oldest`'s arguments.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 pub struct OldestParams {
-    /// The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog).
+    /// The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog; when `list_catalogs` shows an empty selection, pass `catalog`).
     pub catalog: Option<String>,
     /// Read through this changeset's drafts (its handle); the report then runs on its catalog unless `catalog` names it.
     pub changeset: Option<String>,
@@ -104,7 +104,7 @@ pub struct Oldest {
 /// `sprawl`'s arguments.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 pub struct SprawlParams {
-    /// The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog).
+    /// The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog; when `list_catalogs` shows an empty selection, pass `catalog`).
     pub catalog: Option<String>,
     /// Read through this changeset's drafts (its handle); the report then runs on its catalog unless `catalog` names it.
     pub changeset: Option<String>,
@@ -129,7 +129,7 @@ pub struct Sprawl {
 /// `links_report`'s arguments.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 pub struct LinksParams {
-    /// The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog).
+    /// The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog; when `list_catalogs` shows an empty selection, pass `catalog`).
     pub catalog: Option<String>,
     /// Read through this changeset's drafts (its handle); the report then runs on its catalog unless `catalog` names it.
     pub changeset: Option<String>,
@@ -153,7 +153,7 @@ pub struct Links {
 /// `lint`'s arguments.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 pub struct LintParams {
-    /// The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog).
+    /// The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog; when `list_catalogs` shows an empty selection, pass `catalog`).
     pub catalog: Option<String>,
     /// Lint this changeset's drafts (its handle) applied to the published catalog, instead of the published catalog; its changed paths count as uncommitted for `generated-after-commit`.
     pub changeset: Option<String>,
