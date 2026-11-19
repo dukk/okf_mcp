@@ -9,7 +9,9 @@
   settings only if it moved. Callers that find the settings expired together
   run one check (`settings_reload` mutex, re-checked after taking it), and
   callers that waited while a check failed take its answer (`settings_rounds`)
-  instead of each running another failing one, so a database outage does not
+  instead of each running another failing one, whether a TTL or a stale mark
+  started it (stale marks are counted, `settings_marks`/`checked_marks`, so
+  only a mark newer than the finished check gets a check of its own), so a database outage does not
   serialize every request behind one timeout after another. A failed check
   keeps serving the loaded settings, logs at `warn` and leaves them expired,
   so the next request retries. A validation time in the future (the
@@ -38,6 +40,8 @@
   `concurrent_requests_past_the_ttl_reload_settings_once`,
   `a_check_loads_the_settings_only_when_admin_generation_moved`,
   `concurrent_requests_share_one_failed_check`,
+  `concurrent_requests_share_one_failed_check_after_a_stale_mark`,
+  `a_mark_during_a_check_gets_a_check_of_its_own`,
   `a_clock_stepped_back_expires_the_settings` (`src/app.rs`);
   `a_request_checks_settings_older_than_the_credential_ttl`
   (`src/http/mod.rs`); `an_m16_announcement_marks_credentials_and_settings_stale`,
@@ -53,11 +57,11 @@
   validated_at }>`; `App::access_view` is `async` and reads `fresh_settings`.
 - The `admin_generation` and `announced_generation` atomics are gone, and so
   are `reload_settings_now`, `reload_settings_if_changed`,
-  `reload_moved_settings` and `loaded_admin_generation`. The labels keep their
-  own `labels_generation` and reload through `App::reload_labels_now` until
-  Task 12 loads them on demand; a `Credential` message no longer reloads them.
+  `reload_moved_settings` and `loaded_admin_generation`. Labels are Task 12's
+  `LabelLookup` (merged in): the M16 announcement, a reconnect and the poll's
+  sweep mark it stale. `okf_keycache_reloads_total` counts settings loads.
 - The poll pass no longer announces over Redis. It checks the settings, reads
-  `admin_generation` itself, reloads the labels if it moved and runs the
+  `admin_generation` itself and runs the
   sweep (credential caches and directory marked stale) whenever it moved since
   the last sweep, whether or not the settings check succeeded.
 - `settle` still polls (Task 16 removes that) and then calls `bridge_to_m16`.

@@ -23,6 +23,7 @@ use crate::auth::Reach;
 use crate::catalog::Loaded;
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
+use crate::labels::directory::Wanted;
 use crate::mcp::context::{Pinned, ToolContext};
 use crate::mcp::{blocking, reply, OkfServer};
 use crate::okf::ops::OpOutcome;
@@ -180,7 +181,11 @@ pub(crate) async fn list_changesets(
         ctx.app().clock().now(),
         ctx.app().config().session_idle_timeout,
     );
-    let labels = ctx.labels();
+    let mut wanted = Wanted::default();
+    for row in &rows {
+        wanted.catalog(&row.catalog).user(&row.changeset.actor);
+    }
+    let labels = ctx.labels_for(&wanted).await?;
     let changesets = rows
         .into_iter()
         .map(|row| ListedChangeset {
@@ -313,7 +318,7 @@ pub(crate) async fn open_changeset(
     Ok(Opened {
         changeset: opened.handle,
         catalog: state.name().to_string(),
-        catalog_label: ctx.catalog_label(state.name()),
+        catalog_label: ctx.catalog_label(state.name()).await?,
     })
 }
 
@@ -410,7 +415,7 @@ pub(crate) async fn publish(
     let report = publishing::publish(ctx.app(), &state, &input, &ctx.audit_actor()).await?;
     Ok(Published {
         catalog: state.name().to_string(),
-        catalog_label: ctx.catalog_label(state.name()),
+        catalog_label: ctx.catalog_label(state.name()).await?,
         changeset: row.handle,
         report,
     })
@@ -601,7 +606,7 @@ pub(crate) async fn discard(
     } = ctx.changeset(&params.changeset, Access::Write).await?;
     let mut discarded = Discarded {
         catalog: state.name().to_string(),
-        catalog_label: ctx.catalog_label(state.name()),
+        catalog_label: ctx.catalog_label(state.name()).await?,
         changeset: params.changeset,
         removed: 0,
         closed: false,
@@ -792,7 +797,7 @@ pub(crate) async fn pending_changes(
     let files = blocking(move || pending_files(&loaded, &entries)).await?;
     Ok(PendingChanges {
         catalog: state.name().to_string(),
-        catalog_label: ctx.catalog_label(state.name()),
+        catalog_label: ctx.catalog_label(state.name()).await?,
         changeset: row.handle,
         files,
     })

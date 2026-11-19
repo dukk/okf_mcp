@@ -217,7 +217,7 @@ pub(crate) async fn open_questions(
         .collect();
     Ok(OpenQuestions {
         catalog: state.name().to_string(),
-        catalog_label: ctx.catalog_label(state.name()),
+        catalog_label: ctx.catalog_label(state.name()).await?,
         concepts,
     })
 }
@@ -248,7 +248,7 @@ pub(crate) async fn oldest_report(
     let rows = blocking(move || oldest(view.snapshot(), now, query)).await;
     Ok(Oldest {
         catalog: state.name().to_string(),
-        catalog_label: ctx.catalog_label(state.name()),
+        catalog_label: ctx.catalog_label(state.name()).await?,
         rows,
     })
 }
@@ -286,7 +286,7 @@ pub(crate) async fn sprawl_report(
     .await?;
     Ok(Sprawl {
         catalog: state.name().to_string(),
-        catalog_label: ctx.catalog_label(state.name()),
+        catalog_label: ctx.catalog_label(state.name()).await?,
         reports,
     })
 }
@@ -310,7 +310,7 @@ pub(crate) async fn links(ctx: &ToolContext, params: LinksParams) -> Result<Link
     let report = blocking(move || links_report(view.snapshot(), mentions)).await;
     Ok(Links {
         catalog: state.name().to_string(),
-        catalog_label: ctx.catalog_label(state.name()),
+        catalog_label: ctx.catalog_label(state.name()).await?,
         report,
     })
 }
@@ -337,7 +337,7 @@ pub(crate) async fn lint_report(ctx: &ToolContext, params: LintParams) -> Result
     let report = blocking(move || view.lint(now)).await;
     Ok(Lint {
         catalog: state.name().to_string(),
-        catalog_label: ctx.catalog_label(state.name()),
+        catalog_label: ctx.catalog_label(state.name()).await?,
         pending,
         report,
     })

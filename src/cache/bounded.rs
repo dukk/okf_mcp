@@ -457,6 +457,74 @@ where
         self.load_present_once(key, load).await
     }
 
+    /// The cached values of `keys`, reading every key not cached (or marked
+    /// stale) with one call to `load`: a batch of lookups costs one round
+    /// trip, not one per miss. Each loaded value is kept unless an
+    /// invalidation of its key (or of the whole cache) overtook the read,
+    /// as for [`Bounded::get_or_load`]. Not single flight: callers that
+    /// miss together each read.
+    ///
+    /// # Arguments
+    /// * `keys` - the keys wanted (repeats are read once).
+    /// * `load` - given the keys to read, returns the `(key, value)` pairs
+    ///   that exist; a key it leaves out is absent, and never cached.
+    ///
+    /// # Returns
+    /// The value of each key found, cached or loaded.
+    ///
+    /// # Errors
+    /// The loader's error; nothing is cached then.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub async fn get_or_load_many<F, Fut>(
+        &self,
+        keys: Vec<K>,
+        load: F,
+    ) -> Result<HashMap<K, V>, OkfError>
+    where
+        F: FnOnce(Vec<K>) -> Fut,
+        Fut: Future<Output = Result<Vec<(K, V)>, OkfError>>,
+    {
+        let mut found = HashMap::new();
+        // The flights are registered before the read, so an invalidation
+        // that lands while the loader runs is seen when the value is kept.
+        let mut flights: HashMap<K, Flight<'_, K>> = HashMap::new();
+        for key in keys {
+            if found.contains_key(&key) || flights.contains_key(&key) {
+                continue;
+            }
+            match self.cache.get(&key).await {
+                Some(entry) if self.is_fresh(&entry) => {
+                    self.count(Lookup::Hit);
+                    found.insert(key, entry.value);
+                }
+                seen => {
+                    self.count(if seen.is_some() {
+                        Lookup::Stale
+                    } else {
+                        Lookup::Miss
+                    });
+                    let flight = self.begin(&key);
+                    flights.insert(key, flight);
+                }
+            }
+        }
+        if flights.is_empty() {
+            return Ok(found);
+        }
+        let stamp = self.stale_before.load(Ordering::SeqCst);
+        let started = Instant::now();
+        let loaded = load(flights.keys().cloned().collect()).await;
+        self.record_load(started, loaded.is_ok());
+        for (key, value) in loaded? {
+            // A pair for a key nobody asked for is dropped.
+            if let Some(flight) = flights.get(&key) {
+                self.keep(&key, value.clone(), stamp, flight).await;
+                found.insert(key, value);
+            }
+        }
+        Ok(found)
+    }
+
     /// As [`Bounded::get_or_load`], except that an entry marked stale is
     /// first passed to `check`, which returns `Ok(None)` to keep it or
     /// `Ok(Some(new))` to replace it. Revalidations are not single flight.
@@ -990,6 +1058,80 @@ mod tests {
             None,
             "but the removed entry stays removed"
         );
+    }
+
+    #[tokio::test]
+    async fn get_or_load_many_reads_the_misses_together_and_caches_them() {
+        let cache = Bounded::<i64, i64>::new(CacheName::Labels, Limit::Entries(10), TTL);
+        let reads = AtomicUsize::new(0);
+        let load = |keys: Vec<i64>| async {
+            reads.fetch_add(1, Ordering::SeqCst);
+            // Key 9 does not exist.
+            Ok(keys
+                .into_iter()
+                .filter(|key| *key != 9)
+                .map(|key| (key, key * 10))
+                .collect())
+        };
+
+        let first = cache
+            .get_or_load_many(vec![1, 2, 9, 1], load)
+            .await
+            .unwrap();
+        let second = cache.get_or_load_many(vec![1, 2], load).await.unwrap();
+
+        assert_eq!(first, HashMap::from([(1, 10), (2, 20)]));
+        assert_eq!(second, first);
+        assert_eq!(reads.load(Ordering::SeqCst), 1, "the second call is cached");
+        assert_eq!(cache.peek(&9).await, None, "an absent key is not cached");
+    }
+
+    #[tokio::test]
+    async fn get_or_load_many_does_not_keep_a_value_overtaken_by_an_invalidation() {
+        let cache = Arc::new(Bounded::<i64, i64>::new(
+            CacheName::Labels,
+            Limit::Entries(10),
+            TTL,
+        ));
+        let (entered, started) = oneshot::channel();
+        let (release, released) = oneshot::channel::<()>();
+        let reader = {
+            let cache = Arc::clone(&cache);
+            tokio::spawn(async move {
+                cache
+                    .get_or_load_many(vec![1], |keys| async move {
+                        entered.send(()).unwrap();
+                        released.await.unwrap();
+                        Ok(keys.into_iter().map(|key| (key, 5)).collect())
+                    })
+                    .await
+            })
+        };
+        timeout(BOUND, started).await.unwrap().unwrap();
+
+        cache.invalidate(&1).await;
+        release.send(()).unwrap();
+        let served = timeout(BOUND, reader).await.unwrap().unwrap().unwrap();
+
+        assert_eq!(served, HashMap::from([(1, 5)]), "the caller is served");
+        assert_eq!(cache.peek(&1).await, None, "but the old read is not kept");
+    }
+
+    #[tokio::test]
+    async fn get_or_load_many_reads_a_stale_entry_again() {
+        let cache = Bounded::<i64, i64>::new(CacheName::Labels, Limit::Entries(10), TTL);
+        cache.get_or_load(1, || async { Ok(1) }).await.unwrap();
+        cache.mark_all_stale();
+
+        let got = cache
+            .get_or_load_many(vec![1], |keys| async move {
+                Ok(keys.into_iter().map(|key| (key, 2)).collect())
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(got, HashMap::from([(1, 2)]));
+        assert_eq!(cache.peek(&1).await, Some(2));
     }
 
     #[tokio::test]

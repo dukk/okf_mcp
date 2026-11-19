@@ -18,6 +18,7 @@ use crate::auth::{Admission, CatalogScope, Principal};
 use crate::error::OkfError;
 use crate::http::requester::Requester;
 use crate::http::{timeout_layer_after, AppError, REQUEST_TIMEOUT};
+use crate::labels::directory::Wanted;
 use crate::labels::export_stem;
 use crate::mcp::blocking;
 use crate::store::audit::{AccessKind, AuditActor};
@@ -382,8 +383,12 @@ async fn export_catalog(
     );
     // The stem is ASCII letters, digits and '-', and `name` is `[a-z0-9-]+`:
     // both are safe in a header.
+    let mut wanted = Wanted::default();
+    wanted.catalog(&name);
     let stem = app
         .labels()
+        .labels_for(&wanted)
+        .await?
         .catalog(&name)
         .map(export_stem)
         .unwrap_or_default();
@@ -1097,7 +1102,6 @@ mod tests {
         )
         .await
         .unwrap();
-        test.app.reload_labels_now().await;
         let exported = router(&test, admin())
             .oneshot(
                 Request::get("/catalogs/pg/export")

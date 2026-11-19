@@ -16,6 +16,7 @@ use tracing::Instrument;
 use crate::auth::{Admission, Principal};
 use crate::cache::credentials::{AccessView, CredentialLimits, Credentials};
 use crate::cache::directory::CatalogDirectory;
+use crate::cache::labels::{LabelLookup, DEFAULT_LABEL_CACHE_ENTRIES};
 use crate::catalog::CatalogState;
 use crate::clock::Clock;
 use crate::clock_check::{self, ClockStatus};
@@ -25,7 +26,6 @@ use crate::http::limits::SignInLimits;
 use crate::http::passkeys::Passkeys;
 use crate::http::sessions::SessionBindings;
 use crate::keyed_lock::{KeyedGuard, KeyedLocks};
-use crate::labels::directory::Labels;
 use crate::oauth::OAuth;
 use crate::oidc::OidcProviders;
 use crate::overlay::Overlays;
@@ -72,11 +72,9 @@ pub struct App {
     clock: Arc<dyn Clock>,
     // Keys, grants and users, loaded on demand (M18 Decision 9).
     credentials: Credentials,
-    // Every user's, team's and catalog's label, by slug: reloaded when
-    // `admin_generation` moves (until Task 12 of milestone 18 loads labels
-    // on demand). As with `catalogs`, the lock is held only to
-    // clone or swap the `Arc`.
-    labels: RwLock<Arc<Labels>>,
+    // Labels of the slugs a response shows, read on demand and cached
+    // (M18 Decision 9).
+    labels: LabelLookup,
     // Which key opened each MCP session (M5 Decision 2).
     sessions: SessionBindings,
     // The shared Redis (`[redis]`); `None` keeps every short-lived state in
@@ -99,10 +97,6 @@ pub struct App {
     directory: CatalogDirectory,
     // As in `CatalogState`: the lock is held only to clone or swap the `Arc`.
     catalogs: RwLock<Arc<Catalogs>>,
-    // The `admin_generation` the labels were loaded at (until Task 12 of
-    // milestone 18 loads labels on demand). Written only under `polling`,
-    // so `Relaxed` ordering is enough.
-    labels_generation: AtomicI64,
     // The `admin_generation` the poll pass last marked the credential caches
     // and the catalog directory stale at (or the one this instance started
     // at). The pass reads the counter itself: a change no message described
@@ -272,12 +266,17 @@ impl App {
         metrics: Metrics,
         redis: Option<shared::Redis>,
     ) -> Result<Arc<Self>, OkfError> {
-        // Read the counter before the settings and labels: a change committed
-        // between them moves it again, so the next check reloads.
+        // Read the counter before the settings: a change committed between
+        // them moves it again, so the next check reloads.
         let validated_at = clock.now();
         let admin_generation = catalogs::admin_generation(&pool).await?;
         let settings = settings::load(&pool, &config.auth).await?;
-        let labels = Labels::load(&pool).await?;
+        let labels = LabelLookup::new(
+            pool.clone(),
+            DEFAULT_LABEL_CACHE_ENTRIES,
+            config.credential_ttl,
+        )
+        .with_metrics(metrics.clone());
         // `clock` moves into `Self` below, so the caches get their own handle.
         let credentials = Credentials::new(
             pool.clone(),
@@ -337,7 +336,7 @@ impl App {
             config,
             clock,
             credentials,
-            labels: RwLock::new(Arc::new(labels)),
+            labels,
             sessions,
             redis,
             overlays,
@@ -346,7 +345,6 @@ impl App {
             rebuild_locks: KeyedLocks::new(),
             directory,
             catalogs: RwLock::new(Arc::new(loaded)),
-            labels_generation: AtomicI64::new(admin_generation),
             swept_generation: AtomicI64::new(admin_generation),
             settings: RwLock::new(LoadedSettings {
                 settings: Arc::new(settings),
@@ -593,10 +591,11 @@ impl App {
         &self.credentials
     }
 
-    /// The label directory, as of the last reload.
+    /// The label lookup: the labels of the slugs a response shows, read on
+    /// demand ([`LabelLookup::labels_for`]).
     ///
     /// # Returns
-    /// The shared directory (a pointer copy, not a copy of the maps).
+    /// The lookup.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -604,22 +603,21 @@ impl App {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    pub fn labels(&self) -> Arc<Labels> {
-        Arc::clone(&self.labels.read().expect("labels lock poisoned"))
+    pub fn labels(&self) -> &LabelLookup {
+        &self.labels
     }
 
     /// What every principal of a request is assembled with besides its
     /// credential and user: the `require_unlock` setting, checked against
     /// the database when older than `credential_ttl`
-    /// ([`App::fresh_settings`]), and the labels.
+    /// ([`App::fresh_settings`]).
     ///
     /// # Returns
-    /// The view (two pointer copies).
+    /// The view.
     #[tracing::instrument(level = "trace", skip_all)]
     pub async fn access_view(&self) -> AccessView {
         AccessView {
             require_unlock: self.fresh_settings().await.require_unlock,
-            labels: self.labels(),
         }
     }
 
@@ -807,8 +805,17 @@ impl App {
             self.settings_loads.fetch_add(1, Ordering::Relaxed);
             // A stored setting this server cannot read is not a failure:
             // `settings::load` falls back to the default.
-            let settings = settings::load(&self.pool, &self.config.auth).await?;
-            Ok::<_, OkfError>(Some((generation, settings)))
+            // The span and metric keep the key cache's name
+            // (`okf.keycache.*`), which dashboards know them by.
+            let loaded = settings::load(&self.pool, &self.config.auth)
+                .instrument(tracing::info_span!("okf.keycache.reload"))
+                .await;
+            self.metrics.keycache_reload(if loaded.is_ok() {
+                Outcome::Ok
+            } else {
+                Outcome::Error
+            });
+            Ok::<_, OkfError>(Some((generation, loaded?)))
         }
         .await;
         match checked {
@@ -1081,14 +1088,14 @@ impl App {
         self.reload_settings().await;
         match catalogs::admin_generation(&self.pool).await {
             Ok(generation) => {
-                self.reload_labels_at(generation).await;
                 // `admin_generation` moved since the last pass's sweep: a
                 // change no message described may be among those, so every
-                // cached credential, user and catalog row is reread on its
-                // next use. The poll loop's backstop, until it is removed
+                // cached credential, user, label and catalog row is reread on
+                // its next use. The poll loop's backstop, until it is removed
                 // (Task 16).
                 if generation != self.swept_generation.load(Ordering::Relaxed) {
                     self.credentials.mark_all_stale();
+                    self.labels.mark_all_stale();
                     self.directory.mark_all_stale().await;
                     self.swept_generation.store(generation, Ordering::Relaxed);
                 }
@@ -1184,28 +1191,6 @@ impl App {
         *self.catalogs.write().expect("catalog map lock poisoned") = Arc::new(next);
         *broken = still_broken;
         Ok(())
-    }
-
-    /// Reloads the labels if `admin_generation` moved since they were
-    /// loaded, serialized with poll passes through `polling`: what the
-    /// change feed does for a message that may change a label, and what the
-    /// M16 subscriber does on an announcement (until Task 12 of milestone 18
-    /// loads labels on demand). A failure is logged; the next message or
-    /// poll pass retries.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn reload_labels_now(&self) {
-        let _pass = self.polling.lock().await;
-        match catalogs::admin_generation(&self.pool).await {
-            Ok(generation) => self.reload_labels_at(generation).await,
-            Err(error) => {
-                split_event!(
-                    error,
-                    { kind = error.kind(), },
-                    { %error, },
-                    "reading admin_generation failed; retrying at the next poll"
-                );
-            }
-        }
     }
 
     /// M16 bridge (spec Decision 14): remove in the release after 0.23.
@@ -1345,15 +1330,13 @@ impl App {
     }
 
     /// Applies one change-feed message to this replica's caches: the
-    /// catalog directory, the credential and user caches, the catalog map,
-    /// the settings and the labels (Task 12 of milestone 18 moves the last
-    /// onto its own bounded cache behind this same method).
+    /// catalog directory, the credential, user and label caches, the catalog
+    /// map and the settings.
     ///
     /// A `Catalog` message refreshes that catalog if it is loaded and
     /// behind; a catalog not loaded is left to the poll loop. A `Settings`
-    /// message reloads the settings. A `CatalogMeta`, `User` or `Team`
-    /// message reloads the labels if `admin_generation` moved (until Task
-    /// 12); a `Credential` message changes no label.
+    /// message reloads the settings. The caches apply every other kind
+    /// themselves.
     ///
     /// # Arguments
     /// * `message` - what changed.
@@ -1365,6 +1348,7 @@ impl App {
         // row or a revoked credential.
         self.directory.apply(&message.invalidation).await;
         self.credentials.apply(&message.invalidation).await;
+        self.labels.apply(&message.invalidation).await;
         match &message.invalidation {
             Invalidation::Catalog { id, generation } => {
                 self.refresh_announced(
@@ -1379,22 +1363,22 @@ impl App {
             Invalidation::Settings => self.reload_settings().await,
             Invalidation::CatalogMeta { .. }
             | Invalidation::User { .. }
-            | Invalidation::Team { .. } => self.reload_labels_now().await,
-            Invalidation::Credential { .. } => {}
+            | Invalidation::Team { .. }
+            | Invalidation::Credential { .. } => {}
         }
     }
 
     /// After the change feed's connection was lost (or a payload could not
     /// be read): messages sent meanwhile are gone, so every cache is
-    /// suspect. The directory, credential and user caches mark every entry
-    /// stale; the settings are checked and the labels reload; every loaded
-    /// catalog that is behind is refreshed.
+    /// suspect. The directory, credential, user and label caches mark every
+    /// entry stale; the settings are checked; every loaded catalog that is
+    /// behind is refreshed.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn apply_reconnect(&self) {
         self.directory.mark_all_stale().await;
         self.credentials.mark_all_stale();
+        self.labels.mark_all_stale();
         self.reload_settings().await;
-        self.reload_labels_now().await;
         self.catch_up_catalogs().await;
     }
 
@@ -1402,17 +1386,16 @@ impl App {
     ///
     /// What an M16 replica's announcement means here: an older replica
     /// changed something without sending change messages, so every cached
-    /// credential, user and catalog row (suspension, owner, maintenance) is
-    /// reread on its next use, the settings are checked and the labels
-    /// reload.
+    /// credential, user, label and catalog row (suspension, owner,
+    /// maintenance) is reread on its next use, and the settings are checked.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn apply_m16_announcement(&self) {
         #[cfg(test)]
         self.m16_announcements.fetch_add(1, Ordering::Relaxed);
         self.credentials.mark_all_stale();
+        self.labels.mark_all_stale();
         self.directory.mark_all_stale().await;
         self.reload_settings().await;
-        self.reload_labels_now().await;
     }
 
     /// Refreshes every loaded catalog whose generation in the database is
@@ -1448,46 +1431,6 @@ impl App {
                     generation: row.generation,
                 })
                 .await;
-            }
-        }
-    }
-
-    /// Reloads the labels if `generation` (an `admin_generation` just read)
-    /// is not the one they were loaded at. Called only under `polling`.
-    ///
-    /// A failed reload is logged, not returned: the stored counter stays as
-    /// it was, so the next message or pass tries again, and the caller's
-    /// other work goes ahead regardless.
-    ///
-    /// # Arguments
-    /// * `generation` - the counter, read before this call.
-    #[tracing::instrument(level = "debug", skip_all)]
-    async fn reload_labels_at(&self, generation: i64) {
-        if generation == self.labels_generation.load(Ordering::Relaxed) {
-            return;
-        }
-        // The span and metric keep the key cache's name (`okf.keycache.*`),
-        // which dashboards know them by.
-        let reloaded = Labels::load(&self.pool)
-            .instrument(tracing::info_span!("okf.keycache.reload"))
-            .await;
-        self.metrics.keycache_reload(if reloaded.is_ok() {
-            Outcome::Ok
-        } else {
-            Outcome::Error
-        });
-        match reloaded {
-            Ok(labels) => {
-                *self.labels.write().expect("labels lock poisoned") = Arc::new(labels);
-                self.labels_generation.store(generation, Ordering::Relaxed);
-            }
-            Err(error) => {
-                split_event!(
-                    error,
-                    { kind = error.kind(), },
-                    { %error, },
-                    "labels reload failed; retrying at the next poll"
-                );
             }
         }
     }
