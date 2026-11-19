@@ -15,6 +15,7 @@ use opentelemetry::KeyValue;
 use super::otlp::{ExportFailures, FailureReason, Signal};
 use crate::app::App;
 use crate::config::MailProvider;
+use crate::housekeeping::Task;
 use crate::mcp::annotations::{DESTRUCTIVE, EXTERNAL, READS, STAGED};
 use crate::store::sign_in_events::{Method, Outcome as SignInOutcome};
 
@@ -240,6 +241,12 @@ struct Instruments {
     ratelimit_rejections: Counter<u64>,
     mail_jobs: Counter<u64>,
     mail_queue_depth: Arc<MailQueueDepth>,
+    // The cluster-wide open changeset count `okf.changesets.open` reports,
+    // as the last `cluster_stats` row read held it (issue #693).
+    open_changesets: Arc<AtomicI64>,
+    // Housekeeping jobs (issue #693).
+    housekeeping_runs: Counter<u64>,
+    housekeeping_duration: Histogram<f64>,
     // Clock checks and archives (Task 6).
     clock_checks: Counter<u64>,
     clock_offset: Gauge<f64>,
@@ -256,13 +263,14 @@ impl Metrics {
         "okf_build_info",
         "okf_telemetry_export_failures_total",
         "okf_mail_queue_depth",
+        "okf_changesets_open",
     ];
     // The catalog gauges join them once `App::load_with_metrics` registers
     // them (`observe_catalogs`), and the pool gauge (`observe_pool`); the
     // catalog ones have a series only per loaded catalog.
 
     /// Every Prometheus family the server can export, as `/metrics` names
-    /// it: the three in [`Metrics::FAMILIES`], plus each one that appears
+    /// it: the four in [`Metrics::FAMILIES`], plus each one that appears
     /// only once its event has happened (a counter or histogram has no
     /// series until the first record) or once a catalog is loaded (the
     /// observable gauges [`Metrics::observe_catalogs`] and
@@ -274,6 +282,7 @@ impl Metrics {
         "okf_build_info",
         "okf_telemetry_export_failures_total",
         "okf_mail_queue_depth",
+        "okf_changesets_open",
         "http_server_request_duration_seconds",
         "http_server_active_requests",
         "okf_mcp_tool_duration_seconds",
@@ -294,12 +303,13 @@ impl Metrics {
         "okf_clock_offset_seconds",
         "okf_archive_size_bytes_total",
         "okf_archive_duration_seconds",
+        "okf_housekeeping_runs_total",
+        "okf_housekeeping_duration_seconds",
         // Registered by `observe_catalogs` and `observe_pool`: they need a
         // loaded `App`, so their own tests (`app.rs`, `mcp/changesets.rs`)
         // check the rendered names.
         "okf_catalog_concepts",
         "okf_catalog_generation",
-        "okf_changesets_open",
         "db_client_connection_count",
     ];
 
@@ -389,6 +399,17 @@ impl Metrics {
                     "Mail jobs, by provider and outcome.",
                 ),
                 mail_queue_depth: MailQueueDepth::observe(meter),
+                open_changesets: observe_open_changesets(meter),
+                housekeeping_runs: counter(
+                    meter,
+                    "okf.housekeeping.runs",
+                    "Housekeeping jobs run, by task and outcome.",
+                ),
+                housekeeping_duration: seconds_histogram(
+                    meter,
+                    "okf.housekeeping.duration",
+                    "Housekeeping job duration, by task.",
+                ),
                 clock_checks: counter(meter, "okf.clock.checks", "Clock checks, by outcome."),
                 clock_offset: meter
                     .f64_gauge("okf.clock.offset")
@@ -518,9 +539,8 @@ impl Metrics {
             .add(1, &[KeyValue::new("operation", op.as_str())]);
     }
 
-    /// Registers the catalog gauges: `okf.catalog.concepts`,
-    /// `okf.catalog.generation` and `okf.changesets.open`, one series per
-    /// loaded catalog. Each callback holds only a [`Weak`] handle, so the
+    /// Registers the catalog gauges: `okf.catalog.concepts` and
+    /// `okf.catalog.generation`, one series per loaded catalog. Each callback holds only a [`Weak`] handle, so the
     /// meter provider (which outlives the app) keeps no strong cycle, and
     /// reads what `app` already holds: a scrape never queries Postgres.
     ///
@@ -548,32 +568,16 @@ impl Metrics {
                 }
             })
             .build();
-        let generations = app.clone();
         self.meter
             .i64_observable_gauge("okf.catalog.generation")
             .with_description("Each catalog's current snapshot generation.")
             .with_callback(move |observer| {
-                let Some(app) = generations.upgrade() else {
+                let Some(app) = app.upgrade() else {
                     return;
                 };
                 for (name, state) in app.catalogs().iter() {
                     observer.observe(
                         state.current().generation(),
-                        &[KeyValue::new("catalog", name.clone())],
-                    );
-                }
-            })
-            .build();
-        self.meter
-            .i64_observable_gauge("okf.changesets.open")
-            .with_description("Open changesets per catalog, as of the last poll pass.")
-            .with_callback(move |observer| {
-                let Some(app) = app.upgrade() else {
-                    return;
-                };
-                for name in app.catalogs().keys() {
-                    observer.observe(
-                        app.open_changesets(name),
                         &[KeyValue::new("catalog", name.clone())],
                     );
                 }
@@ -863,8 +867,8 @@ impl MailStatus {
     }
 }
 
-/// The mail queue's depth by status, as the last poll counted it. A scrape
-/// reads these numbers; it never queries Postgres.
+/// The mail queue's depth by status, as the last `cluster_stats` row read
+/// held it. A scrape reads these numbers; it never queries Postgres.
 #[derive(Debug, Default)]
 struct MailQueueDepth {
     counts: [AtomicI64; MailStatus::ALL.len()],
@@ -872,7 +876,7 @@ struct MailQueueDepth {
 
 impl MailQueueDepth {
     /// Registers the `okf.mail.queue.depth` gauge on `meter`: one series per
-    /// status from the first scrape (zero until a poll counts).
+    /// status from the first scrape (zero until the first row is read).
     #[tracing::instrument(level = "trace", skip_all)]
     fn observe(meter: &Meter) -> Arc<Self> {
         let depth = Arc::new(Self::default());
@@ -881,7 +885,9 @@ impl MailQueueDepth {
         // registered with the meter provider.
         meter
             .i64_observable_gauge("okf.mail.queue.depth")
-            .with_description("Mail jobs not yet sent, by status, as of the last poll.")
+            .with_description(
+                "Mail jobs not yet sent, by status, as of the last cluster_stats job.",
+            )
             .with_callback(move |observer| {
                 for status in MailStatus::ALL {
                     observer.observe(
@@ -893,6 +899,25 @@ impl MailQueueDepth {
             .build();
         depth
     }
+}
+
+/// Registers the `okf.changesets.open` gauge on `meter`: one series, the
+/// cluster's total (zero until the first `cluster_stats` row is read). Every
+/// replica reports the same value, so dashboards take `max()`.
+///
+/// # Returns
+/// The number the gauge reports; [`Metrics::set_open_changesets`] stores it.
+#[tracing::instrument(level = "trace", skip_all)]
+fn observe_open_changesets(meter: &Meter) -> Arc<AtomicI64> {
+    let open = Arc::new(AtomicI64::new(0));
+    let read = Arc::clone(&open);
+    // The instrument handle may be dropped: the callback stays registered.
+    meter
+        .i64_observable_gauge("okf.changesets.open")
+        .with_description("Open changesets in the cluster, as of the last cluster_stats job.")
+        .with_callback(move |observer| observer.observe(read.load(Ordering::Relaxed), &[]))
+        .build();
+    open
 }
 
 impl Metrics {
@@ -952,7 +977,8 @@ impl Metrics {
     }
 
     /// Stores the mail queue's depth for the gauge: the count per status
-    /// the poll just read. A status missing from `counts` is zero.
+    /// the last `cluster_stats` row read held. A status missing from
+    /// `counts` is zero.
     ///
     /// # Arguments
     /// * `counts` - `(status, jobs)` pairs.
@@ -966,6 +992,36 @@ impl Metrics {
                 .sum();
             self.inner.mail_queue_depth.counts[status.slot()].store(jobs, Ordering::Relaxed);
         }
+    }
+
+    /// Stores the cluster's open changeset count for `okf.changesets.open`.
+    ///
+    /// # Arguments
+    /// * `open` - the count the last `cluster_stats` row read held.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn set_open_changesets(&self, open: i64) {
+        self.inner.open_changesets.store(open, Ordering::Relaxed);
+    }
+
+    /// Records one housekeeping job's run.
+    ///
+    /// # Arguments
+    /// * `task` - which task ran.
+    /// * `outcome` - whether it succeeded (a failure is retried by apalis).
+    /// * `elapsed` - how long it took.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn housekeeping_run(&self, task: Task, outcome: Outcome, elapsed: Duration) {
+        self.inner.housekeeping_runs.add(
+            1,
+            &[
+                KeyValue::new("task", task.as_str()),
+                KeyValue::new("outcome", outcome.as_str()),
+            ],
+        );
+        self.inner.housekeeping_duration.record(
+            elapsed.as_secs_f64(),
+            &[KeyValue::new("task", task.as_str())],
+        );
     }
 }
 
@@ -1178,11 +1234,10 @@ mod tests {
     #[test]
     fn all_families_names_every_family_the_instruments_render() {
         use crate::mcp::testing::local_metrics;
-        // The four gauges that read a loaded `App`.
-        const NEEDS_APP: [&str; 4] = [
+        // The three gauges that read a loaded `App`.
+        const NEEDS_APP: [&str; 3] = [
             "okf_catalog_concepts",
             "okf_catalog_generation",
-            "okf_changesets_open",
             "db_client_connection_count",
         ];
         let (_provider, metrics, registry) = local_metrics();
@@ -1206,6 +1261,7 @@ mod tests {
         metrics.mail_job(MailProvider::Log, MailOutcome::Sent);
         metrics.clock_check(Outcome::Ok, Some(10));
         metrics.archive(Direction::Export, "notes", Outcome::Ok, elapsed, Some(10));
+        metrics.housekeeping_run(Task::PruneOauth, Outcome::Ok, elapsed);
 
         let rendered: std::collections::BTreeSet<String> = registry
             .gather()

@@ -779,3 +779,74 @@ async fn a_publish_on_one_replica_propagates_to_the_other_promptly() {
         "the second publish reached B through its announcement"
     );
 }
+
+/// Two serving replicas, both ticking and both running the housekeeping
+/// worker (issue #693): each task's first slot is scheduled once in the
+/// cluster and run once, by whichever worker took it, and the
+/// `cluster_stats` row it writes is there for both replicas' gauges.
+#[tokio::test(flavor = "multi_thread")]
+async fn housekeeping_runs_each_slot_once_across_two_serving_replicas() {
+    let redis = TestRedis::start().await;
+    let a = TestServer::start_shared_serving(pg(), &redis, |_| Config::default(), true).await;
+    let b = a.sibling_serving(&redis, |_| Config::default(), true).await;
+    let pool = a.db.pool.clone();
+    let tasks = okf_mcp::housekeeping::Task::ALL;
+
+    // Both tickers pushed every task's current slot at start-up. The
+    // workers poll every 10 seconds, so allow a few polls.
+    let done = tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            let finished: i64 = sqlx::query_scalar(
+                "SELECT count(DISTINCT split_part(idempotency_key, ':', 1)) FROM apalis.jobs \
+                 WHERE job_type = $1 AND status = 'Done'",
+            )
+            .bind(okf_mcp::housekeeping::QUEUE)
+            .fetch_one(&pool)
+            .await
+            .expect("count the finished jobs");
+            if finished == tasks.len() as i64 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await;
+    let jobs: Vec<(String, String, i32)> = sqlx::query_as(
+        "SELECT idempotency_key, status, attempts FROM apalis.jobs \
+         WHERE job_type = $1 ORDER BY idempotency_key",
+    )
+    .bind(okf_mcp::housekeeping::QUEUE)
+    .fetch_all(&pool)
+    .await
+    .expect("list the jobs");
+    let workers: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM apalis.workers WHERE worker_type = $1")
+            .bind(okf_mcp::housekeeping::QUEUE)
+            .fetch_one(&pool)
+            .await
+            .expect("count the workers");
+    let stats = okf_mcp::housekeeping::read_stats(&pool)
+        .await
+        .expect("read the cluster stats");
+    drop(b);
+    drop(a);
+
+    assert!(done.is_ok(), "every task ran within the wait: {jobs:?}");
+    assert_eq!(workers, 2, "each replica runs a housekeeping worker");
+    for task in tasks {
+        let slots: Vec<&(String, String, i32)> = jobs
+            .iter()
+            .filter(|(key, ..)| key.starts_with(&format!("{}:", task.as_str())))
+            .collect();
+        // Within a minute or two only `cluster_stats` can reach a second slot.
+        assert!(!slots.is_empty(), "{task:?}: {jobs:?}");
+        assert!(slots.len() <= 3, "{task:?}: {jobs:?}");
+        assert!(
+            slots
+                .iter()
+                .all(|(_, status, attempts)| status != "Done" || *attempts == 1),
+            "a finished slot ran once: {jobs:?}"
+        );
+    }
+    assert!(stats.is_some(), "the cluster_stats job wrote its row");
+}

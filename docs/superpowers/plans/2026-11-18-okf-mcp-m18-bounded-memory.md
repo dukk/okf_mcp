@@ -143,7 +143,7 @@
 | `src/store/{keys,users,teams,ceiling,settings,unlocks,import,repair,publish}.rs`, `src/store/oauth/{codes,grants}.rs` | 2 |
 | `src/store/{users,keys,teams}.rs`, `src/store/oauth/{codes,grants}.rs`, `src/store/gates.rs`, `src/store/audit.rs` | 3 |
 | `migrations/0022_audit_backfill.sql` | 3 |
-| `migrations/0023_cluster_stats.sql` | 15 |
+| `migrations/0024_cluster_stats.sql` | 15 |
 | `src/catalog.rs` | 6 (locks out), 8 (description and owner out) |
 | `src/keyed_lock.rs` | 6 (doc only) |
 | `src/store/publish.rs`, `src/mcp/changesets.rs` | 6, 8 |
@@ -1044,7 +1044,7 @@ Each caller builds its `Wanted` from what it is about to render (the audit page'
 ### Task 15: Housekeeping as apalis jobs (#356, spec Decisions 15, 16)
 
 **Files:**
-- Create: `src/housekeeping.rs`, `migrations/0023_cluster_stats.sql`.
+- Create: `src/housekeeping.rs`, `migrations/0024_cluster_stats.sql`.
 - Modify: `src/app.rs` (prune functions move), `src/http/mod.rs`, `src/telemetry/metrics.rs`, `src/mail/queue.rs` (`record_depth` returns counts instead of recording), `tests/multi_replica.rs`.
 
 - [ ] **Step 1: Migration.**
@@ -1124,6 +1124,17 @@ async fn run(job: Housekeeping, context: Data<HousekeepingContext>) -> Result<()
 - Each replica's gauges (`okf.changesets.open` without the `catalog` label, `okf_mail_queue_depth`) read an in-memory copy of the row that `tick_until` refreshes each minute.
 - Metrics: `okf.housekeeping.runs{task,outcome}`, `okf.housekeeping.duration{task}`.
 - `serve` spawns `tick_until` and the housekeeping worker and awaits both at shutdown. `poll_pass` drops the prune and count calls.
+
+> **Corrected (issue #693, 2026-11-19).** What shipped differs from Steps 1-3 in these places; read `src/housekeeping.rs`, `src/http/mod.rs` (`serve_with`) and `src/telemetry/metrics.rs`.
+> - The migration is `0024_cluster_stats.sql` (Task 3 took `0023`).
+> - `schedule(pool, task, slot) -> Result<bool, OkfError>`: `true` when this push created the job, `false` for the ignored duplicate. Only a unique violation on apalis's `idx_jobs_idempotency_key` is ignored (code `23505` and that constraint name); any other error is returned.
+> - `run(task: Task, app: &App) -> Result<(), OkfError>` runs one task in-process (the tests call it); the apalis handler is the private `run_job(job, Data<HousekeepingContext>, TaskId)`, which records `okf.housekeeping.runs{task,outcome}` and `okf.housekeeping.duration{task}` and, on a failure, moves `run_at` back with `mail::queue::reschedule_job` (30 s doubling) before returning the plain error, so the three attempts are not spent at three consecutive 10 s polls. A task with several steps (`prune_oauth`) runs them all, logs each failure and returns the first.
+> - `cluster_stats` counts with a new `changesets::open_total(pool) -> Result<i64, OkfError>` (`count(*)` over the `changesets_open` partial index), which replaces `changesets::open_counts`; nothing else used the per-catalog map. `queue::record_depth(pool, metrics)` became `queue::depth(pool) -> Result<Vec<(MailStatus, i64)>, OkfError>`.
+> - The in-memory copy of the row lives in `Metrics`, not `App`: `refresh_gauges(app)` (called by each tick, after scheduling) reads the row with `read_stats(pool) -> Result<Option<ClusterStats>, OkfError>` and stores it with `Metrics::set_open_changesets` and `Metrics::set_mail_queue_depth`. `okf.changesets.open` (no labels) is registered in `Metrics::new`, so `okf_changesets_open` moved into `Metrics::FAMILIES` (present from the first scrape, zero until the first row is read). `App` lost `open_changesets`, `open_changesets()`, `count_open_changesets`, `oauth_pruned`, `audit_pruned` and the prune functions; `poll_pass` no longer prunes or counts.
+> - `prune_oauth` also deletes housekeeping jobs that gave up (`Killed`, or `Failed` at `max_attempts`) 30 days after they finished, as `queue::prune` does for mail; `Done` ones go after a day.
+> - `serve_with` starts the housekeeping worker and `tick_until` only with `ServeOptions.worker` (test servers that set it to `false` neither run nor schedule housekeeping). Both workers run under `supervise_worker`, which gained a `queue: &'static str` argument for its log lines; the ticker is joined, then both supervisors, then the pool is closed.
+> - The worker's name is `okf-housekeeping-<host>-<pid>`, with `.2`, `.3`, ... for later workers in the same process: apalis holds an advisory lock on each registered name, and several test servers in one process would otherwise share one.
+> - The housekeeping worker polls every 10 s (`housekeeping::POLL_INTERVAL`) with `WorkerTiming::SERVE`'s heartbeat and restart delays.
 
 - [ ] **Step 4: Run, gates, commit** — `feat: housekeeping runs once per cluster as apalis jobs (M18 task 15, closes #356)`.
 
