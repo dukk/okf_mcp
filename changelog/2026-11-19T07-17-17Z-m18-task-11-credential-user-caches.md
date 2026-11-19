@@ -16,7 +16,7 @@ Issue #689. Plan: `docs/superpowers/plans/2026-11-18-okf-mcp-m18-bounded-memory.
 - Suspension, maintenance opt-out, ownership and audit team are read from the catalog directory's row at the moment of each check: `Principal::require`, `check_open`, `admission`, `require_contents`, `require_maintenance_report` and `suspension` take a `&CatalogRow`. Memberships, entitlements and unlocks match the row's ids, not its name.
 - `ToolContext` resolves the directory row of the very incarnation it reads (`row`), and refuses `Busy` when the name has become another catalog; `admit`, `admit_all` and `check_contents` are async. The selection resolves the rows of its candidate names.
 - Console sessions and OAuth grants load on a miss: the database fallback in `session_user`/`session_principal` and the catch-up retries in `oauth::access` and the refresh grant are gone.
-- `reload_keys_now` is `reload_settings_now`: settings and labels only (labels stay a full load until Task 12). The poll pass marks the credential caches and the directory stale when it sees `admin_generation` move ahead of the change messages, until Task 16 removes the poll.
+- `reload_keys_now` is `reload_settings_now`: settings and labels only (labels stay a full load until Task 12). The poll pass marks the credential caches and the directory stale whenever `admin_generation` moved since its last sweep (its own counter), until Task 16 removes the poll. An M16 announcement marks both stale too (review of PR #713).
 
 ## Removed
 
