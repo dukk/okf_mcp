@@ -980,6 +980,24 @@ impl App {
         }
     }
 
+    /// Applies this replica's own writes to its catalog directory before the
+    /// request that made them answers ([`crate::invalidate::capturing`]):
+    /// the next request on this replica reads the new rows, without waiting
+    /// for the change feed to deliver the same messages. Only in-process
+    /// cache drops; nothing here reads the database (a dropped row is read
+    /// again by the next lookup, and a snapshot behind its row is refreshed
+    /// on its next use). The change feed still applies each message in full
+    /// when it arrives.
+    ///
+    /// # Arguments
+    /// * `written` - the invalidations the request's writes queued.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn apply_own_writes(&self, written: &[crate::invalidate::Invalidation]) {
+        for invalidation in written {
+            self.directory.apply(invalidation).await;
+        }
+    }
+
     /// Drops catalog `id` from the catalog cache if `name` no longer names
     /// it (the catalog was deleted, perhaps created again under the name).
     /// A catalog that is not cached costs nothing; one that is costs one

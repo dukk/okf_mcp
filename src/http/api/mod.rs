@@ -96,6 +96,13 @@ pub(crate) fn routes(app: &Arc<App>) -> Router<Arc<App>> {
         .merge(crate::http::oidc::api_routes())
         // `route_layer` covers the routes merged above and runs only when one
         // matched, so an unknown API path stays 404 rather than 401.
+        // Innermost, around the handler only: the directory reflects the
+        // request's own writes before it answers (read-your-writes on this
+        // replica, M18 Task 8).
+        .route_layer(middleware::from_fn_with_state(
+            Arc::clone(app),
+            apply_own_writes,
+        ))
         .route_layer(middleware::from_fn(provisioner_gate))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(app),
@@ -108,6 +115,29 @@ pub(crate) fn routes(app: &Arc<App>) -> Router<Arc<App>> {
         // A plain `layer` wraps everything above, `require_principal` and
         // the fallback included, so the 401 and the 404 get these headers too.
         .layer(middleware::map_response(api_headers))
+}
+
+/// Runs the handler, collecting the invalidations its writes queued, and
+/// applies them to this replica's catalog directory before the response
+/// goes out ([`App::apply_own_writes`]): in-process cache drops only, so
+/// nothing after the commit waits on I/O.
+///
+/// # Arguments
+/// * `app` - the application.
+/// * `request` - the request.
+/// * `next` - the handler.
+///
+/// # Returns
+/// The handler's response, unchanged.
+#[tracing::instrument(level = "trace", skip_all)]
+async fn apply_own_writes(
+    axum::extract::State(app): axum::extract::State<Arc<App>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let (response, written) = crate::invalidate::capturing(next.run(request)).await;
+    app.apply_own_writes(&written).await;
+    response
 }
 
 /// Adds the headers every API response carries: never cached (keys and
@@ -336,8 +366,9 @@ pub(crate) async fn reachable_page(
         .await
 }
 
-/// Polls after an administrative change, so the key cache and the catalog
-/// list reflect it for the next request. The change has committed, so a
+/// Polls after an administrative change, so the key cache reflects it for
+/// the next request (the catalog directory is updated from the request's
+/// own invalidations: `apply_own_writes`). The change has committed, so a
 /// failed poll is logged, not returned: the poll loop retries it.
 ///
 /// # Arguments

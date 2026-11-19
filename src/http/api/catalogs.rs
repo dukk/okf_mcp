@@ -1260,10 +1260,35 @@ mod tests {
         assert!(still_there);
         assert_eq!(forced, StatusCode::OK);
         assert_eq!(deleted, json!({ "name": "main" }));
-        // The delete's change message, as this replica's listener applies it.
-        test.app.catch_up_catalogs().await;
+        // No listener runs here: the route applied its own write.
         assert!(test.app.catalog("main").await.unwrap().is_none());
         assert!(names(&test, &keys.read).await.is_empty());
+    }
+
+    /// Read-your-writes on the replica that made a write: with no change
+    /// feed listener running (none does in a unit test), a REST write's own
+    /// invalidations reach this replica's directory before it answers, so
+    /// the very next read sees the cached row replaced.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_rest_admin_write_is_seen_by_the_next_read_on_this_replica() {
+        let test = app().await;
+        let keys = keys(&test).await;
+        // Cached before the write, as a catalog in use is.
+        let before = test.app.catalog_row("main").await.unwrap().expect("main");
+        assert_ne!(before.description, "Changed through the API.");
+
+        let (status, _) = send(
+            &test,
+            "PATCH",
+            "/api/v1/catalogs/main",
+            Some(&keys.admin),
+            Some(json!({ "description": "Changed through the API." })),
+        )
+        .await;
+        let after = test.app.catalog_row("main").await.unwrap().expect("main");
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(after.description, "Changed through the API.");
     }
 
     #[tokio::test(flavor = "multi_thread")]

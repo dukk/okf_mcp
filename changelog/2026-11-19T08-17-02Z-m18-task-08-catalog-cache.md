@@ -63,6 +63,14 @@ Issue #686, part of epic #678 (milestone 18, bounded memory). Spec
 - After a lost change feed (or an M16 resubscribe), the directory is marked
   stale instead of every loaded catalog being refreshed at once.
 - Multi-replica test servers also set `catalog_ttl` to one hour.
+- A publish has the cache re-weigh its catalog on every outcome, including
+  a refusal after its preliminary refresh (review of PR #714).
+- `/api/v1` writes are read-your-writes on the replica that made them: the
+  routes collect the invalidations their writes queued
+  (`invalidate::capturing`) and drop the affected directory rows before
+  answering (`App::apply_own_writes`), instead of waiting for the change
+  feed. The operations guide's recovery text now describes the change feed
+  and `catalog_ttl` as the bounds, not `poll_interval`.
 
 ## Notes
 
