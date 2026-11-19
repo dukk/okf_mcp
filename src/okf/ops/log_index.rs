@@ -113,6 +113,10 @@ pub(crate) struct Listing<'a> {
     pub(crate) summary: &'a str,
     /// The heading to list under, if any.
     pub(crate) section: Option<&'a str>,
+    /// Count an older raw (unencoded) bullet as already listing the
+    /// concept: `index` and `repair_indexes` do; creating a concept never
+    /// does, so a new concept always gets its working, encoded listing.
+    pub(crate) accept_raw: bool,
 }
 
 /// `cmd_index` after the concept is loaded: lists it in its folder's
@@ -139,7 +143,12 @@ pub(crate) fn list_concept(
         )));
     }
     let text = workspace.read_text(&index_path)?;
-    if already_lists(workspace, &text, &index_path, listing.concept) {
+    let listed = if listing.accept_raw {
+        already_lists(workspace, &text, &index_path, listing.concept)
+    } else {
+        lists_target(workspace, &text, &index_path, listing.concept)
+    };
+    if listed {
         if !lists_target(workspace, &text, &index_path, listing.concept) {
             // Only an older raw bullet lists it: no link resolves, so say so
             // rather than append a second bullet beside it.
@@ -229,6 +238,7 @@ pub fn index(
         title,
         summary,
         section,
+        accept_raw: true,
     };
     let mut outcome = OpOutcome::default();
     let message = list_concept(workspace, &listing, &mut outcome)?;
@@ -548,6 +558,7 @@ fn repair_counted(workspace: &dyn Workspace) -> Result<(OpOutcome, usize), OkfEr
             title: &title,
             summary: about.description.as_deref().unwrap_or(CONCEPT_TODO),
             section: None,
+            accept_raw: true,
         };
         if !links_back(workspace, &index_path, &concept_bullet(&listing), concept) {
             outcome.notes.push(unlinkable_note(concept, &index_path));

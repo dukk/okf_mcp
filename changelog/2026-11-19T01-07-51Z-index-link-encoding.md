@@ -8,6 +8,7 @@
 - The `index` tool description and `docs/reference/tools.md` mention the encoding and the raw-bullet case.
 
 ## Notes
+- `create_concept` with `index_summary` never counts an old raw bullet as the listing (`Listing::accept_raw` is false there): a new concept always gets its encoded bullet. The `links_back` round-trip refusal applies to creation too.
 - A raw bullet must also have the shape older versions wrote: `* [label](destination` with the link first in the bullet, no unescaped `[` in the label. Prose, images, code spans, indented lines and unbalanced brackets never count.
 - Publish replay never counts a raw bullet as listed (it cannot see which files exist): after a concurrent change the worst case is an old broken raw bullet beside a new working one. `index`/`repair_indexes` accept a raw bullet only when its destination as written equals the target's raw name and the link the parser reads there is broken.
 - A raw bullet is recognised only when its destination holds no valid `%XX` escape and does not resolve to another existing document, so `d/a%20b.md` is never taken as listed by the bullet for `d/a b.md`. A literal-percent name with a valid-looking escape gets its own bullet (`a%2520b.md`) rather than being matched to an old raw one.

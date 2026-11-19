@@ -215,6 +215,7 @@ pub fn create_concept(
             title,
             summary,
             section: new.index_section,
+            accept_raw: false,
         };
         lines.push(list_concept(workspace, &listing, &mut outcome)?);
     }
@@ -1130,5 +1131,53 @@ mod tests {
             "n.md has no frontmatter; add it with your editor first"
         );
         assert_eq!(read(&ws, "s.md"), SET_DOC);
+    }
+
+    #[test]
+    fn create_concept_lists_with_an_encoded_bullet_beside_an_old_raw_one() {
+        // Creation never counts an older raw bullet as the listing: the new
+        // concept gets its working, encoded one (issue #453).
+        let ws = MemWorkspace::default();
+        ws.write_atomic("index.md", "# Root\n").unwrap();
+        ws.write_atomic("d/index.md", "# D\n\n# Concepts\n\n* [Old](a b.md) - old\n")
+            .unwrap();
+        let frontmatter = json!({"type": "Note", "title": "New"});
+        let new = NewConcept {
+            path: "d/a b",
+            frontmatter: frontmatter.as_object().unwrap(),
+            body: "x\n",
+            index_summary: Some("new"),
+            index_section: None,
+        };
+
+        create_concept(&ws, &ctx(), &new).unwrap();
+
+        let got = ws.read_to_string("d/index.md").unwrap();
+        assert!(got.contains("* [New](a%20b.md) - new"), "{got}");
+        assert!(got.contains("* [Old](a b.md) - old"), "{got}");
+    }
+
+    #[test]
+    fn create_concept_refuses_a_listing_that_would_not_link_back() {
+        let ws = MemWorkspace::default();
+        ws.write_atomic("index.md", "# Root\n").unwrap();
+        ws.write_atomic("d/index.md", "# D\n\n# Concepts\n")
+            .unwrap();
+        let frontmatter = json!({"type": "Note", "title": "Odd\\"});
+        let new = NewConcept {
+            path: "d/plain",
+            frontmatter: frontmatter.as_object().unwrap(),
+            body: "x\n",
+            index_summary: Some("s"),
+            index_section: None,
+        };
+
+        let error = create_concept(&ws, &ctx(), &new).unwrap_err();
+
+        assert!(matches!(error, OkfError::Refused { .. }), "{error:?}");
+        assert_eq!(
+            ws.read_to_string("d/index.md").unwrap(),
+            "# D\n\n# Concepts\n"
+        );
     }
 }
