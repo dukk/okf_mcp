@@ -119,7 +119,10 @@ async fn read(ctx: &ToolContext, path: &str, changeset: Option<&str>) -> String 
     read_document(ctx, params).await.expect("the read").text
 }
 
-/// Waits until `read` of `path` on `ctx` contains `text`.
+/// Waits (bounded by [`WAIT`]) until `read` of `path` on `ctx` contains
+/// `text`. Propagation is asynchronous and best effort: the write's answer
+/// does not wait for another replica's refresh, so these tests check that
+/// the change arrives promptly, never that the first read is fresh.
 async fn until_read(ctx: &ToolContext, path: &str, text: &str) -> bool {
     tokio::time::timeout(WAIT, async {
         while !read(ctx, path, None).await.contains(text) {
@@ -139,12 +142,12 @@ async fn stored_generation(app: &App, name: &str) -> CatalogGeneration {
     }
 }
 
-/// The acceptance criterion: a publish on A is read on B well within
-/// `poll_interval`, with no poll. The first publish lets B's subscriber
-/// finish its catch-up on subscribing, so the second can reach B only
-/// through its announcement.
+/// The acceptance criterion: a publish on A propagates to B well within
+/// `poll_interval`, with no poll (a bounded wait, not a first-read
+/// guarantee). The first publish lets B's subscriber finish its catch-up on
+/// subscribing, so the second can reach B only through its announcement.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_publish_on_one_replica_is_read_on_the_other_without_a_poll() {
+async fn a_publish_on_one_replica_propagates_to_the_other_promptly_without_a_poll() {
     let (a, b, _redis) = pair().await;
     let on_a = writer(&a, "alice", "pg").await;
     let on_b = alice_on(&b);
@@ -156,8 +159,11 @@ async fn a_publish_on_one_replica_is_read_on_the_other_without_a_poll() {
     let second = until_read(&on_b, "/index.md", "all systems").await;
     listener.stop().await;
 
-    assert!(first, "B read the first publish");
-    assert!(second, "B read the second publish through its announcement");
+    assert!(first, "the first publish reached B within the wait");
+    assert!(
+        second,
+        "the second publish reached B through its announcement"
+    );
     let stored = stored_generation(&a.app, "pg").await;
     let state = b.catalog("pg").expect("B holds pg");
     assert_eq!(state.current().generation(), stored.generation);
@@ -283,6 +289,45 @@ async fn a_read_through_a_changeset_on_a_lagging_replica_sees_its_base() {
 
     assert!(untouched.contains("- ex"), "{untouched}");
     assert!(touched.contains("all systems"), "{touched}");
+}
+
+/// The same read after a refused write on the lagging replica: the write's
+/// `get_in` builds and caches an overlay on B's old snapshot before the op
+/// fails (and returns before `forget`). The read must not reuse it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_through_a_changeset_after_a_refused_write_on_a_lagging_replica_sees_its_base() {
+    let (a, b, _redis) = pair().await;
+    let on_a = writer(&a, "alice", "pg").await;
+    let on_b = alice_on(&b);
+    let both = open(&on_a).await;
+    edit(&on_a, &both, "/index.md", "- systems", "- the systems").await;
+    edit(&on_a, &both, "/infra/index.md", "- x", "- ex").await;
+    publish_now(&on_a, &both).await;
+    let handle = open(&on_a).await;
+    edit(
+        &on_a,
+        &handle,
+        "/index.md",
+        "- the systems",
+        "- all systems",
+    )
+    .await;
+    let refused = edit_document(
+        &on_b,
+        EditDocumentParams {
+            path: "/infra/index.md".to_string(),
+            old_str: "not in the file".to_string(),
+            new_str: "anything".to_string(),
+            replace_all: false,
+            changeset: handle.clone(),
+        },
+    )
+    .await;
+
+    let untouched = read(&on_b, "/infra/index.md", Some(&handle)).await;
+
+    assert!(refused.is_err(), "the write on B is refused");
+    assert!(untouched.contains("- ex"), "{untouched}");
 }
 
 /// The invariant in `pending_changes`' response builder: a snapshot that
