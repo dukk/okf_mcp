@@ -1505,6 +1505,105 @@ mod tests {
         assert!(app.directory().resolve("later").await.unwrap().is_some());
     }
 
+    /// Every store write a directory row reflects (details, maintenance,
+    /// suspension, owner, delete) sends a message that makes the directory
+    /// reread it: each write's own messages, applied here as the listener
+    /// would, and nothing else.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn each_catalog_writers_messages_refresh_its_directory_row() {
+        use crate::invalidate::testing::invalidations_of;
+        use crate::store::audit::AuditActor;
+        use crate::store::catalogs::{DetailsChange, MaintenanceChange, Switch};
+        use crate::store::teams;
+        let db = test_db().await;
+        create_pg(&db.pool).await;
+        let app = app(&db.pool).await;
+        let cli = AuditActor::cli();
+        let row = || async { app.directory().resolve("pg").await.unwrap() };
+        // Applies what `write` sent.
+        let applied = |sent: Vec<crate::invalidate::Invalidation>| async {
+            for invalidation in sent {
+                app.apply(&message(invalidation)).await;
+            }
+        };
+        assert!(row().await.is_some_and(|row| !row.maintenance_off));
+
+        let details = DetailsChange {
+            catalog: "pg",
+            display_name: None,
+            description: Some("Notes."),
+            owner: None,
+        };
+        applied(
+            invalidations_of(&db.pool, async {
+                catalogs::update_details(&db.pool, &details, &cli, Utc::now())
+                    .await
+                    .unwrap();
+            })
+            .await,
+        )
+        .await;
+        assert_eq!(row().await.unwrap().description, "Notes.");
+
+        let off = MaintenanceChange {
+            catalog: "pg",
+            to: Switch::Off,
+            owner: None,
+        };
+        applied(
+            invalidations_of(&db.pool, async {
+                catalogs::set_maintenance(&db.pool, &off, &cli, Utc::now())
+                    .await
+                    .unwrap();
+            })
+            .await,
+        )
+        .await;
+        assert!(row().await.unwrap().maintenance_off);
+
+        applied(
+            invalidations_of(&db.pool, async {
+                teams::suspend(&db.pool, crate::db::TEST_TEAM, None, &cli, Utc::now())
+                    .await
+                    .unwrap();
+            })
+            .await,
+        )
+        .await;
+        assert!(row().await.unwrap().suspended.is_some());
+
+        let other = crate::store::users::NewUser {
+            name: "bob",
+            display_name: &crate::labels::DisplayName::default(),
+        };
+        crate::store::users::create(&db.pool, &other, &cli, Utc::now())
+            .await
+            .unwrap();
+        applied(
+            invalidations_of(&db.pool, async {
+                catalogs::set_owner(&db.pool, "pg", "bob", &cli, Utc::now())
+                    .await
+                    .unwrap();
+            })
+            .await,
+        )
+        .await;
+        let moved = row().await.unwrap();
+        assert_eq!(moved.owner_team.as_deref(), Some("bob"));
+        assert!(moved.suspended.is_none(), "bob's team is not suspended");
+
+        applied(
+            invalidations_of(&db.pool, async {
+                catalogs::delete(&db.pool, "pg", false, &cli, Utc::now())
+                    .await
+                    .unwrap();
+            })
+            .await,
+        )
+        .await;
+        assert!(row().await.is_none());
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_credential_invalidation_reloads_the_key_cache() {
         use crate::invalidate::Invalidation;

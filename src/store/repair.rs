@@ -21,6 +21,7 @@ use serde::Serialize;
 use sqlx::PgPool;
 
 use crate::error::OkfError;
+use crate::invalidate::{invalidate, Invalidation};
 use crate::okf::ops::{repair_catalog, OpContext, OpOutcome};
 use crate::okf::rules;
 use crate::okf::snapshot::Snapshot;
@@ -164,6 +165,14 @@ pub async fn repair(
             }),
         },
         options.now,
+    )
+    .await?;
+    invalidate(
+        &mut tx,
+        &[Invalidation::Catalog {
+            id: found.id,
+            generation,
+        }],
     )
     .await?;
     tx.commit().await?;

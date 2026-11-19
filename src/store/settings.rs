@@ -54,8 +54,8 @@ use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::config::{check_auth_duration, AuthConfig, MAX_KEYS_PER_USER_LIMIT};
 use crate::error::OkfError;
+use crate::invalidate::{invalidate, Invalidation};
 use crate::store::audit::{self, Action, AuditActor, Entry, Target, Via};
-use crate::store::catalogs::bump_admin_generation;
 use crate::store::unlocks;
 use crate::telemetry::subscriber::split_event;
 
@@ -818,14 +818,15 @@ pub async fn set(
     // writes queue here, and the read below (a new statement, under READ
     // COMMITTED) sees the one before, even when it inserted the row
     // `FOR UPDATE` alone could not lock.
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::Settings]).await?;
     let previous: Option<Value> =
         sqlx::query_scalar("SELECT value FROM server_settings WHERE key = $1 FOR UPDATE")
             .bind(key.as_str())
             .fetch_optional(&mut *tx)
             .await?;
     if previous.as_ref() == Some(&json) {
-        // Unchanged: dropping `tx` rolls the generation bump back.
+        // Unchanged: dropping `tx` rolls the generation bump back, and
+        // its `NOTIFY` is never sent.
         return Ok(());
     }
     sqlx::query(
@@ -891,7 +892,7 @@ pub async fn reset(
     // or `users::set_admin` queue instead of each holding a row the other
     // waits on (a deadlock).
     audit::lock_people(&mut tx, actor, &audit::People::default()).await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::Settings]).await?;
     // `RETURNING value`: the deleted override, for the entry.
     let deleted: Option<Value> =
         sqlx::query_scalar("DELETE FROM server_settings WHERE key = $1 RETURNING value")
@@ -899,7 +900,7 @@ pub async fn reset(
             .fetch_optional(&mut *tx)
             .await?;
     // `let ... else`: no override, nothing to record; dropping `tx` rolls
-    // the generation bump back.
+    // the generation bump back, and its `NOTIFY` is never sent.
     let Some(from) = deleted else {
         return Ok(());
     };
@@ -2008,7 +2009,9 @@ mod tests {
         // can neither see nor wait on a row inserted by an uncommitted
         // transaction, and would record `from: null`.
         let mut holder = db.pool.begin().await.unwrap();
-        bump_admin_generation(&mut holder).await.unwrap();
+        invalidate(&mut holder, &[Invalidation::Settings])
+            .await
+            .unwrap();
         sqlx::query(
             "INSERT INTO server_settings (key, value, updated_at, updated_by) \
              VALUES ($1, $2, $3, 'carol')",

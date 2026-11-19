@@ -16,10 +16,10 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgPool};
 
 use crate::error::OkfError;
+use crate::invalidate::{invalidate, Invalidation};
 use crate::keys;
 use crate::maintenance::types::new_id;
 use crate::store::audit::{self, Action, AuditActor, Entry, Target};
-use crate::store::catalogs::bump_admin_generation;
 use crate::store::ceiling;
 use crate::store::keys::{resolve_grants, Access, Grants};
 use crate::store::oauth::clients::ClientRecord;
@@ -312,7 +312,7 @@ pub async fn create_self_issued(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::credential(&grant_id)]).await?;
     tx.commit().await?;
     Ok(grant_id)
 }
