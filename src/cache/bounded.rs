@@ -938,6 +938,66 @@ mod tests {
         );
     }
 
+    /// Loads `0..keys` into `cache`, lets moka evict, then asks for every
+    /// key again and returns how many of the second requests had to load.
+    async fn reloads_after_filling(cache: &Bounded<i64, i64>, keys: i64) -> usize {
+        for key in 0..keys {
+            cache
+                .get_or_load(key, || async move { Ok(key) })
+                .await
+                .unwrap();
+            // Moka admits and evicts asynchronously: settle as we go so the
+            // cache is full of its limit, not of what is still queued.
+            cache.settle().await;
+        }
+        let reloads = AtomicUsize::new(0);
+        for key in 0..keys {
+            cache
+                .get_or_load(key, || async {
+                    reloads.fetch_add(1, Ordering::SeqCst);
+                    Ok(key)
+                })
+                .await
+                .unwrap();
+        }
+        reloads.load(Ordering::SeqCst)
+    }
+
+    #[tokio::test]
+    async fn an_entry_count_limit_evicts_to_the_limit() {
+        // Without a `max_capacity` nothing is evicted and this fails.
+        let cache = Bounded::<i64, i64>::new(CacheName::Directory, Limit::Entries(5), TTL);
+        let reloads = reloads_after_filling(&cache, 50).await;
+        cache.settle().await;
+        assert!(
+            cache.cache.entry_count() <= 5,
+            "{}",
+            cache.cache.entry_count()
+        );
+        assert!(reloads > 0, "at least one evicted key reloads");
+    }
+
+    #[tokio::test]
+    async fn a_byte_limit_evicts_to_the_budget_and_counts_size_evictions() {
+        let (_provider, metrics, registry) = local_metrics();
+        let cache = Bounded::<i64, i64>::new(CacheName::Catalog, Limit::Bytes(100), TTL)
+            .with_weigher(|_, _| 10)
+            .with_metrics(metrics);
+        let reloads = reloads_after_filling(&cache, 50).await;
+        cache.settle().await;
+        assert!(
+            cache.cache.weighted_size() <= 100,
+            "{}",
+            cache.cache.weighted_size()
+        );
+        assert!(reloads > 0, "at least one evicted key reloads");
+        let text = render(&registry);
+        assert!(
+            text.contains(r#"okf_cache_evictions_total{cache="catalog",cause="size"}"#),
+            "no size eviction counted in\n{text}"
+        );
+    }
+
     #[tokio::test]
     async fn entries_expire_after_the_ttl() {
         // moka reads the real clock, so this test cannot pause tokio's.
