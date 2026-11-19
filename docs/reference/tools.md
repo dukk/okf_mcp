@@ -19,13 +19,16 @@ How a session usually goes:
   edit, `publish`, `discard`, `revert` and `pending_changes`. Reads take it too, to see the
   drafts. Nothing is visible to others until `publish`.
 
-A tool is one of four kinds:
+A tool is one of five kinds:
 
 - read-only: it changes nothing.
 - staged: it adds an entry to a changeset, which `discard` drops and `publish` applies.
 - maintenance: a step in a maintenance run (claim, renew, submit, dispose). It takes no
   changeset and is saved at once, so `discard` does not undo it; it never touches a concept.
 - destructive: it deletes, or cannot be undone from inside the server.
+- external: it sends something to a service outside the server (`send_feedback`, offered
+  only when the operator configured it). It changes no catalog.
+
 | Tool | Title | Kind |
 |---|---|---|
 | [`add_source`](#add_source) | Add Source | staged |
@@ -65,6 +68,7 @@ A tool is one of four kinds:
 | [`revert`](#revert) | Revert Document | staged |
 | [`review`](#review) | Record Review | staged |
 | [`search`](#search) | Search Concepts | read-only |
+| [`send_feedback`](#send_feedback) | Send Feedback | external |
 | [`set_frontmatter`](#set_frontmatter) | Set Frontmatter | staged |
 | [`split_concept`](#split_concept) | Split Concept | staged |
 | [`sprawl`](#sprawl) | Sprawl Report | read-only |
@@ -538,6 +542,20 @@ Search concepts across this connection's catalogs (or `catalogs`). Every term of
 | `status` | string | no | Only concepts with this `status` (case-insensitive; a missing status counts as `stable`). |
 | `limit` | integer | no | At most this many hits (default 20, at most 200; 0 returns none). |
 | `changeset` | string | no | Read through this changeset's drafts (its handle); its catalog must be one this call reads. |
+
+## `send_feedback`
+
+**Send Feedback** (external)
+
+Send feedback about using Telekin (something confusing, broken, missing or good) to Telekin's team. The feedback goes to Telekin's team through a third-party form service (Forminit). Ask the user before including catalog content, personal details or anything the user hasn't agreed to share. When the user asks you to send feedback, send the user's own words and set `from` to `user`; when you report your own experience, set `from` to `agent`. What is sent: message, kind, from, tool, rating, the server version, your MCP client's name, the credential kind (api_key or oauth), the feedback's id and your user name as the sender's userId. No email, display name, key name, token or catalog content is sent unless it is in the message. A message is at most 4,000 characters, and each credential may send a limited number per hour (10 by default). Returns the feedback's id at once; delivery happens in the background.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `message` | string | yes | The feedback, in the user's or the agent's own words (at most 4,000 characters). |
+| `kind` | string | no | What it is about: `bug`, `confusing`, `missing`, `praise` or `other` (default `other`). |
+| `from` | string | no | `user` (the person asked for it to be sent) or `agent` (the agent reports its own experience); default `agent`. |
+| `tool` | string | no | The tool the feedback is about, if any (`publish`). |
+| `rating` | integer | no | A rating from 1 to 5, if any. |
 
 ## `set_frontmatter`
 

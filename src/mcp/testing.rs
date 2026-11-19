@@ -980,9 +980,31 @@ impl McpProbe {
     /// # Panics
     /// If the answer is not a JSON-RPC message: a broken test setup.
     pub(crate) async fn call(&self, tool: &str, arguments: serde_json::Value) -> serde_json::Value {
+        self.request(
+            "tools/call",
+            serde_json::json!({"name": tool, "arguments": arguments}),
+        )
+        .await
+    }
+
+    /// Sends one JSON-RPC request with id 2 and returns its answer.
+    ///
+    /// # Arguments
+    /// * `method` - the method (`tools/list`).
+    /// * `params` - its params.
+    ///
+    /// # Returns
+    /// The JSON-RPC answer (`result` or `error`).
+    ///
+    /// # Panics
+    /// If the answer is not a JSON-RPC message: a broken test setup.
+    pub(crate) async fn request(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> serde_json::Value {
         let body = serde_json::json!({
-            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
-            "params": {"name": tool, "arguments": arguments}
+            "jsonrpc": "2.0", "id": 2, "method": method, "params": params
         });
         let text = Self::post(
             &self.client,
