@@ -787,6 +787,212 @@ pub async fn find<'e>(executor: impl PgExecutor<'e>, name: &str) -> Result<Catal
         })
 }
 
+/// An owner team's suspension, as the directory holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SuspendedRow {
+    /// The owner team's name.
+    pub team: String,
+    /// Its notice, if any.
+    pub notice: Option<String>,
+}
+
+/// A catalog's row with its access facts (M18 spec Decisions 6 and 9): what a
+/// request needs to know about a catalog without reading its content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogRow {
+    /// `catalogs.id`, never reused.
+    pub id: i64,
+    /// Unique name, `[a-z0-9-]+`.
+    pub name: String,
+    /// Its display name; empty when unset.
+    pub display_name: String,
+    /// Free text.
+    pub description: String,
+    /// Bumped by every publish and import.
+    pub generation: i64,
+    /// The owner team's name.
+    pub owner_team: Option<String>,
+    /// The owner team's id (`teams.id`).
+    pub owner_team_id: Option<String>,
+    /// The owner team's suspension, if it is suspended.
+    pub suspended: Option<SuspendedRow>,
+    /// `NOT catalogs.maintenance`.
+    pub maintenance_off: bool,
+    /// The owner team's `audit_teams.id` (the gates' `CatalogScope::team`).
+    pub audit_team: Option<i64>,
+}
+
+/// [`CatalogRow`] as the query returns it: the suspension as two columns.
+#[derive(sqlx::FromRow)]
+struct CatalogRowColumns {
+    id: i64,
+    name: String,
+    display_name: String,
+    description: String,
+    generation: i64,
+    owner_team: Option<String>,
+    owner_team_id: Option<String>,
+    suspended: bool,
+    suspension_notice: Option<String>,
+    maintenance_off: bool,
+    audit_team: Option<i64>,
+}
+
+impl From<CatalogRowColumns> for CatalogRow {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    fn from(columns: CatalogRowColumns) -> Self {
+        // The same rule as `teams::suspended_catalogs`: a suspended owner.
+        let suspended = columns
+            .suspended
+            .then(|| columns.owner_team.clone())
+            .flatten()
+            .map(|team| SuspendedRow {
+                team,
+                notice: columns.suspension_notice,
+            });
+        Self {
+            id: columns.id,
+            name: columns.name,
+            display_name: columns.display_name,
+            description: columns.description,
+            generation: columns.generation,
+            owner_team: columns.owner_team,
+            owner_team_id: columns.owner_team_id,
+            suspended,
+            maintenance_off: columns.maintenance_off,
+            audit_team: columns.audit_team,
+        }
+    }
+}
+
+// The directory's SELECT, shared by the three queries below. The owner,
+// suspension, maintenance and audit-team columns are the ones
+// `teams::suspended_catalogs` and `gates::load` read, so a row holds the
+// values the key cache holds today.
+macro_rules! select_catalog_rows {
+    () => {
+        "SELECT c.id, c.name, c.display_name, c.description, c.generation, \
+                t.name AS owner_team, c.owner_team_id, \
+                (t.suspended_at IS NOT NULL) AS suspended, t.suspension_notice, \
+                NOT c.maintenance AS maintenance_off, a.id AS audit_team \
+         FROM catalogs c \
+         LEFT JOIN teams t ON t.id = c.owner_team_id \
+         LEFT JOIN audit_teams a ON a.team_id = c.owner_team_id"
+    };
+}
+
+/// The row of the catalog called `name`, with its access facts.
+///
+/// # Arguments
+/// * `executor` - a pool, connection or transaction.
+/// * `name` - the catalog's name; a malformed one (which Postgres might
+///   refuse, such as one with a NUL) is the same as an unknown one.
+///
+/// # Returns
+/// Its row, or `None` if there is no such catalog.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.row_by_name"))]
+pub async fn row_by_name<'e>(
+    executor: impl PgExecutor<'e>,
+    name: &str,
+) -> Result<Option<CatalogRow>, OkfError> {
+    if !is_valid_name(name) {
+        return Ok(None);
+    }
+    let row = sqlx::query_as::<_, CatalogRowColumns>(concat!(
+        select_catalog_rows!(),
+        " WHERE c.name = $1"
+    ))
+    .bind(name)
+    .fetch_optional(executor)
+    .await?;
+    Ok(row.map(CatalogRow::from))
+}
+
+/// The rows of the catalogs called `names`, in one query.
+///
+/// # Arguments
+/// * `executor` - a pool, connection or transaction.
+/// * `names` - catalog names; malformed ones and ones that do not exist are
+///   left out of the answer.
+///
+/// # Returns
+/// The rows found, ordered by name.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.rows_by_names"))]
+pub async fn rows_by_names<'e>(
+    executor: impl PgExecutor<'e>,
+    names: &[String],
+) -> Result<Vec<CatalogRow>, OkfError> {
+    // Drop what Postgres could not take (a NUL) or cannot match.
+    let valid: Vec<&str> = names
+        .iter()
+        .map(String::as_str)
+        .filter(|name| is_valid_name(name))
+        .collect();
+    if valid.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query_as::<_, CatalogRowColumns>(concat!(
+        select_catalog_rows!(),
+        " WHERE c.name = ANY($1) ORDER BY c.name"
+    ))
+    .bind(valid)
+    .fetch_all(executor)
+    .await?;
+    Ok(rows.into_iter().map(CatalogRow::from).collect())
+}
+
+/// One page of catalog rows, ordered by name.
+///
+/// # Arguments
+/// * `executor` - a pool, connection or transaction.
+/// * `after` - the last name of the previous page (exclusive); `None` for
+///   the first page.
+/// * `limit` - the most rows to return.
+///
+/// # Returns
+/// Up to `limit` rows, ordered by name.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.page"))]
+pub async fn page<'e>(
+    executor: impl PgExecutor<'e>,
+    after: Option<&str>,
+    limit: i64,
+) -> Result<Vec<CatalogRow>, OkfError> {
+    // A cursor Postgres cannot take (a NUL) can match nothing, so it is the
+    // end of the list.
+    if after.is_some_and(|name| name.contains('\0')) {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query_as::<_, CatalogRowColumns>(concat!(
+        select_catalog_rows!(),
+        " WHERE ($1::text IS NULL OR c.name > $1) ORDER BY c.name LIMIT $2"
+    ))
+    .bind(after)
+    .bind(limit)
+    .fetch_all(executor)
+    .await?;
+    Ok(rows.into_iter().map(CatalogRow::from).collect())
+}
+
+// Its own file: the directory's queries are tested away from `tests` below.
+#[cfg(test)]
+#[path = "catalogs_rows_tests.rs"]
+mod rows_tests;
+
 /// Deletes a catalog with its documents, history, changesets and grants
 /// (cascading foreign keys), under the catalog's lock, and bumps the
 /// administrative generation, in one transaction.

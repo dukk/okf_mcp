@@ -3,6 +3,7 @@
 //! loads, per-key invalidation epochs and stale marking.
 
 pub mod bounded;
+pub mod directory;
 
 pub use bounded::{Bounded, CacheName, Limit};
 
