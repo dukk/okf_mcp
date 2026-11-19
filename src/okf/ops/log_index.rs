@@ -160,16 +160,8 @@ pub(crate) fn list_concept(
         }
         return Ok(format!("{index_path}: already lists {}", listing.concept));
     }
+    require_link_back(workspace, &index_path, listing)?;
     let bullet = concept_bullet(listing);
-    // The #432 round trip: never write a bullet that no later run would
-    // read back as a listing of the concept.
-    if !links_back(workspace, &index_path, &bullet, listing.concept) {
-        return Err(refused(format!(
-            "no markdown link to /{} can be written in /{index_path} (its title or path cannot be \
-             escaped); list it by editing the index",
-            listing.concept
-        )));
-    }
     let updated = insert_index_bullet_text(&text, &bullet, listing.section, false)
         .ok_or_else(|| missing_heading(&index_path, listing.section.unwrap_or("")))?;
     workspace.write_atomic(&index_path, &updated)?;
@@ -184,6 +176,39 @@ pub(crate) fn list_concept(
         },
     );
     Ok(message)
+}
+
+/// The #432 round trip: refuses a listing whose bullet no later run would
+/// read back as a listing of the concept (a label that cannot be written).
+/// `list_concept` runs it before writing; `create_concept` runs it before
+/// it writes anything.
+///
+/// # Arguments
+/// * `workspace` - the catalog.
+/// * `index_path` - the folder index the bullet would go in.
+/// * `listing` - what would be listed.
+///
+/// # Errors
+/// [`OkfError::Refused`] when the bullet does not link back.
+#[tracing::instrument(level = "trace", skip_all)]
+pub(crate) fn require_link_back(
+    workspace: &dyn Workspace,
+    index_path: &str,
+    listing: &Listing<'_>,
+) -> Result<(), OkfError> {
+    if links_back(
+        workspace,
+        index_path,
+        &concept_bullet(listing),
+        listing.concept,
+    ) {
+        return Ok(());
+    }
+    Err(refused(format!(
+        "no markdown link to /{} can be written in /{index_path} (its title or path cannot be \
+         escaped); list it by editing the index",
+        listing.concept
+    )))
 }
 
 /// The bullet [`list_concept`] writes: `* [<title>](<file name>) - <summary>`,
