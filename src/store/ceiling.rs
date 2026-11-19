@@ -406,7 +406,7 @@ pub fn is_valid_prefix(prefix: &str) -> bool {
 
 /// One page of a user's ceiling (issue #736): the catalogs whose names
 /// start with `prefix`, after `after`, in byte order, at most `limit`, each
-/// at the level [`ceiling_of`] gives it. Walking the pages (each `next` as
+/// at the level `ceiling_of` gives it. Walking the pages (each `next` as
 /// the following `after`) visits exactly the whole ceiling's entries with
 /// that prefix, once each, but no request reads more than a page per owner
 /// team: it is what `GET /me/ceiling`, `GET /me` and the consent page read
@@ -452,9 +452,7 @@ pub async fn page(
     let more = rows.len() > limit as usize;
     // `take` keeps the page; the extra row only said that one follows.
     let entries: Ceiling = one_ceiling(rows.into_iter().take(limit as usize).collect());
-    let next = more
-        .then(|| entries.keys().next_back().cloned())
-        .flatten();
+    let next = more.then(|| entries.keys().next_back().cloned()).flatten();
     Ok(CeilingPage { entries, next })
 }
 
@@ -1795,12 +1793,18 @@ mod tests {
 
         assert_eq!(first.entries.len(), 100);
         assert_eq!(first.next.as_deref(), Some("c000100"));
-        assert_eq!(later.entries.keys().next().map(String::as_str), Some("c025001"));
+        assert_eq!(
+            later.entries.keys().next().map(String::as_str),
+            Some("c025001")
+        );
         assert_eq!(found.entries.len(), 100);
         assert!(found.entries.keys().all(|name| name.starts_with("c0499")));
         for (prefix, after) in [("", ""), ("", "c025000"), ("c0499", ""), ("zz", "")] {
             let (rows, plan) = examined(prefix, after).await;
-            assert!(rows < 1_000.0, "{prefix:?} after {after:?}: {rows} rows: {plan:#}");
+            assert!(
+                rows < 1_000.0,
+                "{prefix:?} after {after:?}: {rows} rows: {plan:#}"
+            );
         }
     }
 }

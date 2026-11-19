@@ -15,9 +15,6 @@ pub(crate) use pg_support as pg;
 #[cfg(test)]
 #[path = "../tests/support/redis.rs"]
 pub(crate) mod redis_support;
-#[cfg(test)]
-#[path = "db_rows_returned.rs"]
-pub(crate) mod rows_returned;
 
 /// The schema migrations in `migrations/`, embedded at compile time.
 // `migrate!` reads the directory while compiling (`build.rs` makes cargo

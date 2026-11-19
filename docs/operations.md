@@ -3361,8 +3361,8 @@ key and acts only on the signed-in user's own rows. Every endpoint also takes a 
 
 | Method and path | Key | Does |
 |---|---|---|
-| `GET /api/v1/whoami` | any | The calling credential: `key_id`, `name`, `actor`, `access`, `maintenance_report`, `all_catalogs`, `catalogs` (one page of the catalogs it reaches, sorted; see [Catalog listings are paginated](#catalog-listings-are-paginated)) with `next`, `default_catalog`, `kind` (`key`, `oauth` or `session`), `client_name` (a grant's client), `user` (the user it belongs to, `null` when unassigned), `teams` (that user's teams, sorted) and `user_admin` (whether that user is an admin user, `false` without one; the console offers Unlock only when it is true). A session's `key_id` is `session:<user>`, its `name` `null` and its `actor` the user's name. Never a key, token or hash |
-| `GET /api/v1/session` | console session | `{user, email, admin, csrf, ceiling, expires_at}`: the signed-in user's name, email and admin flag, the CSRF token writes must send as `X-OKF-CSRF`, the ceiling (`{catalog: "read"\|"write"}`) and when the session ends at the latest. 401 without a usable session (a dead cookie is cleared); a bearer credential gets 403 |
+| `GET /api/v1/whoami` | any | The calling credential: `key_id`, `name`, `actor`, `access`, `maintenance_report`, `all_catalogs`, `catalogs` (one page of the catalogs it reaches, sorted; see [Catalog listings are paginated](#catalog-listings-are-paginated)) with `next`, `levels` (its level on each catalog of the page, `{catalog: "read"\|"write"\|"admin"}`: for a console session the ceiling's level there, resolved per catalog), `default_catalog`, `kind` (`key`, `oauth` or `session`), `client_name` (a grant's client), `user` (the user it belongs to, `null` when unassigned), `teams` (that user's teams, sorted) and `user_admin` (whether that user is an admin user, `false` without one; the console offers Unlock only when it is true). A session's `key_id` is `session:<user>`, its `name` `null` and its `actor` the user's name. Never a key, token or hash |
+| `GET /api/v1/session` | console session | `{user, email, admin, csrf, expires_at}`: the signed-in user's name, email and admin flag, the CSRF token writes must send as `X-OKF-CSRF`, and when the session ends at the latest. It holds no ceiling (issue #736): the session's level on each catalog is in `GET /api/v1/whoami`'s `levels`, and `GET /api/v1/me/ceiling` pages the ceiling. 401 without a usable session (a dead cookie is cleared); a bearer credential gets 403 |
 | `DELETE /api/v1/session` | console session | Signs out: deletes the session and clears the cookie; 204. Needs `X-OKF-CSRF` (403 without); a bearer credential gets 403 |
 
 ```sh
@@ -3499,12 +3499,13 @@ does. Limits are in [Signing in and self-service](#signing-in-and-self-service).
 
 | Method and path | Key | Does |
 |---|---|---|
-| `GET /api/v1/me` | console session, or a key that belongs to a user | `{user, display_name, email, admin, has_password, teams, owned_teams, ceiling, session, password_sign_in, limits}`: `owned_teams` are the teams the user owns, sorted, its personal team included (whose audit log its console session can read); `ceiling` is `[{catalog, access}]`, `session` says whether a console session asked, and `limits` is `{max_keys_per_user, max_key_lifetime_secs}` (`null` for no lifetime limit). 404 for a key without a user |
-| `GET /api/v1/me/keys` | console session | `{keys}`: the user's keys, revoked and expired ones included, as `GET /api/v1/keys` shows them (with `catalog_access`, `expires_at`, `self_issued`) |
+| `GET /api/v1/me` | console session, or a key that belongs to a user | `{user, display_name, email, admin, has_password, teams, owned_teams, ceiling_access, session, password_sign_in, limits}`: `owned_teams` are the teams the user owns, sorted, its personal team included (whose audit log its console session can read); `ceiling_access` is the ceiling's highest level (`read` or `write`, `null` when it reaches no catalog; the ceiling itself is paged by `GET /api/v1/me/ceiling`), `session` says whether a console session asked, and `limits` is `{max_keys_per_user, max_key_lifetime_secs}` (`null` for no lifetime limit). 404 for a key without a user |
+| `GET /api/v1/me/ceiling` | console session, or a key that belongs to a user | `?prefix=&after=&limit=`: one page of the user's ceiling, `{ceiling: [{catalog, access}], next}`, by catalog name in byte order; `prefix` (trimmed, lowercased) keeps the names that start with it, and one no name can start with finds nothing; `next` is present when more follow (send it back as `after`); `limit` is 100 by default, at most 1000. Each page is one bounded read: no request reads the whole ceiling. 400 for a malformed `after`, 404 for a key without a user |
+| `GET /api/v1/me/keys` | console session | `{keys, ceiling}`: the user's keys, revoked and expired ones included, as `GET /api/v1/keys` shows them (with `catalog_access`, `expires_at`, `self_issued`), and the ceiling on the catalogs its live self-issued keys name (`{catalog: "read"\|"write"}`; a catalog left out is outside it) |
 | `POST /api/v1/me/keys` | console session | Body `{name, catalogs: [{catalog, access}], default_catalog, actor, expires_at}` (`actor` defaults to `name`; `expires_at` RFC 3339, and absent means the lifetime limit, or none). Answers `{key, secret}`, the secret once. 400 for no catalogs, a repeated catalog, an unknown level, or a malformed or past expiry; 409 for a bad or taken name or a default that is not one of `catalogs`; 422 above the ceiling (`admin` included), past the key limit or the lifetime limit (`limit` is `ceiling`, `max_keys_per_user` or `max_key_lifetime`), or for an unknown field such as `all`, `user` or `maintenance_report` |
 | `PATCH /api/v1/me/keys/{id}` | console session | Body `{name}`. Renames a live key; answers its view. 409 for a bad or taken name or a revoked key |
 | `DELETE /api/v1/me/keys/{id}` | console session | Revokes it (the row stays, revoked); answers its view. 409 if already revoked |
-| `GET /api/v1/me/grants` | console session | `{grants}`: the user's OAuth grants, revoked ones included, as key views (`client_name`, `catalog_access`, `self_issued`, `revoked_at`, ...) |
+| `GET /api/v1/me/grants` | console session | `{grants, ceiling}`: the user's OAuth grants, revoked ones included, as key views (`client_name`, `catalog_access`, `self_issued`, `revoked_at`, ...), and the ceiling on the catalogs its live self-issued grants name, as for `/me/keys` |
 | `DELETE /api/v1/me/grants/{id}` | console session | Revokes the grant and every token it holds; its client is refused from its next request. Answers its view; 409 if already revoked |
 | `PUT /api/v1/me/password` | console session | Body `{current_password, new_password, keep_sessions}` (`current_password` required while the user has a password). 204. 403 for a wrong current password, a locked account or a password changed meanwhile (never 401, which the console would read as signed out); 401 once this session has ended; 422 for the policy (`limit: "password"`). Signs the other sessions out unless `keep_sessions`, and queues the notice, in the same transaction |
 | `GET /api/v1/me/passkeys` | console session | `{passkeys}`, oldest first: `id` (unpadded base64url), `name`, `created_at`, `last_used_at` |
@@ -3917,8 +3918,11 @@ A person connecting a client signs in on the consent page with their
 account: `/oauth/authorize` sends them to `/signin` first, after checking the
 client and its redirect URI. Under **Advanced Options** they tick catalogs,
 choose `read` or `write` for each within their ceiling, pick a default and
-approve. With several catalogs to offer, Advanced Options starts open and
-nothing is preselected. With exactly one it starts closed, with that catalog
+approve. The page offers their ceiling 50 catalogs at a time: **Find** shows
+the catalogs whose name starts with what they type, and **Next catalogs** the
+50 after those shown; both keep what is ticked (at most 50 catalogs), at the
+ceiling's level now. With several catalogs to offer, Advanced Options starts open and
+nothing is preselected. With exactly one catalog in their whole ceiling it starts closed, with that catalog
 ticked, at `write` if their ceiling allows it (else `read`), and as the
 default; the page says so above the form, so approving as shown grants
 exactly that. Opening Advanced Options changes it. The grant is
@@ -4376,7 +4380,8 @@ take the server out of service. Alert on the `error` log line, not on
 
 - **Bounded memory (milestone 18; 0.23.0)** adds migrations
   `0023_audit_backfill.sql`, `0024_cluster_stats.sql`,
-  `0025_catalogs_member_reach.sql` and `0026_catalogs_member_write.sql`, and an older
+  `0025_catalogs_member_reach.sql`, `0026_catalogs_member_write.sql` and
+  `0027_catalogs_member_reach_bytes.sql`, and an older
   binary refuses the migrated database. The migrations run before the new
   binary serves. Old and new replicas can run together
   during a rolling deploy: a milestone 18 server bridges both ways (it still
@@ -4384,9 +4389,11 @@ take the server out of service. Alert on the `error` log line, not on
   `admin-generation` channel, and it treats a milestone 16 announcement as
   "mark the caches stale"). The bridge and the deprecated settings go in the
   release after this one. What changes for operators:
-  - **Two indexes are built concurrently.** `0025` and `0026` add partial
-    indexes on `catalogs` (a console session's catalogs, listed a page at a
-    time per owner team, and its owner teams' writable catalogs) with
+  - **Three indexes are built concurrently.** `0025`, `0026` and `0027` add
+    partial indexes on `catalogs` (a console session's catalogs, listed a
+    page at a time per owner team; its owner teams' writable catalogs; and
+    the same catalogs by name in byte order, which `GET /api/v1/me/ceiling`
+    and the consent page page and find by a name prefix) with
     `CREATE INDEX CONCURRENTLY`, so the replicas still serving keep writing
     catalogs while they build; on a large database the build takes a while
     and waits for transactions already open on `catalogs`. If a build fails
@@ -4418,6 +4425,28 @@ take the server out of service. Alert on the `error` log line, not on
     `GET /whoami` lists every reachable name without loading any catalog;
     `GET /catalogs` and `list_catalogs` leave out a catalog whose data does
     not build.
+  - **No answer holds a whole ceiling (issue #736).** A user's ceiling grows
+    with the catalogs their teams own, so it is paged now:
+    - `GET /api/v1/session` no longer has `ceiling`. A console session's
+      level on a catalog is in `GET /api/v1/whoami`'s new `levels`
+      (`{catalog: "read"|"write"|"admin"}` for the catalogs on that page).
+    - `GET /api/v1/me` no longer has `ceiling` (it was `[{catalog,
+      access}]`); `ceiling_access` (`"read"`, `"write"`, or `null` for an
+      empty ceiling) names its highest level. The new `GET
+      /api/v1/me/ceiling?prefix=&after=&limit=` pages it: `{ceiling:
+      [{catalog, access}], next}`, by name in byte order, `prefix` for the
+      names starting with it.
+    - `GET /api/v1/me/keys` and `GET /api/v1/me/grants` gain `ceiling`: the
+      ceiling on the catalogs their live self-issued credentials name, for
+      cap notes.
+    - The OAuth consent page offers 50 catalogs at a time, with Find (by
+      the start of a catalog's name) and Next catalogs, which keep what is
+      ticked (at most 50 ticked catalogs carry over).
+
+    What clients must change: a script that read `ceiling` from `/session`
+    or `/me` reads `GET /me/ceiling` page by page (follow `next` as
+    `after`), or `whoami`'s `levels` for the catalogs it lists. The console
+    shipped with the server is already changed.
   - **Metrics removed:** `okf_poll_duration_seconds`,
     `okf_catalog_refreshes_total`, `okf_catalog_concepts` and
     `okf_catalog_generation` (and the `okf.poll` span). Added: the

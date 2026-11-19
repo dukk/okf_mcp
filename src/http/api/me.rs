@@ -871,11 +871,8 @@ async fn account_view(app: &App, principal: &Principal) -> Result<AccountView, O
     };
     // `try_join!` runs the three reads at once (as `asyncio.gather` would)
     // and returns the first error, if any.
-    let (record, ceiling_access, owned) = tokio::try_join!(
-        users::find(app.pool(), name),
-        ceiling_access,
-        owned_teams,
-    )?;
+    let (record, ceiling_access, owned) =
+        tokio::try_join!(users::find(app.pool(), name), ceiling_access, owned_teams,)?;
     let policy = app.settings();
     let label = user_label(&record.display_name, record.email.as_deref());
     let owned_teams = owned.iter().map(|team| team.name.clone()).collect();
@@ -2181,11 +2178,21 @@ mod tests {
             .await
             .parts();
         let (_, found) = alice
-            .send(&test, "GET", "/api/v1/me/ceiling?prefix=%20OT", Payload::Empty)
+            .send(
+                &test,
+                "GET",
+                "/api/v1/me/ceiling?prefix=%20OT",
+                Payload::Empty,
+            )
             .await
             .parts();
         let (_, nothing) = alice
-            .send(&test, "GET", "/api/v1/me/ceiling?prefix=no%00pe", Payload::Empty)
+            .send(
+                &test,
+                "GET",
+                "/api/v1/me/ceiling?prefix=no%00pe",
+                Payload::Empty,
+            )
             .await
             .parts();
         let (bad_status, _) = alice
@@ -2193,10 +2200,19 @@ mod tests {
             .await
             .parts();
 
-        assert_eq!(first["ceiling"], json!([{"catalog": "main", "access": "read"}]));
-        assert_eq!(second["ceiling"], json!([{"catalog": "other", "access": "write"}]));
+        assert_eq!(
+            first["ceiling"],
+            json!([{"catalog": "main", "access": "read"}])
+        );
+        assert_eq!(
+            second["ceiling"],
+            json!([{"catalog": "other", "access": "write"}])
+        );
         assert!(second.get("next").is_none(), "{second}");
-        assert_eq!(found["ceiling"], json!([{"catalog": "other", "access": "write"}]));
+        assert_eq!(
+            found["ceiling"],
+            json!([{"catalog": "other", "access": "write"}])
+        );
         assert_eq!(nothing["ceiling"], json!([]));
         assert_eq!(bad_status.as_u16(), 400);
 

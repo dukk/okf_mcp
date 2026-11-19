@@ -393,7 +393,12 @@ pub(crate) fn user_page_html(view: &PageView, user: &UserPage<'_>, error: Option
         _ => None,
     };
     // A catalog carried over ticked, and its chosen level.
-    let carried = |catalog: &str| browse.chosen.and_then(|chosen| chosen.get(catalog)).copied();
+    let carried = |catalog: &str| {
+        browse
+            .chosen
+            .and_then(|chosen| chosen.get(catalog))
+            .copied()
+    };
     // Catalog names are `[a-z0-9-]+` (a schema CHECK), so they are safe in
     // ids and names; they are escaped anyway, as everything is. The label
     // is free text, so it is escaped as visible text and as an attribute

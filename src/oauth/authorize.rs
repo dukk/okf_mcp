@@ -14,9 +14,9 @@
 //! sign-in code path (step 1 and 2), whose grants stay admin-issued. Else a
 //! signed-in person (the console session cookie) chooses catalogs within
 //! their ceiling, and the approval is a self-issued grant. The page offers
-//! one page of the ceiling at a time ([`CONSENT_PAGE`] catalogs), found by
+//! one page of the ceiling at a time (`CONSENT_PAGE` catalogs), found by
 //! a name prefix (Find) or continued (Next catalogs), and carries the
-//! ticked catalogs over (at most [`MAX_CARRIED`]): it never reads or holds
+//! ticked catalogs over (at most `MAX_CARRIED`): it never reads or holds
 //! the whole ceiling (issue #736). Without a
 //! session, the GET sends the browser to `/signin` first, before anything
 //! is stored.
@@ -845,7 +845,9 @@ async fn authorize(
     };
     let page = match &user {
         Some(user) => match consent_labels(&app, &pending).await {
-            Ok(labels) => user_consent_page(&pending_id, &pending, (user, &labels), None, None, &brand),
+            Ok(labels) => {
+                user_consent_page(&pending_id, &pending, (user, &labels), None, None, &brand)
+            }
             Err(error) => return server_error(&error, &brand),
         },
         None => consent::code_page(&view(&pending_id, &pending), None, &brand),
@@ -1550,6 +1552,10 @@ async fn consent_browse(
     }
 }
 
+/// What a stored Find or Next catalogs gives back: the request as stored,
+/// and the carried catalogs at their (possibly lowered) chosen levels.
+type Browsed = (PendingAuthorization, BTreeMap<String, Access>);
+
 /// Moves a signed-in page to the offer its Find or Next catalogs asks for:
 /// reads it ([`browse_offer`]) and stores it in the pending authorization
 /// while the page's replacement nonce is still current.
@@ -1573,7 +1579,7 @@ async fn browse_to(
     form: &ConsentForm,
     consent: &UserConsent,
     ticked: &BTreeMap<String, Access>,
-) -> Result<Option<(PendingAuthorization, BTreeMap<String, Access>)>, OkfError> {
+) -> Result<Option<Browsed>, OkfError> {
     // Find starts over from the box's prefix; Next continues the shown
     // page's. An unusable prefix finds nothing (`ceiling::page`).
     let found;
@@ -4226,7 +4232,11 @@ mod tests {
             assert!(!consent.whole, "160 catalogs do not fit a page");
             for (catalog, level) in &consent.offered {
                 assert!(page.contains(&format!("name=\"grant.{catalog}\"")));
-                assert_eq!(walked.insert(catalog.clone(), *level), None, "{catalog} twice");
+                assert_eq!(
+                    walked.insert(catalog.clone(), *level),
+                    None,
+                    "{catalog} twice"
+                );
             }
             pages += 1;
             if consent.next.is_none() {
@@ -4251,7 +4261,10 @@ mod tests {
         let consent = consent_of(&test, &found).await;
         assert_eq!(consent.offered, wanted);
         assert_eq!(consent.prefix, "c0001");
-        assert!(found.contains("value=\"c0001\""), "the box keeps the prefix");
+        assert!(
+            found.contains("value=\"c0001\""),
+            "the box keeps the prefix"
+        );
     }
 
     /// Ticked catalogs are carried across a Find, preselected at their
@@ -4277,7 +4290,9 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{found}");
-        assert!(found.contains("name=\"grant.main\" value=\"on\" id=\"consent-catalog-main\" checked"));
+        assert!(
+            found.contains("name=\"grant.main\" value=\"on\" id=\"consent-catalog-main\" checked")
+        );
         assert!(found.contains("<option value=\"write\" selected>write</option>"));
         assert!(found.contains("name=\"grant.other\" value=\"on\" id=\"consent-catalog-other\">"));
         let (status, none) = browse_as(
@@ -4289,10 +4304,15 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{none}");
-        assert!(!none.contains("id=\"consent-none-found\""), "main is carried");
+        assert!(
+            !none.contains("id=\"consent-none-found\""),
+            "main is carried"
+        );
         assert_eq!(
             consent_of(&test, &none).await.offered,
-            [("main".to_string(), Access::Write)].into_iter().collect::<Ceiling>()
+            [("main".to_string(), Access::Write)]
+                .into_iter()
+                .collect::<Ceiling>()
         );
         let (status, empty) = browse_as(&test, &alice, &none, Some("zz"), &[]).await;
         assert_eq!(status, StatusCode::OK, "{empty}");
@@ -4362,9 +4382,15 @@ mod tests {
         )
         .await
         .expect("lower");
-        ceiling::unentitle(test.app.pool(), "alice", "other", &AuditActor::cli(), Utc::now())
-            .await
-            .expect("remove");
+        ceiling::unentitle(
+            test.app.pool(),
+            "alice",
+            "other",
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("remove");
 
         let (status, found) = browse_as(
             &test,
@@ -4382,7 +4408,9 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{found}");
         assert_eq!(
             consent_of(&test, &found).await.offered,
-            [("main".to_string(), Access::Read)].into_iter().collect::<Ceiling>()
+            [("main".to_string(), Access::Read)]
+                .into_iter()
+                .collect::<Ceiling>()
         );
         assert!(!found.contains("value=\"write\""), "{found}");
         // The old page's nonce was spent by the Find.
@@ -4456,7 +4484,7 @@ mod tests {
     /// per catalog.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_team_owning_many_catalogs_keeps_each_page_small() {
-        use crate::db::rows_returned::counting;
+        use crate::rows_returned::counting;
         let test = oauth_app().await;
         let alice = signed_in(&test, "alice", &[]).await;
         sqlx::query(
@@ -4485,12 +4513,13 @@ mod tests {
         let (_, session_rows, _) = counting(get("/api/v1/session")).await;
         let (_, listing_rows, _) = counting(get("/api/v1/me/ceiling")).await;
         let authorize = format!("/oauth/authorize?{}", user_authorize_query());
-        let (page, page_rows, _) = counting(async {
-            send_as(test, "GET", &authorize, None, Some(alice)).await.2
-        })
-        .await;
+        let (page, page_rows, _) =
+            counting(async { send_as(test, "GET", &authorize, None, Some(alice)).await.2 }).await;
         // The page's offer is one page (the Find below replaces it).
-        assert_eq!(consent_of(test, &page).await.offered.len(), CONSENT_PAGE as usize);
+        assert_eq!(
+            consent_of(test, &page).await.offered.len(),
+            CONSENT_PAGE as usize
+        );
         let ((status, found), find_rows, _) =
             counting(browse_as(test, alice, &page, Some("c04999"), &[])).await;
         assert_eq!(consent_of(test, &found).await.offered.len(), 10);
