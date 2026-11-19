@@ -4375,9 +4375,8 @@ take the server out of service. Alert on the `error` log line, not on
   `GET /api/v1/catalogs` a `maintenance` field.
 
 - **Bounded memory (milestone 18; 0.23.0)** adds migrations
-  `0023_audit_backfill.sql`, `0024_cluster_stats.sql` and
-  `0025_catalogs_member_reach.sql` (an index: a console session's catalogs
-  are listed a page at a time per owner team), and an older
+  `0023_audit_backfill.sql`, `0024_cluster_stats.sql`,
+  `0025_catalogs_member_reach.sql` and `0026_catalogs_member_write.sql`, and an older
   binary refuses the migrated database. The migrations run before the new
   binary serves. Old and new replicas can run together
   during a rolling deploy: a milestone 18 server bridges both ways (it still
@@ -4385,6 +4384,17 @@ take the server out of service. Alert on the `error` log line, not on
   `admin-generation` channel, and it treats a milestone 16 announcement as
   "mark the caches stale"). The bridge and the deprecated settings go in the
   release after this one. What changes for operators:
+  - **Two indexes are built concurrently.** `0025` and `0026` add partial
+    indexes on `catalogs` (a console session's catalogs, listed a page at a
+    time per owner team, and its owner teams' writable catalogs) with
+    `CREATE INDEX CONCURRENTLY`, so the replicas still serving keep writing
+    catalogs while they build; on a large database the build takes a while
+    and waits for transactions already open on `catalogs`. If a build fails
+    part-way (a lost connection, a cancelled pod), Postgres leaves the index
+    INVALID and the migration unrecorded: the next start drops the invalid
+    index and builds it again, under a lock that keeps two starting replicas
+    from doing it at once. Check with
+    `SELECT indexrelid::regclass, indisvalid FROM pg_index WHERE indexrelid::regclass::text LIKE 'catalogs_member_%'`.
   - **Settings added:** `catalog_cache_bytes` (`"1GiB"`),
     `catalog_directory_entries` (100000), `catalog_ttl` (`"10s"`),
     `credential_cache_entries` (100000), `user_cache_entries` (100000),

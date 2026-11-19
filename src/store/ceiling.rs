@@ -306,10 +306,21 @@ pub(crate) async fn ceiling_in(
     Ok(one_ceiling(rows))
 }
 
+/// Is any catalog of user `$1`'s ceiling at `write`? The team half seeks
+/// the owner teams' writable catalogs through the partial index
+/// `catalogs_member_write` (migration 0026), so a team's read-only catalogs
+/// are never scanned, however many it owns.
+const HIGHEST_SQL: &str = "\
+    SELECT EXISTS (SELECT 1 FROM team_members m \
+                   JOIN catalogs c ON c.owner_team_id = m.team_id \
+                   WHERE m.user_id = $1 AND c.member_access = 'write') \
+        OR EXISTS (SELECT 1 FROM user_catalogs e \
+                   WHERE e.user_id = $1 AND e.access = 'write')";
+
 /// Whether any catalog of the user's ceiling is at `write`: a user's
 /// highest ceiling level, which `GET /whoami` shows as a console
 /// session's `access` (`read` when the ceiling is empty, as before). One
-/// row, whatever the ceiling's size.
+/// row, and an index seek, whatever the ceiling's size (`HIGHEST_SQL`).
 ///
 /// # Arguments
 /// * `pool` - the database.
@@ -322,16 +333,10 @@ pub(crate) async fn ceiling_in(
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.highest"))]
 pub async fn highest(pool: &PgPool, user_id: &str) -> Result<Access, OkfError> {
-    let write: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM team_members m \
-                        JOIN catalogs c ON c.owner_team_id = m.team_id \
-                        WHERE m.user_id = $1 AND c.member_access = 'write') \
-             OR EXISTS (SELECT 1 FROM user_catalogs e \
-                        WHERE e.user_id = $1 AND e.access = 'write')",
-    )
-    .bind(user_id)
-    .fetch_one(pool)
-    .await?;
+    let write: bool = sqlx::query_scalar(HIGHEST_SQL)
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?;
     Ok(row_level(write))
 }
 
@@ -1541,5 +1546,61 @@ mod tests {
             ["alice"],
             "the personal team reads as its person"
         );
+    }
+
+    /// Every row a plan's nodes read: their output rows (times their loops)
+    /// and the rows their filters threw away.
+    fn rows_examined(node: &serde_json::Value) -> f64 {
+        let number = |key: &str| {
+            node.get(key)
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0)
+        };
+        let own = number("Actual Rows") * number("Actual Loops").max(1.0)
+            + number("Rows Removed by Filter")
+            + number("Rows Removed by Index Recheck");
+        let children: f64 = node
+            .get("Plans")
+            .and_then(serde_json::Value::as_array)
+            .map_or(0.0, |plans| plans.iter().map(rows_examined).sum());
+        own + children
+    }
+
+    /// Issue #728 (review of PR #739): `highest` for a user whose team owns
+    /// 50,000 read-only catalogs seeks the writable ones through
+    /// `catalogs_member_write`, so it examines a bounded number of rows,
+    /// not one per catalog the team owns.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn highest_examines_no_read_only_catalog() {
+        let db = test_db().await;
+        sqlx::query(
+            "INSERT INTO catalogs (name, description, created_at, owner_team_id, member_access) \
+             SELECT 'r' || lpad(n::text, 6, '0'), '', now(), \
+                    (SELECT id FROM teams WHERE name = $1), 'read' \
+             FROM generate_series(1, 50000) AS n",
+        )
+        .bind(TEST_TEAM)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        sqlx::query("ANALYZE catalogs")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let user_id = id(&db.pool, TEST_USER).await;
+
+        let level = highest(&db.pool, &user_id).await.unwrap();
+        // `AssertSqlSafe`: the text is a constant of this module.
+        let plan: serde_json::Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN (ANALYZE, FORMAT JSON) {HIGHEST_SQL}"
+        )))
+        .bind(&user_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+
+        assert_eq!(level, Access::Read, "every catalog is read-only");
+        let examined = rows_examined(&plan[0]["Plan"]);
+        assert!(examined < 100.0, "examined {examined} rows: {plan:#}");
     }
 }

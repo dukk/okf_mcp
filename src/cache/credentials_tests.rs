@@ -947,3 +947,97 @@ async fn a_user_whose_team_owns_many_catalogs_loads_a_small_entry() {
     assert_eq!(first.items[0].name, "c000001");
     assert!(first.next.is_some(), "a page, not the whole ceiling");
 }
+
+/// Review of PR #739: since #728 a ceiling change made on the catalog
+/// (`member_access`, the owner team) reaches a cached console session only
+/// through the catalog's directory row, which the write's `catalog_meta`
+/// message drops. A session and the row are warmed first; each change is
+/// applied as the change feed would (no poll, and a one-hour TTL so nothing
+/// expires): the next request's level and listing follow it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cached_session_follows_member_access_and_owner_changes() {
+    let db = test_db().await;
+    let pool = &db.pool;
+    let cli = AuditActor::cli();
+    for name in ["alice", "bob"] {
+        person(pool, name).await;
+    }
+    for team in ["family", "others"] {
+        let new = NewTeam {
+            name: team,
+            display_name: &DisplayName::default(),
+            owner: "bob",
+        };
+        teams::create(pool, &new, &cli, Utc::now()).await.unwrap();
+    }
+    let joined = Membership {
+        team: "family",
+        user: "alice",
+        role: Role::Member,
+    };
+    teams::set_member(pool, &joined, &cli, Utc::now())
+        .await
+        .unwrap();
+    catalog(pool, "shared", "family").await;
+    let caches = credentials(pool);
+    let alice = user_id(pool, "alice").await;
+    // One request: alice's session, the catalog's row and her listing.
+    let request = async || {
+        let session = caches
+            .session_principal(&alice, &view())
+            .await
+            .unwrap()
+            .expect("alice");
+        let row = caches
+            .directory
+            .resolve("shared")
+            .await
+            .unwrap()
+            .expect("shared");
+        let listed: Vec<String> = caches
+            .directory
+            .reachable_page(&session, None, 100)
+            .await
+            .unwrap()
+            .items
+            .iter()
+            .map(|row| row.name.clone())
+            .collect();
+        (session.level_at(&row), listed)
+    };
+    let shared = vec!["shared".to_string()];
+    assert_eq!(
+        request().await,
+        (Some(Access::Write), shared.clone()),
+        "warm"
+    );
+
+    for (access, expected) in [
+        (
+            ceiling::MemberAccess::Read,
+            (Some(Access::Read), shared.clone()),
+        ),
+        (ceiling::MemberAccess::None, (None, Vec::new())),
+        (
+            ceiling::MemberAccess::Write,
+            (Some(Access::Write), shared.clone()),
+        ),
+    ] {
+        apply_messages_of(pool, &caches, async {
+            ceiling::set_member_access(pool, "shared", access, &cli, Utc::now())
+                .await
+                .unwrap();
+        })
+        .await;
+        assert_eq!(request().await, expected, "member access {access:?}");
+    }
+
+    // Given to a team alice is not in: she no longer reaches it.
+    apply_messages_of(pool, &caches, async {
+        catalogs::set_owner(pool, "shared", "others", &cli, Utc::now())
+            .await
+            .unwrap();
+    })
+    .await;
+    assert_eq!(request().await, (None, Vec::new()), "owner moved");
+}

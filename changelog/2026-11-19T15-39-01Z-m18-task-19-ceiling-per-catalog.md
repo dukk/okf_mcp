@@ -18,7 +18,13 @@ authenticate and held a million-entry map in one cache entry.
   `require_level_at`, `precheck_level`, `excludes`.
 - `store::catalogs::ceiling_page`: a session's catalogs a page at a time,
   per owner team, over the new partial index `catalogs_member_reach`
-  (migration `0025_catalogs_member_reach.sql`).
+  (migration `0025_catalogs_member_reach.sql`), and `catalogs_member_write`
+  (migration `0026`), which `highest` seeks writable catalogs through. Both
+  are built `CONCURRENTLY` in non-transactional migrations; `db::migrate`
+  drops either if a failed build left it INVALID, so the retry rebuilds it.
+- Tests from review (PR #739): `a_cached_session_follows_member_access_and_owner_changes`,
+  `highest_examines_no_read_only_catalog` and
+  `a_failed_concurrent_build_is_rebuilt_by_the_next_migrate`.
 - `CatalogRow::member_access`; `UserGates::entitled` carries each
   entitlement's level.
 - Tests: `the_per_catalog_ceiling_answers_what_the_whole_ceiling_did` (old
