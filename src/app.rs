@@ -837,8 +837,11 @@ impl App {
     /// (issue #659), after the write that moved it committed. Best effort and
     /// detached: the publish happens on its own task, so a slow or failing
     /// Redis never delays the caller's answer; a failure is counted and
-    /// logged, and the other replicas' poll loops cover it. Does nothing
-    /// without `[redis]`.
+    /// logged, and the other replicas' poll loops cover it. Because nothing
+    /// waits for the publish or the other replicas' refresh, this is prompt
+    /// eventual consistency, not read-your-writes: the caller's next read on
+    /// another replica may still see the old snapshot. Does nothing without
+    /// `[redis]`.
     ///
     /// # Arguments
     /// * `change` - the catalog and the generation its write committed.

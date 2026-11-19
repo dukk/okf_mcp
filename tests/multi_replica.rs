@@ -720,7 +720,9 @@ async fn publish_index_edit(client: &support::server::Client, old: &str, new: &s
     );
 }
 
-/// Waits until `read_document` of `/index.md` on `client` contains `text`.
+/// Waits (bounded by [`WAIT`]) until `read_document` of `/index.md` on
+/// `client` contains `text`. Propagation is asynchronous and best effort, so
+/// this checks the change arrives promptly, not that the first read is fresh.
 async fn until_index_reads(client: &support::server::Client, text: &str) -> bool {
     tokio::time::timeout(WAIT, async {
         loop {
@@ -745,12 +747,13 @@ async fn until_index_reads(client: &support::server::Client, text: &str) -> bool
 }
 
 /// Issue #659's acceptance criterion on two real servers with
-/// `poll_interval = 1h`: a publish on A is read on B at once. B's
+/// `poll_interval = 1h`: a publish on A propagates to B well within it (a
+/// bounded wait, not a first-read guarantee). B's
 /// subscriber answers events in order, so once B reads the first publish
 /// (by its announcement or by the catch-up when B subscribed), the second
 /// can reach B only by its announcement.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_publish_on_one_replica_is_read_on_the_other_at_once() {
+async fn a_publish_on_one_replica_propagates_to_the_other_promptly() {
     let redis = TestRedis::start().await;
     let a = TestServer::start_shared(indexed(), &redis, |_| Config::default()).await;
     let b = a.sibling(&redis, |_| Config::default()).await;
@@ -770,6 +773,9 @@ async fn a_publish_on_one_replica_is_read_on_the_other_at_once() {
     publish_index_edit(&on_a, "- the systems", "- all systems").await;
     let second = until_index_reads(&on_b, "all systems").await;
 
-    assert!(first, "B read the first publish");
-    assert!(second, "B read the second publish through its announcement");
+    assert!(first, "the first publish reached B within the wait");
+    assert!(
+        second,
+        "the second publish reached B through its announcement"
+    );
 }

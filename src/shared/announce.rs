@@ -5,8 +5,10 @@
 //! - Catalog generations (issue #659): after a publish, an import or a
 //!   repair commits, the writer publishes `<catalog id> <generation>`; every
 //!   instance's subscriber refreshes that catalog's snapshot
-//!   ([`App::apply_catalog_announcement`]), so a read on another replica sees
-//!   the write without waiting for the poll.
+//!   ([`App::apply_catalog_announcement`]), so other replicas normally pick
+//!   the write up well before their poll. Best effort: the writer does not
+//!   wait for the publish or for anyone's refresh, so this is prompt
+//!   eventual consistency, not read-your-writes.
 //!
 //! Messages are not stored: one sent while an instance is not subscribed is
 //! lost. So each subscriber catches up once after every (re)subscribe, and

@@ -33,10 +33,11 @@ changesets and the routes in detail.
   | Rate-limit buckets and the mail worker | Counted per replica (#357, #458); not fixed by `[redis]` |
 
 - **With `[redis]`, several replicas work.** Redis holds the first four rows'
-  short-lived state, and three caches learn of changes on every replica at
-  once: the key cache (pub/sub announcements of each `admin_generation` bump),
-  the catalog snapshots (pub/sub announcements of each catalog's new
-  generation) and the access-token cache (a revocation counter). Everything else stays as
+  short-lived state, and three caches learn of changes on every replica
+  promptly: the key cache (pub/sub announcements of each `admin_generation`
+  bump), the catalog snapshots (best-effort pub/sub announcements of each
+  catalog's new generation) and the access-token cache (a revocation
+  counter). Everything else stays as
   it was. The Redis section below says what to run, what it holds and what
   happens when it fails; "Several replicas: what stays per replica" lists the
   caveats. Without the table nothing changes: no Redis code runs, no
@@ -56,8 +57,9 @@ changesets and the routes in detail.
   `migrate`) talks to the database directly, not to the server. The running
   server notices catalogs, imports and key changes within `poll_interval`.
   With `[redis]` the command line announces key changes, imports and
-  `catalog repair-indexes`, so those show at once; a new or deleted catalog
-  still shows within `poll_interval`.
+  `catalog repair-indexes`, so the serving replicas normally pick those up
+  well within a second (best effort; `poll_interval` remains the bound); a
+  new or deleted catalog still shows within `poll_interval`.
 
 ## 2. The image
 
@@ -456,16 +458,24 @@ session id: the keys and values that refer to one hold its hash.
 - **Catalog snapshots** are announced, not stored. After a publish, an HTTP
   import, or (from the command line) an import or `catalog repair-indexes`
   commits, the writer publishes the catalog's id and new generation, and every
-  replica refreshes that catalog's snapshot at once, so a client's next read
-  on another replica sees its write. A replica that already reached the
+  replica refreshes that catalog's snapshot when the announcement arrives.
+  This is best-effort, eventually consistent propagation, not
+  read-your-writes: the write's answer does not wait for the announcement or
+  for any other replica's refresh, so a client whose next request lands on
+  another replica can still read the old text for a moment (normally well
+  under a second), and the poll loop bounds the lag at `poll_interval` when an
+  announcement is lost. A replica that already reached the
   generation (its own publish, or its poll) does nothing; one that has not
   loaded the catalog (created since its last poll) or has deleted it leaves it
   to the poll loop, so an announcement never loads a catalog. Refreshes of one
   catalog from an announcement, the poll loop and a local publish wait for one
   another and build each generation once; a snapshot never moves back. A
-  replica's `pending_changes`, and its reads through a changeset, also refresh
-  first when an entry was made on a newer revision than its snapshot holds,
-  so `current_revision` is never lower than `base_revision`.
+  replica's `pending_changes`, and its reads through a changeset, do give a
+  guarantee for the changeset's own entries: they refresh first when an entry
+  was made on a newer revision than the replica's snapshot holds, so a
+  changeset is never diffed or read against text older than its entries'
+  bases, and `pending_changes` never reports `current_revision` lower than
+  `base_revision`.
 - **The access-token cache** checks the revocation counter on every lookup. A
   revocation increments it, and a replica that sees a new value clears its
   cache. A cached token is also trusted for at most 60 seconds, as a backstop
@@ -498,7 +508,7 @@ back to memory, because that would split the state between replicas.
   logged, and each replica's catalog subscriber checks every loaded catalog
   when it (re)subscribes, with the same reconnect and backoff. A lost
   announcement costs at most `poll_interval` before that replica's reads show
-  the write.
+  the write; even a delivered one is applied asynchronously.
 - **The access-token cache** skips the cache on a Redis error: the lookup goes
   to Postgres and caches nothing.
 - **An entry Redis lost** (evicted, or Redis restarted without persistence)
@@ -553,12 +563,17 @@ two). What `[redis]` does not share:
 - **`GET /mcp` streams.** A server-sent stream belongs to the replica that
   opened it. A client that loses it reconnects and may land elsewhere; the
   session carries on through Redis, but the stream does not resume.
-- **Catalog reads lag only after a lost announcement.** A publish or import
-  on one replica shows on another at once ("Catalog snapshots" in the Redis
-  section). Only when its announcement is lost (Redis down, or the
-  subscriber reconnecting) does it wait for that replica's poll, within
+- **Catalog reads are eventually consistent across replicas.** A publish or
+  import on one replica normally shows on another within a fraction of a
+  second, through its announcement ("Catalog snapshots" in the Redis
+  section), but not before the write's answer returns: a client's next read
+  on another replica may still see the old text. There is no read-your-writes
+  guarantee across replicas. A lost announcement (Redis down, or the
+  subscriber reconnecting) waits for that replica's poll, within
   `poll_interval` (10 seconds by default). A catalog created or deleted on
-  one replica also shows on the others at their next poll.
+  one replica also shows on the others at their next poll. Within a
+  changeset, `pending_changes` and reads through it refresh a replica that is
+  behind the changeset's own entries.
 - **Rate limits** (per address, per email, OIDC starts, OAuth) are counted per
   replica, so the effective limit is the configured limit times the number of
   replicas (#357). The shared Redis handle is the place to fix that.
@@ -1149,7 +1164,7 @@ the dotted originals.
 | `okf_changesets_open` | gauge | `catalog` | Open changesets, as of the last poll |
 | `okf_poll_duration_seconds` | histogram | `outcome` | One pass of the poll loop |
 | `okf_catalog_refreshes_total` | counter | `catalog`, `result` | Each catalog's turn in a pass: `unchanged`, `reloaded`, `loaded` or `failed` |
-| `okf_catalog_announcements_total` | counter | `result` | Catalog announcements received: `applied` (rebuilt), `current` (already there), `unknown` (not loaded here, or deleted) or `failed`. Only with `[redis]` |
+| `okf_catalog_announcements_total` | counter | `result` | Catalog announcements handled, counting also each catalog found behind in the catch-up after a (re)subscribe: `applied` (rebuilt), `current` (already there), `unknown` (not loaded here, or deleted) or `failed`. Only with `[redis]` |
 | `okf_catalog_concepts` | gauge | `catalog` | Concepts in the current snapshot |
 | `okf_catalog_generation` | gauge | `catalog` | The snapshot's generation |
 | `okf_keycache_reloads_total` | counter | `outcome` | Key cache and settings reloads |
@@ -1181,7 +1196,7 @@ on its own task), so find a call by its tool span, not by the request's trace.
 | `mcp <tool>` (server): one per tool call; `other` for an unregistered name | `okf.tool`, `okf.catalog` (a loaded catalog, else `none`), `okf.outcome` (`ok` or `error`), `okf.error.kind` on failure, `enduser.id`, `okf.key.id` |
 | `okf.publish`, with children `okf.publish.lock`, `okf.publish.lint` and `okf.publish.write` | `okf.catalog`, `okf.changeset.entries` |
 | `okf.poll`, with children `okf.catalog.refresh` (one per catalog) and `okf.keycache.reload` | `okf.catalog` and `okf.refresh.result` on the refresh |
-| `okf.catalog.announcement`: a root per catalog announcement received | `okf.catalog` (a loaded catalog only), `okf.announcement.result` (as `okf_catalog_announcements_total`'s `result`) |
+| `okf.catalog.announcement`: a root per catalog announcement handled (or catalog caught up after a resubscribe) | `okf.catalog` (a loaded catalog only), `okf.announcement.result` (as `okf_catalog_announcements_total`'s `result`) |
 | `okf.clock.check` | `okf.outcome`, `okf.clock.offset` (seconds) |
 | `okf.archive.export` and `okf.archive.import` | `okf.catalog` (only for a catalog that exists), `okf.archive.size` (bytes, on success), `okf.outcome` |
 | `okf.mail.job` | `okf.mail.template`, `okf.mail.provider`, `okf.outcome`. Never the address |
@@ -1245,8 +1260,9 @@ which of them it skipped (those with a root `index.md`, or misspelled). Listings
 without a title or description get `TODO` placeholders; the output names
 each one. A changeset someone left open on an affected index replays its
 bookkeeping onto the repaired text or conflicts at publish, as after any
-publish. The running server shows the result within `poll_interval`, or at
-once with `[redis]`, whose announcement reaches every replica.
+publish. The running server shows the result within `poll_interval`; with
+`[redis]` its announcement normally reaches every replica much sooner (best
+effort).
 
 An agent with write access can do the same for one catalog through a
 changeset, to review before publishing: `open_changeset`, `repair_indexes`,
