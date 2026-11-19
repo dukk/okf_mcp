@@ -384,6 +384,47 @@ async fn a_resident_catalog_that_grows_past_the_budget_is_not_kept() {
     );
 }
 
+/// A publish that refreshes its state in place (the snapshot is behind the
+/// database: an import elsewhere) and is then refused (lint) still has the
+/// cache weigh the grown snapshot, so an entry past the budget is dropped.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_publish_after_a_growing_refresh_still_reweighs() {
+    let small: &[(&str, &str)] = &[("a.md", "---\ntype: Note\n---\n# A\n")];
+    let (test, registry) = app(&[("pg", small)], 64 * 1024).await;
+    let cache = test.app.catalog_cache();
+    let pg = test.app.catalog("pg").await.unwrap().unwrap();
+    cache.settle().await;
+    assert!(cache.resident(pg.id()).await.is_some());
+    let ctx = writer(&test, "writer", "pg").await;
+    let handle = open(&ctx).await;
+    // A new file whose link goes nowhere: the publish's lint refuses it.
+    let edit = PendingEdit {
+        path: "broken.md",
+        text: Some("---\ntype: Note\ntitle: B\ndescription: B.\n---\nSee [gone](/gone.md).\n"),
+        at: Utc::now(),
+    };
+    let changeset = pending_entry(&test, &handle, &edit).await;
+    // The catalog grows past the budget behind this app's back.
+    let big = note(8 * 1024);
+    let generation = import_behind(test.app.pool(), "pg", &[("a.md", &big)]).await;
+
+    let input = PublishInput {
+        changeset: &changeset,
+        actor: "writer",
+        message: "refused",
+    };
+    let refused = publish(&test.app, &pg, &input, &AuditActor::cli()).await;
+    cache.settle().await;
+
+    assert_eq!(refused.unwrap_err().kind(), "LintFailed");
+    assert_eq!(pg.current().generation(), generation, "refreshed in place");
+    assert!(cache.resident(pg.id()).await.is_none(), "not kept");
+    assert_eq!(
+        sample(&registry, r#"okf_cache_bytes{cache="catalog"}"#),
+        0.0
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_load_overtaken_by_a_catalog_message_is_served_but_not_kept() {
     let (test, _registry) = app(&[("pg", &[("a.md", "# A\n")])], ByteSize::gib(1).as_u64()).await;
