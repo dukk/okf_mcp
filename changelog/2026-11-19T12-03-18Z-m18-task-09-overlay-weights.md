@@ -2,7 +2,7 @@
 
 ## Added
 - `overlay_cache_bytes` (default 256 MiB): the most memory the changeset overlays may take, estimated with the catalog snapshot weigher (`cache::catalogs::weight`) over the overlay's whole workspace (the base's files plus the pending entries), so an overlay of many empty files is not free.
-- `Bounded::with_idle` (time to idle) and `Bounded::insert`; `MemWorkspace::totals`.
+- `Bounded::with_idle` (time to idle), `Bounded::get_if` and `Bounded::build` (a fenced, counted build for callers with their own single flight); `MemWorkspace::totals`.
 - Overlays report `okf.cache.*` with `cache="overlay"`.
 
 ## Changed

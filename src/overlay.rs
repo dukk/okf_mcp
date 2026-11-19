@@ -268,6 +268,13 @@ fn built_at(overlay: &Overlay) -> (i64, i64) {
     (overlay.base.generation(), overlay.version)
 }
 
+/// Whether a build may replace the overlay already cached for its changeset:
+/// not when the cached one is newer (a slower build finishing last).
+#[tracing::instrument(level = "trace", skip_all)]
+fn supersedes(cached: &Arc<Overlay>, built: &Arc<Overlay>) -> bool {
+    built_at(built) >= built_at(cached)
+}
+
 /// What an overlay costs in the cache: [`weight`] of its whole workspace (the
 /// base's files copied plus the pending entries), counted as a snapshot's are
 /// (an empty file is not free). The shared `Arc<Loaded>` base itself is not
@@ -351,11 +358,10 @@ impl Overlays {
         // A cached overlay built on a snapshot behind its entries (a write's
         // `get_in` on a lagging replica caches one, even when the write is
         // then refused) is not reused: the build below refreshes first.
-        if let Some(overlay) = self
-            .lookup(changeset, state.current().generation())
-            .await
-            .filter(|overlay| !overlay.behind_entries)
-        {
+        let wanted = (state.current().generation(), changeset.version);
+        let current =
+            |overlay: &Arc<Overlay>| !overlay.behind_entries && built_at(overlay) == wanted;
+        if let Some(overlay) = self.cached.get_if(&changeset.id, current).await {
             return Ok(overlay);
         }
         // `_building` is held (and other reads of this changeset wait) until
@@ -365,8 +371,9 @@ impl Overlays {
         // it (it would close a cycle with a builder waiting for that
         // connection).
         let _building = self.builds.lock(changeset.id).await;
-        // Read the state again: a build that finished while this one waited
-        // may be the overlay wanted, and the published state may have moved.
+        // Read the state again, without counting a second request: a build
+        // that finished while this one waited may be the overlay wanted, and
+        // the published state may have moved.
         if let Some(overlay) = self
             .lookup(changeset, state.current().generation())
             .await
@@ -374,19 +381,28 @@ impl Overlays {
         {
             return Ok(overlay);
         }
-        let entries = changesets::entries(pool, changeset.id).await?;
-        // Unlike `get_in`, a read may take a second connection: so before
-        // building, bring a snapshot that is behind the entries' bases up to
-        // date (an entry made on another replica, issue #659). Otherwise the
-        // paths the changeset does not touch would show older text than the
-        // entries were made on.
-        let bases = entries
-            .iter()
-            .map(|entry| (entry.path.as_str(), entry.base_revision));
-        let base = state.current_covering(pool, rebuilds, bases).await?;
-        let overlay = Arc::new(build_overlay(base, changeset, entries).await?);
-        self.store(Arc::clone(&overlay)).await;
-        Ok(overlay)
+        // The build registers its fence before it starts, so a `forget` while
+        // it runs (a write or discard) keeps its result out of the cache.
+        self.cached
+            .build(
+                changeset.id,
+                || async {
+                    let entries = changesets::entries(pool, changeset.id).await?;
+                    // Unlike `get_in`, a read may take a second connection:
+                    // so before building, bring a snapshot that is behind
+                    // the entries' bases up to date (an entry made on
+                    // another replica, issue #659). Otherwise the paths the
+                    // changeset does not touch would show older text than
+                    // the entries were made on.
+                    let bases = entries
+                        .iter()
+                        .map(|entry| (entry.path.as_str(), entry.base_revision));
+                    let base = state.current_covering(pool, rebuilds, bases).await?;
+                    Ok(Arc::new(build_overlay(base, changeset, entries).await?))
+                },
+                supersedes,
+            )
+            .await
     }
 
     /// As [`Overlays::get`], for a write that holds a connection (its
@@ -429,17 +445,25 @@ impl Overlays {
         changeset: &ChangesetRow,
     ) -> Result<Arc<Overlay>, OkfError> {
         let base = state.current();
-        if let Some(overlay) = self.lookup(changeset, base.generation()).await {
+        let wanted = (base.generation(), changeset.version);
+        let current = |overlay: &Arc<Overlay>| built_at(overlay) == wanted;
+        if let Some(overlay) = self.cached.get_if(&changeset.id, current).await {
             return Ok(overlay);
         }
         // Read after the caller read the row (a read resolves it unlocked in
         // `ToolContext::changeset`), so the entries may be newer than
         // `changeset.version`; harmless: the overlay is tagged with the
         // older version, and the next read at the newer one rebuilds it.
-        let entries = changesets::entries(executor, changeset.id).await?;
-        let overlay = Arc::new(build_overlay(base, changeset, entries).await?);
-        self.store(Arc::clone(&overlay)).await;
-        Ok(overlay)
+        self.cached
+            .build(
+                changeset.id,
+                || async {
+                    let entries = changesets::entries(executor, changeset.id).await?;
+                    Ok(Arc::new(build_overlay(base, changeset, entries).await?))
+                },
+                supersedes,
+            )
+            .await
     }
 
     /// Drops a changeset's overlay (after a write, publish or discard).
@@ -470,25 +494,6 @@ impl Overlays {
                 None
             }
             Ordering::Greater => None,
-        }
-    }
-
-    /// Caches `overlay`, unless a newer one for the same changeset is there
-    /// (a slower build finishing last). The check and the insert are two
-    /// steps, so two builds finishing together can still leave the older
-    /// one; harmless, since `lookup` drops an entry older than the row it
-    /// is asked for and the next read rebuilds. An overlay heavier than the
-    /// whole budget is served but not kept.
-    #[tracing::instrument(level = "trace", skip_all)]
-    async fn store(&self, overlay: Arc<Overlay>) {
-        let id = overlay.changeset_id;
-        let newer_cached = self
-            .cached
-            .peek(&id)
-            .await
-            .is_some_and(|entry| built_at(&entry) > built_at(&overlay));
-        if !newer_cached {
-            self.cached.insert(id, overlay).await;
         }
     }
 
@@ -559,8 +564,8 @@ mod tests {
     use crate::archive::files;
     use crate::config::Config;
     use crate::mcp::testing::{
-        app_with, context, local_metrics, open, pending_entry, principal_as, render, sample_of,
-        store_key, PendingEdit,
+        app_with, app_with_metrics, context, local_metrics, open, pending_entry, principal_as,
+        render, sample_of, store_key, PendingEdit,
     };
     use crate::okf::workspace::Workspace;
     use crate::store::changesets::ChangesetState;
@@ -735,6 +740,16 @@ mod tests {
         )
     }
 
+    /// Caches `overlay` as a finished build would.
+    async fn store(overlays: &Overlays, overlay: Arc<Overlay>) {
+        let id = overlay.changeset_id;
+        overlays
+            .cached
+            .build(id, || async { Ok(overlay) }, supersedes)
+            .await
+            .unwrap();
+    }
+
     /// An overlay of changeset `id` at `version` over `base`, with `files`
     /// pending entries of `size` bytes each.
     async fn built(
@@ -767,11 +782,11 @@ mod tests {
         );
         let (overlays, _registry, _provider) = overlays_with(1 << 20);
 
-        overlays.store(Arc::clone(&newer)).await;
-        overlays.store(Arc::clone(&older)).await;
+        store(&overlays, Arc::clone(&newer)).await;
+        store(&overlays, Arc::clone(&older)).await;
         let behind = overlays.lookup(&changeset(1, 1), generation).await;
         let kept = overlays.lookup(&changeset(1, 2), generation).await;
-        overlays.store(Arc::clone(&other)).await;
+        store(&overlays, Arc::clone(&other)).await;
         let stale = overlays.lookup(&changeset(2, 5), generation).await;
         let stale_dropped = overlays.cached.peek(&2).await.is_none();
 
@@ -803,10 +818,10 @@ mod tests {
 
         // Act: a third overlay does not fit. Which one moka drops is its
         // admission policy's choice, so only the count is asserted.
-        overlays.store(Arc::clone(&overlays_built[0])).await;
-        overlays.store(Arc::clone(&overlays_built[1])).await;
+        store(&overlays, Arc::clone(&overlays_built[0])).await;
+        store(&overlays, Arc::clone(&overlays_built[1])).await;
         let first_used = overlays.lookup(&changeset(1, 1), generation).await;
-        overlays.store(Arc::clone(&overlays_built[2])).await;
+        store(&overlays, Arc::clone(&overlays_built[2])).await;
         overlays.cached.settle().await;
 
         // Assert
@@ -851,7 +866,7 @@ mod tests {
         let big = built(&base, 1, 1, 1, 50_000).await;
         let (overlays, _registry, _provider) = overlays_with(u64::from(big.weight) - 1);
 
-        overlays.store(Arc::clone(&big)).await;
+        store(&overlays, Arc::clone(&big)).await;
 
         assert!(overlays.cached.peek(&1).await.is_none());
     }
@@ -861,7 +876,7 @@ mod tests {
         let test = app_with(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
         let base = test.app.catalog("pg").await.unwrap().unwrap().current();
         let (overlays, _registry, _provider) = overlays_with(1 << 20);
-        overlays.store(built(&base, 1, 1, 0, 0).await).await;
+        store(&overlays, built(&base, 1, 1, 0, 0).await).await;
 
         overlays.forget(1).await;
 
@@ -979,6 +994,113 @@ mod tests {
             .unwrap()
             .unwrap();
         drop(held);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_forget_while_an_overlay_builds_keeps_the_build_out_of_the_cache() {
+        // Arrange: a read's build waits for a connection (the test holds
+        // every one), after its fence is registered.
+        let test = app_with(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
+        store_key(&test, "writer").await;
+        let ctx = context(
+            &test,
+            principal_as("writer", Access::Write, &[], Some("pg")),
+            None,
+        );
+        let handle = open(&ctx).await;
+        let edit = PendingEdit {
+            path: "a.md",
+            text: Some("# One\n"),
+            at: Utc::now(),
+        };
+        let row = Arc::new(pending_entry(&test, &handle, &edit).await);
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
+        let pool = test.app.pool();
+        let size = pool.options().get_max_connections();
+        let mut held = Vec::with_capacity(size as usize);
+        for _ in 0..size {
+            held.push(pool.acquire().await.unwrap());
+        }
+        let read = {
+            let (app, row, state) = (Arc::clone(&test.app), Arc::clone(&row), Arc::clone(&state));
+            tokio::spawn(async move {
+                app.overlays()
+                    .get(app.pool(), app.rebuild_locks(), &state, &row)
+                    .await
+            })
+        };
+        while test.app.overlays().builds.len() == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Act: a write or discard forgets the overlay mid-build.
+        test.app.overlays().forget(row.id).await;
+        drop(held);
+        let served = tokio::time::timeout(Duration::from_secs(30), read)
+            .await
+            .expect("the build finishes once a connection is free")
+            .unwrap()
+            .unwrap();
+
+        // Assert: the caller got its overlay, but it was not kept.
+        assert_eq!(served.snapshot().get("a.md").unwrap().text(), "# One\n");
+        assert!(
+            test.app.overlays().cached.peek(&row.id).await.is_none(),
+            "an overlay overtaken by a forget stays out of the cache"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn overlay_lookups_and_builds_are_counted() {
+        // Arrange
+        let (test, registry) =
+            app_with_metrics(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
+        store_key(&test, "writer").await;
+        let ctx = context(
+            &test,
+            principal_as("writer", Access::Write, &[], Some("pg")),
+            None,
+        );
+        let handle = open(&ctx).await;
+        let edit = |path| PendingEdit {
+            path,
+            text: Some("# One\n"),
+            at: Utc::now(),
+        };
+        let row = pending_entry(&test, &handle, &edit("b.md")).await;
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
+        let (pool, rebuilds) = (test.app.pool(), test.app.rebuild_locks());
+        let overlays = test.app.overlays();
+
+        // Act: a miss that builds, then a hit, then a build that fails (the
+        // new entry's path is below a published file).
+        overlays.get(pool, rebuilds, &state, &row).await.unwrap();
+        overlays.get(pool, rebuilds, &state, &row).await.unwrap();
+        let clash = pending_entry(&test, &handle, &edit("a.md/c.md")).await;
+        let failed = overlays.get(pool, rebuilds, &state, &clash).await;
+
+        // Assert: one request per call (the second lookup under the build
+        // lock is not counted).
+        assert!(failed.is_err());
+        let text = render(&registry);
+        let series = |name: &str| sample_of(&text, name).unwrap_or(0.0);
+        assert_eq!(
+            series(r#"okf_cache_requests_total{cache="overlay",result="miss"}"#),
+            2.0
+        );
+        assert_eq!(
+            series(r#"okf_cache_requests_total{cache="overlay",result="hit"}"#),
+            1.0
+        );
+        assert_eq!(
+            series(r#"okf_cache_load_duration_seconds_count{cache="overlay",outcome="ok"}"#),
+            1.0
+        );
+        assert_eq!(
+            series(r#"okf_cache_load_duration_seconds_count{cache="overlay",outcome="error"}"#),
+            1.0
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
