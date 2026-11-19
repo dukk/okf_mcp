@@ -280,6 +280,8 @@ trait Handler: Send + Sync {
     async fn message(&self, payload: &[u8]);
 }
 
+/// M16 bridge (spec Decision 14): remove in the release after 0.23.
+///
 /// The `admin_generation` subscriber: an announcement from an M16 replica
 /// (whose change sends no change message) marks the credential caches and
 /// the catalog directory stale, checks the settings and reloads the labels

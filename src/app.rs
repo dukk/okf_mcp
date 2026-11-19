@@ -5,7 +5,7 @@
 //! loop and its last result (design "Time").
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use sqlx::PgPool;
@@ -122,6 +122,11 @@ pub struct App {
     // them expired together run one check (tokio's `Mutex`: it is held
     // across `.await`s).
     settings_reload: tokio::sync::Mutex<()>,
+    // How many settings checks have finished, successful or not. A caller
+    // that waited for `settings_reload` while one finished takes its result
+    // instead of checking again, so during a database outage one failing
+    // check serves every request that queued behind it.
+    settings_rounds: AtomicU64,
     // Test counters: how many settings checks, and how many
     // `settings::load`s, ran after start-up.
     #[cfg(test)]
@@ -343,6 +348,7 @@ impl App {
             }),
             settings_stale: AtomicBool::new(false),
             settings_reload: tokio::sync::Mutex::new(()),
+            settings_rounds: AtomicU64::new(0),
             #[cfg(test)]
             settings_checks: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
@@ -691,7 +697,8 @@ impl App {
     /// backstop for a lost `Settings` message). The check reads
     /// `admin_generation` and reloads the settings only if it moved.
     /// Callers that find them expired together run one check: the rest wait
-    /// for it and take its result. A failed check keeps serving the loaded
+    /// for it and take its result, a failed one included (unless they were
+    /// marked stale after it began). A failed check keeps serving the loaded
     /// settings, logs at `warn` and leaves them expired, so the next request
     /// tries again.
     ///
@@ -702,6 +709,7 @@ impl App {
         if let Some(settings) = self.settings_if_fresh() {
             return settings;
         }
+        let round = self.settings_rounds.load(Ordering::Acquire);
         // The guard is held until it goes out of scope at the end of the
         // function, like a Python `with` block.
         let _reload = self.settings_reload.lock().await;
@@ -709,7 +717,14 @@ impl App {
         if let Some(settings) = self.settings_if_fresh() {
             return settings;
         }
+        // That check failed: take its answer rather than queue another
+        // failing one, unless a mark landed after it began.
+        let checked_meanwhile = self.settings_rounds.load(Ordering::Acquire) != round;
+        if checked_meanwhile && !self.settings_stale.load(Ordering::Acquire) {
+            return self.settings();
+        }
         self.revalidate_settings().await;
+        self.settings_rounds.fetch_add(1, Ordering::Release);
         self.settings()
     }
 
@@ -2739,6 +2754,39 @@ mod tests {
             app.settings_checks.load(Ordering::Relaxed) - checks_before,
             1,
             "and one check: the rest found them fresh once they had the lock"
+        );
+    }
+
+    /// With the database gone, callers that queued behind one failing check
+    /// take its answer (the loaded settings) instead of each running its
+    /// own, one after another.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_requests_share_one_failed_check() {
+        let db = test_db().await;
+        let (app, clock) = app_with_movable_clock(&db.pool).await;
+        clock.advance(app.config().credential_ttl + Duration::from_secs(1));
+        // The app's pool, closed: every check fails at once.
+        app.pool().close().await;
+        let checks_before = app.settings_checks.load(Ordering::Relaxed);
+
+        // Hold the check's lock so all ten queue behind it first.
+        let held = app.settings_reload.lock().await;
+        let mut calls = tokio::task::JoinSet::new();
+        for _ in 0..10 {
+            let app = Arc::clone(&app);
+            calls.spawn(async move { app.fresh_settings().await.max_keys_per_user });
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        drop(held);
+        let seen = tokio::time::timeout(Duration::from_secs(30), calls.join_all())
+            .await
+            .expect("ten settings checks within 30 s");
+
+        assert_eq!(seen, [20; 10], "the loaded settings serve");
+        assert_eq!(
+            app.settings_checks.load(Ordering::Relaxed) - checks_before,
+            1,
+            "one failing check for all ten"
         );
     }
 

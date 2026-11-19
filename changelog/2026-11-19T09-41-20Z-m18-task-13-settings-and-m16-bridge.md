@@ -7,9 +7,12 @@
   The check reads `admin_generation` (the settings version: `invalidate` bumps
   it for every administrative change, settings writes included) and loads the
   settings only if it moved. Callers that find the settings expired together
-  run one check (`settings_reload` mutex, re-checked after taking it). A failed
-  check keeps serving the loaded settings, logs at `warn` and leaves them
-  expired, so the next request retries. A validation time in the future (the
+  run one check (`settings_reload` mutex, re-checked after taking it), and
+  callers that waited while a check failed take its answer (`settings_rounds`)
+  instead of each running another failing one, so a database outage does not
+  serialize every request behind one timeout after another. A failed check
+  keeps serving the loaded settings, logs at `warn` and leaves them expired,
+  so the next request retries. A validation time in the future (the
   clock stepped back) counts as expired.
 - `App::reload_settings`: marks the settings stale and checks them at once
   (a `Settings` message, a reconnect, an M16 announcement, a poll pass).
@@ -34,6 +37,7 @@
   `settings_are_revalidated_after_the_ttl_without_a_notification`,
   `concurrent_requests_past_the_ttl_reload_settings_once`,
   `a_check_loads_the_settings_only_when_admin_generation_moved`,
+  `concurrent_requests_share_one_failed_check`,
   `a_clock_stepped_back_expires_the_settings` (`src/app.rs`);
   `a_request_checks_settings_older_than_the_credential_ttl`
   (`src/http/mod.rs`); `an_m16_announcement_marks_credentials_and_settings_stale`,
@@ -57,6 +61,12 @@
   sweep (credential caches and directory marked stale) whenever it moved since
   the last sweep, whether or not the settings check succeeded.
 - `settle` still polls (Task 16 removes that) and then calls `bridge_to_m16`.
+  Writers outside `/api/v1` (OAuth grant changes other than creation, sign-in
+  and account paths) do not bridge: since the poll no longer announces, an M16
+  replica sees them at its own poll (`poll_interval`), the bound the old
+  announcing poll gave.
+- `housekeeping::prune_audit` reads `fresh_settings`, since it runs outside
+  any request.
 - `tests/multi_replica.rs`: `a_change_still_announces_after_a_non_announcing_reload_saw_it_first`
   is removed (the poll no longer announces); the killed-subscriber test now
   revokes and announces as an M16 replica would, since a store revocation also
