@@ -793,7 +793,8 @@ async fn housekeeping_runs_each_slot_once_across_two_serving_replicas() {
     let tasks = okf_mcp::housekeeping::Task::ALL;
 
     // Both tickers pushed every task's current slot at start-up. The
-    // workers poll every 10 seconds, so allow a few polls.
+    // workers poll every 10 seconds, so allow a few polls; wait too until
+    // both workers have registered.
     let done = tokio::time::timeout(Duration::from_secs(60), async {
         loop {
             let finished: i64 = sqlx::query_scalar(
@@ -804,7 +805,15 @@ async fn housekeeping_runs_each_slot_once_across_two_serving_replicas() {
             .fetch_one(&pool)
             .await
             .expect("count the finished jobs");
-            if finished == tasks.len() as i64 {
+            // Each worker registers once it starts polling, which can be
+            // after the other has already run every job.
+            let workers: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM apalis.workers WHERE worker_type = $1")
+                    .bind(okf_mcp::housekeeping::QUEUE)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("count the workers");
+            if finished == tasks.len() as i64 && workers == 2 {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
