@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -14,6 +14,7 @@ use axum::{Extension, Json, Router};
 use serde::Serialize;
 use sqlx::PgPool;
 
+use super::{reachable_page, PageQuery};
 use crate::app::App;
 use crate::auth::{CredentialKind, Principal, Reach};
 use crate::clock::format_timestamp;
@@ -39,8 +40,12 @@ pub(crate) struct WhoAmI {
     pub maintenance_report: bool,
     /// Whether it reaches every catalog.
     pub all_catalogs: bool,
-    /// The loaded catalogs it reaches, sorted.
+    /// One page of the loaded catalogs it reaches, sorted (M18 spec
+    /// Decision 7: `?after=&limit=`, as `GET /catalogs`).
     pub catalogs: Vec<String>,
+    /// The `after` of the next page of `catalogs`; absent on the last page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
     /// Its default catalog.
     pub default_catalog: Option<String>,
     /// `key`, `oauth` for a grant, or `session` for a console session.
@@ -136,15 +141,19 @@ async fn teams_of(pool: &PgPool, name: &str) -> Result<(Vec<String>, bool), OkfE
     }
 }
 
-/// `GET /whoami`.
+/// `GET /whoami?after=&limit=`.
 ///
 /// # Errors
-/// 500 if the key list or the user cannot be read.
+/// 400 for a malformed `after`; 500 if the key list, the user or the
+/// catalog directory cannot be read.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn whoami(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
+    Query(query): Query<PageQuery>,
 ) -> Result<Json<WhoAmI>, AppError> {
+    // First, so a malformed cursor is refused before anything else is read.
+    let page = reachable_page(&app, &principal, &query).await?;
     let (name, user) = match &principal.kind {
         // A session has no key row: it is its user.
         CredentialKind::Session { .. } => (None, principal.user.clone()),
@@ -167,12 +176,13 @@ async fn whoami(
         Some(name) => teams_of(app.pool(), name).await?,
         None => (Vec::new(), false),
     };
-    // `Catalogs` is a BTreeMap, so its keys come out sorted.
-    let catalogs = app
-        .catalogs()
-        .keys()
-        .filter(|catalog| principal.reaches(catalog))
-        .cloned()
+    // The page is sorted by name; a catalog this replica has not loaded is
+    // left out, as before.
+    let catalogs = page
+        .items
+        .iter()
+        .filter(|row| app.loaded_catalog(row).is_some())
+        .map(|row| row.name.clone())
         .collect();
     // `match` on a reference: `client_name` binds a `&Option<String>`.
     let (kind, client_name) = match &principal.kind {
@@ -191,6 +201,7 @@ async fn whoami(
         maintenance_report: principal.maintenance_report,
         all_catalogs: matches!(principal.reach, Reach::All),
         catalogs,
+        next: page.next,
         default_catalog: principal.default_catalog.clone(),
         kind,
         client_name,

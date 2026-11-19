@@ -23,6 +23,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::error::OkfError;
+use crate::store::catalogs;
 
 /// What [`lock_catalog`] reports when the catalog row is gone: it was
 /// deleted while the write waited for the delete to finish.
@@ -567,7 +568,8 @@ pub async fn set_state(
 }
 
 /// Every open changeset in `catalog_ids`, optionally only one key's, empty
-/// ones included: what `list_changesets` shows (M8 Decision 8).
+/// ones included: what `list_changesets` shows for a named catalog (M8
+/// Decision 8).
 ///
 /// # Arguments
 /// * `pool` - the database.
@@ -587,13 +589,64 @@ pub async fn list_open(
     catalog_ids: &[i64],
     key_id: Option<&str>,
 ) -> Result<Vec<ListedRow>, OkfError> {
+    listed(pool, Some(catalog_ids), None, key_id).await
+}
+
+/// Every open changeset in the catalogs called `names` (every catalog for
+/// `None`), optionally only one key's, empty ones included: what
+/// `list_changesets` shows without a catalog (M18 spec Decision 7), read
+/// without enumerating the catalogs first.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `names` - the catalogs the calling key reaches, or `None` for a key
+///   that reaches every catalog. The caller still checks each row's catalog
+///   against its gates.
+/// * `key_id` - as for [`list_open`].
+///
+/// # Returns
+/// As [`list_open`].
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.open_for_catalogs"))]
+pub async fn open_for_catalogs(
+    pool: &PgPool,
+    names: Option<&[String]>,
+    key_id: Option<&str>,
+) -> Result<Vec<ListedRow>, OkfError> {
+    // Drop what Postgres could not take (a NUL) or cannot match, as
+    // `catalogs::rows_by_names` does.
+    let valid: Option<Vec<&str>> = names.map(|names| {
+        names
+            .iter()
+            .map(String::as_str)
+            .filter(|name| catalogs::is_valid_name(name))
+            .collect()
+    });
+    // A list with nothing valid in it matches nothing: skip the query.
+    if valid.as_ref().is_some_and(Vec::is_empty) {
+        return Ok(Vec::new());
+    }
+    listed(pool, None, valid.as_deref(), key_id).await
+}
+
+/// The query behind [`list_open`] and [`open_for_catalogs`]: a `NULL`
+/// filter (a Rust `None`) is turned off.
+#[tracing::instrument(level = "trace", skip_all)]
+async fn listed(
+    pool: &PgPool,
+    catalog_ids: Option<&[i64]>,
+    names: Option<&[&str]>,
+    key_id: Option<&str>,
+) -> Result<Vec<ListedRow>, OkfError> {
     // The `LEFT JOIN` keeps changesets without entries; their one joined row
     // has a `NULL` path, which `FILTER` leaves out of `array_agg`, and
     // `COALESCE` turns the resulting `NULL` array into an empty one.
     // Grouping by the primary key `c.id` lets the other `c` columns be
     // selected without listing them in `GROUP BY`. `= ANY($1)` matches a
-    // Postgres array, which sqlx binds from a Rust slice. A `NULL` key (a
-    // Rust `None`) turns that filter off.
+    // Postgres array, which sqlx binds from a Rust slice. A `NULL` filter
+    // turns that filter off.
     let rows = sqlx::query_as::<_, RawListed>(
         "SELECT c.id, c.handle, c.catalog_id, c.key_id, c.actor, c.state, c.version, \
          c.created_at, c.updated_at, k.name AS catalog, a.name AS key_name, \
@@ -603,12 +656,15 @@ pub async fn list_open(
          JOIN catalogs k ON k.id = c.catalog_id \
          LEFT JOIN api_keys a ON a.id = c.key_id \
          LEFT JOIN changeset_entries e ON e.changeset_id = c.id \
-         WHERE c.state = 'open' AND c.catalog_id = ANY($1) \
-         AND ($2::text IS NULL OR c.key_id = $2) \
+         WHERE c.state = 'open' \
+         AND ($1::bigint[] IS NULL OR c.catalog_id = ANY($1)) \
+         AND ($2::text[] IS NULL OR k.name = ANY($2)) \
+         AND ($3::text IS NULL OR c.key_id = $3) \
          GROUP BY c.id, k.name, a.name \
          ORDER BY k.name, c.updated_at, c.id",
     )
     .bind(catalog_ids)
+    .bind(names)
     .bind(key_id)
     .fetch_all(pool)
     .await?;

@@ -214,22 +214,6 @@ impl Labels {
             .map(|(slug, label)| (slug.as_str(), &**label))
     }
 
-    /// The slug of every catalog.
-    ///
-    /// # Returns
-    /// The slugs in no particular order; show them with
-    /// [`Labels::catalog_choices`].
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    pub fn catalog_slugs(&self) -> impl Iterator<Item = &str> {
-        self.catalogs.keys().map(String::as_str)
-    }
-
     /// A team's label.
     ///
     /// # Arguments

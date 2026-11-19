@@ -55,6 +55,10 @@ pub const DEFAULT_OVERLAY_CACHE_SIZE: usize = 64;
 /// The default `catalog_directory_entries`: catalog rows kept by name.
 pub const DEFAULT_CATALOG_DIRECTORY_ENTRIES: u64 = 100_000;
 
+/// The default `search_fanout_max`: the most catalogs `GET /api/v1/search`
+/// searches when the request names none (M18 spec Decision 8).
+pub const DEFAULT_SEARCH_FANOUT_MAX: u32 = 25;
+
 /// The default `catalog_ttl`: how long a cached catalog row is served.
 pub const DEFAULT_CATALOG_TTL: Duration = Duration::from_secs(10);
 
@@ -944,6 +948,10 @@ pub struct Config {
     /// one that is lost.
     #[serde(with = "humantime_serde")]
     pub catalog_ttl: Duration,
+    /// The most catalogs `GET /api/v1/search` searches when the request
+    /// names none (`25`): a key that reaches more must name them, so one
+    /// request cannot search every catalog in the system.
+    pub search_fanout_max: u32,
     /// The externally visible origin (`"https://okf.example.com"`). Setting
     /// it turns OAuth on: it is the issuer, and `<public_url>/mcp` is the
     /// resource tokens are issued for. Its host must be in `allowed_hosts`.
@@ -990,6 +998,7 @@ impl Default for Config {
             overlay_cache_size: DEFAULT_OVERLAY_CACHE_SIZE,
             catalog_directory_entries: DEFAULT_CATALOG_DIRECTORY_ENTRIES,
             catalog_ttl: DEFAULT_CATALOG_TTL,
+            search_fanout_max: DEFAULT_SEARCH_FANOUT_MAX,
             public_url: None,
             oauth: OAuthConfig::default(),
             auth: AuthConfig::default(),
@@ -1130,6 +1139,9 @@ impl Config {
         }
         if self.catalog_ttl.is_zero() {
             return Err("catalog_ttl must be more than zero".to_string());
+        }
+        if self.search_fanout_max == 0 {
+            return Err("search_fanout_max must be more than zero".to_string());
         }
         if self.allowed_hosts.is_empty() {
             return Err(
@@ -1523,6 +1535,7 @@ mod tests {
         assert_eq!(config.overlay_cache_size, 64);
         assert_eq!(config.catalog_directory_entries, 100_000);
         assert_eq!(config.catalog_ttl, Duration::from_secs(10));
+        assert_eq!(config.search_fanout_max, 25);
     }
 
     #[test]
@@ -1605,6 +1618,7 @@ mod tests {
                 "catalog_directory_entries",
             ),
             ("catalog_ttl = \"0s\"\n", "catalog_ttl"),
+            ("search_fanout_max = 0\n", "search_fanout_max"),
             (
                 "allowed_hosts = [\"\"]\n",
                 "allowed_hosts has a blank entry",

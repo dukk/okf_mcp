@@ -14,13 +14,16 @@ use axum::middleware::Next;
 use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::Router;
+use serde::Deserialize;
 
 use crate::app::App;
 use crate::auth::{Principal, Reach};
+use crate::cache::directory::{page_size, Page};
 use crate::error::OkfError;
 use crate::http::console_session::require_principal;
 use crate::http::requester::Requester;
 use crate::mcp::context::ToolContext;
+use crate::store::catalogs::CatalogRow;
 use crate::store::keys::Access;
 
 #[cfg(test)]
@@ -295,6 +298,40 @@ pub(crate) fn require_reader(principal: &Principal) -> Result<(), OkfError> {
         return Ok(());
     }
     require_admin(principal)
+}
+
+/// `?after=&limit=` of a paginated catalog listing (M18 spec Decision 7):
+/// `GET /catalogs`, `GET /whoami` and `GET /labels`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct PageQuery {
+    /// The `next` of the previous page; absent or empty for the first.
+    after: Option<String>,
+    /// The page size: default 100, at most 1000 (a larger one is cut).
+    limit: Option<u32>,
+}
+
+/// One page of the catalogs `principal` reaches, for `query`.
+///
+/// # Arguments
+/// * `app` - the application, for its catalog directory.
+/// * `principal` - the caller.
+/// * `query` - the request's paging parameters.
+///
+/// # Returns
+/// The page, as [`crate::cache::directory::CatalogDirectory::reachable_page`]
+/// gives it.
+///
+/// # Errors
+/// 400 for a malformed cursor; 500 if the read fails.
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) async fn reachable_page(
+    app: &App,
+    principal: &Principal,
+    query: &PageQuery,
+) -> Result<Page<Arc<CatalogRow>>, OkfError> {
+    app.directory()
+        .reachable_page(principal, query.after.as_deref(), page_size(query.limit))
+        .await
 }
 
 /// Polls after an administrative change, so the key cache and the catalog
