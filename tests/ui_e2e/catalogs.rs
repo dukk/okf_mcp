@@ -743,7 +743,8 @@ async fn member_access_read_makes_a_team_catalog_read_only_for_its_members() {
         ui.sign_in_password(EMAIL, PASSWORD);
         ui.open("/my-keys");
         ui.click("#my-key-new");
-        ui.wait_visible("#my-key-form");
+        // The picker reads the ceiling a page at a time (issue #736).
+        ui.wait_visible("#my-key-form select[name=level-shared]");
         assert_eq!(
             ui.eval(
                 "() => [...document.querySelectorAll('#my-key-form select[name=level-shared] option')] \
