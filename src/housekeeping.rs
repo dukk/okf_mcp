@@ -268,6 +268,7 @@ pub async fn schedule(pool: &PgPool, task: Task, slot: i64) -> Result<bool, OkfE
 /// Every [`TICK_INTERVAL`] until `shutdown` (the first at once): schedules
 /// the current slot of every task, then reads the `cluster_stats` row into
 /// this replica's gauges. A failure is logged and the next tick tries again.
+/// A tick in progress is dropped when `shutdown` is cancelled.
 ///
 /// # Arguments
 /// * `app` - the shared state (its pool, clock and metrics).
@@ -284,11 +285,17 @@ pub async fn tick_until(app: Arc<App>, shutdown: CancellationToken) {
     // After a slow tick, wait a full interval instead of catching up.
     ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
-        // `select!` waits for whichever branch is ready first. A tick in
-        // progress is not interrupted: cancellation is noticed between ticks.
+        // `select!` waits for whichever branch is ready first.
         tokio::select! {
             () = shutdown.cancelled() => return,
-            _ = ticks.tick() => tick(&app).await,
+            _ = ticks.tick() => {}
+        }
+        // The tick is raced against shutdown too, so a query blocked on a
+        // lock cannot hold the process past `worker_shutdown_grace`. Dropping
+        // it midway is safe: scheduling is idempotent per slot (the next
+        // replica or start pushes it again) and the gauge refresh only reads.
+        if shutdown.run_until_cancelled(tick(&app)).await.is_none() {
+            return;
         }
     }
 }
@@ -1073,6 +1080,55 @@ mod tests {
                 (format!("prune_oauth:{next}"), "Pending".to_string(), 0),
             ]
         );
+    }
+
+    /// Issue #748: a tick blocked on a lock does not hold shutdown up.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_ticker_stops_at_shutdown_while_a_tick_is_blocked() {
+        let test = app_with(&[], Config::default()).await;
+        // Arrange: another connection holds ACCESS EXCLUSIVE on the queue.
+        let mut blocker = test.app.pool().begin().await.unwrap();
+        sqlx::query("LOCK TABLE apalis.jobs IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *blocker)
+            .await
+            .unwrap();
+        // The tests share one Postgres server, so the waiter below must be
+        // blocked by this backend, not by another test's lock.
+        let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *blocker)
+            .await
+            .unwrap();
+        let shutdown = CancellationToken::new();
+        let ticker = tokio::spawn(tick_until(Arc::clone(&test.app), shutdown.clone()));
+        // Wait until the tick's query waits on that lock.
+        tokio::time::timeout(PATIENCE, async {
+            loop {
+                let waiting: i64 = sqlx::query_scalar(
+                    "SELECT count(*) FROM pg_stat_activity \
+                     WHERE datname = current_database() AND wait_event_type = 'Lock' \
+                     AND query ILIKE '%apalis.jobs%' AND pid <> pg_backend_pid() \
+                     AND pg_blocking_pids(pid) @> ARRAY[$1]::int[]",
+                )
+                .bind(holder)
+                .fetch_one(test.app.pool())
+                .await
+                .unwrap();
+                if waiting > 0 {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the tick blocks on the lock");
+
+        // Act and assert: cancelling ends the ticker promptly.
+        shutdown.cancel();
+        let stopped = tokio::time::timeout(Duration::from_secs(5), ticker).await;
+        blocker.rollback().await.unwrap();
+        stopped
+            .expect("the ticker returns within the bound")
+            .expect("the ticker does not panic");
     }
 
     #[tokio::test(flavor = "multi_thread")]
