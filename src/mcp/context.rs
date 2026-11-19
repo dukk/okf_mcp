@@ -13,7 +13,7 @@ use crate::auth::{Admission, CatalogScope, Principal};
 use crate::catalog::CatalogState;
 use crate::error::OkfError;
 use crate::http::requester::Requester;
-use crate::labels::directory::Labels;
+use crate::labels::directory::{Labels, Wanted};
 use crate::overlay::View;
 use crate::selection::{connection_catalogs, in_scope, resolve, Selection, Sources};
 use crate::store::audit::{AccessKind, AccessRecord, AuditActor, Source};
@@ -201,13 +201,19 @@ impl ToolContext {
         &self.principal
     }
 
-    /// The label directory, as of its last reload.
+    /// The labels of what a tool output will show.
+    ///
+    /// # Arguments
+    /// * `wanted` - the slugs.
     ///
     /// # Returns
-    /// The shared directory (a pointer copy).
+    /// Their labels.
+    ///
+    /// # Errors
+    /// [`OkfError::Database`].
     #[tracing::instrument(level = "trace", skip_all)]
-    pub fn labels(&self) -> Arc<Labels> {
-        self.app.labels()
+    pub async fn labels_for(&self, wanted: &Wanted) -> Result<Labels, OkfError> {
+        self.app.labels().labels_for(wanted).await
     }
 
     /// A catalog's label for a tool output.
@@ -216,11 +222,16 @@ impl ToolContext {
     /// * `slug` - the catalog's id.
     ///
     /// # Returns
-    /// Its label, or the id when the directory does not know it yet (a
-    /// catalog created since the last reload).
+    /// Its label, or the id when no such catalog exists.
+    ///
+    /// # Errors
+    /// [`OkfError::Database`].
     #[tracing::instrument(level = "trace", skip_all)]
-    pub fn catalog_label(&self, slug: &str) -> String {
-        self.labels().catalog(slug).unwrap_or(slug).to_string()
+    pub async fn catalog_label(&self, slug: &str) -> Result<String, OkfError> {
+        let mut wanted = Wanted::default();
+        wanted.catalog(slug);
+        let labels = self.labels_for(&wanted).await?;
+        Ok(labels.catalog(slug).unwrap_or(slug).to_string())
     }
 
     /// The catalog map this call sees.

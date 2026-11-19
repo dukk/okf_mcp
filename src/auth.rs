@@ -32,7 +32,6 @@ use crate::error::OkfError;
 use crate::http::requester::Requester;
 use crate::http::AppError;
 use crate::keys;
-use crate::labels::directory::Labels;
 use crate::oauth::access::OAuthVerifier;
 use crate::store::audit::{AccessRecord, AuditActor};
 use crate::store::catalogs::CatalogRow;
@@ -79,8 +78,8 @@ pub enum CredentialKind {
 }
 
 /// What a principal's admissions depend on besides its credential and the
-/// catalog's own row: its user's gates, its credential's audit id, the
-/// `require_unlock` setting and the labels, as they were when the principal
+/// catalog's own row: its user's gates, its credential's audit id and the
+/// `require_unlock` setting, as they were when the principal
 /// was assembled for this request (M18 spec Decision 9). Empty for a
 /// principal built outside the credential cache (`From<KeyRecord>`, tests),
 /// which then admits no one as a customer and records nothing.
@@ -94,8 +93,6 @@ pub struct AccessFacts {
     pub credential: Option<i64>,
     /// The `require_unlock` setting.
     pub require_unlock: bool,
-    /// The labels a suspension notice names the catalog and team with.
-    pub labels: Arc<Labels>,
 }
 
 /// A catalog as an access record names it, fixed at admission.
@@ -289,16 +286,13 @@ impl Principal {
     #[tracing::instrument(level = "trace", skip_all)]
     pub fn suspension(&self, row: &CatalogRow) -> Option<SuspendedCatalog> {
         let suspended = row.suspended.as_ref()?;
-        let labels = &self.facts.labels;
-        // A catalog or team created since the labels loaded shows its slug.
+        // Both labels come from the row itself: the catalog's from its
+        // display name and description, the team's from the suspension.
         Some(SuspendedCatalog {
             team: suspended.team.clone(),
             notice: suspended.notice.clone(),
-            catalog_label: labels.catalog(&row.name).unwrap_or(&row.name).to_string(),
-            team_label: labels
-                .team(&suspended.team)
-                .unwrap_or(&suspended.team)
-                .to_string(),
+            catalog_label: crate::labels::catalog_label(&row.display_name, &row.description),
+            team_label: suspended.team_label.clone(),
         })
     }
 
@@ -1071,6 +1065,7 @@ mod tests {
             suspended: Some(SuspendedRow {
                 team: "family".to_string(),
                 notice: Some("Paused.".to_string()),
+                team_label: "family".to_string(),
             }),
             ..row(name, id)
         }
@@ -1603,38 +1598,27 @@ mod tests {
     }
 
     #[test]
-    fn a_suspension_is_named_with_the_labels_of_its_principal() {
-        let labels = Labels::from_rows(
-            Vec::new(),
-            vec![crate::labels::directory::TeamRow {
-                name: "family".to_string(),
-                display_name: "The Family".to_string(),
-                personal_of: None,
-            }],
-            vec![crate::labels::directory::CatalogRow {
-                name: "shared".to_string(),
-                display_name: "Shared notes".to_string(),
-                description: String::new(),
-                owner_team: Some("family".to_string()),
-            }],
-            Vec::new(),
-        );
-        let principal = Principal {
-            facts: Arc::new(AccessFacts {
-                labels: Arc::new(labels),
-                ..AccessFacts::default()
-            }),
-            ..key_on(&["shared", "new"], Access::Read)
-        };
+    fn a_suspension_is_named_with_the_labels_of_its_row() {
+        let principal = key_on(&["shared", "new"], Access::Read);
+        let mut shared = suspended_row("shared", 1);
+        shared.display_name = "Shared notes".to_string();
+        if let Some(suspended) = shared.suspended.as_mut() {
+            suspended.team_label = "The Family".to_string();
+        }
+        let unlabelled = suspended_row("new", 2);
 
-        let named = principal.suspension(&suspended_row("shared", 1)).unwrap();
-        let unlabelled = principal.suspension(&suspended_row("new", 2)).unwrap();
+        let named = principal.suspension(&shared).unwrap();
+        let plain = principal.suspension(&unlabelled).unwrap();
 
         assert_eq!(
             (named.catalog_label.as_str(), named.team_label.as_str()),
             ("Shared notes", "The Family")
         );
-        assert_eq!(unlabelled.catalog_label, "new", "a slug until labels load");
+        assert_eq!(
+            plain.catalog_label,
+            crate::labels::catalog_label("", ""),
+            "a catalog with no name or description reads as the rule says"
+        );
         assert_eq!(principal.suspension(&row("shared", 1)), None);
     }
 

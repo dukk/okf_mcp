@@ -23,6 +23,7 @@ use crate::error::OkfError;
 use crate::http::api::context;
 use crate::http::requester::Requester;
 use crate::http::AppError;
+use crate::labels::directory::Wanted;
 use crate::mcp::blocking;
 use crate::mcp::changesets::unified_diff;
 use crate::mcp::documents::{
@@ -554,7 +555,11 @@ async fn recent_changes(
     let after = query.after.as_deref().map(parse_cursor).transpose()?;
     let limit = query.limit.unwrap_or(RECENT_DEFAULT);
     let page = recent(app.pool(), state.id(), after.as_ref(), limit).await?;
-    let labels = ctx.labels();
+    let mut wanted = Wanted::default();
+    for row in &page.rows {
+        wanted.user(&row.actor);
+    }
+    let labels = ctx.labels_for(&wanted).await?;
     let changes = page
         .rows
         .into_iter()
@@ -570,7 +575,7 @@ async fn recent_changes(
         .collect();
     Ok(Json(RecentChanges {
         catalog: state.name().to_string(),
-        catalog_label: ctx.catalog_label(state.name()),
+        catalog_label: ctx.catalog_label(state.name()).await?,
         changes,
         next_after: page.next.as_ref().map(cursor_text),
     }))
