@@ -32,7 +32,7 @@ use crate::okf::analysis::links::INDEX_HEADING;
 use crate::okf::markdown::{encode_link_path, find_links, resolve_link};
 use crate::okf::ops::relink::{rewrite_text, unlink_text, Redirect};
 use crate::okf::paths::{basename, is_concept};
-use crate::okf::pystr::{py_repr_str, py_strip, universal_newlines};
+use crate::okf::pystr::{py_repr_str, py_strip, py_unquote, universal_newlines};
 use crate::okf::workspace::{MemWorkspace, Workspace};
 
 /// One replayable bookkeeping edit, stored in a changeset entry's `replay`
@@ -259,13 +259,36 @@ pub(crate) fn lists_target(
 /// that differs from the written one; for any other name this is `false`
 /// (the ordinary check already sees its link).
 ///
+/// The rule that keeps this from claiming another concept's listing: a
+/// destination that reads as a working link belongs to the document it
+/// resolves to. So a bullet is a raw listing of `target` only when its
+/// destination equals the target's raw name AND
+/// 1. the name holds no valid `%XX` escape (`py_unquote` leaves it alone):
+///    `a%20b.md` as a raw name is indistinguishable from the encoded name
+///    of `a b.md`, which is that file's listing, never this one's (replay
+///    cannot check which files exist, so the rule is on the text); and
+/// 2. the destination does not resolve to a document that exists in
+///    `workspace` other than `target` itself (`a#b.md` reads as a link to `a` plus a fragment; if `a`
+///    exists the bullet lists it). Replay passes an empty workspace, where
+///    only rule 1 applies.
+///
+/// A literal-percent name with a valid-looking escape therefore never
+/// matches an old raw bullet: it gets a second, working bullet, which is
+/// the safe side of an ambiguous case.
+///
 /// # Arguments
+/// * `workspace` - tells which documents exist (rule 2).
 /// * `text` - an `index.md`, with universal newlines.
 /// * `index` - its catalog-relative path; the raw destination is the
 ///   target relative to its folder, or `/`-absolute.
 /// * `target` - the catalog-relative path listed.
 #[tracing::instrument(level = "debug", skip_all)]
-pub(crate) fn lists_raw_target(text: &str, index: &str, target: &str) -> bool {
+pub(crate) fn lists_raw_target(
+    workspace: &dyn Workspace,
+    text: &str,
+    index: &str,
+    target: &str,
+) -> bool {
     let folder = crate::okf::paths::dirname(index);
     let relative = if folder.is_empty() {
         Some(target)
@@ -278,6 +301,11 @@ pub(crate) fn lists_raw_target(text: &str, index: &str, target: &str) -> bool {
     raws.push(format!("/{target}"));
     raws.iter()
         .filter(|raw| encode_link_path(raw) != raw.as_str())
+        .filter(|raw| py_unquote(raw) == raw.as_str())
+        .filter(|raw| {
+            resolve_link(workspace, raw, index)
+                .is_none_or(|resolved| resolved.path == target || !workspace.exists(&resolved.path))
+        })
         .any(|raw| {
             text.split('\n').any(|line| {
                 is_bullet(line)
@@ -302,7 +330,7 @@ pub(crate) fn already_lists(
     index: &str,
     target: &str,
 ) -> bool {
-    lists_target(workspace, text, index, target) || lists_raw_target(text, index, target)
+    lists_target(workspace, text, index, target) || lists_raw_target(workspace, text, index, target)
 }
 
 /// The line of `text` (an `index.md` at `index`) that lists `target`: the

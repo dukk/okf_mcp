@@ -915,6 +915,92 @@ mod tests {
     }
 
     #[test]
+    fn index_refuses_a_bullet_that_would_not_link_back() {
+        // A title ending in `\` swallows the label's closing `]`: the
+        // documented unrepresentable-label case beside `links_back`.
+        let ws = awkward_ws("plain.md", "# D\n\n# Concepts\n");
+
+        let error = index(&ws, &ctx(), "d/plain", "x", None, Some("Odd\\")).unwrap_err();
+
+        let reason = refusal(error);
+        assert!(
+            reason.contains("no markdown link to /d/plain.md can be written"),
+            "{reason}"
+        );
+        assert_eq!(
+            ws.read_to_string("d/index.md").unwrap(),
+            "# D\n\n# Concepts\n"
+        );
+    }
+
+    #[test]
+    fn replay_does_not_duplicate_a_raw_bullet() {
+        for name in ["a b.md", "a).md", "a#b.md", "a:b.md"] {
+            let raw = format!("# D\n\n# Concepts\n\n* [Odd]({name}) - old\n");
+            let op = ReplayOp::ListBullet {
+                target: format!("d/{name}"),
+                bullet: format!("* [Odd]({}) - new", encode_link_path(name)),
+                section: None,
+                create_section: false,
+            };
+
+            let got = crate::okf::ops::replay("d/index.md", Some(&raw), &[op]).unwrap();
+
+            assert_eq!(got, raw, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_literal_percent_name_is_not_taken_for_an_encoded_one() {
+        // `d/a b.md` is listed as `a%20b.md`; `d/a%20b.md` is another file
+        // and needs its own bullet, `a%2520b.md`, from index, repair and replay.
+        let files = [("d/a b.md", "Space"), ("d/a%20b.md", "Percent")];
+        let make = || {
+            let ws = MemWorkspace::default();
+            ws.write_atomic("index.md", "# Root\n").unwrap();
+            ws.write_atomic("log.md", "# Log\n").unwrap();
+            ws.write_atomic("d/index.md", "# D\n\n# Concepts\n")
+                .unwrap();
+            for (path, title) in files {
+                let text = format!("---\ntype: Note\ntitle: {title}\ndescription: d\n---\n");
+                ws.write_atomic(path, &text).unwrap();
+            }
+            ws
+        };
+        let check = |ws: &MemWorkspace, how: &str| {
+            let text = ws.read_to_string("d/index.md").unwrap();
+            assert!(text.contains("](a%20b.md)"), "{how}: {text}");
+            assert!(text.contains("](a%2520b.md)"), "{how}: {text}");
+            assert_eq!(text.matches("* [").count(), 2, "{how}: {text}");
+        };
+
+        let by_index = make();
+        for (path, _) in files {
+            index(&by_index, &ctx(), path, "d", None, None).unwrap();
+        }
+        check(&by_index, "index");
+
+        let by_repair = make();
+        repair_indexes(&by_repair).unwrap();
+        check(&by_repair, "repair");
+
+        let ws = make();
+        let ops = [
+            ("d/a b.md", "* [Space](a%20b.md) - d"),
+            ("d/a%20b.md", "* [Percent](a%2520b.md) - d"),
+        ]
+        .map(|(target, bullet)| ReplayOp::ListBullet {
+            target: target.to_string(),
+            bullet: bullet.to_string(),
+            section: None,
+            create_section: false,
+        });
+        let got = crate::okf::ops::replay("d/index.md", Some("# D\n\n# Concepts\n"), &ops).unwrap();
+        ws.write_atomic("d/index.md", &got).unwrap();
+        check(&ws, "replay");
+    }
+
+    #[test]
     fn index_refusals_use_okf_py_wording() {
         let ws = infra();
 
