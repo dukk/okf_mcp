@@ -86,7 +86,7 @@ pub struct CatalogList {
 /// A suspended catalog is listed with `suspended` set, and the selection
 /// leaves it out of a connection's list ([`crate::selection::resolve`]).
 #[tracing::instrument(level = "debug", skip_all)]
-pub(crate) fn list(ctx: &ToolContext) -> CatalogList {
+pub(crate) async fn list(ctx: &ToolContext) -> CatalogList {
     let labels = ctx.labels();
     let catalogs = ctx
         .catalogs()
@@ -111,7 +111,7 @@ pub(crate) fn list(ctx: &ToolContext) -> CatalogList {
         })
         .collect();
     // The selection's names only, not its contents: nothing is admitted.
-    let (selection, write_target, selection_error) = match ctx.select(None) {
+    let (selection, write_target, selection_error) = match ctx.select(None).await {
         Ok(selection) => {
             let write_target = Some(selection.write_target().to_string());
             (selection.catalogs().to_vec(), write_target, None)
@@ -160,7 +160,7 @@ impl OkfServer {
     ) -> Result<Json<CatalogList>, CallToolResult> {
         // `?` returns the error result at once, like a Python early `return`.
         let ctx = self.context(&parts)?;
-        Ok(Json(list(&ctx)))
+        Ok(Json(list(&ctx).await))
     }
 }
 
@@ -185,7 +185,7 @@ mod tests {
         .await;
         let key = principal(&["pg", "work"], None);
 
-        let listed = list(&context(&test, key, Some(&["work", "pg"])));
+        let listed = list(&context(&test, key, Some(&["work", "pg"]))).await;
 
         let names: Vec<&str> = listed.catalogs.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["pg", "work"]);
@@ -207,8 +207,8 @@ mod tests {
         .await;
         let key = principal(&["pg", "work"], Some("pg"));
 
-        let listed = list(&context(&test, Arc::clone(&key), Some(&["work"])));
-        let mistyped = list(&context(&test, key, Some(&["work", "home"])));
+        let listed = list(&context(&test, Arc::clone(&key), Some(&["work"]))).await;
+        let mistyped = list(&context(&test, key, Some(&["work", "home"]))).await;
 
         let names: Vec<&str> = listed.catalogs.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["work"]);
@@ -225,7 +225,7 @@ mod tests {
     async fn without_any_source_the_selection_says_why() {
         let test = app_with(&[("pg", &[])], Config::default()).await;
 
-        let listed = list(&context(&test, principal(&[], None), None));
+        let listed = list(&context(&test, principal(&[], None), None)).await;
 
         assert_eq!(listed.catalogs.len(), 1);
         assert!(listed.selection.is_empty());
@@ -260,10 +260,10 @@ mod tests {
             context(&test, cached_principal(&test, secret), Some(connection))
         };
 
-        let listed = list(&on(&reader, &["main", "other"]));
-        let only_suspended = list(&on(&reader, &["main"]));
-        let strangers = list(&on(&stranger, &["other"]));
-        let admins = list(&on(&root, &["main", "other"]));
+        let listed = list(&on(&reader, &["main", "other"])).await;
+        let only_suspended = list(&on(&reader, &["main"])).await;
+        let strangers = list(&on(&stranger, &["other"])).await;
+        let admins = list(&on(&root, &["main", "other"])).await;
 
         let main = listed.catalogs.iter().find(|c| c.name == "main").unwrap();
         assert_eq!(
