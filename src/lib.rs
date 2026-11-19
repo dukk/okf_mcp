@@ -7,7 +7,8 @@
 //! (`auth`), which catalogs a call acts on (`selection`), the catalog store
 //! (`store`), the write path every write tool goes through (`write`), the
 //! configuration file (`config`), the server's shared state and poll loop
-//! (`app`), per-changeset async locks (`keyed_lock`), outgoing mail and its
+//! (`app`), the bounded caches (`cache`), per-changeset async locks
+//! (`keyed_lock`), outgoing mail and its
 //! job queue (`mail`), the MCP handler and its tools (`mcp`), the SNTP client (`ntp`),
 //! OIDC providers (`oidc`) and the clock check that uses it (`clock_check`), the HTTP router and
 //! server (`http`), the OAuth authorization server (`oauth`), the
@@ -23,6 +24,7 @@ pub mod app;
 pub mod archive;
 pub mod auth;
 pub mod backoff;
+pub mod cache;
 pub mod catalog;
 pub mod cli;
 pub mod clock;

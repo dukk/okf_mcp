@@ -14,6 +14,7 @@ use opentelemetry::KeyValue;
 
 use super::otlp::{ExportFailures, FailureReason, Signal};
 use crate::app::App;
+use crate::cache::bounded::{CacheName, CacheSize, Eviction, Lookup};
 use crate::config::MailProvider;
 use crate::mcp::annotations::{DESTRUCTIVE, EXTERNAL, READS, STAGED};
 use crate::store::sign_in_events::{Method, Outcome as SignInOutcome};
@@ -250,6 +251,10 @@ struct Instruments {
     clock_offset: Gauge<f64>,
     archive_size: Counter<u64>,
     archive_duration: Histogram<f64>,
+    // The bounded caches (M18 task 4).
+    cache_requests: Counter<u64>,
+    cache_evictions: Counter<u64>,
+    cache_load_duration: Histogram<f64>,
 }
 
 impl Metrics {
@@ -303,6 +308,13 @@ impl Metrics {
         "okf_clock_offset_seconds",
         "okf_archive_size_bytes_total",
         "okf_archive_duration_seconds",
+        "okf_cache_requests_total",
+        "okf_cache_evictions_total",
+        "okf_cache_load_duration_seconds",
+        // Registered by `observe_cache`: a gauge reports only while its
+        // cache is alive.
+        "okf_cache_entries",
+        "okf_cache_bytes",
         // Registered by `observe_catalogs` and `observe_pool`: they need a
         // loaded `App`, so their own tests (`app.rs`, `mcp/changesets.rs`)
         // check the rendered names.
@@ -430,6 +442,21 @@ impl Metrics {
                     meter,
                     "okf.archive.duration",
                     "Archive exports and imports, by direction and outcome.",
+                ),
+                cache_requests: counter(
+                    meter,
+                    "okf.cache.requests",
+                    "Bounded cache lookups, by cache and result.",
+                ),
+                cache_evictions: counter(
+                    meter,
+                    "okf.cache.evictions",
+                    "Bounded cache entries removed, by cache and cause.",
+                ),
+                cache_load_duration: seconds_histogram(
+                    meter,
+                    "okf.cache.load.duration",
+                    "Bounded cache loads, by cache and outcome.",
                 ),
             }),
             meter: meter.clone(),
@@ -766,6 +793,93 @@ impl Drop for SessionGuard {
     )]
     fn drop(&mut self) {
         self.counter.add(-1, &[]);
+    }
+}
+
+/// The bounded caches' instruments (M18 task 4). Labels are closed sets:
+/// the cache, the lookup result and the eviction cause; never a key.
+impl Metrics {
+    /// Counts one lookup of a bounded cache.
+    ///
+    /// # Arguments
+    /// * `cache` - which cache.
+    /// * `result` - hit, miss, or a stale entry that was revalidated.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn cache_request(&self, cache: CacheName, result: Lookup) {
+        self.inner.cache_requests.add(
+            1,
+            &[
+                KeyValue::new("cache", cache.as_str()),
+                KeyValue::new("result", result.as_str()),
+            ],
+        );
+    }
+
+    /// Counts one entry removed from a bounded cache.
+    ///
+    /// # Arguments
+    /// * `cache` - which cache.
+    /// * `cause` - why it left.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn cache_eviction(&self, cache: CacheName, cause: Eviction) {
+        self.inner.cache_evictions.add(
+            1,
+            &[
+                KeyValue::new("cache", cache.as_str()),
+                KeyValue::new("cause", cause.as_str()),
+            ],
+        );
+    }
+
+    /// Records one finished load of a bounded cache.
+    ///
+    /// # Arguments
+    /// * `cache` - which cache.
+    /// * `outcome` - whether the loader succeeded.
+    /// * `elapsed` - how long it ran.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn cache_load(&self, cache: CacheName, outcome: Outcome, elapsed: Duration) {
+        self.inner.cache_load_duration.record(
+            elapsed.as_secs_f64(),
+            &[
+                KeyValue::new("cache", cache.as_str()),
+                KeyValue::new("outcome", outcome.as_str()),
+            ],
+        );
+    }
+
+    /// Registers `okf.cache.entries` and `okf.cache.bytes` for one cache.
+    /// The callbacks hold only a [`Weak`] handle (the meter provider
+    /// outlives the cache), and report nothing once it is dropped.
+    ///
+    /// # Arguments
+    /// * `cache` - which cache the series is labelled with.
+    /// * `size` - the cache's size probe.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn observe_cache(&self, cache: CacheName, size: Weak<dyn CacheSize>) {
+        let label = [KeyValue::new("cache", cache.as_str())];
+        let entries_probe = size.clone();
+        let entries_label = label.clone();
+        self.meter
+            .u64_observable_gauge("okf.cache.entries")
+            .with_description("Entries held by a bounded cache.")
+            .with_callback(move |observer| {
+                if let Some(probe) = entries_probe.upgrade() {
+                    observer.observe(probe.entries(), &entries_label);
+                }
+            })
+            .build();
+        self.meter
+            .u64_observable_gauge("okf.cache.bytes")
+            .with_description("Estimated bytes held by a bounded cache that is limited by bytes.")
+            .with_callback(move |observer| {
+                if let Some(probe) = size.upgrade() {
+                    if let Some(bytes) = probe.bytes() {
+                        observer.observe(bytes, &label);
+                    }
+                }
+            })
+            .build();
     }
 }
 
@@ -1266,6 +1380,16 @@ mod tests {
         metrics.mail_job(MailProvider::Log, MailOutcome::Sent);
         metrics.clock_check(Outcome::Ok, Some(10));
         metrics.archive(Direction::Export, "notes", Outcome::Ok, elapsed, Some(10));
+        metrics.cache_request(CacheName::Directory, Lookup::Hit);
+        metrics.cache_eviction(CacheName::Directory, Eviction::Size);
+        metrics.cache_load(CacheName::Directory, Outcome::Ok, elapsed);
+        // The gauges report while their cache is alive.
+        let _cache = crate::cache::bounded::Bounded::<i64, i64>::new(
+            CacheName::Directory,
+            crate::cache::bounded::Limit::Bytes(10),
+            Duration::from_secs(60),
+        )
+        .with_metrics(metrics.clone());
 
         let rendered: std::collections::BTreeSet<String> = registry
             .gather()
