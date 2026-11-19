@@ -160,8 +160,10 @@ async fn whoami(
         CredentialKind::Session { .. } => (None, principal.user.clone()),
         CredentialKind::ApiKey | CredentialKind::OAuth { .. } => {
             // The user comes from the one row read now, not the principal,
-            // in case it was reassigned since the principal was cached (a
-            // revoked or missing row has no name or user, as before).
+            // in case it was reassigned since the principal was cached. A
+            // row that is gone has no name or user; a row revoked since the
+            // principal was cached is still read (revoked or not), so it
+            // keeps both, as the whole-table read did.
             // `unzip` splits an `Option<(a, b)>` into
             // `(Option<a>, Option<b>)`.
             let (name, user) = key_rows::record_by_id(app.pool(), &principal.key_id)
@@ -465,6 +467,28 @@ mod tests {
         let test = app().await;
         let (status, _) = send(&test, "GET", "/api/v1/nothing-here", None, None).await;
         assert_eq!(status.as_u16(), 404);
+    }
+
+    /// A key deleted after its credential was cached still authenticates
+    /// until the cache expires; its row is gone, so `whoami` names no key
+    /// and no user (the answer the whole-table read gave).
+    #[tokio::test]
+    async fn whoami_of_a_key_deleted_after_it_was_cached_has_no_name_or_user() {
+        let test = app().await;
+        let keys = keys(&test).await;
+        let (warm, _) = send(&test, "GET", "/api/v1/whoami", Some(&keys.read), None).await;
+        assert_eq!(warm.as_u16(), 200);
+        sqlx::query("DELETE FROM api_keys WHERE name = 'reader'")
+            .execute(test.app.pool())
+            .await
+            .expect("delete the key row");
+
+        let (status, body) = send(&test, "GET", "/api/v1/whoami", Some(&keys.read), None).await;
+
+        assert_eq!(status.as_u16(), 200, "{body}");
+        assert_eq!(body.get("name"), Some(&serde_json::Value::Null));
+        assert_eq!(body.get("user"), Some(&serde_json::Value::Null));
+        assert_eq!(body["teams"], serde_json::json!([]));
     }
 
     /// Issue #737: `GET /whoami` read every key to find the caller's. With

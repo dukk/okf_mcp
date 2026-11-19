@@ -9,14 +9,16 @@ keys.
 - `src/rows_returned.rs` (test only): the `RowsReturned` tracing layer that
   sums the `rows_returned` of `sqlx::query` events, moved out of the
   credential cache tests so other tests can use it.
+- `identity::tests::whoami_of_a_key_deleted_after_it_was_cached_has_no_name_or_user`.
 - `identity::tests::whoami_reads_the_callers_key_not_every_key`: with 50,000
   other keys seeded by SQL, a warmed `whoami` returns under 50 rows.
 
 ## Changed
 
 - `whoami` reads the caller's row with `keys::record_by_id`. The response is
-  the same for keys, grants, unassigned keys and sessions; a row that is gone
-  still gives no name and no user.
+  the same for keys, grants, unassigned keys and sessions; a row that is gone gives no name and no user, and a key revoked after
+  its credential was cached is still named (`record_by_id` returns revoked
+  rows, as `list` did).
 
 ## Notes
 
