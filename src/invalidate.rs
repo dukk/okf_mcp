@@ -283,10 +283,10 @@ impl Message {
 /// on the paths that write, and only after the people are locked.
 ///
 /// A list of only [`Invalidation::Catalog`] (a publish, import or repair)
-/// does not bump: those were never administrative changes, the poll loop
-/// sees them through the catalog's own generation, and a bump would make
-/// every publish wait on the one `server_state` row and reload every
-/// replica's key cache.
+/// does not bump: those were never administrative changes, the catalog's
+/// own generation (and its `Catalog` message) carries them, and a bump
+/// would make every publish wait on the one `server_state` row and mark
+/// every replica's credential caches stale for a milestone 16 replica.
 ///
 /// # Arguments
 /// * `conn` - the writer's transaction (`&mut tx`).
@@ -503,7 +503,7 @@ async fn apply_payload(app: &App, payload: &str) -> Option<Duration> {
         return None;
     };
     let kind = message.invalidation.kind();
-    // `parent: None`: a background root, like each poll pass.
+    // `parent: None`: a background root, like each housekeeping job.
     let span =
         tracing::info_span!(parent: None, "okf.invalidate.apply", okf.invalidation.kind = kind);
     app.apply(&message).instrument(span).await;

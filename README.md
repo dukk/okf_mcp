@@ -448,7 +448,7 @@ own keys, grants, sign-in methods and sessions; admins also get Settings
 
 Browse shows a catalog's tree, each concept rendered (raw HTML in a concept
 is shown as text, never run), its links, history and revision diffs, and
-Search searches the catalogs the key reaches, up to `search_fanout_max` (25) unless it is told which. Recent changes
+Search searches the catalogs the key reaches (the console names every one of them, so `search_fanout_max` does not cap it; that cap applies to an HTTP API search that names none). Recent changes
 (`/ui/#/recent`) lists the revisions published in the selected catalog,
 every document's, newest first, and opens each one's diff.
 
