@@ -14,5 +14,4 @@ no deadline, so the process could outlive `worker_shutdown_grace`.
 - Test `the_ticker_stops_at_shutdown_while_a_tick_is_blocked` holds ACCESS
   EXCLUSIVE on `apalis.jobs`, waits until the tick waits on the lock, cancels
   shutdown and asserts the ticker returns within 5 s.
-- The ticker was the only unbounded await left in `serve_with`'s shutdown
-  path that runs queries; the other loops are already cancellation-aware.
+- The ticker's await in `serve_with` now has no unbounded wait behind it; the other loops were not re-audited here.
