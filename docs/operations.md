@@ -4398,7 +4398,7 @@ take the server out of service. Alert on the `error` log line, not on
   - **Metrics removed:** `okf_poll_duration_seconds`,
     `okf_catalog_refreshes_total`, `okf_catalog_concepts` and
     `okf_catalog_generation` (and the `okf.poll` span). Added: the
-    `okf_cache_*` and `okf_invalidations_*` families. The Grafana example
+    `okf_cache_*`, `okf_invalidations_*` and `okf_housekeeping_*` families. The Grafana example
     follows.
 
 ### Preparing and shipping a release
