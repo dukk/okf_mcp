@@ -52,6 +52,12 @@ pub const DEFAULT_DATABASE_MAX_CONNECTIONS: u32 = 16;
 /// The default number of changeset overlays kept in memory.
 pub const DEFAULT_OVERLAY_CACHE_SIZE: usize = 64;
 
+/// The default `catalog_directory_entries`: catalog rows kept by name.
+pub const DEFAULT_CATALOG_DIRECTORY_ENTRIES: u64 = 100_000;
+
+/// The default `catalog_ttl`: how long a cached catalog row is served.
+pub const DEFAULT_CATALOG_TTL: Duration = Duration::from_secs(10);
+
 /// The default lifetime of an OAuth access token.
 pub const DEFAULT_ACCESS_TOKEN_TTL: Duration = Duration::from_secs(60 * 60);
 
@@ -929,6 +935,15 @@ pub struct Config {
     /// The most changeset overlays kept in memory; past it, the least
     /// recently used one is dropped (and rebuilt if read again).
     pub overlay_cache_size: usize,
+    /// The most catalog rows the catalog directory keeps, by name (`100000`).
+    /// A row is a few hundred bytes, so this bounds the directory at tens of
+    /// megabytes however many catalogs exist.
+    pub catalog_directory_entries: u64,
+    /// How long the directory serves a catalog row before it reads it again
+    /// (`"10s"`). Invalidations drop a row sooner; this is the backstop for
+    /// one that is lost.
+    #[serde(with = "humantime_serde")]
+    pub catalog_ttl: Duration,
     /// The externally visible origin (`"https://okf.example.com"`). Setting
     /// it turns OAuth on: it is the issuer, and `<public_url>/mcp` is the
     /// resource tokens are issued for. Its host must be in `allowed_hosts`.
@@ -973,6 +988,8 @@ impl Default for Config {
             concept_outline_chars: DEFAULT_CONCEPT_OUTLINE_CHARS,
             database_max_connections: DEFAULT_DATABASE_MAX_CONNECTIONS,
             overlay_cache_size: DEFAULT_OVERLAY_CACHE_SIZE,
+            catalog_directory_entries: DEFAULT_CATALOG_DIRECTORY_ENTRIES,
+            catalog_ttl: DEFAULT_CATALOG_TTL,
             public_url: None,
             oauth: OAuthConfig::default(),
             auth: AuthConfig::default(),
@@ -1107,6 +1124,12 @@ impl Config {
         }
         if self.overlay_cache_size == 0 {
             return Err("overlay_cache_size must be more than zero".to_string());
+        }
+        if self.catalog_directory_entries == 0 {
+            return Err("catalog_directory_entries must be more than zero".to_string());
+        }
+        if self.catalog_ttl.is_zero() {
+            return Err("catalog_ttl must be more than zero".to_string());
         }
         if self.allowed_hosts.is_empty() {
             return Err(
@@ -1498,6 +1521,8 @@ mod tests {
         assert_eq!(config.concept_outline_chars, 20_000);
         assert_eq!(config.database_max_connections, 16);
         assert_eq!(config.overlay_cache_size, 64);
+        assert_eq!(config.catalog_directory_entries, 100_000);
+        assert_eq!(config.catalog_ttl, Duration::from_secs(10));
     }
 
     #[test]
@@ -1575,6 +1600,11 @@ mod tests {
             ("allowed_hosts = []\n", "allowed_hosts"),
             ("database_max_connections = 0\n", "database_max_connections"),
             ("overlay_cache_size = 0\n", "overlay_cache_size"),
+            (
+                "catalog_directory_entries = 0\n",
+                "catalog_directory_entries",
+            ),
+            ("catalog_ttl = \"0s\"\n", "catalog_ttl"),
             (
                 "allowed_hosts = [\"\"]\n",
                 "allowed_hosts has a blank entry",

@@ -506,6 +506,26 @@ where
         self.cache.get(key).await.map(|entry| entry.value)
     }
 
+    /// The cached value if it is current: a fresh entry counts as a hit; a
+    /// stale or missing one counts nothing and loads nothing, so the caller
+    /// can read its misses together (a bulk read that must not reorder or
+    /// fill the cache).
+    ///
+    /// # Arguments
+    /// * `key` - the key.
+    ///
+    /// # Returns
+    /// The value, or `None` if it is missing or marked stale.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub async fn peek_fresh(&self, key: &K) -> Option<V> {
+        let entry = self.cache.get(key).await?;
+        if !self.is_fresh(&entry) {
+            return None;
+        }
+        self.count(Lookup::Hit);
+        Some(entry.value)
+    }
+
     /// Drops `key`, and makes a load of it that is running now serve its
     /// caller without keeping the result.
     ///
@@ -1044,6 +1064,21 @@ mod tests {
             text.contains(r#"okf_cache_evictions_total{cache="catalog",cause="size"}"#),
             "no size eviction counted in\n{text}"
         );
+    }
+
+    #[tokio::test]
+    async fn peek_fresh_serves_a_current_entry_and_nothing_else() {
+        let cache = Bounded::<i64, i64>::new(CacheName::Directory, Limit::Entries(10), TTL);
+        assert_eq!(cache.peek_fresh(&1).await, None, "nothing cached yet");
+        cache.get_or_load(1, || async { Ok(7) }).await.unwrap();
+        assert_eq!(cache.peek_fresh(&1).await, Some(7));
+        cache.mark_all_stale();
+        assert_eq!(
+            cache.peek_fresh(&1).await,
+            None,
+            "a stale entry is not served"
+        );
+        assert_eq!(cache.peek(&1).await, Some(7), "but it is still resident");
     }
 
     #[tokio::test]
