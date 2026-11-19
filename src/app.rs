@@ -130,6 +130,9 @@ pub struct App {
     sign_in_limits: SignInLimits,
     // The configured mail provider (Decision 10), built once at start-up.
     mailer: Arc<dyn crate::mail::Mailer>,
+    // The Forminit client `send_feedback`'s worker posts with; `None`
+    // without `[feedback]` (issue #674).
+    forminit: Option<Arc<crate::mail::feedback::Forminit>>,
     // The WebAuthn relying party and ceremonies; `None` without a domain
     // `public_url`.
     passkeys: Option<Passkeys>,
@@ -272,6 +275,18 @@ impl App {
         let sessions = SessionBindings::new(redis.as_ref(), config.session_idle_timeout);
         let overlays = Overlays::new(config.session_idle_timeout, config.overlay_cache_size);
         let mailer = crate::mail::from_config(&config.mail).await?;
+        // A `[feedback] api_key_env` that names an unset variable fails
+        // start-up here, as a mail secret does.
+        let forminit = config
+            .feedback
+            .as_ref()
+            .map(|feedback| {
+                crate::mail::feedback::Forminit::from_config(feedback, &|name| {
+                    std::env::var(name).ok()
+                })
+                .map(Arc::new)
+            })
+            .transpose()?;
         let passkeys = Passkeys::new(&config, redis.as_ref())?;
         // A provider whose secret variable is unset fails start-up here.
         let oidc = OidcProviders::new(&config, |name| std::env::var(name).ok(), redis.as_ref())?;
@@ -297,6 +312,7 @@ impl App {
             audit_pruned: std::sync::Mutex::new(None),
             sign_in_limits: SignInLimits::new(),
             mailer,
+            forminit,
             passkeys,
             oidc,
             access_writes: std::sync::Mutex::new(tokio::task::JoinSet::new()),
@@ -468,6 +484,21 @@ impl App {
     )]
     pub fn mailer(&self) -> &Arc<dyn crate::mail::Mailer> {
         &self.mailer
+    }
+
+    /// The Forminit client the feedback worker posts with.
+    ///
+    /// # Returns
+    /// The client, or `None` without `[feedback]`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn forminit(&self) -> Option<&Arc<crate::mail::feedback::Forminit>> {
+        self.forminit.as_ref()
     }
 
     /// The OIDC providers.
@@ -1143,8 +1174,9 @@ impl App {
     /// registered clients no grant names after [`UNBOUND_CLIENT_HOURS`],
     /// sign-in events older than [`SIGN_IN_EVENT_RETENTION_DAYS`], emailed
     /// links [`OAUTH_RETENTION_DAYS`] past their expiry, console sessions
-    /// past their absolute limit, and mail jobs (sent ones after 7 days and
-    /// failed ones after 30). Runs whether or not OAuth is on, so rows
+    /// past their absolute limit, mail jobs (sent ones after 7 days and
+    /// failed ones after 30), and forwarded feedback after
+    /// `[feedback] retention` (default 30 days). Runs whether or not OAuth is on, so rows
     /// left from when it was are cleared too. Called only under `polling`.
     ///
     /// A failure is logged, not returned, and waits for the next hourly pass.
@@ -1201,6 +1233,22 @@ impl App {
             "old mail jobs",
             crate::mail::queue::prune(&self.pool, now).await,
         );
+        // Without `[feedback]` too, so rows left from when it was set go
+        // after the default retention.
+        let retention = self
+            .config
+            .feedback
+            .as_ref()
+            .map_or(crate::config::DEFAULT_FEEDBACK_RETENTION, |feedback| {
+                feedback.retention
+            });
+        // Validated to at most ten years, so the conversion succeeds.
+        if let Ok(retention) = TimeDelta::from_std(retention) {
+            log_pruned(
+                "forwarded feedback past retention",
+                crate::mail::feedback::prune(&self.pool, now, retention).await,
+            );
+        }
     }
 
     /// Revokes the OAuth grants idle for `oauth.idle_grant_revoke_after`

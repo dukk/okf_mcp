@@ -45,7 +45,7 @@ async fn list_catalogs_carries_display_name_and_label() {
     )
     .await;
 
-    let listed = list(&context(&test, principal(&[], None), None));
+    let listed = list(&context(&test, principal(&[], None), None)).await;
 
     let main = listed.catalogs.iter().find(|c| c.name == "main").unwrap();
     assert_eq!(main.display_name, "Work notes");
@@ -66,7 +66,7 @@ async fn list_catalogs_names_a_suspended_team_by_label() {
     )
     .await;
 
-    let listed = list(&context(&test, cached_principal(&test, &reader), None));
+    let listed = list(&context(&test, cached_principal(&test, &reader), None)).await;
 
     let suspended = listed.catalogs[0].suspended.as_ref().expect("suspended");
     assert_eq!(suspended.team, "family");
@@ -241,7 +241,7 @@ async fn an_unknown_catalog_error_is_unchanged() {
     let test = app_with(&[("pg", &[])], Config::default()).await;
     let ctx = context(&test, principal(&[], Some("pg")), None);
 
-    let error = ctx.one(Some("nope")).unwrap_err();
+    let error = ctx.one(Some("nope")).await.unwrap_err();
 
     assert_eq!(
         error.to_string(),

@@ -364,7 +364,7 @@ async fn one_view(
     changeset: Option<&str>,
 ) -> Result<(Arc<CatalogState>, View), OkfError> {
     let pinned = ctx.pin(changeset).await?;
-    let state = ctx.report_catalog(catalog, pinned.as_ref())?;
+    let state = ctx.report_catalog(catalog, pinned.as_ref()).await?;
     let view = ctx.view(&state, pinned.as_ref()).await?;
     Ok((state, view))
 }
