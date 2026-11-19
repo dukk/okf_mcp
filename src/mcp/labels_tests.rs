@@ -45,7 +45,9 @@ async fn list_catalogs_carries_display_name_and_label() {
     )
     .await;
 
-    let listed = list(&context(&test, principal(&[], None), None)).await;
+    let listed = list(&context(&test, principal(&[], None), None), None)
+        .await
+        .unwrap();
 
     let main = listed.catalogs.iter().find(|c| c.name == "main").unwrap();
     assert_eq!(main.display_name, "Work notes");
@@ -66,7 +68,12 @@ async fn list_catalogs_names_a_suspended_team_by_label() {
     )
     .await;
 
-    let listed = list(&context(&test, cached_principal(&test, &reader), None)).await;
+    let listed = list(
+        &context(&test, cached_principal(&test, &reader), None),
+        None,
+    )
+    .await
+    .unwrap();
 
     let suspended = listed.catalogs[0].suspended.as_ref().expect("suspended");
     assert_eq!(suspended.team, "family");

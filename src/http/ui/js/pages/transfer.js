@@ -69,7 +69,7 @@ export function exportFilename(disposition, slug) {
 export async function render(main, rest) {
     forget();
     let catalogs;
-    try { catalogs = (await api.get('/catalogs')).catalogs; } catch { return; }
+    try { catalogs = (await api.pages('/catalogs', 'catalogs')).catalogs; } catch { return; }
     const known = name => catalogs.some(c => c.name === name);
     let chosen = known(rest[0]) ? rest[0] : known(store.catalog) ? store.catalog : catalogs[0]?.name;
     if (!chosen) {
@@ -161,7 +161,7 @@ export async function render(main, rest) {
                 fraction => { progress.value = Math.round(fraction * 100); });
             result.append(reportPanel(report));
             toast(`Imported into ${target}.`, 'ok');
-            try { catalogs = (await api.get('/catalogs')).catalogs; showGeneration(); } catch { /* toasted */ }
+            try { catalogs = (await api.pages('/catalogs', 'catalogs')).catalogs; showGeneration(); } catch { /* toasted */ }
         } catch (error) {
             result.append(errorPanel(error));
             toast(error.status === 0 ? error.message : 'The import was refused.', 'error');

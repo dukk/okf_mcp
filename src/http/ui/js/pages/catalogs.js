@@ -8,7 +8,6 @@ import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
 import { toast } from '../core/toast.js';
 import { drawerTicket } from '../core/drawer.js';
-import { latest } from '../core/latest.js';
 import { ago, count } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
 import { confirmDialog } from '../components/confirm.js';
@@ -50,22 +49,88 @@ export async function render(main) {
     ];
     const table = listTable(columns, [], { onRow: admin ? openEdit : openOwner, empty: 'This key reaches no catalog.' });
 
-    // Reads the list again; a slower older read never draws over a newer one.
-    const listReads = latest(main);
+    // What is drawn: the rows and the cursor that continues them (GET
+    // /catalogs answers one page, with `next` while more follow). Only a
+    // first page that draws replaces both, and only a continuation that
+    // appends advances the cursor; a failed or overtaken read leaves them as
+    // they are, so the rows on screen keep their Load more (a pending read
+    // only hides the button). Reads are numbered: a slower older read never
+    // draws over a newer one.
+    let rows = [];
+    let cursor = null;
+    let loads = 0;           // the number of the newest first-page load
+    let answered = 0;        // the number of the newest load that answered
+    let continuing = null;   // the load whose rows a continuation is pending for
+    let loadFailed = false;  // the newest load failed over the rows drawn
+    let moreFailed = false;  // the last continuation of the rows drawn failed
+    const more = h('button', { type: 'button', id: 'catalogs-more', class: 'secondary', hidden: true,
+                               onclick: () => loadMore() }, 'Load more');
+    const stale = h('p', { id: 'catalogs-stale', class: 'error small', role: 'status', hidden: true },
+        'The catalogs below may be out of date.');
+
+    // Load more shows while the rows drawn have a cursor and nothing is
+    // pending: no newer load (whose rows would replace them) and no
+    // continuation of these rows (a second click would append it twice).
+    function showMore() {
+        more.hidden = cursor === null || answered !== loads || continuing === loads;
+        stale.hidden = !((loadFailed || moreFailed) && rows.length);
+    }
+
     async function load() {
-        const current = listReads();
+        const mine = ++loads;
+        showMore();
         // Admins read the teams too, for the Owner column's kind; a failed
         // read only leaves the kinds out.
         const kinds = admin
             ? rowsOf('teams').then(rows => rows.map(row => [row.name, Boolean(row.personal_of)]), () => [])
             : Promise.resolve([]);
+        let answer, teamKinds;
         try {
-            const [answer, teamKinds] = await Promise.all([api.get('/catalogs'), kinds]);
-            if (!current()) return;
-            personalTeams.clear();
-            for (const [name, personal] of teamKinds) personalTeams.set(name, personal);
-            table.redraw(answer.catalogs);
-        } catch { /* toasted */ }
+            [answer, teamKinds] = await Promise.all([api.get('/catalogs'), kinds]);
+        } catch {
+            // Toasted. The rows drawn keep their cursor, marked out of date.
+            if (mine !== loads || !main.isConnected) return;
+            answered = mine;
+            loadFailed = true;
+            showMore();
+            return;
+        }
+        if (mine !== loads || !main.isConnected) return;   // overtaken
+        answered = mine;
+        personalTeams.clear();
+        for (const [name, personal] of teamKinds) personalTeams.set(name, personal);
+        rows = answer.catalogs;
+        cursor = answer.next ?? null;
+        loadFailed = false;
+        moreFailed = false;
+        table.redraw(rows);
+        showMore();
+    }
+
+    // The page after the rows drawn. It appends only while no newer load
+    // has started; a failure keeps the cursor for a retry.
+    async function loadMore() {
+        if (cursor === null || answered !== loads || continuing === loads) return;
+        const mine = loads;
+        continuing = mine;
+        showMore();
+        let page;
+        try {
+            page = await api.get(`/catalogs?${new URLSearchParams({ after: cursor })}`);
+        } catch {
+            if (mine !== loads || !main.isConnected) return;
+            continuing = null;
+            moreFailed = true;
+            showMore();
+            return;
+        }
+        if (mine !== loads || !main.isConnected) return;
+        continuing = null;
+        rows = rows.concat(page.catalogs);
+        cursor = page.next ?? null;
+        moreFailed = false;
+        table.redraw(rows);
+        showMore();
     }
 
     // After a create or delete: the switcher is shell state and must follow
@@ -219,6 +284,8 @@ export async function render(main) {
             h('div', { class: 'actions' },
                 creator ? h('button', { type: 'button', id: 'catalog-create', onclick: openCreate }, 'New catalog') : null)),
         table,
+        stale,
+        more,
         admin && !creator
             ? h('p', { class: 'muted small' }, 'Creating a catalog needs an admin key that reaches every catalog.')
             : null);
@@ -340,6 +407,22 @@ async function maySwitchMaintenance(row) {
     }
 }
 
+// Catalog `name` as GET /catalogs lists it now, or null when no page lists
+// it. The listing answers a page at a time (the default size, as the table
+// reads it), so the pages are read in turn until one holds it. Rejects as api.get does (toasted).
+async function listedCatalog(name) {
+    let cursor = null;
+    do {
+        const page = await api.get(cursor === null ? '/catalogs' : `/catalogs?${new URLSearchParams({ after: cursor })}`);
+        const found = page.catalogs.find(catalog => catalog.name === name);
+        if (found) return found;
+        // A cursor that does not move would never end: stop at it.
+        const next = page.next ?? null;
+        cursor = next === cursor ? null : next;
+    } while (cursor !== null);
+    return null;
+}
+
 // The maintenance section the catalog drawer shows (or last showed):
 // {catalog, ticket, refresh, report, take}. See maintenance.
 let shownMaintenance = null;
@@ -388,10 +471,9 @@ function maintenance(row, allowed, ticket) {
     let reads = 0;
     async function refresh() {
         const mine = ++reads;
-        let listing = null;
-        try { listing = await api.get('/catalogs'); } catch { /* toasted */ }
+        let found = null;
+        try { found = await listedCatalog(name); } catch { /* toasted */ }
         if (mine !== reads || !ticket.current()) return;
-        const found = listing?.catalogs.find(catalog => catalog.name === name);
         stale = !found;
         settle(found?.maintenance ?? null);
     }

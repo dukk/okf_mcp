@@ -14,8 +14,10 @@ export async function refreshIdentity() {
     // rather than failing the whole identity.
     const [session, me, labels] = await Promise.all([
         store.session ? api.get('/session') : null,
-        api.get('/whoami'),
-        api.get('/labels', { quiet: true }).catch(() => null),
+        // Every page: the switcher offers every catalog, and the labels
+        // table names every catalog the key reaches.
+        api.pages('/whoami', 'catalogs'),
+        api.pages('/labels', 'catalogs', { quiet: true }).catch(() => null),
     ]);
     if (session) {
         store.session = session;

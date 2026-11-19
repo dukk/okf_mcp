@@ -238,6 +238,21 @@ impl ToolContext {
         &self.catalogs
     }
 
+    /// The connection's catalog list (`X-OKF-Catalogs` or `?catalogs=`).
+    ///
+    /// # Returns
+    /// The names as the connection gave them, or `None` without a list.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn connection(&self) -> Option<&[String]> {
+        self.connection.as_deref()
+    }
+
     /// Does this call see `name`: the key reaches it and the connection's
     /// list, if it has one, names it? What a tool that lists catalogs (or
     /// what is in them) filters by, so an omitted catalog never shows.
@@ -498,6 +513,27 @@ impl ToolContext {
         self.admission_to(state, access).map(drop)
     }
 
+    /// [`ToolContext::check_contents`] for a catalog a query named by its
+    /// name and `catalogs.id` (a changeset row), with no state loaded: the
+    /// same gates, bound to that incarnation.
+    ///
+    /// # Arguments
+    /// * `catalog` - the catalog's name.
+    /// * `catalog_id` - the `catalogs.id` the row belongs to.
+    /// * `access` - what the call does with it.
+    ///
+    /// # Errors
+    /// As [`ToolContext::admission_to`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) fn check_contents_by_id(
+        &self,
+        catalog: &str,
+        catalog_id: i64,
+        access: Access,
+    ) -> Result<(), OkfError> {
+        self.admission_by_id(catalog, catalog_id, access).map(drop)
+    }
+
     /// The admission of this call's principal to `state` for `access`, from
     /// gates that describe the incarnation this call reads (the state's
     /// `catalogs.id`): the principal's own, else the key cache's current
@@ -528,7 +564,21 @@ impl ToolContext {
         state: &CatalogState,
         access: Access,
     ) -> Result<Option<BoundAdmission<'_>>, OkfError> {
-        let (catalog, catalog_id) = (state.name(), state.id());
+        self.admission_by_id(state.name(), state.id(), access)
+    }
+
+    /// [`ToolContext::admission_to`] for a catalog known by its name and
+    /// `catalogs.id` only (a row a query returned), with no state at hand.
+    ///
+    /// # Errors
+    /// As [`ToolContext::admission_to`].
+    #[tracing::instrument(level = "trace", skip_all)]
+    fn admission_by_id(
+        &self,
+        catalog: &str,
+        catalog_id: i64,
+        access: Access,
+    ) -> Result<Option<BoundAdmission<'_>>, OkfError> {
         let now = self.app.clock().now();
         // The principal as it is when its gates know this incarnation, else
         // a copy carrying the cache's current gates (`Cow` holds either,

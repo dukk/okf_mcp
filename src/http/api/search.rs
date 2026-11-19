@@ -10,6 +10,7 @@ use serde::Deserialize;
 
 use crate::app::App;
 use crate::auth::Principal;
+use crate::error::OkfError;
 use crate::http::api::context;
 use crate::http::requester::Requester;
 use crate::http::AppError;
@@ -58,16 +59,66 @@ fn catalog_names(listed: &str) -> Vec<String> {
         .collect()
 }
 
+/// The catalogs a search that names none searches: every catalog the key
+/// reaches, when there are at most `search_fanout_max` of them (M18 spec
+/// Decision 8), leaving out those it may not read now.
+///
+/// # Arguments
+/// * `app` - the application, for its directory and its config.
+/// * `principal` - the caller.
+///
+/// # Returns
+/// The names, sorted.
+///
+/// # Errors
+/// [`OkfError::InvalidPath`] (400, naming `catalogs`) when the key reaches
+/// more than `search_fanout_max` catalogs; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
+async fn every_reachable(app: &App, principal: &Principal) -> Result<Vec<String>, OkfError> {
+    let most = app.config().search_fanout_max;
+    // One row more than the cap: enough to tell that the key reaches too
+    // many, without reading every catalog for a key that reaches them all.
+    // The count is of what the key reaches, not of what is open to it now,
+    // so the cap does not move with suspensions or unlocks.
+    let page = app
+        .directory()
+        .reachable_page(principal, None, most.saturating_add(1))
+        .await?;
+    if page.next.is_some() || page.items.len() > most as usize {
+        return Err(OkfError::InvalidPath {
+            path: "catalogs".to_string(),
+            reason: format!("name the catalogs to search (at most {most} are searched by default)"),
+        });
+    }
+    // A closed catalog is not searched: a suspended team's (M13), or one the
+    // key needs an unlock for (M14). Reach was checked by the page; naming
+    // one explicitly is refused by the selection. A catalog this replica has
+    // not loaded is left out, as before.
+    let now = app.clock().now();
+    Ok(page
+        .items
+        .iter()
+        .filter(|row| {
+            app.loaded_catalog(row).is_some()
+                && principal.check_open(&row.name, Access::Read, now).is_ok()
+        })
+        .map(|row| row.name.clone())
+        .collect())
+}
+
 /// `GET /search`.
 ///
 /// Unlike the MCP tool, whose default is the connection's catalogs (else
 /// the key's default catalog), the console has no connection: without
 /// `catalogs` it searches every loaded catalog the key reaches, leaving out
-/// those whose owner team is suspended (unless the key is admin).
+/// those whose owner team is suspended (unless the key is admin), as long
+/// as the key reaches at most `search_fanout_max` catalogs.
 ///
 /// # Errors
 /// As `search`: 404 for a named catalog the key does not reach or that does
-/// not exist; 403 `Suspended` for a named catalog whose team is suspended.
+/// not exist; 403 `Suspended` for a named catalog whose team is suspended;
+/// 400 without `catalogs` for a key that reaches more than
+/// `search_fanout_max` catalogs.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn search(
     State(app): State<Arc<App>>,
@@ -81,20 +132,10 @@ async fn search(
         .map(catalog_names)
         .unwrap_or_default();
     let catalogs = if named.is_empty() {
-        // `Catalogs` is a BTreeMap, so the names come out sorted. An empty
-        // list (a key that reaches nothing active) falls back to the key's
-        // default inside the selection, which then refuses as the tool would.
-        // A closed catalog is not searched: a suspended team's (M13), or one
-        // the key needs an unlock for (M14). Reach is checked first; naming
-        // one explicitly is refused by the selection.
-        let now = app.clock().now();
-        app.catalogs()
-            .keys()
-            .filter(|name| {
-                principal.reaches(name) && principal.check_open(name, Access::Read, now).is_ok()
-            })
-            .cloned()
-            .collect()
+        // An empty list (a key that reaches nothing active) falls back to the
+        // key's default inside the selection, which then refuses as the tool
+        // would.
+        every_reachable(&app, &principal).await?
     } else {
         named
     };

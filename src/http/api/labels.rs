@@ -3,21 +3,25 @@
 //! answer names it by id (display names spec, Part 3).
 //!
 //! Scope:
-//! - an admin that reaches every catalog sees every user, team and catalog;
-//! - anyone else sees its own user, its teams, the loaded catalogs it
-//!   reaches and those catalogs' owner teams;
+//! - an admin that reaches every catalog sees every user and team;
+//! - anyone else sees its own user, its teams, and the owner teams of the
+//!   catalogs on its page;
+//! - the catalogs are one page of those the caller reaches (M18 spec
+//!   Decision 7: `?after=&limit=` and `next`, as `GET /catalogs`), every
+//!   catalog for an admin that reaches every catalog. Labels shared within
+//!   a page are told apart; across pages they are not;
 //! - a provisioner never gets here: the route is not in
 //!   [`PROVISIONER_ROUTES`](super::PROVISIONER_ROUTES).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::routing::get;
 use axum::{Extension, Json, Router};
 use serde::Serialize;
 
-use super::require_every_catalog;
+use super::{reachable_page, require_every_catalog, PageQuery};
 use crate::app::App;
 use crate::auth::Principal;
 use crate::http::AppError;
@@ -43,8 +47,12 @@ pub(crate) struct LabelsView {
     pub users: BTreeMap<String, String>,
     /// Team slug -> label.
     pub teams: BTreeMap<String, String>,
-    /// Catalog slug -> label, told apart where two share one.
+    /// Catalog slug -> label for one page of the catalogs the caller
+    /// reaches, told apart where two on the page share one.
     pub catalogs: BTreeMap<String, String>,
+    /// The `after` of the next page of `catalogs`; absent on the last page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
 }
 
 /// The labels of `slugs`, as `(slug, label)` pairs, for a team or a user
@@ -64,7 +72,7 @@ fn known<'a, 'l>(
 ///
 /// # Arguments
 /// * `labels` - the key cache's directory.
-/// * `reachable` - the loaded catalogs `principal` reaches, which only the
+/// * `reachable` - the page of catalogs `principal` reaches, which only the
 ///   caller can name.
 /// * `principal` - the caller.
 ///
@@ -83,9 +91,10 @@ fn scoped(labels: &Labels, reachable: &[&str], principal: &Principal) -> LabelsV
                 .map(|(slug, label)| (slug.to_string(), label.to_string()))
                 .collect(),
             catalogs: labels
-                .catalog_choices(labels.catalog_slugs())
+                .catalog_choices(reachable.iter().copied())
                 .into_iter()
                 .collect(),
+            next: None,
         };
     }
     let own_teams = principal
@@ -103,28 +112,30 @@ fn scoped(labels: &Labels, reachable: &[&str], principal: &Principal) -> LabelsV
             .catalog_choices(reachable.iter().copied())
             .into_iter()
             .collect(),
+        next: None,
     }
 }
 
-/// `GET /labels`.
+/// `GET /labels?after=&limit=`.
 ///
 /// # Returns
-/// The labels the caller may see.
+/// The labels the caller may see, with `next` while more of its catalogs
+/// follow.
 ///
 /// # Errors
-/// 403 for a provisioner (by the allow-list, before this runs).
+/// 403 for a provisioner (by the allow-list, before this runs); 400 for a
+/// malformed `after`; 500 if the catalog directory cannot be read.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn labels(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
+    Query(query): Query<PageQuery>,
 ) -> Result<Json<LabelsView>, AppError> {
-    // Held in locals so the borrows below outlive the call.
-    let loaded = app.catalogs();
-    let reachable: Vec<&str> = loaded
-        .keys()
-        .map(String::as_str)
-        .filter(|catalog| principal.reaches(catalog))
-        .collect();
+    let page = reachable_page(&app, &principal, &query).await?;
+    let reachable: Vec<&str> = page.items.iter().map(|row| row.name.as_str()).collect();
     let directory = app.keys().labels();
-    Ok(Json(scoped(&directory, &reachable, &principal)))
+    Ok(Json(LabelsView {
+        next: page.next,
+        ..scoped(&directory, &reachable, &principal)
+    }))
 }

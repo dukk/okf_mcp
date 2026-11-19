@@ -12,7 +12,7 @@ use axum::routing::{get, patch, put};
 use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 
-use super::{require_every_catalog, settle};
+use super::{reachable_page, require_every_catalog, settle, PageQuery};
 use crate::app::App;
 use crate::auth::{CredentialKind, Principal};
 use crate::catalog::CatalogState;
@@ -24,7 +24,7 @@ use crate::labels::{catalog_label, DisplayName};
 use crate::mcp::catalogs::SuspensionInfo;
 use crate::okf::ops::STARTER_FILE_COUNT;
 use crate::store::audit::AuditActor;
-use crate::store::catalogs::{self as catalog_rows, MaintenanceChange, Switch};
+use crate::store::catalogs::{self as catalog_rows, CatalogRow, MaintenanceChange, Switch};
 use crate::store::ceiling::{self, MemberAccess};
 use crate::store::keys::Access;
 use crate::telemetry::subscriber::split_event;
@@ -97,14 +97,15 @@ pub(crate) struct CatalogSummary {
 }
 
 impl CatalogSummary {
-    /// The summary of one loaded catalog, as `principal` sees it.
+    /// The summary of one listed catalog, as `principal` sees it.
     ///
     /// # Arguments
-    /// * `name` - its name.
-    /// * `state` - its state.
+    /// * `row` - its directory row: name, display name, description, owner.
+    /// * `state` - its loaded state, of the same incarnation as `row`: the
+    ///   file and concept counts, generation and last change.
     /// * `principal` - the caller, which must reach the catalog (its
     ///   suspension is shown only to those who do).
-    /// * `labels` - the key cache's directory, for the labels.
+    /// * `labels` - the key cache's directory, for the owner team's label.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -112,34 +113,29 @@ impl CatalogSummary {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    fn of(name: &str, state: &CatalogState, principal: &Principal, labels: &Labels) -> Self {
+    fn of(row: &CatalogRow, state: &CatalogState, principal: &Principal, labels: &Labels) -> Self {
         // `current()` is an `Arc` of the loaded snapshot: one consistent
         // generation, file count and concept count.
         let loaded = state.current();
-        let description = state.description();
-        let display_name = labels.catalog_display_name(name).unwrap_or_default();
-        // `as_deref` borrows the `Arc<str>` inside as a `&str`.
-        let owner_team = state.owner_team().as_deref().map(str::to_string);
         Self {
-            name: name.to_string(),
-            // A catalog loaded since the directory was: its label comes from
-            // what the state knows.
-            label: labels
-                .catalog(name)
-                .map_or_else(|| catalog_label(display_name, &description), str::to_string),
-            display_name: display_name.to_string(),
-            description: description.to_string(),
-            owner_team_label: owner_team
+            name: row.name.clone(),
+            label: catalog_label(&row.display_name, &row.description),
+            display_name: row.display_name.clone(),
+            description: row.description.clone(),
+            owner_team_label: row
+                .owner_team
                 .as_deref()
                 .and_then(|team| labels.team(team))
                 .map(str::to_string),
-            owner_team,
+            owner_team: row.owner_team.clone(),
             files: loaded.files(),
             concepts: loaded.snapshot().concepts().count(),
             generation: loaded.generation(),
             last_change: loaded.last_change().map(format_timestamp),
-            suspended: principal.suspension(name).map(SuspensionInfo::from),
-            maintenance: Switch::from(!principal.gates.maintenance_off.contains(name)),
+            // Suspension and maintenance come from the principal's key
+            // cache, as every admission decision does.
+            suspended: principal.suspension(&row.name).map(SuspensionInfo::from),
+            maintenance: Switch::from(!principal.gates.maintenance_off.contains(&row.name)),
         }
     }
 }
@@ -147,8 +143,11 @@ impl CatalogSummary {
 /// `GET /catalogs`' answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct CatalogListing {
-    /// The catalogs the key reaches, by name.
+    /// One page of the catalogs the key reaches, by name.
     pub catalogs: Vec<CatalogSummary>,
+    /// The `after` of the next page; absent on the last page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
 }
 
 /// `POST /catalogs`' body.
@@ -233,24 +232,36 @@ pub(crate) struct CatalogDeleted {
     pub name: String,
 }
 
-/// `GET /catalogs`: every loaded catalog the key reaches, any access level.
+/// `GET /catalogs?after=&limit=`: one page of the catalogs the key reaches,
+/// any access level (M18 spec Decision 7).
 ///
 /// # Returns
-/// The listing, by name (`Catalogs` is a `BTreeMap`, so it iterates sorted).
+/// The page, by name, with `next` while more follow. A catalog this
+/// replica has not loaded (created since its last poll, or one whose data
+/// does not build) is left out of its page, as it was left out of the list.
+///
+/// # Errors
+/// 400 for a malformed `after`; 500 if the directory read fails.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn list_catalogs(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
+    Query(query): Query<PageQuery>,
 ) -> Result<Json<CatalogListing>, AppError> {
-    // Held in a local so the map outlives the iteration that borrows it.
-    let loaded = app.catalogs();
+    let page = reachable_page(&app, &principal, &query).await?;
     let labels = app.keys().labels();
-    let catalogs = loaded
+    let catalogs = page
+        .items
         .iter()
-        .filter(|(name, _)| principal.reaches(name))
-        .map(|(name, state)| CatalogSummary::of(name, state, &principal, &labels))
+        .filter_map(|row| {
+            app.loaded_catalog(row)
+                .map(|state| CatalogSummary::of(row, &state, &principal, &labels))
+        })
         .collect();
-    Ok(Json(CatalogListing { catalogs }))
+    Ok(Json(CatalogListing {
+        catalogs,
+        next: page.next,
+    }))
 }
 
 /// `POST /catalogs`: creates a catalog holding only its starter files (a

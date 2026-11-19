@@ -131,6 +131,7 @@ unknown keys are ignored, so one file serves every version.
 | `mail.worker` | none | Deprecated and ignored: every `serve` runs the mail worker, and logs a warning if the key is present. The workers share one pool of up to 3 connections per process, on top of `database_max_connections` |
 | `catalog_directory_entries` | `100000` | The most catalog rows the catalog directory keeps in memory, by name. It answers "does this catalog exist, and who owns it" without loading content |
 | `catalog_ttl` | `"10s"` | How long the directory serves a catalog row before reading it again. A change drops the row at once; this covers a change message that is lost. A name that does not exist is remembered for 5 seconds regardless |
+| `search_fanout_max` | `25` | The most catalogs `GET /api/v1/search` searches when the request names none, from 1 to 999. A credential that reaches more gets a 400 asking it to name the catalogs (`catalogs=`), so one request cannot search every catalog. MCP `search` is bounded by the connection's selection and does not use it |
 | `worker_shutdown_grace` | `"30s"` | How long `serve` waits, once told to stop, for the mail worker to finish the mail in hand. Set the pod's `terminationGracePeriodSeconds` a few seconds above it |
 | `mail.smtp.host`, `mail.smtp.port`, `mail.smtp.starttls`, `mail.smtp.username`, `mail.smtp.password_env` | none, `587`, `true`, none, none | The SMTP relay. `starttls = true` requires STARTTLS; `false` is TLS from the first byte (port 465); there is no plain-text mode. `username` and `password_env` (the environment variable holding the password) go together |
 | `mail.postmark.token_env`, `mail.postmark.message_stream` | none, `"outbound"` | Postmark's server token (by environment variable) and message stream |
@@ -157,7 +158,7 @@ unknown keys are ignored, so one file serves every version.
 
 The server refuses to start (and every subcommand refuses to run) with a zero
 `poll_interval`, `session_idle_timeout`, `worker_shutdown_grace`,
-`database_max_connections`, `overlay_cache_size`, `catalog_directory_entries` or `catalog_ttl`, an empty `allowed_hosts` or a blank
+`database_max_connections`, `overlay_cache_size`, `catalog_directory_entries` or `catalog_ttl`, a `search_fanout_max` outside 1 to 999, an empty `allowed_hosts` or a blank
 entry in it, or a `time_server` that is blank or has surrounding whitespace.
 `maintenance_review_intervals` also rejects invalid catalog names, malformed
 durations, durations below 86,400 seconds and durations beyond the supported
@@ -3252,7 +3253,7 @@ key and acts only on the signed-in user's own rows. Every endpoint also takes a 
 
 | Method and path | Key | Does |
 |---|---|---|
-| `GET /api/v1/whoami` | any | The calling credential: `key_id`, `name`, `actor`, `access`, `maintenance_report`, `all_catalogs`, `catalogs` (the loaded catalogs it reaches, sorted), `default_catalog`, `kind` (`key`, `oauth` or `session`), `client_name` (a grant's client), `user` (the user it belongs to, `null` when unassigned), `teams` (that user's teams, sorted) and `user_admin` (whether that user is an admin user, `false` without one; the console offers Unlock only when it is true). A session's `key_id` is `session:<user>`, its `name` `null` and its `actor` the user's name. Never a key, token or hash |
+| `GET /api/v1/whoami` | any | The calling credential: `key_id`, `name`, `actor`, `access`, `maintenance_report`, `all_catalogs`, `catalogs` (one page of the loaded catalogs it reaches, sorted; see [Catalog listings are paginated](#catalog-listings-are-paginated)) with `next`, `default_catalog`, `kind` (`key`, `oauth` or `session`), `client_name` (a grant's client), `user` (the user it belongs to, `null` when unassigned), `teams` (that user's teams, sorted) and `user_admin` (whether that user is an admin user, `false` without one; the console offers Unlock only when it is true). A session's `key_id` is `session:<user>`, its `name` `null` and its `actor` the user's name. Never a key, token or hash |
 | `GET /api/v1/session` | console session | `{user, email, admin, csrf, ceiling, expires_at}`: the signed-in user's name, email and admin flag, the CSRF token writes must send as `X-OKF-CSRF`, the ceiling (`{catalog: "read"\|"write"}`) and when the session ends at the latest. 401 without a usable session (a dead cookie is cleared); a bearer credential gets 403 |
 | `DELETE /api/v1/session` | console session | Signs out: deletes the session and clears the cookie; 204. Needs `X-OKF-CSRF` (403 without); a bearer credential gets 403 |
 
@@ -3612,7 +3613,7 @@ whole body and scrolls to that heading.
 | `GET /api/v1/catalogs/{catalog}/revisions/{n}/{path}` | read | `text` at revision `n` (null for a deletion or non-text bytes) and a unified `diff` from revision `n-1` |
 | `GET /api/v1/catalogs/{catalog}/documents/{path}` | read | `read_document` (any `index.md` or `log.md`, the root `AGENTS.md`) plus `body_html` |
 | `GET /api/v1/catalogs/{catalog}/recent-changes?limit=&after=` | read | The catalog's published revisions, newest first: `{catalog, catalog_label, changes, next_after}`, each change `{path, revision, op, actor, actor_label, message, at}`, content left out. Revisions sharing a time come by path, then revision, both descending. `limit` 1..=200 (default 50; outside is 409); `after` is the previous page's `next_after` (an unknown or malformed one is 404); `next_after` is `null` on the last page |
-| `GET /api/v1/search?q=&catalogs=&limit=` | read | The `search` tool. `catalogs` is comma-separated and defaults to every catalog the key reaches; a named catalog it does not reach is a 404 |
+| `GET /api/v1/search?q=&catalogs=&limit=` | read | The `search` tool. `catalogs` is comma-separated and defaults to every catalog the key reaches, if it reaches at most `search_fanout_max` (25); past that, leaving `catalogs` out is a 400 (`InvalidPath`, "name the catalogs to search (at most 25 are searched by default)"). A named catalog it does not reach is a 404 |
 
 A catalog the key does not reach, or that does not exist, is 404 on all
 eight.
@@ -3630,10 +3631,10 @@ curl -s -H "Authorization: Bearer $OKF_MCP_KEY" \
 
 | Method and path | Key | Does |
 |---|---|---|
-| `GET /api/v1/catalogs` | any | The catalogs the key reaches, by name: `name`, `display_name`, `label` (the display name, else the description, else "Untitled catalog"), `description`, `owner_team` (`null` when unassigned), `owner_team_label`, `files`, `concepts`, `generation` (of the loaded snapshot, what `expect_generation` compares against), `last_change` (`null` when empty), `suspended` (`{team, notice}` while its owner team is suspended, otherwise `null`: a suspended catalog is listed, never hidden; see [Suspending a team](#suspending-a-team)) and `maintenance` (`on` or `off`) |
+| `GET /api/v1/catalogs?after=&limit=` | any | One page of the catalogs the key reaches, by name (see [Catalog listings are paginated](#catalog-listings-are-paginated)), as `{catalogs, next}`, each catalog with `name`, `display_name`, `label` (the display name, else the description, else "Untitled catalog"), `description`, `owner_team` (`null` when unassigned), `owner_team_label`, `files`, `concepts`, `generation` (of the loaded snapshot, what `expect_generation` compares against), `last_change` (`null` when empty), `suspended` (`{team, notice}` while its owner team is suspended, otherwise `null`: a suspended catalog is listed, never hidden; see [Suspending a team](#suspending-a-team)) and `maintenance` (`on` or `off`) |
 | `POST /api/v1/catalogs` | admin, every catalog | `{name, display_name, description, owner}` (`display_name` and `description` optional, `display_name` checked as for users; `owner` required, a team's name). 201 with the new catalog's summary; 403 for a key granted named catalogs, since it would not reach the new one; 404 for an unknown owner; 409 for an invalid or taken name; 422 without `owner` or for a refused `display_name` |
 | `PATCH /api/v1/catalogs/{catalog}` | admin on the catalog; an owner of its owner team signed in to the console; a provisioner | `{display_name?, description?}`, at least one (`deny_unknown_fields`). Answers `{name, previous, description, previous_display_name, display_name, label}`. 422 for a refused `display_name`. The CLI is `catalog update` |
-| `GET /api/v1/labels` | any credential; not a provisioner | `{users, teams, catalogs}`, each a map from id to label. An admin that reaches every catalog gets every one; anyone else gets its own user, its teams, the catalogs it reaches and their owner teams. The console reads it to show labels where an answer names something by id (see [Display names and labels](#display-names-and-labels)) |
+| `GET /api/v1/labels?after=&limit=` | any credential; not a provisioner | `{users, teams, catalogs, next}`, each of the first three a map from id to label. `catalogs` is one page of the catalogs the caller reaches (paginated as `GET /api/v1/catalogs`; labels shared within a page are told apart). An admin that reaches every catalog gets every user and team; anyone else gets its own user, its teams and the owner teams of the catalogs on its page. The console reads it to show labels where an answer names something by id (see [Display names and labels](#display-names-and-labels)) |
 | `PUT /api/v1/catalogs/{catalog}/owner` | admin, every catalog | `{team}`. Makes the team the owner; answers `{name, previous, owner_team}` (`previous` is `null` for a legacy catalog). 404 for an unknown catalog or team, 422 without `team`. Ownership grants no access |
 | `GET /api/v1/catalogs/{catalog}/member-access` | admin | `{name, member_access}` (`none`, `read` or `write`): what members of the owner team reach through their own keys and grants |
 | `PUT /api/v1/catalogs/{catalog}/member-access` | admin, every catalog | Body `{access: "none"\|"read"\|"write"}`. Sets it, and every member's own keys and grants are capped again at once; answers `{name, previous, member_access}`. 400 for another value, 404 for an unknown catalog, 422 without `access` |
@@ -3641,6 +3642,25 @@ curl -s -H "Authorization: Bearer $OKF_MCP_KEY" \
 | `DELETE /api/v1/catalogs/{catalog}[?force=true]` | admin | Deletes the catalog with its documents, history, changesets and grants; answers `{name}`. 409 while an open changeset holds unpublished changes, unless `force=true` |
 | `GET /api/v1/catalogs/{catalog}/export` | read | The same handler and 120 s timeout as `/catalogs/{name}/export` |
 | `POST /api/v1/catalogs/{catalog}/import[?replace=true&only_machinery=true&expect_generation=N]` | write | The same handler, body cap and upload deadline as `/catalogs/{name}/import` |
+
+#### Catalog listings are paginated
+
+`GET /api/v1/catalogs`, `GET /api/v1/whoami` (its `catalogs`), `GET
+/api/v1/labels` (its `catalogs`) and the MCP `list_catalogs` tool answer one
+page at a time, by name:
+
+- `limit` is the page size: 100 when absent or 0, at most 1000 (a larger
+  one is cut to 1000). `list_catalogs` always serves 100.
+- `next` is set while more catalogs follow and absent on the last page.
+  Send it back as `after` (as it came; it is opaque) for the next page.
+- A malformed `after` is a 400 (`InvalidPath`, naming `after`). A cursor only
+  moves the start of the list: it never shows a catalog the key does not
+  reach, whatever it names.
+- A catalog this replica has not loaded yet is left out of its page, so a
+  page can hold fewer than `limit`; keep following `next`.
+
+The console follows `next`: the catalog switcher, the labels and the
+pickers read every page, and the Catalogs page shows Load more.
 
 A catalog the key does not reach, or that does not exist, is 404 on every
 route but the list, the create, the owner change, the member-access
