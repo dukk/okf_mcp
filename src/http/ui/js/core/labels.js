@@ -75,6 +75,9 @@ export async function ensureLabels({ users = [], teams = [] } = {}) {
             if (table !== onDemand) return;
             for (const kind of ['users', 'teams']) {
                 for (const slug of part[kind]) {
+                    // A read asked for after a later refresh may have settled
+                    // first: an older answer never replaces its newer label.
+                    if ((table[kind].get(slug)?.generation ?? -1) > asked) continue;
                     const label = answer?.[kind]?.[slug];
                     table[kind].set(slug, { label: typeof label === 'string' ? label : null, generation: asked });
                 }

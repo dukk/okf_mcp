@@ -1253,3 +1253,57 @@ async fn a_failed_labels_read_still_draws_the_keys_by_slug() {
     })
     .await;
 }
+
+/// Review of PR #754 (`tools/agentic/lessons.md`: overlapping reads draw
+/// only the newest answer): a labels read asked for before a refresh, and
+/// answering after a read asked for since, never replaces the newer label.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_late_labels_answer_never_replaces_a_newer_one() {
+    let server = server().await;
+    let admin = server
+        .key("console-admin", Access::Admin, &[], Some("main"))
+        .await;
+    alice(&server).await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.wait_visible("#app");
+        // The first read of alice's label reaches the server now (her old
+        // label), and its answer is held.
+        ui.hold_answer("GET", "/api/v1/labels/named?users=alice", || {
+            ui.eval(
+                "async () => { \
+                   const labels = await import('/ui/js/core/labels.js'); \
+                   window.firstRead = labels.ensureLabels({ users: ['alice'] }); \
+                   return true; }",
+                json!(null),
+            );
+        });
+        // She is renamed, the shell refreshes, and a newer read settles.
+        let newer = ui.eval(
+            "async () => { \
+               const { api } = await import('/ui/js/core/api.js'); \
+               const shell = await import('/ui/js/core/shell.js'); \
+               const labels = await import('/ui/js/core/labels.js'); \
+               await api.patch('/users/alice', { display_name: 'Alice Renamed' }); \
+               await shell.refreshIdentity(); \
+               await labels.ensureLabels({ users: ['alice'] }); \
+               return labels.userLabel('alice'); }",
+            json!(null),
+        );
+        assert_eq!(newer, json!("Alice Renamed"));
+        // The old answer arrives last; the newer label stays.
+        ui.release_held();
+        let shown = ui.eval(
+            "async () => { \
+               await window.firstRead; \
+               return (await import('/ui/js/core/labels.js')).userLabel('alice'); }",
+            json!(null),
+        );
+        assert_eq!(
+            shown,
+            json!("Alice Renamed"),
+            "the late answer replaced the newer label"
+        );
+    })
+    .await;
+}

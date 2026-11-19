@@ -21,6 +21,9 @@ same maps 1,000 times. Found by the review bot on milestone PR #747.
   personal teams seeded by SQL); browser journeys
   `keys::the_keys_table_reads_the_labels_of_the_users_it_shows_only`,
   `keys::a_failed_labels_read_still_draws_the_keys_by_slug`,
+  `keys::a_late_labels_answer_never_replaces_a_newer_one` (review of PR
+  #754: an answer asked for before a refresh never replaces a label read
+  since),
   `unlocks::an_admin_reads_another_staff_members_unlock_by_label`.
 
 ## Changed
