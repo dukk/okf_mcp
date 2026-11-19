@@ -1185,6 +1185,10 @@ the dotted originals.
 | `okf_catalog_announcements_total` | counter | `result` | Catalog announcements handled, counting also each catalog found behind in the catch-up after a (re)subscribe: `applied` (rebuilt), `current` (already there), `unknown` (not loaded here, or deleted) or `failed`. Only with `[redis]` |
 | `okf_catalog_concepts` | gauge | `catalog` | Concepts in the current snapshot |
 | `okf_catalog_generation` | gauge | `catalog` | The snapshot's generation |
+| `okf_invalidations_sent_total` | counter | `kind` | Change-feed messages sent by this replica's writes (`catalog`, `catalog_meta`, `credential`, `user`, `team`, `settings`) |
+| `okf_invalidations_received_total` | counter | `kind` | Change-feed messages received and applied |
+| `okf_invalidations_unreadable_total` | counter | | Change-feed payloads this build could not read (each reloads the caches) |
+| `okf_invalidations_lag_seconds` | histogram | | Time from a message's send to its application on this replica |
 | `okf_keycache_reloads_total` | counter | `outcome` | Key cache and settings reloads |
 | `okf_redis_errors_total` | counter | `operation` | Failed Redis calls. `operation` is `connect`, `get`, `set`, `take`, `update`, `remove`, `index`, `admit`, `bind`, `publish`, `subscribe`, `counter` or `decode` (a stored value that would not decode). A failed or late `/healthz` `PING` counts as `get`. Only with `[redis]` |
 | `okf_auth_attempts_total` | counter | `method`, `outcome` | Sign-in attempts. `method` is `password`, `passkey`, `oidc` or `setup`; `outcome` is `ok`, `failed` or `locked` |
