@@ -71,10 +71,11 @@ impl Served {
             .expect("bind");
         let endpoint = format!("http://{}/mcp", listener.local_addr().expect("address"));
         let shutdown = CancellationToken::new();
-        let server = tokio::spawn(crate::http::serve(
+        let server = tokio::spawn(crate::http::serve_with(
             Arc::clone(&test.app),
             listener,
             shutdown.clone(),
+            crate::http::ServeOptions::NO_WORKER,
         ));
         Self {
             test,
