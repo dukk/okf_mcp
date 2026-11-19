@@ -508,8 +508,11 @@ where
 
     /// The cached value if it is current: a fresh entry counts as a hit; a
     /// stale or missing one counts nothing and loads nothing, so the caller
-    /// can read its misses together (a bulk read that must not reorder or
-    /// fill the cache).
+    /// can read its misses together (a bulk read that must not fill the
+    /// cache). It is an ordinary moka `get`, so it does record an access:
+    /// a fresh entry it finds counts as recently used. moka 0.12 has no
+    /// lookup that returns a value without that (`contains_key` skips it but
+    /// returns no value).
     ///
     /// # Arguments
     /// * `key` - the key.

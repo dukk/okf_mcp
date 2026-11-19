@@ -200,7 +200,10 @@ impl CatalogDirectory {
 
     /// The rows of `names`: those cached are served from the cache, the rest
     /// are read together in one query. The rows read are not cached, so a
-    /// listing cannot push the entries that requests use out of the cache.
+    /// listing never adds entries (it cannot evict what requests use). A row
+    /// already cached that the listing visits is counted as recently used
+    /// (moka has no read that does not); that is bounded by the page size and
+    /// is acceptable, since a catalog a principal can list is one it uses.
     ///
     /// # Arguments
     /// * `names` - catalog names; duplicates, malformed names and names with

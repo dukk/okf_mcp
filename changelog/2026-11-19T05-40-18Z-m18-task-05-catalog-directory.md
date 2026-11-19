@@ -5,10 +5,10 @@
 - `src/cache/directory.rs`: `CatalogDirectory`, catalog rows by name with their access facts (owner, suspension, maintenance opt-out, audit team id).
   - `resolve(name)`: one read however many callers ask together, then served for `catalog_ttl`.
   - Absent names are remembered for 5 s in a second `Bounded<String, ()>` (the row cache's `check` cannot expire a fresh entry). A `CatalogMeta` message drops both entries of its name; a lookup that read "no such catalog" before a create is not remembered (a counter read before the shared read starts and carried with its result, so followers that join an overtaken read judge it by the same counter).
-  - `resolve_many(names)`: cached rows plus one query for the rest; the rows read are not cached, so a listing cannot push request entries out.
+  - `resolve_many(names)`: cached rows plus one query for the rest; the rows read are not cached, so a listing adds no entries; a row already cached that a listing visits counts as recently used (moka has no value lookup that does not record an access).
   - `apply` and `mark_all_stale` for the change feed.
 - `store::catalogs::{CatalogRow, SuspendedRow, row_by_name, rows_by_names, page}`.
-- `Bounded::peek_fresh`: a current entry without loading or reordering.
+- `Bounded::peek_fresh`: a current entry without loading it (it records an access like any `get`).
 - Config `catalog_directory_entries` (100000) and `catalog_ttl` ("10s"), documented in `docs/operations.md`.
 - `App::directory()`.
 
