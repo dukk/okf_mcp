@@ -5,8 +5,12 @@
 //!
 //! * API keys by the SHA-256 of their secret, and OAuth grants by id: the
 //!   credential row ([`CredentialRecord`]) with its audit id;
-//! * users by id ([`UserEntry`]): the user's sign-in identity, ceiling and
-//!   gates (teams, entitlements, live unlocks, audit id).
+//! * users by id ([`UserEntry`]): the user's sign-in identity and gates
+//!   (teams, entitlements, live unlocks, audit id). The user's ceiling is
+//!   not here: it is resolved per catalog from the catalog's directory row
+//!   and these gates ([`crate::store::ceiling::level_on`]), so an entry and
+//!   its load are bounded by the user's teams and entitlements, never by how
+//!   many catalogs those teams own (issue #728).
 //!
 //! A principal is not cached as a whole: [`Credentials::find`] reads the
 //! credential and its user from the caches and assembles the principal per
@@ -27,7 +31,7 @@
 //! | `credential { key_id }` | that key or grant, by id and by hash |
 //! | `user { id }` | that user |
 //! | `team { id }` | every cached user in that team |
-//! | `catalog_meta { name }` | every cached credential and user whose reach names that catalog |
+//! | `catalog_meta { name }` | every cached credential whose reach names that catalog |
 //!
 //! The indirect ones (by hash, by team, by catalog) scan the resident
 //! entries and raise the cache's fence, so a load running at that moment
@@ -47,28 +51,29 @@ use std::time::Duration;
 use sqlx::PgPool;
 
 use crate::auth::{principal_of, unexpired, AccessFacts, Principal};
+use crate::cache::directory::CatalogDirectory;
 use crate::cache::{Bounded, CacheName, Limit};
 use crate::clock::Clock;
 use crate::error::OkfError;
 use crate::invalidate::Invalidation;
 use crate::keys;
-use crate::store::ceiling::{self, Ceiling};
+use crate::store::ceiling;
 use crate::store::gates::{self, UserGates};
 use crate::store::keys::{self as key_rows, CredentialRecord, KeyKind, KeyRecord};
 use crate::store::users::{self, UserAuth};
 use crate::telemetry::metrics::Metrics;
 
 /// What a user row and its memberships say: what a session principal is
-/// built from, and what caps a self-issued credential.
+/// built from, and (with each catalog's directory row) what caps a
+/// self-issued credential.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserEntry {
     /// The user's id, name, display name, email and admin flag.
     pub auth: UserAuth,
-    /// What the user may reach through self-issued credentials and a
-    /// console session ([`crate::store::ceiling`]).
-    pub ceiling: Ceiling,
     /// The user's teams, entitlements, live unlocks and audit id, shared by
-    /// every principal of theirs.
+    /// every principal of theirs. The teams and entitlements are what the
+    /// user's ceiling is resolved from, one catalog at a time
+    /// ([`crate::store::ceiling::level_on`]).
     pub gates: Arc<UserGates>,
 }
 
@@ -109,6 +114,9 @@ pub struct Credentials {
     // OAuth grants by id: an access token names its grant by id.
     by_id: Bounded<String, Arc<CredentialRecord>>,
     users: Bounded<String, Arc<UserEntry>>,
+    // The catalog rows a self-issued credential's ceiling is resolved from:
+    // the application's own directory, shared, so its invalidations apply.
+    directory: Arc<CatalogDirectory>,
     pool: PgPool,
     clock: Arc<dyn Clock>,
     #[cfg(test)]
@@ -148,6 +156,8 @@ impl Credentials {
     ///
     /// # Arguments
     /// * `pool` - the database.
+    /// * `directory` - the catalog directory the ceilings are resolved
+    ///   against (the application's, shared).
     /// * `clock` - the server clock, for expiry.
     /// * `limits` - the capacities and the time to live.
     /// * `metrics` - the instruments `okf.cache.*` is recorded on.
@@ -157,6 +167,7 @@ impl Credentials {
     #[tracing::instrument(level = "trace", skip_all)]
     pub fn new(
         pool: PgPool,
+        directory: Arc<CatalogDirectory>,
         clock: Arc<dyn Clock>,
         limits: CredentialLimits,
         metrics: Metrics,
@@ -169,6 +180,7 @@ impl Credentials {
                 .with_metrics(metrics.clone()),
             users: Bounded::new(CacheName::User, Limit::Entries(limits.users), limits.ttl)
                 .with_metrics(metrics),
+            directory,
             pool,
             clock,
             #[cfg(test)]
@@ -270,11 +282,7 @@ impl Credentials {
             return Ok(None);
         };
         let facts = facts_of(Some(&user), None, view);
-        Ok(Some(Principal::for_session(
-            &user.auth,
-            user.ceiling.clone(),
-            facts,
-        )))
+        Ok(Some(Principal::for_session(&user.auth, facts)))
     }
 
     /// Applies one change-feed message (see the module docs' table).
@@ -299,10 +307,13 @@ impl Credentials {
                     .await;
             }
             Invalidation::CatalogMeta { name, .. } => {
-                // Reach and ceilings name catalogs, and a catalog deleted and
-                // created again under its name is another catalog: a cached
-                // grant or ceiling of the old one must not reach the new one.
-                // Catalog writes are rare, so the scans cost little.
+                // Reach names catalogs, and a catalog deleted and created
+                // again under its name is another catalog: a cached grant of
+                // the old one must not reach the new one. Catalog writes are
+                // rare, so the scans cost little. No user is dropped: a
+                // ceiling is resolved from the catalog's row (which the
+                // directory drops on this message) and gates that name
+                // catalogs and teams by id.
                 let names = |record: &KeyRecord| {
                     record.catalog_access.contains_key(name)
                         || record.default_catalog.as_deref() == Some(name.as_str())
@@ -312,9 +323,6 @@ impl Credentials {
                     .await;
                 self.by_id
                     .invalidate_where(|_, entry| names(&entry.record))
-                    .await;
-                self.users
-                    .invalidate_where(|_, user| user.ceiling.contains_key(name))
                     .await;
             }
             // Catalog content and settings are read per request elsewhere.
@@ -357,8 +365,10 @@ impl Credentials {
             .map(Arc::new))
     }
 
-    /// Reads one user, its ceiling and its gates in one read-only snapshot,
-    /// so they describe one moment.
+    /// Reads one user and its gates in one read-only snapshot, so they
+    /// describe one moment. Every query is bounded by the user's teams,
+    /// entitlements and unlocks; none reads the catalogs those teams own
+    /// (issue #728).
     #[tracing::instrument(level = "debug", skip_all)]
     async fn load_user(&self, user_id: &str) -> Result<Option<Arc<UserEntry>>, OkfError> {
         let now = self.clock.now();
@@ -371,7 +381,6 @@ impl Credentials {
         let Some(auth) = users::find_auth(&mut *tx, user_id).await? else {
             return Ok(None);
         };
-        let ceiling = ceiling::ceiling_in(&mut tx, user_id).await?;
         let gates = gates::for_user(&mut tx, user_id, auth.is_admin, now).await?;
         // Nothing was written; ending the transaction frees its connection.
         tx.commit().await?;
@@ -379,7 +388,6 @@ impl Credentials {
         self.user_hold.pass().await;
         Ok(Some(Arc::new(UserEntry {
             auth,
-            ceiling,
             gates: Arc::new(gates),
         })))
     }
@@ -405,12 +413,44 @@ impl Credentials {
             None => None,
         };
         let facts = facts_of(user.as_deref(), found.audit_credential, view);
-        let ceiling = user.as_deref().map(|user| &user.ceiling);
+        // A self-issued credential is capped by its user's ceiling on its own
+        // catalogs only: their rows, resolved now, and the user's gates.
+        let ceiling = match user.as_deref() {
+            Some(user) if found.record.self_issued => {
+                Some(self.ceiling_over_grants(&found.record, &user.gates).await?)
+            }
+            _ => None,
+        };
         Ok(Some(Arc::new(principal_of(
             found.record.clone(),
-            ceiling,
+            ceiling.as_ref(),
             facts,
         ))))
+    }
+
+    /// A user's ceiling on the catalogs a credential is granted: each
+    /// granted catalog's directory row (served from the directory's cache
+    /// when it is there, the rest read in one query), at the level the
+    /// user's gates give it ([`ceiling::ceiling_over`]). Bounded by the
+    /// credential's grants.
+    ///
+    /// # Errors
+    /// [`OkfError::Database`] when the rows' read fails.
+    #[tracing::instrument(level = "trace", skip_all)]
+    async fn ceiling_over_grants(
+        &self,
+        record: &KeyRecord,
+        gates: &UserGates,
+    ) -> Result<ceiling::Ceiling, OkfError> {
+        // `principal_of` caps only a by-name reach: an all-catalogs
+        // self-issued row (which the schema refuses) reaches nothing.
+        if record.all_catalogs {
+            return Ok(ceiling::Ceiling::new());
+        }
+        let names: Vec<String> = record.catalog_access.keys().cloned().collect();
+        let rows = self.directory.resolve_many(&names).await?;
+        // `as_ref` turns each `&Arc<CatalogRow>` into `&CatalogRow`.
+        Ok(ceiling::ceiling_over(rows.iter().map(AsRef::as_ref), gates))
     }
 }
 

@@ -385,7 +385,7 @@ async fn refuse_suspended_owner(
         Some(user) => app.labels().teams_of(user).await?.contains(&suspended.team),
         None => false,
     };
-    if in_team || principal.reaches(catalog) {
+    if in_team || principal.reaches_row(&row) {
         principal.check_not_suspended(&row)
     } else {
         Ok(())

@@ -3,6 +3,14 @@
 //! `member_access`, merged with the user's entitlements (`user_catalogs`);
 //! the higher level wins. Every write here that changes a ceiling sends its
 //! user's or team's invalidation, so every replica re-caps at once.
+//!
+//! A ceiling is never loaded whole to check access (issue #728): a check
+//! resolves it for the one catalog it acts on, from the catalog's directory
+//! row (owner team, `member_access`) and the user's gates (teams,
+//! entitlements), with [`level_on`]. A `member_access` or owner change sends
+//! the catalog's `catalog_meta` message, which drops the directory row; a
+//! membership or entitlement change sends the user's or team's, which drops
+//! the user's gates.
 
 use std::collections::BTreeMap;
 
@@ -14,7 +22,8 @@ use crate::auth::{Principal, Reach};
 use crate::error::OkfError;
 use crate::invalidate::{invalidate, Invalidation};
 use crate::store::audit::{self, Action, AuditActor, Entry, People, RowLock};
-use crate::store::catalogs::{self, CatalogEvent};
+use crate::store::catalogs::{self, CatalogEvent, CatalogRow};
+use crate::store::gates::UserGates;
 use crate::store::keys::Access;
 use crate::store::users;
 
@@ -218,7 +227,12 @@ fn check_names(user: Option<&str>, catalog: &str) -> Result<(), OkfError> {
     Ok(())
 }
 
-/// One user's ceiling.
+/// One user's whole ceiling: one entry per catalog the user's teams own (at
+/// its `member_access`) or the user is entitled to. Only for pages that show
+/// the whole ceiling (`GET /me`, `GET /session`, the consent page), read when
+/// they are asked for. No access check reads it: they resolve the ceiling
+/// per catalog ([`level_on`]), so authenticating costs nothing per catalog
+/// (issue #728).
 ///
 /// # Arguments
 /// * `pool` - the database.
@@ -235,16 +249,37 @@ pub async fn ceiling_of(pool: &PgPool, user: &str) -> Result<Ceiling, OkfError> 
     Ok(one_ceiling(ceiling_rows(pool, &user_id).await?))
 }
 
-/// One user's ceiling, by id, read inside the caller's transaction: what
-/// `store::oauth::grants::create_self_issued` checks a consent against
-/// while it holds the user's row.
+/// One user's ceiling on the named catalogs only (`$1` the user's id, `$2`
+/// the names): the same two sources as [`CEILING_ROWS`], looked up per
+/// catalog, so the cost is bounded by the names, never by how many
+/// catalogs the user's teams own (issue #728).
+const NAMED_CEILING_ROWS: &str = "\
+    SELECT c.name AS catalog, bool_or(s.access = 'write') AS write \
+    FROM catalogs c \
+    CROSS JOIN LATERAL ( \
+        SELECT c.member_access AS access FROM team_members m \
+        WHERE m.team_id = c.owner_team_id AND m.user_id = $1 \
+          AND c.member_access <> 'none' \
+        UNION ALL \
+        SELECT e.access FROM user_catalogs e \
+        WHERE e.catalog_id = c.id AND e.user_id = $1) s \
+    WHERE c.name = ANY($2) \
+    GROUP BY c.name";
+
+/// One user's ceiling on the named catalogs, by id, read on the caller's
+/// connection: what `store::oauth::grants::create_self_issued` checks a
+/// consent against while it holds the user's row, and what `POST /me/keys`
+/// checks a new key against. A catalog left out of the answer is not in
+/// the ceiling (or does not exist).
 ///
 /// # Arguments
-/// * `conn` - the open transaction's connection.
+/// * `conn` - the connection (an open transaction's, or one from the pool).
 /// * `user_id` - the user's id.
+/// * `names` - the catalogs asked about; malformed names are left out.
 ///
 /// # Returns
-/// The ceiling (empty for an unknown user or one who reaches nothing).
+/// The ceiling restricted to `names` (empty for an unknown user or one who
+/// reaches none of them).
 ///
 /// # Errors
 /// [`OkfError::Database`].
@@ -252,8 +287,112 @@ pub async fn ceiling_of(pool: &PgPool, user: &str) -> Result<Ceiling, OkfError> 
 pub(crate) async fn ceiling_in(
     conn: &mut PgConnection,
     user_id: &str,
+    names: &[String],
 ) -> Result<Ceiling, OkfError> {
-    Ok(one_ceiling(ceiling_rows(conn, user_id).await?))
+    // Postgres refuses a NUL; a malformed name names no catalog anyway.
+    let valid: Vec<&str> = names
+        .iter()
+        .map(String::as_str)
+        .filter(|name| catalogs::is_valid_name(name))
+        .collect();
+    if valid.is_empty() {
+        return Ok(Ceiling::new());
+    }
+    let rows = sqlx::query_as::<_, CeilingRow>(NAMED_CEILING_ROWS)
+        .bind(user_id)
+        .bind(valid)
+        .fetch_all(conn)
+        .await?;
+    Ok(one_ceiling(rows))
+}
+
+/// Is any catalog of user `$1`'s ceiling at `write`? The team half seeks
+/// the owner teams' writable catalogs through the partial index
+/// `catalogs_member_write` (migration 0026), so a team's read-only catalogs
+/// are never scanned, however many it owns.
+const HIGHEST_SQL: &str = "\
+    SELECT EXISTS (SELECT 1 FROM team_members m \
+                   JOIN catalogs c ON c.owner_team_id = m.team_id \
+                   WHERE m.user_id = $1 AND c.member_access = 'write') \
+        OR EXISTS (SELECT 1 FROM user_catalogs e \
+                   WHERE e.user_id = $1 AND e.access = 'write')";
+
+/// Whether any catalog of the user's ceiling is at `write`: a user's
+/// highest ceiling level, which `GET /whoami` shows as a console
+/// session's `access` (`read` when the ceiling is empty, as before). One
+/// row, and an index seek, whatever the ceiling's size (`HIGHEST_SQL`).
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `user_id` - the user's id.
+///
+/// # Returns
+/// `Write` when some catalog of the ceiling is at `write`, else `Read`.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.highest"))]
+pub async fn highest(pool: &PgPool, user_id: &str) -> Result<Access, OkfError> {
+    let write: bool = sqlx::query_scalar(HIGHEST_SQL)
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(row_level(write))
+}
+
+/// The level a user's ceiling has on one catalog (spec "The ceiling"),
+/// resolved from that catalog's directory row and the user's gates instead
+/// of a list of every catalog the user's teams own (issue #728): the
+/// catalog's `member_access` when the user is in its owner team, merged
+/// with the user's entitlement to it; the higher level wins.
+///
+/// It is what the whole-ceiling query (`CEILING_ROWS`) answers for this
+/// catalog: the owner team and entitlements are matched by id (`teams.id`,
+/// `catalogs.id`), as the query joins them.
+///
+/// # Arguments
+/// * `row` - the catalog's directory row.
+/// * `gates` - the user's teams and entitlements.
+///
+/// # Returns
+/// `Read` or `Write`, or `None` when the ceiling does not reach the catalog.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: two lookups and a max, no I/O; it runs on every check of a session"
+    )
+)]
+pub fn level_on(row: &CatalogRow, gates: &UserGates) -> Option<Access> {
+    let through_team = row
+        .owner_team_id
+        .as_ref()
+        .filter(|team| gates.teams.contains(*team))
+        .and_then(|_| row.member_access.level());
+    let entitled = gates.entitled.get(&row.id).copied();
+    // `Option`'s `max` treats `None` as lowest: the higher level wins.
+    through_team.max(entitled)
+}
+
+/// The ceiling restricted to `rows`: each row's [`level_on`], the rows the
+/// ceiling does not reach left out. What a self-issued credential is capped
+/// by ([`cap`] reads only its own catalogs), built from the rows of those
+/// catalogs alone.
+///
+/// # Arguments
+/// * `rows` - the directory rows of the catalogs asked about.
+/// * `gates` - the user's teams and entitlements.
+///
+/// # Returns
+/// Catalog name to level, for the rows the ceiling reaches.
+#[tracing::instrument(level = "trace", skip_all)]
+pub fn ceiling_over<'r>(
+    rows: impl IntoIterator<Item = &'r CatalogRow>,
+    gates: &UserGates,
+) -> Ceiling {
+    rows.into_iter()
+        .filter_map(|row| Some((row.name.clone(), level_on(row, gates)?)))
+        .collect()
 }
 
 /// Sets what members of a catalog's owning team may reach, and records
@@ -1033,8 +1172,7 @@ mod tests {
 
     /// One user's ceiling by id, as the user cache reads it.
     async fn by_id(pool: &PgPool, user_id: &str) -> Ceiling {
-        let mut conn = pool.acquire().await.unwrap();
-        ceiling_in(&mut conn, user_id).await.unwrap()
+        one_ceiling(ceiling_rows(pool, user_id).await.unwrap())
     }
 
     /// Every write that can change a ceiling's inputs (team membership,
@@ -1408,5 +1546,61 @@ mod tests {
             ["alice"],
             "the personal team reads as its person"
         );
+    }
+
+    /// Every row a plan's nodes read: their output rows (times their loops)
+    /// and the rows their filters threw away.
+    fn rows_examined(node: &serde_json::Value) -> f64 {
+        let number = |key: &str| {
+            node.get(key)
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0)
+        };
+        let own = number("Actual Rows") * number("Actual Loops").max(1.0)
+            + number("Rows Removed by Filter")
+            + number("Rows Removed by Index Recheck");
+        let children: f64 = node
+            .get("Plans")
+            .and_then(serde_json::Value::as_array)
+            .map_or(0.0, |plans| plans.iter().map(rows_examined).sum());
+        own + children
+    }
+
+    /// Issue #728 (review of PR #739): `highest` for a user whose team owns
+    /// 50,000 read-only catalogs seeks the writable ones through
+    /// `catalogs_member_write`, so it examines a bounded number of rows,
+    /// not one per catalog the team owns.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn highest_examines_no_read_only_catalog() {
+        let db = test_db().await;
+        sqlx::query(
+            "INSERT INTO catalogs (name, description, created_at, owner_team_id, member_access) \
+             SELECT 'r' || lpad(n::text, 6, '0'), '', now(), \
+                    (SELECT id FROM teams WHERE name = $1), 'read' \
+             FROM generate_series(1, 50000) AS n",
+        )
+        .bind(TEST_TEAM)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        sqlx::query("ANALYZE catalogs")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let user_id = id(&db.pool, TEST_USER).await;
+
+        let level = highest(&db.pool, &user_id).await.unwrap();
+        // `AssertSqlSafe`: the text is a constant of this module.
+        let plan: serde_json::Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN (ANALYZE, FORMAT JSON) {HIGHEST_SQL}"
+        )))
+        .bind(&user_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+
+        assert_eq!(level, Access::Read, "every catalog is read-only");
+        let examined = rows_examined(&plan[0]["Plan"]);
+        assert!(examined < 100.0, "examined {examined} rows: {plan:#}");
     }
 }

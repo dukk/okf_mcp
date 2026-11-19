@@ -284,12 +284,14 @@ impl ToolContext {
         self.connection.as_deref()
     }
 
-    /// Does this call see `name`: the key reaches it and the connection's
-    /// list, if it has one, names it? What a tool that lists catalogs (or
-    /// what is in them) filters by, so an omitted catalog never shows.
+    /// Does this call see the catalog `row` describes: the key reaches it
+    /// and the connection's list, if it has one, names it? What a tool that
+    /// lists catalogs (or what is in them) filters by, so an omitted
+    /// catalog never shows. By row, so a console session's ceiling decides
+    /// it too ([`Principal::reaches_row`]).
     ///
     /// # Arguments
-    /// * `name` - a catalog name.
+    /// * `row` - the catalog's directory row.
     ///
     /// # Returns
     /// `true` if the call may see the catalog.
@@ -300,8 +302,8 @@ impl ToolContext {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    pub fn offers(&self, name: &str) -> bool {
-        self.principal.reaches(name) && in_scope(self.connection.as_deref(), name)
+    pub fn offers(&self, row: &CatalogRow) -> bool {
+        self.principal.reaches_row(row) && in_scope(self.connection.as_deref(), &row.name)
     }
 
     /// Checks the connection's list whole, as [`resolve`] does: for the
@@ -387,11 +389,15 @@ impl ToolContext {
             .collect();
         let mut rows = HashMap::new();
         for name in &names {
-            if rows.contains_key(*name) || !self.principal.reaches(name) {
+            // A by-name reach that leaves the name out needs no row; any
+            // other is decided by the row (a session's ceiling).
+            if rows.contains_key(*name) || self.principal.excludes(name) {
                 continue;
             }
             if let Some(row) = self.app.directory().resolve(name).await? {
-                rows.insert(name.to_string(), row);
+                if self.principal.reaches_row(&row) {
+                    rows.insert(name.to_string(), row);
+                }
             }
         }
         // With no source naming a catalog, `resolve` falls back to the only
@@ -466,7 +472,7 @@ impl ToolContext {
     pub async fn require(&self, access: Access, state: &CatalogState) -> Result<(), OkfError> {
         // Reach and level first, so a key that does not reach the catalog
         // learns nothing from the row's lookup.
-        self.principal.require_level(access, state.name())?;
+        self.principal.precheck_level(access, state.name())?;
         self.principal.require(access, &*self.row(state).await?)
     }
 
@@ -488,7 +494,7 @@ impl ToolContext {
         access: Access,
         state: &CatalogState,
     ) -> Result<Admission, OkfError> {
-        self.principal.require_level(access, state.name())?;
+        self.principal.precheck_level(access, state.name())?;
         let row = self.row(state).await?;
         self.principal
             .require_contents(access, &row, self.app.clock().now())
@@ -505,7 +511,7 @@ impl ToolContext {
     /// [`Principal::require_maintenance_report`].
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn require_maintenance_report(&self, state: &CatalogState) -> Result<(), OkfError> {
-        self.principal.require_level(Access::Read, state.name())?;
+        self.principal.precheck_level(Access::Read, state.name())?;
         self.principal
             .require_maintenance_report(&*self.row(state).await?)
     }
@@ -991,7 +997,7 @@ impl ToolContext {
         // admins. Don't reorder these checks.
         let own = row.key_id.as_deref() == Some(self.principal.key_id.as_str());
         let admin = self.principal.access == Access::Admin;
-        if !self.offers(state.name()) || !(own || admin) {
+        if !self.offers(&catalog) || !(own || admin) {
             return Err(unknown());
         }
         // The whole content check, the unlock last (M14 Task 9b): it refuses
@@ -1187,8 +1193,12 @@ mod tests {
         assert_eq!(names(&chosen), ["pg"]);
         assert_eq!(names(&read_set), ["pg"]);
         assert_eq!(escaped.kind(), "CatalogNotSelected");
-        assert!(on_connection.offers("pg") && !on_connection.offers("home"));
-        assert!(on_default.offers("home") && !on_default.offers("work"));
+        let directory = test.app.directory();
+        let pg = directory.resolve("pg").await.unwrap().expect("pg");
+        let home = directory.resolve("home").await.unwrap().expect("home");
+        let work = directory.resolve("work").await.unwrap().expect("work");
+        assert!(on_connection.offers(&pg) && !on_connection.offers(&home));
+        assert!(on_default.offers(&home) && !on_default.offers(&work));
         assert_eq!(first.name(), "work");
         assert_eq!(names(&fallback), ["home"]);
         assert_eq!(unreachable.kind(), "CatalogNotSelected");

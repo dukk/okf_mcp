@@ -1371,8 +1371,13 @@ mod http_tests {
             .expect("look up");
 
         assert_eq!(principal.key_id, "session:bob");
-        assert_eq!(principal.level("main"), Some(Access::Write));
-        assert_eq!(principal.level("other"), None);
+        let directory = test.app.directory();
+        let main = directory.resolve("main").await.unwrap().expect("main");
+        assert_eq!(principal.level_at(&main), Some(Access::Write));
+        // `other` may not exist here: either way bob does not reach it.
+        if let Some(other) = directory.resolve("other").await.unwrap() {
+            assert_eq!(principal.level_at(&other), None);
+        }
         assert!(nobody.is_none());
     }
 

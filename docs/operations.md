@@ -143,7 +143,7 @@ unknown keys are ignored, so one file serves every version.
 | `catalog_directory_entries` | `100000` | The most catalog rows the catalog directory keeps in memory, by name. It answers "does this catalog exist, and who owns it" without loading content |
 | `catalog_ttl` | `"10s"` | How long the directory serves a catalog row before reading it again, and so the longest a replica serves an older snapshot of a catalog whose change message it missed (each use refreshes the snapshot to its row). A change drops the row at once; this covers a change message that is lost while the listener stays connected (a reconnect marks every row stale). A name that does not exist is remembered for 5 seconds regardless |
 | `credential_cache_entries` | `100000` | The most API keys and OAuth grants each credential cache keeps in memory (one by key hash, one by grant id). A key or grant is read from the database the first time it is used; an unknown one is never cached |
-| `user_cache_entries` | `100000` | The most users the user cache keeps in memory: each one's admin flag, ceiling, teams, entitlements and live unlocks, read on first use |
+| `user_cache_entries` | `100000` | The most users the user cache keeps in memory: each one's admin flag, teams, entitlements and live unlocks, read on first use (a ceiling is resolved per catalog from these and the catalog's row, so an entry does not grow with the catalogs a user's teams own) |
 | `credential_ttl` | `"10s"` | How long a cached key, grant or user is served before it is read again. A change (a revocation, a team or admin change) drops it on every replica at once; this bounds how long one survives a change message that is lost |
 | `search_fanout_max` | `25` | The most catalogs `GET /api/v1/search` searches when the request names none, from 1 to 999. A credential that reaches more gets a 400 asking it to name the catalogs (`catalogs=`), so one request cannot search every catalog. MCP `search` is bounded by the connection's selection and does not use it, and neither does the console, which names every catalog it reaches in `catalogs=` |
 | `worker_shutdown_grace` | `"30s"` | How long `serve` waits, once told to stop, for the mail worker to finish the mail in hand. Set the pod's `terminationGracePeriodSeconds` a few seconds above it |
@@ -684,7 +684,7 @@ first use.
 | Changeset overlays | `overlay_cache_bytes` | A changeset's view of its catalog | `overlay` |
 | Catalog directory | `catalog_directory_entries` | The catalog rows (id, name, owner, suspension, maintenance), by name, with no content | `directory` |
 | Credentials | `credential_cache_entries` each | API keys by hash, OAuth grants by id | `credential`, `grant` |
-| Users | `user_cache_entries` | Each user's admin flag, ceiling, teams, entitlements and unlocks | `user` |
+| Users | `user_cache_entries` | Each user's admin flag, teams, entitlements and unlocks (the ceiling is resolved per catalog from these) | `user` |
 | Labels | 100,000 entries (fixed) | The display labels of the users, teams and catalogs a response shows, read for just those names | `labels` |
 
 - **A request pins what it uses.** A catalog evicted while a request reads it
@@ -2324,7 +2324,9 @@ token derived from it, stored hashed too.
 - **What a session reaches.** An admin user's session is an admin that
   reaches every catalog, as an every-catalog admin key is. A member's
   session reaches exactly its ceiling, at the ceiling's levels. The admin
-  flag and the ceiling are read from the user cache on every request.
+  flag, teams and entitlements are read from the user cache on every
+  request, and the ceiling on a catalog is resolved from them and the
+  catalog's directory row (owner team, member access) at the check.
 - **No changesets.** A session never owns a changeset, so MCP writes still
   need a key or a grant. An admin user's session may still publish or
   discard any key's changeset from the Changesets page, recorded as that
@@ -4373,7 +4375,8 @@ take the server out of service. Alert on the `error` log line, not on
   `GET /api/v1/catalogs` a `maintenance` field.
 
 - **Bounded memory (milestone 18; 0.23.0)** adds migrations
-  `0023_audit_backfill.sql` and `0024_cluster_stats.sql`, and an older
+  `0023_audit_backfill.sql`, `0024_cluster_stats.sql`,
+  `0025_catalogs_member_reach.sql` and `0026_catalogs_member_write.sql`, and an older
   binary refuses the migrated database. The migrations run before the new
   binary serves. Old and new replicas can run together
   during a rolling deploy: a milestone 18 server bridges both ways (it still
@@ -4381,6 +4384,17 @@ take the server out of service. Alert on the `error` log line, not on
   `admin-generation` channel, and it treats a milestone 16 announcement as
   "mark the caches stale"). The bridge and the deprecated settings go in the
   release after this one. What changes for operators:
+  - **Two indexes are built concurrently.** `0025` and `0026` add partial
+    indexes on `catalogs` (a console session's catalogs, listed a page at a
+    time per owner team, and its owner teams' writable catalogs) with
+    `CREATE INDEX CONCURRENTLY`, so the replicas still serving keep writing
+    catalogs while they build; on a large database the build takes a while
+    and waits for transactions already open on `catalogs`. If a build fails
+    part-way (a lost connection, a cancelled pod), Postgres leaves the index
+    INVALID and the migration unrecorded: the next start drops the invalid
+    index and builds it again, under a lock that keeps two starting replicas
+    from doing it at once. Check with
+    `SELECT indexrelid::regclass, indisvalid FROM pg_index WHERE indexrelid::regclass::text LIKE 'catalogs_member_%'`.
   - **Settings added:** `catalog_cache_bytes` (`"1GiB"`),
     `catalog_directory_entries` (100000), `catalog_ttl` (`"10s"`),
     `credential_cache_entries` (100000), `user_cache_entries` (100000),

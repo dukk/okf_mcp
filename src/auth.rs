@@ -55,6 +55,14 @@ pub enum Reach {
     All,
     /// These catalogs, by name, each at its own level (Decision 1).
     Catalogs(BTreeMap<String, Access>),
+    /// A non-admin console session: the catalogs its user's ceiling reaches,
+    /// each at the ceiling's level there. It is resolved per catalog, from
+    /// the catalog's directory row and the user's gates in
+    /// [`AccessFacts::user`] ([`crate::store::ceiling::level_on`]), never
+    /// listed whole, so a session costs nothing per catalog its user's teams
+    /// own (issue #728). A name alone cannot decide it: checks that a
+    /// session can reach take the row ([`Principal::level_at`]).
+    Ceiling,
 }
 
 /// What credential a request came with.
@@ -203,13 +211,18 @@ pub struct Principal {
 }
 
 impl Principal {
-    /// The level this principal has on `catalog`.
+    /// The level this principal has on `catalog`, decided by name alone.
+    ///
+    /// A [`Reach::Ceiling`] (a non-admin console session) cannot be decided
+    /// by name, so it answers `None` here: it fails closed. Every check a
+    /// session can reach uses [`Self::level_at`] with the catalog's row.
     ///
     /// # Arguments
     /// * `catalog` - a catalog name.
     ///
     /// # Returns
-    /// Its level there, or `None` when it does not reach the catalog.
+    /// Its level there, or `None` when it does not reach the catalog (or
+    /// the reach is a ceiling).
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn level(&self, catalog: &str) -> Option<Access> {
         match &self.reach {
@@ -217,6 +230,72 @@ impl Principal {
             // `copied` turns the map's `Option<&Access>` into
             // `Option<Access>` (`Access` is `Copy`).
             Reach::Catalogs(levels) => levels.get(catalog).copied(),
+            Reach::Ceiling => None,
+        }
+    }
+
+    /// The level this principal has on the catalog `row` describes: what
+    /// every reach check uses, and the only one a [`Reach::Ceiling`]
+    /// answers.
+    ///
+    /// # Arguments
+    /// * `row` - the catalog's directory row.
+    ///
+    /// # Returns
+    /// Its level there, or `None` when it does not reach the catalog.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn level_at(&self, row: &CatalogRow) -> Option<Access> {
+        match &self.reach {
+            Reach::All | Reach::Catalogs(_) => self.level(&row.name),
+            // A session without gates (built outside the credential cache)
+            // reaches nothing.
+            Reach::Ceiling => self
+                .facts
+                .user
+                .as_deref()
+                .and_then(|gates| crate::store::ceiling::level_on(row, gates)),
+        }
+    }
+
+    /// Does the key reach the catalog `row` describes ([`Self::level_at`])?
+    ///
+    /// # Arguments
+    /// * `row` - the catalog's directory row.
+    ///
+    /// # Returns
+    /// `true` when it reaches it at any level.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn reaches_row(&self, row: &CatalogRow) -> bool {
+        self.level_at(row).is_some()
+    }
+
+    /// Whether the name alone shows the key does not reach `catalog`: a
+    /// [`Reach::Catalogs`] that does not name it. Lets a caller skip the
+    /// row's lookup; a `false` decides nothing, so the caller then checks
+    /// the row ([`Self::reaches_row`]).
+    ///
+    /// # Arguments
+    /// * `catalog` - a catalog name.
+    ///
+    /// # Returns
+    /// `true` only for a by-name reach without the catalog.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn excludes(&self, catalog: &str) -> bool {
+        match &self.reach {
+            Reach::Catalogs(levels) => !levels.contains_key(catalog),
+            Reach::All | Reach::Ceiling => false,
         }
     }
 
@@ -252,8 +331,57 @@ impl Principal {
     /// there is lower than `access`.
     #[tracing::instrument(level = "trace", skip_all)]
     pub fn require_level(&self, access: Access, catalog: &str) -> Result<(), OkfError> {
+        self.check_level(self.level(catalog), access, catalog)
+    }
+
+    /// [`Self::require_level`] on the catalog `row` describes
+    /// ([`Self::level_at`]): the form a [`Reach::Ceiling`] passes.
+    ///
+    /// # Arguments
+    /// * `access` - the level the operation needs.
+    /// * `row` - the catalog's directory row.
+    ///
+    /// # Errors
+    /// As [`Self::require_level`].
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn require_level_at(&self, access: Access, row: &CatalogRow) -> Result<(), OkfError> {
+        self.check_level(self.level_at(row), access, &row.name)
+    }
+
+    /// [`Self::require_level`] where the name decides it, run before a
+    /// row's lookup so a key that does not reach the catalog learns nothing
+    /// from it. A [`Reach::Ceiling`] passes here: its caller must then
+    /// check the row ([`Self::require_level_at`], which [`Self::require`]
+    /// runs).
+    ///
+    /// # Arguments
+    /// * `access` - the level the operation needs.
+    /// * `catalog` - the catalog's name.
+    ///
+    /// # Errors
+    /// As [`Self::require_level`], never for a ceiling.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn precheck_level(&self, access: Access, catalog: &str) -> Result<(), OkfError> {
+        match self.reach {
+            Reach::Ceiling => Ok(()),
+            Reach::All | Reach::Catalogs(_) => self.require_level(access, catalog),
+        }
+    }
+
+    /// The refusal, if any, of `level` (this principal's on `catalog`) for
+    /// an operation needing `access`.
+    ///
+    /// # Errors
+    /// As [`Self::require_level`].
+    #[tracing::instrument(level = "trace", skip_all)]
+    fn check_level(
+        &self,
+        level: Option<Access>,
+        access: Access,
+        catalog: &str,
+    ) -> Result<(), OkfError> {
         // `let ... else`: bind the level, or leave early when there is none.
-        let Some(level) = self.level(catalog) else {
+        let Some(level) = level else {
             return Err(OkfError::CatalogNotSelected {
                 catalog: catalog.to_string(),
             });
@@ -346,7 +474,7 @@ impl Principal {
         )
     )]
     pub fn require(&self, access: Access, row: &CatalogRow) -> Result<(), OkfError> {
-        self.require_level(access, &row.name)?;
+        self.require_level_at(access, row)?;
         self.check_not_suspended(row)
     }
 
@@ -370,6 +498,16 @@ impl Principal {
         access: Access,
         catalog: &str,
     ) -> Result<(), OkfError> {
+        if matches!(self.reach, Reach::Ceiling) {
+            // Decided by the row: one that does not exist is not reached.
+            // A ceiling never holds admin, so suspension is always checked.
+            return match directory.resolve(catalog).await? {
+                Some(row) => self.require(access, &row),
+                None => Err(OkfError::CatalogNotSelected {
+                    catalog: catalog.to_string(),
+                }),
+            };
+        }
         self.require_level(access, catalog)?;
         if self.access == Access::Admin {
             return Ok(());
@@ -402,20 +540,25 @@ impl Principal {
         access: Access,
         catalog: &str,
     ) -> Result<Arc<CatalogRow>, OkfError> {
-        self.require_level(access, catalog)?;
-        directory
-            .resolve(catalog)
-            .await?
-            .ok_or_else(|| OkfError::CatalogNotSelected {
-                catalog: catalog.to_string(),
-            })
+        self.precheck_level(access, catalog)?;
+        let row =
+            directory
+                .resolve(catalog)
+                .await?
+                .ok_or_else(|| OkfError::CatalogNotSelected {
+                    catalog: catalog.to_string(),
+                })?;
+        // The whole check for a ceiling; for the others, the same answer
+        // as the precheck.
+        self.require_level_at(access, &row)?;
+        Ok(row)
     }
 
     /// Checks that the key may export `catalog`: read access, suspended or
     /// not (M13 spec: export stays open so members can take their data).
     ///
     /// # Arguments
-    /// * `catalog` - the catalog to export.
+    /// * `row` - the directory row of the catalog to export.
     ///
     /// # Errors
     /// As [`Self::require`] with [`Access::Read`], but never
@@ -427,13 +570,14 @@ impl Principal {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    pub fn require_export(&self, catalog: &str) -> Result<(), OkfError> {
-        self.require_level(Access::Read, catalog)
+    pub fn require_export(&self, row: &CatalogRow) -> Result<(), OkfError> {
+        self.require_level_at(Access::Read, row)
     }
 
     /// The principal of a console session (plan Decision 5): an admin
     /// user acts as an admin on every catalog; anyone else reaches exactly
-    /// their ceiling, at the ceiling's level for each catalog.
+    /// their ceiling, at the ceiling's level for each catalog
+    /// ([`Reach::Ceiling`], resolved per catalog from `facts`' gates).
     ///
     /// Callers pass the user as the user cache knows it now, never as read
     /// at sign-in: the admin flag can change between the password check
@@ -441,21 +585,20 @@ impl Principal {
     ///
     /// # Arguments
     /// * `user` - the signed-in user, from the user cache.
-    /// * `ceiling` - the user's ceiling (unused for an admin).
-    /// * `facts` - the access facts, with this user's gates.
+    /// * `facts` - the access facts, with this user's gates (what a
+    ///   non-admin's ceiling is resolved from).
     ///
     /// # Returns
-    /// The principal; its `access` is the highest level it holds, for
-    /// display and the admin checks (which a non-admin never passes).
+    /// The principal. An admin's `access` is `Admin`; a non-admin's is
+    /// `Read`, which grants nothing by itself (its levels are the ceiling's,
+    /// per catalog) and only ever fails the admin checks; `GET /whoami`
+    /// shows the ceiling's highest level instead ([`crate::store::ceiling::highest`]).
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn for_session(user: &UserAuth, ceiling: Ceiling, facts: Arc<AccessFacts>) -> Self {
+    pub fn for_session(user: &UserAuth, facts: Arc<AccessFacts>) -> Self {
         let (access, reach) = if user.is_admin {
             (Access::Admin, Reach::All)
         } else {
-            // `copied()` turns the `&Access` items into `Access` values;
-            // `max()` is `None` for an empty ceiling.
-            let highest = ceiling.values().copied().max().unwrap_or(Access::Read);
-            (highest, Reach::Catalogs(ceiling))
+            (Access::Read, Reach::Ceiling)
         };
         Self {
             key_id: format!("{SESSION_KEY_PREFIX}{}", user.name),
@@ -529,7 +672,7 @@ impl Principal {
                 .as_ref()
                 .is_some_and(|team| user.teams.contains(team))
         });
-        let entitled = user.is_some_and(|user| user.entitled.contains(&row.id));
+        let entitled = user.is_some_and(|user| user.entitled.contains_key(&row.id));
         if member || (!admin_user && entitled) {
             return Ok(Admission::Customer);
         }
@@ -736,7 +879,9 @@ static NO_CEILING: Ceiling = BTreeMap::new();
 ///
 /// # Arguments
 /// * `record` - the row.
-/// * `ceiling` - its user's current ceiling; `None` for a credential whose
+/// * `ceiling` - its user's current ceiling, at least on the record's own
+///   catalogs (the cache passes it restricted to them,
+///   [`crate::store::ceiling::ceiling_over`]); `None` for a credential whose
 ///   user is unknown (a self-issued one then reaches nothing).
 /// * `facts` - the access facts, shared with the principal.
 ///
@@ -755,8 +900,9 @@ pub(crate) fn principal_of(
         let levels = match &principal.reach {
             Reach::Catalogs(levels) => cap(levels, ceiling),
             // The schema refuses a self-issued all-catalogs row; one edited
-            // by hand reaches nothing rather than everything.
-            Reach::All => Ceiling::new(),
+            // by hand reaches nothing rather than everything. A stored
+            // record is never a ceiling reach (only a session is).
+            Reach::All | Reach::Ceiling => Ceiling::new(),
         };
         // Its highest level left, for display; `Read` when nothing is left
         // (it then reaches no catalog at all).
@@ -993,6 +1139,7 @@ mod tests {
 
     use crate::config::Config;
     use crate::store::catalogs::SuspendedRow;
+    use crate::store::ceiling::MemberAccess;
     use crate::store::gates::UserUnlock;
     use crate::store::keys as key_rows;
     // `oneshot` sends one request through a router without a socket.
@@ -1056,7 +1203,16 @@ mod tests {
             suspended: None,
             maintenance_off: false,
             audit_team: Some(40 + id),
+            member_access: MemberAccess::Write,
         }
+    }
+
+    /// The access facts of a console session whose user has `gates`.
+    fn session_facts(gates: UserGates) -> Arc<AccessFacts> {
+        Arc::new(AccessFacts {
+            user: Some(Arc::new(gates)),
+            ..AccessFacts::default()
+        })
     }
 
     /// [`row`], with its owner team suspended.
@@ -1405,20 +1561,24 @@ mod tests {
 
     #[test]
     fn a_non_admin_session_reaches_its_ceiling_at_each_level() {
-        let ceiling = Ceiling::from([
-            ("main".to_string(), Access::Write),
-            ("other".to_string(), Access::Read),
-        ]);
-
-        let principal = Principal::for_session(&user(false), ceiling, Arc::default());
+        // Entitled to `main` (1) at write and `other` (2) at read; in no
+        // team, so the owner's member access gives nothing.
+        let principal = Principal::for_session(
+            &user(false),
+            session_facts(UserGates {
+                entitled: [(1, Access::Write), (2, Access::Read)].into(),
+                ..UserGates::default()
+            }),
+        );
 
         assert_eq!(principal.key_id, "session:alice");
         assert_eq!(principal.actor, "alice");
         assert_eq!(principal.user.as_deref(), Some("alice"));
+        assert_eq!(principal.reach, Reach::Ceiling);
         assert_eq!(
             principal.access,
-            Access::Write,
-            "the highest level in the ceiling"
+            Access::Read,
+            "grants nothing by itself: the levels are the ceiling's"
         );
         assert!(!principal.maintenance_report);
         assert!(principal.require(Access::Write, &row("main", 1)).is_ok());
@@ -1442,7 +1602,7 @@ mod tests {
 
     #[test]
     fn an_admin_users_session_is_an_admin_on_every_catalog() {
-        let principal = Principal::for_session(&user(true), Ceiling::new(), Arc::default());
+        let principal = Principal::for_session(&user(true), Arc::default());
 
         assert_eq!(principal.access, Access::Admin);
         assert_eq!(principal.reach, Reach::All);
@@ -1453,10 +1613,16 @@ mod tests {
 
     #[test]
     fn a_session_with_an_empty_ceiling_reaches_nothing() {
-        let principal = Principal::for_session(&user(false), Ceiling::new(), Arc::default());
+        let principal = Principal::for_session(&user(false), session_facts(UserGates::default()));
+        let gateless = Principal::for_session(&user(false), Arc::default());
 
         assert_eq!(principal.access, Access::Read);
         assert!(!principal.reaches("main"));
+        assert!(!principal.reaches_row(&row("main", 1)));
+        assert!(
+            !gateless.reaches_row(&row("main", 1)),
+            "no gates, no ceiling"
+        );
     }
 
     /// An API key reaching `catalogs`, each at `access`, with no user.
@@ -1537,7 +1703,7 @@ mod tests {
             ..key_on(&["main"], Access::Read)
         };
         let entitled = customer(UserGates {
-            entitled: [1].into(),
+            entitled: [(1, Access::Read)].into(),
             ..UserGates::default()
         });
         // `main` deleted and created again (id 2) for another team.
@@ -1630,9 +1796,9 @@ mod tests {
 
         assert!(admin.require(Access::Admin, &shared).is_ok());
         assert!(admin.require(Access::Write, &shared).is_ok());
-        assert!(reader.require_export("shared").is_ok());
+        assert!(reader.require_export(&shared).is_ok());
         assert!(matches!(
-            reader.require_export("other"),
+            reader.require_export(&row("other", 2)),
             Err(OkfError::CatalogNotSelected { .. })
         ));
         assert_eq!(
@@ -1645,17 +1811,17 @@ mod tests {
 
     #[test]
     fn a_member_session_is_suspended_and_an_admin_session_is_not() {
-        let ceiling = Ceiling::from([("shared".to_string(), Access::Write)]);
         let shared = suspended_row("shared", 1);
 
-        let member = Principal::for_session(&user(false), ceiling, Arc::default());
-        let admin = Principal::for_session(&user(true), Ceiling::new(), Arc::default());
+        // In the owner team, whose member access is `write`.
+        let member = Principal::for_session(&user(false), session_facts(member()));
+        let admin = Principal::for_session(&user(true), Arc::default());
 
         assert!(matches!(
             member.require(Access::Read, &shared),
             Err(OkfError::Suspended { .. })
         ));
-        assert!(member.require_export("shared").is_ok());
+        assert!(member.require_export(&shared).is_ok());
         assert!(admin.require(Access::Write, &shared).is_ok());
     }
 
@@ -1682,12 +1848,12 @@ mod tests {
         match who {
             "member" => member(),
             "entitled" => UserGates {
-                entitled: [1].into(),
+                entitled: [(1, Access::Read)].into(),
                 ..UserGates::default()
             },
             "staff" => UserGates {
                 is_admin: true,
-                entitled: [1].into(),
+                entitled: [(1, Access::Read)].into(),
                 ..UserGates::default()
             },
             _ => UserGates::default(),

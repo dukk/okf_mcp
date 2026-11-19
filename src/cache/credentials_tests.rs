@@ -10,7 +10,7 @@ use chrono::{TimeDelta, Utc};
 use tokio::time::timeout;
 
 use super::*;
-use crate::auth::CredentialKind;
+use crate::auth::{CredentialKind, Reach};
 use crate::clock::{FixedClock, SystemClock};
 use crate::db::{test_db, TEST_TEAM, TEST_USER};
 use crate::invalidate::testing::invalidations_of;
@@ -41,7 +41,15 @@ fn credentials_with(
         users: 100,
         ttl,
     };
-    Credentials::new(pool.clone(), clock, limits, metrics)
+    // The ceilings of self-issued credentials are resolved against this
+    // directory's rows; `apply_messages_of` applies each message to it too.
+    let directory = Arc::new(CatalogDirectory::new(
+        pool.clone(),
+        100,
+        ttl,
+        metrics.clone(),
+    ));
+    Credentials::new(pool.clone(), directory, clock, limits, metrics)
 }
 
 fn view() -> AccessView {
@@ -94,6 +102,7 @@ async fn stored(pool: &PgPool, new: &NewKey<'_>) -> (String, String) {
 /// the change feed's listener would.
 async fn apply_messages_of(pool: &PgPool, caches: &Credentials, write: impl Future<Output = ()>) {
     for invalidation in invalidations_of(pool, write).await {
+        caches.directory.apply(&invalidation).await;
         caches.apply(&invalidation).await;
     }
 }
@@ -636,4 +645,399 @@ async fn a_cached_key_survives_a_failed_database_and_an_uncached_one_errors() {
         caches.find(&other, &view()).await,
         Err(OkfError::Database { .. })
     ));
+}
+
+/// Creates user `name` (with their personal team, also `name`).
+async fn person(pool: &PgPool, name: &str) {
+    let user = crate::store::users::NewUser {
+        name,
+        display_name: &DisplayName::default(),
+    };
+    crate::store::users::create(pool, &user, &AuditActor::cli(), Utc::now())
+        .await
+        .unwrap();
+}
+
+/// Issue #728: the ceiling resolved per catalog (from the catalog's row and
+/// the user's cached gates) answers exactly what the whole ceiling did, for
+/// every source of a ceiling: the owner team at each `member_access`, an
+/// entitlement at each level, both at once (the higher wins), an admin
+/// user, and a user with neither. The whole ceiling is still computed by
+/// the query every check read before (`ceiling::ceiling_of`), so this
+/// compares the old answer with the new one, catalog by catalog: the
+/// session's level, a self-issued key's cap (by `ceiling::cap` over the
+/// whole ceiling, as `principal_of` did), the named read the key and grant
+/// creation use, and the session's catalog listing, page by page.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_per_catalog_ceiling_answers_what_the_whole_ceiling_did() {
+    let db = test_db().await;
+    let pool = &db.pool;
+    let cli = AuditActor::cli();
+    for name in ["alice", "bob", "carol", "root"] {
+        person(pool, name).await;
+    }
+    sqlx::query("UPDATE users SET is_admin = true WHERE name = 'root'")
+        .execute(pool)
+        .await
+        .unwrap();
+    let family = NewTeam {
+        name: "family",
+        display_name: &DisplayName::default(),
+        owner: "bob",
+    };
+    teams::create(pool, &family, &cli, Utc::now())
+        .await
+        .unwrap();
+    for user in ["alice", "root"] {
+        let joined = Membership {
+            team: "family",
+            user,
+            role: Role::Member,
+        };
+        teams::set_member(pool, &joined, &cli, Utc::now())
+            .await
+            .unwrap();
+    }
+    // The family's catalogs at each member access; bob's own (outside
+    // alice's teams); alice's own (her personal team).
+    let owned = [
+        ("f-none", "family", ceiling::MemberAccess::None),
+        ("f-read", "family", ceiling::MemberAccess::Read),
+        ("f-write", "family", ceiling::MemberAccess::Write),
+        ("b-write", "bob", ceiling::MemberAccess::Write),
+        ("b-read", "bob", ceiling::MemberAccess::Read),
+        ("a-read", "alice", ceiling::MemberAccess::Read),
+    ];
+    for (name, team, access) in owned {
+        catalog(pool, name, team).await;
+        ceiling::set_member_access(pool, name, access, &cli, Utc::now())
+            .await
+            .unwrap();
+    }
+    // Entitlements below, at and above what the team gives, and outside it.
+    let entitlements = [
+        ("alice", "f-none", Access::Read),
+        ("alice", "f-read", Access::Write),
+        ("alice", "f-write", Access::Read),
+        ("alice", "b-read", Access::Write),
+        ("alice", "a-read", Access::Read),
+        ("carol", "b-write", Access::Read),
+        ("root", "b-read", Access::Read),
+    ];
+    for (user, catalog, access) in entitlements {
+        let new = ceiling::NewEntitlement {
+            user,
+            catalog,
+            access,
+        };
+        ceiling::entitle(pool, &new, &cli, Utc::now())
+            .await
+            .unwrap();
+    }
+    let every: Vec<String> = owned.iter().map(|(name, ..)| name.to_string()).collect();
+    let caches = credentials(pool);
+    let mut rows = Vec::new();
+    for name in &every {
+        rows.push(
+            caches
+                .directory
+                .resolve(name)
+                .await
+                .unwrap()
+                .expect("seeded"),
+        );
+    }
+
+    for user in ["alice", "bob", "carol", "root"] {
+        // Arrange: the old whole ceiling, and the new cached entry.
+        let whole = ceiling::ceiling_of(pool, user).await.unwrap();
+        let id = user_id(pool, user).await;
+        let entry = caches.user(&id).await.unwrap().expect("a user");
+        let session = caches
+            .session_principal(&id, &view())
+            .await
+            .unwrap()
+            .expect("a session");
+        let key_name = format!("{user}-own");
+        let (_, secret) = stored(pool, &new_key(&key_name, user, &every, true)).await;
+        let key = caches.find(&secret, &view()).await.unwrap().expect("a key");
+        let grants: std::collections::BTreeMap<String, Access> = every
+            .iter()
+            .map(|name| (name.clone(), Access::Write))
+            .collect();
+
+        // The whole ceiling, catalog by catalog.
+        for row in &rows {
+            let old = whole.get(&row.name).copied();
+            assert_eq!(
+                ceiling::level_on(row, &entry.gates),
+                old,
+                "{user} on {}: level_on",
+                row.name
+            );
+            let expected_session = if user == "root" {
+                Some(Access::Admin)
+            } else {
+                old
+            };
+            assert_eq!(
+                session.level_at(row),
+                expected_session,
+                "{user}'s session on {}",
+                row.name
+            );
+            // A self-issued key, capped as `principal_of` did by the whole
+            // ceiling (an admin user's self-issued key is capped too).
+            assert_eq!(
+                key.level(&row.name),
+                ceiling::cap(&grants, &whole).get(&row.name).copied(),
+                "{user}'s self-issued key on {}",
+                row.name
+            );
+            assert_eq!(key.level_at(row), key.level(&row.name));
+        }
+        // Reach::All for the admin; a ceiling for everyone else.
+        let expected_reach = if user == "root" {
+            Reach::All
+        } else {
+            Reach::Ceiling
+        };
+        assert_eq!(session.reach, expected_reach, "{user}");
+        // The named read (key and grant creation) is the whole ceiling,
+        // restricted to the names.
+        let named = ceiling::ceiling_in(&mut pool.acquire().await.unwrap(), &id, &every)
+            .await
+            .unwrap();
+        assert_eq!(named, whole, "{user}: the named read");
+        // `whoami`'s level for a session: the highest in the ceiling.
+        let highest = whole.values().copied().max().unwrap_or(Access::Read);
+        assert_eq!(
+            ceiling::highest(pool, &id).await.unwrap(),
+            highest,
+            "{user}"
+        );
+        // The session's listing, two at a time, is the whole ceiling (every
+        // catalog for the admin).
+        if user != "root" {
+            let mut listed = Vec::new();
+            let mut after: Option<String> = None;
+            loop {
+                let page = caches
+                    .directory
+                    .reachable_page(&session, after.as_deref(), 2)
+                    .await
+                    .unwrap();
+                listed.extend(page.items.iter().map(|row| row.name.clone()));
+                match page.next {
+                    Some(next) => after = Some(next),
+                    None => break,
+                }
+            }
+            let expected: Vec<String> = whole.keys().cloned().collect();
+            assert_eq!(listed, expected, "{user}'s listing");
+        }
+    }
+}
+
+/// Sums the `rows_returned` of every `sqlx::query` event: how many rows the
+/// database sent back to the code under test.
+#[derive(Clone, Default)]
+struct RowsReturned {
+    rows: Arc<std::sync::atomic::AtomicU64>,
+    statements: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for RowsReturned {
+    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        struct Rows(u64);
+        impl tracing::field::Visit for Rows {
+            fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+                if field.name() == "rows_returned" {
+                    self.0 = value;
+                }
+            }
+            fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+        }
+        if event.metadata().target() != "sqlx::query" {
+            return;
+        }
+        let mut rows = Rows(0);
+        event.record(&mut rows);
+        let relaxed = std::sync::atomic::Ordering::Relaxed;
+        self.rows.fetch_add(rows.0, relaxed);
+        self.statements.fetch_add(1, relaxed);
+    }
+}
+
+/// Issue #728: a user whose team owns 50,000 catalogs authenticates with a
+/// load whose queries return a handful of rows (none per catalog), and the
+/// cached entry stays small; the session still reaches those catalogs, one
+/// at a time, and lists them a page at a time.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_user_whose_team_owns_many_catalogs_loads_a_small_entry() {
+    use tracing_subscriber::layer::SubscriberExt;
+    // `with_filter` is a method of the `Layer` trait.
+    use tracing_subscriber::Layer as _;
+
+    const OWNED: i64 = 50_000;
+    let db = test_db().await;
+    let pool = &db.pool;
+    person(pool, "alice").await;
+    // Seeded by SQL, not the store: alice's personal team owns them all.
+    sqlx::query(
+        "INSERT INTO catalogs (name, description, created_at, owner_team_id) \
+         SELECT 'c' || lpad(n::text, 6, '0'), '', now(), \
+                (SELECT id FROM teams WHERE name = 'alice') \
+         FROM generate_series(1, $1) AS n",
+    )
+    .bind(OWNED)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query("ANALYZE catalogs").execute(pool).await.unwrap();
+    let id = user_id(pool, "alice").await;
+    let caches = credentials(pool);
+    let counter = RowsReturned::default();
+    let subscriber = tracing_subscriber::registry().with(
+        counter.clone().with_filter(
+            tracing_subscriber::filter::Targets::new()
+                .with_target("sqlx::query", tracing::Level::TRACE),
+        ),
+    );
+
+    // Act: the first authentication of her session loads her entry.
+    let session = {
+        // Only this thread's events: the loads below run on it.
+        let _guard = tracing::subscriber::set_default(subscriber);
+        timeout(BOUND, caches.session_principal(&id, &view()))
+            .await
+            .expect("the load")
+            .unwrap()
+            .expect("alice")
+    };
+
+    let relaxed = std::sync::atomic::Ordering::Relaxed;
+    let rows = counter.rows.load(relaxed);
+    let statements = counter.statements.load(relaxed);
+    assert!(statements > 0, "the load's statements are counted");
+    assert!(
+        rows < 20,
+        "the load returns {rows} rows in {statements} statements, not one per catalog"
+    );
+    let entry = caches.user(&id).await.unwrap().expect("cached");
+    let size = format!("{entry:?}").len();
+    assert!(
+        size < 4096,
+        "the cached entry is {size} bytes of Debug text"
+    );
+    // She still reaches every one of them, resolved per catalog.
+    let last = caches
+        .directory
+        .resolve("c050000")
+        .await
+        .unwrap()
+        .expect("seeded");
+    assert_eq!(session.level_at(&last), Some(Access::Write));
+    let first = caches
+        .directory
+        .reachable_page(&session, None, 100)
+        .await
+        .unwrap();
+    assert_eq!(first.items.len(), 100);
+    assert_eq!(first.items[0].name, "c000001");
+    assert!(first.next.is_some(), "a page, not the whole ceiling");
+}
+
+/// Review of PR #739: since #728 a ceiling change made on the catalog
+/// (`member_access`, the owner team) reaches a cached console session only
+/// through the catalog's directory row, which the write's `catalog_meta`
+/// message drops. A session and the row are warmed first; each change is
+/// applied as the change feed would (no poll, and a one-hour TTL so nothing
+/// expires): the next request's level and listing follow it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cached_session_follows_member_access_and_owner_changes() {
+    let db = test_db().await;
+    let pool = &db.pool;
+    let cli = AuditActor::cli();
+    for name in ["alice", "bob"] {
+        person(pool, name).await;
+    }
+    for team in ["family", "others"] {
+        let new = NewTeam {
+            name: team,
+            display_name: &DisplayName::default(),
+            owner: "bob",
+        };
+        teams::create(pool, &new, &cli, Utc::now()).await.unwrap();
+    }
+    let joined = Membership {
+        team: "family",
+        user: "alice",
+        role: Role::Member,
+    };
+    teams::set_member(pool, &joined, &cli, Utc::now())
+        .await
+        .unwrap();
+    catalog(pool, "shared", "family").await;
+    let caches = credentials(pool);
+    let alice = user_id(pool, "alice").await;
+    // One request: alice's session, the catalog's row and her listing.
+    let request = async || {
+        let session = caches
+            .session_principal(&alice, &view())
+            .await
+            .unwrap()
+            .expect("alice");
+        let row = caches
+            .directory
+            .resolve("shared")
+            .await
+            .unwrap()
+            .expect("shared");
+        let listed: Vec<String> = caches
+            .directory
+            .reachable_page(&session, None, 100)
+            .await
+            .unwrap()
+            .items
+            .iter()
+            .map(|row| row.name.clone())
+            .collect();
+        (session.level_at(&row), listed)
+    };
+    let shared = vec!["shared".to_string()];
+    assert_eq!(
+        request().await,
+        (Some(Access::Write), shared.clone()),
+        "warm"
+    );
+
+    for (access, expected) in [
+        (
+            ceiling::MemberAccess::Read,
+            (Some(Access::Read), shared.clone()),
+        ),
+        (ceiling::MemberAccess::None, (None, Vec::new())),
+        (
+            ceiling::MemberAccess::Write,
+            (Some(Access::Write), shared.clone()),
+        ),
+    ] {
+        apply_messages_of(pool, &caches, async {
+            ceiling::set_member_access(pool, "shared", access, &cli, Utc::now())
+                .await
+                .unwrap();
+        })
+        .await;
+        assert_eq!(request().await, expected, "member access {access:?}");
+    }
+
+    // Given to a team alice is not in: she no longer reaches it.
+    apply_messages_of(pool, &caches, async {
+        catalogs::set_owner(pool, "shared", "others", &cli, Utc::now())
+            .await
+            .unwrap();
+    })
+    .await;
+    assert_eq!(request().await, (None, Vec::new()), "owner moved");
 }

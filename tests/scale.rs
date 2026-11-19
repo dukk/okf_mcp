@@ -6,8 +6,11 @@
 //! * reading 5,000 distinct catalogs through a cache sized for about 1,000
 //!   keeps `okf_cache_bytes{cache="catalog"}` within its budget and the
 //!   process's resident memory within budget plus 200 MiB;
+//! * the first authentication of the administrator's key, whose user's
+//!   team owns all million catalogs, answers in under 20 ms: a user's
+//!   ceiling is resolved per catalog, never loaded whole (issue #728);
 //! * authenticating 10,000 distinct keys has a p99 under 20 ms and leaves
-//!   the credential cache at or under `credential_cache_entries`;
+//!   the credential cache at, and not over, `credential_cache_entries`;
 //! * the first page of `GET /api/v1/catalogs` for an admin key answers in
 //!   under 200 ms cold (100 snapshot loads) and under 50 ms repeated.
 //!
@@ -58,21 +61,18 @@ const BOUND: Duration = Duration::from_secs(120);
 /// The body of every seeded document, 51 bytes.
 const NOTE: &str = "---\ntype: Note\ntitle: Note\n---\n# Note\nA tiny note.\n";
 
-/// Seeds [`SEEDED`] catalogs (one tiny document each, owned by a team nobody is in) and [`SEEDED`] users, each with a read key whose secret is
-/// `okf_scale_<n>`.
+/// Seeds [`SEEDED`] catalogs (one tiny document each, owned by the personal
+/// team of [`support::server::OWNER`], the administrator's user) and
+/// [`SEEDED`] users, each with a read key whose secret is `okf_scale_<n>`.
 async fn seed(pool: &PgPool) {
     let started = Instant::now();
-    // The catalogs belong to a team nobody is in: a user's ceiling lists
-    // every catalog their teams own, so giving the million to the
-    // administrator's team would measure that list, not the caches.
-    sqlx::query("INSERT INTO teams (name, created_at) VALUES ('scale-owners', now())")
-        .execute(pool)
-        .await
-        .expect("create the owner team");
+    // The administrator's team owns the million (issue #728): its user's
+    // ceiling holds every one of them, and authenticating that user must
+    // not read them.
     for statement in [
         "INSERT INTO catalogs (name, description, created_at, owner_team_id) \
          SELECT 'c' || lpad(n::text, 7, '0'), '', now(), \
-                (SELECT id FROM teams WHERE name = 'scale-owners') \
+                (SELECT id FROM teams WHERE name = $2) \
          FROM generate_series(1, $1) AS n",
         "INSERT INTO documents (catalog_id, path, content, executable, revision, updated_at, \
                                 updated_by, kind, concept_type, title) \
@@ -88,8 +88,11 @@ async fn seed(pool: &PgPool) {
          JOIN users u ON u.name = 'u' || lpad(n::text, 7, '0')",
     ] {
         let mut query = sqlx::query(statement).bind(SEEDED);
-        // Only the documents statement has a second parameter.
-        if statement.contains("$2") {
+        // The catalogs' second parameter is their owner team; the
+        // documents', their body.
+        if statement.starts_with("INSERT INTO catalogs") {
+            query = query.bind(support::server::OWNER);
+        } else if statement.contains("$2") {
             query = query.bind(NOTE);
         }
         query.execute(pool).await.expect("seed");
@@ -163,6 +166,10 @@ async fn a_million_catalogs_and_users_stay_within_bounds() {
     let config = Config {
         catalog_cache_bytes: ByteSize::b(budget),
         credential_cache_entries: CREDENTIAL_ENTRIES,
+        // An hour, so no entry expires during the run (10,000 sequential
+        // authentications take about a minute): the entry count is held by
+        // `credential_cache_entries` alone, not by the TTL.
+        credential_ttl: Duration::from_secs(3600),
         ..Config::default()
     };
 
@@ -231,7 +238,34 @@ async fn a_million_catalogs_and_users_stay_within_bounds() {
         "resident memory grew by {growth} B"
     );
 
-    // 3. Authenticating distinct keys.
+    // 3. The administrator's first authentication: its user's team owns
+    // every seeded catalog (issue #728). It loads the user's entry cold.
+    let admin = server.key("scale-admin", Access::Admin, &[], None).await;
+    let started = Instant::now();
+    let principal = tokio::time::timeout(BOUND, authenticate(&app, &admin))
+        .await
+        .expect("the administrator's authentication")
+        .expect("a database answer");
+    let admin_auth = started.elapsed();
+    assert!(principal.is_some(), "the administrator's key authenticates");
+    let started = Instant::now();
+    tokio::time::timeout(BOUND, authenticate(&app, &admin))
+        .await
+        .expect("the administrator's second authentication")
+        .expect("a database answer");
+    let admin_again = started.elapsed();
+    eprintln!(
+        "administrator ({SEEDED} catalogs owned by its team): first authentication \
+         {admin_auth:.2?}, again {admin_again:.2?}"
+    );
+    let mut failures = Vec::new();
+    if admin_auth >= Duration::from_millis(20) {
+        failures.push(format!(
+            "the administrator's first authentication took {admin_auth:?}"
+        ));
+    }
+
+    // 4. Authenticating distinct keys.
     let mut latencies = Vec::with_capacity(KEY_READS);
     for index in 0..KEY_READS {
         let key = format!("okf_scale_{}", 1 + (index as i64 * 97) % SEEDED);
@@ -261,17 +295,23 @@ async fn a_million_catalogs_and_users_stay_within_bounds() {
     );
     // Every bound is measured before any is asserted, so one run reports
     // all the numbers.
-    let mut failures = Vec::new();
     if worst >= Duration::from_millis(20) {
         failures.push(format!("authentication p99 was {worst:?}"));
     }
     if entries > CREDENTIAL_ENTRIES as f64 {
         failures.push(format!("the credential cache holds {entries} entries"));
     }
+    // With an hour's TTL nothing expired, so twice the limit in distinct
+    // keys must have filled the cache to its limit region: the bound, not
+    // expiry, is what held the count.
+    if entries < CREDENTIAL_ENTRIES as f64 * 0.9 {
+        failures.push(format!(
+            "the credential cache holds only {entries} entries: the limit was not reached"
+        ));
+    }
 
-    // 4. The first page of the catalog listing for an admin key, over HTTP
+    // 5. The first page of the catalog listing for an admin key, over HTTP
     // against the server that shares the database.
-    let admin = server.key("scale-admin", Access::Admin, &[], None).await;
     let client = reqwest::Client::new();
     let url = format!("{}/api/v1/catalogs", server.base);
     // The first request, then the same page again and a page of ten: what

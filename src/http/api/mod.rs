@@ -214,7 +214,8 @@ pub(crate) fn require_every_catalog(principal: &Principal) -> Result<(), OkfErro
     require_admin(principal)?;
     match &principal.reach {
         Reach::All => Ok(()),
-        Reach::Catalogs(_) => Err(OkfError::Forbidden {
+        // A ceiling is never admin, so `require_admin` refused it already.
+        Reach::Catalogs(_) | Reach::Ceiling => Err(OkfError::Forbidden {
             reason: "this needs an admin key that reaches every catalog".to_string(),
         }),
     }

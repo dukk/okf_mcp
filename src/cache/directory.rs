@@ -375,6 +375,10 @@ impl CatalogDirectory {
     /// * With a list, or for [`Reach::Catalogs`]: the listed or granted
     ///   catalogs the principal reaches and that exist, read together
     ///   (bounded by the list or the grants), then cut to the page.
+    /// * For [`Reach::Ceiling`] (a console session): one query of up to
+    ///   `limit + 1` rows of its user's ceiling after the cursor, read per
+    ///   owner team from an index ([`catalogs::ceiling_page`]), never the
+    ///   whole ceiling (issue #728).
     /// * Otherwise ([`Reach::All`]): one query of up to `limit + 1` rows
     ///   after the cursor, so `next` is set only when a row follows.
     ///
@@ -408,32 +412,57 @@ impl CatalogDirectory {
         let limit = limit.clamp(1, MAX_PAGE);
         // The bounded set of names to read, or `None` to page through every
         // catalog. `filter` drops an empty list (no list at all).
+        // One row more than the page, to know whether one follows.
+        let fetch = i64::from(limit) + 1;
         let names: Option<Vec<String>> =
             match (connection.filter(|list| !list.is_empty()), &principal.reach) {
+                // Reach is checked on each row below: a ceiling needs it.
                 (Some(list), _) => Some(
                     list.iter()
-                        .filter(|name| principal.reaches(name))
+                        .filter(|name| !principal.excludes(name))
                         .cloned()
                         .collect(),
                 ),
                 (None, Reach::Catalogs(levels)) => Some(levels.keys().cloned().collect()),
-                (None, Reach::All) => None,
+                (None, Reach::All | Reach::Ceiling) => None,
             };
-        let rows = match names {
-            Some(names) => {
+        let rows = match (names, &principal.reach) {
+            (Some(names), _) => {
                 let mut rows = self.resolve_many(&names).await?;
-                // `retain` keeps the rows after the cursor (sorted by name).
-                if let Some(after) = after.as_deref() {
-                    rows.retain(|row| row.name.as_str() > after);
-                }
+                // `retain` keeps the rows after the cursor (sorted by name)
+                // that the principal reaches.
+                rows.retain(|row| {
+                    principal.reaches_row(row)
+                        && after
+                            .as_deref()
+                            .is_none_or(|after| row.name.as_str() > after)
+                });
                 rows
             }
-            // One row more than the page, to know whether one follows.
-            None => catalogs::page(&self.pool, after.as_deref(), i64::from(limit) + 1)
-                .await?
-                .into_iter()
-                .map(Arc::new)
-                .collect(),
+            // A session's ceiling, a page at a time per owner team (issue
+            // #728), from the teams and entitlements its checks use.
+            (None, Reach::Ceiling) => {
+                let Some(gates) = principal.facts.user.as_deref() else {
+                    return Ok(Page::cut(Vec::new(), limit as usize));
+                };
+                let teams: Vec<String> = gates.teams.iter().cloned().collect();
+                let entitled: Vec<i64> = gates.entitled.keys().copied().collect();
+                catalogs::ceiling_page(&self.pool, &teams, &entitled, after.as_deref(), fetch)
+                    .await?
+                    .into_iter()
+                    .map(Arc::new)
+                    // Each row checked as every access check does: the
+                    // query and `level_on` agree, and this keeps it so.
+                    .filter(|row| principal.reaches_row(row))
+                    .collect()
+            }
+            (None, Reach::All | Reach::Catalogs(_)) => {
+                catalogs::page(&self.pool, after.as_deref(), fetch)
+                    .await?
+                    .into_iter()
+                    .map(Arc::new)
+                    .collect()
+            }
         };
         // A `u32` always fits a `usize` on the 64-bit targets this builds for.
         Ok(Page::cut(rows, limit as usize))
@@ -557,6 +586,7 @@ mod tests {
             suspended: None,
             maintenance_off: false,
             audit_team: None,
+            member_access: crate::store::ceiling::MemberAccess::Write,
         }))
     }
 

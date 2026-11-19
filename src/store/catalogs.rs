@@ -13,6 +13,7 @@ use crate::okf::ops::starter_files;
 use crate::okf::snapshot::Snapshot;
 use crate::okf::workspace::{MemWorkspace, StoredFile};
 use crate::store::audit::{self, Action, AuditActor, Entry, People, Target};
+use crate::store::ceiling::MemberAccess;
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
 use crate::store::teams;
 
@@ -857,6 +858,10 @@ pub struct CatalogRow {
     pub maintenance_off: bool,
     /// The owner team's `audit_teams.id` (the gates' `CatalogScope::team`).
     pub audit_team: Option<i64>,
+    /// What members of the owner team reach through self-issued credentials
+    /// and console sessions: one half of every user's ceiling on this
+    /// catalog ([`crate::store::ceiling::level_on`], issue #728).
+    pub member_access: MemberAccess,
 }
 
 /// [`CatalogRow`] as the query returns it: the suspension as two columns.
@@ -877,6 +882,7 @@ struct CatalogRowColumns {
     team_owner_email: Option<String>,
     maintenance_off: bool,
     audit_team: Option<i64>,
+    member_access: String,
 }
 
 impl From<CatalogRowColumns> for CatalogRow {
@@ -923,6 +929,10 @@ impl From<CatalogRowColumns> for CatalogRow {
             suspended,
             maintenance_off: columns.maintenance_off,
             audit_team: columns.audit_team,
+            // The schema's CHECK allows only the three spellings; anything
+            // else would reach nothing through the team, never more.
+            member_access: MemberAccess::parse(&columns.member_access)
+                .unwrap_or(MemberAccess::None),
         }
     }
 }
@@ -939,7 +949,8 @@ macro_rules! select_catalog_rows {
                 (t.personal_of IS NOT NULL) AS team_personal, \
                 pu.display_name AS team_owner_display_name, \
                 pu.email::text AS team_owner_email, \
-                NOT c.maintenance AS maintenance_off, a.id AS audit_team \
+                NOT c.maintenance AS maintenance_off, a.id AS audit_team, \
+                c.member_access \
          FROM catalogs c \
          LEFT JOIN teams t ON t.id = c.owner_team_id \
          LEFT JOIN users pu ON pu.id = t.personal_of \
@@ -1067,6 +1078,64 @@ pub async fn page<'e>(
         select_catalog_rows!(),
         " WHERE ($1::text IS NULL OR c.name > $1) ORDER BY c.name LIMIT $2"
     ))
+    .bind(after)
+    .bind(limit)
+    .fetch_all(executor)
+    .await?;
+    Ok(rows.into_iter().map(CatalogRow::from).collect())
+}
+
+/// One page of the catalogs a user's ceiling reaches, ordered by name
+/// (issue #728): those owned by one of `teams` with a `member_access` other
+/// than `none`, and those in `entitled`. Each team's catalogs are read from
+/// the `catalogs_member_reach` index (owner team, name) one page at a time,
+/// so the cost is bounded by the teams, the entitlements and the page,
+/// never by how many catalogs a team owns.
+///
+/// # Arguments
+/// * `executor` - a pool, connection or transaction.
+/// * `teams` - the user's `teams.id`s.
+/// * `entitled` - the `catalogs.id`s the user is entitled to.
+/// * `after` - the last name of the previous page (exclusive); `None` for
+///   the first page.
+/// * `limit` - the most rows to return.
+///
+/// # Returns
+/// Up to `limit` rows, ordered by name.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.ceiling_page"))]
+pub async fn ceiling_page<'e>(
+    executor: impl PgExecutor<'e>,
+    teams: &[String],
+    entitled: &[i64],
+    after: Option<&str>,
+    limit: i64,
+) -> Result<Vec<CatalogRow>, OkfError> {
+    // As in `page`: a cursor Postgres cannot take matches nothing.
+    if after.is_some_and(|name| name.contains('\0')) || (teams.is_empty() && entitled.is_empty()) {
+        return Ok(Vec::new());
+    }
+    // `LATERAL` runs the inner query once per team (like a loop over
+    // `unnest`), each an index range scan stopping after `limit` rows.
+    let rows = sqlx::query_as::<_, CatalogRowColumns>(concat!(
+        select_catalog_rows!(),
+        " WHERE c.id IN ( \
+              SELECT owned.id FROM unnest($1::text[]) AS team (id) \
+              CROSS JOIN LATERAL ( \
+                  SELECT i.id FROM catalogs i \
+                  WHERE i.owner_team_id = team.id AND i.member_access <> 'none' \
+                    AND ($3::text IS NULL OR i.name > $3) \
+                  ORDER BY i.name LIMIT $4) owned \
+              UNION \
+              (SELECT i.id FROM catalogs i \
+               WHERE i.id = ANY($2) AND ($3::text IS NULL OR i.name > $3) \
+               ORDER BY i.name LIMIT $4)) \
+          ORDER BY c.name LIMIT $4"
+    ))
+    .bind(teams)
+    .bind(entitled)
     .bind(after)
     .bind(limit)
     .fetch_all(executor)

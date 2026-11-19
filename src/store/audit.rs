@@ -2068,7 +2068,7 @@ mod tests {
             .unwrap()
             .unwrap();
         // A real console-session principal: its `actor` is the user's name.
-        let principal = Principal::for_session(&alice, Default::default(), Default::default());
+        let principal = Principal::for_session(&alice, Default::default());
         let requester = Requester {
             ip: None,
             source: Source::Console,

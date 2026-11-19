@@ -12,12 +12,13 @@
 //! catalog deleted and created again under its name is another catalog, and
 //! an entitlement or unlock of the old one must never open the new one.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgPool};
 
 use crate::error::OkfError;
+use crate::store::keys::Access;
 
 /// One live unlock of a user's, as an admission checks it.
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
@@ -39,9 +40,12 @@ pub struct UserGates {
     /// included): a member of a catalog's owner team is its customer.
     pub teams: HashSet<String>,
     /// The `catalogs.id` of every catalog the user is entitled to
-    /// (`user_catalogs`). An entitled non-admin is a customer; an admin
-    /// user's entitlement is not (spec "Who needs an unlock").
-    pub entitled: HashSet<i64>,
+    /// (`user_catalogs`), with the entitlement's level (`Read` or `Write`).
+    /// An entitled non-admin is a customer; an admin user's entitlement is
+    /// not (spec "Who needs an unlock"). With [`UserGates::teams`] it is
+    /// what the user's ceiling is resolved from, one catalog at a time
+    /// ([`crate::store::ceiling::level_on`], issue #728).
+    pub entitled: HashMap<i64, Access>,
     /// The user's live unlocks.
     pub unlocks: Vec<UserUnlock>,
     /// The user's `audit_people` id, fixed at admission (M14 Decision 21).
@@ -76,8 +80,8 @@ pub async fn for_user(
             .bind(user_id)
             .fetch_all(&mut *conn)
             .await?;
-    let entitled: Vec<i64> =
-        sqlx::query_scalar("SELECT catalog_id FROM user_catalogs WHERE user_id = $1")
+    let entitled: Vec<(i64, String)> =
+        sqlx::query_as("SELECT catalog_id, access FROM user_catalogs WHERE user_id = $1")
             .bind(user_id)
             .fetch_all(&mut *conn)
             .await?;
@@ -96,7 +100,12 @@ pub async fn for_user(
     Ok(UserGates {
         is_admin,
         teams: teams.into_iter().collect(),
-        entitled: entitled.into_iter().collect(),
+        // The schema's CHECK allows only `read` and `write`; anything else
+        // would be left out (reaching less, never more).
+        entitled: entitled
+            .into_iter()
+            .filter_map(|(catalog_id, access)| Some((catalog_id, Access::parse(&access)?)))
+            .collect(),
         unlocks,
         person,
     })
@@ -128,7 +137,6 @@ pub async fn audit_credential_id(pool: &PgPool, key_id: &str) -> Result<Option<i
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
 
     use crate::db::{test_db, TEST_USER};
 
@@ -358,7 +366,7 @@ mod tests {
         let bobs = for_user(&mut conn, &bob, false, now).await.unwrap();
         let staffs = for_user(&mut conn, &staff, true, now).await.unwrap();
 
-        assert_eq!(bobs.entitled, HashSet::from([main]));
+        assert_eq!(bobs.entitled, HashMap::from([(main, Access::Read)]));
         assert!(bobs.unlocks.is_empty());
         assert!(staffs.is_admin && staffs.entitled.is_empty());
         let unlocks: Vec<(i64, i64)> = staffs

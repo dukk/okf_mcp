@@ -247,7 +247,9 @@ pub async fn create_self_issued(
         other => other,
     })?;
     let user = lock_signed_in(&mut tx, new, now).await?;
-    let ceiling = ceiling::ceiling_in(&mut tx, new.user_id).await?;
+    // The ceiling on the chosen catalogs only (issue #728): the check below
+    // looks up nothing else.
+    let ceiling = ceiling::ceiling_in(&mut tx, new.user_id, &names).await?;
     // `is_none_or`: absent from the ceiling, or allowed below the choice.
     if let Some(catalog) = new.levels.iter().find_map(|(catalog, &level)| {
         ceiling

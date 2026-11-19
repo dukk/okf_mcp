@@ -42,6 +42,52 @@ pub async fn connect(url: &str, max_connections: u32) -> Result<PgPool, OkfError
     Ok(pool)
 }
 
+/// The indexes okf's migrations build `CONCURRENTLY` (in `no-transaction`
+/// migrations). A build that fails part-way leaves the index behind,
+/// marked INVALID, and its migration unrecorded; `CREATE INDEX ... IF NOT
+/// EXISTS` on the retry would then keep the invalid index for good.
+const CONCURRENT_INDEXES: [&str; 2] = ["catalogs_member_reach", "catalogs_member_write"];
+
+/// The advisory lock [`migrate`] holds around the cleanup and the
+/// migrations (an arbitrary constant, distinct from sqlx's own lock key).
+const CONCURRENT_INDEX_LOCK: i64 = 0x6f6b_665f_6964_7831;
+
+/// Drops each of [`CONCURRENT_INDEXES`] that exists but is INVALID (a
+/// failed concurrent build), so its migration builds it again.
+///
+/// # Arguments
+/// * `conn` - a connection outside any transaction (`DROP INDEX
+///   CONCURRENTLY` cannot run in one).
+///
+/// # Returns
+/// How many it dropped.
+///
+/// # Errors
+/// [`sqlx::Error`] if a read or a drop fails.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "db.drop_invalid_indexes"))]
+async fn drop_invalid_indexes(conn: &mut sqlx::PgConnection) -> Result<usize, sqlx::Error> {
+    let invalid: Vec<String> = sqlx::query_scalar(
+        "SELECT c.relname::text FROM pg_index i \
+         JOIN pg_class c ON c.oid = i.indexrelid \
+         WHERE c.relnamespace = 'public'::regnamespace \
+           AND c.relname = ANY($1) AND NOT i.indisvalid",
+    )
+    .bind(&CONCURRENT_INDEXES[..])
+    .fetch_all(&mut *conn)
+    .await?;
+    for name in &invalid {
+        tracing::warn!(index = %name, "dropping an invalid index left by a failed build");
+        // The name is one of the constants above, never input: safe to
+        // splice (an identifier cannot be a bound parameter).
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP INDEX CONCURRENTLY IF EXISTS {name}"
+        )))
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(invalid.len())
+}
+
 /// Applies every okf migration not yet applied, then apalis' own (both are
 /// no-ops when up to date).
 ///
@@ -57,7 +103,32 @@ pub async fn connect(url: &str, max_connections: u32) -> Result<PgPool, OkfError
 /// [`OkfError::Database`] if apalis' setup cannot reach the database.
 #[tracing::instrument(level = "debug", skip_all)]
 pub async fn migrate(pool: &PgPool) -> Result<(), OkfError> {
-    MIGRATOR.run(pool).await?;
+    // One connection holds the lock for the cleanup and the migrations, so
+    // two replicas starting together never drop an index the other is
+    // still building (one being built CONCURRENTLY is INVALID until done).
+    // The migrator runs on that same connection: a pool of one
+    // (`database_max_connections = 1`) has no second to give it.
+    let mut conn = pool.acquire().await?;
+    sqlx::query("SELECT pg_advisory_lock($1)")
+        .bind(CONCURRENT_INDEX_LOCK)
+        .execute(&mut *conn)
+        .await?;
+    // The lock is released below whatever this returns, so no `?` here.
+    let migrated = match drop_invalid_indexes(&mut conn).await {
+        // `&mut *conn`: the pooled connection itself (sqlx's migrator takes
+        // its own advisory lock on it, and runs `no-transaction` files on
+        // it outside any transaction, as on a pool).
+        Ok(_) => MIGRATOR.run(&mut *conn).await.map_err(OkfError::from),
+        Err(error) => Err(OkfError::from(error)),
+    };
+    // Released on every path; a lost connection releases it too.
+    sqlx::query("SELECT pg_advisory_unlock($1)")
+        .bind(CONCURRENT_INDEX_LOCK)
+        .execute(&mut *conn)
+        .await?;
+    // Back to the pool before apalis' setup, which takes one of its own.
+    drop(conn);
+    migrated?;
     // `::<()>`: `setup` is defined on `PostgresStorage<()>`; the job type
     // a storage carries does not matter for creating the schema.
     apalis_postgres::PostgresStorage::<()>::setup(pool)
@@ -1728,5 +1799,79 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    /// Review of PR #739: a concurrent index build that failed part-way
+    /// leaves an INVALID index and no record of its migration; the next
+    /// `migrate` drops it and builds it again, valid.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_concurrent_build_is_rebuilt_by_the_next_migrate() {
+        let db = super::test_db().await;
+        let valid = |name: &'static str| {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid \
+                 WHERE c.relname = $1",
+            )
+            .bind(name)
+        };
+        // As a failed `0025` leaves it: the index there but invalid (the
+        // test database's user is a superuser), the migration unrecorded.
+        sqlx::query(
+            "UPDATE pg_index SET indisvalid = false \
+             WHERE indexrelid = 'catalogs_member_reach'::regclass",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 25")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert!(!valid("catalogs_member_reach")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap());
+
+        super::migrate(&db.pool).await.unwrap();
+
+        assert!(valid("catalogs_member_reach")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap());
+        let recorded: bool =
+            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM _sqlx_migrations WHERE version = 25)")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert!(recorded, "the rebuilt migration is recorded");
+    }
+
+    /// Review of PR #739: with a pool of one connection (the smallest
+    /// `database_max_connections`), `migrate` finishes on a fresh database
+    /// and on one already migrated, instead of waiting for a second
+    /// connection the pool cannot give.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn migrate_needs_only_one_connection() {
+        let db = pg_support::TestDb::start().await;
+        let one = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(std::time::Duration::from_secs(5))
+            .connect(&db.url)
+            .await
+            .unwrap();
+        for state in ["fresh", "already migrated"] {
+            tokio::time::timeout(std::time::Duration::from_secs(120), super::migrate(&one))
+                .await
+                .unwrap_or_else(|_| panic!("migrating a {state} database timed out"))
+                .unwrap_or_else(|error| panic!("migrating a {state} database: {error}"));
+        }
+        let applied: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
+            .fetch_one(&one)
+            .await
+            .unwrap();
+        assert_eq!(
+            applied,
+            i64::try_from(super::MIGRATOR.iter().count()).unwrap()
+        );
     }
 }
