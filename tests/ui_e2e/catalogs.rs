@@ -439,19 +439,21 @@ async fn an_admin_signed_in_with_a_password_imports_an_archive() {
     server
         .user_with_password("erin", "erin@example.com", password)
         .await;
-    okf_mcp::store::users::set_admin(
-        &server.db.pool,
-        "erin",
-        AdminChange {
-            on: true,
-            allow_last: false,
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("make erin an admin");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        okf_mcp::store::users::set_admin(
+            &server.db.pool,
+            "erin",
+            AdminChange {
+                on: true,
+                allow_last: false,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("make erin an admin");
+    })
+    .await;
     let generation = server
         .app
         .catalog("main")
@@ -535,21 +537,23 @@ async fn a_member_imports_where_they_write_and_only_exports_where_they_read() {
     )
     .await;
     server.user_with_password("alice", EMAIL, PASSWORD).await;
-    for (catalog, access) in [("main", Access::Write), ("other", Access::Read)] {
-        ceiling::entitle(
-            &server.db.pool,
-            &NewEntitlement {
-                user: "alice",
-                catalog,
-                access,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("entitle");
-    }
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        for (catalog, access) in [("main", Access::Write), ("other", Access::Read)] {
+            ceiling::entitle(
+                &server.db.pool,
+                &NewEntitlement {
+                    user: "alice",
+                    catalog,
+                    access,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("entitle");
+        }
+    })
+    .await;
     // The generation `app` serves for catalog `name`.
     async fn generation(app: &okf_mcp::app::App, name: &str) -> i64 {
         app.catalog(name)
@@ -661,20 +665,22 @@ async fn member_access_read_makes_a_team_catalog_read_only_for_its_members() {
     )
     .await
     .expect("add alice");
-    okf_mcp::store::catalogs::create(
-        pool,
-        &okf_mcp::store::catalogs::NewCatalog {
-            name: "shared",
-            display_name: &okf_mcp::labels::DisplayName::default(),
-            description: "",
-            owner_team: "family",
-        },
-        &okf_mcp::store::audit::AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("create the team's catalog");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        okf_mcp::store::catalogs::create(
+            pool,
+            &okf_mcp::store::catalogs::NewCatalog {
+                name: "shared",
+                display_name: &okf_mcp::labels::DisplayName::default(),
+                description: "",
+                owner_team: "family",
+            },
+            &okf_mcp::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("create the team's catalog");
+    })
+    .await;
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
     let ran = drive(console_base(&server), move |ui| {
         ui.login(&admin);

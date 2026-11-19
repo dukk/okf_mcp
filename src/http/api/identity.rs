@@ -160,7 +160,7 @@ async fn whoami(
         CredentialKind::Session { .. } => (None, principal.user.clone()),
         CredentialKind::ApiKey | CredentialKind::OAuth { .. } => {
             // The user comes from the row read now, not the principal, in
-            // case it was reassigned since the last poll. `unzip` splits an
+            // case it was reassigned since the principal was cached. `unzip` splits an
             // `Option<(a, b)>` into `(Option<a>, Option<b>)`.
             let (name, user) = key_rows::list(app.pool())
                 .await?
@@ -370,8 +370,6 @@ mod tests {
             chrono::Utc::now(),
         )
         .await;
-        // The legacy insert bumps no generation, so a bare poll would skip
-        // it; creating the fixture keys bumps it and polls.
         keys(&test).await;
 
         let (status, body) = send(&test, "GET", "/api/v1/whoami", Some(&key), None).await;

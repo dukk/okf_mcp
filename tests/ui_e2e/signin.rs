@@ -80,19 +80,21 @@ async fn a_setup_link_sets_a_password_and_the_console_shows_the_user() {
     )
     .await
     .expect("set the email");
-    ceiling::entitle(
-        pool,
-        &NewEntitlement {
-            user: "alice",
-            catalog: "main",
-            access: Access::Read,
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("entitle");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        ceiling::entitle(
+            pool,
+            &NewEntitlement {
+                user: "alice",
+                catalog: "main",
+                access: Access::Read,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("entitle");
+    })
+    .await;
     let alice = users::find_by_email(pool, "alice@example.com")
         .await
         .expect("find alice")
@@ -177,19 +179,21 @@ async fn a_refused_password_says_so_and_a_session_survives_a_reload() {
     server
         .user_with_password("bob", "bob@example.com", PASSWORD)
         .await;
-    ceiling::entitle(
-        &server.db.pool,
-        &NewEntitlement {
-            user: "bob",
-            catalog: "main",
-            access: Access::Write,
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("entitle");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        ceiling::entitle(
+            &server.db.pool,
+            &NewEntitlement {
+                user: "bob",
+                catalog: "main",
+                access: Access::Write,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("entitle");
+    })
+    .await;
 
     drive(server.base.clone(), move |ui| {
         // The login card links to the account sign-in.
@@ -304,19 +308,21 @@ async fn an_admin_session_writes_through_the_console_with_its_csrf_token() {
     server
         .user_with_password("erin", "erin@example.com", PASSWORD)
         .await;
-    users::set_admin(
-        &server.db.pool,
-        "erin",
-        AdminChange {
-            on: true,
-            allow_last: false,
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("make erin an admin");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        users::set_admin(
+            &server.db.pool,
+            "erin",
+            AdminChange {
+                on: true,
+                allow_last: false,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("make erin an admin");
+    })
+    .await;
 
     let ran = drive(server.base.clone(), move |ui| {
         ui.sign_in_password("erin@example.com", PASSWORD);
@@ -413,19 +419,21 @@ async fn a_setup_link_registers_a_passkey_that_then_signs_in_from_the_sign_in_pa
     )
     .await
     .expect("set the email");
-    ceiling::entitle(
-        pool,
-        &NewEntitlement {
-            user: "alice",
-            catalog: "main",
-            access: Access::Read,
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("entitle");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        ceiling::entitle(
+            pool,
+            &NewEntitlement {
+                user: "alice",
+                catalog: "main",
+                access: Access::Read,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("entitle");
+    })
+    .await;
     let alice = users::find_by_email(pool, "alice@example.com")
         .await
         .expect("find alice")

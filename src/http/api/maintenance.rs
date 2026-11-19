@@ -472,7 +472,6 @@ mod tests {
         .await
         .expect("create a reporter key")
         .key;
-        test.app.poll().await.expect("poll the reporter in");
         let (status, body) = send(
             &test,
             "POST",

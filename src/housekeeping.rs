@@ -553,8 +553,8 @@ async fn prune_oauth(app: &App) -> Result<(), OkfError> {
 /// Revokes the OAuth grants idle for `oauth.idle_grant_revoke_after` that
 /// hold no live token ([`keys::revoke_idle_grants`]); several replicas
 /// running it at once would revoke and audit each grant once, and as a
-/// housekeeping step it runs once per cluster per hour. The key cache learns
-/// of the revocations at the next poll pass.
+/// housekeeping step it runs once per cluster per hour. Every replica's
+/// credential cache drops the revoked grants on their change messages.
 ///
 /// # Arguments
 /// * `app` - the shared state.

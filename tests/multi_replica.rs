@@ -148,7 +148,6 @@ async fn a_user_deleted_on_one_replica_loses_access_on_the_other() {
     let key = keys::create(&a.db.pool, &new, &AuditActor::cli(), Utc::now())
         .await
         .expect("create alice's key");
-    a.app.poll().await.expect("A's poll");
     eventually!(
         "B knows alice's key",
         b.app.find_key(&key).await.unwrap().is_some()
@@ -244,7 +243,6 @@ async fn a_grant_revoked_on_one_replica_is_refused_on_the_other() {
         .expect("a principal")
         .key_id
         .clone();
-    a.app.poll().await.expect("A's poll");
     eventually!(
         "B knows the grant",
         b.app.find_grant(&grant_id).await.unwrap().is_some()
@@ -253,8 +251,6 @@ async fn a_grant_revoked_on_one_replica_is_refused_on_the_other() {
     keys::revoke_by_id(&a.db.pool, &grant_id, &AuditActor::cli(), Utc::now())
         .await
         .expect("revoke the grant");
-    // What `settle` does after a change made through the API.
-    a.app.poll().await.expect("A's poll");
 
     eventually!(
         "B refuses the revoked grant",

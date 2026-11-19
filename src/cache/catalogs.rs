@@ -214,8 +214,7 @@ impl CatalogCache {
     /// * `rebuilds` - the rebuild locks, by catalog id (`App::rebuild_locks`).
     ///
     /// # Returns
-    /// The state. A refresh that fails keeps serving the cached snapshot,
-    /// as the poll loop did.
+    /// The state. A refresh that fails keeps serving the cached snapshot.
     ///
     /// # Errors
     /// [`OkfError::CatalogNotSelected`] if the catalog was deleted, or if
@@ -230,8 +229,7 @@ impl CatalogCache {
         rebuilds: &KeyedLocks,
     ) -> Result<Arc<CatalogState>, OkfError> {
         if self.is_broken(row.id, row.generation).await {
-            // An older snapshot, if one is still cached, is served as the
-            // poll loop kept serving it.
+            // An older snapshot, if one is still cached, keeps being served.
             return self
                 .states
                 .peek(&row.id)

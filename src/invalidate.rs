@@ -522,6 +522,7 @@ pub(crate) mod testing {
     use sqlx::PgPool;
 
     use super::{Invalidation, Message, CHANNEL};
+    use crate::app::App;
 
     /// The payload that marks the end of a write's messages: not JSON, so
     /// no message can look like it.
@@ -554,9 +555,29 @@ pub(crate) mod testing {
         pool: &PgPool,
         write: impl Future<Output = ()>,
     ) -> Vec<Invalidation> {
+        messages_of(pool, write).await.1
+    }
+
+    /// [`invalidations_of`], keeping what `write` returned.
+    ///
+    /// # Arguments
+    /// * `pool` - the test database.
+    /// * `write` - the write.
+    ///
+    /// # Returns
+    /// `write`'s output and the invalidations delivered, in commit order.
+    ///
+    /// # Panics
+    /// As [`invalidations_of`].
+    // `<T>`: a generic, like a Python `TypeVar`: the helper works for a
+    // write of any output type.
+    pub(crate) async fn messages_of<T>(
+        pool: &PgPool,
+        write: impl Future<Output = T>,
+    ) -> (T, Vec<Invalidation>) {
         let mut listener = PgListener::connect_with(pool).await.expect("listener");
         listener.listen(CHANNEL).await.expect("LISTEN");
-        write.await;
+        let output = write.await;
         sqlx::query("SELECT pg_notify($1, $2)")
             .bind(CHANNEL)
             .bind(END)
@@ -570,11 +591,39 @@ pub(crate) mod testing {
                 .expect("the end marker within the wait")
                 .expect("receive a notification");
             if notification.payload() == END {
-                return got;
+                return (output, got);
             }
             let message = Message::parse(notification.payload()).expect("a readable payload");
             got.push(message.invalidation);
         }
+    }
+
+    /// Runs `write` and applies every change-feed message it committed to
+    /// `app`, as that replica's listener would ([`App::apply`]). Lib tests
+    /// run no listener, so this is how a test makes a store write it did
+    /// outside a request visible to an app whose caches may hold the old
+    /// state (the poll loop did it before milestone 18 removed it).
+    ///
+    /// # Arguments
+    /// * `app` - the replica whose caches the messages are applied to.
+    /// * `write` - the write, an `async { .. }` block.
+    ///
+    /// # Returns
+    /// What `write` returned.
+    ///
+    /// # Panics
+    /// As [`invalidations_of`].
+    pub(crate) async fn applied<T>(app: &App, write: impl Future<Output = T>) -> T {
+        let (output, sent) = messages_of(app.pool(), write).await;
+        let sent_at_ms = chrono::Utc::now().timestamp_millis();
+        for invalidation in sent {
+            app.apply(&Message {
+                invalidation,
+                sent_at_ms,
+            })
+            .await;
+        }
+        output
     }
 }
 

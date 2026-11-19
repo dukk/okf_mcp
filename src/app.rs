@@ -1,11 +1,11 @@
 //! The server's shared state (design "Architecture"): the database, the
 //! configuration, the clock, the credential caches, the catalog directory
 //! and the catalog cache (catalogs load on demand, M18 Decisions 2 and 6),
-//! the change feed's handlers, the poll loop that still reloads the settings
-//! (design "Noticing changes made outside the server"), and the clock check
-//! loop and its last result (design "Time").
+//! the change feed's handlers (M18 Decisions 10-14; the poll loop is gone,
+//! Decision 18), and the clock check loop and its last result (design
+//! "Time").
 
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use sqlx::PgPool;
@@ -97,12 +97,6 @@ pub struct App {
     // Catalog snapshots by id, loaded on demand and bounded in estimated
     // bytes (M18 Decision 2).
     catalog_cache: CatalogCache,
-    // The `admin_generation` the poll pass last marked the credential caches
-    // and the catalog directory stale at (or the one this instance started
-    // at). The pass reads the counter itself: a change no message described
-    // (an older replica's, or a lost message) moves it, and the next pass
-    // must see it whatever reloaded meanwhile. Written only under `polling`.
-    swept_generation: AtomicI64,
     // The effective sign-in policy (`[auth]` with `server_settings`
     // overrides), with the `admin_generation` it was checked at and when
     // (spec Decision 9). Reloaded on a `Settings` message, and checked again
@@ -119,7 +113,7 @@ pub struct App {
     // check serves every request that queued behind it.
     settings_rounds: AtomicU64,
     // How many times the settings were marked stale (a `Settings` message,
-    // a reconnect, an M16 announcement, a poll pass). They stay stale, for
+    // a reconnect, an M16 announcement, the request's own write). They stay stale, for
     // every caller, until a check that began after the last mark succeeds:
     // `satisfied_marks` is the count such a check saw when it began, and is
     // written only on success, so a failed or cancelled check satisfies
@@ -142,11 +136,6 @@ pub struct App {
     // Test counter: how many M16 announcements were applied.
     #[cfg(test)]
     pub(crate) m16_announcements: std::sync::atomic::AtomicUsize,
-    // Held for a whole `poll` pass. Without it, two overlapping passes (the
-    // loop and a test's or a later milestone's direct call) could swap older
-    // Held for a whole `poll` pass, so passes never overlap (tokio's
-    // `Mutex`: it is held across `.await`s).
-    polling: tokio::sync::Mutex<()>,
     // The last clock check (design "Time"); `None` until the first one, and
     // always without a `time_server`. Written by the check loop only.
     clock_status: RwLock<Option<ClockStatus>>,
@@ -341,7 +330,6 @@ impl App {
             rebuild_locks: KeyedLocks::new(),
             directory,
             catalog_cache,
-            swept_generation: AtomicI64::new(admin_generation),
             settings: RwLock::new(LoadedSettings {
                 settings: Arc::new(settings),
                 generation: admin_generation,
@@ -360,7 +348,6 @@ impl App {
             settings_loads: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
             m16_announcements: std::sync::atomic::AtomicUsize::new(0),
-            polling: tokio::sync::Mutex::new(()),
             clock_status: RwLock::new(None),
             oauth,
             sign_in_limits: SignInLimits::new(),
@@ -751,7 +738,7 @@ impl App {
     }
 
     /// Marks the settings stale and checks them at once: what a `Settings`
-    /// message, a reconnect, an M16 announcement and a poll pass do.
+    /// message, a reconnect and an M16 announcement do.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn reload_settings(&self) {
         self.mark_settings_stale();
@@ -1087,79 +1074,6 @@ impl App {
         }
     }
 
-    /// One pass of the poll loop: checks the settings, and marks every
-    /// cached credential, user, label and catalog row stale if
-    /// `admin_generation` moved since the last pass. Catalogs are not
-    /// polled: the change feed refreshes a cached catalog, and every use
-    /// checks its snapshot against the directory row (M18 Task 8). Pruning
-    /// and the cluster counts are housekeeping jobs ([`crate::housekeeping`]),
-    /// run once per cluster, not per pass.
-    ///
-    /// A key reload (or the `admin_generation` read before it) that fails is
-    /// logged and retried at the next pass. Passes never overlap: a call
-    /// made while another runs waits for it, then makes its own pass.
-    ///
-    /// # Returns
-    /// `Ok(())` once the pass is done.
-    ///
-    /// # Errors
-    /// None today; the `Result` stays for the callers (`settle`).
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(uninstrumented_fn, reason = "makes the okf.poll root span itself")
-    )]
-    pub async fn poll(&self) -> Result<(), OkfError> {
-        let started = std::time::Instant::now();
-        // `parent: None` makes each pass the root of its own trace, whatever
-        // span the caller is in (spec "Background roots").
-        let result = self
-            .poll_pass()
-            .instrument(tracing::info_span!(parent: None, "okf.poll"))
-            .await;
-        let outcome = if result.is_ok() {
-            Outcome::Ok
-        } else {
-            Outcome::Error
-        };
-        self.metrics.poll(outcome, started.elapsed());
-        result
-    }
-
-    /// The body of [`App::poll`], inside its `okf.poll` span.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(uninstrumented_fn, reason = "runs inside the okf.poll span")
-    )]
-    async fn poll_pass(&self) -> Result<(), OkfError> {
-        let _pass = self.polling.lock().await;
-        self.reload_settings().await;
-        match catalogs::admin_generation(&self.pool).await {
-            Ok(generation) => {
-                // `admin_generation` moved since the last pass's sweep: a
-                // change no message described may be among those, so every
-                // cached credential, user, label and catalog row is reread on
-                // its next use (and with a row, its catalog's snapshot is
-                // checked). The poll loop's backstop, until it is removed
-                // (Task 16).
-                if generation != self.swept_generation.load(Ordering::Relaxed) {
-                    self.credentials.mark_all_stale();
-                    self.labels.mark_all_stale();
-                    self.directory.mark_all_stale().await;
-                    self.swept_generation.store(generation, Ordering::Relaxed);
-                }
-            }
-            Err(error) => {
-                split_event!(
-                    error,
-                    { kind = error.kind(), },
-                    { %error, },
-                    "reading admin_generation failed; retrying at the next poll"
-                );
-            }
-        }
-        Ok(())
-    }
-
     /// M16 bridge (spec Decision 14): remove in the release after 0.23.
     ///
     /// After an administrative change this replica committed, tells
@@ -1168,7 +1082,9 @@ impl App {
     /// every milestone 18 replica through the change feed. Best effort and
     /// detached, like [`App::announce_catalog`]: a slow or failing Redis
     /// never delays the caller's answer, and an M16 replica's own poll
-    /// covers a lost announcement. Does nothing without `[redis]`.
+    /// covers a lost announcement (`invalidate` still bumps
+    /// `admin_generation`, which that poll reads). Does nothing without
+    /// `[redis]`.
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn bridge_to_m16(&self) {
         let Some(redis) = self.redis.clone() else {
@@ -1182,7 +1098,8 @@ impl App {
     /// (issue #659), after the write that moved it committed. Best effort and
     /// detached: the publish happens on its own task, so a slow or failing
     /// Redis never delays the caller's answer; a failure is counted and
-    /// logged, and the other replicas' poll loops cover it. Because nothing
+    /// logged, and the change feed's `catalog` message (and, failing both,
+    /// `catalog_ttl`) covers it. Because nothing
     /// waits for the publish or the other replicas' refresh, this is prompt
     /// eventual consistency, not read-your-writes: the caller's next read on
     /// another replica may still see the old snapshot. Does nothing without
@@ -1230,7 +1147,7 @@ impl App {
         &self,
         change: CatalogGeneration,
     ) -> AnnouncementResult {
-        // `parent: None`: a background root, like each poll pass.
+        // `parent: None`: a background root, like each change-feed message.
         let span = tracing::info_span!(
             parent: None,
             "okf.catalog.announcement",
@@ -1421,46 +1338,6 @@ impl App {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn catch_up_catalogs(&self) {
         self.directory.mark_all_stale().await;
-    }
-
-    /// Runs [`App::poll`] every `poll_interval` until `shutdown` is cancelled.
-    /// A failed pass is logged and the loop goes on.
-    ///
-    /// # Arguments
-    /// * `shutdown` - cancelled when the server stops.
-    // `self: Arc<Self>`: the method takes a shared handle by value, so the
-    // spawned task owns one and the `App` lives as long as the loop.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "long-lived loop: its span would never close and would stay open as the parent of every later span"
-        )
-    )]
-    pub async fn poll_until(self: Arc<Self>, shutdown: CancellationToken) {
-        let mut ticks = tokio::time::interval(self.config.poll_interval);
-        // After a slow pass, wait a full interval instead of catching up.
-        ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        // The first tick completes at once, and the state was just loaded.
-        ticks.tick().await;
-        loop {
-            // `select!` waits for whichever branch is ready first and drops
-            // the other. A pass in progress is not interrupted: cancellation
-            // is only noticed between passes.
-            tokio::select! {
-                () = shutdown.cancelled() => return,
-                _ = ticks.tick() => {
-                    if let Err(error) = self.poll().await {
-                        split_event!(
-                            error,
-                            { kind = error.kind(), },
-                            { %error, },
-                            "poll failed"
-                        );
-                    }
-                }
-            }
-        }
     }
 
     /// Checks the clock at once and then every [`clock_check::CHECK_INTERVAL`]
@@ -1859,14 +1736,7 @@ mod tests {
         .unwrap()
     }
 
-    /// Runs `write` and applies every change-feed message it sent, as this
-    /// replica's listener would.
-    async fn applied(app: &App, write: impl std::future::Future<Output = ()>) {
-        let sent = crate::invalidate::testing::invalidations_of(app.pool(), write).await;
-        for invalidation in sent {
-            app.apply(&message(invalidation)).await;
-        }
-    }
+    use crate::invalidate::testing::applied;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn load_holds_no_catalog_and_every_live_key() {
@@ -1921,7 +1791,7 @@ mod tests {
 
     /// A write's own invalidations, collected around it and applied here,
     /// reach the directory and the label cache at once, with no listener
-    /// and no poll (the `settle` a REST route also runs would hide this).
+    /// and no poll.
     #[tokio::test(flavor = "multi_thread")]
     async fn own_writes_reach_the_directory_and_the_labels() {
         let db = test_db().await;
@@ -1957,7 +1827,7 @@ mod tests {
 
     /// A settings write's own `Settings` invalidation, applied here, makes
     /// this replica's next request check the settings although they are
-    /// young: the writer reads its own write with no listener and no poll.
+    /// young: the writer reads its own write with no listener.
     #[tokio::test(flavor = "multi_thread")]
     async fn an_own_settings_write_reaches_the_next_request() {
         let db = test_db().await;
@@ -1980,18 +1850,19 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn poll_notices_revoked_keys() {
+    async fn a_revocations_message_drops_the_cached_key() {
         let db = test_db().await;
         let key = new_key(&db.pool, "reader").await;
         let app = app(&db.pool).await;
-        // Cached first: lib tests run no listener, so only the poll's
-        // backstop drops it.
+        // Cached first: only a cached key can outlive its revocation.
         assert!(app.find_key(&key).await.unwrap().is_some());
 
-        key_rows::revoke(&db.pool, "reader", &AuditActor::cli(), Utc::now())
-            .await
-            .unwrap();
-        app.poll().await.unwrap();
+        applied(&app, async {
+            key_rows::revoke(&db.pool, "reader", &AuditActor::cli(), Utc::now())
+                .await
+                .unwrap();
+        })
+        .await;
 
         assert!(app.find_key(&key).await.unwrap().is_none());
     }
@@ -2047,70 +1918,6 @@ mod tests {
             app.catalog("pg").await.unwrap().is_none(),
             "the deleted catalog is not served"
         );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn overlapping_polls_leave_the_newest_key_list() {
-        let db = test_db().await;
-        let key = new_key(&db.pool, "reader").await;
-        let app = app(&db.pool).await;
-
-        key_rows::revoke(
-            &db.pool,
-            "reader",
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        // `join!` runs both passes concurrently; `polling` serializes them.
-        let (first, second) = tokio::join!(app.poll(), app.poll());
-
-        first.unwrap();
-        second.unwrap();
-        assert!(app.find_key(&key).await.unwrap().is_none());
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_failed_reload_does_not_stop_the_pass_and_is_retried() {
-        let db = test_db().await;
-        let key = new_key(&db.pool, "reader").await;
-        let app = app(&db.pool).await;
-        // Cached before the revocation, whose message this app never hears
-        // (lib tests run no listener): only the poll's backstop drops it.
-        assert!(app.find_key(&key).await.unwrap().is_some());
-        key_rows::revoke(
-            &db.pool,
-            "reader",
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        set_setting(&db.pool, settings::SettingKey::MaxKeysPerUser, "5").await;
-        // With the settings table out of the way, the settings check fails.
-        sqlx::query("ALTER TABLE server_settings RENAME TO server_settings_away")
-            .execute(&db.pool)
-            .await
-            .unwrap();
-
-        app.poll().await.unwrap();
-        assert!(
-            app.find_key(&key).await.unwrap().is_none(),
-            "the sweep does not wait for the settings"
-        );
-        assert_eq!(
-            app.settings().max_keys_per_user,
-            20,
-            "the old settings serve"
-        );
-        sqlx::query("ALTER TABLE server_settings_away RENAME TO server_settings")
-            .execute(&db.pool)
-            .await
-            .unwrap();
-        // No admin change since: only the failed check makes this retry.
-        app.poll().await.unwrap();
-        assert_eq!(app.settings().max_keys_per_user, 5);
     }
 
     /// An app whose catalog rows and credentials live an hour (so only an
@@ -2217,43 +2024,56 @@ mod tests {
         );
     }
 
+    /// The backstop for a message that never arrives (a listener that is up
+    /// but missed one, or an older replica's write: spec Decision 13), now
+    /// that no poll sweeps the caches: a silently revoked key, a silently
+    /// suspended catalog row and a silently renamed label are each read again
+    /// once their TTL (`credential_ttl`, `catalog_ttl`) has passed, with no
+    /// message, no reconnect and no announcement.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_change_absorbed_by_a_messages_reload_is_still_swept_by_the_next_poll() {
-        let (db, app, writer) = warmed_writer().await;
-        suspend_as_an_older_replica(&db.pool).await;
-        // A change message for something else reloads the settings and
-        // catches `admin_generation` up past the silent suspension.
-        let me: String = sqlx::query_scalar("SELECT id FROM users WHERE name = $1")
-            .bind(crate::db::TEST_USER)
-            .fetch_one(&db.pool)
+    async fn a_change_no_message_described_is_read_after_the_ttls() {
+        const TTL: Duration = Duration::from_millis(200);
+        let db = test_db().await;
+        create_catalog_main(&db.pool).await;
+        let key = new_key(&db.pool, "reader").await;
+        let config = Config {
+            catalog_ttl: TTL,
+            credential_ttl: TTL,
+            ..Config::default()
+        };
+        let app = App::load(db.pool.clone(), config, Arc::new(SystemClock))
             .await
             .unwrap();
-        app.apply(&message(crate::invalidate::Invalidation::User { id: me }))
-            .await;
-        assert!(!suspended(&app, &writer).await, "no message named the row");
-
-        app.poll().await.unwrap();
-
-        assert!(
-            suspended(&app, &writer).await,
-            "the poll's sweep rereads it"
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_failed_admin_generation_read_does_not_stop_the_pass() {
-        let db = test_db().await;
-        let app = app(&db.pool).await;
-        // With the counter's table out of the way, reading it fails.
-        sqlx::query("ALTER TABLE server_state RENAME TO server_state_away")
+        let mut wanted = crate::labels::directory::Wanted::default();
+        wanted.catalog("main");
+        // All three cached before the silent changes.
+        let reader = app.find_key(&key).await.unwrap().expect("the key");
+        assert!(reader
+            .require_in(app.directory(), key_rows::Access::Read, "main")
+            .await
+            .is_ok());
+        app.labels().labels_for(&wanted).await.unwrap();
+        sqlx::query("UPDATE api_keys SET revoked_at = now() WHERE id = 'reader'")
             .execute(&db.pool)
             .await
             .unwrap();
+        suspend_as_an_older_replica(&db.pool).await;
+        sqlx::query("UPDATE catalogs SET display_name = 'Renamed' WHERE name = 'main'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert!(
+            app.find_key(&key).await.unwrap().is_some(),
+            "still cached: no message named it"
+        );
+        assert!(!suspended(&app, &reader).await, "the row is still cached");
 
-        // Logged, not returned: the pass still completes.
-        let passed = app.poll().await;
+        tokio::time::sleep(TTL + Duration::from_millis(200)).await;
 
-        assert!(passed.is_ok());
+        assert!(app.find_key(&key).await.unwrap().is_none(), "the key");
+        assert!(suspended(&app, &reader).await, "the catalog row");
+        let labels = app.labels().labels_for(&wanted).await.unwrap();
+        assert_eq!(labels.catalog("main"), Some("Renamed"), "the label");
     }
 
     /// A clock a test moves by hand.
@@ -2367,7 +2187,7 @@ mod tests {
     }
 
     /// Ten callers queued behind the check's lock with the database gone,
-    /// after `mark` (nothing, for an expired TTL; a stale mark, as a poll,
+    /// after `mark` (nothing, for an expired TTL; a stale mark, as an announcement,
     /// reconnect or `Settings` message makes). Returns how many checks the
     /// ten ran and what they got, then how many a later request ran.
     async fn queued_behind_a_failed_check(
@@ -2616,34 +2436,38 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_settings_change_reaches_the_running_app_at_the_next_poll() {
+    async fn a_settings_change_reaches_the_running_app_through_its_message() {
         let db = test_db().await;
         let app = app(&db.pool).await;
         assert_eq!(app.settings().max_keys_per_user, 20);
 
-        settings::set(
-            &db.pool,
-            settings::SettingKey::MaxKeysPerUser,
-            "5",
-            &audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        let before_poll = app.settings().max_keys_per_user;
-        app.poll().await.unwrap();
+        let before_message = applied(&app, async {
+            settings::set(
+                &db.pool,
+                settings::SettingKey::MaxKeysPerUser,
+                "5",
+                &audit::AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .unwrap();
+            app.settings().max_keys_per_user
+        })
+        .await;
         let after_set = app.settings().max_keys_per_user;
-        settings::reset(
-            &db.pool,
-            settings::SettingKey::MaxKeysPerUser,
-            &audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        app.poll().await.unwrap();
+        applied(&app, async {
+            settings::reset(
+                &db.pool,
+                settings::SettingKey::MaxKeysPerUser,
+                &audit::AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .unwrap();
+        })
+        .await;
 
-        assert_eq!(before_poll, 20, "read from memory, not per call");
+        assert_eq!(before_message, 20, "read from memory, not per call");
         assert_eq!(after_set, 5);
         assert_eq!(app.settings().max_keys_per_user, 20, "reset reaches it too");
     }
@@ -2670,16 +2494,18 @@ mod tests {
         .execute(&db.pool)
         .await
         .unwrap();
-        settings::set(
-            &db.pool,
-            settings::SettingKey::PasswordSignIn,
-            "off",
-            &audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        app.poll().await.unwrap();
+        applied(&app, async {
+            settings::set(
+                &db.pool,
+                settings::SettingKey::PasswordSignIn,
+                "off",
+                &audit::AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .unwrap();
+        })
+        .await;
 
         let current = app.settings();
         assert_eq!(at_start, crate::config::DEFAULT_CONSOLE_SESSION_IDLE);
@@ -2712,61 +2538,19 @@ mod tests {
             .await
             .unwrap();
 
-        app.poll().await.unwrap();
+        // What the write's `Settings` message does: the check fails.
+        app.reload_settings().await;
         let while_unreadable = app.settings().max_keys_per_user;
         sqlx::query("ALTER TABLE server_settings_away RENAME TO server_settings")
             .execute(&db.pool)
             .await
             .unwrap();
-        // No new bump: the counter was not stored, so this pass reloads.
-        app.poll().await.unwrap();
+        // No new message: the failed check satisfied nothing, so the next
+        // use checks again.
+        app.fresh_settings().await;
 
         assert_eq!(while_unreadable, 20);
         assert_eq!(app.settings().max_keys_per_user, 5);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn poll_until_stops_when_cancelled() {
-        // Generous bounds: the tests share a loaded machine, and each pass
-        // talks to Postgres. The loop needs only one pass to succeed.
-        const PATIENCE: Duration = Duration::from_secs(30);
-        let db = test_db().await;
-        let config = Config {
-            poll_interval: Duration::from_millis(20),
-            ..Config::default()
-        };
-        let app = App::load(db.pool.clone(), config, Arc::new(SystemClock))
-            .await
-            .unwrap();
-        let shutdown = CancellationToken::new();
-        let task = tokio::spawn(Arc::clone(&app).poll_until(shutdown.clone()));
-        catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "pg",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-
-        // Within a few intervals the loop has picked the new catalog up.
-        let started = Instant::now();
-        while app.catalog("pg").await.unwrap().is_none() && started.elapsed() < PATIENCE {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        let seen = app.catalog("pg").await.unwrap().is_some();
-        shutdown.cancel();
-
-        assert!(seen, "the poll loop never loaded the new catalog");
-        tokio::time::timeout(PATIENCE, task)
-            .await
-            .expect("poll_until returns after cancel")
-            .unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]

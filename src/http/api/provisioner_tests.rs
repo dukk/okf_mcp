@@ -2,7 +2,7 @@ use super::{provisioner_may, PROVISIONER_ROUTES};
 use crate::http::api::testing::{app, every_catalog_admin, send};
 use serde_json::json;
 
-/// A provisioner key for TEST_USER, polled in.
+/// A provisioner key for TEST_USER.
 async fn provisioner(test: &crate::mcp::testing::TestApp) -> String {
     let created = crate::store::keys::create_provisioner(
         test.app.pool(),
@@ -16,7 +16,6 @@ async fn provisioner(test: &crate::mcp::testing::TestApp) -> String {
     )
     .await
     .unwrap();
-    test.app.poll().await.unwrap();
     created.key
 }
 

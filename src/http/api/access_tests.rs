@@ -213,10 +213,9 @@ async fn a_read_of_a_catalog_deleted_or_replaced_before_it_is_written_keeps_its_
     .unwrap();
     drop(hold);
     settle_access(&test).await;
-    // The replacement's messages, as the listener applies them: the
-    // directory reads `main` again, and the key cache reloads.
-    test.app.catch_up_catalogs().await;
-    test.app.poll().await.unwrap();
+    // Everything the replacement changed is read again, as after a
+    // change-feed reconnect.
+    test.app.apply_reconnect().await;
     // A read of the replacement is another entry, in its own scope.
     let (status, _) = send(
         &test,
@@ -376,8 +375,10 @@ async fn an_old_principal_reading_a_new_catalog_map_is_admitted_as_the_new_catal
     // owner team, not of the replacement's.
     let root = crate::http::api::testing::every_catalog_admin(&test).await;
     let old_principal = crate::mcp::testing::cached_principal(&test, &root).await;
-    replace_main_for_acme(&test).await;
-    test.app.poll().await.unwrap();
+    crate::invalidate::testing::applied(&test.app, async {
+        replace_main_for_acme(&test).await;
+    })
+    .await;
     let ctx = crate::mcp::testing::context(&test, old_principal, None);
 
     let state = ctx.one(Some("main")).await.unwrap();
@@ -606,14 +607,12 @@ async fn make_staff_admin(test: &TestApp) {
     .unwrap();
 }
 
-/// A one-hour unlock of `catalog` for `staff`, polled in.
+/// A one-hour unlock of `catalog` for `staff`, its change message applied.
 ///
 /// # Returns
 /// The unlock's id.
 async fn unlock(test: &TestApp, catalog: &str) -> i64 {
-    let id = create_unlock(test, catalog).await;
-    test.app.poll().await.unwrap();
-    id
+    crate::invalidate::testing::applied(&test.app, create_unlock(test, catalog)).await
 }
 
 /// [`unlock`] without the poll.
@@ -776,10 +775,12 @@ async fn with_require_unlock_staff_need_an_unlock_for_reads_writes_and_exports()
     );
 
     // Ended, the unlock lets nothing in, an open changeset included.
-    crate::store::unlocks::end(test.app.pool(), id, &AuditActor::cli(), Utc::now())
-        .await
-        .unwrap();
-    test.app.poll().await.unwrap();
+    crate::invalidate::testing::applied(&test.app, async {
+        crate::store::unlocks::end(test.app.pool(), id, &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap();
+    })
+    .await;
     let (ended, _) = send(&test, "GET", tree, Some(&staff), None).await;
     let ended_write = staff_context(&test, &staff)
         .await
@@ -873,22 +874,24 @@ async fn the_maintenance_runner_reads_without_an_unlock_until_the_catalog_opts_o
     let (exempt_export, _) = send(&test, "GET", export, Some(&runner), None).await;
     let (writer_reads, _) = send(&test, "GET", tree, Some(&writing_runner), None).await;
     let writer_opens = open_main(&staff_context(&test, &writing_runner).await).await;
-    let mut tx = test.app.pool().begin().await.unwrap();
-    let id: i64 = sqlx::query_scalar(
-        "UPDATE catalogs SET maintenance = false WHERE name = 'main' RETURNING id",
-    )
-    .fetch_one(&mut *tx)
-    .await
-    .unwrap();
-    let main = crate::invalidate::Invalidation::CatalogMeta {
-        id,
-        name: "main".to_owned(),
-    };
-    crate::invalidate::invalidate(&mut tx, &[main])
+    crate::invalidate::testing::applied(&test.app, async {
+        let mut tx = test.app.pool().begin().await.unwrap();
+        let id: i64 = sqlx::query_scalar(
+            "UPDATE catalogs SET maintenance = false WHERE name = 'main' RETURNING id",
+        )
+        .fetch_one(&mut *tx)
         .await
         .unwrap();
-    tx.commit().await.unwrap();
-    test.app.poll().await.unwrap();
+        let main = crate::invalidate::Invalidation::CatalogMeta {
+            id,
+            name: "main".to_owned(),
+        };
+        crate::invalidate::invalidate(&mut tx, &[main])
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    })
+    .await;
     let (opted_out, refused) = send(&test, "GET", tree, Some(&runner), None).await;
     let (opted_out_export, _) = send(&test, "GET", export, Some(&runner), None).await;
     let (other, _) = send(
@@ -985,10 +988,12 @@ async fn a_changeset_list_leaves_out_a_catalog_whose_unlock_ended() {
             .await
             .unwrap();
     }
-    crate::store::unlocks::end(test.app.pool(), other, &AuditActor::cli(), Utc::now())
-        .await
-        .unwrap();
-    test.app.poll().await.unwrap();
+    crate::invalidate::testing::applied(&test.app, async {
+        crate::store::unlocks::end(test.app.pool(), other, &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap();
+    })
+    .await;
     let listed = async |catalog: Option<&str>| {
         let ctx = staff_context(&test, &staff).await;
         let params = crate::mcp::changesets::ListParams {
@@ -1144,10 +1149,9 @@ async fn old_unlock_against_a_new_map(
     .await
     .unwrap();
     drop(conn);
-    // The replacement's messages, as the listener applies them: the
-    // directory reads `main` again, and the key cache reloads.
-    test.app.catch_up_catalogs().await;
-    test.app.poll().await.unwrap();
+    // Everything the replacement changed is read again, as after a
+    // change-feed reconnect.
+    test.app.apply_reconnect().await;
     (old_principal, replacement, opened.handle)
 }
 

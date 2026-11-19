@@ -109,22 +109,24 @@ pub(crate) fn console_base(server: &TestServer) -> String {
 /// * `access` - her level on `main`: `Read` or `Write`.
 ///
 /// # Panics
-/// If a store call or the poll fails.
+/// If a store call fails.
 pub(crate) async fn member(server: &TestServer, access: Access) {
     server.user_with_password("alice", EMAIL, PASSWORD).await;
-    ceiling::entitle(
-        &server.db.pool,
-        &NewEntitlement {
-            user: "alice",
-            catalog: "main",
-            access,
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("entitle alice to main");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        ceiling::entitle(
+            &server.db.pool,
+            &NewEntitlement {
+                user: "alice",
+                catalog: "main",
+                access,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("entitle alice to main");
+    })
+    .await;
 }
 
 /// Creates a self-issued key of alice's called `name`, with write on
@@ -155,7 +157,6 @@ async fn alices_key(server: &TestServer, name: &str) {
     )
     .await
     .expect("create alice's key");
-    server.app.poll().await.expect("poll");
 }
 
 /// Inserts an OAuth grant of alice's, from consent signed in as her: read
@@ -202,11 +203,6 @@ async fn alices_grant(server: &TestServer) -> String {
     .execute(pool)
     .await
     .expect("grant main");
-    sqlx::query("UPDATE server_state SET admin_generation = admin_generation + 1")
-        .execute(pool)
-        .await
-        .expect("bump the admin generation");
-    server.app.poll().await.expect("poll");
     id
 }
 
@@ -271,19 +267,21 @@ async fn a_member_signs_in_from_the_card_and_sees_only_their_pages() {
 async fn a_members_level_follows_the_selected_catalog() {
     let server = login_server().await;
     member(&server, Access::Write).await;
-    ceiling::entitle(
-        &server.db.pool,
-        &NewEntitlement {
-            user: "alice",
-            catalog: "other",
-            access: Access::Read,
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("entitle alice to other");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        ceiling::entitle(
+            &server.db.pool,
+            &NewEntitlement {
+                user: "alice",
+                catalog: "other",
+                access: Access::Read,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("entitle alice to other");
+    })
+    .await;
     drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
         // The console's own store module (the same instance the pages use).
@@ -301,19 +299,21 @@ async fn a_members_level_follows_the_selected_catalog() {
 async fn an_admin_user_signs_in_and_sees_the_full_console() {
     let server = login_server().await;
     member(&server, Access::Read).await;
-    users::set_admin(
-        &server.db.pool,
-        "alice",
-        AdminChange {
-            on: true,
-            allow_last: false,
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("make alice an admin");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        users::set_admin(
+            &server.db.pool,
+            "alice",
+            AdminChange {
+                on: true,
+                allow_last: false,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("make alice an admin");
+    })
+    .await;
     drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
         ui.wait_text("#whoami", "admin");
@@ -397,16 +397,18 @@ async fn a_member_creates_a_key_within_the_ceiling_and_sees_its_secret_once() {
 async fn the_lifetime_limit_shapes_the_expiry_choices_and_the_longest_is_the_default() {
     let server = login_server().await;
     member(&server, Access::Write).await;
-    settings::set(
-        &server.db.pool,
-        SettingKey::MaxKeyLifetime,
-        "30d",
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("limit key lifetimes to 30 days");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        settings::set(
+            &server.db.pool,
+            SettingKey::MaxKeyLifetime,
+            "30d",
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("limit key lifetimes to 30 days");
+    })
+    .await;
     // The expiry the API reports for the new key, handed out of the
     // journey's thread.
     let reported = Arc::new(Mutex::new(String::new()));
@@ -478,10 +480,12 @@ async fn a_ceiling_lowered_during_the_session_shows_on_my_keys_without_a_reload(
         // An admin lowers main to read. The page is not reloaded: My keys
         // is reached through the nav link (a hash change).
         runtime.block_on(async {
-            ceiling::entitle(&pool, &NewEntitlement { user: "alice", catalog: "main", access: Access::Read }, &AuditActor::cli(), Utc::now())
-                .await
-                .expect("lower main to read");
-            app.poll().await.expect("poll");
+            crate::support::server::applied(&app, async {
+                ceiling::entitle(&pool, &NewEntitlement { user: "alice", catalog: "main", access: Access::Read }, &AuditActor::cli(), Utc::now())
+                    .await
+                    .expect("lower main to read");
+            })
+            .await;
         });
         ui.click("a[data-nav=my-keys]");
         ui.wait_text(cell, "(capped to read)");
@@ -501,10 +505,12 @@ async fn a_ceiling_lowered_during_the_session_shows_on_my_keys_without_a_reload(
         ui.click("#drawer-close");
         // Then main is taken away altogether.
         runtime.block_on(async {
-            ceiling::unentitle(&pool, "alice", "main", &AuditActor::cli(), Utc::now())
-                .await
-                .expect("take main away");
-            app.poll().await.expect("poll");
+            crate::support::server::applied(&app, async {
+                ceiling::unentitle(&pool, "alice", "main", &AuditActor::cli(), Utc::now())
+                    .await
+                    .expect("take main away");
+            })
+            .await;
         });
         ui.click("a[data-nav=health]");
         ui.wait_hidden("#my-keys-table");
@@ -531,15 +537,17 @@ async fn an_admin_issued_key_for_every_catalog_shows_its_level() {
         expires_at: None,
         levels: &[],
     };
-    key_rows::create(
-        &server.db.pool,
-        &new,
-        &okf_mcp::store::audit::AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("an admin issues alice a key for every catalog");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        key_rows::create(
+            &server.db.pool,
+            &new,
+            &okf_mcp::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("an admin issues alice a key for every catalog");
+    })
+    .await;
     drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
         ui.open("/my-keys");
@@ -571,10 +579,12 @@ async fn a_key_the_ceiling_no_longer_allows_is_refused_and_names_the_limit() {
         ui.click("#my-key-form input[name=catalog][value=main]");
         ui.select("#my-key-form select[name=level-main]", "write");
         runtime.block_on(async {
-            ceiling::unentitle(&pool, "alice", "main", &AuditActor::cli(), Utc::now())
-                .await
-                .expect("take main away");
-            app.poll().await.expect("poll");
+            crate::support::server::applied(&app, async {
+                ceiling::unentitle(&pool, "alice", "main", &AuditActor::cli(), Utc::now())
+                    .await
+                    .expect("take main away");
+            })
+            .await;
         });
         ui.click("#my-key-form button[type=submit]");
         // The 422 (`limit: "ceiling"`) says why.
@@ -727,10 +737,12 @@ async fn a_member_revokes_an_oauth_grant() {
         // Signed in with main in her ceiling, then an admin takes it away:
         // the page compares with the ceiling /me gives now.
         runtime.block_on(async {
-            ceiling::unentitle(&pool, "alice", "main", &AuditActor::cli(), Utc::now())
-                .await
-                .expect("take main away");
-            app.poll().await.expect("poll");
+            crate::support::server::applied(&app, async {
+                ceiling::unentitle(&pool, "alice", "main", &AuditActor::cli(), Utc::now())
+                    .await
+                    .expect("take main away");
+            })
+            .await;
         });
         ui.open("/my-grants");
         ui.wait_text("[data-test=my-grant-example-client]", "Example Client");

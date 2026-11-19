@@ -1040,7 +1040,7 @@ mod tests {
     /// Every write that can change a ceiling's inputs (team membership,
     /// catalog creation, ownership and deletion, member access,
     /// entitlements and user deletion) changes `ceilings()` and bumps
-    /// `admin_generation`, so the key cache re-caps within one poll.
+    /// `admin_generation` (its change messages re-cap the cached users).
     #[tokio::test(flavor = "multi_thread")]
     async fn every_write_that_moves_a_ceiling_bumps_the_generation() {
         let db = test_db().await;

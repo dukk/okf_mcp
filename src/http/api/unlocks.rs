@@ -33,7 +33,7 @@ use crate::app::App;
 use crate::auth::{CredentialKind, Principal};
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
-use crate::http::api::{require_admin, require_every_catalog, settle};
+use crate::http::api::{require_admin, require_every_catalog};
 use crate::http::AppError;
 use crate::store::audit::AuditActor;
 use crate::store::keys::Access;
@@ -310,7 +310,8 @@ async fn create_unlock(
     };
     let now = app.clock().now();
     let created = unlocks::create(app.pool(), &new, &policy, &actor, now).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok((StatusCode::CREATED, Json(UnlockView::of(created, now))))
 }
 
@@ -391,7 +392,8 @@ async fn end_unlock(
     }
     let now = app.clock().now();
     let ended = unlocks::end(app.pool(), id, &actor, now).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(UnlockView::of(ended, now)))
 }
 

@@ -16,8 +16,9 @@ use crate::store::keys::Access;
 
 const NOTE: &str = "---\ntype: Note\ntitle: Note\n---\nBody.\n";
 
-/// Runs `statements`, then bumps the admin generation and polls, so the key
-/// cache reloads the label directory (the store's own writers do the same).
+/// Runs `statements`, then catches up (what a change-feed reconnect does),
+/// so the label cache reads the labels again: a raw update sends no change
+/// message, as the store's own writers do.
 async fn relabel(test: &TestApp, statements: &[&'static str]) {
     for statement in statements {
         sqlx::query(*statement)
@@ -25,11 +26,7 @@ async fn relabel(test: &TestApp, statements: &[&'static str]) {
             .await
             .expect("relabel");
     }
-    sqlx::query("UPDATE server_state SET admin_generation = admin_generation + 1")
-        .execute(test.app.pool())
-        .await
-        .expect("bump the generation");
-    test.app.poll().await.expect("poll the labels in");
+    test.app.apply_reconnect().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

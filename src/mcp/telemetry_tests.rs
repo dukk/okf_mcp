@@ -65,7 +65,6 @@ impl Served {
         )
         .await
         .expect("create a key");
-        test.app.poll().await.expect("poll the key in");
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind");

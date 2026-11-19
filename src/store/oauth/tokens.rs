@@ -302,7 +302,7 @@ type RefreshRow = (
 /// that issues tokens for a grant (a code exchange, a refresh rotation)
 /// takes it first, before the family's lock ([`lock_family`]) and before
 /// any token row, and holds it until it commits. Every revocation of the
-/// grant (`store::keys::revoke_by_id`, the poll loop's
+/// grant (`store::keys::revoke_by_id`, housekeeping's
 /// `store::keys::revoke_idle_grants`) locks the same row `FOR UPDATE`, which
 /// conflicts with this. So either the revocation commits first, and this
 /// (waiting, then reading the committed row) reports the grant revoked and
@@ -478,7 +478,7 @@ pub async fn revoke_family(
 ///
 /// # Arguments
 /// * `pool` - the database.
-/// * `expired_before` - the cut-off (the poll loop passes a week ago).
+/// * `expired_before` - the cut-off (housekeeping passes a week ago).
 ///
 /// # Returns
 /// How many were deleted.

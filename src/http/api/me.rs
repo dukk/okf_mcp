@@ -32,7 +32,6 @@ use crate::clock::format_timestamp;
 use crate::error::OkfError;
 use crate::http::api::keys::{parse_access, CreatedKeyView, KeyView};
 use crate::http::api::people::DisplayNameBody;
-use crate::http::api::settle;
 use crate::http::console_session::ConsoleSession;
 use crate::http::passkeys::passkey_name;
 use crate::http::signin::notify_method_added;
@@ -779,8 +778,8 @@ async fn account_view(app: &App, principal: &Principal) -> Result<AccountView, O
     })
 }
 
-/// `PATCH /me`: sets the caller's own display name, then polls so the labels
-/// show it at once.
+/// `PATCH /me`: sets the caller's own display name; the labels show it at
+/// once (the write's own change messages are applied before the answer).
 ///
 /// # Returns
 /// The account as it now is.
@@ -814,7 +813,8 @@ async fn update_account(
         app.clock().now(),
     )
     .await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(account_view(&app, &principal).await?))
 }
 
@@ -897,7 +897,8 @@ async fn create_key(
         { user = %user.name, },
         "self-issued key created"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     let key = own(&app, user, KeyKind::Key, &created.id).await?;
     Ok(Json(CreatedKeyView {
         key: key.into(),
@@ -1007,7 +1008,8 @@ async fn revoke_own(
         { user = %user.name, },
         "self-service revoke"
     );
-    settle(app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(own(app, user, kind, &target.id).await?.into()))
 }
 
@@ -1061,8 +1063,8 @@ async fn change_password(
     };
     // Hashed before the transaction opens, never while it holds the lock.
     let password = NewPassword::hash(&body.new_password).await?;
-    // For the notice's address, from the database: the key cache can be a
-    // poll interval behind an email change, and the notice must reach the
+    // For the notice's address, from the database: the user cache can be a
+    // `credential_ttl` behind an email change, and the notice must reach the
     // address the account has now.
     let account = users::find_auth(app.pool(), user.id)
         .await?
@@ -1351,21 +1353,23 @@ mod tests {
         )
         .await
         .expect("create the user");
-        for (catalog, access) in grants {
-            ceiling::entitle(
-                pool,
-                &NewEntitlement {
-                    user: name,
-                    catalog,
-                    access: *access,
-                },
-                &AuditActor::cli(),
-                Utc::now(),
-            )
-            .await
-            .expect("entitle");
-        }
-        test.app.poll().await.expect("poll the user in");
+        crate::invalidate::testing::applied(&test.app, async {
+            for (catalog, access) in grants {
+                ceiling::entitle(
+                    pool,
+                    &NewEntitlement {
+                        user: name,
+                        catalog,
+                        access: *access,
+                    },
+                    &AuditActor::cli(),
+                    Utc::now(),
+                )
+                .await
+                .expect("entitle");
+            }
+        })
+        .await;
         Browser::session_for(test, name).await
     }
 
@@ -1455,7 +1459,6 @@ mod tests {
             Utc::now(),
         )
         .await;
-        // The legacy insert bumps no generation; `keys` bumps and polls both in.
         let keys = keys(&test).await;
 
         let (status, me) = send(&test, "GET", "/api/v1/me", Some(&keys.read), None).await;
@@ -1660,18 +1663,18 @@ mod tests {
     async fn the_key_limit_counts_live_self_issued_keys() {
         let test = app().await;
         let mut alice = member(&test, "alice", &[("main", Access::Read)]).await;
-        settings::set(
-            test.app.pool(),
-            SettingKey::MaxKeysPerUser,
-            "1",
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("set the limit");
-        // The poll loop's next pass, run now: the running app picks the
-        // setting up from `app.settings()` without a restart.
-        test.app.poll().await.expect("poll the setting in");
+        crate::invalidate::testing::applied(&test.app, async {
+            settings::set(
+                test.app.pool(),
+                SettingKey::MaxKeysPerUser,
+                "1",
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("set the limit");
+        })
+        .await;
 
         let (first, body) = alice
             .send(
@@ -1710,16 +1713,18 @@ mod tests {
             )
             .await
             .parts();
-        settings::set(
-            test.app.pool(),
-            SettingKey::MaxKeysPerUser,
-            "2",
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("raise the limit");
-        test.app.poll().await.expect("poll the setting in");
+        crate::invalidate::testing::applied(&test.app, async {
+            settings::set(
+                test.app.pool(),
+                SettingKey::MaxKeysPerUser,
+                "2",
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("raise the limit");
+        })
+        .await;
         let (_, me) = alice
             .send(&test, "GET", "/api/v1/me", Payload::Empty)
             .await
@@ -1747,16 +1752,18 @@ mod tests {
     async fn the_lifetime_limit_caps_and_defaults_the_expiry() {
         let test = app().await;
         let mut alice = member(&test, "alice", &[("main", Access::Read)]).await;
-        settings::set(
-            test.app.pool(),
-            SettingKey::MaxKeyLifetime,
-            "24h",
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("set the lifetime");
-        test.app.poll().await.expect("poll the setting in");
+        crate::invalidate::testing::applied(&test.app, async {
+            settings::set(
+                test.app.pool(),
+                SettingKey::MaxKeyLifetime,
+                "24h",
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("set the lifetime");
+        })
+        .await;
         let later = |hours: i64| {
             (Utc::now() + TimeDelta::hours(hours))
                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
@@ -1833,19 +1840,21 @@ mod tests {
         )
         .await
         .expect("entitle");
-        users::set_admin(
-            test.app.pool(),
-            "alice",
-            AdminChange {
-                on: true,
-                allow_last: true,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("make alice admin");
-        test.app.poll().await.expect("poll");
+        crate::invalidate::testing::applied(&test.app, async {
+            users::set_admin(
+                test.app.pool(),
+                "alice",
+                AdminChange {
+                    on: true,
+                    allow_last: true,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("make alice admin");
+        })
+        .await;
         let mut alice = Browser::session_for(&test, "alice").await;
 
         let (admin_route, _) = alice
@@ -1883,31 +1892,33 @@ mod tests {
         )
         .await;
         let mut grants = Vec::new();
-        for (name, user) in [("phone", "alice"), ("tablet", TEST_USER)] {
-            let catalogs = ["main".to_string()];
-            let code = code_rows::create(
-                test.app.pool(),
-                &NewSignInCode {
-                    name,
-                    access: Access::Read,
-                    grants: Grants::Catalogs(&catalogs),
-                    default_catalog: None,
-                    actor: name,
-                    expires_at: Utc::now() + TimeDelta::hours(1),
-                    user,
-                },
-                &crate::store::audit::AuditActor::cli(),
-                Utc::now(),
-            )
-            .await
-            .expect("mint a code");
-            grants.push(
-                code_rows::redeem(test.app.pool(), &code.id, &client, Utc::now())
-                    .await
-                    .expect("redeem"),
-            );
-        }
-        test.app.poll().await.expect("poll the grants in");
+        crate::invalidate::testing::applied(&test.app, async {
+            for (name, user) in [("phone", "alice"), ("tablet", TEST_USER)] {
+                let catalogs = ["main".to_string()];
+                let code = code_rows::create(
+                    test.app.pool(),
+                    &NewSignInCode {
+                        name,
+                        access: Access::Read,
+                        grants: Grants::Catalogs(&catalogs),
+                        default_catalog: None,
+                        actor: name,
+                        expires_at: Utc::now() + TimeDelta::hours(1),
+                        user,
+                    },
+                    &crate::store::audit::AuditActor::cli(),
+                    Utc::now(),
+                )
+                .await
+                .expect("mint a code");
+                grants.push(
+                    code_rows::redeem(test.app.pool(), &code.id, &client, Utc::now())
+                        .await
+                        .expect("redeem"),
+                );
+            }
+        })
+        .await;
 
         let (_, listed) = alice
             .send(&test, "GET", "/api/v1/me/grants", Payload::Empty)

@@ -12,7 +12,7 @@ use axum::routing::{get, patch, put};
 use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 
-use super::{reachable_page, require_every_catalog, settle, PageQuery};
+use super::{reachable_page, require_every_catalog, PageQuery};
 use crate::app::App;
 use crate::auth::{CredentialKind, Principal};
 use crate::catalog::CatalogState;
@@ -271,8 +271,7 @@ async fn list_catalogs(
 }
 
 /// `POST /catalogs`: creates a catalog holding only its starter files (a
-/// root `index.md` and a `log.md`), then polls so it is served at
-/// once. It needs an admin key that reaches every catalog: a key granted
+/// root `index.md` and a `log.md`); it is served at once. It needs an admin key that reaches every catalog: a key granted
 /// named catalogs would not reach the new one, and grants are made with the
 /// keys routes.
 ///
@@ -315,7 +314,8 @@ async fn create_catalog(
         { key = %principal.key_id, actor = %principal.actor, },
         "catalog created"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     // The owner may be a suspended team: read the new row's access facts
     // from the database (one query), not from the directory, which may
     // still remember the name as absent until the create's message lands.
@@ -325,8 +325,8 @@ async fn create_catalog(
         .map(SuspensionInfo::from);
     // Built from the row, not the loaded state: a new catalog holds only its
     // starter files (a root index.md and a log.md, no concepts), written
-    // when it was created, and the answer must not depend on the poll
-    // having loaded it.
+    // when it was created, and the answer must not depend on the catalog
+    // cache having loaded it.
     let mut wanted = Wanted::default();
     if let Some(team) = row.owner_team.as_deref() {
         wanted.team(team);
@@ -393,7 +393,8 @@ async fn refuse_suspended_owner(
 }
 
 /// `PATCH /catalogs/{catalog}`: replaces the display name, the description
-/// or both, then polls so the listing shows them at once.
+/// or both; the listing shows them at once (the write's own change
+/// messages are applied before the answer).
 ///
 /// Who may: a provisioner (it reaches no catalog content; this touches only
 /// the row), a key or session with `admin` on the catalog, or a console
@@ -461,7 +462,8 @@ async fn update_catalog(
         { key = %principal.key_id, actor = %principal.actor, },
         "catalog details changed"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     let description = change
         .description
         .unwrap_or_else(|| previous.description.clone());
@@ -479,8 +481,8 @@ async fn update_catalog(
     }))
 }
 
-/// `PUT /catalogs/{catalog}/owner`: makes `team` the catalog's owner, then
-/// polls so the listing shows it at once. Ownership grants no access, so it
+/// `PUT /catalogs/{catalog}/owner`: makes `team` the catalog's owner; the
+/// listing shows it at once. Ownership grants no access, so it
 /// needs an admin key that reaches every catalog, like the users and teams
 /// routes (plan Decision 3), not `admin` on the catalog.
 ///
@@ -510,7 +512,8 @@ async fn set_owner(
         { key = %principal.key_id, actor = %principal.actor, },
         "catalog owner changed"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(OwnerChanged {
         name: catalog,
         previous,
@@ -539,8 +542,8 @@ pub(crate) struct MaintenanceChanged {
 }
 
 /// `PUT /catalogs/{catalog}/maintenance`: lets the maintenance runner in, or
-/// keeps it out (spec Part 6), then polls so the key cache refuses or admits
-/// the runner at once. An admin that reaches every catalog, or an owner of
+/// keeps it out (spec Part 6); the catalog directory refuses or admits the
+/// runner at once. An admin that reaches every catalog, or an owner of
 /// the catalog's owner team signed in to the console: the one
 /// owner-managed control of this milestone. The store checks the owner
 /// under its locks.
@@ -580,7 +583,8 @@ async fn set_maintenance(
         { key = %principal.key_id, actor = %principal.actor, },
         "catalog maintenance set"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(MaintenanceChanged {
         name: catalog,
         previous,
@@ -638,8 +642,8 @@ async fn member_access(
     }))
 }
 
-/// `PUT /catalogs/{catalog}/member-access`: sets it, then polls so every
-/// member's self-issued credentials are re-capped at once. The permission
+/// `PUT /catalogs/{catalog}/member-access`: sets it; every member's
+/// self-issued credentials are re-capped at once. The permission
 /// is `ceiling::may_set_member_access`, the one hook team owners will
 /// later share (spec "Admin surface").
 ///
@@ -672,7 +676,8 @@ async fn set_member_access(
         { key = %principal.key_id, actor = %principal.actor, },
         "member access set"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(MemberAccessChanged {
         name: catalog,
         previous: previous.as_str(),
@@ -681,8 +686,8 @@ async fn set_member_access(
 }
 
 /// `DELETE /catalogs/{catalog}[?force=true]`: deletes the catalog with its
-/// documents, history, changesets and grants (`admin` on the catalog), then
-/// polls so it is gone at once.
+/// documents, history, changesets and grants (`admin` on the catalog); it is
+/// gone at once.
 ///
 /// # Errors
 /// 404 for a catalog the key does not reach or that does not exist; 403
@@ -716,7 +721,8 @@ async fn delete_catalog(
         { key = %principal.key_id, actor = %principal.actor, },
         "catalog deleted"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(CatalogDeleted { name: catalog }))
 }
 
@@ -890,18 +896,21 @@ mod tests {
             )
             .await
             .parts();
-        crate::store::users::set_admin(
-            test.app.pool(),
-            "alice",
-            AdminChange {
-                on: true,
-                allow_last: false,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("make alice an admin");
+        crate::invalidate::testing::applied(&test.app, async {
+            crate::store::users::set_admin(
+                test.app.pool(),
+                "alice",
+                AdminChange {
+                    on: true,
+                    allow_last: false,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("make alice an admin");
+        })
+        .await;
         let mut admin = Browser::session_for(&test, "alice").await;
         let (write_admin, answer) = admin
             .send(

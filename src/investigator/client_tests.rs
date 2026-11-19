@@ -645,7 +645,6 @@ async fn investigator_client_real_slice1_http_nine_tools() {
     )
     .await
     .unwrap();
-    app.app.poll().await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
     let shutdown = tokio_util::sync::CancellationToken::new();
@@ -706,15 +705,17 @@ async fn investigator_client_real_slice1_http_nine_tools() {
         .unwrap();
     assert_eq!(report["run"]["state"], "completed");
     assert_eq!(report["work"][0]["assessment"], "unverifiable");
-    keys::revoke(
-        app.app.pool(),
-        "reporter",
-        &crate::store::audit::AuditActor::cli(),
-        chrono::Utc::now(),
-    )
-    .await
-    .unwrap();
-    app.app.poll().await.unwrap();
+    crate::invalidate::testing::applied(&app.app, async {
+        keys::revoke(
+            app.app.pool(),
+            "reporter",
+            &crate::store::audit::AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    })
+    .await;
     assert_eq!(client.call(search()).await, Err(RunnerError::Permission));
     assert_eq!(client.call(search()).await, Err(RunnerError::Permission));
     drop(client);

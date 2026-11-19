@@ -98,32 +98,6 @@ impl RedisOp {
     }
 }
 
-/// What one catalog's turn in a poll pass came to: a closed set for the
-/// `result` label of `okf.catalog.refreshes`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RefreshResult {
-    /// Nothing to do: the snapshot is current, or a failed generation waits.
-    Unchanged,
-    /// The loaded catalog's snapshot was rebuilt in place.
-    Reloaded,
-    /// The catalog was loaded from scratch (new, or created again).
-    Loaded,
-    /// The refresh or load failed.
-    Failed,
-}
-
-impl RefreshResult {
-    /// The label value (also the `okf.refresh.result` span attribute).
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Unchanged => "unchanged",
-            Self::Reloaded => "reloaded",
-            Self::Loaded => "loaded",
-            Self::Failed => "failed",
-        }
-    }
-}
-
 /// What one catalog announcement came to on the replica that received it
 /// (issue #659): a closed set for the `result` label of
 /// `okf.catalog.announcements`.
@@ -133,12 +107,12 @@ pub enum AnnouncementResult {
     /// newer one.
     Applied,
     /// Nothing to rebuild: the snapshot already reached that generation (its
-    /// own publish, the poll loop or an earlier announcement got there).
+    /// own publish, the change feed or an earlier announcement got there).
     Current,
-    /// This replica has not loaded the catalog, or it was deleted: the poll
-    /// loop loads or drops it.
+    /// This replica has not loaded the catalog, or it was deleted: it loads
+    /// on its next use, or is gone.
     Unknown,
-    /// The refresh failed; the old snapshot stays and the poll loop retries.
+    /// The refresh failed; the old snapshot stays and its next use retries.
     Failed,
 }
 
@@ -226,8 +200,6 @@ struct Instruments {
     publish_duration: Histogram<f64>,
     publish_lock_wait: Histogram<f64>,
     lint_rejections: Counter<u64>,
-    poll_duration: Histogram<f64>,
-    catalog_refreshes: Counter<u64>,
     catalog_announcements: Counter<u64>,
     // Task 1 of milestone 18: the change feed.
     invalidations_queued: Counter<u64>,
@@ -299,8 +271,6 @@ impl Metrics {
         "okf_publish_duration_seconds",
         "okf_publish_lock_wait_seconds",
         "okf_lint_rejections_total",
-        "okf_poll_duration_seconds",
-        "okf_catalog_refreshes_total",
         "okf_catalog_announcements_total",
         "okf_invalidations_queued_total",
         "okf_invalidations_received_total",
@@ -357,15 +327,6 @@ impl Metrics {
                 lint_rejections: meter
                     .u64_counter("okf.lint.rejections")
                     .with_description("Publish lint errors, by rule.")
-                    .build(),
-                poll_duration: seconds_histogram(
-                    meter,
-                    "okf.poll.duration",
-                    "Poll passes, by outcome.",
-                ),
-                catalog_refreshes: meter
-                    .u64_counter("okf.catalog.refreshes")
-                    .with_description("Each catalog's turn in a poll pass, by result.")
                     .build(),
                 catalog_announcements: meter
                     .u64_counter("okf.catalog.announcements")
@@ -522,35 +483,6 @@ impl Metrics {
             &[
                 KeyValue::new("catalog", catalog.to_owned()),
                 KeyValue::new("rule", lint_rule_label(rule)),
-            ],
-        );
-    }
-
-    /// Records a poll pass.
-    ///
-    /// # Arguments
-    /// * `outcome` - whether the pass returned `Ok`.
-    /// * `elapsed` - its duration, the wait for an overlapping pass included.
-    #[tracing::instrument(level = "trace", skip_all)]
-    pub fn poll(&self, outcome: Outcome, elapsed: Duration) {
-        self.inner.poll_duration.record(
-            elapsed.as_secs_f64(),
-            &[KeyValue::new("outcome", outcome.as_str())],
-        );
-    }
-
-    /// Counts one catalog's turn in a poll pass.
-    ///
-    /// # Arguments
-    /// * `catalog` - the catalog's name.
-    /// * `result` - what the turn came to.
-    #[tracing::instrument(level = "trace", skip_all)]
-    pub fn catalog_refresh(&self, catalog: &str, result: RefreshResult) {
-        self.inner.catalog_refreshes.add(
-            1,
-            &[
-                KeyValue::new("catalog", catalog.to_owned()),
-                KeyValue::new("result", result.as_str()),
             ],
         );
     }
@@ -1363,8 +1295,6 @@ mod tests {
         metrics.publish("notes", Outcome::Ok, elapsed);
         metrics.publish_lock_wait("notes", elapsed);
         metrics.lint_rejection("notes", "orphan");
-        metrics.poll(Outcome::Ok, elapsed);
-        metrics.catalog_refresh("notes", RefreshResult::Reloaded);
         metrics.catalog_announcement(AnnouncementResult::Applied);
         metrics.invalidation_queued("settings");
         metrics.invalidation_received("settings", Duration::from_millis(5));

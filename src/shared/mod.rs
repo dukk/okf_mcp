@@ -617,7 +617,6 @@ mod tests {
             .await
             .expect("get through the second replica");
         assert_eq!(read.as_deref(), Some("42"));
-        assert_eq!(first.app.config().poll_interval, Duration::from_secs(3600));
 
         let (single, _redis) =
             crate::mcp::testing::app_with_redis(crate::config::Config::default()).await;

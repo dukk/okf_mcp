@@ -16,7 +16,7 @@ use crate::app::App;
 use crate::auth::Principal;
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
-use crate::http::api::{require_admin, require_every_catalog, settle};
+use crate::http::api::{require_admin, require_every_catalog};
 use crate::http::AppError;
 use crate::store::audit::AuditActor;
 use crate::store::settings::{self, SettingKey, SettingRow};
@@ -207,7 +207,8 @@ async fn set_setting(
         { value = %body.value, key_id = %principal.key_id, actor = %principal.actor, },
         "setting changed"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(current(&app, key).await?))
 }
 
@@ -232,7 +233,8 @@ async fn reset_setting(
         { key_id = %principal.key_id, actor = %principal.actor, },
         "setting reset"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(current(&app, key).await?))
 }
 
@@ -314,7 +316,9 @@ mod tests {
 
         let (_, before) = send(&test, "GET", "/api/v1/settings", Some(&root), None).await;
         let (set, row) = put(&test, &root, "max_keys_per_user", "5").await;
-        let applied = test.app.settings().max_keys_per_user;
+        // The route's own write marks the settings stale, so the next use
+        // (the next request's check) reloads them.
+        let applied = test.app.fresh_settings().await.max_keys_per_user;
         let (invalid, _) = put(&test, &root, "max_keys_per_user", "many").await;
         let (unknown, _) = put(&test, &root, "max_keys", "5").await;
         let (malformed, _) = put(&test, &root, "max%00keys", "5").await;
@@ -336,7 +340,7 @@ mod tests {
         assert_eq!(row["value"], "5");
         assert_eq!(row["overridden"], true);
         assert_eq!(row["updated_by"], "root");
-        assert_eq!(applied, 5, "the route polls, so the cached policy has it");
+        assert_eq!(applied, 5, "the next use has the new policy");
         assert_eq!(invalid.as_u16(), 422);
         assert_eq!(unknown.as_u16(), 404);
         assert_eq!(malformed.as_u16(), 404);

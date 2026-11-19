@@ -228,7 +228,6 @@ async fn an_oauth_grant_is_marked_and_cannot_be_given_reporting() {
     let grant_id = codes::redeem(&server.db.pool, &code.id, &client, Utc::now())
         .await
         .expect("redeem the code");
-    server.app.poll().await.expect("poll the grant in");
     let name = key_rows::list(&server.db.pool)
         .await
         .expect("list keys")
@@ -291,9 +290,10 @@ async fn an_admin_changes_a_keys_user_and_assigns_a_legacy_key() {
         .await;
     server.key("laptop", Access::Read, &["main"], None).await;
     server.legacy_key("legacy", Access::Read).await;
-    alice(&server).await;
-    // The console reads the labels the server holds: reload them.
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        alice(&server).await;
+    })
+    .await;
     let ran = drive(server.base.clone(), move |ui| {
         ui.login(&admin);
         // The shell names the signed-in key's user.
@@ -336,9 +336,10 @@ async fn an_admin_changes_a_sign_in_codes_user() {
     let admin = server
         .key("console-admin", Access::Admin, &[], Some("main"))
         .await;
-    alice(&server).await;
-    // The console reads the labels the server holds: reload them.
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        alice(&server).await;
+    })
+    .await;
     let main = ["main".to_string()];
     codes::create(
         &server.db.pool,
@@ -841,7 +842,6 @@ async fn redeemed_grant(server: &TestServer) -> (String, String) {
     let grant_id = codes::redeem(&server.db.pool, &code.id, &client, Utc::now())
         .await
         .expect("redeem the code");
-    server.app.poll().await.expect("poll the grant in");
     let name = key_rows::list(&server.db.pool)
         .await
         .expect("list keys")

@@ -114,17 +114,19 @@ async fn maintenance_http_lease_uses_credential_identity() {
             .await
             .unwrap();
     assert_eq!(stored, id);
-    keys::set_maintenance_report_target(
-        &server.db.pool,
-        &id,
-        None,
-        false,
-        &okf_mcp::store::audit::AuditActor::cli(),
-        chrono::Utc::now(),
-    )
-    .await
-    .unwrap();
-    server.app.poll().await.unwrap();
+    crate::support::server::applied(&server.app, async {
+        keys::set_maintenance_report_target(
+            &server.db.pool,
+            &id,
+            None,
+            false,
+            &okf_mcp::store::audit::AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    })
+    .await;
     for (tool, args) in [
         ("maintenance_renew", renew_args(lease, "renew")),
         ("maintenance_submit", submit_args(lease, "submit")),
@@ -142,26 +144,30 @@ async fn maintenance_http_lease_uses_credential_identity() {
             "Forbidden"
         );
     }
-    keys::set_maintenance_report_target(
-        &server.db.pool,
-        &id,
-        None,
-        true,
-        &okf_mcp::store::audit::AuditActor::cli(),
-        chrono::Utc::now(),
-    )
-    .await
-    .unwrap();
-    server.app.poll().await.unwrap();
-    keys::revoke(
-        &server.db.pool,
-        &id,
-        &okf_mcp::store::audit::AuditActor::cli(),
-        server.app.clock().now(),
-    )
-    .await
-    .unwrap();
-    server.app.poll().await.unwrap();
+    crate::support::server::applied(&server.app, async {
+        keys::set_maintenance_report_target(
+            &server.db.pool,
+            &id,
+            None,
+            true,
+            &okf_mcp::store::audit::AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    })
+    .await;
+    crate::support::server::applied(&server.app, async {
+        keys::revoke(
+            &server.db.pool,
+            &id,
+            &okf_mcp::store::audit::AuditActor::cli(),
+            server.app.clock().now(),
+        )
+        .await
+        .unwrap();
+    })
+    .await;
     for (tool, args) in [
         ("maintenance_renew", renew_args(lease, "renew")),
         ("maintenance_submit", submit_args(lease, "submit")),
@@ -731,17 +737,19 @@ async fn maintenance_http_reauthorizes_successful_replays_and_allows_plain_reads
         .unwrap()
         .key_id
         .clone();
-    keys::set_maintenance_report_target(
-        &server.db.pool,
-        &id,
-        None,
-        false,
-        &okf_mcp::store::audit::AuditActor::cli(),
-        chrono::Utc::now(),
-    )
-    .await
-    .unwrap();
-    server.app.poll().await.unwrap();
+    crate::support::server::applied(&server.app, async {
+        keys::set_maintenance_report_target(
+            &server.db.pool,
+            &id,
+            None,
+            false,
+            &okf_mcp::store::audit::AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    })
+    .await;
     assert_eq!(
         error(&call(&client, "maintenance_submit", args.clone()).await)["error"],
         "Forbidden"
@@ -801,17 +809,19 @@ async fn maintenance_http_reauthorizes_successful_replays_and_allows_plain_reads
     .unwrap();
     assert!(!stored_paths.is_empty());
     assert!(stored_paths.iter().all(|path| !path.starts_with('/')));
-    keys::set_maintenance_report_target(
-        &server.db.pool,
-        &id,
-        None,
-        true,
-        &okf_mcp::store::audit::AuditActor::cli(),
-        chrono::Utc::now(),
-    )
-    .await
-    .unwrap();
-    server.app.poll().await.unwrap();
+    crate::support::server::applied(&server.app, async {
+        keys::set_maintenance_report_target(
+            &server.db.pool,
+            &id,
+            None,
+            true,
+            &okf_mcp::store::audit::AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    })
+    .await;
     assert_eq!(
         receipt,
         structured(&call(&client, "maintenance_submit", args).await).clone()
@@ -832,30 +842,34 @@ async fn maintenance_close_requires_reporting_for_own_run_even_with_write() {
         .unwrap()
         .key_id
         .clone();
-    keys::set_maintenance_report_target(
-        &server.db.pool,
-        &id,
-        None,
-        true,
-        &okf_mcp::store::audit::AuditActor::cli(),
-        chrono::Utc::now(),
-    )
-    .await
-    .unwrap();
-    server.app.poll().await.unwrap();
+    crate::support::server::applied(&server.app, async {
+        keys::set_maintenance_report_target(
+            &server.db.pool,
+            &id,
+            None,
+            true,
+            &okf_mcp::store::audit::AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    })
+    .await;
     let client = server.client(&key, None).await.unwrap();
     let run = claim(&client, "claim", 1).await;
-    keys::set_maintenance_report_target(
-        &server.db.pool,
-        &id,
-        None,
-        false,
-        &okf_mcp::store::audit::AuditActor::cli(),
-        chrono::Utc::now(),
-    )
-    .await
-    .unwrap();
-    server.app.poll().await.unwrap();
+    crate::support::server::applied(&server.app, async {
+        keys::set_maintenance_report_target(
+            &server.db.pool,
+            &id,
+            None,
+            false,
+            &okf_mcp::store::audit::AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    })
+    .await;
     assert_eq!(error(&call(&client,"maintenance_close",json!({"catalog":"pg","run_id":run["run_id"],"state":"cancelled","rationale":"Own run needs reporting.","idempotency_key":"close"})).await)["error"],"Forbidden");
 }
 
@@ -890,17 +904,19 @@ async fn maintenance_close_owner_replay_is_stable_after_access_upgrade() {
     )
     .await
     .unwrap();
-    keys::set_maintenance_report_target(
-        &server.db.pool,
-        &id,
-        None,
-        true,
-        &okf_mcp::store::audit::AuditActor::cli(),
-        chrono::Utc::now(),
-    )
-    .await
-    .unwrap();
-    server.app.poll().await.unwrap();
+    crate::support::server::applied(&server.app, async {
+        keys::set_maintenance_report_target(
+            &server.db.pool,
+            &id,
+            None,
+            true,
+            &okf_mcp::store::audit::AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    })
+    .await;
     assert_eq!(
         server.app.find_key(&key).await.unwrap().unwrap().access,
         Access::Write

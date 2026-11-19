@@ -416,18 +416,21 @@ mod tests {
         let theirs = open_as(&test, &keys.write, "systems/gamma.md").await;
         let own = open_as(&test, &keys.write, "systems/delta.md").await;
         let user = crate::db::TEST_USER;
-        crate::store::users::set_admin(
-            test.app.pool(),
-            user,
-            AdminChange {
-                on: true,
-                allow_last: false,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("make the user an admin");
+        crate::invalidate::testing::applied(&test.app, async {
+            crate::store::users::set_admin(
+                test.app.pool(),
+                user,
+                AdminChange {
+                    on: true,
+                    allow_last: false,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("make the user an admin");
+        })
+        .await;
         let mut admin = Browser::session_for(&test, user).await;
 
         let mine = format!("/api/v1/changesets/{own}");
@@ -595,18 +598,21 @@ mod tests {
         let body = || Payload::Json(json!({"message": "Reviewed delta"}));
         let mut member = Browser::session_for(&test, user).await;
         let (unknown, refused) = member.send(&test, "POST", &uri, body()).await.parts();
-        crate::store::users::set_admin(
-            test.app.pool(),
-            user,
-            AdminChange {
-                on: true,
-                allow_last: false,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("make the user an admin");
+        crate::invalidate::testing::applied(&test.app, async {
+            crate::store::users::set_admin(
+                test.app.pool(),
+                user,
+                AdminChange {
+                    on: true,
+                    allow_last: false,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("make the user an admin");
+        })
+        .await;
         let mut admin = Browser::session_for(&test, user).await;
 
         let (status, keyed) = publish_with(&test, &keys.admin, &by_key, "Reviewed gamma").await;
@@ -858,22 +864,24 @@ mod tests {
         let locked = open_as(&test, &staff, "systems/gamma.md").await;
         let opted_out = open_as(&test, &runner, "systems/delta.md").await;
         require_unlock(&test).await;
-        let mut tx = test.app.pool().begin().await.expect("begin");
-        let id: i64 = sqlx::query_scalar(
-            "UPDATE catalogs SET maintenance = false WHERE name = 'main' RETURNING id",
-        )
-        .fetch_one(&mut *tx)
-        .await
-        .expect("turn maintenance off");
-        let main = crate::invalidate::Invalidation::CatalogMeta {
-            id,
-            name: "main".to_owned(),
-        };
-        crate::invalidate::invalidate(&mut tx, &[main])
+        crate::invalidate::testing::applied(&test.app, async {
+            let mut tx = test.app.pool().begin().await.expect("begin");
+            let id: i64 = sqlx::query_scalar(
+                "UPDATE catalogs SET maintenance = false WHERE name = 'main' RETURNING id",
+            )
+            .fetch_one(&mut *tx)
             .await
-            .expect("invalidate");
-        tx.commit().await.expect("commit");
-        test.app.poll().await.expect("poll");
+            .expect("turn maintenance off");
+            let main = crate::invalidate::Invalidation::CatalogMeta {
+                id,
+                name: "main".to_owned(),
+            };
+            crate::invalidate::invalidate(&mut tx, &[main])
+                .await
+                .expect("invalidate");
+            tx.commit().await.expect("commit");
+        })
+        .await;
         let tool = async |secret: &str, handle: &str| {
             let ctx = ctx_of(&test, secret).await;
             let params = PublishParams {

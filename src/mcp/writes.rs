@@ -1733,15 +1733,17 @@ mod repair_tests {
             now: chrono::Utc::now(),
         };
         let imported = "---\nokf_version: \"0.2\"\n---\n# Imported\n";
-        crate::store::import::import(
-            test.app.pool(),
-            "pg",
-            crate::mcp::testing::files(&[("index.md", imported), ("log.md", "# Log\n")]),
-            &options,
-        )
-        .await
-        .unwrap();
-        test.app.poll().await.unwrap();
+        crate::invalidate::testing::applied(&test.app, async {
+            crate::store::import::import(
+                test.app.pool(),
+                "pg",
+                crate::mcp::testing::files(&[("index.md", imported), ("log.md", "# Log\n")]),
+                &options,
+            )
+            .await
+            .unwrap();
+        })
+        .await;
 
         let refused = publish_as(&ctx, &handle).await.unwrap_err();
 

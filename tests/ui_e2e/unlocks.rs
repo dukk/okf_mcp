@@ -39,16 +39,18 @@ async fn locked_server() -> TestServer {
     )
     .await
     .expect("make staff an admin");
-    settings::set(
-        pool,
-        SettingKey::RequireUnlock,
-        "true",
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("require unlocks");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        settings::set(
+            pool,
+            SettingKey::RequireUnlock,
+            "true",
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("require unlocks");
+    })
+    .await;
     server
 }
 
@@ -142,7 +144,6 @@ async fn a_non_admin_users_admin_key_is_not_offered_unlock() {
     let key = keys::create(pool, &new, &AuditActor::cli(), Utc::now())
         .await
         .expect("create helper's admin key");
-    server.app.poll().await.expect("poll");
     drive(console_base(&server), move |ui| {
         ui.login(&key);
         ui.open("/browse/main");

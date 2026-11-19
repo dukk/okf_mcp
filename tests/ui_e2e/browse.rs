@@ -131,10 +131,12 @@ async fn the_links_tab_shows_backlinks_and_a_revision_opens_its_diff() {
         now: Utc::now(),
     };
     let edited = ALPHA.replace("Nothing yet.", "Two settings.");
-    import(&server.db.pool, "main", main_catalog(&edited), &options)
-        .await
-        .expect("import the edit");
-    server.app.poll().await.expect("load the edit");
+    crate::support::server::applied(&server.app, async {
+        import(&server.db.pool, "main", main_catalog(&edited), &options)
+            .await
+            .expect("import the edit");
+    })
+    .await;
     drive(server.base.clone(), move |ui| {
         ui.login(&key);
         ui.open("/browse/main/systems/beta.md");
@@ -300,16 +302,18 @@ async fn the_suspended_view_names_the_catalog_and_its_team_by_label() {
     let (server, key) = server().await;
     server.set_catalog_label("main", "Work notes").await;
     server.set_user_label("tester", "Tess").await;
-    okf_mcp::store::teams::suspend(
-        &server.db.pool,
-        "tester",
-        Some("Paused for review."),
-        &okf_mcp::store::audit::AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("suspend the owner team");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        okf_mcp::store::teams::suspend(
+            &server.db.pool,
+            "tester",
+            Some("Paused for review."),
+            &okf_mcp::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("suspend the owner team");
+    })
+    .await;
     drive(server.base.clone(), move |ui| {
         ui.login(&key);
         ui.open("/browse/main");

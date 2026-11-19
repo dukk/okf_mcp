@@ -439,10 +439,10 @@ async fn racing_announcements_and_refreshes_rebuild_once_and_never_go_back() {
     );
 }
 
-/// The same race with B's poll pass in it: the snapshot ends at the stored
-/// generation, whoever got there.
+/// The same race with B's change-feed message for the publish in it: the
+/// snapshot ends at the stored generation, whoever got there.
 #[tokio::test(flavor = "multi_thread")]
-async fn an_announcement_racing_the_poll_ends_at_the_stored_generation() {
+async fn an_announcement_racing_the_change_feed_ends_at_the_stored_generation() {
     let (a, b, _redis) = pair().await;
     let on_a = writer(&a, "alice", "pg").await;
     // B holds pg before A publishes.
@@ -450,13 +450,20 @@ async fn an_announcement_racing_the_poll_ends_at_the_stored_generation() {
     published_edit(&on_a, "/index.md", "- systems", "- the systems").await;
     let change = stored_generation(&a.app, "pg").await;
 
-    let (announced, polled) = tokio::time::timeout(WAIT, async {
-        tokio::join!(b.apply_catalog_announcement(change), b.poll())
+    let message = crate::invalidate::Message {
+        invalidation: crate::invalidate::Invalidation::Catalog {
+            id: change.catalog_id,
+            generation: change.generation,
+        },
+        sent_at_ms: chrono::Utc::now().timestamp_millis(),
+    };
+
+    let (announced, ()) = tokio::time::timeout(WAIT, async {
+        tokio::join!(b.apply_catalog_announcement(change), b.apply(&message))
     })
     .await
     .expect("the race settles");
 
-    polled.expect("B's poll");
     assert!(
         matches!(
             announced,

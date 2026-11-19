@@ -193,7 +193,6 @@ async fn patch_me_sets_my_display_name_and_refuses_the_rest() {
         chrono::Utc::now(),
     )
     .await;
-    test.app.poll().await.unwrap();
     let mut bob = Browser::session_for(&test, "bob").await;
 
     let (status, set) = patch(

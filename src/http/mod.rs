@@ -734,7 +734,7 @@ pub async fn serve(
 /// job in hand; past that it is aborted and an error is logged (another
 /// replica takes the job after the orphan timeout). It returns when the
 /// worker has finished or been aborted, and runs beside the server's own
-/// draining, so a slow request or poll pass never lengthens the grace.
+/// draining, so a slow request or message never lengthens the grace.
 ///
 /// # Arguments
 /// * `worker` - the worker's task.
@@ -781,15 +781,15 @@ async fn supervise_worker(
     }
 }
 
-/// Serves until `shutdown` is cancelled, running the poll loop, the clock
-/// check and (unless `options.worker` is off) the mail worker, the
+/// Serves until `shutdown` is cancelled, running the change-feed listener,
+/// the announcement subscribers, the clock check and (unless `options.worker` is off) the mail worker, the
 /// housekeeping worker and the housekeeping ticker beside it.
 ///
 /// # Arguments
 /// * `app` - the shared state.
 /// * `listener` - a bound socket.
-/// * `shutdown` - cancelled to stop: it ends the MCP sessions, the poll loop,
-///   the clock check, the workers, the ticker and the listener, and `serve`
+/// * `shutdown` - cancelled to stop: it ends the MCP sessions, the listener,
+///   the subscribers, the clock check, the workers, the ticker and the listener, and `serve`
 ///   returns once open connections close, each worker has finished the job
 ///   in hand (at most `worker_shutdown_grace`) and the access counts in
 ///   flight are written.
@@ -815,7 +815,6 @@ pub async fn serve_with(
         tracing::warn!("{warning}");
     }
     let router = router(Arc::clone(&app), &shutdown);
-    let poller = tokio::spawn(Arc::clone(&app).poll_until(shutdown.clone()));
     // M16 bridge (spec Decision 14): remove in the release after 0.23.
     // Marks the credential caches and the catalog directory stale on every
     // announcement from a milestone 16 replica; ends at once without
@@ -894,14 +893,6 @@ pub async fn serve_with(
     // rmcp's sessions) before returning; cancelling twice is harmless.
     shutdown.cancel();
     // The loops return once `shutdown` is cancelled; a panic in one is logged.
-    if let Err(error) = poller.await {
-        split_event!(
-            error,
-            {},
-            { %error, },
-            "the poll loop panicked"
-        );
-    }
     if let Err(error) = announcements.await {
         split_event!(
             error,
@@ -1430,16 +1421,18 @@ mod tests {
         )
         .await
         .unwrap();
-        settings::set(
-            test.app.pool(),
-            SettingKey::FeedbackUrl,
-            "https://example.com/feedback",
-            &AuditActor::cli(),
-            chrono::Utc::now(),
-        )
-        .await
-        .unwrap();
-        test.app.poll().await.unwrap();
+        crate::invalidate::testing::applied(&test.app, async {
+            settings::set(
+                test.app.pool(),
+                SettingKey::FeedbackUrl,
+                "https://example.com/feedback",
+                &AuditActor::cli(),
+                chrono::Utc::now(),
+            )
+            .await
+            .unwrap();
+        })
+        .await;
         let (_, _, after) = get_brand().await;
 
         assert_eq!(status, StatusCode::OK);

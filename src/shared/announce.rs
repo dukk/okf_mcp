@@ -12,13 +12,14 @@
 //!   repair commits, the writer publishes `<catalog id> <generation>`; every
 //!   instance's subscriber refreshes that catalog's snapshot
 //!   ([`App::apply_catalog_announcement`]), so other replicas normally pick
-//!   the write up well before their poll. Best effort: the writer does not
+//!   the write up well before `catalog_ttl`. Best effort: the writer does not
 //!   wait for the publish or for anyone's refresh, so this is prompt
 //!   eventual consistency, not read-your-writes.
 //!
 //! Messages are not stored: one sent while an instance is not subscribed is
 //! lost. So each subscriber catches up once after every (re)subscribe, and
-//! the poll loop stays as the backstop. Both subscribers share one loop
+//! the change feed and the cache TTLs (`catalog_ttl`, `credential_ttl`)
+//! stay as the backstop. Both subscribers share one loop
 //! (`run`): the same reconnect, backoff and grace, with a `Handler`
 //! saying what a message and a resubscribe do.
 
@@ -83,7 +84,8 @@ pub async fn publish_bridge(redis: Redis) {
 }
 
 /// Publishes a catalog's new generation (issue #659). A failure is counted
-/// and logged; the poll loop covers a lost announcement.
+/// and logged; the change feed's `catalog` message (and, failing both,
+/// `catalog_ttl`) covers a lost announcement.
 ///
 /// # Arguments
 /// * `redis` - the shared Redis (owned: [`App::announce_catalog`] runs this
@@ -178,7 +180,7 @@ pub async fn announce_from_cli(
         // only the kind is logged: the rest adds nothing a log reader needs.
         Err(error) => tracing::warn!(
             kind = error.kind(),
-            "announcement skipped; serving instances notice the change within poll_interval"
+            "announcement skipped; serving instances notice the change through the change feed"
         ),
     }
 }
@@ -582,7 +584,6 @@ mod catch_up_tests {
         let a = first.app.clone();
         let b = second;
         let key = crate::mcp::testing::staff_root(&first).await;
-        a.poll().await.expect("A's poll");
         // How many announcements B applied: only the subscriber below
         // applies one.
         let before = b.m16_announcements.load(Ordering::Relaxed);
@@ -596,7 +597,6 @@ mod catch_up_tests {
         crate::store::keys::revoke_by_id(a.pool(), &id, &AuditActor::cli(), chrono::Utc::now())
             .await
             .expect("revoke");
-        a.poll().await.expect("A's poll");
 
         let holder = b.clone();
         let source = Outage {
@@ -652,7 +652,6 @@ mod catch_up_tests {
         let a = first.app.clone();
         let b = second;
         let key = crate::mcp::testing::staff_root(&first).await;
-        a.poll().await.expect("A's poll");
         assert!(b.find_key(&key).await.unwrap().is_some(), "B holds the key");
 
         let id = a
@@ -667,7 +666,6 @@ mod catch_up_tests {
             .expect("revoke");
         // Heard by nobody: B runs no change-feed listener (a lib test) and
         // has no subscription yet.
-        a.poll().await.expect("A's poll");
         assert!(
             b.find_key(&key).await.unwrap().is_some(),
             "B has not heard of it"

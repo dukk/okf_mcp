@@ -1333,7 +1333,6 @@ mod publish_tests {
     use crate::store::{catalogs, history};
     use crate::telemetry::subscriber::capture::{SeenSpan, SeenValue, SpanRecorder};
     use crate::write::{apply, WriteReport};
-    use tracing::Instrument;
 
     const NOTE: &str = "---\ntype: Note\ntitle: A\ndescription: A note.\n---\n# A\n";
     const X: &str = "---\ntype: Note\ntitle: X\ndescription: X.\n---\n# X\n";
@@ -1432,35 +1431,6 @@ mod publish_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn each_poll_tick_is_its_own_trace() {
-        let (test, _registry) = pg_with_metrics().await;
-        let recorder = SpanRecorder::new();
-
-        // Each pass runs inside a caller span: the pass must still be a root.
-        // The caller span is attached with `instrument`, so no entered guard
-        // is held across an await.
-        // The span is made inside the subscribed future, so it is a real one.
-        // The span is made inside the recorded future, so it is a real one.
-        recorder.run(async {
-            async {
-                test.app.poll().await.unwrap();
-                test.app.poll().await.unwrap();
-            }
-            .instrument(tracing::info_span!("caller"))
-            .await;
-        });
-
-        let spans = recorder.finished();
-        let polls: Vec<_> = spans
-            .iter()
-            .filter(|span| span.name == "okf.poll")
-            .collect();
-        assert_eq!(polls.len(), 2);
-        // A root has no parent, so each pass starts a trace of its own.
-        assert!(polls.iter().all(|span| span.parent.is_none()));
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
     async fn open_changesets_gauge() {
         let (test, registry) = pg_with_metrics().await;
         let first = writer(&test, "writer-a", "pg").await;
@@ -1490,28 +1460,27 @@ mod publish_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_poll_counts_the_key_reload() {
+    async fn a_settings_message_counts_the_settings_load() {
         let (test, registry) = pg_with_metrics().await;
-        // A key change moves `admin_generation`, so the poll reloads the cache.
-        let mut conn = test.app.pool().acquire().await.unwrap();
-        crate::invalidate::invalidate(
-            &mut conn,
-            &[crate::invalidate::Invalidation::credential("some-key")],
-        )
-        .await
-        .unwrap();
-        drop(conn);
-
-        test.app.poll().await.unwrap();
-        test.app.poll().await.unwrap();
+        // A settings write moves `admin_generation`, so its message's check
+        // loads the settings.
+        crate::invalidate::testing::applied(&test.app, async {
+            crate::store::settings::set(
+                test.app.pool(),
+                crate::store::settings::SettingKey::MaxKeysPerUser,
+                "5",
+                &crate::store::audit::AuditActor::cli(),
+                chrono::Utc::now(),
+            )
+            .await
+            .unwrap();
+        })
+        .await;
 
         let text = render(&registry);
-        // Catalogs are not polled (M18 Task 8): no refresh is counted.
+        // No poll (M18 Task 16), and catalogs were never polled (Task 8).
+        assert!(!text.contains("okf_poll_duration_seconds"), "{text}");
         assert!(!text.contains("okf_catalog_refreshes_total"), "{text}");
-        assert!(
-            text.contains(r#"okf_poll_duration_seconds_count{outcome="ok"} 2"#),
-            "{text}"
-        );
         assert!(
             text.contains(r#"okf_keycache_reloads_total{outcome="ok"} 1"#),
             "{text}"
