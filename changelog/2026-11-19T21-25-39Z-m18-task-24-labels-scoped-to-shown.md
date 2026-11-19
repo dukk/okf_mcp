@@ -43,8 +43,8 @@ same maps 1,000 times. Found by the review bot on milestone PR #747.
   take the check of `GET /users` and `GET /teams` (any admin), which
   already answer every user's and team's label; anyone else gets only its
   own user and teams, as its `/labels` page did. A catalog-scoped admin's
-  key drawer now shows a user's label rather than the slug (two keys
-  journeys updated).
+  keys table and key drawer now show a user's label rather than the slug
+  (three keys journeys updated).
 - Not changed: `GET /users` and `GET /teams` remain whole admin listings,
   and the shell still follows every `/whoami` and `/labels` page; each page
   is now bounded by the page size.
