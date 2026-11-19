@@ -38,6 +38,9 @@ request reads or returns the whole ceiling now.
 - The console reads a member's levels from `whoami`'s `levels`; My keys and
   My grants read the cap notes' ceiling from their own answers.
 - `ceiling::ceiling_of` is test-only.
+- New key's picker lowers a ticked catalog's chosen level when the ceiling
+  has lowered it since (the map and the select stay in step), so Create
+  never sends a level the ceiling no longer allows (review of PR #743).
 
 ## Notes
 

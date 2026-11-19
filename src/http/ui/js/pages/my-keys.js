@@ -173,8 +173,14 @@ function newKey(main, account, reload) {
         const box = h('input', { type: 'checkbox', name: 'catalog', value: catalog, checked: chosen.has(catalog) });
         const level = h('select', { name: `level-${catalog}`, 'aria-label': `Access to ${catalogLabel(catalog)}` },
             levelsUpTo(access).map(option => h('option', { value: option }, option)));
-        // A level chosen earlier, if this page still allows it.
-        if (chosen.has(catalog) && levelsUpTo(access).includes(chosen.get(catalog))) level.value = chosen.get(catalog);
+        // A level chosen earlier. One the ceiling no longer allows (lowered
+        // since it was ticked) is lowered to the most it allows now, in
+        // `chosen` too, so Create sends what the select shows; the draw
+        // below shows the change in the summary.
+        if (chosen.has(catalog)) {
+            if (!levelsUpTo(access).includes(chosen.get(catalog))) chosen.set(catalog, access);
+            level.value = chosen.get(catalog);
+        }
         const update = () => {
             if (box.checked) chosen.set(catalog, level.value);
             else chosen.delete(catalog);
@@ -190,6 +196,8 @@ function newKey(main, account, reload) {
         fill(rows, entries.length
             ? entries.map(row)
             : h('p', { class: 'muted' }, prefix ? `No catalog of yours starts with ${prefix}.` : 'Your account reaches no catalog yet.'));
+        // `row` may have lowered a chosen level to the ceiling's now.
+        showChosen();
     } });
     const key = 'my-key:create';
     const submit = guard(h('button', { type: 'submit', id: 'my-key-create' }, 'Create key'), key);

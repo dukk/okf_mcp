@@ -842,3 +842,74 @@ async fn a_member_picks_key_catalogs_across_finds() {
     );
     assert_eq!(key.default_catalog.as_deref(), Some("c00140"));
 }
+
+/// Review of PR #743: a catalog ticked at write, whose ceiling is lowered
+/// to read while another Find is shown, comes back under its own Find at
+/// read in the select and in what Create sends: the key is created at
+/// read (no 422), without retoggling the checkbox.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_ticked_catalog_lowered_meanwhile_is_created_at_its_new_level() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    seed_alices_catalogs(&server, 3).await;
+    let pool = server.db.pool.clone();
+    let app = Arc::clone(&server.app);
+    // The journey runs on a blocking thread; this handle lets it run the
+    // admin's change on the test's runtime mid-session.
+    let runtime = tokio::runtime::Handle::current();
+    let ran = drive(console_base(&server), move |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.open("/my-keys");
+        ui.wait_text("#my-keys-note", "0 of 20");
+        ui.click("#my-key-new");
+        ui.wait_visible("#my-key-form input[name=catalog][value=main]");
+        ui.fill("#my-key-form input[name=name]", "lowered");
+        ui.click("#my-key-form input[name=catalog][value=main]");
+        ui.select("#my-key-form select[name=level-main]", "write");
+        ui.wait_text("#my-key-chosen", "(write)");
+        ui.fill("#my-key-ceiling-find", "c0");
+        ui.wait_visible("#my-key-form input[name=catalog][value=c00001]");
+        // An admin lowers main to read while another Find is shown.
+        runtime.block_on(async {
+            crate::support::server::applied(&app, async {
+                ceiling::entitle(
+                    &pool,
+                    &NewEntitlement {
+                        user: "alice",
+                        catalog: "main",
+                        access: Access::Read,
+                    },
+                    &AuditActor::cli(),
+                    Utc::now(),
+                )
+                .await
+                .expect("lower main to read");
+            })
+            .await;
+        });
+        ui.fill("#my-key-ceiling-find", "ma");
+        ui.wait_visible("#my-key-form input[name=catalog][value=main]:checked");
+        assert_eq!(
+            ui.eval(
+                "() => [...document.querySelectorAll('#my-key-form select[name=level-main] option')] \
+                 .map(option => option.value)",
+                json!(null)
+            ),
+            json!(["read"])
+        );
+        ui.wait_text("#my-key-chosen", "(read)");
+        ui.click("#my-key-form button[type=submit]");
+        ui.wait_visible("#my-key-secret");
+        ui.click("#my-key-secret-done");
+        ui.wait_text("[data-test=my-key-lowered]", "lowered");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let key = key_named(&server, "lowered").await.expect("the key exists");
+    assert_eq!(
+        key.catalog_access,
+        [("main".to_string(), Access::Read)].into_iter().collect()
+    );
+}
