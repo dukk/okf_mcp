@@ -421,6 +421,16 @@ pub fn router(app: Arc<App>, shutdown: &CancellationToken) -> Router {
         // routes (`keyed`) take only a bearer credential.
         .nest("/api/v1", api::routes(&app))
         .merge(keyed)
+        // Every route's own writes reach this replica's caches before it
+        // answers (read-your-writes on the writing replica, M18 Task 8): the
+        // API, the archive routes, the console's sign-in and account forms,
+        // the OAuth pages and MCP. In process only; a write made on a task
+        // the handler spawned is not collected, and the change feed
+        // delivers it a moment later.
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&app),
+            api::apply_own_writes,
+        ))
         // One `info` line per response (status, latency) in a span naming the
         // method and the matched route. The span records no headers, so a
         // bearer key never reaches the log; no query, so neither does an

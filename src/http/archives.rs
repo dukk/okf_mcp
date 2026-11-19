@@ -564,6 +564,17 @@ async fn import_catalog(
         // Committed: tell the other replicas, on its own task (issue #659).
         if let Some(change) = report.changed {
             app.announce_catalog(change);
+            // This replica's own write, applied before the answer (in
+            // process, no I/O): the directory drops its row behind the new
+            // generation, so the next read loads the import even when the
+            // catalog is not cached (one remembered as broken at the old
+            // generation included). The change feed delivers the same
+            // message later; applying it twice is harmless.
+            app.apply_own_writes(&[crate::invalidate::Invalidation::Catalog {
+                id: change.catalog_id,
+                generation: change.generation,
+            }])
+            .await;
             let caught_up = app
                 .catalog_cache()
                 .catch_up(change.catalog_id, change.generation, app.rebuild_locks())
@@ -932,6 +943,54 @@ mod tests {
         let current = state.current();
         assert_eq!(current.generation(), loaded_at + 1);
         assert_eq!(current.files(), 1);
+    }
+
+    /// A catalog remembered as broken at its generation, repaired by a
+    /// replacing import through this route, is readable on this replica at
+    /// once: no listener runs in a unit test, and the route's router here
+    /// has no other layer, so only the route's own write can tell the
+    /// directory.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_broken_catalog_repaired_by_an_import_is_readable_at_once() {
+        use crate::okf::workspace::Workspace as _;
+        let test = app_with(&[("pg", &[])], Config::default()).await;
+        let id = test.app.catalog_row("pg").await.unwrap().expect("pg").id;
+        // A row no workspace accepts, at a new generation.
+        sqlx::query(
+            "INSERT INTO documents (catalog_id, path, content, executable, revision, \
+                                    updated_at, updated_by) \
+             VALUES ($1, '../escape.md', '', false, 1, now(), 'test')",
+        )
+        .bind(id)
+        .execute(test.app.pool())
+        .await
+        .unwrap();
+        sqlx::query("UPDATE catalogs SET generation = generation + 1 WHERE id = $1")
+            .bind(id)
+            .execute(test.app.pool())
+            .await
+            .unwrap();
+        test.app.catch_up_catalogs().await;
+        // Its cold load fails and is remembered as broken at that generation.
+        assert!(test.app.catalog("pg").await.unwrap().is_none());
+
+        let request = Request::post("/catalogs/pg/import?replace=true")
+            .body(Body::from(tarball()))
+            .expect("request");
+        let (status, _) =
+            status_and_json(router(&test, admin()).oneshot(request).await.unwrap()).await;
+        let state = test.app.catalog("pg").await.unwrap();
+
+        assert_eq!(status, StatusCode::OK);
+        let state = state.expect("readable at once");
+        assert_eq!(
+            state
+                .current()
+                .workspace()
+                .read_to_string("index.md")
+                .unwrap(),
+            "# Index\n"
+        );
     }
 
     /// An admin's import into `test`'s `pg`, with `query` ("" or "?...").

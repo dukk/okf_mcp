@@ -18,11 +18,12 @@ Issue #686, part of epic #678 (milestone 18, bounded memory). Spec
   re-weighs the entry, so a catalog that grows past the budget is dropped.
 - A negative cache of `(id, generation)` pairs whose stored data does not
   build: that generation is built once, not on every request.
-- The weight estimate: `Loaded::stored_bytes() * 10`. The factor was
-  measured with a counting allocator in `tests/snapshot_weight.rs`
-  (ignored by default): 9.13 and 9.03 resident bytes per stored byte for
-  synthetic catalogs of 500 and 5,000 documents, rounded up to 10. Method
-  and numbers are in spec Decision 2.
+- The weight estimate: 1 KiB per catalog, plus 1 KiB per file, plus 8
+  bytes per stored byte of content, measured with a counting allocator in
+  `tests/snapshot_weight.rs` (ignored by default) on synthetic catalogs of
+  500 and 5,000 documents and of 1 and 5,000 empty documents. Method and
+  numbers are in spec Decision 2. An empty catalog, or one of many empty
+  files, is charged for its files (review of PR #714).
 - `catalogs::row_by_id`, the directory row of one incarnation by id
   (`resolve_changeset` uses it instead of scanning the map).
 - `App::catalog_row`, `App::catalog_state`, `App::listed_state`,
@@ -65,8 +66,9 @@ Issue #686, part of epic #678 (milestone 18, bounded memory). Spec
 - Multi-replica test servers also set `catalog_ttl` to one hour.
 - A publish has the cache re-weigh its catalog on every outcome, including
   a refusal after its preliminary refresh (review of PR #714).
-- `/api/v1` writes are read-your-writes on the replica that made them: the
-  routes collect the invalidations their writes queued
+- HTTP writes are read-your-writes on the replica that made them (every
+  route, through a layer on the top-level router; the archive import also
+  applies its own `catalog` invalidation itself): the routes collect the invalidations their writes queued
   (`invalidate::capturing`) and drop the affected directory rows before
   answering (`App::apply_own_writes`), instead of waiting for the change
   feed. The operations guide's recovery text now describes the change feed

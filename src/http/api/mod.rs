@@ -96,13 +96,6 @@ pub(crate) fn routes(app: &Arc<App>) -> Router<Arc<App>> {
         .merge(crate::http::oidc::api_routes())
         // `route_layer` covers the routes merged above and runs only when one
         // matched, so an unknown API path stays 404 rather than 401.
-        // Innermost, around the handler only: the directory reflects the
-        // request's own writes before it answers (read-your-writes on this
-        // replica, M18 Task 8).
-        .route_layer(middleware::from_fn_with_state(
-            Arc::clone(app),
-            apply_own_writes,
-        ))
         .route_layer(middleware::from_fn(provisioner_gate))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(app),
@@ -130,7 +123,7 @@ pub(crate) fn routes(app: &Arc<App>) -> Router<Arc<App>> {
 /// # Returns
 /// The handler's response, unchanged.
 #[tracing::instrument(level = "trace", skip_all)]
-async fn apply_own_writes(
+pub(crate) async fn apply_own_writes(
     axum::extract::State(app): axum::extract::State<Arc<App>>,
     request: Request,
     next: Next,
