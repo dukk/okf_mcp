@@ -348,9 +348,16 @@ label and becomes one cluster total.
 - `mail.worker` is deprecated: it parses, logs a warning, and is ignored.
   Every `serve` runs one apalis worker for `send_mail` and
   `housekeeping`. Tests disable it with a constructor flag, not config.
-- The worker's dedicated pool shrinks from 4 connections to 2, shared by
-  both queues. `docs/operations.md` gives the Postgres connection total
-  for N replicas: `N × (database_max_connections + 2)`.
+- The worker's dedicated pool shrinks from 4 connections to 3, shared by
+  both queues: mail's `LISTEN`, mail's fetch, ack, heartbeat and handler
+  writes, and housekeeping's fetch, ack and heartbeat (housekeeping polls
+  without `LISTEN`).
+- The invalidation listener (Decision 10) holds one connection for the
+  life of the process, from its own one-connection pool rather than the
+  main pool, so it never takes a request slot.
+- `docs/operations.md` gives the Postgres connection total per replica as
+  `database_max_connections` + 1 (listener) + 3 (worker), and for N
+  replicas `N × (database_max_connections + 4)`.
 - Orphan recovery: heartbeat 10s, 6 missed heartbeats, so a dead pod's
   job returns after about 1 minute. Documented, with the `sending` state
   it implies for mail.

@@ -151,7 +151,7 @@
 | `src/mcp/*.rs`, `src/mcp/maintenance/*.rs`, `src/http/api/browse.rs` | 7 (`.await`s) |
 | `src/overlay.rs` | 9 |
 | `src/http/api/{catalogs,identity,labels,search}.rs`, `src/mcp/catalogs.rs` | 10 |
-| `src/http/console/**` (catalog list views) | 10 |
+| `src/http/ui/js/**` (console views that list catalogs) | 10 |
 | `src/auth.rs` | 11 (`Keys`/`KeyCache` replaced), 12 |
 | `src/http/console_session.rs`, `src/oauth/{access,token,authorize}.rs` | 11 |
 | `src/http/api/{audit,people}.rs`, `src/http/archives.rs`, `src/labels/directory.rs` | 12 |
@@ -461,7 +461,7 @@ pub async fn apply_reconnect(&self) {
 
 - [ ] **Step 4: Metrics** (`src/telemetry/metrics.rs`): `okf.invalidations.sent{kind}` and `okf.invalidations.received{kind}` (counters), `okf.invalidations.unreadable` (counter), `okf.invalidations.lag` (seconds histogram, send to apply; a negative lag from clock skew records 0). Add the new families to `Metrics::FAMILIES`.
 
-- [ ] **Step 5: Spawn the listener** in `serve` (`src/http/mod.rs`, next to the M16 subscriber at `:660`), and await it in the shutdown sequence like the others. It opens one connection from the pool (`PgListener::connect_with(&pool)`), so `docs/operations.md`'s connection count grows by one in Task 17.
+- [ ] **Step 5: Spawn the listener** in `serve` (`src/http/mod.rs`, next to the M16 subscriber at `:660`), and await it in the shutdown sequence like the others. It holds its connection for the life of the process, so it gets its own one-connection pool (`PgPoolOptions::new().max_connections(1)`, same URL and options as the main pool) and `PgListener::connect_with(&listener_pool)`. sqlx's `connect_with` keeps a connection from the pool it is given, so using the main pool would take one request slot away for good. The pool also gives the listener its reconnects. `docs/operations.md`'s per-replica count grows by one in Task 17 (spec Decision 17).
 
 - [ ] **Step 6: Run** `tools/agentic/gate.sh narrow invalidate` and `gate.sh narrow app::tests::a_` — expected PASS. Then the full gates.
 
@@ -877,7 +877,7 @@ Publish (`src/store/publish.rs:303`) and HTTP import (`src/http/archives.rs:576`
 
 Runs before Task 8 and removes every enumeration of the catalog map from the listing paths, so Task 8 can delete the map. Summary fields come from the `CatalogRow` (description, owner, label); the snapshot fields (`files`, `concepts`, `last_change`) of the page being returned come from today's `App::catalog(name)`, one per listed catalog, which Task 8 replaces with `catalog_state`. Callers that still need the map after this task: the per-catalog gauges and `/healthz` (Task 8 removes them) and tests.
 
-**Files:** Modify `src/http/api/catalogs.rs`, `src/http/api/identity.rs`, `src/http/api/labels.rs`, `src/http/api/search.rs`, `src/mcp/catalogs.rs`, `src/mcp/changesets.rs`, `src/mcp/context.rs` (`ToolContext::catalogs()` loses its listing callers), `src/config.rs`, the console views that list catalogs (find them with `grep -rn "api/v1/catalogs\|catalogs\"" src/http/console`), `docs/reference/` (Task 17 finishes the prose).
+**Files:** Modify `src/http/api/catalogs.rs`, `src/http/api/identity.rs`, `src/http/api/labels.rs`, `src/http/api/search.rs`, `src/mcp/catalogs.rs`, `src/mcp/changesets.rs`, `src/mcp/context.rs` (`ToolContext::catalogs()` loses its listing callers), `src/config.rs`, the console views that list catalogs (find them with `grep -rnE "api\.get\('/catalogs'|/catalogs\?" src/http/ui/js`; for example `src/http/ui/js/components/unlock.js:77`), `docs/reference/` (Task 17 finishes the prose).
 
 - [ ] **Step 1: One helper** (`src/cache/directory.rs`):
 
@@ -1135,7 +1135,7 @@ async fn run(job: Housekeeping, context: Data<HousekeepingContext>) -> Result<()
   - a "Caches" section: each cache, its setting, what bounds it, its metrics, and how to size `catalog_cache_bytes` from `okf.cache.bytes` and hit ratios;
   - "Change propagation": the change feed, the 10 s TTL bound, what a listener reconnect does;
   - replace "Pruning" with "Housekeeping": the five tasks, cadences, one run per slot, `okf.housekeeping.runs`;
-  - "Postgres connections": per replica `database_max_connections` + 1 (listener) + 3 (worker pool); total for N replicas;
+  - "Postgres connections": per replica `database_max_connections` (requests) + 1 (the invalidation listener's own pool) + 3 (the worker pool); total for N replicas `N × (database_max_connections + 4)`, as in spec Decision 17;
   - the mail worker: every replica, at-least-once delivery, orphan recovery about 1 minute, `worker_shutdown_grace` matched to `terminationGracePeriodSeconds`;
   - optional ingress hashing on `Mcp-Session-Id` (nginx `hash $http_mcp_session_id consistent;`), what it buys, and that nothing depends on it;
   - Grafana notes: database-wide gauges with `max()`, the removed per-catalog series and their replacements.
