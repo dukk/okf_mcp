@@ -178,11 +178,15 @@ follows the cursor. This is a response shape change and is called out in
 the release notes.
 
 > **Corrected (issue #745, 2026-11-19).** Task 21 (issue #736) extends the
-> paging to the pages that showed a user's whole ceiling: `GET /me`,
-> `GET /session` and the consent page read one page of it (by name prefix
-> and `after`, at most `limit`) and carry `next`. A client that read the
-> whole ceiling from one answer must follow `next`. Listings leave out
-> catalogs that do not build.
+> paging to the pages that showed a user's whole ceiling. `GET /me` drops
+> `ceiling` for `ceiling_access` (the highest level, or `null`) and carries
+> no `next`; `GET /session` drops it and has no paging. The new
+> `GET /me/ceiling?prefix=&after=&limit=` answers `{ceiling, next}`: the
+> catalogs whose names start with `prefix`, in byte order, at most `limit`
+> (`ceiling::page`). `GET /whoami` gains `levels`, and the consent page
+> shows one page at a time (Find, Next catalogs). A client that read the
+> whole ceiling from `/me` must page `/me/ceiling` and follow `next`.
+> Listings leave out catalogs that do not build.
 
 ### 8. Search fan-out is capped
 
@@ -238,10 +242,11 @@ expiry is still checked on every request.
 > A user's ceiling grew with the catalogs their teams own, so it is
 > resolved per catalog from the directory row (owner team, member access,
 > entitlements) when a request needs it, and a session's reach is
-> `Reach::Ceiling`. The pages that listed a whole ceiling (`GET /me`,
-> `GET /session`, the consent page) read one page of it instead, and the
-> response shapes changed: they return a page with `next` (`?after=&limit=`).
-> Listings (`GET /catalogs`, `/whoami`, `/labels`, MCP `list_catalogs`)
+> `Reach::Ceiling`. The pages that listed a whole ceiling no longer do
+> (issue #736): `GET /me` returns `ceiling_access` instead, `GET /session`
+> drops the ceiling, `GET /me/ceiling?prefix=&after=&limit=` pages it
+> (`{ceiling, next}`) and the consent page shows one page at a time (see
+> Decision 7). Listings (`GET /catalogs`, `/whoami`, `/labels`, MCP `list_catalogs`)
 > page the same way (Decision 7).
 
 ### 10. Invalidations are sent by the transaction that makes the change
