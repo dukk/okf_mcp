@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::OkfError;
 use crate::okf::analysis::links::INDEX_HEADING;
-use crate::okf::markdown::{find_links, resolve_link};
+use crate::okf::markdown::{encode_link_path, find_links, resolve_link};
 use crate::okf::ops::relink::{rewrite_text, unlink_text, Redirect};
 use crate::okf::paths::{basename, is_concept};
 use crate::okf::pystr::{py_repr_str, py_strip, universal_newlines};
@@ -161,7 +161,7 @@ pub fn replay(path: &str, current: Option<&str>, ops: &[ReplayOp]) -> Result<Str
                 create_section,
             } => {
                 let base = universal_newlines(present(path, &text)?);
-                if lists_target(&no_dirs, &base, path, target) {
+                if already_lists(&no_dirs, &base, path, target) {
                     None
                 } else {
                     let section = section.as_deref();
@@ -247,6 +247,62 @@ pub(crate) fn lists_target(
             resolved.path == target
                 || target.strip_suffix("/index.md") == Some(resolved.path.as_str())
         })
+}
+
+/// Does `text` hold a bullet that lists `target` in the raw form older
+/// versions wrote (issue #453): the path as written, unencoded, such as
+/// `[A](a b.md)`, `[A](a).md)` or `[A](a:b.md)`? No parser reads such a
+/// destination back as `target` ([`lists_target`] cannot see it), so
+/// without this check `index` appended a second, working bullet beside it.
+///
+/// Only a name that [`encode_link_path`] would change can have a raw form
+/// that differs from the written one; for any other name this is `false`
+/// (the ordinary check already sees its link).
+///
+/// # Arguments
+/// * `text` - an `index.md`, with universal newlines.
+/// * `index` - its catalog-relative path; the raw destination is the
+///   target relative to its folder, or `/`-absolute.
+/// * `target` - the catalog-relative path listed.
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) fn lists_raw_target(text: &str, index: &str, target: &str) -> bool {
+    let folder = crate::okf::paths::dirname(index);
+    let relative = if folder.is_empty() {
+        Some(target)
+    } else {
+        target
+            .strip_prefix(folder)
+            .and_then(|rest| rest.strip_prefix('/'))
+    };
+    let mut raws: Vec<String> = relative.into_iter().map(str::to_string).collect();
+    raws.push(format!("/{target}"));
+    raws.iter()
+        .filter(|raw| encode_link_path(raw) != raw.as_str())
+        .any(|raw| {
+            text.split('\n').any(|line| {
+                is_bullet(line)
+                    && (line.contains(&format!("]({raw})")) || line.contains(&format!("]({raw}#")))
+            })
+        })
+}
+
+/// [`lists_target`], or [`lists_raw_target`]: does `text` list `target` in
+/// any form, working or an older raw one? What `index`, `repair_indexes` and
+/// replay use to decide that a concept is already listed.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "one-line delegation to instrumented functions"
+    )
+)]
+pub(crate) fn already_lists(
+    workspace: &dyn Workspace,
+    text: &str,
+    index: &str,
+    target: &str,
+) -> bool {
+    lists_target(workspace, text, index, target) || lists_raw_target(text, index, target)
 }
 
 /// The line of `text` (an `index.md` at `index`) that lists `target`: the
