@@ -672,6 +672,53 @@ async fn an_unlock_and_its_end_invalidate_the_unlocked_admin() {
     assert_eq!(ended, [Invalidation::user(&staff)]);
 }
 
+/// Ending an unlock whose admin was deleted (`unlocks.user_id` is then
+/// NULL): it reaches nobody, so it sends nothing and leaves
+/// `admin_generation` alone, but the unlock still ends.
+#[tokio::test(flavor = "multi_thread")]
+async fn ending_an_unlock_of_a_deleted_user_sends_nothing_and_does_not_bump() {
+    let db = test_db().await;
+    catalog(&db.pool, "main").await;
+    user(&db.pool, "staff").await;
+    let on = AdminChange {
+        on: true,
+        allow_last: true,
+    };
+    users::set_admin(&db.pool, "staff", on, &cli(), now())
+        .await
+        .unwrap();
+    let policy = UnlockPolicy {
+        max_hours: 4,
+        notify_owners: false,
+    };
+    let new = NewUnlock {
+        catalog: "main",
+        user: "staff",
+        category: Category::Support,
+        reason: "ticket 12",
+        hours: 1,
+    };
+    let id = unlocks::create(&db.pool, &new, &policy, &cli(), now())
+        .await
+        .unwrap()
+        .id;
+    users::delete(&db.pool, "staff", DeleteOptions::OPERATOR, &cli(), now())
+        .await
+        .unwrap();
+    let before = catalogs::admin_generation(&db.pool).await.unwrap();
+
+    let got = invalidations_of(&db.pool, async {
+        unlocks::end(&db.pool, id, &cli(), now()).await.unwrap();
+    })
+    .await;
+
+    assert_eq!(got, []);
+    assert_eq!(catalogs::admin_generation(&db.pool).await.unwrap(), before);
+    let ended = unlocks::find(&db.pool, id).await.unwrap();
+    assert!(ended.ended_at.is_some(), "the unlock ended");
+    assert_eq!(ended.user, None, "its user was deleted");
+}
+
 // ---- teams ----
 
 #[tokio::test(flavor = "multi_thread")]
