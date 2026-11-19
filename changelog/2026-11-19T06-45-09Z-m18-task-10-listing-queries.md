@@ -15,8 +15,8 @@ spec Decisions 7 and 8.
 - `?after=&limit=` and a `next` field (absent on the last page) on `GET /api/v1/catalogs`,
   `GET /api/v1/whoami` and `GET /api/v1/labels`; an `after` argument and a `next` field on
   MCP `list_catalogs`.
-- `search_fanout_max` (default 25): `GET /api/v1/search` without `catalogs` refuses, with a
-  400, a credential that reaches more catalogs than that.
+- `search_fanout_max` (default 25, from 1 to 999): `GET /api/v1/search` without `catalogs`
+  refuses, with a 400, a credential that reaches more catalogs than that.
 - `changesets::open_for_catalogs`: `list_changesets` without `catalog` reads the open
   changesets of the catalogs it names (all of them for a key that reaches every catalog) in
   one query, then keeps each row only if the connection offers its catalog, it is not
@@ -52,6 +52,9 @@ spec Decisions 7 and 8.
 
 ## Notes
 
+- `list_changesets` without `catalog` now also lists the changesets of a catalog this replica
+  has not loaded yet; each still passes the same reach, suspension and incarnation-bound
+  admission checks.
 - `limit` and `after` apply to granted keys too, not only to keys that reach every catalog,
   so `?limit=` means the same for everyone (plan corrected).
 - The fan-out cap counts the catalogs a credential reaches, not those open to it now, so

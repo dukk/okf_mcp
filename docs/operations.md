@@ -131,7 +131,7 @@ unknown keys are ignored, so one file serves every version.
 | `mail.worker` | none | Deprecated and ignored: every `serve` runs the mail worker, and logs a warning if the key is present. The workers share one pool of up to 3 connections per process, on top of `database_max_connections` |
 | `catalog_directory_entries` | `100000` | The most catalog rows the catalog directory keeps in memory, by name. It answers "does this catalog exist, and who owns it" without loading content |
 | `catalog_ttl` | `"10s"` | How long the directory serves a catalog row before reading it again. A change drops the row at once; this covers a change message that is lost. A name that does not exist is remembered for 5 seconds regardless |
-| `search_fanout_max` | `25` | The most catalogs `GET /api/v1/search` searches when the request names none. A credential that reaches more gets a 400 asking it to name the catalogs (`catalogs=`), so one request cannot search every catalog. MCP `search` is bounded by the connection's selection and does not use it |
+| `search_fanout_max` | `25` | The most catalogs `GET /api/v1/search` searches when the request names none, from 1 to 999. A credential that reaches more gets a 400 asking it to name the catalogs (`catalogs=`), so one request cannot search every catalog. MCP `search` is bounded by the connection's selection and does not use it |
 | `worker_shutdown_grace` | `"30s"` | How long `serve` waits, once told to stop, for the mail worker to finish the mail in hand. Set the pod's `terminationGracePeriodSeconds` a few seconds above it |
 | `mail.smtp.host`, `mail.smtp.port`, `mail.smtp.starttls`, `mail.smtp.username`, `mail.smtp.password_env` | none, `587`, `true`, none, none | The SMTP relay. `starttls = true` requires STARTTLS; `false` is TLS from the first byte (port 465); there is no plain-text mode. `username` and `password_env` (the environment variable holding the password) go together |
 | `mail.postmark.token_env`, `mail.postmark.message_stream` | none, `"outbound"` | Postmark's server token (by environment variable) and message stream |
@@ -158,7 +158,7 @@ unknown keys are ignored, so one file serves every version.
 
 The server refuses to start (and every subcommand refuses to run) with a zero
 `poll_interval`, `session_idle_timeout`, `worker_shutdown_grace`,
-`database_max_connections`, `overlay_cache_size`, `catalog_directory_entries`, `catalog_ttl` or `search_fanout_max`, an empty `allowed_hosts` or a blank
+`database_max_connections`, `overlay_cache_size`, `catalog_directory_entries` or `catalog_ttl`, a `search_fanout_max` outside 1 to 999, an empty `allowed_hosts` or a blank
 entry in it, or a `time_server` that is blank or has surrounding whitespace.
 `maintenance_review_intervals` also rejects invalid catalog names, malformed
 durations, durations below 86,400 seconds and durations beyond the supported

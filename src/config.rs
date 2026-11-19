@@ -949,8 +949,8 @@ pub struct Config {
     #[serde(with = "humantime_serde")]
     pub catalog_ttl: Duration,
     /// The most catalogs `GET /api/v1/search` searches when the request
-    /// names none (`25`): a key that reaches more must name them, so one
-    /// request cannot search every catalog in the system.
+    /// names none (`25`, from 1 to 999): a key that reaches more must name
+    /// them, so one request cannot search every catalog in the system.
     pub search_fanout_max: u32,
     /// The externally visible origin (`"https://okf.example.com"`). Setting
     /// it turns OAuth on: it is the issuer, and `<public_url>/mcp` is the
@@ -1140,8 +1140,12 @@ impl Config {
         if self.catalog_ttl.is_zero() {
             return Err("catalog_ttl must be more than zero".to_string());
         }
-        if self.search_fanout_max == 0 {
-            return Err("search_fanout_max must be more than zero".to_string());
+        // The cap is checked with one listing page of `search_fanout_max + 1`
+        // rows, and a page holds at most `MAX_PAGE` (1000).
+        if self.search_fanout_max == 0
+            || self.search_fanout_max >= crate::cache::directory::MAX_PAGE
+        {
+            return Err("search_fanout_max must be from 1 to 999".to_string());
         }
         if self.allowed_hosts.is_empty() {
             return Err(
@@ -1619,6 +1623,10 @@ mod tests {
             ),
             ("catalog_ttl = \"0s\"\n", "catalog_ttl"),
             ("search_fanout_max = 0\n", "search_fanout_max"),
+            (
+                "search_fanout_max = 1000\n",
+                "search_fanout_max must be from 1 to 999",
+            ),
             (
                 "allowed_hosts = [\"\"]\n",
                 "allowed_hosts has a blank entry",
