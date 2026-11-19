@@ -537,8 +537,11 @@ where
             .filter(|(key, entry)| predicate(key, &entry.value))
             .map(|(key, _)| (*key).clone())
             .collect();
+        // Through `invalidate`, so each removed key's epoch moves too: a
+        // revalidation or reweigh that registered after the fence moved above
+        // but read the entry before this removal is overtaken by it.
         for key in selected {
-            self.cache.invalidate(&key).await;
+            self.invalidate(&key).await;
         }
     }
 
@@ -828,6 +831,51 @@ mod tests {
             .expect("the load finishes");
         assert_eq!(served.unwrap(), 5);
         assert_eq!(cache.peek(&1).await, None, "the fenced load is not kept");
+    }
+
+    #[tokio::test]
+    async fn a_revalidation_registered_after_the_fence_cannot_keep_a_removed_entry() {
+        use std::cell::{Cell, RefCell};
+        use std::task::{Context, Poll, Waker};
+
+        let cache = Bounded::<i64, i64>::new(CacheName::Credential, Limit::Entries(10), TTL);
+        cache.get_or_load(1, || async { Ok(1) }).await.unwrap();
+        cache.mark_all_stale();
+        let (release, wait) = oneshot::channel::<()>();
+        let revalidation = RefCell::new(Box::pin(cache.get_or_revalidate(
+            1,
+            || async { Ok(9) },
+            |_| async {
+                wait.await.ok();
+                Ok(None)
+            },
+        )));
+        let started = Cell::new(false);
+        // The predicate runs after the fence moved and before the removal:
+        // start the revalidation there, so it registers under the new fence,
+        // reads the old entry and parks in `check`.
+        cache
+            .invalidate_where(|_, _| {
+                if !started.replace(true) {
+                    let mut context = Context::from_waker(Waker::noop());
+                    let polled = revalidation.borrow_mut().as_mut().poll(&mut context);
+                    assert!(matches!(polled, Poll::Pending), "parked in check");
+                    assert_eq!(cache.tracked_epochs(), 1, "registered before the removal");
+                }
+                true
+            })
+            .await;
+        release.send(()).ok();
+        let served = timeout(BOUND, revalidation.into_inner())
+            .await
+            .expect("the revalidation finishes")
+            .unwrap();
+        assert_eq!(served, 1, "the caller still gets what the check kept");
+        assert_eq!(
+            cache.peek(&1).await,
+            None,
+            "but the removed entry stays removed"
+        );
     }
 
     #[tokio::test]
