@@ -8,7 +8,8 @@ use sqlx::{PgConnection, PgPool};
 
 use crate::error::OkfError;
 use crate::store::audit::{self, Action, AuditActor, Entry, Target};
-use crate::store::catalogs::{self, bump_admin_generation, is_unique_violation};
+use crate::invalidate::{invalidate, Invalidation};
+use crate::store::catalogs::{self, is_unique_violation};
 use crate::store::users;
 
 /// What a key may do. Each level includes the ones before it, so the
@@ -472,7 +473,7 @@ pub async fn create_provisioner(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::credential(&id)]).await?;
     tx.commit().await?;
     Ok(CreatedKey { id, key })
 }
@@ -531,7 +532,7 @@ pub async fn create_with_id(
     lock_new_key(&mut tx, new, audit, audit::RowLock::KeyShare).await?;
     let created = insert_key(&mut tx, new, now).await?;
     record_created(&mut tx, &created.id, new, audit, now).await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::credential(&created.id)]).await?;
     tx.commit().await?;
     Ok(created)
 }
@@ -731,7 +732,7 @@ pub async fn create_self_issued(
     }
     let created = insert_key(&mut tx, new, now).await?;
     record_created(&mut tx, &created.id, new, audit, now).await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::credential(&created.id)]).await?;
     tx.commit().await?;
     Ok(created)
 }
@@ -1118,7 +1119,7 @@ async fn set_maintenance_report_with(
             now,
         )
         .await?;
-        bump_admin_generation(&mut tx).await?;
+        invalidate(&mut tx, &[Invalidation::credential(&id)]).await?;
     } else {
         // `resolve_active` accepts an exact generated id even if revoked.
         let active: bool = sqlx::query_scalar(
@@ -1234,7 +1235,7 @@ async fn record_revocation(
         }
     };
     record_change(conn, id, action, audit, details, now).await?;
-    bump_admin_generation(conn).await?;
+    invalidate(conn, &[Invalidation::credential(id)]).await?;
     Ok(())
 }
 
@@ -1499,7 +1500,7 @@ async fn grant_with(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::credential(&id)]).await?;
     tx.commit().await?;
     Ok(id)
 }
@@ -1620,7 +1621,7 @@ async fn ungrant_with(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::credential(&id)]).await?;
     tx.commit().await?;
     Ok(id)
 }
@@ -1769,7 +1770,7 @@ async fn set_user(
         now,
     )
     .await?;
-    bump_admin_generation(conn).await?;
+    invalidate(conn, &[Invalidation::credential(id)]).await?;
     Ok(Some(name))
 }
 

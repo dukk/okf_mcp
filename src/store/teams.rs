@@ -13,7 +13,8 @@ use sqlx::{PgConnection, PgPool};
 use crate::error::OkfError;
 use crate::labels::DisplayName;
 use crate::store::audit::{self, Action, AuditActor, Entry, People, RowLock, Target};
-use crate::store::catalogs::{bump_admin_generation, is_valid_name};
+use crate::invalidate::{invalidate, Invalidation};
+use crate::store::catalogs::is_valid_name;
 use crate::store::users;
 
 /// A member's role in a team.
@@ -289,7 +290,7 @@ pub async fn create(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::team(&team_id)]).await?;
     tx.commit().await?;
     Ok(TeamRecord {
         name: new.name.to_string(),
@@ -512,7 +513,11 @@ pub async fn set_member(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(
+        &mut tx,
+        &[Invalidation::team(&locked.id), Invalidation::user(&user_id)],
+    )
+    .await?;
     tx.commit().await?;
     Ok(change)
 }
@@ -582,7 +587,11 @@ pub async fn remove_member(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(
+        &mut tx,
+        &[Invalidation::team(&locked.id), Invalidation::user(&user_id)],
+    )
+    .await?;
     tx.commit().await?;
     Ok(())
 }
@@ -712,7 +721,7 @@ pub async fn set_display_name(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::team(&team_id)]).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -782,7 +791,7 @@ pub async fn delete(
         .bind(&locked.id)
         .execute(&mut *tx)
         .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::team(&locked.id)]).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -894,7 +903,8 @@ pub async fn suspend(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    let invalidations = suspension_invalidations(&mut tx, &locked.id).await?;
+    invalidate(&mut tx, &invalidations).await?;
     tx.commit().await?;
     find(pool, name).await
 }
@@ -953,7 +963,8 @@ pub async fn unsuspend(
             now,
         )
         .await?;
-        bump_admin_generation(&mut tx).await?;
+        let invalidations = suspension_invalidations(&mut tx, &locked.id).await?;
+        invalidate(&mut tx, &invalidations).await?;
     }
     tx.commit().await?;
     find(pool, name).await
@@ -1099,6 +1110,39 @@ async fn refuse_last_owner(
         });
     }
     Ok(())
+}
+
+/// What a suspension or its lifting changes: the team, and each catalog
+/// it owns (a suspended team's catalogs refuse their members). Read inside
+/// the change's transaction, under the team's lock: a catalog moved to the
+/// team meanwhile waits on that lock, and its own `set_owner` invalidates it.
+///
+/// # Arguments
+/// * `conn` - the change's transaction.
+/// * `team_id` - the team's id.
+///
+/// # Returns
+/// The team's invalidation, then one per owned catalog, by id.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.suspension_invalidations"))]
+async fn suspension_invalidations(
+    conn: &mut PgConnection,
+    team_id: &str,
+) -> Result<Vec<Invalidation>, OkfError> {
+    let owned: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id, name FROM catalogs WHERE owner_team_id = $1 ORDER BY id")
+            .bind(team_id)
+            .fetch_all(&mut *conn)
+            .await?;
+    Ok(std::iter::once(Invalidation::team(team_id))
+        .chain(
+            owned
+                .into_iter()
+                .map(|(id, name)| Invalidation::CatalogMeta { id, name }),
+        )
+        .collect())
 }
 
 /// The id of the team called `name`, inside a caller's transaction.

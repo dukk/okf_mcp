@@ -1528,7 +1528,12 @@ mod publish_tests {
             .unwrap();
         // A key change moves `admin_generation`, so the poll reloads the cache.
         let mut conn = test.app.pool().acquire().await.unwrap();
-        catalogs::bump_admin_generation(&mut conn).await.unwrap();
+        crate::invalidate::invalidate(
+            &mut conn,
+            &[crate::invalidate::Invalidation::credential("some-key")],
+        )
+        .await
+        .unwrap();
         drop(conn);
 
         test.app.poll().await.unwrap();

@@ -90,9 +90,9 @@ pub(crate) async fn insert_grant(
     .execute(&mut *tx)
     .await
     .expect("grant the test grant its catalogs");
-    crate::store::catalogs::bump_admin_generation(&mut tx)
+    crate::invalidate::invalidate(&mut tx, &[crate::invalidate::Invalidation::credential(&id)])
         .await
-        .expect("bump the generation");
+        .expect("invalidate the test grant");
     tx.commit().await.expect("commit");
     id
 }

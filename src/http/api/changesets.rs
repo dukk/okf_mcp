@@ -846,13 +846,19 @@ mod tests {
         let opted_out = open_as(&test, &runner, "systems/delta.md").await;
         require_unlock(&test).await;
         let mut tx = test.app.pool().begin().await.expect("begin");
-        sqlx::query("UPDATE catalogs SET maintenance = false WHERE name = 'main'")
-            .execute(&mut *tx)
+        let id: i64 = sqlx::query_scalar(
+            "UPDATE catalogs SET maintenance = false WHERE name = 'main' RETURNING id",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .expect("turn maintenance off");
+        let main = crate::invalidate::Invalidation::CatalogMeta {
+            id,
+            name: "main".to_owned(),
+        };
+        crate::invalidate::invalidate(&mut tx, &[main])
             .await
-            .expect("turn maintenance off");
-        crate::store::catalogs::bump_admin_generation(&mut tx)
-            .await
-            .expect("bump");
+            .expect("invalidate");
         tx.commit().await.expect("commit");
         test.app.poll().await.expect("poll");
         let tool = |secret: &str, handle: &str| {

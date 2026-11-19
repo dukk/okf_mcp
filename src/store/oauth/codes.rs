@@ -14,7 +14,7 @@ use sqlx::PgPool;
 use crate::error::OkfError;
 use crate::keys::{self, SIGN_IN_CODE_PREFIX};
 use crate::store::audit::{self, Action, AuditActor, Entry, Target};
-use crate::store::catalogs::bump_admin_generation;
+use crate::invalidate::{invalidate, Invalidation};
 use crate::store::keys::{is_valid_name, resolve_grants, Access, Grants};
 use crate::store::oauth::clients::{ClientKind, ClientRecord};
 use crate::store::users;
@@ -671,7 +671,7 @@ pub async fn redeem(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::credential(&grant_id)]).await?;
     tx.commit().await?;
     Ok(grant_id)
 }

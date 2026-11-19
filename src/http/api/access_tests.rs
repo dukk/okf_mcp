@@ -851,11 +851,16 @@ async fn the_maintenance_runner_reads_without_an_unlock_until_the_catalog_opts_o
     let (writer_reads, _) = send(&test, "GET", tree, Some(&writing_runner), None).await;
     let writer_opens = open_main(&staff_context(&test, &writing_runner)).await;
     let mut tx = test.app.pool().begin().await.unwrap();
-    sqlx::query("UPDATE catalogs SET maintenance = false WHERE name = 'main'")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    catalogs::bump_admin_generation(&mut tx).await.unwrap();
+    let id: i64 =
+        sqlx::query_scalar("UPDATE catalogs SET maintenance = false WHERE name = 'main' RETURNING id")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+    let main = crate::invalidate::Invalidation::CatalogMeta {
+        id,
+        name: "main".to_owned(),
+    };
+    crate::invalidate::invalidate(&mut tx, &[main]).await.unwrap();
     tx.commit().await.unwrap();
     test.app.poll().await.unwrap();
     let (opted_out, refused) = send(&test, "GET", tree, Some(&runner), None).await;
