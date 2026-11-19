@@ -127,6 +127,13 @@ pub struct App {
     // instead of checking again, so during a database outage one failing
     // check serves every request that queued behind it.
     settings_rounds: AtomicU64,
+    // How many times the settings were marked stale, and how many marks
+    // there had been when the last finished check began. A waiter shares a
+    // finished check only when no mark has landed since it began: a newer
+    // invalidation needs a check of its own, while the mark a failed check
+    // restored for its retry does not.
+    settings_marks: AtomicU64,
+    checked_marks: AtomicU64,
     // Test counters: how many settings checks, and how many
     // `settings::load`s, ran after start-up.
     #[cfg(test)]
@@ -349,6 +356,8 @@ impl App {
             settings_stale: AtomicBool::new(false),
             settings_reload: tokio::sync::Mutex::new(()),
             settings_rounds: AtomicU64::new(0),
+            settings_marks: AtomicU64::new(0),
+            checked_marks: AtomicU64::new(0),
             #[cfg(test)]
             settings_checks: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
@@ -697,8 +706,9 @@ impl App {
     /// backstop for a lost `Settings` message). The check reads
     /// `admin_generation` and reloads the settings only if it moved.
     /// Callers that find them expired together run one check: the rest wait
-    /// for it and take its result, a failed one included (unless they were
-    /// marked stale after it began). A failed check keeps serving the loaded
+    /// for it and take its result, a failed one included, whatever made it
+    /// run (unless the settings were marked stale again after it began). A
+    /// request that arrives after a failed check runs a check of its own. A failed check keeps serving the loaded
     /// settings, logs at `warn` and leaves them expired, so the next request
     /// tries again.
     ///
@@ -720,10 +730,16 @@ impl App {
         // That check failed: take its answer rather than queue another
         // failing one, unless a mark landed after it began.
         let checked_meanwhile = self.settings_rounds.load(Ordering::Acquire) != round;
-        if checked_meanwhile && !self.settings_stale.load(Ordering::Acquire) {
+        let marked_since = self.settings_marks.load(Ordering::Acquire)
+            != self.checked_marks.load(Ordering::Acquire);
+        if checked_meanwhile && !marked_since {
             return self.settings();
         }
+        // Read before the check clears the flag: a mark that lands after
+        // this counts as newer than the check.
+        let marks = self.settings_marks.load(Ordering::Acquire);
         self.revalidate_settings().await;
+        self.checked_marks.store(marks, Ordering::Release);
         self.settings_rounds.fetch_add(1, Ordering::Release);
         self.settings()
     }
@@ -732,8 +748,17 @@ impl App {
     /// message, a reconnect, an M16 announcement and a poll pass do.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn reload_settings(&self) {
-        self.settings_stale.store(true, Ordering::Release);
+        self.mark_settings_stale();
         self.fresh_settings().await;
+    }
+
+    /// Marks the settings for a check before their next use, whatever their
+    /// age. The count goes first, so a check that clears the flag after
+    /// this has already counted the mark as newer than itself.
+    #[tracing::instrument(level = "trace", skip_all)]
+    fn mark_settings_stale(&self) {
+        self.settings_marks.fetch_add(1, Ordering::AcqRel);
+        self.settings_stale.store(true, Ordering::Release);
     }
 
     /// The loaded settings if they are neither marked stale nor older than
@@ -2757,23 +2782,23 @@ mod tests {
         );
     }
 
-    /// With the database gone, callers that queued behind one failing check
-    /// take its answer (the loaded settings) instead of each running its
-    /// own, one after another.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn concurrent_requests_share_one_failed_check() {
-        let db = test_db().await;
-        let (app, clock) = app_with_movable_clock(&db.pool).await;
-        clock.advance(app.config().credential_ttl + Duration::from_secs(1));
+    /// Ten callers queued behind the check's lock with the database gone,
+    /// after `mark` (nothing, for an expired TTL; a stale mark, as a poll,
+    /// reconnect or `Settings` message makes). Returns how many checks the
+    /// ten ran and what they got, then how many a later request ran.
+    async fn queued_behind_a_failed_check(
+        app: &Arc<App>,
+        mark: impl FnOnce(&App),
+    ) -> (usize, Vec<u32>, usize) {
         // The app's pool, closed: every check fails at once.
         app.pool().close().await;
+        mark(app);
         let checks_before = app.settings_checks.load(Ordering::Relaxed);
-
         // Hold the check's lock so all ten queue behind it first.
         let held = app.settings_reload.lock().await;
         let mut calls = tokio::task::JoinSet::new();
         for _ in 0..10 {
-            let app = Arc::clone(&app);
+            let app = Arc::clone(app);
             calls.spawn(async move { app.fresh_settings().await.max_keys_per_user });
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -2781,13 +2806,67 @@ mod tests {
         let seen = tokio::time::timeout(Duration::from_secs(30), calls.join_all())
             .await
             .expect("ten settings checks within 30 s");
+        let queued = app.settings_checks.load(Ordering::Relaxed) - checks_before;
+        app.fresh_settings().await;
+        let later = app.settings_checks.load(Ordering::Relaxed) - checks_before - queued;
+        (queued, seen, later)
+    }
+
+    /// With the database gone, callers that queued behind one failing check
+    /// take its answer (the loaded settings) instead of each running their
+    /// own, one after another; a request after it still retries.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_requests_share_one_failed_check() {
+        let db = test_db().await;
+        let (app, clock) = app_with_movable_clock(&db.pool).await;
+        clock.advance(app.config().credential_ttl + Duration::from_secs(1));
+
+        let (queued, seen, later) = queued_behind_a_failed_check(&app, |_| {}).await;
 
         assert_eq!(seen, [20; 10], "the loaded settings serve");
-        assert_eq!(
-            app.settings_checks.load(Ordering::Relaxed) - checks_before,
-            1,
-            "one failing check for all ten"
-        );
+        assert_eq!(queued, 1, "one failing check for all ten");
+        assert_eq!(later, 1, "a later request checks again");
+    }
+
+    /// The same when a stale mark started the check: the mark its failure
+    /// restores for the retry is not a newer one, so it is still shared.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_requests_share_one_failed_check_after_a_stale_mark() {
+        let db = test_db().await;
+        let (app, _clock) = app_with_movable_clock(&db.pool).await;
+
+        let (queued, seen, later) =
+            queued_behind_a_failed_check(&app, |app| app.mark_settings_stale()).await;
+
+        assert_eq!(seen, [20; 10], "the loaded settings serve");
+        assert_eq!(queued, 1, "one failing check for all ten");
+        assert_eq!(later, 1, "a later request checks again");
+    }
+
+    /// A mark that lands while a check runs is newer than that check: a
+    /// caller waiting behind it runs its own.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_mark_during_a_check_gets_a_check_of_its_own() {
+        let db = test_db().await;
+        let (app, _clock) = app_with_movable_clock(&db.pool).await;
+        set_setting(&db.pool, settings::SettingKey::MaxKeysPerUser, "5").await;
+        app.mark_settings_stale();
+        // Stands in for a check that began before the mark: the lock held,
+        // the round finished and the marks it saw recorded as of before.
+        let held = app.settings_reload.lock().await;
+        let waiter = {
+            let app = Arc::clone(&app);
+            tokio::spawn(async move { app.fresh_settings().await.max_keys_per_user })
+        };
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        app.settings_rounds.fetch_add(1, Ordering::Release);
+        drop(held);
+        let seen = tokio::time::timeout(Duration::from_secs(30), waiter)
+            .await
+            .expect("the waiter within 30 s")
+            .expect("the waiter's task");
+
+        assert_eq!(seen, 5, "the waiter checked for its own mark");
     }
 
     /// A check that finds `admin_generation` unmoved loads nothing; one
@@ -2802,7 +2881,7 @@ mod tests {
 
         set_setting(&db.pool, settings::SettingKey::MaxKeysPerUser, "5").await;
         let fresh_and_unmarked = app.fresh_settings().await.max_keys_per_user;
-        app.settings_stale.store(true, Ordering::Release);
+        app.mark_settings_stale();
         let marked = app.fresh_settings().await.max_keys_per_user;
 
         assert_eq!(unmoved, 0, "an unmoved counter loads nothing");
