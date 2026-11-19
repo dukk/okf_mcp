@@ -540,9 +540,10 @@ impl Metrics {
     }
 
     /// Registers the catalog gauges: `okf.catalog.concepts` and
-    /// `okf.catalog.generation`, one series per loaded catalog. Each callback holds only a [`Weak`] handle, so the
-    /// meter provider (which outlives the app) keeps no strong cycle, and
-    /// reads what `app` already holds: a scrape never queries Postgres.
+    /// `okf.catalog.generation`, one series per loaded catalog. Each
+    /// callback holds only a [`Weak`] handle, so the meter provider (which
+    /// outlives the app) keeps no strong cycle, and reads what `app` already
+    /// holds: a scrape never queries Postgres.
     ///
     /// # Arguments
     /// * `app` - the app to read; a callback finding it dropped reports
