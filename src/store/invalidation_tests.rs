@@ -622,7 +622,7 @@ async fn deleting_a_user_invalidates_it_its_credentials_and_its_teams() {
             .unwrap();
     })
     .await;
-    let mut teams = vec![personal, staff_id];
+    let mut teams = [personal, staff_id];
     teams.sort();
     let expected: Vec<Invalidation> = [Invalidation::user(&alice), credential(&laptop)]
         .into_iter()
