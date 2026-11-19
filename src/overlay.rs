@@ -306,6 +306,8 @@ impl Overlays {
     ///
     /// # Arguments
     /// * `pool` - where to read the entries.
+    /// * `rebuilds` - the rebuild locks (`App::rebuild_locks`), for the
+    ///   refresh of a snapshot behind the entries.
     /// * `state` - the changeset's catalog.
     /// * `changeset` - an open changeset, as just read.
     ///
@@ -318,6 +320,7 @@ impl Overlays {
     pub async fn get(
         &self,
         pool: &PgPool,
+        rebuilds: &KeyedLocks,
         state: &CatalogState,
         changeset: &ChangesetRow,
     ) -> Result<Arc<Overlay>, OkfError> {
@@ -355,7 +358,7 @@ impl Overlays {
         let bases = entries
             .iter()
             .map(|entry| (entry.path.as_str(), entry.base_revision));
-        let base = state.current_covering(pool, bases).await?;
+        let base = state.current_covering(pool, rebuilds, bases).await?;
         let overlay = Arc::new(build_overlay(base, changeset, entries).await?);
         self.store(Arc::clone(&overlay), now);
         Ok(overlay)
@@ -628,6 +631,7 @@ mod tests {
         let state = test.app.catalog("pg").unwrap();
         let pool = test.app.pool();
         let overlays = test.app.overlays();
+        let rebuilds = test.app.rebuild_locks();
         let edit = |text: &'static str| PendingEdit {
             path: "a.md",
             text: Some(text),
@@ -636,10 +640,19 @@ mod tests {
         let handle = open(&ctx).await;
         let first_row = pending_entry(&test, &handle, &edit("# One\n")).await;
 
-        let first = overlays.get(pool, &state, &first_row).await.unwrap();
-        let again = overlays.get(pool, &state, &first_row).await.unwrap();
+        let first = overlays
+            .get(pool, rebuilds, &state, &first_row)
+            .await
+            .unwrap();
+        let again = overlays
+            .get(pool, rebuilds, &state, &first_row)
+            .await
+            .unwrap();
         let second_row = pending_entry(&test, &handle, &edit("# Two\n")).await;
-        let after_edit = overlays.get(pool, &state, &second_row).await.unwrap();
+        let after_edit = overlays
+            .get(pool, rebuilds, &state, &second_row)
+            .await
+            .unwrap();
         let options = ImportOptions {
             replace: true,
             scope: ImportScope::Everything,
@@ -651,10 +664,16 @@ mod tests {
         };
         let republished = files(&[("a.md", "# A\n"), ("b.md", "# B\n")]);
         import(pool, "pg", republished, &options).await.unwrap();
-        state.refresh(pool).await.unwrap();
-        let after_import = overlays.get(pool, &state, &second_row).await.unwrap();
+        state.refresh(pool, rebuilds).await.unwrap();
+        let after_import = overlays
+            .get(pool, rebuilds, &state, &second_row)
+            .await
+            .unwrap();
         overlays.forget(second_row.id);
-        let after_forget = overlays.get(pool, &state, &second_row).await.unwrap();
+        let after_forget = overlays
+            .get(pool, rebuilds, &state, &second_row)
+            .await
+            .unwrap();
 
         assert!(
             Arc::ptr_eq(&first, &again),
@@ -789,7 +808,10 @@ mod tests {
                 let (app, row) = (Arc::clone(&test.app), Arc::clone(&row));
                 tokio::spawn(async move {
                     let state = app.catalog("pg").unwrap();
-                    app.overlays().get(app.pool(), &state, &row).await.unwrap()
+                    app.overlays()
+                        .get(app.pool(), app.rebuild_locks(), &state, &row)
+                        .await
+                        .unwrap()
                 })
             })
             .collect();
@@ -841,7 +863,9 @@ mod tests {
             let (app, row) = (Arc::clone(&test.app), Arc::clone(&row));
             tokio::spawn(async move {
                 let state = app.catalog("pg").unwrap();
-                app.overlays().get(app.pool(), &state, &row).await
+                app.overlays()
+                    .get(app.pool(), app.rebuild_locks(), &state, &row)
+                    .await
             })
         };
         // Wait until the read holds the build lock (its entry exists).

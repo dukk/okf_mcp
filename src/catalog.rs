@@ -14,6 +14,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::error::OkfError;
+use crate::keyed_lock::KeyedLocks;
 use crate::okf::analysis::lint::{lint, CommitTimes, LintReport};
 use crate::okf::snapshot::Snapshot;
 use crate::okf::workspace::{MemWorkspace, StoredFile};
@@ -169,17 +170,10 @@ pub struct CatalogState {
     // or built. It is `std`'s lock, not tokio's: it is never held across an
     // `.await`, so it never blocks an async thread for longer than that copy.
     current: RwLock<Arc<Loaded>>,
-    // Held for the length of one rebuild, so refreshes of this catalog build
-    // one at a time instead of each building the same snapshot. tokio's
-    // `Mutex`, unlike `std`'s, may be held across an `.await`: waiting for it
-    // suspends the task instead of blocking the thread.
-    rebuilding: tokio::sync::Mutex<()>,
-    // The in-process half of the publish lock (design "Publish"): one
-    // publish of this catalog at a time in this server, held through the
-    // snapshot refresh after commit, so the next publish checks against the
-    // new snapshot. The other half is the advisory lock in the publish
-    // transaction, which also serializes against a CLI import.
-    publishing: tokio::sync::Mutex<()>,
+    // No mutex lives here (spec M18 Decision 4): the rebuild lock and the
+    // in-process half of the publish lock are keyed by catalog id on `App`
+    // (`App::rebuild_locks`, `App::publish_lock`), so two states of one
+    // catalog (an entry evicted and loaded again) still share them.
 }
 
 impl CatalogState {
@@ -208,8 +202,6 @@ impl CatalogState {
             // `Some(Arc<str>)`, leaving `None` alone.
             owner_team: RwLock::new(catalog.owner_team.map(Arc::from)),
             current: RwLock::new(Arc::new(loaded)),
-            rebuilding: tokio::sync::Mutex::new(()),
-            publishing: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -305,31 +297,18 @@ impl CatalogState {
         Arc::clone(&self.current.read().expect("catalog state lock poisoned"))
     }
 
-    /// The in-process publish lock (design "Publish"). `store::publish`
-    /// holds it for a whole publish, refresh included.
-    ///
-    /// # Returns
-    /// The mutex; lock it with `.lock().await`.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    pub fn publish_lock(&self) -> &tokio::sync::Mutex<()> {
-        &self.publishing
-    }
-
     /// Rebuilds and swaps in the snapshot if the catalog changed since it was
     /// loaded.
     ///
     /// Concurrent refreshes of one catalog are safe and build at most once
     /// per change: a refresh that waited for another's rebuild returns `false`
-    /// if that rebuild already reached the generation it saw.
+    /// if that rebuild already reached the generation it saw. Rebuilds of one
+    /// catalog run one at a time under its key in `rebuilds`, which every
+    /// state of the catalog shares.
     ///
     /// # Arguments
     /// * `pool` - the database.
+    /// * `rebuilds` - the rebuild locks, by catalog id (`App::rebuild_locks`).
     ///
     /// # Returns
     /// Whether a new snapshot was swapped in.
@@ -338,9 +317,9 @@ impl CatalogState {
     /// [`OkfError::CatalogNotSelected`] if the catalog was deleted;
     /// [`OkfError::Database`]; a workspace error as for [`CatalogState::load`].
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn refresh(&self, pool: &PgPool) -> Result<bool, OkfError> {
+    pub async fn refresh(&self, pool: &PgPool, rebuilds: &KeyedLocks) -> Result<bool, OkfError> {
         let generation = self.generation_in(pool).await?;
-        self.refresh_to(generation, || build(pool, self.id, &self.name))
+        self.refresh_to(rebuilds, generation, || build(pool, self.id, &self.name))
             .await
     }
 
@@ -357,6 +336,7 @@ impl CatalogState {
     ///
     /// # Arguments
     /// * `pool` - the database.
+    /// * `rebuilds` - the rebuild locks, by catalog id (`App::rebuild_locks`).
     /// * `bases` - each entry's normalized path and base revision.
     ///
     /// # Returns
@@ -370,6 +350,7 @@ impl CatalogState {
     pub async fn current_covering<'a>(
         &self,
         pool: &PgPool,
+        rebuilds: &KeyedLocks,
         bases: impl IntoIterator<Item = (&'a str, Option<i32>)>,
     ) -> Result<Arc<Loaded>, OkfError> {
         let loaded = self.current();
@@ -382,7 +363,7 @@ impl CatalogState {
         if !behind {
             return Ok(loaded);
         }
-        self.refresh(pool).await?;
+        self.refresh(pool, rebuilds).await?;
         Ok(self.current())
     }
 
@@ -394,6 +375,7 @@ impl CatalogState {
     ///
     /// # Arguments
     /// * `conn` - the lock holder's transaction (`&mut tx`).
+    /// * `rebuilds` - the rebuild locks, by catalog id (`App::rebuild_locks`).
     ///
     /// # Returns
     /// Whether a new snapshot was swapped in.
@@ -401,10 +383,14 @@ impl CatalogState {
     /// # Errors
     /// As [`CatalogState::refresh`].
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn refresh_locked(&self, conn: &mut PgConnection) -> Result<bool, OkfError> {
+    pub(crate) async fn refresh_locked(
+        &self,
+        conn: &mut PgConnection,
+        rebuilds: &KeyedLocks,
+    ) -> Result<bool, OkfError> {
         let generation = self.generation_in(&mut *conn).await?;
         let id = self.id;
-        self.refresh_to(generation, || async move {
+        self.refresh_to(rebuilds, generation, || async move {
             let rows = documents::published(&mut *conn, id).await?;
             assemble(generation, rows).await
         })
@@ -432,6 +418,8 @@ impl CatalogState {
     /// reached `generation` (before or after waiting for another rebuild).
     ///
     /// # Arguments
+    /// * `rebuilds` - the rebuild locks; this catalog's id is held for the
+    ///   rebuild.
     /// * `generation` - the database's generation, as just read.
     /// * `load` - builds the snapshot; called at most once.
     ///
@@ -443,7 +431,12 @@ impl CatalogState {
     // `F: FnOnce() -> Fut` with `Fut: Future`: `load` is an async closure,
     // like passing a coroutine function in Python, called only if needed.
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn refresh_to<F, Fut>(&self, generation: i64, load: F) -> Result<bool, OkfError>
+    async fn refresh_to<F, Fut>(
+        &self,
+        rebuilds: &KeyedLocks,
+        generation: i64,
+        load: F,
+    ) -> Result<bool, OkfError>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<Loaded, OkfError>>,
@@ -453,13 +446,15 @@ impl CatalogState {
             return Ok(false);
         }
         // The guard (`_` prefix: kept only for its lifetime) releases the
-        // mutex when it goes out of scope at the end of the function.
-        let _rebuilding = self.rebuilding.lock().await;
+        // lock when it goes out of scope at the end of the function. Keyed
+        // by id, not held in `self`: another state of this catalog (an
+        // evicted entry still in use, and its reload) waits here too.
+        let _rebuilding = rebuilds.lock(self.id).await;
         // Another refresh may have swapped in this generation while we waited.
         if generation <= self.current().generation {
             return Ok(false);
         }
-        // Swaps happen only under `rebuilding`, so this build, which read a
+        // Swaps happen only under the rebuild lock, so this build, which read a
         // generation at least as new as `generation`, is newer than `current`.
         let loaded = load().await?;
         // A statement-long write lock, taken after the last `.await`: the
@@ -619,6 +614,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn load_records_the_description_file_count_and_last_change() {
         let db = test_db().await;
+        let rebuilds = KeyedLocks::new();
         let created = Utc.with_ymd_and_hms(2026, 11, 1, 12, 0, 0).unwrap();
         catalogs::create(
             &db.pool,
@@ -652,7 +648,7 @@ mod tests {
         let entries = files(&[("a.md", b"# A\n"), ("b.txt", b"b\n")]);
         import(&db.pool, "pg", entries, &options).await.unwrap();
 
-        empty.refresh(&db.pool).await.unwrap();
+        empty.refresh(&db.pool, &rebuilds).await.unwrap();
 
         let loaded = empty.current();
         assert_eq!(loaded.files(), 2);
@@ -702,6 +698,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn refresh_swaps_in_a_new_snapshot_only_when_the_catalog_changed() {
         let db = test_db().await;
+        let rebuilds = KeyedLocks::new();
         catalogs::create(
             &db.pool,
             &crate::store::catalogs::NewCatalog {
@@ -720,23 +717,24 @@ mod tests {
         let before = state.current();
 
         assert!(
-            !state.refresh(&db.pool).await.unwrap(),
+            !state.refresh(&db.pool, &rebuilds).await.unwrap(),
             "nothing changed yet"
         );
         import_into(&db.pool, &[("a.md", b"# New\n")], true).await;
-        assert!(state.refresh(&db.pool).await.unwrap());
+        assert!(state.refresh(&db.pool, &rebuilds).await.unwrap());
 
         let after = state.current();
         assert_eq!(after.generation(), 2);
         assert_eq!(after.snapshot().get("a.md").unwrap().text(), "# New\n");
         // A reader that took the old snapshot still sees it, whole.
         assert_eq!(before.snapshot().get("a.md").unwrap().text(), "# Old\n");
-        assert!(!state.refresh(&db.pool).await.unwrap());
+        assert!(!state.refresh(&db.pool, &rebuilds).await.unwrap());
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn concurrent_refreshes_build_and_swap_once() {
         let db = test_db().await;
+        let rebuilds = KeyedLocks::new();
         catalogs::create(
             &db.pool,
             &crate::store::catalogs::NewCatalog {
@@ -754,7 +752,10 @@ mod tests {
         import_into(&db.pool, &[("a.md", b"# New\n")], false).await;
 
         // `tokio::join!` runs both futures at once on this task.
-        let (first, second) = tokio::join!(state.refresh(&db.pool), state.refresh(&db.pool));
+        let (first, second) = tokio::join!(
+            state.refresh(&db.pool, &rebuilds),
+            state.refresh(&db.pool, &rebuilds)
+        );
 
         assert_eq!(
             [first.unwrap(), second.unwrap()]
@@ -766,9 +767,58 @@ mod tests {
         assert_eq!(state.current().generation(), 1);
     }
 
+    /// Two states of one catalog (an evicted entry still in use and its
+    /// reload, M18 Decision 4) rebuild under one lock: a refresh of either
+    /// waits while the catalog's rebuild lock is held.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn refreshes_of_two_states_share_the_rebuild_lock() {
+        use std::time::Duration;
+
+        let db = test_db().await;
+        let rebuilds = Arc::new(KeyedLocks::new());
+        catalogs::create(
+            &db.pool,
+            &crate::store::catalogs::NewCatalog {
+                name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            },
+            &crate::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        let first = CatalogState::load(&db.pool, "pg").await.unwrap();
+        let second = Arc::new(CatalogState::load(&db.pool, "pg").await.unwrap());
+        import_into(&db.pool, &[("a.md", b"# New\n")], false).await;
+        // Held as `first`'s rebuild would hold it.
+        let held = rebuilds.lock(first.id()).await;
+
+        let refreshing = {
+            let (pool, rebuilds, second) =
+                (db.pool.clone(), Arc::clone(&rebuilds), Arc::clone(&second));
+            tokio::spawn(async move { second.refresh(&pool, &rebuilds).await })
+        };
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let waited = !refreshing.is_finished();
+        drop(held);
+        let swapped = tokio::time::timeout(Duration::from_secs(30), refreshing)
+            .await
+            .expect("the refresh finishes once the lock is released")
+            .unwrap()
+            .unwrap();
+
+        assert!(waited, "the second state's refresh waited for the lock");
+        assert!(swapped);
+        assert_eq!(second.current().generation(), 1);
+        assert_eq!(first.current().generation(), 0);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_deleted_catalog_cannot_be_refreshed() {
         let db = test_db().await;
+        let rebuilds = KeyedLocks::new();
         let catalog = catalogs::create(
             &db.pool,
             &crate::store::catalogs::NewCatalog {
@@ -793,7 +843,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result = state.refresh(&db.pool).await;
+        let result = state.refresh(&db.pool, &rebuilds).await;
 
         assert_eq!(state.id(), catalog.id);
         assert!(matches!(result, Err(OkfError::CatalogNotSelected { .. })));
