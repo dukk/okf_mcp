@@ -266,7 +266,10 @@ impl App {
         // `if let Some(name) = ...`: Python's `if (name := ...) is not None`.
         // One directory read, not a load: the catalog loads when first used.
         if let Some(name) = &config.default_catalog {
-            if directory.resolve(name).await?.is_none() {
+            // Boxed: the directory's lookup is a deep future (moka's single
+            // flight), and inlining it here pushed rustc's layout query past
+            // its recursion limit for callers that nest this load.
+            if Box::pin(directory.resolve(name)).await?.is_none() {
                 tracing::warn!(catalog = %name, "default_catalog does not exist (yet)");
             }
         }
