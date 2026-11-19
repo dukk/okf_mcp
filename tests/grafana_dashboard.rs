@@ -171,7 +171,7 @@ fn every_histogram_has_a_heatmap_of_its_buckets() {
         .flat_map(|panel| bucket_families(panel))
         .collect();
     assert_eq!(histograms, in_heatmaps);
-    assert_eq!(in_heatmaps.len(), 8, "{in_heatmaps:?}");
+    assert_eq!(in_heatmaps.len(), 9, "{in_heatmaps:?}");
 
     // And each one also has a quantile view beside its heatmap.
     let mut quantile_expressions = Vec::new();

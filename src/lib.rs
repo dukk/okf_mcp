@@ -23,6 +23,7 @@
 pub mod app;
 pub mod archive;
 pub mod auth;
+pub mod backoff;
 pub mod cache;
 pub mod catalog;
 pub mod cli;
@@ -33,6 +34,7 @@ pub mod db;
 pub mod error;
 pub mod housekeeping;
 pub mod http;
+pub mod invalidate;
 pub mod investigator;
 pub mod keyed_lock;
 pub mod keys;

@@ -229,6 +229,11 @@ struct Instruments {
     poll_duration: Histogram<f64>,
     catalog_refreshes: Counter<u64>,
     catalog_announcements: Counter<u64>,
+    // Task 1 of milestone 18: the change feed.
+    invalidations_queued: Counter<u64>,
+    invalidations_received: Counter<u64>,
+    invalidations_unreadable: Counter<u64>,
+    invalidation_lag: Histogram<f64>,
     keycache_reloads: Counter<u64>,
     redis_errors: Counter<u64>,
     // Task 3: HTTP and MCP.
@@ -298,6 +303,10 @@ impl Metrics {
         "okf_poll_duration_seconds",
         "okf_catalog_refreshes_total",
         "okf_catalog_announcements_total",
+        "okf_invalidations_queued_total",
+        "okf_invalidations_received_total",
+        "okf_invalidations_unreadable_total",
+        "okf_invalidations_lag_seconds",
         "okf_keycache_reloads_total",
         "okf_redis_errors_total",
         "okf_auth_attempts_total",
@@ -368,6 +377,23 @@ impl Metrics {
                         "Catalog generation announcements received from Redis, by result.",
                     )
                     .build(),
+                invalidations_queued: meter
+                    .u64_counter("okf.invalidations.queued")
+                    .with_description("Change-feed messages queued in a transaction, by kind; a rollback discards them.")
+                    .build(),
+                invalidations_received: meter
+                    .u64_counter("okf.invalidations.received")
+                    .with_description("Change-feed messages received, by kind.")
+                    .build(),
+                invalidations_unreadable: meter
+                    .u64_counter("okf.invalidations.unreadable")
+                    .with_description("Change-feed payloads this build could not read.")
+                    .build(),
+                invalidation_lag: seconds_histogram(
+                    meter,
+                    "okf.invalidations.lag",
+                    "Time from a change-feed message's send to its application.",
+                ),
                 keycache_reloads: meter
                     .u64_counter("okf.keycache.reloads")
                     .with_description("Key cache and settings reloads, by outcome.")
@@ -542,6 +568,37 @@ impl Metrics {
         self.inner
             .catalog_announcements
             .add(1, &[KeyValue::new("result", result.as_str())]);
+    }
+
+    /// Counts one change-feed message queued in a transaction. The message is
+    /// delivered only if that transaction commits, so a rollback leaves this
+    /// counter ahead of `received`.
+    ///
+    /// # Arguments
+    /// * `kind` - the invalidation's kind (a fixed set, never an id).
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn invalidation_queued(&self, kind: &'static str) {
+        self.inner
+            .invalidations_queued
+            .add(1, &[KeyValue::new("kind", kind)]);
+    }
+
+    /// Counts one change-feed message received and records its lag.
+    ///
+    /// # Arguments
+    /// * `kind` - the invalidation's kind.
+    /// * `lag` - send to receipt (zero when the clocks disagree).
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn invalidation_received(&self, kind: &'static str, lag: Duration) {
+        let labels = [KeyValue::new("kind", kind)];
+        self.inner.invalidations_received.add(1, &labels);
+        self.inner.invalidation_lag.record(lag.as_secs_f64(), &[]);
+    }
+
+    /// Counts one change-feed payload that could not be read.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn invalidation_unreadable(&self) {
+        self.inner.invalidations_unreadable.add(1, &[]);
     }
 
     /// Counts one key cache and settings reload.
@@ -1364,6 +1421,9 @@ mod tests {
         metrics.poll(Outcome::Ok, elapsed);
         metrics.catalog_refresh("notes", RefreshResult::Reloaded);
         metrics.catalog_announcement(AnnouncementResult::Applied);
+        metrics.invalidation_queued("settings");
+        metrics.invalidation_received("settings", Duration::from_millis(5));
+        metrics.invalidation_unreadable();
         metrics.keycache_reload(Outcome::Ok);
         metrics.redis_error(RedisOp::Get);
         metrics.http_request("GET", "/health", 200, elapsed);

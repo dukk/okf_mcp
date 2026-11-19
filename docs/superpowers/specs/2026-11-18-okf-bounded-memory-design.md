@@ -391,7 +391,7 @@ Added, labelled by `cache` (`catalog`, `overlay`, `directory`,
 - `okf.cache.entries{cache}` and `okf.cache.bytes{cache}` (the weighed
   caches);
 - `okf.cache.load.duration{cache,outcome}` (histogram);
-- `okf.invalidations.sent{kind}`, `okf.invalidations.received{kind}`,
+- `okf.invalidations.queued{kind}`, `okf.invalidations.received{kind}`,
   and `okf.invalidations.lag` (histogram, send to apply, from a send
   timestamp in the payload);
 - `okf.housekeeping.runs{task,outcome}` and
