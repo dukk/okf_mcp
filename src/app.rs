@@ -5,7 +5,7 @@
 //! (design "Noticing changes made outside the server"), and the clock check
 //! loop and its last result (design "Time").
 
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use sqlx::PgPool;
@@ -37,6 +37,28 @@ use crate::store::settings::{self, Settings};
 use crate::store::{catalogs, unlocks};
 use crate::telemetry::metrics::{AnnouncementResult, Metrics, Outcome};
 use crate::telemetry::subscriber::split_event;
+
+/// The longest a settings check may take. A check runs before every
+/// request whose settings expired, outside the routes' own timeouts, so a
+/// blocked read (`server_state` under an exclusive lock, an unresponsive
+/// connection) must not hold requests: past this bound the check counts as
+/// failed, the loaded settings serve, and the next request retries.
+pub const SETTINGS_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The settings as last loaded, with the `admin_generation` they were
+/// checked at and when (spec Decision 9): `admin_generation` moves with
+/// every administrative change, settings writes included, so an unmoved
+/// counter means the loaded settings are still the stored ones.
+#[derive(Debug, Clone)]
+struct LoadedSettings {
+    /// The effective settings.
+    settings: Arc<Settings>,
+    /// The `admin_generation` read just before they were loaded, or at the
+    /// last check that found it unmoved.
+    generation: i64,
+    /// When the last check began, by the app's clock.
+    validated_at: chrono::DateTime<chrono::Utc>,
+}
 
 /// The state every route and tool shares. Built once by [`App::load`] and
 /// shared as an `Arc<App>`.
@@ -75,29 +97,55 @@ pub struct App {
     // Catalog snapshots by id, loaded on demand and bounded in estimated
     // bytes (M18 Decision 2).
     catalog_cache: CatalogCache,
-    // The `admin_generation` the settings were loaded at. Written only under
-    // `polling`, so `Relaxed` ordering is enough.
-    admin_generation: AtomicI64,
-    // The last `admin_generation` this instance published over Redis (or the
-    // one it started at). Tracked apart from `admin_generation` so a reload
-    // that only loaded a change (and did not announce) cannot make the next
-    // announcing reload skip it. Written only under `polling`.
-    announced_generation: AtomicI64,
     // The `admin_generation` the poll pass last marked the credential caches
     // and the catalog directory stale at (or the one this instance started
-    // at). Apart from `admin_generation`, which a change message's or an
-    // announcement's reload also advances: a change those did not carry (an
-    // older replica's, or a lost message) moves the generation with them,
-    // and the next pass must still see it. Written only under `polling`.
+    // at). The pass reads the counter itself: a change no message described
+    // (an older replica's, or a lost message) moves it, and the next pass
+    // must see it whatever reloaded meanwhile. Written only under `polling`.
     swept_generation: AtomicI64,
     // The effective sign-in policy (`[auth]` with `server_settings`
-    // overrides), reloaded whenever `admin_generation`
-    // moves. The lock is held only to clone or swap the `Arc`.
-    settings: RwLock<Arc<Settings>>,
+    // overrides), with the `admin_generation` it was checked at and when
+    // (spec Decision 9). Reloaded on a `Settings` message, and checked again
+    // by the first request after `credential_ttl` ([`App::fresh_settings`]).
+    // The lock is held only to clone or swap.
+    settings: RwLock<LoadedSettings>,
+    // Held while the settings are checked or reloaded, so callers that find
+    // them expired together run one check (tokio's `Mutex`: it is held
+    // across `.await`s).
+    settings_reload: tokio::sync::Mutex<()>,
+    // How many settings checks have finished, successful or not. A caller
+    // that waited for `settings_reload` while one finished takes its result
+    // instead of checking again, so during a database outage one failing
+    // check serves every request that queued behind it.
+    settings_rounds: AtomicU64,
+    // How many times the settings were marked stale (a `Settings` message,
+    // a reconnect, an M16 announcement, a poll pass). They stay stale, for
+    // every caller, until a check that began after the last mark succeeds:
+    // `satisfied_marks` is the count such a check saw when it began, and is
+    // written only on success, so a failed or cancelled check satisfies
+    // nothing. `checked_marks` is the count the last finished check (failed
+    // or not) saw when it began: a waiter shares a finished failed check
+    // only when no mark has landed since it began.
+    settings_marks: AtomicU64,
+    satisfied_marks: AtomicU64,
+    checked_marks: AtomicU64,
+    // Test hook: a settings check waits for this lock after it began and
+    // before it reads the database, so a test can hold a check in flight.
+    #[cfg(test)]
+    pub(crate) settings_check_hold: tokio::sync::Mutex<()>,
+    // Test counters: how many settings checks, and how many
+    // `settings::load`s, ran after start-up.
+    #[cfg(test)]
+    pub(crate) settings_checks: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    pub(crate) settings_loads: std::sync::atomic::AtomicUsize,
+    // Test counter: how many M16 announcements were applied.
+    #[cfg(test)]
+    pub(crate) m16_announcements: std::sync::atomic::AtomicUsize,
     // Held for a whole `poll` pass. Without it, two overlapping passes (the
     // loop and a test's or a later milestone's direct call) could swap older
-    // settings in after newer ones while storing the newer counter.
-    // tokio's `Mutex`: it is held across `.await`s.
+    // Held for a whole `poll` pass, so passes never overlap (tokio's
+    // `Mutex`: it is held across `.await`s).
     polling: tokio::sync::Mutex<()>,
     // The last clock check (design "Time"); `None` until the first one, and
     // always without a `time_server`. Written by the check loop only.
@@ -217,8 +265,9 @@ impl App {
         metrics: Metrics,
         redis: Option<shared::Redis>,
     ) -> Result<Arc<Self>, OkfError> {
-        // Read the counter before the settings: a change committed
-        // between them moves it again, so the next poll reloads.
+        // Read the counter before the settings: a change committed between
+        // them moves it again, so the next check reloads.
+        let validated_at = clock.now();
         let admin_generation = catalogs::admin_generation(&pool).await?;
         let settings = settings::load(&pool, &config.auth).await?;
         let labels = LabelLookup::new(
@@ -292,10 +341,25 @@ impl App {
             rebuild_locks: KeyedLocks::new(),
             directory,
             catalog_cache,
-            admin_generation: AtomicI64::new(admin_generation),
-            announced_generation: AtomicI64::new(admin_generation),
             swept_generation: AtomicI64::new(admin_generation),
-            settings: RwLock::new(Arc::new(settings)),
+            settings: RwLock::new(LoadedSettings {
+                settings: Arc::new(settings),
+                generation: admin_generation,
+                validated_at,
+            }),
+            settings_reload: tokio::sync::Mutex::new(()),
+            settings_rounds: AtomicU64::new(0),
+            settings_marks: AtomicU64::new(0),
+            satisfied_marks: AtomicU64::new(0),
+            checked_marks: AtomicU64::new(0),
+            #[cfg(test)]
+            settings_check_hold: tokio::sync::Mutex::new(()),
+            #[cfg(test)]
+            settings_checks: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            settings_loads: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            m16_announcements: std::sync::atomic::AtomicUsize::new(0),
             polling: tokio::sync::Mutex::new(()),
             clock_status: RwLock::new(None),
             oauth,
@@ -550,14 +614,16 @@ impl App {
     }
 
     /// What every principal of a request is assembled with besides its
-    /// credential and user: the `require_unlock` setting.
+    /// credential and user: the `require_unlock` setting, checked against
+    /// the database when older than `credential_ttl`
+    /// ([`App::fresh_settings`]).
     ///
     /// # Returns
     /// The view.
     #[tracing::instrument(level = "trace", skip_all)]
-    pub fn access_view(&self) -> AccessView {
+    pub async fn access_view(&self) -> AccessView {
         AccessView {
-            require_unlock: self.settings().require_unlock,
+            require_unlock: self.fresh_settings().await.require_unlock,
         }
     }
 
@@ -574,7 +640,9 @@ impl App {
     /// lookup that shared another's failed load.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn find_key(&self, presented: &str) -> Result<Option<Arc<Principal>>, OkfError> {
-        self.credentials.find(presented, &self.access_view()).await
+        self.credentials
+            .find(presented, &self.access_view().await)
+            .await
     }
 
     /// A live OAuth grant's principal ([`Credentials::find_grant`]).
@@ -590,7 +658,7 @@ impl App {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn find_grant(&self, grant_id: &str) -> Result<Option<Arc<Principal>>, OkfError> {
         self.credentials
-            .find_grant(grant_id, &self.access_view())
+            .find_grant(grant_id, &self.access_view().await)
             .await
     }
 
@@ -608,12 +676,15 @@ impl App {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn session_principal(&self, user_id: &str) -> Result<Option<Principal>, OkfError> {
         self.credentials
-            .session_principal(user_id, &self.access_view())
+            .session_principal(user_id, &self.access_view().await)
             .await
     }
 
     /// The effective sign-in policy, as of the last settings reload. Request
-    /// handlers read it here, never from `server_settings`.
+    /// handlers read it here, never from `server_settings`. Every HTTP
+    /// request calls [`App::fresh_settings`] first, so what this returns
+    /// during a request is never older than `credential_ttl` plus that
+    /// request.
     ///
     /// # Returns
     /// A shared snapshot (cheap: an `Arc` clone, one atomic increment).
@@ -625,7 +696,173 @@ impl App {
         )
     )]
     pub fn settings(&self) -> Arc<Settings> {
-        Arc::clone(&self.settings.read().expect("settings lock poisoned"))
+        Arc::clone(
+            &self
+                .settings
+                .read()
+                .expect("settings lock poisoned")
+                .settings,
+        )
+    }
+
+    /// The settings, checked against the database first when they are older
+    /// than `credential_ttl` or marked stale (spec Decision 9: the TTL
+    /// backstop for a lost `Settings` message). The check reads
+    /// `admin_generation` and reloads the settings only if it moved.
+    /// Callers that find them expired together run one check: the rest wait
+    /// for it and take its result, a failed one included, whatever made it
+    /// run (unless the settings were marked stale again after it began). A
+    /// request that arrives after a failed check runs a check of its own. A failed check keeps serving the loaded
+    /// settings, logs at `warn` and leaves them expired, so the next request
+    /// tries again.
+    ///
+    /// # Returns
+    /// The settings (an `Arc` clone).
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub async fn fresh_settings(&self) -> Arc<Settings> {
+        if let Some(settings) = self.settings_if_fresh() {
+            return settings;
+        }
+        let round = self.settings_rounds.load(Ordering::Acquire);
+        // The guard is held until it goes out of scope at the end of the
+        // function, like a Python `with` block.
+        let _reload = self.settings_reload.lock().await;
+        // Another caller may have checked them while this one waited.
+        if let Some(settings) = self.settings_if_fresh() {
+            return settings;
+        }
+        // That check failed: take its answer rather than queue another
+        // failing one, unless a mark landed after it began.
+        let checked_meanwhile = self.settings_rounds.load(Ordering::Acquire) != round;
+        let marked_since = self.settings_marks.load(Ordering::Acquire)
+            != self.checked_marks.load(Ordering::Acquire);
+        if checked_meanwhile && !marked_since {
+            return self.settings();
+        }
+        // The marks this check answers: one that lands after this read is
+        // newer than the check and stays unsatisfied. If this future is
+        // dropped (a cancelled request) before the check finishes, nothing
+        // below runs and nothing is satisfied.
+        let marks = self.settings_marks.load(Ordering::Acquire);
+        self.revalidate_settings(marks).await;
+        self.checked_marks.store(marks, Ordering::Release);
+        self.settings_rounds.fetch_add(1, Ordering::Release);
+        self.settings()
+    }
+
+    /// Marks the settings stale and checks them at once: what a `Settings`
+    /// message, a reconnect, an M16 announcement and a poll pass do.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn reload_settings(&self) {
+        self.mark_settings_stale();
+        self.fresh_settings().await;
+    }
+
+    /// Marks the settings for a check before their next use, whatever their
+    /// age: every caller from now on waits for a check that began after
+    /// this mark to succeed.
+    #[tracing::instrument(level = "trace", skip_all)]
+    fn mark_settings_stale(&self) {
+        self.settings_marks.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// The loaded settings if they are neither marked stale nor older than
+    /// `credential_ttl`. A validation time in the future (the clock stepped
+    /// back) counts as expired, so a clock change cannot keep them forever.
+    ///
+    /// # Returns
+    /// The settings, or `None` when they must be checked first.
+    #[tracing::instrument(level = "trace", skip_all)]
+    fn settings_if_fresh(&self) -> Option<Arc<Settings>> {
+        // Under the read lock: a successful check swaps the settings and
+        // satisfies its marks under the write lock, so no caller sees the
+        // marks satisfied with the settings from before.
+        let loaded = self.settings.read().expect("settings lock poisoned");
+        let unsatisfied = self.settings_marks.load(Ordering::Acquire)
+            != self.satisfied_marks.load(Ordering::Acquire);
+        if unsatisfied {
+            return None;
+        }
+        // `to_std` fails for a negative age.
+        let age = self.clock.now().signed_duration_since(loaded.validated_at);
+        let fresh = age
+            .to_std()
+            .is_ok_and(|age| age < self.config.credential_ttl);
+        fresh.then(|| Arc::clone(&loaded.settings))
+    }
+
+    /// Checks the settings against `admin_generation` and reloads them if it
+    /// moved. Called only under `settings_reload`. The counter is read
+    /// before the settings, so a change committed between the two reads
+    /// moves it again and the next check reloads. Nothing is changed until
+    /// the check succeeds, so a failed or cancelled one leaves the settings
+    /// as stale as they were.
+    ///
+    /// # Arguments
+    /// * `marks` - the stale marks counted before this check began, which a
+    ///   success satisfies.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn revalidate_settings(&self, marks: u64) {
+        #[cfg(test)]
+        self.settings_checks.fetch_add(1, Ordering::Relaxed);
+        #[cfg(test)]
+        drop(self.settings_check_hold.lock().await);
+        let checked_at = self.clock.now();
+        let loaded_generation = self
+            .settings
+            .read()
+            .expect("settings lock poisoned")
+            .generation;
+        let checking = async {
+            let generation = catalogs::admin_generation(&self.pool).await?;
+            if generation == loaded_generation {
+                return Ok(None);
+            }
+            #[cfg(test)]
+            self.settings_loads.fetch_add(1, Ordering::Relaxed);
+            // A stored setting this server cannot read is not a failure:
+            // `settings::load` falls back to the default.
+            // The span and metric keep the key cache's name
+            // (`okf.keycache.*`), which dashboards know them by.
+            let loaded = settings::load(&self.pool, &self.config.auth)
+                .instrument(tracing::info_span!("okf.keycache.reload"))
+                .await;
+            self.metrics.keycache_reload(if loaded.is_ok() {
+                Outcome::Ok
+            } else {
+                Outcome::Error
+            });
+            Ok::<_, OkfError>(Some((generation, loaded?)))
+        };
+        // A check past its bound is a failed one: dropping the future
+        // abandons its read (sqlx discards the connection), and nothing
+        // below is written, so its marks stay unsatisfied.
+        let checked = tokio::time::timeout(SETTINGS_CHECK_TIMEOUT, checking)
+            .await
+            .unwrap_or_else(|_| {
+                Err(OkfError::Busy {
+                    reason: "the settings check timed out".to_string(),
+                })
+            });
+        match checked {
+            Ok(reloaded) => {
+                let mut loaded = self.settings.write().expect("settings lock poisoned");
+                loaded.validated_at = checked_at;
+                if let Some((generation, settings)) = reloaded {
+                    loaded.generation = generation;
+                    loaded.settings = Arc::new(settings);
+                }
+                self.satisfied_marks.store(marks, Ordering::Release);
+            }
+            Err(error) => {
+                split_event!(
+                    warn,
+                    { kind = error.kind(), },
+                    { %error, },
+                    "settings check failed; serving the loaded settings until the next request retries"
+                );
+            }
+        }
     }
 
     /// Which key opened each MCP session (the `/mcp` session binding).
@@ -850,12 +1087,13 @@ impl App {
         }
     }
 
-    /// One pass of the poll loop: reloads the settings if
-    /// `admin_generation` moved. Catalogs are not polled: the change feed
-    /// refreshes a cached catalog, and every use checks its snapshot against
-    /// the directory row (M18 Task 8). Pruning and the cluster counts are
-    /// housekeeping jobs ([`crate::housekeeping`]), run once per cluster, not
-    /// per pass.
+    /// One pass of the poll loop: checks the settings, and marks every
+    /// cached credential, user, label and catalog row stale if
+    /// `admin_generation` moved since the last pass. Catalogs are not
+    /// polled: the change feed refreshes a cached catalog, and every use
+    /// checks its snapshot against the directory row (M18 Task 8). Pruning
+    /// and the cluster counts are housekeeping jobs ([`crate::housekeeping`]),
+    /// run once per cluster, not per pass.
     ///
     /// A key reload (or the `admin_generation` read before it) that fails is
     /// logged and retried at the next pass. Passes never overlap: a call
@@ -894,51 +1132,50 @@ impl App {
     )]
     async fn poll_pass(&self) -> Result<(), OkfError> {
         let _pass = self.polling.lock().await;
-        self.reload_settings_if_changed(true).await;
-        // `admin_generation` moved since the last pass's sweep, whoever
-        // reloaded it (this pass, a change message, an announcement): a
-        // change no message described may be among those, so every cached
-        // credential, user and catalog row is reread on its next use (and with
-        // a row, its catalog's snapshot is checked). The
-        // poll loop's backstop, until it is removed (Task 16).
-        let loaded = self.admin_generation.load(Ordering::Relaxed);
-        if loaded != self.swept_generation.load(Ordering::Relaxed) {
-            self.credentials.mark_all_stale();
-            self.labels.mark_all_stale();
-            self.directory.mark_all_stale().await;
-            self.swept_generation.store(loaded, Ordering::Relaxed);
+        self.reload_settings().await;
+        match catalogs::admin_generation(&self.pool).await {
+            Ok(generation) => {
+                // `admin_generation` moved since the last pass's sweep: a
+                // change no message described may be among those, so every
+                // cached credential, user, label and catalog row is reread on
+                // its next use (and with a row, its catalog's snapshot is
+                // checked). The poll loop's backstop, until it is removed
+                // (Task 16).
+                if generation != self.swept_generation.load(Ordering::Relaxed) {
+                    self.credentials.mark_all_stale();
+                    self.labels.mark_all_stale();
+                    self.directory.mark_all_stale().await;
+                    self.swept_generation.store(generation, Ordering::Relaxed);
+                }
+            }
+            Err(error) => {
+                split_event!(
+                    error,
+                    { kind = error.kind(), },
+                    { %error, },
+                    "reading admin_generation failed; retrying at the next poll"
+                );
+            }
         }
         Ok(())
     }
 
-    /// Reloads the settings if `admin_generation` moved since
-    /// they were loaded, serialized with poll passes through `polling`: what
-    /// the change feed does for a message that may move them, and the M16
-    /// subscriber on a message or a resubscribe.
+    /// M16 bridge (spec Decision 14): remove in the release after 0.23.
     ///
-    /// # Arguments
-    /// * `announce` - publish the loaded generation if it was not announced
-    ///   yet: `false` when this reload answers an announcement or a change
-    ///   message (the writer already told everyone).
+    /// After an administrative change this replica committed, tells
+    /// milestone 16 replicas to check `admin_generation` now
+    /// ([`shared::announce::publish_bridge`]); the change itself reached
+    /// every milestone 18 replica through the change feed. Best effort and
+    /// detached, like [`App::announce_catalog`]: a slow or failing Redis
+    /// never delays the caller's answer, and an M16 replica's own poll
+    /// covers a lost announcement. Does nothing without `[redis]`.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn reload_settings_now(&self, announce: bool) {
-        let _pass = self.polling.lock().await;
-        self.reload_settings_if_changed(announce).await;
-    }
-
-    /// The `admin_generation` the settings were loaded at.
-    ///
-    /// # Returns
-    /// The generation.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "one-line accessor: a span would record nothing"
-        )
-    )]
-    pub fn loaded_admin_generation(&self) -> i64 {
-        self.admin_generation.load(Ordering::Relaxed)
+    pub fn bridge_to_m16(&self) {
+        let Some(redis) = self.redis.clone() else {
+            return;
+        };
+        // M16 bridge (spec Decision 14): remove in the release after 0.23.
+        tokio::spawn(shared::announce::publish_bridge(redis).instrument(tracing::Span::current()));
     }
 
     /// Tells the other replicas that a catalog's published generation moved
@@ -1050,16 +1287,15 @@ impl App {
 
     /// Applies one change-feed message to this replica's caches: the
     /// catalog directory, the credential, user and label caches, the catalog
-    /// cache, and the settings (a later task of milestone 18 moves the last
-    /// onto its own cache behind this same method).
+    /// cache and the settings.
     ///
     /// A `Catalog` message refreshes that catalog if it is cached and behind
     /// (the body of [`App::apply_catalog_announcement`]). A `CatalogMeta`
     /// message for a catalog that no longer exists under that id (deleted)
     /// drops it from the catalog cache; a catalog that merely changed its
     /// description, owner or maintenance keeps its snapshot, since those
-    /// live in the directory row. A message of any other kind than `Catalog`
-    /// reloads the settings if `admin_generation` moved (until Task 13).
+    /// live in the directory row. A `Settings` message reloads the settings.
+    /// The caches apply every other kind themselves.
     ///
     /// # Arguments
     /// * `message` - what changed.
@@ -1086,23 +1322,19 @@ impl App {
                 )
                 .await;
             }
+            Invalidation::Settings => self.reload_settings().await,
             Invalidation::CatalogMeta { id, name } => {
                 self.forget_if_deleted(*id, name).await;
-                self.reload_settings_now(false).await;
             }
-            // A credential message moves `admin_generation` too: reloading
-            // keeps this replica at the generation the M16 announcements
-            // carry, so they do not mark the credential caches stale.
-            Invalidation::Credential { .. }
-            | Invalidation::User { .. }
+            Invalidation::User { .. }
             | Invalidation::Team { .. }
-            | Invalidation::Settings => self.reload_settings_now(false).await,
+            | Invalidation::Credential { .. } => {}
         }
     }
 
-    /// Applies this replica's own writes to its catalog directory and its
-    /// credential, user and label caches before the request that made them
-    /// answers ([`crate::invalidate::capturing`]):
+    /// Applies this replica's own writes to its catalog directory, its
+    /// credential, user and label caches and its settings before the request
+    /// that made them answers ([`crate::invalidate::capturing`]):
     /// the next request on this replica reads the new rows, without waiting
     /// for the change feed to deliver the same messages. Only in-process
     /// cache drops; nothing here reads the database (a dropped row is read
@@ -1118,6 +1350,11 @@ impl App {
             self.directory.apply(invalidation).await;
             self.credentials.apply(invalidation).await;
             self.labels.apply(invalidation).await;
+            // A mark, not a reload: the next request checks the settings
+            // ([`App::fresh_settings`]) whatever their age.
+            if matches!(invalidation, crate::invalidate::Invalidation::Settings) {
+                self.mark_settings_stale();
+            }
         }
     }
 
@@ -1150,26 +1387,29 @@ impl App {
     /// suspect (spec Decision 12). The directory, credential, user and label
     /// caches mark every entry stale (each is read again on its next use,
     /// and with a catalog's row its cached snapshot is checked); the
-    /// settings reload.
+    /// settings are checked.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn apply_reconnect(&self) {
         self.catch_up_catalogs().await;
         self.credentials.mark_all_stale();
         self.labels.mark_all_stale();
-        self.reload_settings_now(false).await;
+        self.reload_settings().await;
     }
 
-    /// What an M16 replica's announcement means here (spec Decision 14):
-    /// an older replica changed something without sending change messages,
-    /// so every cached credential, user, label and catalog row (suspension,
-    /// owner, maintenance) is reread on its next use, and the settings
-    /// reload.
+    /// M16 bridge (spec Decision 14): remove in the release after 0.23.
+    ///
+    /// What an M16 replica's announcement means here: an older replica
+    /// changed something without sending change messages, so every cached
+    /// credential, user, label and catalog row (suspension, owner,
+    /// maintenance) is reread on its next use, and the settings are checked.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn apply_m16_announcement(&self) {
+        #[cfg(test)]
+        self.m16_announcements.fetch_add(1, Ordering::Relaxed);
         self.credentials.mark_all_stale();
         self.labels.mark_all_stale();
         self.directory.mark_all_stale().await;
-        self.reload_settings_now(false).await;
+        self.reload_settings().await;
     }
 
     /// Makes every cached catalog revalidate on its next use: what the
@@ -1181,91 +1421,6 @@ impl App {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn catch_up_catalogs(&self) {
         self.directory.mark_all_stale().await;
-    }
-
-    /// Reloads the settings if `admin_generation` moved
-    /// since they were loaded, then, when `announce` is set, publishes the
-    /// loaded generation if it differs from the last one announced.
-    /// Called only under `polling`.
-    ///
-    /// Failing to read the counter or to reload is logged, not returned: the
-    /// stored counter stays as it was, so the next pass tries again, and the
-    /// caller's catalog changes go ahead regardless.
-    ///
-    /// Announcing is tracked apart from loading. A reload that loads a change
-    /// without announcing it (the subscriber's resubscribe, a change message)
-    /// must not make the `settle` poll that follows find nothing to publish,
-    /// so the announce step runs whether or not this call reloaded.
-    #[tracing::instrument(level = "debug", skip_all)]
-    async fn reload_settings_if_changed(&self, announce: bool) {
-        self.reload_moved_settings().await;
-        if !announce {
-            return;
-        }
-        let Some(redis) = &self.redis else {
-            return;
-        };
-        let loaded = self.admin_generation.load(Ordering::Relaxed);
-        // Under `polling`, so no other reload moves either counter meanwhile.
-        if loaded != self.announced_generation.load(Ordering::Relaxed) {
-            shared::announce::publish(redis, Some(loaded)).await;
-            // Stored even if the publish failed: the failure is counted, and
-            // the poll loop covers a lost announcement (spec Decision 12).
-            self.announced_generation.store(loaded, Ordering::Relaxed);
-        }
-    }
-
-    /// The reload half of [`App::reload_settings_if_changed`]. Called only
-    /// under `polling`.
-    #[tracing::instrument(level = "debug", skip_all)]
-    async fn reload_moved_settings(&self) {
-        let admin_generation = match catalogs::admin_generation(&self.pool).await {
-            Ok(admin_generation) => admin_generation,
-            Err(error) => {
-                split_event!(
-                    error,
-                    { kind = error.kind(), },
-                    { %error, },
-                    "reading admin_generation failed; retrying at the next poll"
-                );
-                return;
-            }
-        };
-        if admin_generation == self.admin_generation.load(Ordering::Relaxed) {
-            return;
-        }
-        // An async block lets `?` stop at the first failure; either way the
-        // counter is stored only when both were reloaded, so a failure is
-        // retried at the next pass. A stored setting this server cannot
-        // read is not a failure: `settings::load` falls back to the default.
-        // Both are read before either is swapped in, so a failure leaves the
-        // pair as it was. The span and metric keep the key cache's name
-        // (`okf.keycache.*`), which dashboards know them by.
-        let reloaded = async {
-            let settings = settings::load(&self.pool, &self.config.auth).await?;
-            *self.settings.write().expect("settings lock poisoned") = Arc::new(settings);
-            Ok::<(), OkfError>(())
-        }
-        .instrument(tracing::info_span!("okf.keycache.reload"))
-        .await;
-        self.metrics.keycache_reload(if reloaded.is_ok() {
-            Outcome::Ok
-        } else {
-            Outcome::Error
-        });
-        match reloaded {
-            Ok(()) => self
-                .admin_generation
-                .store(admin_generation, Ordering::Relaxed),
-            Err(error) => {
-                split_event!(
-                    error,
-                    { kind = error.kind(), },
-                    { %error, },
-                    "settings reload failed; retrying at the next poll"
-                );
-            }
-        }
     }
 
     /// Runs [`App::poll`] every `poll_interval` until `shutdown` is cancelled.
@@ -1800,6 +1955,30 @@ mod tests {
         assert_eq!(labels.catalog("pg"), Some("Renamed"));
     }
 
+    /// A settings write's own `Settings` invalidation, applied here, makes
+    /// this replica's next request check the settings although they are
+    /// young: the writer reads its own write with no listener and no poll.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_own_settings_write_reaches_the_next_request() {
+        let db = test_db().await;
+        let app = app(&db.pool).await;
+        let before = app.fresh_settings().await.max_keys_per_user;
+
+        let ((), written) = crate::invalidate::capturing(async {
+            set_setting(&db.pool, settings::SettingKey::MaxKeysPerUser, "5").await;
+        })
+        .await;
+        app.apply_own_writes(&written).await;
+
+        assert_eq!(before, 20);
+        assert_eq!(
+            written,
+            [crate::invalidate::Invalidation::Settings],
+            "the write queued its invalidation"
+        );
+        assert_eq!(app.fresh_settings().await.max_keys_per_user, 5);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn poll_notices_revoked_keys() {
         let db = test_db().await;
@@ -1908,7 +2087,8 @@ mod tests {
         )
         .await
         .unwrap();
-        // With the settings table out of the way, the reload fails.
+        set_setting(&db.pool, settings::SettingKey::MaxKeysPerUser, "5").await;
+        // With the settings table out of the way, the settings check fails.
         sqlx::query("ALTER TABLE server_settings RENAME TO server_settings_away")
             .execute(&db.pool)
             .await
@@ -1916,16 +2096,21 @@ mod tests {
 
         app.poll().await.unwrap();
         assert!(
-            app.find_key(&key).await.unwrap().is_some(),
-            "nothing is marked stale for a reload that failed"
+            app.find_key(&key).await.unwrap().is_none(),
+            "the sweep does not wait for the settings"
+        );
+        assert_eq!(
+            app.settings().max_keys_per_user,
+            20,
+            "the old settings serve"
         );
         sqlx::query("ALTER TABLE server_settings_away RENAME TO server_settings")
             .execute(&db.pool)
             .await
             .unwrap();
-        // No admin change since: only the unstored counter makes this retry.
+        // No admin change since: only the failed check makes this retry.
         app.poll().await.unwrap();
-        assert!(app.find_key(&key).await.unwrap().is_none());
+        assert_eq!(app.settings().max_keys_per_user, 5);
     }
 
     /// An app whose catalog rows and credentials live an hour (so only an
@@ -2069,6 +2254,365 @@ mod tests {
         let passed = app.poll().await;
 
         assert!(passed.is_ok());
+    }
+
+    /// A clock a test moves by hand.
+    struct MovableClock(std::sync::Mutex<chrono::DateTime<Utc>>);
+
+    impl MovableClock {
+        fn advance(&self, by: Duration) {
+            let mut now = self.0.lock().expect("clock lock");
+            *now += chrono::Duration::from_std(by).expect("a small duration");
+        }
+    }
+
+    impl Clock for MovableClock {
+        #[cfg_attr(
+            dylint_lib = "hyp_tracing",
+            allow(uninstrumented_fn, reason = "test double")
+        )]
+        fn now(&self) -> chrono::DateTime<Utc> {
+            *self.0.lock().expect("clock lock")
+        }
+    }
+
+    /// An app on `pool` whose clock the test moves, with the default
+    /// `credential_ttl`.
+    async fn app_with_movable_clock(pool: &PgPool) -> (Arc<App>, Arc<MovableClock>) {
+        let clock = Arc::new(MovableClock(std::sync::Mutex::new(Utc::now())));
+        let app = App::load(pool.clone(), Config::default(), clock.clone())
+            .await
+            .unwrap();
+        (app, clock)
+    }
+
+    async fn set_setting(pool: &PgPool, key: settings::SettingKey, value: &str) {
+        settings::set(pool, key, value, &audit::AuditActor::cli(), Utc::now())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_settings_invalidation_reloads_the_settings() {
+        let db = test_db().await;
+        let app = app(&db.pool).await;
+        set_setting(&db.pool, settings::SettingKey::MaxKeysPerUser, "5").await;
+        let before = app.settings().max_keys_per_user;
+
+        app.apply(&message(crate::invalidate::Invalidation::Settings))
+            .await;
+
+        assert_eq!(before, 20, "nothing told this replica yet");
+        assert_eq!(app.settings().max_keys_per_user, 5);
+    }
+
+    /// The TTL backstop (spec Decision 9): no listener runs in a lib test,
+    /// so the setting's `NOTIFY` reaches no one; only the age of the loaded
+    /// settings makes the principal's assembly read them again.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn settings_are_revalidated_after_the_ttl_without_a_notification() {
+        let db = test_db().await;
+        let key = new_key(&db.pool, "reader").await;
+        let (app, clock) = app_with_movable_clock(&db.pool).await;
+        let require_unlock = |app: Arc<App>, key: String| async move {
+            app.find_key(&key)
+                .await
+                .unwrap()
+                .expect("a live key")
+                .facts
+                .require_unlock
+        };
+        assert!(!require_unlock(app.clone(), key.clone()).await);
+
+        set_setting(&db.pool, settings::SettingKey::RequireUnlock, "on").await;
+        let within_the_ttl = require_unlock(app.clone(), key.clone()).await;
+        clock.advance(app.config().credential_ttl + Duration::from_secs(1));
+        let past_the_ttl = require_unlock(app.clone(), key.clone()).await;
+
+        assert!(!within_the_ttl, "younger settings are not read again");
+        assert!(past_the_ttl, "the principal carries the new setting");
+        assert!(app.settings().require_unlock, "and so does the app");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_requests_past_the_ttl_reload_settings_once() {
+        let db = test_db().await;
+        let (app, clock) = app_with_movable_clock(&db.pool).await;
+        set_setting(&db.pool, settings::SettingKey::MaxKeysPerUser, "5").await;
+        clock.advance(app.config().credential_ttl + Duration::from_secs(1));
+        let loads_before = app.settings_loads.load(Ordering::Relaxed);
+        let checks_before = app.settings_checks.load(Ordering::Relaxed);
+
+        // A `JoinSet` runs the ten calls as concurrent tasks.
+        let mut calls = tokio::task::JoinSet::new();
+        for _ in 0..10 {
+            let app = Arc::clone(&app);
+            calls.spawn(async move { app.fresh_settings().await.max_keys_per_user });
+        }
+        let seen = tokio::time::timeout(Duration::from_secs(30), calls.join_all())
+            .await
+            .expect("ten settings checks within 30 s");
+
+        assert_eq!(seen, [5; 10]);
+        assert_eq!(
+            app.settings_loads.load(Ordering::Relaxed) - loads_before,
+            1,
+            "one load for all ten"
+        );
+        assert_eq!(
+            app.settings_checks.load(Ordering::Relaxed) - checks_before,
+            1,
+            "and one check: the rest found them fresh once they had the lock"
+        );
+    }
+
+    /// Ten callers queued behind the check's lock with the database gone,
+    /// after `mark` (nothing, for an expired TTL; a stale mark, as a poll,
+    /// reconnect or `Settings` message makes). Returns how many checks the
+    /// ten ran and what they got, then how many a later request ran.
+    async fn queued_behind_a_failed_check(
+        app: &Arc<App>,
+        mark: impl FnOnce(&App),
+    ) -> (usize, Vec<u32>, usize) {
+        // The app's pool, closed: every check fails at once.
+        app.pool().close().await;
+        mark(app);
+        let checks_before = app.settings_checks.load(Ordering::Relaxed);
+        // Hold the check's lock so all ten queue behind it first.
+        let held = app.settings_reload.lock().await;
+        let mut calls = tokio::task::JoinSet::new();
+        for _ in 0..10 {
+            let app = Arc::clone(app);
+            calls.spawn(async move { app.fresh_settings().await.max_keys_per_user });
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        drop(held);
+        let seen = tokio::time::timeout(Duration::from_secs(30), calls.join_all())
+            .await
+            .expect("ten settings checks within 30 s");
+        let queued = app.settings_checks.load(Ordering::Relaxed) - checks_before;
+        app.fresh_settings().await;
+        let later = app.settings_checks.load(Ordering::Relaxed) - checks_before - queued;
+        (queued, seen, later)
+    }
+
+    /// With the database gone, callers that queued behind one failing check
+    /// take its answer (the loaded settings) instead of each running their
+    /// own, one after another; a request after it still retries.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_requests_share_one_failed_check() {
+        let db = test_db().await;
+        let (app, clock) = app_with_movable_clock(&db.pool).await;
+        clock.advance(app.config().credential_ttl + Duration::from_secs(1));
+
+        let (queued, seen, later) = queued_behind_a_failed_check(&app, |_| {}).await;
+
+        assert_eq!(seen, [20; 10], "the loaded settings serve");
+        assert_eq!(queued, 1, "one failing check for all ten");
+        assert_eq!(later, 1, "a later request checks again");
+    }
+
+    /// The same when a stale mark started the check: the mark its failure
+    /// restores for the retry is not a newer one, so it is still shared.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_requests_share_one_failed_check_after_a_stale_mark() {
+        let db = test_db().await;
+        let (app, _clock) = app_with_movable_clock(&db.pool).await;
+
+        let (queued, seen, later) =
+            queued_behind_a_failed_check(&app, |app| app.mark_settings_stale()).await;
+
+        assert_eq!(seen, [20; 10], "the loaded settings serve");
+        assert_eq!(queued, 1, "one failing check for all ten");
+        assert_eq!(later, 1, "a later request checks again");
+    }
+
+    /// A mark that lands while a check runs is newer than that check: a
+    /// caller waiting behind it runs its own.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_mark_during_a_check_gets_a_check_of_its_own() {
+        let db = test_db().await;
+        let (app, _clock) = app_with_movable_clock(&db.pool).await;
+        set_setting(&db.pool, settings::SettingKey::MaxKeysPerUser, "5").await;
+        app.mark_settings_stale();
+        // Stands in for a check that began before the mark: the lock held,
+        // the round finished and the marks it saw recorded as of before.
+        let held = app.settings_reload.lock().await;
+        let waiter = {
+            let app = Arc::clone(&app);
+            tokio::spawn(async move { app.fresh_settings().await.max_keys_per_user })
+        };
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        app.settings_rounds.fetch_add(1, Ordering::Release);
+        drop(held);
+        let seen = tokio::time::timeout(Duration::from_secs(30), waiter)
+            .await
+            .expect("the waiter within 30 s")
+            .expect("the waiter's task");
+
+        assert_eq!(seen, 5, "the waiter checked for its own mark");
+    }
+
+    /// Holds a stale-triggered check in flight (past its start, before its
+    /// database read) and returns its task, for the in-flight tests. The
+    /// settings are young, so only the stale mark makes the check run.
+    async fn a_stale_check_held_in_flight(
+        app: &Arc<App>,
+    ) -> (tokio::sync::MutexGuard<'_, ()>, tokio::task::JoinHandle<()>) {
+        let hold = app.settings_check_hold.lock().await;
+        let checks_before = app.settings_checks.load(Ordering::Relaxed);
+        let check = {
+            let app = Arc::clone(app);
+            tokio::spawn(async move { app.reload_settings().await })
+        };
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while app.settings_checks.load(Ordering::Relaxed) == checks_before {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the check started within 30 s");
+        (hold, check)
+    }
+
+    /// A request that arrives while a stale-triggered check is in flight
+    /// waits for it and gets what it read, not the old settings: they stay
+    /// stale until a check that began after the mark has succeeded.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_request_during_a_stale_check_waits_for_its_answer() {
+        let db = test_db().await;
+        let (app, _clock) = app_with_movable_clock(&db.pool).await;
+        set_setting(&db.pool, settings::SettingKey::MaxKeysPerUser, "5").await;
+        let (hold, check) = a_stale_check_held_in_flight(&app).await;
+
+        let mut request = {
+            let app = Arc::clone(&app);
+            tokio::spawn(async move { app.fresh_settings().await.max_keys_per_user })
+        };
+        let answered_early = tokio::time::timeout(Duration::from_millis(300), &mut request)
+            .await
+            .is_ok();
+        drop(hold);
+        let answer = tokio::time::timeout(Duration::from_secs(30), request)
+            .await
+            .expect("the request within 30 s")
+            .expect("the request's task");
+        tokio::time::timeout(Duration::from_secs(30), check)
+            .await
+            .expect("the check within 30 s")
+            .expect("the check's task");
+
+        assert!(!answered_early, "the request waited for the check");
+        assert_eq!(answer, 5);
+    }
+
+    /// A check cancelled mid-read satisfies nothing: the next request,
+    /// though the settings are young, checks again and gets the new value.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_cancelled_check_leaves_the_settings_stale() {
+        let db = test_db().await;
+        let (app, _clock) = app_with_movable_clock(&db.pool).await;
+        set_setting(&db.pool, settings::SettingKey::MaxKeysPerUser, "5").await;
+        let (hold, check) = a_stale_check_held_in_flight(&app).await;
+
+        check.abort();
+        // `abort` only requests it: wait until the task is gone.
+        let _ = tokio::time::timeout(Duration::from_secs(30), check)
+            .await
+            .expect("the cancelled check ends within 30 s");
+        drop(hold);
+        let next = tokio::time::timeout(Duration::from_secs(30), app.fresh_settings())
+            .await
+            .expect("the next request within 30 s");
+
+        assert_eq!(next.max_keys_per_user, 5, "the next request checked");
+    }
+
+    /// A settings read blocked behind an exclusive lock on `server_state`
+    /// must not hold a request: past [`SETTINGS_CHECK_TIMEOUT`] the check
+    /// fails, the request is answered with the loaded settings, and the
+    /// check is not satisfied, so the next request (once the lock is gone)
+    /// checks again.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_blocked_settings_check_answers_within_its_bound() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+        let db = test_db().await;
+        let (app, clock) = app_with_movable_clock(&db.pool).await;
+        set_setting(&db.pool, settings::SettingKey::ProductName, "Acme Notes").await;
+        clock.advance(app.config().credential_ttl + Duration::from_secs(1));
+        // Held on its own connection; dropping the transaction releases it.
+        let mut locker = db.pool.begin().await.unwrap();
+        sqlx::query("LOCK TABLE server_state IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *locker)
+            .await
+            .unwrap();
+        let product_name = || async {
+            let response = crate::http::router(
+                Arc::clone(&app),
+                &tokio_util::sync::CancellationToken::new(),
+            )
+            .oneshot(Request::get("/ui/brand.json").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["product_name"].clone()
+        };
+
+        let started = Instant::now();
+        let blocked = tokio::time::timeout(
+            SETTINGS_CHECK_TIMEOUT + Duration::from_secs(10),
+            product_name(),
+        )
+        .await
+        .expect("the request answers although the settings read is blocked");
+        let waited = started.elapsed();
+        locker.rollback().await.unwrap();
+        let after = tokio::time::timeout(Duration::from_secs(30), product_name())
+            .await
+            .expect("the next request within 30 s");
+
+        assert_eq!(blocked, "okf", "the loaded settings serve");
+        assert!(
+            waited >= SETTINGS_CHECK_TIMEOUT,
+            "it waited for the bound: {waited:?}"
+        );
+        assert_eq!(after, "Acme Notes", "the next request checked again");
+    }
+
+    /// A check that finds `admin_generation` unmoved loads nothing; one
+    /// marked stale checks again at once, whatever the settings' age.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_check_loads_the_settings_only_when_admin_generation_moved() {
+        let db = test_db().await;
+        let (app, clock) = app_with_movable_clock(&db.pool).await;
+        clock.advance(app.config().credential_ttl + Duration::from_secs(1));
+        app.fresh_settings().await;
+        let unmoved = app.settings_loads.load(Ordering::Relaxed);
+
+        set_setting(&db.pool, settings::SettingKey::MaxKeysPerUser, "5").await;
+        let fresh_and_unmarked = app.fresh_settings().await.max_keys_per_user;
+        app.mark_settings_stale();
+        let marked = app.fresh_settings().await.max_keys_per_user;
+
+        assert_eq!(unmoved, 0, "an unmoved counter loads nothing");
+        assert_eq!(fresh_and_unmarked, 20, "young settings are not checked");
+        assert_eq!(marked, 5, "stale ones are");
+    }
+
+    /// A clock stepped back past the last check must not keep the settings
+    /// forever: a check time in the future counts as expired.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_clock_stepped_back_expires_the_settings() {
+        let db = test_db().await;
+        let (app, clock) = app_with_movable_clock(&db.pool).await;
+        set_setting(&db.pool, settings::SettingKey::MaxKeysPerUser, "5").await;
+        *clock.0.lock().expect("clock lock") -= chrono::Duration::hours(1);
+
+        assert_eq!(app.fresh_settings().await.max_keys_per_user, 5);
     }
 
     #[tokio::test(flavor = "multi_thread")]
