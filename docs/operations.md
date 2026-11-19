@@ -623,10 +623,12 @@ two). What `[redis]` does not share:
   worker takes it. A failed job is retried twice with a backoff; a slot
   missed while every replica was down is not caught up, and the next slot
   does the same work. `okf_housekeeping_runs_total` counts the runs. A
-  repeated push is refused by the unique index, so the Postgres server log
-  shows `duplicate key value violates unique constraint
-  "idx_jobs_idempotency_key"` errors every minute from each replica: they
-  are expected, and the server ignores them.
+  replica looks a slot up before pushing it, so a slot already scheduled
+  costs one indexed read and leaves nothing in the Postgres log. Only when
+  two replicas push a new slot at the same moment does the loser hit the
+  unique index: the Postgres log then shows one `duplicate key value
+  violates unique constraint "idx_jobs_idempotency_key"` error, which the
+  server ignores.
 - **Cluster gauges.** `okf_changesets_open` and `okf_mail_queue_depth` come
   from the `cluster_stats` row, which every replica reads once a minute, so
   all replicas report the same value: use `max()` across replicas.

@@ -9,11 +9,13 @@
 //! 1. **Scheduling.** Every replica's ticker ([`tick_until`]) wakes once a
 //!    minute and, for each [`Task`], pushes the job of the task's current
 //!    slot ([`schedule`]). A slot is the start of the task's cadence window,
-//!    as a Unix second. The job's idempotency key is `"<task>:<slot>"`, and
-//!    apalis-postgres has a unique index on `(job_type, idempotency_key)`, so
-//!    the first push of a slot creates the job and every other replica's
-//!    push of it is a unique violation, which is ignored. Each slot is
-//!    therefore scheduled once in the cluster. A slot missed because every
+//!    as a Unix second. The job's idempotency key is `"<task>:<slot>"`. A
+//!    push first looks the key up and stops if the slot is scheduled (the
+//!    common case, which so attempts no insert and logs nothing in
+//!    Postgres); apalis-postgres's unique index on
+//!    `(job_type, idempotency_key)` turns the rare insert that loses a race
+//!    with another replica into a unique violation, which is ignored. Each
+//!    slot is therefore scheduled once in the cluster. A slot missed because every
 //!    replica was down is not caught up; the next slot does the same work.
 //! 2. **Running.** Every replica runs a housekeeping worker
 //!    ([`spawn_worker`]) on the process's [`WorkerPool`]. apalis takes a job
@@ -211,10 +213,14 @@ fn queue_error(error: impl std::fmt::Display) -> OkfError {
     }
 }
 
-/// Pushes `task`'s job for `slot` unless one exists: the idempotency key
-/// `"<task>:<slot>"` and apalis's unique index make a second push a unique
-/// violation, which is ignored. The push runs on the pool in its own
-/// statement, so the violation aborts nothing else.
+/// Pushes `task`'s job for `slot` unless one exists. It first looks the
+/// idempotency key `"<task>:<slot>"` up (through apalis's unique index), so
+/// the common case, a slot another replica or an earlier tick already
+/// scheduled, attempts no insert and leaves no error in the Postgres log.
+/// Only two replicas racing for a new slot both get past the lookup: then
+/// the unique index makes the second push a unique violation, which is
+/// ignored. The push runs on the pool in its own statement, so the
+/// violation aborts nothing else.
 ///
 /// # Arguments
 /// * `pool` - the database.
@@ -229,12 +235,23 @@ fn queue_error(error: impl std::fmt::Display) -> OkfError {
 /// other reason.
 #[tracing::instrument(level = "debug", skip_all, fields(okf.housekeeping.task = task.as_str()))]
 pub async fn schedule(pool: &PgPool, task: Task, slot: i64) -> Result<bool, OkfError> {
+    let key = format!("{}:{slot}", task.as_str());
+    let mut conn = pool.acquire().await?;
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM apalis.jobs WHERE job_type = $1 AND idempotency_key = $2)",
+    )
+    .bind(QUEUE)
+    .bind(&key)
+    .fetch_one(&mut *conn)
+    .await?;
+    if exists {
+        return Ok(false);
+    }
     let payload = serde_json::to_vec(&Housekeeping { task, slot }).map_err(queue_error)?;
     let job = TaskBuilder::new(payload)
         .max_attempts(MAX_ATTEMPTS)
-        .idempotency_key(format!("{}:{slot}", task.as_str()))
+        .idempotency_key(key)
         .build();
-    let mut conn = pool.acquire().await?;
     match push_tasks(&mut *conn, QUEUE, vec![job]).await {
         Ok(()) => Ok(true),
         Err(apalis_postgres::Error::Database(sqlx::Error::Database(error)))
@@ -1054,6 +1071,31 @@ mod tests {
                 (format!("prune_oauth:{next}"), "Pending".to_string(), 0),
             ]
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_scheduled_slot_is_not_pushed_again() {
+        let test = app_with(&[], Config::default()).await;
+        let pool = test.app.pool().clone();
+        let slot = Task::PruneOauth.slot_at(fixed_now());
+        assert!(schedule(&pool, Task::PruneOauth, slot).await.unwrap());
+        // From now on any insert into the jobs table fails loudly, so a push
+        // that reached the insert would return an error, not `false`.
+        sqlx::raw_sql(
+            "CREATE FUNCTION refuse_job() RETURNS trigger LANGUAGE plpgsql AS \
+             $$ BEGIN RAISE EXCEPTION 'insert attempted'; END $$; \
+             CREATE TRIGGER refuse_job BEFORE INSERT ON apalis.jobs \
+             FOR EACH ROW EXECUTE FUNCTION refuse_job();",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let again = schedule(&pool, Task::PruneOauth, slot).await;
+        let next = schedule(&pool, Task::PruneOauth, slot + 3600).await;
+
+        assert!(!again.expect("no insert is attempted"), "already scheduled");
+        assert!(next.is_err(), "a new slot does reach the insert: {next:?}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -8,9 +8,11 @@
   (hourly) and `cluster_stats` (every minute).
 - Every serving replica runs a ticker (`tick_until`) that, once a minute,
   pushes the current slot of each task with idempotency key `"<task>:<slot>"`.
-  apalis-postgres's unique index on `(job_type, idempotency_key)` turns every
-  other replica's push of the same slot into an ignored unique violation, so
-  each slot is scheduled once in the cluster.
+  A push first looks the key up and skips a slot that is already scheduled,
+  so the repeats attempt no insert and leave no errors in the Postgres log.
+  apalis-postgres's unique index on `(job_type, idempotency_key)` turns the
+  rare insert that loses a race with another replica into an ignored unique
+  violation, so each slot is scheduled once in the cluster.
 - Every serving replica runs a housekeeping worker on the shared worker pool
   (Task 14). It polls every 10 seconds and holds no `LISTEN` connection, so
   the pool stays at 3 connections per replica.
