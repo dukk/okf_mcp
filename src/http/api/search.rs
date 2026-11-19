@@ -14,6 +14,7 @@ use crate::error::OkfError;
 use crate::http::api::context;
 use crate::http::requester::Requester;
 use crate::http::AppError;
+use crate::mcp::context::ToolContext;
 use crate::mcp::search::{run, SearchParams, SearchResult};
 use crate::store::keys::Access;
 
@@ -65,7 +66,8 @@ fn catalog_names(listed: &str) -> Vec<String> {
 ///
 /// # Arguments
 /// * `app` - the application, for its directory and its config.
-/// * `principal` - the caller.
+/// * `ctx` - the search's own context: each catalog is loaded through it
+///   and held, so the search reads the same state without a second load.
 ///
 /// # Returns
 /// The names, sorted.
@@ -74,7 +76,8 @@ fn catalog_names(listed: &str) -> Vec<String> {
 /// [`OkfError::InvalidPath`] (400, naming `catalogs`) when the key reaches
 /// more than `search_fanout_max` catalogs; [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all)]
-async fn every_reachable(app: &App, principal: &Principal) -> Result<Vec<String>, OkfError> {
+async fn every_reachable(app: &App, ctx: &ToolContext) -> Result<Vec<String>, OkfError> {
+    let principal = ctx.principal();
     let most = app.config().search_fanout_max;
     // One row more than the cap: enough to tell that the key reaches too
     // many, without reading every catalog for a key that reaches them all.
@@ -99,7 +102,7 @@ async fn every_reachable(app: &App, principal: &Principal) -> Result<Vec<String>
     let mut names = Vec::with_capacity(page.items.len());
     for row in &page.items {
         if principal.check_open(row, Access::Read, now).is_ok()
-            && app.listed_state(row).await?.is_some()
+            && ctx.listed_state(row).await?.is_some()
         {
             names.push(row.name.clone());
         }
@@ -132,15 +135,17 @@ async fn search(
         .as_deref()
         .map(catalog_names)
         .unwrap_or_default();
+    // First, so the catalogs an unnamed search loads to check are held for
+    // the search itself (one build each, even for one the cache cannot keep).
+    let ctx = context(&app, principal, requester);
     let catalogs = if named.is_empty() {
         // An empty list (a key that reaches nothing active) falls back to the
         // key's default inside the selection, which then refuses as the tool
         // would.
-        every_reachable(&app, &principal).await?
+        every_reachable(&app, &ctx).await?
     } else {
         named
     };
-    let ctx = context(&app, principal, requester);
     let result = run(
         &ctx,
         SearchParams {
@@ -161,6 +166,44 @@ async fn search(
 mod tests {
     use super::*;
     use crate::http::api::testing::{app, assert_matrix, keys, send, Row};
+
+    /// An unnamed search loads each catalog once: the check that a catalog
+    /// builds and the search share one load, even for a catalog the cache
+    /// cannot keep (a budget smaller than one catalog).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unnamed_search_builds_each_catalog_once() {
+        use crate::http::api::testing::MAIN;
+        let config = crate::config::Config {
+            catalog_cache_bytes: bytesize::ByteSize::b(1),
+            ..crate::config::Config::default()
+        };
+        let (test, registry) = crate::mcp::testing::app_with_metrics(
+            &[("main", MAIN), ("other", &[("index.md", "# Other\n")])],
+            config,
+        )
+        .await;
+        let keys = keys(&test).await;
+        let loads = || {
+            crate::mcp::testing::sample_of(
+                &crate::mcp::testing::render(&registry),
+                r#"okf_cache_load_duration_seconds_count{cache="catalog",outcome="ok"}"#,
+            )
+            .unwrap_or(0.0)
+        };
+        let before = loads();
+
+        let (status, _) = send(
+            &test,
+            "GET",
+            "/api/v1/search?q=alpha",
+            Some(&keys.read),
+            None,
+        )
+        .await;
+
+        assert_eq!(status, axum::http::StatusCode::OK);
+        assert_eq!(loads() - before, 1.0, "one build of `main` for one search");
+    }
 
     #[test]
     fn catalog_names_are_trimmed_and_empty_ones_dropped() {

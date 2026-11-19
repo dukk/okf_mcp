@@ -1036,6 +1036,33 @@ impl ToolContext {
         self.held_state(&row).await
     }
 
+    /// [`ToolContext::state`] for a listed row: the catalog's state, held
+    /// for the rest of the call, or `None` for one to leave out because it
+    /// was deleted since the row was read or its stored data does not build
+    /// (as [`App::listed_state`]). A later read of it in this call reuses the
+    /// held state instead of loading it again.
+    ///
+    /// # Arguments
+    /// * `row` - a listed catalog's row.
+    ///
+    /// # Returns
+    /// The state, or `None`.
+    ///
+    /// # Errors
+    /// [`OkfError::Database`], or [`OkfError::Busy`] for a load shared with
+    /// another request that failed.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub(crate) async fn listed_state(
+        &self,
+        row: &CatalogRow,
+    ) -> Result<Option<Arc<CatalogState>>, OkfError> {
+        match self.held_state(row).await {
+            Ok(state) => Ok(Some(state)),
+            Err(OkfError::CatalogNotSelected { .. }) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     /// The state of `row`'s catalog for this call, resolved and held (with
     /// its snapshot) on first use. A state already held under the name is
     /// kept only if it is the same incarnation.

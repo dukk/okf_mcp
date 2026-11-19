@@ -64,6 +64,12 @@ Issue #686, part of epic #678 (milestone 18, bounded memory). Spec
 - After a lost change feed (or an M16 resubscribe), the directory is marked
   stale instead of every loaded catalog being refreshed at once.
 - Multi-replica test servers also set `catalog_ttl` to one hour.
+- Requests that find a resident catalog behind a generation that does not
+  build bring it up to date one at a time (a per-catalog lock taken before
+  the rebuild lock), so the generation is built once and remembered, not
+  once per queued request (review of PR #714, round 3).
+- An unnamed `GET /api/v1/search` loads each catalog once: the catalogs it
+  checks are held by the search's own context and reused by the search.
 - A publish has the cache re-weigh its catalog on every outcome, including
   a refusal after its preliminary refresh (review of PR #714).
 - HTTP writes are read-your-writes on the replica that made them (every
