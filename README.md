@@ -520,10 +520,16 @@ Bookkeeping (`write`):
 files, or one whose indexes were never written. Operators can repair every
 such catalog at once with `okf-mcp catalog repair-indexes --missing-only`
 (`--dry-run` first), which publishes directly and adds a line recording the
-repair to each catalog's `log.md`; no existing index text is changed. It only adds: existing
-headings, prose, listings and summaries stay as they are, a target an index
-already links is not listed again, and a second run changes nothing. A
-path no markdown link can reach (a space, `)` or `#` in it, or a label that cannot be written, such as a folder named `a]`) is not listed;
+repair to each catalog's `log.md`. Existing headings, prose, listings and
+summaries stay as they are, a target an index already links is not listed
+again, and a second run changes nothing. The one change to existing text is
+an old raw (unencoded) concept listing written before percent-encoding,
+such as `* [A](a b.md) - x`, whose link never resolves: its destination is
+encoded in place (`* [A](a%20b.md) - x`, label and summary kept), or the
+bullet is removed when a working listing sits beside it, and `notes` quotes
+each one. A bullet whose link resolves to an existing document, or whose
+name holds a `%XX` escape, is never touched. A
+path no markdown link can reach (a label that cannot be written, such as a folder named `a]`) is not listed;
 `notes` names it instead. A
 listing takes the concept's `title` (else its first `# ` heading, else its
 file name) and `description`; whatever is missing becomes a `TODO`

@@ -484,7 +484,7 @@ Remove the entry with `id` from a concept's `sources`, deleting the key when non
 
 **Repair Indexes** (staged)
 
-Create whatever bookkeeping the catalog is missing, in the changeset `changeset` names (open one with open_changeset): the root index.md and log.md, an index.md for every folder holding concepts, each folder's listing in its parent's # Sections, and each concept's listing in its folder's index.md (its title and description; TODO placeholders where they are missing, each named in `notes`). Only adds: existing text, listings and summaries are kept, and a second run changes nothing. A file or folder no markdown link can list (a space, `)` or `#` in its path, or a `]` in a folder name) is not listed; `notes` names it. Review the result with pending_changes before publishing. Write access.
+Create whatever bookkeeping the catalog is missing, in the changeset `changeset` names (open one with open_changeset): the root index.md and log.md, an index.md for every folder holding concepts, each folder's listing in its parent's # Sections, and each concept's listing in its folder's index.md (its title and description; TODO placeholders where they are missing, each named in `notes`). Existing text, listings and summaries are kept, except an old raw (unencoded) concept listing whose link never resolves, such as `[A](a b.md)`: its destination is percent-encoded in place, or the bullet removed beside a working one, and `notes` quotes each. A second run changes nothing. A file or folder no markdown link can list (a `]` in a folder name) is not listed; `notes` names it. Review the result with pending_changes before publishing. Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|

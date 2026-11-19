@@ -18,6 +18,12 @@
 //! keeps bytes as `Relink` does. `okf.py` has no counterpart, as it has no
 //! delete command.
 //!
+//! Issue #717 adds [`ReplayOp::RewriteRawListing`]: `repair_indexes`
+//! percent-encodes the destination of a raw listing bullet older versions
+//! wrote, or removes it beside a working one. Its edit,
+//! `rewrite_raw_listing_text`, works on universal-newline text, like the
+//! other index edits.
+//!
 //! [`log_text`] is `okf.py`'s `cmd_log` body (`:752`) and
 //! [`insert_index_bullet_text`] its `insert_index_bullet` (`:1410`), line
 //! for line. `okf.py` reads and writes these files in text mode, so both
@@ -98,6 +104,27 @@ pub enum ReplayOp {
         /// Catalog-relative path of the deleted concept.
         target: String,
     },
+    /// `repair_indexes`: fix a raw (unencoded) listing bullet of `target`
+    /// that versions before issue #453 wrote (issue #717). The first line
+    /// equal to `line` is removed when another bullet already links
+    /// `target`, else replaced by `fixed` (the same line with its
+    /// destination percent-encoded); a line no longer there is left alone.
+    ///
+    /// `repair_indexes` decided that `line` is a raw listing against the
+    /// changeset's documents (`lists_raw_target`'s rules 0-3). Replay cannot
+    /// tell which files exist, so it cannot re-check rule 3: it leaves the
+    /// line as it is when the link the parser reads in it resolves to any
+    /// path (`[A](a).md)` reads as a link to `a`, which a concurrent change
+    /// may have created). The worst case is a broken raw bullet left for the
+    /// next repair, never a working listing lost.
+    RewriteRawListing {
+        /// Catalog-relative path of the concept listed.
+        target: String,
+        /// The raw bullet line, as written.
+        line: String,
+        /// Its rewrite.
+        fixed: String,
+    },
 }
 
 /// Redoes `ops` on a file's current text (design "Publish", step 3).
@@ -105,8 +132,9 @@ pub enum ReplayOp {
 /// Idempotent where publish needs it: a log bullet already under its date,
 /// a listing whose `target` the index already links, a `CreateIndex` or
 /// `CreateLog` of a file that exists (someone else's text wins), an `Unlist` whose listing is gone, a `Relink` with
-/// no link left into its source, and an `Unlink` with no link left into its
-/// target all leave the text alone. Text that no operation
+/// no link left into its source, an `Unlink` with no link left into its
+/// target, and a `RewriteRawListing` whose raw line is gone all leave the
+/// text alone. Text that no operation
 /// changes is returned byte for byte; text a bookkeeping edit changed has
 /// `\n` endings, as `okf.py` writes it, while a `Relink` or an `Unlink`
 /// keeps the file's own line endings.
@@ -121,8 +149,8 @@ pub enum ReplayOp {
 /// The text after the operations.
 ///
 /// # Errors
-/// [`OkfError::NotFound`] when a `Log`, `ListBullet`, `Unlist`, `Relink` or `Unlink`
-/// (or nothing) finds no file. For `Unlist` this is deliberate, not "already
+/// [`OkfError::NotFound`] when a `Log`, `ListBullet`, `Unlist`, `Relink`,
+/// `Unlink` or `RewriteRawListing` (or nothing) finds no file. For `Unlist` this is deliberate, not "already
 /// gone": publish never replays onto a file deleted since the entry's base
 /// (`replayed_text` makes that a conflict), so a missing file here means the
 /// ops themselves are wrong. [`OkfError::Refused`] when a listing's section
@@ -190,6 +218,19 @@ pub fn replay(path: &str, current: Option<&str>, ops: &[ReplayOp]) -> Result<Str
                     return Err(non_concept_unlink(path, target));
                 }
                 unlink_text(&no_dirs, path, present(path, &text)?, target)
+            }
+            ReplayOp::RewriteRawListing {
+                target,
+                line,
+                fixed,
+            } => {
+                let base = universal_newlines(present(path, &text)?);
+                if parses_to_a_path(line, path) {
+                    None
+                } else {
+                    rewrite_raw_listing_text(&no_dirs, &base, path, target, line, fixed)
+                        .map(|(updated, _)| updated)
+                }
             }
             ReplayOp::Relink { redirect } => {
                 // `no_dirs` cannot tell a directory link (`[x](../a)`) from a file
@@ -280,7 +321,8 @@ pub(crate) fn lists_target(
 /// silently drop the staged listing. Replay counts only a bullet whose
 /// parsed link resolves to the target ([`lists_target`]); after a concurrent
 /// change the worst case is an old broken raw bullet beside a new working
-/// one, which lint shows and the author can remove.
+/// one, which lint shows and the next `repair_indexes` removes (issue
+/// #717).
 ///
 /// # Arguments
 /// * `workspace` - tells which documents exist (rule 3).
@@ -288,13 +330,51 @@ pub(crate) fn lists_target(
 /// * `index` - its catalog-relative path; the raw destination is the
 ///   target relative to its folder, or `/`-absolute.
 /// * `target` - the catalog-relative path listed.
-#[tracing::instrument(level = "debug", skip_all)]
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "one-line delegation to an instrumented function"
+    )
+)]
 pub(crate) fn lists_raw_target(
     workspace: &dyn Workspace,
     text: &str,
     index: &str,
     target: &str,
 ) -> bool {
+    first_raw_listing(workspace, text, index, target).is_some()
+}
+
+/// A bullet [`first_raw_listing`] found: where, in `text`'s `\n`-split
+/// lines, a raw listing of the target sits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RawListing {
+    /// The whole bullet line, as written.
+    pub(crate) line: String,
+    /// The same line with only its destination percent-encoded
+    /// ([`encode_link_path`] of the raw destination, relative or
+    /// `/`-absolute as written): the label and everything after the
+    /// destination are kept.
+    pub(crate) fixed: String,
+}
+
+/// The first bullet of `text` that [`lists_raw_target`] counts as a raw
+/// listing of `target`, by exactly its rules 0-3, and the line it would be
+/// rewritten to.
+///
+/// # Arguments
+/// As [`lists_raw_target`].
+///
+/// # Returns
+/// The bullet and its rewrite, or `None` when no bullet is a raw listing.
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) fn first_raw_listing(
+    workspace: &dyn Workspace,
+    text: &str,
+    index: &str,
+    target: &str,
+) -> Option<RawListing> {
     let folder = crate::okf::paths::dirname(index);
     let relative = if folder.is_empty() {
         Some(target)
@@ -305,29 +385,91 @@ pub(crate) fn lists_raw_target(
     };
     let mut raws: Vec<String> = relative.into_iter().map(str::to_string).collect();
     raws.push(format!("/{target}"));
-    raws.iter()
+    let raws: Vec<String> = raws
+        .into_iter()
         .filter(|raw| encode_link_path(raw) != raw.as_str())
         .filter(|raw| py_unquote(raw) == raw.as_str())
-        .any(|raw| {
-            text.split('\n').filter(|line| is_bullet(line)).any(|line| {
-                let Some(start) = legacy_destination_start(line) else {
-                    return false;
-                };
-                let Some(rest) = line[start..].strip_prefix(raw.as_str()) else {
-                    return false;
-                };
+        .collect();
+    // Lines in order, so the first raw bullet is the one found (a replay
+    // of the rewrite takes the first line equal to it, the same line).
+    text.split('\n')
+        .filter(|line| is_bullet(line))
+        .find_map(|line| {
+            let start = legacy_destination_start(line)?;
+            raws.iter().find_map(|raw| {
+                let rest = line[start..].strip_prefix(raw.as_str())?;
                 // Rule 1: the destination ends here, as written.
-                (rest.starts_with(')') || rest.starts_with('#'))
-                    // Rule 3: the parsed link at this spot, if any, is broken.
-                    && find_links(line)
-                        .iter()
-                        .find(|link| link.target_range.start == start)
-                        .is_none_or(|link| {
-                            resolve_link(workspace, &link.target, index)
-                                .is_none_or(|r| !workspace.exists(&r.path))
-                        })
+                let ends = rest.starts_with(')') || rest.starts_with('#');
+                // Rule 3: the parsed link at this spot, if any, is broken.
+                let broken = find_links(line)
+                    .iter()
+                    .find(|link| link.target_range.start == start)
+                    .is_none_or(|link| {
+                        resolve_link(workspace, &link.target, index)
+                            .is_none_or(|r| !workspace.exists(&r.path))
+                    });
+                (ends && broken).then(|| RawListing {
+                    line: line.to_string(),
+                    fixed: format!("{}{}{rest}", &line[..start], encode_link_path(raw)),
+                })
             })
         })
+}
+
+/// Does the link [`find_links`] parses at a legacy bullet's destination
+/// resolve to any path at all? Publish replay cannot tell which files
+/// exist, so it treats every such path as one that might (see
+/// [`ReplayOp::RewriteRawListing`]). A space ends the parse before the
+/// link closes and a `:` reads as a URI scheme, so `[A](a b.md)` and
+/// `[A](a:b.md)` resolve to nothing; `[A](a).md)` and `[A](a#b.md)` resolve
+/// to `a`.
+#[tracing::instrument(level = "trace", skip_all)]
+fn parses_to_a_path(line: &str, index: &str) -> bool {
+    let Some(start) = legacy_destination_start(line) else {
+        // Not the shape a raw listing has: never rewrite it.
+        return true;
+    };
+    find_links(line)
+        .iter()
+        .find(|link| link.target_range.start == start)
+        .is_some_and(|link| resolve_link(&MemWorkspace::default(), &link.target, index).is_some())
+}
+
+/// The edit of [`ReplayOp::RewriteRawListing`], shared by `repair_indexes`
+/// and its replay: the first line of `text` equal to `line` is removed when
+/// another bullet of the index already links `target` (the raw bullet is a
+/// duplicate), else replaced by `fixed`.
+///
+/// # Arguments
+/// * `workspace` - resolves the other bullets' links (replay passes an
+///   empty one).
+/// * `text` - the index, with universal newlines.
+/// * `index` - its catalog-relative path.
+/// * `target` - the catalog-relative path listed.
+/// * `line` - the raw bullet, as written.
+/// * `fixed` - its rewrite.
+///
+/// # Returns
+/// The new text, and whether the line was removed (`true`) or rewritten;
+/// `None` when no line equals `line`.
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) fn rewrite_raw_listing_text(
+    workspace: &dyn Workspace,
+    text: &str,
+    index: &str,
+    target: &str,
+    line: &str,
+    fixed: &str,
+) -> Option<(String, bool)> {
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    let at = lines.iter().position(|l| *l == line)?;
+    lines.remove(at);
+    let rest = lines.join("\n");
+    if listing_line(workspace, &rest, index, target).is_some() {
+        return Some((rest, true));
+    }
+    lines.insert(at, fixed);
+    Some((lines.join("\n"), false))
 }
 
 /// Where the destination starts in a bullet written the way older versions
@@ -1380,6 +1522,99 @@ mod tests {
         let back: Vec<ReplayOp> = serde_json::from_value(value.clone()).unwrap();
 
         assert_eq!(value, json!([{"op": "unlink", "target": "a/b.md"}]));
+        assert_eq!(back, ops);
+    }
+
+    /// The op `repair_indexes` records for the raw bullet `line` of
+    /// `d/{name}` in `d/index.md`: its destination `name`, encoded.
+    fn rewrite(name: &str, line: &str) -> ReplayOp {
+        let start = legacy_destination_start(line).unwrap();
+        assert!(line[start..].starts_with(name), "{line}");
+        let rest = &line[start + name.len()..];
+        ReplayOp::RewriteRawListing {
+            target: format!("d/{name}"),
+            line: line.to_string(),
+            fixed: format!("{}{}{rest}", &line[..start], encode_link_path(name)),
+        }
+    }
+
+    #[test]
+    fn rewrite_raw_listing_replays_onto_newer_text_and_idempotently() {
+        // Someone added prose and another bullet since the repair: the raw
+        // line is still rewritten, and nothing else changes.
+        for name in ["a b.md", "a:b.md"] {
+            let line = format!("* [Odd]({name}) - odd");
+            let current = format!("# D\n\nNew prose.\n\n{line}\n* [New](new.md) - n\n");
+            let ops = [rewrite(name, &line)];
+
+            let once = replay("d/index.md", Some(&current), &ops).unwrap();
+            let twice = replay("d/index.md", Some(&once), &ops).unwrap();
+
+            let fixed = format!("* [Odd]({}) - odd", encode_link_path(name));
+            assert_eq!(
+                once,
+                format!("# D\n\nNew prose.\n\n{fixed}\n* [New](new.md) - n\n"),
+                "{name}"
+            );
+            assert_eq!(twice, once, "{name}");
+        }
+    }
+
+    #[test]
+    fn rewrite_raw_listing_replay_removes_or_rewrites_by_the_current_text() {
+        let line = "* [Odd](a b.md) - old";
+        let ops = [rewrite("a b.md", line)];
+        // A working bullet added meanwhile: the raw one is a duplicate.
+        let beside = format!("# D\n\n{line}\n* [Odd](a%20b.md) - new\n");
+        // The working bullet the repair saw was removed meanwhile: the raw
+        // one is rewritten, never dropped.
+        let alone = format!("# D\n\n{line}\n");
+
+        assert_eq!(
+            replay("d/index.md", Some(&beside), &ops).unwrap(),
+            "# D\n\n* [Odd](a%20b.md) - new\n"
+        );
+        assert_eq!(
+            replay("d/index.md", Some(&alone), &ops).unwrap(),
+            "# D\n\n* [Odd](a%20b.md) - old\n"
+        );
+    }
+
+    #[test]
+    fn rewrite_raw_listing_replay_leaves_a_changed_line_and_a_parsed_link_alone() {
+        // The line was edited meanwhile: left as it is, byte for byte.
+        let ops = [rewrite("a b.md", "* [Odd](a b.md) - old")];
+        let edited = "# D\r\n\r\n* [Odd](a b.md) - edited\r\n";
+        assert_eq!(replay("d/index.md", Some(edited), &ops).unwrap(), edited);
+        // `a).md` and `a#b.md` read as a link to `d/a`, which replay cannot
+        // tell is missing (a concurrent change may have created it): left.
+        for name in ["a).md", "a#b.md"] {
+            let line = format!("* [Odd]({name}) - old");
+            let current = format!("# D\n\n{line}\n");
+            let ops = [rewrite(name, &line)];
+
+            let got = replay("d/index.md", Some(&current), &ops).unwrap();
+
+            assert_eq!(got, current, "{name}");
+        }
+    }
+
+    #[test]
+    fn rewrite_raw_listing_serializes_with_an_op_tag() {
+        let ops = vec![rewrite("a b.md", "* [A](a b.md)")];
+
+        let value = serde_json::to_value(&ops).unwrap();
+        let back: Vec<ReplayOp> = serde_json::from_value(value.clone()).unwrap();
+
+        assert_eq!(
+            value,
+            json!([{
+                "op": "rewrite_raw_listing",
+                "target": "d/a b.md",
+                "line": "* [A](a b.md)",
+                "fixed": "* [A](a%20b.md)"
+            }])
+        );
         assert_eq!(back, ops);
     }
 }
