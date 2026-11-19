@@ -304,6 +304,11 @@ const NOTHING_SELECTED: &str = "no catalog selected: pass `catalog` (see `list_c
 /// makes the other the selection, and a sole closed catalog is refused
 /// the way a key default is (the caller checks it).
 ///
+/// A console session's ceiling ([`Reach::Ceiling`]) gets `None` too: it is
+/// not listed by name, and every HTTP route a session calls names its
+/// catalog, so the fallback (for MCP keys) never applied to one (issue
+/// #728).
+///
 /// # Arguments
 /// * `principal` - the calling key.
 /// * `exists` - whether a catalog of that name is loaded.
@@ -367,7 +372,8 @@ pub fn resolve<'r>(
     sources: Sources<'_>,
     rows: impl Fn(&str) -> Option<&'r CatalogRow>,
 ) -> Result<Selection, OkfError> {
-    let available = |name: &str| rows(name).is_some() && principal.reaches(name);
+    // By row, so a console session's ceiling is decided too.
+    let available = |name: &str| rows(name).is_some_and(|row| principal.reaches_row(row));
     // An empty list (`catalogs: []`) counts as unset, so the selection is
     // never empty.
     #[tracing::instrument(level = "trace", skip_all)]
@@ -486,6 +492,7 @@ mod tests {
                     }),
                     maintenance_off: false,
                     audit_team: None,
+                    member_access: crate::store::ceiling::MemberAccess::Write,
                 };
                 (name.to_string(), row)
             })

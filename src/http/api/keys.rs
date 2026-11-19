@@ -260,6 +260,10 @@ pub(crate) fn manages_grants(
         Reach::Catalogs(_) => {
             !all_catalogs && catalogs.iter().all(|catalog| principal.reaches(catalog))
         }
+        // Only admin credentials manage others' (every caller checks
+        // `require_admin` first), and a console session's ceiling is never
+        // admin: it manages nothing here.
+        Reach::Ceiling => false,
     }
 }
 

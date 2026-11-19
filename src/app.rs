@@ -93,7 +93,7 @@ pub struct App {
     rebuild_locks: KeyedLocks,
     // Catalog rows by name with their access facts (M18 Decision 6): what
     // "does this catalog exist" and every snapshot's freshness are read from.
-    directory: CatalogDirectory,
+    directory: Arc<CatalogDirectory>,
     // Catalog snapshots by id, loaded on demand and bounded in estimated
     // bytes (M18 Decision 2).
     catalog_cache: CatalogCache,
@@ -265,9 +265,18 @@ impl App {
             config.credential_ttl,
         )
         .with_metrics(metrics.clone());
+        // Shared with the credential cache, which resolves self-issued
+        // credentials' ceilings against its rows (issue #728).
+        let directory = Arc::new(CatalogDirectory::new(
+            pool.clone(),
+            config.catalog_directory_entries,
+            config.catalog_ttl,
+            metrics.clone(),
+        ));
         // `clock` moves into `Self` below, so the caches get their own handle.
         let credentials = Credentials::new(
             pool.clone(),
+            Arc::clone(&directory),
             Arc::clone(&clock),
             CredentialLimits {
                 credentials: config.credential_cache_entries,
@@ -299,12 +308,6 @@ impl App {
         let passkeys = Passkeys::new(&config, redis.as_ref())?;
         // A provider whose secret variable is unset fails start-up here.
         let oidc = OidcProviders::new(&config, |name| std::env::var(name).ok(), redis.as_ref())?;
-        let directory = CatalogDirectory::new(
-            pool.clone(),
-            config.catalog_directory_entries,
-            config.catalog_ttl,
-            metrics.clone(),
-        );
         // `if let Some(name) = ...`: Python's `if (name := ...) is not None`.
         // One directory read, not a load: the catalog loads when first used.
         if let Some(name) = &config.default_catalog {

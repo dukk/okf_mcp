@@ -1812,14 +1812,21 @@ mod tests {
         let ceiling_now = ceiling::ceiling_of(test.app.pool(), "alice")
             .await
             .expect("ceiling");
-        let cached = test
+        // Her session's ceiling on `main`, resolved from the cached gates
+        // and the catalog's row (issue #728).
+        let main_row = test
             .app
-            .credentials()
-            .user(&detail_id(&test, "alice").await)
+            .directory()
+            .resolve("main")
             .await
             .unwrap()
-            .map(|user| user.ceiling.clone())
-            .unwrap_or_default();
+            .expect("main");
+        let cached = test
+            .app
+            .session_principal(&detail_id(&test, "alice").await)
+            .await
+            .unwrap()
+            .and_then(|session| session.level_at(&main_row));
         let (admin, _) = put("main", "admin").await;
         let (bogus, _) = put("main", "owner").await;
         let (unknown_catalog, _) = put("nowhere", "read").await;
@@ -1839,7 +1846,11 @@ mod tests {
         assert!(body["entitlements"][0]["created_at"].is_string());
         assert_eq!(detail["entitlements"], body["entitlements"]);
         assert_eq!(ceiling_now.get("main"), Some(&Access::Read));
-        assert_eq!(cached.get("main"), Some(&Access::Read), "the route polls");
+        assert_eq!(
+            cached,
+            Some(Access::Read),
+            "the route's messages reach the cache"
+        );
         assert_eq!(admin.as_u16(), 400, "an entitlement is read or write");
         assert_eq!(bogus.as_u16(), 400);
         assert_eq!(unknown_catalog.as_u16(), 404);

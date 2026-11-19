@@ -23,7 +23,7 @@ use crate::http::console_session::{self, ConsoleSession};
 use crate::http::AppError;
 use crate::labels::directory::Wanted;
 use crate::store::keys::{self as key_rows, Access};
-use crate::store::{user_sessions, users};
+use crate::store::{ceiling, user_sessions, users};
 
 /// The calling key, as the console sees it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -173,6 +173,12 @@ async fn whoami(
             (name, user.flatten())
         }
     };
+    // A console session's levels are its ceiling's, resolved per catalog:
+    // its highest is read now, one row (issue #728).
+    let access = match (&principal.reach, principal.user_id.as_deref()) {
+        (Reach::Ceiling, Some(user_id)) => ceiling::highest(app.pool(), user_id).await?,
+        _ => principal.access,
+    };
     let (teams, user_admin) = match &user {
         Some(name) => teams_of(app.pool(), name).await?,
         None => (Vec::new(), false),
@@ -203,7 +209,7 @@ async fn whoami(
         key_id: principal.key_id.clone(),
         name,
         actor: principal.actor.clone(),
-        access: principal.access.as_str(),
+        access: access.as_str(),
         maintenance_report: principal.maintenance_report,
         all_catalogs: matches!(principal.reach, Reach::All),
         catalogs,
@@ -259,16 +265,9 @@ async fn session(
         })?;
     let admin = principal.access == Access::Admin;
     // A non-admin's ceiling is exactly what it reaches; an admin reaches
-    // everything, so its own ceiling is shown for information.
-    let ceiling = match &principal.reach {
-        Reach::Catalogs(levels) => levels.clone(),
-        Reach::All => app
-            .credentials()
-            .user(&user_id)
-            .await?
-            .map(|user| user.ceiling.clone())
-            .unwrap_or_default(),
-    };
+    // everything, so its own ceiling is shown for information. Read now,
+    // whole, for this page only: no access check reads it (issue #728).
+    let ceiling = ceiling::ceiling_of(app.pool(), &user.name).await?;
     Ok(Json(SessionView {
         user: user.name,
         email: user.email,

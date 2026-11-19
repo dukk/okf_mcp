@@ -849,7 +849,16 @@ async fn create_key(
 ) -> Result<Json<CreatedKeyView>, AppError> {
     let user = session_user(&principal)?;
     let levels = requested_levels(&body.catalogs)?;
-    let ceiling = ceiling::ceiling_of(app.pool(), user.name).await?;
+    // The ceiling on the requested catalogs only (issue #728):
+    // `within_ceiling` looks up nothing else.
+    let requested: Vec<String> = levels.keys().cloned().collect();
+    // `&mut *` borrows the pooled connection, returned when the statement ends.
+    let ceiling = ceiling::ceiling_in(
+        &mut *app.pool().acquire().await.map_err(OkfError::from)?,
+        user.id,
+        &requested,
+    )
+    .await?;
     within_ceiling(&levels, &ceiling)?;
     let now = app.clock().now();
     // The cached policy (Task 5), not a query per request.

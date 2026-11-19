@@ -145,7 +145,10 @@ pub(crate) async fn list_changesets(
             let names: Option<Vec<String>> = match (ctx.connection(), &principal.reach) {
                 (Some(list), _) if !list.is_empty() => Some(list.to_vec()),
                 (_, Reach::Catalogs(levels)) => Some(levels.keys().cloned().collect()),
-                (_, Reach::All) => None,
+                // A console session's ceiling is not listed: it is never
+                // admin, so the key filter (its own changesets) bounds the
+                // rows, and each is checked against its row below.
+                (_, Reach::All | Reach::Ceiling) => None,
             };
             let rows = changesets::open_for_catalogs(pool, names.as_deref(), key_filter).await?;
             // A closed catalog shows no changesets: its handles and paths are
@@ -154,7 +157,9 @@ pub(crate) async fn list_changesets(
             // the incarnation each row belongs to, not only its name.
             let mut open = Vec::with_capacity(rows.len());
             for row in rows {
-                if !ctx.offers(&row.catalog) {
+                // The by-name half of `offers` first, so a row the name
+                // rules out costs no lookup.
+                if principal.excludes(&row.catalog) {
                     continue;
                 }
                 let catalog_id = row.changeset.catalog_id;
@@ -165,7 +170,8 @@ pub(crate) async fn list_changesets(
                     // Gone, or now another catalog: nothing of it to list.
                     Err(_) => continue,
                 };
-                if principal.check_not_suspended(&catalog).is_ok()
+                if ctx.offers(&catalog)
+                    && principal.check_not_suspended(&catalog).is_ok()
                     && ctx
                         .check_contents_by_id(&row.catalog, catalog_id, Access::Read)
                         .await
@@ -1049,8 +1055,7 @@ mod open_tests {
             is_admin: true,
         };
         // An admin session: it passes every level check.
-        let session =
-            crate::auth::Principal::for_session(&user, Default::default(), Default::default());
+        let session = crate::auth::Principal::for_session(&user, Default::default());
         let ctx = crate::mcp::testing::context(&test, std::sync::Arc::new(session), None);
 
         let refused = open_changeset(
