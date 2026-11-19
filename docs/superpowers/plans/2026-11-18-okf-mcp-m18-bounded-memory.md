@@ -57,6 +57,8 @@
 
 ### moka 0.12.15 (in the registry, not yet in the lock)
 
+> **Corrected (issue #682, 2026-11-18).** The requirement `0.12.15` resolved to 0.12.16 in `Cargo.lock` (the newest compatible release); the API below is unchanged. Moka's clock is the real one: a TTL cannot be tested by pausing tokio's time (Task 4's test sleeps 300 ms against a 100 ms TTL). `Cache::invalidate` and `insert` are async, so `Bounded::invalidate_where` and `reweigh` are async too.
+
 - Needs `features = ["future"]`.
 - `moka::future::Cache::builder().max_capacity(u64).weigher(|&K, &V| -> u32).time_to_live(Duration).eviction_listener(|Arc<K>, V, RemovalCause|).build()`.
 - `try_get_with(key, init_future) -> Result<V, Arc<E>>`: concurrent callers for one key share one init.
@@ -697,6 +699,16 @@ Implementation notes for the engineer:
 
 - [ ] **Step 3: Run, full gates, commit** — `feat: a bounded cache with epochs and stale marking (M18 task 4)`.
 
+> **Corrected (issue #682, 2026-11-18).** What shipped in `src/cache/bounded.rs` differs from the surface below in these ways; read the file for the code.
+> - `with_metrics(Metrics)` (call it last) turns on `okf.cache.*` and registers the size gauges (`Metrics::observe_cache`, holding a `Weak` probe); `with_weigher` goes before it. Types `Lookup` (`hit|miss|stale`), `Eviction` (`size|ttl|invalidated`) and the trait `CacheSize` live in `cache::bounded`. `okf.cache.bytes` has no unit (a `By` unit renders as `okf_cache_bytes_bytes`) and reports only for `Limit::Bytes`.
+> - `invalidate_where` and `reweigh` are `async`.
+> - `get_or_load` treats a stale-marked entry as a miss (it reloads). `get_or_revalidate`'s `check` runs **only** for stale-marked entries, never for a fresh one: moka's `time_to_live` is the only age limit, so "older than the TTL" is an ordinary miss. Anything that needs a shorter lifetime for some entries (Task 5's absent-name entries, 5 s) must not rely on `check` seeing them: use a second `Bounded` with its own TTL, or put the age in the value and treat an old one as a miss in the caller.
+> - A caller that shared another caller's failed load gets `OkfError::Busy` (`OkfError` is not `Clone`); the caller that ran the loader gets the original error.
+> - The over-budget warning is rate-limited once an hour **per cache**, not per key: per-key state would be unbounded.
+> - Minimum generations (`InFlight.min_generation`, Decision 11) are **not** in Task 4: `Bounded` cannot read a generation out of `V`. Task 8 adds them (a `generation_of` function given to the cache, or checked in its `check`/load closures) with `CatalogCache`.
+> - `with_idle` (named in the self-review's list of names) was never part of Task 4 and does not exist.
+
+
 ---
 
 ### Task 5: The catalog directory (spec Decisions 6, 7 store side)
@@ -764,7 +776,9 @@ impl CatalogDirectory {
 }
 ```
 
-Absent entries: store `None` with a 5 s lifetime by checking `loaded_at` in `get_or_revalidate`'s `check` (absent entries older than 5 s are reloaded; present ones follow `catalog_ttl`).
+> **Corrected (issue #682).** `Bounded`'s `check` runs only for stale-marked entries, so it cannot expire an absent entry after 5 s. Keep absent names in a second `Bounded<String, ()>` (negative cache) with a 5 s TTL, consulted before the row cache.
+
+Absent entries: a negative cache with a 5 s lifetime (see the note above); present ones follow `catalog_ttl`.
 
 - [ ] **Step 4: Wire into `App`** (`App::directory() -> &CatalogDirectory`) and into `App::apply` / `apply_reconnect`. Nothing reads it yet except tests.
 
@@ -1216,7 +1230,7 @@ async fn run(job: Housekeeping, context: Data<HousekeepingContext>) -> Result<()
   - Docs section: Task 17.
 - **Names used across tasks:**
   - `invalidate::{Invalidation, Message, CHANNEL, invalidate, listen}`, `App::{apply, apply_reconnect}`;
-  - `cache::{Bounded, CacheName, Limit}`, `Bounded::{get_or_load, get_or_revalidate, peek, invalidate, invalidate_where, mark_all_stale, with_weigher, with_idle}`;
+  - `cache::{Bounded, CacheName, Limit}`, `Bounded::{get_or_load, get_or_revalidate, peek, invalidate, invalidate_where, mark_all_stale, reweigh, with_weigher, with_metrics}`;
   - `cache::directory::{CatalogDirectory, Page}`, `CatalogDirectory::{resolve, resolve_many, reachable_page, apply}`; `store::catalogs::{CatalogRow, row_by_name, row_by_id, rows_by_names, page}`;
   - `cache::catalogs::CatalogCache::{get, apply}`; `App::{catalog_row, catalog_state, publish_lock, directory}`;
   - `cache::credentials::{Credentials, CredentialEntry, UserEntry, AccessFacts}`; `cache::labels::{LabelLookup, Wanted}`;
