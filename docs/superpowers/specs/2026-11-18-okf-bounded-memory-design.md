@@ -76,6 +76,32 @@ unchanged inside.
   measure on the real catalog and a synthetic large one, record the factor
   and the method in this spec). The cache's capacity is
   `catalog_cache_bytes`.
+  > **Corrected (issue #686, 2026-11-19).** The weight is
+  > `1024 + 1024 * files + 8 * stored_bytes`, saturating at `u32::MAX`
+  > (`cache::catalogs::{PER_CATALOG_BYTES, PER_FILE_BYTES, WEIGHT_FACTOR,
+  > weight}`). Content alone would charge nothing for an empty catalog or
+  > for many empty files, whose paths, revisions, commit times and map
+  > entries still take memory (review of PR #714). Method
+  > (`tests/snapshot_weight.rs`, `--ignored`): a counting
+  > `#[global_allocator]` in its own test binary; catalogs imported into
+  > Postgres; after a warm-up load of a small catalog, the bytes allocated
+  > minus freed across one `CatalogState::load` whose result is still held.
+  > Measured: one empty document, 1,065 B; 5,000 empty documents at paths
+  > like `notes/topic-1/concept-00001.md`, 4,926,196 B (985 B per file, so
+  > about 80 B per catalog besides); 500 synthetic concepts (frontmatter,
+  > headings, prose, links, about 850 B each), 3,870,753 B for 424,010 B of
+  > content; 5,000 of them, 38,696,461 B for 4,285,010 B. With 985 B per
+  > file taken out, content costs 7.97 and 7.88 B per byte. Rounded up:
+  > 8 per byte, 1 KiB per file, and 1 KiB per catalog (generous, to include
+  > the cache entry's own bookkeeping). No real catalog checkout was
+  > available to the run.
+
+  > **Corrected (issue #745, 2026-11-19).** The catalog cache has no TTL of
+  > its own (issue #686): `CatalogCache::new` takes the pool, the budget
+  > and the metrics, and no TTL. Freshness is the directory row's: a use compares the
+  > snapshot's generation with the row's and refreshes in place when
+  > behind. The moka TTL on snapshots is a fixed one-day backstop.
+
 - **Loads are single-flight** (`try_get_with`): concurrent misses on one
   catalog build it once, through today's `CatalogState::load`.
 - **A stale hit refreshes in place** with today's `refresh_to`. Readers
@@ -151,6 +177,17 @@ endpoint's catalog list, and the MCP `list_catalogs` tool. The console
 follows the cursor. This is a response shape change and is called out in
 the release notes.
 
+> **Corrected (issue #745, 2026-11-19).** Task 21 (issue #736) extends the
+> paging to the pages that showed a user's whole ceiling. `GET /me` drops
+> `ceiling` for `ceiling_access` (the highest level, or `null`) and carries
+> no `next`; `GET /session` drops it and has no paging. The new
+> `GET /me/ceiling?prefix=&after=&limit=` answers `{ceiling, next}`: the
+> catalogs whose names start with `prefix`, in byte order, at most `limit`
+> (`ceiling::page`). `GET /whoami` gains `levels`, and the consent page
+> shows one page at a time (Find, Next catalogs). A client that read the
+> whole ceiling from `/me` must page `/me/ceiling` and follow `next`.
+> Listings leave out catalogs that do not build.
+
 ### 8. Search fan-out is capped
 
 `GET /api/search` with no catalogs named searches every reachable catalog
@@ -159,6 +196,11 @@ It now searches at most `search_fanout_max` catalogs (default 25). A
 request that would exceed it is refused with a 400 asking the caller to
 name the catalogs. The cap applies to every key. MCP `search` is already
 bounded by catalog selection and does not change.
+
+> **Corrected (issue #745, 2026-11-19).** The cap applies only when the
+> request names no catalogs (issue #725). An explicit list is not capped:
+> the console names every reachable catalog, so capping a list would have
+> broken it. The cap still applies to every key.
 
 ### 9. The key cache is split by what each change touches
 
@@ -194,6 +236,18 @@ expiry is still checked on every request.
 - **Settings** are global and small: loaded once per replica, reloaded on
   a `settings` invalidation or after `credential_ttl`. `admin_generation`
   remains only as the settings version.
+
+> **Corrected (issue #745, 2026-11-19).** As shipped (issues #689, #728 and
+> #736, PR #739): the user cache holds `{ auth, gates }`, not the ceiling.
+> A user's ceiling grew with the catalogs their teams own, so it is
+> resolved per catalog from the directory row (owner team, member access,
+> entitlements) when a request needs it, and a session's reach is
+> `Reach::Ceiling`. The pages that listed a whole ceiling no longer do
+> (issue #736): `GET /me` returns `ceiling_access` instead, `GET /session`
+> drops the ceiling, `GET /me/ceiling?prefix=&after=&limit=` pages it
+> (`{ceiling, next}`) and the consent page shows one page at a time (see
+> Decision 7). Listings (`GET /catalogs`, `/whoami`, `/labels`, MCP `list_catalogs`)
+> page the same way (Decision 7).
 
 ### 10. Invalidations are sent by the transaction that makes the change
 
@@ -304,6 +358,13 @@ bridge both ways:
 
 The bridge is removed one release later.
 
+> **Corrected (issue #745, 2026-11-19).** The bridge payload is the string
+> `"notified"` (`announce::BRIDGE_PAYLOAD`, issue #691), not the empty
+> message. An M16 replica reads any non-number as "check now", as it reads
+> the M16 command line's empty payload. A new replica ignores the bridge
+> payload (that change also went through `NOTIFY`) and answers every other
+> payload as an M16 announcement.
+
 ### 15. Housekeeping runs as apalis jobs, once per cluster (#356)
 
 > **Corrected (2026-11-18, planning).** The design first used a
@@ -368,6 +429,13 @@ label and becomes one cluster total.
 - `prune_workers` deletes `apalis.workers` rows whose `last_seen` is older
   than 10 orphan timeouts and that no `Running` job references.
 
+> **Corrected (issue #745, 2026-11-19).** `prune_workers` keeps every
+> worker row that any job still names, not only `Queued` or `Running` ones
+> (issue #692): `apalis.jobs.lock_by` is a foreign key with no `ON DELETE`,
+> so deleting the row of a worker that finished jobs fails. A dead worker's
+> row is prunable at once (apalis clears `lock_by` when it re-enqueues its
+> job); a sender's row goes after the jobs are pruned (7 days).
+
 ### 18. The poll loop is removed
 
 `App::poll`, `poll_pass`, `poll_until`, the `polling` mutex and
@@ -391,7 +459,7 @@ Added, labelled by `cache` (`catalog`, `overlay`, `directory`,
 - `okf.cache.entries{cache}` and `okf.cache.bytes{cache}` (the weighed
   caches);
 - `okf.cache.load.duration{cache,outcome}` (histogram);
-- `okf.invalidations.sent{kind}`, `okf.invalidations.received{kind}`,
+- `okf.invalidations.queued{kind}`, `okf.invalidations.received{kind}`,
   and `okf.invalidations.lag` (histogram, send to apply, from a send
   timestamp in the payload);
 - `okf.housekeeping.runs{task,outcome}` and
@@ -417,6 +485,14 @@ Per-request loading cannot do that. Instead:
 An entity found without its audit row at request time (which the
 migration and the create paths rule out) is refused with
 `OkfError::Database`'s 503 and logged, rather than recorded without one.
+
+> **Corrected (issue #745, 2026-11-19).** An entity found without its audit
+> row at request time is recorded with no credential id, not refused with
+> 503. Rows are created with their entity and backfilled by migration
+> `0023_audit_backfill.sql` (issue #681). The maintainer kept this
+> behaviour (2026-11-19). Reading a user's gates (`gates::for_user`,
+> `gates::audit_credential_id`) no longer creates rows
+> (`reading_a_users_gates_writes_nothing`).
 
 ## Architecture
 
@@ -524,6 +600,15 @@ Deprecated (parse with a warning for one release): `poll_interval`,
   startup loads no catalog, resident memory stays within the configured
   budgets after touching a working set larger than the budget, and
   listing and auth latencies stay within stated bounds.
+
+> **Corrected (issue #745, 2026-11-19).** The hegel property test of the
+> epoch race was not written in M18; it is deferred to issue #744. The
+> unit and integration tests above cover the race with a held load. The
+> scale test ran with a small budget (2,456,000 bytes, 1,000 catalogs), not the
+> default 1 GiB; the default settings (1 GiB catalog cache, fan-out cap 25)
+> were kept. Its listing bound is split: 200 ms for the cold first page, 50
+> ms for a repeated one (the cold page loads 100 snapshots one after
+> another, issue #732).
 
 ## Rollout
 

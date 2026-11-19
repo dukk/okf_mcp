@@ -26,6 +26,7 @@ use chrono::{DateTime, Utc};
 
 use crate::auth::{Principal, Reach};
 use crate::error::OkfError;
+use crate::store::catalogs::CatalogRow;
 use crate::store::keys::Access;
 
 /// The header naming a connection's catalogs (`pg,work`); HTTP header names
@@ -203,6 +204,7 @@ fn checked<'a>(
 /// # Arguments
 /// * `principal` - the calling key.
 /// * `selection` - the checked selection.
+/// * `rows` - each catalog's directory row.
 /// * `now` - the server clock.
 ///
 /// # Returns
@@ -212,17 +214,33 @@ fn checked<'a>(
 /// The first closed catalog's refusal: [`OkfError::Suspended`],
 /// [`OkfError::UnlockRequired`] or [`OkfError::MaintenanceOff`].
 #[tracing::instrument(level = "trace", skip_all)]
-fn refuse_closed(
+fn refuse_closed<'r>(
     principal: &Principal,
     selection: Selection,
+    rows: &impl Fn(&str) -> Option<&'r CatalogRow>,
     now: DateTime<Utc>,
 ) -> Result<Selection, OkfError> {
     for name in &selection.catalogs {
         // The selection is for reading; a tool that writes checks its own
         // level and the write's admission after (M14 Decision 24).
-        principal.check_open(name, Access::Read, now)?;
+        principal.check_open(row_of(rows, name)?, Access::Read, now)?;
     }
     Ok(selection)
+}
+
+/// The row of a name the selection already found.
+///
+/// # Errors
+/// [`OkfError::CatalogNotSelected`] if it has none (never: only names with
+/// a row pass [`checked`]).
+#[tracing::instrument(level = "trace", skip_all)]
+fn row_of<'r>(
+    rows: &impl Fn(&str) -> Option<&'r CatalogRow>,
+    name: &str,
+) -> Result<&'r CatalogRow, OkfError> {
+    rows(name).ok_or_else(|| OkfError::CatalogNotSelected {
+        catalog: name.to_string(),
+    })
 }
 
 /// `selection` without its closed catalogs: for a call that falls back to
@@ -231,6 +249,7 @@ fn refuse_closed(
 /// # Arguments
 /// * `principal` - the calling key.
 /// * `selection` - the checked connection list.
+/// * `rows` - each catalog's directory row.
 /// * `now` - the server clock.
 ///
 /// # Returns
@@ -240,9 +259,10 @@ fn refuse_closed(
 /// The first catalog's refusal, as [`refuse_closed`], when every one is
 /// closed (a selection is never empty).
 #[tracing::instrument(level = "trace", skip_all)]
-fn without_closed(
+fn without_closed<'r>(
     principal: &Principal,
     selection: Selection,
+    rows: &impl Fn(&str) -> Option<&'r CatalogRow>,
     now: DateTime<Utc>,
 ) -> Result<Selection, OkfError> {
     let mut kept = Vec::with_capacity(selection.catalogs.len());
@@ -250,7 +270,8 @@ fn without_closed(
     // `selection.catalogs` is moved out (no `&`), so each kept name is reused
     // rather than copied.
     for name in selection.catalogs {
-        match principal.check_open(&name, Access::Read, now) {
+        let open = row_of(rows, &name).and_then(|row| principal.check_open(row, Access::Read, now));
+        match open {
             Ok(_) => kept.push(name),
             // `get_or_insert` keeps the first refusal only.
             Err(error) => {
@@ -283,6 +304,11 @@ const NOTHING_SELECTED: &str = "no catalog selected: pass `catalog` (see `list_c
 /// makes the other the selection, and a sole closed catalog is refused
 /// the way a key default is (the caller checks it).
 ///
+/// A console session's ceiling ([`Reach::Ceiling`]) gets `None` too: it is
+/// not listed by name, and every HTTP route a session calls names its
+/// catalog, so the fallback (for MCP keys) never applied to one (issue
+/// #728).
+///
 /// # Arguments
 /// * `principal` - the calling key.
 /// * `exists` - whether a catalog of that name is loaded.
@@ -314,7 +340,8 @@ fn only_reachable<'a>(principal: &'a Principal, exists: &impl Fn(&str) -> bool) 
 /// # Arguments
 /// * `principal` - the calling key.
 /// * `sources` - the argument, the connection and the server default.
-/// * `exists` - whether a catalog of that name is loaded.
+/// * `rows` - the directory row of a catalog of that name, if one exists
+///   and is loaded: what the closed checks read.
 ///
 /// # Returns
 /// The selection: the argument if set, else the connection's list, else
@@ -336,15 +363,17 @@ fn only_reachable<'a>(principal: &'a Principal, exists: &impl Fn(&str) -> bool) 
 /// falls back to the connection's list leaves closed catalogs out instead,
 /// and is refused only when every listed catalog is closed. Reach is
 /// always checked first.
-// `impl Fn(&str) -> bool`: any function or closure taking a name, like a
-// Python callable argument.
+// `impl Fn(&str) -> Option<&CatalogRow>`: any function or closure taking a
+// name, like a Python callable argument. `'r` says the rows it returns
+// outlive the call.
 #[tracing::instrument(level = "debug", skip_all)]
-pub fn resolve(
+pub fn resolve<'r>(
     principal: &Principal,
     sources: Sources<'_>,
-    exists: impl Fn(&str) -> bool,
+    rows: impl Fn(&str) -> Option<&'r CatalogRow>,
 ) -> Result<Selection, OkfError> {
-    let available = |name: &str| exists(name) && principal.reaches(name);
+    // By row, so a console session's ceiling is decided too.
+    let available = |name: &str| rows(name).is_some_and(|row| principal.reaches_row(row));
     // An empty list (`catalogs: []`) counts as unset, so the selection is
     // never empty.
     #[tracing::instrument(level = "trace", skip_all)]
@@ -355,18 +384,18 @@ pub fn resolve(
     if let Some(connection) = set(sources.connection) {
         let scope = checked(connection.iter().map(String::as_str), available)?;
         return match argument {
-            None => without_closed(principal, scope, sources.now),
+            None => without_closed(principal, scope, &rows, sources.now),
             // Every scope name is available, so membership is the whole check.
             // `and_then` runs the open check only on an `Ok` selection.
             Some(list) => checked(list.iter().map(String::as_str), |name| {
                 scope.catalogs.iter().any(|listed| listed == name)
             })
-            .and_then(|selection| refuse_closed(principal, selection, sources.now)),
+            .and_then(|selection| refuse_closed(principal, selection, &rows, sources.now)),
         };
     }
     if let Some(list) = argument {
         return checked(list.iter().map(String::as_str), available)
-            .and_then(|selection| refuse_closed(principal, selection, sources.now));
+            .and_then(|selection| refuse_closed(principal, selection, &rows, sources.now));
     }
     // `as_deref`: `Option<String>` to `Option<&str>`, borrowing the name.
     match principal
@@ -375,12 +404,12 @@ pub fn resolve(
         .or(sources.server_default)
     {
         Some(name) => checked([name], available)
-            .and_then(|selection| refuse_closed(principal, selection, sources.now)),
+            .and_then(|selection| refuse_closed(principal, selection, &rows, sources.now)),
         // The fallback names a catalog the key reaches and that exists, and
         // is refused when closed exactly as a key default is.
-        None => match only_reachable(principal, &exists) {
+        None => match only_reachable(principal, &|name| rows(name).is_some()) {
             Some(name) => checked([name], available)
-                .and_then(|selection| refuse_closed(principal, selection, sources.now)),
+                .and_then(|selection| refuse_closed(principal, selection, &rows, sources.now)),
             None => Err(OkfError::Refused {
                 reason: NOTHING_SELECTED.to_string(),
             }),
@@ -393,12 +422,15 @@ mod tests {
     use super::*;
     use axum::http::HeaderValue;
 
+    use std::collections::HashMap;
+
     use crate::auth::{CredentialKind, Reach};
+    use crate::store::catalogs::SuspendedRow;
     use crate::store::keys::Access;
 
-    /// A `read` key reaching `reach` (every catalog when empty), seeing each
-    /// of `suspended` as suspended, as the key cache would build it.
-    fn principal_with(reach: &[&str], default: Option<&str>, suspended: &[&str]) -> Principal {
+    /// A `read` key reaching `reach` (every catalog when empty), as the
+    /// credential cache would build it (no user, so no customer gates).
+    fn principal(reach: &[&str], default: Option<&str>) -> Principal {
         Principal {
             key_id: "k".to_string(),
             access: Access::Read,
@@ -419,28 +451,8 @@ mod tests {
             kind: CredentialKind::ApiKey,
             user: None,
             user_id: None,
-            gates: Default::default(),
-            suspended: std::sync::Arc::new(
-                suspended
-                    .iter()
-                    .map(|name| {
-                        (
-                            name.to_string(),
-                            crate::store::teams::SuspendedCatalog {
-                                team: "family".to_string(),
-                                notice: None,
-                                catalog_label: name.to_string(),
-                                team_label: "family".to_string(),
-                            },
-                        )
-                    })
-                    .collect(),
-            ),
+            facts: Default::default(),
         }
-    }
-
-    fn principal(reach: &[&str], default: Option<&str>) -> Principal {
-        principal_with(reach, default, &[])
     }
 
     /// The name of the catalog a `Suspended` refusal names, or a panic.
@@ -455,14 +467,49 @@ mod tests {
         list.iter().map(|name| name.to_string()).collect()
     }
 
+    /// The catalogs that exist, with their ids: `pg` is 1, `work` 2, `home` 3.
     const EXISTING: [&str; 3] = ["pg", "work", "home"];
 
-    fn exists(name: &str) -> bool {
-        EXISTING.contains(&name)
+    /// The directory rows of [`EXISTING`], each of `suspended` owned by the
+    /// suspended team `family`.
+    fn rows(suspended: &[&str]) -> HashMap<String, CatalogRow> {
+        EXISTING
+            .iter()
+            .zip(1..)
+            .map(|(name, id)| {
+                let row = CatalogRow {
+                    id,
+                    name: name.to_string(),
+                    display_name: String::new(),
+                    description: String::new(),
+                    generation: 1,
+                    owner_team: Some("family".to_string()),
+                    owner_team_id: Some("t-family".to_string()),
+                    suspended: suspended.contains(name).then(|| SuspendedRow {
+                        team: "family".to_string(),
+                        notice: None,
+                        team_label: "family".to_string(),
+                    }),
+                    maintenance_off: false,
+                    audit_team: None,
+                    member_access: crate::store::ceiling::MemberAccess::Write,
+                };
+                (name.to_string(), row)
+            })
+            .collect()
+    }
+
+    fn select_in(
+        principal: &Principal,
+        sources: Sources<'_>,
+        catalogs: &HashMap<String, CatalogRow>,
+    ) -> Result<Vec<String>, OkfError> {
+        resolve(principal, sources, |name| catalogs.get(name))
+            .map(|selection| selection.catalogs().to_vec())
     }
 
     fn select(principal: &Principal, sources: Sources<'_>) -> Result<Vec<String>, OkfError> {
-        resolve(principal, sources, exists).map(|selection| selection.catalogs().to_vec())
+        select_in(principal, sources, &rows(&[]))
     }
 
     #[test]
@@ -488,6 +535,7 @@ mod tests {
 
     #[test]
     fn the_connection_is_the_scope_and_the_argument_only_narrows_it() {
+        let catalogs = rows(&[]);
         let key = principal(&["pg", "work"], Some("pg"));
         let connection = names(&["work"]);
         let inside = names(&["work", "work"]);
@@ -499,7 +547,7 @@ mod tests {
             now: Utc::now(),
         };
 
-        let alone = resolve(&key, base, exists).unwrap();
+        let alone = resolve(&key, base, |name| catalogs.get(name)).unwrap();
         let narrowed = select(
             &key,
             Sources {
@@ -579,6 +627,7 @@ mod tests {
 
     #[test]
     fn the_first_name_is_the_write_target_and_duplicates_collapse() {
+        let catalogs = rows(&[]);
         let key = principal(&[], None);
         let connection = names(&["work", "pg", "work"]);
         let sources = Sources {
@@ -588,7 +637,7 @@ mod tests {
             now: Utc::now(),
         };
 
-        let selection = resolve(&key, sources, exists).unwrap();
+        let selection = resolve(&key, sources, |name| catalogs.get(name)).unwrap();
 
         assert_eq!(selection.catalogs(), ["work", "pg"]);
         assert_eq!(selection.write_target(), "work");
@@ -666,7 +715,9 @@ mod tests {
         for reach in [&["pg"][..], &["pg", "gone"][..]] {
             let key = principal(reach, None);
 
-            let selection = resolve(&key, unset(), exists).unwrap();
+            let rows = rows(&[]);
+
+            let selection = resolve(&key, unset(), |name| rows.get(name)).unwrap();
 
             assert_eq!(selection.catalogs(), ["pg"], "{reach:?}");
             assert_eq!(selection.write_target(), "pg", "{reach:?}");
@@ -722,19 +773,23 @@ mod tests {
     /// suspended catalog is selected, as a named one is.
     #[test]
     fn a_closed_only_catalog_is_refused_like_a_default() {
-        use crate::auth::AccessGates;
+        use crate::auth::AccessFacts;
+        use crate::store::gates::UserGates;
 
-        let suspended = principal_with(&["pg"], None, &["pg"]);
+        let suspended = principal(&["pg"], None);
         let admin = Principal {
             access: Access::Admin,
-            ..principal_with(&["pg"], None, &["pg"])
+            ..principal(&["pg"], None)
         };
         let locked = Principal {
             user_id: Some("u-staff".to_string()),
-            gates: std::sync::Arc::new(AccessGates {
-                admins: ["u-staff".to_string()].into(),
+            facts: std::sync::Arc::new(AccessFacts {
+                user: Some(std::sync::Arc::new(UserGates {
+                    is_admin: true,
+                    ..UserGates::default()
+                })),
                 require_unlock: true,
-                ..AccessGates::default()
+                ..AccessFacts::default()
             }),
             ..principal(&["pg"], None)
         };
@@ -743,8 +798,12 @@ mod tests {
             ..locked.clone()
         };
 
-        assert_eq!(suspended_name(resolve(&suspended, unset(), exists)), "pg");
-        assert_eq!(select(&admin, unset()).unwrap(), ["pg"]);
+        let closed = rows(&["pg"]);
+        assert_eq!(
+            suspended_name(resolve(&suspended, unset(), |name| closed.get(name))),
+            "pg"
+        );
+        assert_eq!(select_in(&admin, unset(), &closed).unwrap(), ["pg"]);
         assert_eq!(
             select(&locked, unset()).unwrap_err().kind(),
             select(&locked_default, unset()).unwrap_err().kind(),
@@ -760,11 +819,9 @@ mod tests {
     /// are closed: closing a catalog never moves a key's selection.
     #[test]
     fn several_reachable_catalogs_are_still_refused() {
-        for key in [
-            principal(&["pg", "work"], None),
-            principal_with(&["pg", "work"], None, &["work"]),
-        ] {
-            let error = select(&key, unset()).unwrap_err();
+        let key = principal(&["pg", "work"], None);
+        for closed in [rows(&[]), rows(&["work"])] {
+            let error = select_in(&key, unset(), &closed).unwrap_err();
 
             assert!(matches!(error, OkfError::Refused { .. }), "{error:?}");
             assert!(
@@ -783,7 +840,12 @@ mod tests {
         let key = principal(&[], None);
         assert_eq!(key.reach, Reach::All);
 
-        let refused = resolve(&key, unset(), |name| name == "pg");
+        let only_pg: HashMap<String, CatalogRow> = rows(&[])
+            .into_iter()
+            .filter(|(name, _)| name == "pg")
+            .collect();
+
+        let refused = resolve(&key, unset(), |name| only_pg.get(name));
 
         assert!(
             matches!(refused, Err(OkfError::Refused { .. })),
@@ -854,7 +916,8 @@ mod tests {
 
     #[test]
     fn a_named_suspended_catalog_is_refused() {
-        let key = principal_with(&[], Some("pg"), &["work"]);
+        let catalogs = rows(&["work"]);
+        let key = principal(&[], Some("pg"));
         let list = names(&["pg", "work"]);
         let connection = names(&["pg", "work"]);
         let named = Sources {
@@ -868,9 +931,12 @@ mod tests {
             ..named
         };
 
-        assert_eq!(suspended_name(resolve(&key, named, exists)), "work");
         assert_eq!(
-            suspended_name(resolve(&key, narrowed, exists)),
+            suspended_name(resolve(&key, named, |name| catalogs.get(name))),
+            "work"
+        );
+        assert_eq!(
+            suspended_name(resolve(&key, narrowed, |name| catalogs.get(name))),
             "work",
             "an argument naming a suspended catalog on a connection is refused too"
         );
@@ -878,8 +944,9 @@ mod tests {
 
     #[test]
     fn a_suspended_default_is_refused() {
-        let key = principal_with(&[], Some("work"), &["work"]);
-        let server = principal_with(&[], None, &["home"]);
+        let catalogs = rows(&["work", "home"]);
+        let key = principal(&[], Some("work"));
+        let server = principal(&[], None);
         let sources = Sources {
             argument: None,
             connection: None,
@@ -887,7 +954,10 @@ mod tests {
             now: Utc::now(),
         };
 
-        assert_eq!(suspended_name(resolve(&key, sources, exists)), "work");
+        assert_eq!(
+            suspended_name(resolve(&key, sources, |name| catalogs.get(name))),
+            "work"
+        );
         assert_eq!(
             suspended_name(resolve(
                 &server,
@@ -895,7 +965,7 @@ mod tests {
                     server_default: Some("home"),
                     ..sources
                 },
-                exists
+                |name| catalogs.get(name)
             )),
             "home",
             "the server's default is a named catalog too"
@@ -904,7 +974,8 @@ mod tests {
 
     #[test]
     fn the_connection_list_drops_suspended_catalogs() {
-        let key = principal_with(&[], None, &["pg"]);
+        let catalogs = rows(&["pg"]);
+        let key = principal(&[], None);
         let connection = names(&["pg", "work"]);
         let sources = Sources {
             argument: None,
@@ -913,7 +984,7 @@ mod tests {
             now: Utc::now(),
         };
 
-        let selection = resolve(&key, sources, exists).unwrap();
+        let selection = resolve(&key, sources, |name| catalogs.get(name)).unwrap();
 
         assert_eq!(selection.catalogs(), ["work"]);
         assert_eq!(selection.write_target(), "work");
@@ -921,7 +992,8 @@ mod tests {
 
     #[test]
     fn a_connection_list_of_only_suspended_catalogs_is_refused() {
-        let key = principal_with(&[], None, &["pg", "work"]);
+        let catalogs = rows(&["pg", "work"]);
+        let key = principal(&[], None);
         let connection = names(&["pg", "work"]);
         let sources = Sources {
             argument: None,
@@ -930,13 +1002,17 @@ mod tests {
             now: Utc::now(),
         };
 
-        assert_eq!(suspended_name(resolve(&key, sources, exists)), "pg");
+        assert_eq!(
+            suspended_name(resolve(&key, sources, |name| catalogs.get(name))),
+            "pg"
+        );
     }
 
     #[test]
     fn an_unreached_suspended_catalog_is_not_selected_rather_than_suspended() {
+        let catalogs = rows(&["work"]);
         // `work` is suspended, but this key reaches only `pg`.
-        let key = principal_with(&["pg"], Some("work"), &["work"]);
+        let key = principal(&["pg"], Some("work"));
         let list = names(&["work"]);
         let connection = names(&["pg", "work"]);
         let base = Sources {
@@ -964,7 +1040,7 @@ mod tests {
         ];
 
         for (source, sources) in cases {
-            let refused = resolve(&key, sources, exists);
+            let refused = resolve(&key, sources, |name| catalogs.get(name));
             assert!(
                 matches!(refused, Err(OkfError::CatalogNotSelected { ref catalog }) if catalog == "work"),
                 "{source}: an unreached catalog never reads as suspended: {refused:?}"
@@ -974,9 +1050,10 @@ mod tests {
 
     #[test]
     fn an_admin_selects_suspended_catalogs() {
+        let catalogs = rows(&["pg", "work"]);
         let admin = Principal {
             access: Access::Admin,
-            ..principal_with(&[], Some("pg"), &["pg", "work"])
+            ..principal(&[], Some("pg"))
         };
         let list = names(&["work"]);
         let connection = names(&["pg", "work"]);
@@ -987,25 +1064,27 @@ mod tests {
             now: Utc::now(),
         };
 
-        assert_eq!(select(&admin, base).unwrap(), ["pg"]);
+        assert_eq!(select_in(&admin, base, &catalogs).unwrap(), ["pg"]);
         assert_eq!(
-            select(
+            select_in(
                 &admin,
                 Sources {
                     argument: Some(&list),
                     ..base
-                }
+                },
+                &catalogs
             )
             .unwrap(),
             ["work"]
         );
         assert_eq!(
-            select(
+            select_in(
                 &admin,
                 Sources {
                     connection: Some(&connection),
                     ..base
-                }
+                },
+                &catalogs
             )
             .unwrap(),
             ["pg", "work"]
@@ -1018,31 +1097,30 @@ mod tests {
     /// refused only when nothing is left. An expired unlock is no unlock.
     #[test]
     fn a_locked_catalog_is_refused_when_named_and_dropped_from_a_connection_list() {
-        use crate::auth::AccessGates;
-        use crate::store::unlocks::LiveUnlock;
+        use crate::auth::AccessFacts;
+        use crate::store::gates::{UserGates, UserUnlock};
         let now = Utc::now();
-        let unlock = |catalog: &str, id, expires_at| LiveUnlock {
+        // `work` is catalog 2 and `home` 3 (see `rows`).
+        let unlock = |catalog_id, id, expires_at| UserUnlock {
             id,
-            user_id: "u-staff".to_string(),
-            catalog: catalog.to_string(),
+            catalog_id,
             expires_at,
         };
         let staff = Principal {
             user_id: Some("u-staff".to_string()),
-            gates: std::sync::Arc::new(AccessGates {
-                admins: ["u-staff".to_string()].into(),
-                require_unlock: true,
-                unlocks: [(
-                    "u-staff".to_string(),
-                    vec![
-                        unlock("work", 1, now + chrono::TimeDelta::hours(1)),
-                        unlock("home", 2, now - chrono::TimeDelta::seconds(1)),
+            facts: std::sync::Arc::new(AccessFacts {
+                user: Some(std::sync::Arc::new(UserGates {
+                    is_admin: true,
+                    unlocks: vec![
+                        unlock(2, 1, now + chrono::TimeDelta::hours(1)),
+                        unlock(3, 2, now - chrono::TimeDelta::seconds(1)),
                     ],
-                )]
-                .into(),
-                ..AccessGates::default()
+                    ..UserGates::default()
+                })),
+                require_unlock: true,
+                ..AccessFacts::default()
             }),
-            ..principal_with(&[], Some("pg"), &[])
+            ..principal(&[], Some("pg"))
         };
         let connection = names(&["pg", "work"]);
         let only_pg = names(&["pg"]);

@@ -59,7 +59,7 @@ pub(crate) struct Keys {
     pub stranger: String,
 }
 
-/// Creates [`Keys`] in the test database and polls, so the server knows them.
+/// Creates [`Keys`] in the test database (keys load on their first use).
 pub(crate) async fn keys(test: &TestApp) -> Keys {
     let make = |name: &'static str, access: Access, catalog: &'static str| {
         let pool = test.app.pool().clone();
@@ -94,12 +94,10 @@ pub(crate) async fn keys(test: &TestApp) -> Keys {
         admin: make("admin", Access::Admin, "main").await,
         stranger: make("stranger", Access::Admin, "other").await,
     };
-    test.app.poll().await.expect("poll the new keys in");
     keys
 }
 
-/// Creates an admin key, named `root`, that reaches every catalog, and
-/// polls it in. [`Keys`] has none: its `admin` reaches only `main`, which is
+/// Creates an admin key, named `root`, that reaches every catalog. [`Keys`] has none: its `admin` reaches only `main`, which is
 /// what the scoped-admin cases need. Create it once per test, since a name
 /// and actor cannot be taken twice.
 ///
@@ -127,7 +125,6 @@ pub(crate) async fn every_catalog_admin(test: &TestApp) -> String {
     .await
     .expect("create the every-catalog admin key")
     .key;
-    test.app.poll().await.expect("poll the key in");
     key
 }
 
@@ -299,8 +296,8 @@ pub(crate) async fn login_app_with_metrics() -> (TestApp, prometheus::Registry) 
     .await
 }
 
-/// Creates a user with an email and, optionally, a password, then polls so
-/// the key cache knows it.
+/// Creates a user with an email and, optionally, a password (users load on
+/// their first use).
 ///
 /// # Returns
 /// The user.
@@ -334,7 +331,6 @@ pub(crate) async fn user_with_password(
             .await
             .expect("set the password");
     }
-    test.app.poll().await.expect("poll the user in");
     user
 }
 
@@ -527,13 +523,11 @@ impl Browser {
     }
 
     /// A browser signed in as the existing user called `name`, with no
-    /// password (tests of signed-in routes, Tasks 10a to 12). Polls first,
-    /// so the key cache knows the user and its ceiling.
+    /// password (tests of signed-in routes, Tasks 10a to 12).
     ///
     /// # Panics
     /// If the user does not exist or the session cannot be stored.
     pub(crate) async fn session_for(test: &TestApp, name: &str) -> Self {
-        test.app.poll().await.expect("poll the user in");
         let id: String = sqlx::query_scalar("SELECT id FROM users WHERE name = $1")
             .bind(name)
             .fetch_one(test.app.pool())

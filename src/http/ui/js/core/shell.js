@@ -8,14 +8,17 @@ import { api } from './api.js';
 import { catalogLabel, setLabels } from './labels.js';
 
 export async function refreshIdentity() {
-    // Signed in with an account, the session (admin flag, ceiling, CSRF
-    // token) is read again beside whoami: an admin may have changed it.
+    // Signed in with an account, the session (admin flag, CSRF token) is
+    // read again beside whoami, whose `levels` give a member's level on
+    // each catalog: an admin may have changed either.
     // The labels are read beside them: a failed read leaves slugs showing
     // rather than failing the whole identity.
     const [session, me, labels] = await Promise.all([
         store.session ? api.get('/session') : null,
-        api.get('/whoami'),
-        api.get('/labels', { quiet: true }).catch(() => null),
+        // Every page: the switcher offers every catalog, and the labels
+        // table names every catalog the key reaches.
+        api.pages('/whoami', 'catalogs'),
+        api.pages('/labels', 'catalogs', { quiet: true }).catch(() => null),
     ]);
     if (session) {
         store.session = session;
@@ -66,18 +69,13 @@ export function requireSession(main, id) {
     return false;
 }
 
-// GET /api/v1/me, fresh on every load of an account page: the ceiling and
-// everything else it shows come from this answer, never from the sign-in
-// snapshot, since an admin may have changed them since. Its ceiling
-// ([{catalog, access}]) replaces the session's ({catalog: level}, as GET
-// /api/v1/session spells it), so the cap notes and `store.can` follow too.
-// Rejects as api.get does (already toasted).
+// GET /api/v1/me, fresh on every load of an account page: everything it
+// shows comes from this answer, never from the sign-in snapshot, since an
+// admin may have changed it since. It names the ceiling's highest level
+// only (`ceiling_access`); the ceiling itself is paged (GET /me/ceiling,
+// components/ceiling.js). Rejects as api.get does (already toasted).
 export async function freshAccount() {
-    const account = await api.get('/me');
-    if (store.session) {
-        store.session.ceiling = Object.fromEntries(account.ceiling.map(({ catalog, access }) => [catalog, access]));
-    }
-    return account;
+    return api.get('/me');
 }
 
 // How the console leaves a session it ended itself: main.js installs it

@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::catalog::CatalogState;
 use crate::error::OkfError;
+use crate::labels::directory::Wanted;
 use crate::mcp::context::{is_broken_overlay, require_selected, ToolContext};
 use crate::mcp::{blocking, reply, OkfServer};
 use crate::okf::search::{search_catalogs, CatalogHit, SearchQuery};
@@ -112,12 +113,12 @@ pub struct SkippedCatalog {
 /// fail a search across every catalog.
 #[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn run(ctx: &ToolContext, params: SearchParams) -> Result<SearchResult, OkfError> {
-    let states = ctx.states(params.catalogs.as_deref())?;
+    let states = ctx.states(params.catalogs.as_deref()).await?;
     let pinned = ctx.pin(params.changeset.as_deref()).await?;
     require_selected(pinned.as_ref(), &states)?;
     // A search reads every catalog before it answers: all are admitted at
     // once, or none (a refused call queues no read).
-    ctx.admit_all(&states, AccessKind::Read)?;
+    ctx.admit_all(&states, AccessKind::Read).await?;
     let query = SearchQuery {
         text: params.query,
         concept_type: params.concept_type,
@@ -140,7 +141,7 @@ pub(crate) async fn run(ctx: &ToolContext, params: SearchParams) -> Result<Searc
                 tracing::warn!(catalog = %state.name(), kind = error.kind(), "search skipped a catalog");
                 skipped.push(SkippedCatalog {
                     catalog: state.name().to_string(),
-                    catalog_label: ctx.catalog_label(state.name()),
+                    catalog_label: ctx.catalog_label(state.name()).await?,
                     error: error.to_json(),
                 });
             }
@@ -160,7 +161,11 @@ pub(crate) async fn run(ctx: &ToolContext, params: SearchParams) -> Result<Searc
         search_catalogs(&catalogs, &query)
     })
     .await;
-    let labels = ctx.labels();
+    let mut wanted = Wanted::default();
+    for hit in &hits {
+        wanted.catalog(&hit.catalog);
+    }
+    let labels = ctx.labels_for(&wanted).await?;
     let hits = hits
         .into_iter()
         .map(|hit| LabeledHit {

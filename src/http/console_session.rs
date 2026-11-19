@@ -4,8 +4,8 @@
 //! cookie. MCP and the archive routes keep bearer-only `require_key`, so a
 //! cookie never reaches them.
 //!
-//! A session's principal is built on every request from the key cache (the
-//! user's admin flag and ceiling as of the last reload), never from what
+//! A session's principal is built on every request from the user cache (the
+//! user's admin flag and ceiling as they are now), never from what
 //! was read at sign-in: the flag can change between the password check and
 //! the session's first request.
 
@@ -27,10 +27,9 @@ use crate::config::AuthConfig;
 use crate::error::OkfError;
 use crate::http::requester::ClientIp;
 use crate::http::AppError;
-use crate::store::ceiling;
 use crate::store::passwords::PasswordStamp;
 use crate::store::user_sessions::{self, NewSession, SessionStart};
-use crate::store::users::{self, UserAuth};
+use crate::store::users::UserAuth;
 use crate::telemetry::subscriber::split_event;
 
 /// The session cookie (plan Decision 9).
@@ -317,8 +316,8 @@ fn is_safe_method(method: &Method) -> bool {
     matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
 }
 
-/// A user's sign-in identity: from the key cache, else (a user created
-/// since the last reload) from the database.
+/// A user's sign-in identity, from the user cache (which reads a user it
+/// does not hold yet from the database).
 ///
 /// # Arguments
 /// * `app` - the shared state.
@@ -331,10 +330,11 @@ fn is_safe_method(method: &Method) -> bool {
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn session_user(app: &App, user_id: &str) -> Result<Option<UserAuth>, OkfError> {
-    match app.keys().user_admin(user_id) {
-        Some(user) => Ok(Some(user)),
-        None => users::find_auth(app.pool(), user_id).await,
-    }
+    Ok(app
+        .credentials()
+        .user(user_id)
+        .await?
+        .map(|user| user.auth.clone()))
 }
 
 /// The user of the console session this request's cookie names, for a
@@ -367,38 +367,14 @@ pub(crate) async fn signed_in_user(
     }
 }
 
-/// The principal of a live session's user, built now from the key cache
-/// (or, for a user created since the last reload, from the database).
+/// The principal of a live session's user, built now from the user cache
+/// (which reads a user it does not hold yet from the database).
 ///
 /// # Errors
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all)]
 async fn session_principal(app: &App, user_id: &str) -> Result<Option<Principal>, OkfError> {
-    if let Some(user) = app.keys().user_admin(user_id) {
-        return Ok(Some(Principal::for_session(
-            &user,
-            app.keys().ceiling_of(user_id),
-            app.keys().suspensions(),
-            app.keys().gates(),
-        )));
-    }
-    // Not in the cache yet: two queries, until the next reload.
-    let Some(user) = users::find_auth(app.pool(), user_id).await? else {
-        return Ok(None);
-    };
-    match ceiling::ceiling_of(app.pool(), &user.name).await {
-        // The current cache's suspensions are right for a user it does not
-        // know yet: suspension is per catalog, not per user.
-        Ok(ceiling) => Ok(Some(Principal::for_session(
-            &user,
-            ceiling,
-            app.keys().suspensions(),
-            app.keys().gates(),
-        ))),
-        // Deleted between the two reads.
-        Err(OkfError::UnknownName { .. }) => Ok(None),
-        Err(other) => Err(other),
-    }
+    app.session_principal(user_id).await
 }
 
 /// [`unauthorized`], also clearing a session cookie that no longer works.
@@ -797,19 +773,21 @@ mod http_tests {
     async fn a_session_reaches_the_api_with_exactly_its_ceiling() {
         let test = login_app().await;
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
-        ceiling::entitle(
-            test.app.pool(),
-            &NewEntitlement {
-                user: "alice",
-                catalog: "main",
-                access: Access::Read,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("entitle");
-        test.app.poll().await.expect("poll");
+        crate::invalidate::testing::applied(&test.app, async {
+            ceiling::entitle(
+                test.app.pool(),
+                &NewEntitlement {
+                    user: "alice",
+                    catalog: "main",
+                    access: Access::Read,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("entitle");
+        })
+        .await;
         let mut browser = Browser::signed_in(&test, "alice@example.com", PASSWORD).await;
 
         let whoami = browser
@@ -840,12 +818,15 @@ mod http_tests {
         assert_eq!(whoami["access"], "read");
         assert_eq!(whoami["all_catalogs"], false);
         assert_eq!(whoami["catalogs"], serde_json::json!(["main"]));
+        // Issue #736: the level on each listed catalog, resolved per catalog.
+        assert_eq!(whoami["levels"], serde_json::json!({ "main": "read" }));
         assert_eq!(whoami["teams"], serde_json::json!(["alice"]));
         let session = session.json();
         assert_eq!(session["user"], "alice");
         assert_eq!(session["email"], "alice@example.com");
         assert_eq!(session["admin"], false);
-        assert_eq!(session["ceiling"], serde_json::json!({ "main": "read" }));
+        // Issue #736: no ceiling (whoami's `levels` and /me/ceiling page it).
+        assert!(session.get("ceiling").is_none(), "{session}");
         assert!(session["csrf"]
             .as_str()
             .is_some_and(|csrf| csrf.len() >= 43));
@@ -916,19 +897,21 @@ mod http_tests {
     async fn an_admin_users_session_is_an_admin_on_every_catalog() {
         let test = login_app().await;
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
-        users::set_admin(
-            test.app.pool(),
-            "alice",
-            AdminChange {
-                on: true,
-                allow_last: false,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("set admin");
-        test.app.poll().await.expect("poll");
+        crate::invalidate::testing::applied(&test.app, async {
+            users::set_admin(
+                test.app.pool(),
+                "alice",
+                AdminChange {
+                    on: true,
+                    allow_last: false,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("set admin");
+        })
+        .await;
         let mut browser = Browser::signed_in(&test, "alice@example.com", PASSWORD).await;
 
         let whoami = browser
@@ -957,19 +940,21 @@ mod http_tests {
         // exists, so `set_admin` had no session to end.
         let test = login_app().await;
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
-        users::set_admin(
-            test.app.pool(),
-            "alice",
-            AdminChange {
-                on: true,
-                allow_last: false,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("set admin");
-        test.app.poll().await.expect("poll");
+        crate::invalidate::testing::applied(&test.app, async {
+            users::set_admin(
+                test.app.pool(),
+                "alice",
+                AdminChange {
+                    on: true,
+                    allow_last: false,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("set admin");
+        })
+        .await;
         let passwords::SignInOutcome::Ok(passwords::Verified { user: checked, .. }) =
             passwords::verify(test.app.pool(), "alice@example.com", PASSWORD, Utc::now())
                 .await
@@ -978,20 +963,21 @@ mod http_tests {
             panic!("the password was refused");
         };
         assert!(checked.is_admin, "admin when the password was checked");
-        users::set_admin(
-            test.app.pool(),
-            "alice",
-            AdminChange {
-                on: false,
-                allow_last: true,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("clear admin");
-        // What the API's `settle` and the poll loop do after a change.
-        test.app.poll().await.expect("poll");
+        crate::invalidate::testing::applied(&test.app, async {
+            users::set_admin(
+                test.app.pool(),
+                "alice",
+                AdminChange {
+                    on: false,
+                    allow_last: true,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("clear admin");
+        })
+        .await;
         let (_, session) = super::start_session(&test.app, &checked, None, "okf-test")
             .await
             .expect("start the session with the stale user");
@@ -1347,10 +1333,11 @@ mod http_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_user_new_to_the_cache_is_read_from_the_database() {
+    async fn a_user_is_read_from_the_database_on_first_use() {
         let test = login_app().await;
         let pool = test.app.pool();
-        // Created and entitled with no poll: the cache does not know bob.
+        // Created and entitled with no poll: the user cache reads bob on
+        // his first request.
         users::create(
             pool,
             &users::NewUser {
@@ -1378,8 +1365,6 @@ mod http_tests {
             .fetch_one(pool)
             .await
             .expect("bob's id");
-        assert_eq!(test.app.keys().user_admin(&bob_id), None);
-
         let principal = super::session_principal(&test.app, &bob_id)
             .await
             .expect("look up")
@@ -1389,8 +1374,13 @@ mod http_tests {
             .expect("look up");
 
         assert_eq!(principal.key_id, "session:bob");
-        assert_eq!(principal.level("main"), Some(Access::Write));
-        assert_eq!(principal.level("other"), None);
+        let directory = test.app.directory();
+        let main = directory.resolve("main").await.unwrap().expect("main");
+        assert_eq!(principal.level_at(&main), Some(Access::Write));
+        // `other` may not exist here: either way bob does not reach it.
+        if let Some(other) = directory.resolve("other").await.unwrap() {
+            assert_eq!(principal.level_at(&other), None);
+        }
         assert!(nobody.is_none());
     }
 

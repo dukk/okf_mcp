@@ -1,5 +1,6 @@
-// Account: how the signed-in person signs in, and where. Profile and
-// ceiling (read-only, from /me on every load, never the sign-in snapshot),
+// Account: how the signed-in person signs in, and where. Profile (from /me
+// on every load, never the sign-in snapshot) and ceiling (read-only, a page
+// at a time from /me/ceiling, with a Find box: never the whole ceiling),
 // password, passkeys (add, rename, remove), linked sign-in accounts (link,
 // unlink), console sessions (sign any one out, this browser's included)
 // and recent sign-ins. Each section loads and redraws on its own, only
@@ -17,6 +18,7 @@ import { guard, once } from '../core/pending.js';
 import { listTable } from '../components/list-table.js';
 import { confirmDialog } from '../components/confirm.js';
 import { accessPill } from '../components/levels.js';
+import { ceilingPager } from '../components/ceiling.js';
 import { sessionTable, signInTable } from '../components/activity.js';
 import { createCredential } from '../signin/webauthn.js';
 
@@ -39,6 +41,25 @@ export async function render(main) {
     const sessions = section('account-sessions', 'Where you are signed in');
     const signIns = section('account-sign-ins', 'Recent sign-ins');
     main.append(profile.el, owned.el, ceiling.el, password.el, passkeys.el, identities.el, sessions.el, signIns.el);
+    // The ceiling table, a page at a time: drawn once, then redrawn with
+    // each committed page. `shownPrefix` is the prefix the drawn rows
+    // answer (null before the first page), for the empty text.
+    let shownPrefix = null;
+    const ceilingTable = listTable([
+        { key: 'catalog', label: 'Catalog',
+          render: row => h('span', { dataset: { test: `ceiling-${row.catalog}` } },
+              named(catalogLabel(row.catalog), row.catalog)) },
+        { key: 'access', label: 'Access', render: row => accessPill(row.access) },
+    ], [], { empty: () => {
+        if (shownPrefix === null) return 'Loading...';
+        return shownPrefix ? `No catalog of yours starts with ${shownPrefix}.` : 'Your account reaches no catalog yet. Ask an admin.';
+    } });
+    ceilingTable.id = 'ceiling-table';
+    const ceilingPage = ceilingPager({ id: 'ceiling', draw: (rows, prefix) => {
+        shownPrefix = prefix;
+        ceilingTable.redraw(rows);
+    } });
+    fill(ceiling.body, h('label', { class: 'small' }, 'Find ', ceilingPage.find), ceilingTable, ceilingPage.footer);
 
     async function drawAccount() {
         let account;
@@ -54,14 +75,6 @@ export async function render(main) {
             'Account ID: ', h('code', {}, account.user)));
         fill(owned.body, ownedTeams(account.owned_team_details ?? []));
         owned.el.hidden = !(account.owned_team_details ?? []).length;
-        const table = listTable([
-            { key: 'catalog', label: 'Catalog', sort: row => row.catalog,
-              render: row => h('span', { dataset: { test: `ceiling-${row.catalog}` } },
-                  named(catalogLabel(row.catalog), row.catalog)) },
-            { key: 'access', label: 'Access', render: row => accessPill(row.access) },
-        ], account.ceiling, { empty: 'Your account reaches no catalog yet. Ask an admin.' });
-        table.id = 'ceiling-table';
-        fill(ceiling.body, table);
         fill(password.body, passwordForm(account));
     }
 
@@ -332,7 +345,7 @@ export async function render(main) {
         if (main.isConnected) fill(signIns.body, signInTable({ id: 'sign-in-table', signIns: list }));
     }
 
-    await Promise.all([drawAccount(), drawPasskeys(), drawIdentities(), drawSessions(), drawSignIns()]);
+    await Promise.all([drawAccount(), ceilingPage.start(), drawPasskeys(), drawIdentities(), drawSessions(), drawSignIns()]);
 }
 
 // A refusal's reason as the server gave it, without the "forbidden: "

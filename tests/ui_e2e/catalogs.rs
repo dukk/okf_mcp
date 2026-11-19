@@ -229,6 +229,8 @@ async fn an_import_reports_its_counts_and_a_stale_generation_is_refused() {
     let generation = server
         .app
         .catalog("main")
+        .await
+        .unwrap()
         .expect("main")
         .current()
         .generation();
@@ -286,6 +288,8 @@ async fn an_import_reports_its_counts_and_a_stale_generation_is_refused() {
         server
             .app
             .catalog("main")
+            .await
+            .unwrap()
             .expect("main")
             .current()
             .generation(),
@@ -348,6 +352,8 @@ async fn an_export_or_import_in_flight_locks_the_catalog_and_admits_no_second_im
     let generation = server
         .app
         .catalog("main")
+        .await
+        .unwrap()
         .expect("main")
         .current()
         .generation();
@@ -406,6 +412,8 @@ async fn an_export_or_import_in_flight_locks_the_catalog_and_admits_no_second_im
         server
             .app
             .catalog("main")
+            .await
+            .unwrap()
             .expect("main")
             .current()
             .generation(),
@@ -431,22 +439,26 @@ async fn an_admin_signed_in_with_a_password_imports_an_archive() {
     server
         .user_with_password("erin", "erin@example.com", password)
         .await;
-    okf_mcp::store::users::set_admin(
-        &server.db.pool,
-        "erin",
-        AdminChange {
-            on: true,
-            allow_last: false,
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("make erin an admin");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        okf_mcp::store::users::set_admin(
+            &server.db.pool,
+            "erin",
+            AdminChange {
+                on: true,
+                allow_last: false,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("make erin an admin");
+    })
+    .await;
     let generation = server
         .app
         .catalog("main")
+        .await
+        .unwrap()
         .expect("main")
         .current()
         .generation();
@@ -496,7 +508,13 @@ async fn an_admin_signed_in_with_a_password_imports_an_archive() {
     if !ran {
         return;
     }
-    let current = server.app.catalog("main").expect("main").current();
+    let current = server
+        .app
+        .catalog("main")
+        .await
+        .unwrap()
+        .expect("main")
+        .current();
     assert_eq!(current.generation(), generation + 1);
 }
 
@@ -519,23 +537,36 @@ async fn a_member_imports_where_they_write_and_only_exports_where_they_read() {
     )
     .await;
     server.user_with_password("alice", EMAIL, PASSWORD).await;
-    for (catalog, access) in [("main", Access::Write), ("other", Access::Read)] {
-        ceiling::entitle(
-            &server.db.pool,
-            &NewEntitlement {
-                user: "alice",
-                catalog,
-                access,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("entitle");
+    crate::support::server::applied(&server.app, async {
+        for (catalog, access) in [("main", Access::Write), ("other", Access::Read)] {
+            ceiling::entitle(
+                &server.db.pool,
+                &NewEntitlement {
+                    user: "alice",
+                    catalog,
+                    access,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("entitle");
+        }
+    })
+    .await;
+    // The generation `app` serves for catalog `name`.
+    async fn generation(app: &okf_mcp::app::App, name: &str) -> i64 {
+        app.catalog(name)
+            .await
+            .unwrap()
+            .expect(name)
+            .current()
+            .generation()
     }
-    server.app.poll().await.expect("poll");
-    let generation = |name: &str| server.app.catalog(name).expect(name).current().generation();
-    let (main_before, other_before) = (generation("main"), generation("other"));
+    let (main_before, other_before) = (
+        generation(&server.app, "main").await,
+        generation(&server.app, "other").await,
+    );
     let archive = tarball(&[("index.md", "# Main\n\nImported by a member.\n")]);
 
     let ran = drive(console_base(&server), move |ui| {
@@ -583,9 +614,19 @@ async fn a_member_imports_where_they_write_and_only_exports_where_they_read() {
     if !ran {
         return;
     }
-    assert_eq!(generation("main"), main_before + 1);
-    assert_eq!(generation("other"), other_before, "nothing imported there");
-    let main = server.app.catalog("main").expect("main").current();
+    assert_eq!(generation(&server.app, "main").await, main_before + 1);
+    assert_eq!(
+        generation(&server.app, "other").await,
+        other_before,
+        "nothing imported there"
+    );
+    let main = server
+        .app
+        .catalog("main")
+        .await
+        .unwrap()
+        .expect("main")
+        .current();
     assert_eq!(
         main.workspace()
             .read_to_string("index.md")
@@ -624,20 +665,22 @@ async fn member_access_read_makes_a_team_catalog_read_only_for_its_members() {
     )
     .await
     .expect("add alice");
-    okf_mcp::store::catalogs::create(
-        pool,
-        &okf_mcp::store::catalogs::NewCatalog {
-            name: "shared",
-            display_name: &okf_mcp::labels::DisplayName::default(),
-            description: "",
-            owner_team: "family",
-        },
-        &okf_mcp::store::audit::AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("create the team's catalog");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        okf_mcp::store::catalogs::create(
+            pool,
+            &okf_mcp::store::catalogs::NewCatalog {
+                name: "shared",
+                display_name: &okf_mcp::labels::DisplayName::default(),
+                description: "",
+                owner_team: "family",
+            },
+            &okf_mcp::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("create the team's catalog");
+    })
+    .await;
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
     let ran = drive(console_base(&server), move |ui| {
         ui.login(&admin);
@@ -700,7 +743,8 @@ async fn member_access_read_makes_a_team_catalog_read_only_for_its_members() {
         ui.sign_in_password(EMAIL, PASSWORD);
         ui.open("/my-keys");
         ui.click("#my-key-new");
-        ui.wait_visible("#my-key-form");
+        // The picker reads the ceiling a page at a time (issue #736).
+        ui.wait_visible("#my-key-form select[name=level-shared]");
         assert_eq!(
             ui.eval(
                 "() => [...document.querySelectorAll('#my-key-form select[name=level-shared] option')] \
@@ -985,6 +1029,76 @@ async fn an_older_list_read_that_answers_late_never_redraws_the_catalogs_table()
             ui.present("[data-catalog=newer]") && ui.present("[data-catalog=older]"),
             "the older read redrew the catalogs table"
         );
+    })
+    .await;
+}
+
+/// M18 Task 10: the catalogs page draws the first page (100) and a Load
+/// more control; the rows drawn keep their cursor while an older reload
+/// answers late and a newer one fails, and Load more then appends the next
+/// page once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_catalogs_page_loads_more_and_keeps_its_cursor_when_reloads_fail() {
+    // `c000` to `c100` and `main`: 102 catalogs, so the first page ends at
+    // `c099` and the second holds `c100` and `main`.
+    let names: Vec<String> = (0..=100).map(|index| format!("c{index:03}")).collect();
+    let mut catalogs: Vec<(&str, _)> = names
+        .iter()
+        .map(|name| (name.as_str(), files(&[])))
+        .collect();
+    catalogs.push(("main", files(&[("index.md", "# Main\n")])));
+    let server = TestServer::start(catalogs, Config::default()).await;
+    let key = server
+        .key("console-root", Access::Admin, &[], Some("main"))
+        .await;
+    drive(server.base.clone(), move |ui| {
+        let count = |selector: &str| {
+            ui.eval(
+                "(selector) => document.querySelectorAll(selector).length",
+                json!(selector),
+            )
+        };
+        let create = |name: &str| {
+            ui.click("#catalog-create");
+            ui.wait_visible("#catalog-create-form select[name=owner]");
+            ui.fill("#catalog-create-form input[name=name]", name);
+            ui.select("#catalog-create-form select[name=owner]", OWNER);
+        };
+        ui.login(&key);
+        ui.open("/catalogs");
+        ui.wait_visible("[data-catalog=c000]");
+        ui.wait_visible("#catalogs-more");
+        assert_eq!(count("span[data-catalog]"), json!(100), "one page drawn");
+        assert!(!ui.present("[data-catalog=main]"));
+
+        // The list read after creating `n-one` answers late; the one after
+        // creating `n-two` fails. Neither may take the rows' cursor away.
+        create("n-one");
+        ui.hold_answer("GET", "/api/v1/catalogs", || {
+            ui.click("#catalog-create-form button[type=submit]")
+        });
+        create("n-two");
+        ui.fail_next("GET", "/api/v1/catalogs", 503, "the list is away");
+        ui.click("#catalog-create-form button[type=submit]");
+        ui.wait_visible("#catalogs-stale");
+        ui.release_held();
+        ui.wait_visible("#catalogs-more");
+        assert_eq!(
+            count("span[data-catalog]"),
+            json!(100),
+            "the rows drawn stay"
+        );
+
+        ui.click("#catalogs-more");
+        ui.wait_visible("[data-catalog=n-two]");
+
+        // c100, main, n-one and n-two, appended once.
+        assert_eq!(count("span[data-catalog]"), json!(104));
+        assert_eq!(count("[data-catalog=c099]"), json!(1));
+        assert_eq!(count("[data-catalog=main]"), json!(1));
+        ui.wait_hidden("#catalogs-more");
+        // The first page still comes from the read before the failed one.
+        ui.wait_visible("#catalogs-stale");
     })
     .await;
 }

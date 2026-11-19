@@ -5,18 +5,22 @@
 //! applied and a full snapshot of the result (about 10 ms for the real
 //! catalog), built on a blocking thread. [`Overlays`] caches one per
 //! changeset, valid while the changeset's `version` and the published
-//! `generation` stay the same; no incremental snapshot. The cache holds at
-//! most `overlay_cache_size` overlays (the least recently used goes first),
-//! and builds each changeset's overlay once however many reads ask at once.
+//! `generation` stay the same; no incremental snapshot. The cache is
+//! bounded in estimated bytes (`overlay_cache_bytes`, weighed as a catalog
+//! snapshot is, over the overlay's own files) and drops an overlay unused
+//! for `session_idle_timeout`; it builds each changeset's overlay once
+//! however many reads ask at once.
 
 use std::cmp::Ordering;
-use std::collections::{BTreeSet, HashMap};
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::collections::BTreeSet;
+use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgExecutor, PgPool};
 
+use crate::cache::catalogs::weight;
+use crate::cache::{Bounded, CacheName, Limit};
 use crate::catalog::{CatalogState, Loaded};
 use crate::error::OkfError;
 use crate::keyed_lock::KeyedLocks;
@@ -25,6 +29,7 @@ use crate::okf::analysis::lint::{lint, CommitTimes, LintReport};
 use crate::okf::snapshot::Snapshot;
 use crate::okf::workspace::{MemWorkspace, StoredFile};
 use crate::store::changesets::{self, ChangesetRow, EntryRow};
+use crate::telemetry::metrics::Metrics;
 
 /// A catalog's published state with one changeset's entries applied.
 /// Immutable.
@@ -43,6 +48,8 @@ pub struct Overlay {
     // `get_in` may cache such an overlay, since it cannot refresh on its
     // connection; a read never reuses it (`Overlays::get`).
     behind_entries: bool,
+    // What it costs in the cache, computed once at build.
+    weight: u32,
 }
 
 impl Overlay {
@@ -194,6 +201,7 @@ pub async fn build_overlay(
         // UTF-8): named as theirs, like a clash.
         let snapshot = Snapshot::build(&workspace).map_err(|error| in_changeset(error, &handle))?;
         let commit_times = base.commit_times().with_dirty(dirty.iter().cloned());
+        let weight = weight_of_workspace(&workspace);
         Ok(Overlay {
             base,
             changeset_id,
@@ -203,6 +211,7 @@ pub async fn build_overlay(
             dirty,
             commit_times,
             behind_entries,
+            weight,
         })
     })
     .await
@@ -259,20 +268,39 @@ fn built_at(overlay: &Overlay) -> (i64, i64) {
     (overlay.base.generation(), overlay.version)
 }
 
-/// A cached overlay and when it was last used.
-#[derive(Debug)]
-struct Cached {
-    overlay: Arc<Overlay>,
-    used: Instant,
+/// Whether a build may replace the overlay already cached for its changeset:
+/// not when the cached one is newer (a slower build finishing last).
+#[tracing::instrument(level = "trace", skip_all)]
+fn supersedes(cached: &Arc<Overlay>, built: &Arc<Overlay>) -> bool {
+    built_at(built) >= built_at(cached)
 }
 
-/// Every connection's overlay, by changeset id.
+/// What an overlay costs in the cache: [`weight`] of its whole workspace (the
+/// base's files copied plus the pending entries), counted as a snapshot's are
+/// (an empty file is not free). The shared `Arc<Loaded>` base itself is not
+/// charged again: the catalog cache weighs it.
+///
+/// # Arguments
+/// * `workspace` - the overlaid files.
+///
+/// # Returns
+/// The estimated resident bytes.
+#[tracing::instrument(level = "trace", skip_all)]
+fn weight_of_workspace(workspace: &MemWorkspace) -> u32 {
+    let (files, stored_bytes) = workspace.totals();
+    weight(stored_bytes, files)
+}
+
+/// How long an overlay may stay cached at most. Not the bound (the byte
+/// budget and the idle time are): only a backstop for an entry that is read
+/// often enough never to go idle.
+const OVERLAY_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Every connection's overlay, by changeset id, bounded in estimated bytes
+/// (spec Decision 5).
 #[derive(Debug)]
 pub struct Overlays {
-    idle: Duration,
-    capacity: usize,
-    // A `std` mutex: held for a lookup or an insert, never across `.await`.
-    cached: Mutex<HashMap<i64, Cached>>,
+    cached: Bounded<i64, Arc<Overlay>>,
     // One build at a time per changeset: a read that misses waits for a
     // build already running, then finds its result cached.
     builds: KeyedLocks,
@@ -280,20 +308,23 @@ pub struct Overlays {
 
 impl Overlays {
     /// An empty cache whose entries are dropped after `idle` without use,
-    /// holding at most `capacity` of them.
+    /// holding at most `budget_bytes` of estimated memory.
     ///
     /// # Arguments
     /// * `idle` - `session_idle_timeout`.
-    /// * `capacity` - `overlay_cache_size` (at least 1).
+    /// * `budget_bytes` - `overlay_cache_bytes`.
+    /// * `metrics` - where the `okf.cache.*` series are recorded.
     ///
     /// # Returns
     /// The cache.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn new(idle: Duration, capacity: usize) -> Self {
+    pub fn new(idle: Duration, budget_bytes: u64, metrics: Metrics) -> Self {
+        let cached = Bounded::new(CacheName::Overlay, Limit::Bytes(budget_bytes), OVERLAY_TTL)
+            .with_weigher(|_id, overlay: &Arc<Overlay>| overlay.weight)
+            .with_idle(idle)
+            .with_metrics(metrics);
         Self {
-            idle,
-            capacity,
-            cached: Mutex::new(HashMap::new()),
+            cached,
             builds: KeyedLocks::new(),
         }
     }
@@ -306,6 +337,8 @@ impl Overlays {
     ///
     /// # Arguments
     /// * `pool` - where to read the entries.
+    /// * `rebuilds` - the rebuild locks (`App::rebuild_locks`), for the
+    ///   refresh of a snapshot behind the entries.
     /// * `state` - the changeset's catalog.
     /// * `changeset` - an open changeset, as just read.
     ///
@@ -318,16 +351,17 @@ impl Overlays {
     pub async fn get(
         &self,
         pool: &PgPool,
+        rebuilds: &KeyedLocks,
         state: &CatalogState,
         changeset: &ChangesetRow,
     ) -> Result<Arc<Overlay>, OkfError> {
         // A cached overlay built on a snapshot behind its entries (a write's
         // `get_in` on a lagging replica caches one, even when the write is
         // then refused) is not reused: the build below refreshes first.
-        if let Some(overlay) = self
-            .lookup(changeset, state.current().generation(), Instant::now())
-            .filter(|overlay| !overlay.behind_entries)
-        {
+        let wanted = (state.current().generation(), changeset.version);
+        let current =
+            |overlay: &Arc<Overlay>| !overlay.behind_entries && built_at(overlay) == wanted;
+        if let Some(overlay) = self.cached.get_if(&changeset.id, current).await {
             return Ok(overlay);
         }
         // `_building` is held (and other reads of this changeset wait) until
@@ -337,28 +371,38 @@ impl Overlays {
         // it (it would close a cycle with a builder waiting for that
         // connection).
         let _building = self.builds.lock(changeset.id).await;
-        // Read the state again: a build that finished while this one waited
-        // may be the overlay wanted, and the published state may have moved.
-        let now = Instant::now();
+        // Read the state again, without counting a second request: a build
+        // that finished while this one waited may be the overlay wanted, and
+        // the published state may have moved.
         if let Some(overlay) = self
-            .lookup(changeset, state.current().generation(), now)
+            .lookup(changeset, state.current().generation())
+            .await
             .filter(|overlay| !overlay.behind_entries)
         {
             return Ok(overlay);
         }
-        let entries = changesets::entries(pool, changeset.id).await?;
-        // Unlike `get_in`, a read may take a second connection: so before
-        // building, bring a snapshot that is behind the entries' bases up to
-        // date (an entry made on another replica, issue #659). Otherwise the
-        // paths the changeset does not touch would show older text than the
-        // entries were made on.
-        let bases = entries
-            .iter()
-            .map(|entry| (entry.path.as_str(), entry.base_revision));
-        let base = state.current_covering(pool, bases).await?;
-        let overlay = Arc::new(build_overlay(base, changeset, entries).await?);
-        self.store(Arc::clone(&overlay), now);
-        Ok(overlay)
+        // The build registers its fence before it starts, so a `forget` while
+        // it runs (a write or discard) keeps its result out of the cache.
+        self.cached
+            .build(
+                changeset.id,
+                || async {
+                    let entries = changesets::entries(pool, changeset.id).await?;
+                    // Unlike `get_in`, a read may take a second connection:
+                    // so before building, bring a snapshot that is behind
+                    // the entries' bases up to date (an entry made on
+                    // another replica, issue #659). Otherwise the paths the
+                    // changeset does not touch would show older text than
+                    // the entries were made on.
+                    let bases = entries
+                        .iter()
+                        .map(|entry| (entry.path.as_str(), entry.base_revision));
+                    let base = state.current_covering(pool, rebuilds, bases).await?;
+                    Ok(Arc::new(build_overlay(base, changeset, entries).await?))
+                },
+                supersedes,
+            )
+            .await
     }
 
     /// As [`Overlays::get`], for a write that holds a connection (its
@@ -401,18 +445,25 @@ impl Overlays {
         changeset: &ChangesetRow,
     ) -> Result<Arc<Overlay>, OkfError> {
         let base = state.current();
-        let now = Instant::now();
-        if let Some(overlay) = self.lookup(changeset, base.generation(), now) {
+        let wanted = (base.generation(), changeset.version);
+        let current = |overlay: &Arc<Overlay>| built_at(overlay) == wanted;
+        if let Some(overlay) = self.cached.get_if(&changeset.id, current).await {
             return Ok(overlay);
         }
         // Read after the caller read the row (a read resolves it unlocked in
         // `ToolContext::changeset`), so the entries may be newer than
         // `changeset.version`; harmless: the overlay is tagged with the
         // older version, and the next read at the newer one rebuilds it.
-        let entries = changesets::entries(executor, changeset.id).await?;
-        let overlay = Arc::new(build_overlay(base, changeset, entries).await?);
-        self.store(Arc::clone(&overlay), now);
-        Ok(overlay)
+        self.cached
+            .build(
+                changeset.id,
+                || async {
+                    let entries = changesets::entries(executor, changeset.id).await?;
+                    Ok(Arc::new(build_overlay(base, changeset, entries).await?))
+                },
+                supersedes,
+            )
+            .await
     }
 
     /// Drops a changeset's overlay (after a write, publish or discard).
@@ -420,81 +471,42 @@ impl Overlays {
     /// # Arguments
     /// * `changeset_id` - the changeset.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn forget(&self, changeset_id: i64) {
-        self.lock().remove(&changeset_id);
+    pub async fn forget(&self, changeset_id: i64) {
+        self.cached.invalidate(&changeset_id).await;
     }
 
-    /// The cached overlay, if it is current; marks it used.
+    /// The cached overlay, if it is current; a read of it counts as a use
+    /// (so it does not go idle).
     ///
-    /// Every read comes through here, so it is also where the cache stays
-    /// bounded: it first drops every idle entry, and it drops this
-    /// changeset's entry if it is older than the one asked for (each entry
-    /// pins its base `Loaded`, so a stale one would keep an old generation in
-    /// memory). A newer entry stays, for the callers that read the newer row.
+    /// It drops this changeset's entry if it is older than the one asked for
+    /// (each entry pins its base `Loaded`, so a stale one would keep an old
+    /// generation in memory). A newer entry stays, for the callers that read
+    /// the newer row.
     #[tracing::instrument(level = "trace", skip_all)]
-    fn lookup(
-        &self,
-        changeset: &ChangesetRow,
-        generation: i64,
-        now: Instant,
-    ) -> Option<Arc<Overlay>> {
-        let mut cached = self.lock();
-        self.drop_idle(&mut cached, now);
-        let entry = cached.get_mut(&changeset.id)?;
+    async fn lookup(&self, changeset: &ChangesetRow, generation: i64) -> Option<Arc<Overlay>> {
+        let overlay = self.cached.peek(&changeset.id).await?;
         let wanted = (generation, changeset.version);
         // `cmp` on tuples compares field by field, like Python's.
-        match built_at(&entry.overlay).cmp(&wanted) {
-            Ordering::Equal => {
-                entry.used = now;
-                Some(Arc::clone(&entry.overlay))
-            }
+        match built_at(&overlay).cmp(&wanted) {
+            Ordering::Equal => Some(overlay),
             Ordering::Less => {
-                cached.remove(&changeset.id);
+                self.cached.invalidate(&changeset.id).await;
                 None
             }
             Ordering::Greater => None,
         }
     }
 
-    /// Caches `overlay`, unless a newer one for the same changeset is there
-    /// (a slower build finishing last), first dropping every idle entry;
-    /// then, past `capacity`, drops the least recently used other entry.
-    #[tracing::instrument(level = "trace", skip_all)]
-    fn store(&self, overlay: Arc<Overlay>, now: Instant) {
-        let mut cached = self.lock();
-        self.drop_idle(&mut cached, now);
-        let id = overlay.changeset_id;
-        let newer_cached = cached
-            .get(&id)
-            .is_some_and(|entry| built_at(&entry.overlay) > built_at(&overlay));
-        if newer_cached {
-            return;
-        }
-        cached.insert(id, Cached { overlay, used: now });
-        // One insert adds at most one entry, so one eviction restores the
-        // bound. A linear scan: the cache is small (`overlay_cache_size`),
-        // and an ordered index would cost every lookup an update.
-        if cached.len() > self.capacity {
-            let oldest = cached
-                .iter()
-                .filter(|(key, _)| **key != id)
-                .min_by_key(|(_, entry)| entry.used)
-                .map(|(key, _)| *key);
-            if let Some(oldest) = oldest {
-                cached.remove(&oldest);
-            }
-        }
-    }
-
-    /// Drops every entry unused for longer than `idle`.
-    #[tracing::instrument(level = "trace", skip_all)]
-    fn drop_idle(&self, cached: &mut HashMap<i64, Cached>, now: Instant) {
-        cached.retain(|_, entry| now.saturating_duration_since(entry.used) <= self.idle);
-    }
-
-    #[tracing::instrument(level = "trace", skip_all)]
-    fn lock(&self) -> MutexGuard<'_, HashMap<i64, Cached>> {
-        self.cached.lock().expect("overlay cache lock poisoned")
+    /// How many overlays are cached, as the cache counts them.
+    ///
+    /// # Returns
+    /// The entry count.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "reads one counter")
+    )]
+    pub fn entry_count(&self) -> u64 {
+        self.cached.entry_count()
     }
 }
 
@@ -552,7 +564,8 @@ mod tests {
     use crate::archive::files;
     use crate::config::Config;
     use crate::mcp::testing::{
-        app_with, context, open, pending_entry, principal_as, store_key, PendingEdit,
+        app_with, app_with_metrics, context, local_metrics, open, pending_entry, principal_as,
+        render, sample_of, store_key, PendingEdit,
     };
     use crate::okf::workspace::Workspace;
     use crate::store::changesets::ChangesetState;
@@ -591,7 +604,7 @@ mod tests {
             Config::default(),
         )
         .await;
-        let base = test.app.catalog("pg").unwrap().current();
+        let base = test.app.catalog("pg").await.unwrap().unwrap().current();
         let changeset = changeset(7, 3);
         let entries = vec![
             entry("a.md", Some("# New\n")),
@@ -625,9 +638,10 @@ mod tests {
             principal_as("writer", Access::Write, &[], Some("pg")),
             None,
         );
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         let pool = test.app.pool();
         let overlays = test.app.overlays();
+        let rebuilds = test.app.rebuild_locks();
         let edit = |text: &'static str| PendingEdit {
             path: "a.md",
             text: Some(text),
@@ -636,10 +650,19 @@ mod tests {
         let handle = open(&ctx).await;
         let first_row = pending_entry(&test, &handle, &edit("# One\n")).await;
 
-        let first = overlays.get(pool, &state, &first_row).await.unwrap();
-        let again = overlays.get(pool, &state, &first_row).await.unwrap();
+        let first = overlays
+            .get(pool, rebuilds, &state, &first_row)
+            .await
+            .unwrap();
+        let again = overlays
+            .get(pool, rebuilds, &state, &first_row)
+            .await
+            .unwrap();
         let second_row = pending_entry(&test, &handle, &edit("# Two\n")).await;
-        let after_edit = overlays.get(pool, &state, &second_row).await.unwrap();
+        let after_edit = overlays
+            .get(pool, rebuilds, &state, &second_row)
+            .await
+            .unwrap();
         let options = ImportOptions {
             replace: true,
             scope: ImportScope::Everything,
@@ -651,10 +674,16 @@ mod tests {
         };
         let republished = files(&[("a.md", "# A\n"), ("b.md", "# B\n")]);
         import(pool, "pg", republished, &options).await.unwrap();
-        state.refresh(pool).await.unwrap();
-        let after_import = overlays.get(pool, &state, &second_row).await.unwrap();
-        overlays.forget(second_row.id);
-        let after_forget = overlays.get(pool, &state, &second_row).await.unwrap();
+        state.refresh(pool, rebuilds).await.unwrap();
+        let after_import = overlays
+            .get(pool, rebuilds, &state, &second_row)
+            .await
+            .unwrap();
+        overlays.forget(second_row.id).await;
+        let after_forget = overlays
+            .get(pool, rebuilds, &state, &second_row)
+            .await
+            .unwrap();
 
         assert!(
             Arc::ptr_eq(&first, &again),
@@ -677,7 +706,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_clashing_entry_names_the_pending_changeset() {
         let test = app_with(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
-        let base = test.app.catalog("pg").unwrap().current();
+        let base = test.app.catalog("pg").await.unwrap().unwrap().current();
 
         let result =
             build_overlay(base, &changeset(9, 1), vec![entry("a.md/b.md", Some("x"))]).await;
@@ -694,32 +723,72 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn the_cache_drops_idle_and_stale_entries_and_keeps_the_newer_build() {
-        let test = app_with(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
-        let base = test.app.catalog("pg").unwrap().current();
-        let generation = base.generation();
-        let build = |id, version| {
-            let base = Arc::clone(&base);
-            async move {
-                let built = build_overlay(base, &changeset(id, version), Vec::new()).await;
-                Arc::new(built.unwrap())
-            }
-        };
-        let (newer, older, other) = (build(1, 2).await, build(1, 1).await, build(2, 1).await);
-        let overlays = Overlays::new(Duration::from_secs(60), 64);
-        let start = Instant::now();
-        let later = start + Duration::from_secs(61);
+    /// The overlays cache with a byte budget, and its registry.
+    /// The provider must stay alive while the instruments are used.
+    fn overlays_with(
+        budget: u64,
+    ) -> (
+        Overlays,
+        prometheus::Registry,
+        opentelemetry_sdk::metrics::SdkMeterProvider,
+    ) {
+        let (provider, metrics, registry) = local_metrics();
+        (
+            Overlays::new(Duration::from_secs(60), budget, metrics),
+            registry,
+            provider,
+        )
+    }
 
-        overlays.store(Arc::clone(&newer), start);
-        overlays.store(Arc::clone(&older), start);
-        let behind = overlays.lookup(&changeset(1, 1), generation, start);
-        let kept = overlays.lookup(&changeset(1, 2), generation, start);
-        overlays.store(Arc::clone(&other), start);
-        let stale = overlays.lookup(&changeset(2, 5), generation, start);
-        let stale_dropped = !overlays.lock().contains_key(&2);
-        overlays.store(Arc::clone(&other), start);
-        let after_idle = overlays.lookup(&changeset(3, 1), generation, later);
+    /// Caches `overlay` as a finished build would.
+    async fn store(overlays: &Overlays, overlay: Arc<Overlay>) {
+        let id = overlay.changeset_id;
+        overlays
+            .cached
+            .build(id, || async { Ok(overlay) }, supersedes)
+            .await
+            .unwrap();
+    }
+
+    /// An overlay of changeset `id` at `version` over `base`, with `files`
+    /// pending entries of `size` bytes each.
+    async fn built(
+        base: &Arc<Loaded>,
+        id: i64,
+        version: i64,
+        files: usize,
+        size: usize,
+    ) -> Arc<Overlay> {
+        let entries = (0..files)
+            .map(|n| entry(&format!("pending/f{n}.md"), Some(&"x".repeat(size))))
+            .collect();
+        let row = changeset(id, version);
+        Arc::new(
+            build_overlay(Arc::clone(base), &row, entries)
+                .await
+                .unwrap(),
+        )
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_cache_drops_stale_entries_and_keeps_the_newer_build() {
+        let test = app_with(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
+        let base = test.app.catalog("pg").await.unwrap().unwrap().current();
+        let generation = base.generation();
+        let (newer, older, other) = (
+            built(&base, 1, 2, 0, 0).await,
+            built(&base, 1, 1, 0, 0).await,
+            built(&base, 2, 1, 0, 0).await,
+        );
+        let (overlays, _registry, _provider) = overlays_with(1 << 20);
+
+        store(&overlays, Arc::clone(&newer)).await;
+        store(&overlays, Arc::clone(&older)).await;
+        let behind = overlays.lookup(&changeset(1, 1), generation).await;
+        let kept = overlays.lookup(&changeset(1, 2), generation).await;
+        store(&overlays, Arc::clone(&other)).await;
+        let stale = overlays.lookup(&changeset(2, 5), generation).await;
+        let stale_dropped = overlays.cached.peek(&2).await.is_none();
 
         assert!(
             kept.is_some_and(|kept| Arc::ptr_eq(&kept, &newer)),
@@ -731,38 +800,90 @@ mod tests {
         );
         assert!(stale.is_none());
         assert!(stale_dropped, "an out-of-date entry is dropped on lookup");
-        assert!(after_idle.is_none());
-        assert!(overlays.lock().is_empty(), "a lookup drops idle entries");
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn past_its_capacity_the_cache_drops_the_least_recently_used() {
-        // Arrange: three changesets' overlays, a cache that holds two.
+    async fn overlays_are_evicted_by_bytes_not_count() {
+        // Arrange: three overlays of one 10 KiB file each, a budget that
+        // fits two of them but not three. A count limit of 64 would keep all.
         let test = app_with(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
-        let base = test.app.catalog("pg").unwrap().current();
+        let base = test.app.catalog("pg").await.unwrap().unwrap().current();
         let generation = base.generation();
-        let mut built = Vec::with_capacity(3);
+        let mut overlays_built = Vec::with_capacity(3);
         for id in 1..=3 {
-            let row = changeset(id, 1);
-            let overlay = build_overlay(Arc::clone(&base), &row, Vec::new()).await;
-            built.push(Arc::new(overlay.unwrap()));
+            overlays_built.push(built(&base, id, 1, 1, 10 * 1024).await);
         }
-        let overlays = Overlays::new(Duration::from_secs(60), 2);
-        let start = Instant::now();
-        let at = |seconds| start + Duration::from_secs(seconds);
+        let each = u64::from(overlays_built[0].weight);
+        let (overlays, registry, _provider) = overlays_with(each * 5 / 2);
 
-        // Act: 1 is used after 2, so 2 is the least recently used when 3
-        // arrives.
-        overlays.store(Arc::clone(&built[0]), at(0));
-        overlays.store(Arc::clone(&built[1]), at(1));
-        let first_used = overlays.lookup(&changeset(1, 1), generation, at(2));
-        overlays.store(Arc::clone(&built[2]), at(3));
+        // Act: a third overlay does not fit. Which one moka drops is its
+        // admission policy's choice, so only the count is asserted.
+        store(&overlays, Arc::clone(&overlays_built[0])).await;
+        store(&overlays, Arc::clone(&overlays_built[1])).await;
+        let first_used = overlays.lookup(&changeset(1, 1), generation).await;
+        store(&overlays, Arc::clone(&overlays_built[2])).await;
+        overlays.cached.settle().await;
 
         // Assert
         assert!(first_used.is_some());
-        let mut kept: Vec<i64> = overlays.lock().keys().copied().collect();
-        kept.sort_unstable();
-        assert_eq!(kept, [1, 3], "2 was the least recently used");
+        let mut kept = Vec::new();
+        for id in 1..=3 {
+            if overlays.cached.peek(&id).await.is_some() {
+                kept.push(id);
+            }
+        }
+        assert_eq!(kept.len(), 2, "two fit, one was left out: {kept:?}");
+        let text = render(&registry);
+        let bytes = sample_of(&text, r#"okf_cache_bytes{cache="overlay"}"#).unwrap();
+        assert!(bytes <= (each * 5 / 2) as f64, "within budget: {bytes}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_overlay_weighs_its_own_files_even_when_they_are_empty() {
+        let test = app_with(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
+        let base = test.app.catalog("pg").await.unwrap().unwrap().current();
+
+        let none = built(&base, 1, 1, 0, 0).await;
+        let many_empty = built(&base, 2, 1, 200, 0).await;
+        let one_big = built(&base, 3, 1, 1, 100_000).await;
+
+        // The workspace is the base's one file plus the pending ones.
+        let expect = |files: u64, bytes: u64| weight(bytes, files);
+        let base_bytes = base.stored_bytes();
+        assert_eq!(none.weight, expect(1, base_bytes));
+        assert_eq!(many_empty.weight, expect(201, base_bytes));
+        assert!(
+            many_empty.weight > none.weight + 200 * 1000,
+            "empty files are not free"
+        );
+        assert_eq!(one_big.weight, expect(2, base_bytes + 100_000));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_overlay_heavier_than_the_budget_is_served_but_not_kept() {
+        let test = app_with(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
+        let base = test.app.catalog("pg").await.unwrap().unwrap().current();
+        let big = built(&base, 1, 1, 1, 50_000).await;
+        let (overlays, _registry, _provider) = overlays_with(u64::from(big.weight) - 1);
+
+        store(&overlays, Arc::clone(&big)).await;
+
+        assert!(overlays.cached.peek(&1).await.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn forget_drops_the_overlay() {
+        let test = app_with(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
+        let base = test.app.catalog("pg").await.unwrap().unwrap().current();
+        let (overlays, _registry, _provider) = overlays_with(1 << 20);
+        store(&overlays, built(&base, 1, 1, 0, 0).await).await;
+
+        overlays.forget(1).await;
+
+        assert!(overlays
+            .lookup(&changeset(1, 1), base.generation())
+            .await
+            .is_none());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -788,8 +909,11 @@ mod tests {
             .map(|_| {
                 let (app, row) = (Arc::clone(&test.app), Arc::clone(&row));
                 tokio::spawn(async move {
-                    let state = app.catalog("pg").unwrap();
-                    app.overlays().get(app.pool(), &state, &row).await.unwrap()
+                    let state = app.catalog("pg").await.unwrap().unwrap();
+                    app.overlays()
+                        .get(app.pool(), app.rebuild_locks(), &state, &row)
+                        .await
+                        .unwrap()
                 })
             })
             .collect();
@@ -830,6 +954,8 @@ mod tests {
             at: Utc::now(),
         };
         let row = Arc::new(pending_entry(&test, &handle, &edit).await);
+        // Loaded before the pool is full: a catalog loads on demand.
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         let pool = test.app.pool();
         let mut tx = pool.begin().await.unwrap();
         let size = pool.options().get_max_connections();
@@ -838,10 +964,11 @@ mod tests {
             held.push(pool.acquire().await.unwrap());
         }
         let read = {
-            let (app, row) = (Arc::clone(&test.app), Arc::clone(&row));
+            let (app, row, state) = (Arc::clone(&test.app), Arc::clone(&row), Arc::clone(&state));
             tokio::spawn(async move {
-                let state = app.catalog("pg").unwrap();
-                app.overlays().get(app.pool(), &state, &row).await
+                app.overlays()
+                    .get(app.pool(), app.rebuild_locks(), &state, &row)
+                    .await
             })
         };
         // Wait until the read holds the build lock (its entry exists).
@@ -852,7 +979,6 @@ mod tests {
 
         // Act: well inside sqlx's 30 s acquire timeout, which a write
         // waiting on the read's build lock would run the read into.
-        let state = test.app.catalog("pg").unwrap();
         let written = tokio::time::timeout(
             Duration::from_secs(10),
             test.app.overlays().get_in(&mut tx, &state, &row),
@@ -871,9 +997,116 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn a_forget_while_an_overlay_builds_keeps_the_build_out_of_the_cache() {
+        // Arrange: a read's build waits for a connection (the test holds
+        // every one), after its fence is registered.
+        let test = app_with(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
+        store_key(&test, "writer").await;
+        let ctx = context(
+            &test,
+            principal_as("writer", Access::Write, &[], Some("pg")),
+            None,
+        );
+        let handle = open(&ctx).await;
+        let edit = PendingEdit {
+            path: "a.md",
+            text: Some("# One\n"),
+            at: Utc::now(),
+        };
+        let row = Arc::new(pending_entry(&test, &handle, &edit).await);
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
+        let pool = test.app.pool();
+        let size = pool.options().get_max_connections();
+        let mut held = Vec::with_capacity(size as usize);
+        for _ in 0..size {
+            held.push(pool.acquire().await.unwrap());
+        }
+        let read = {
+            let (app, row, state) = (Arc::clone(&test.app), Arc::clone(&row), Arc::clone(&state));
+            tokio::spawn(async move {
+                app.overlays()
+                    .get(app.pool(), app.rebuild_locks(), &state, &row)
+                    .await
+            })
+        };
+        while test.app.overlays().builds.len() == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Act: a write or discard forgets the overlay mid-build.
+        test.app.overlays().forget(row.id).await;
+        drop(held);
+        let served = tokio::time::timeout(Duration::from_secs(30), read)
+            .await
+            .expect("the build finishes once a connection is free")
+            .unwrap()
+            .unwrap();
+
+        // Assert: the caller got its overlay, but it was not kept.
+        assert_eq!(served.snapshot().get("a.md").unwrap().text(), "# One\n");
+        assert!(
+            test.app.overlays().cached.peek(&row.id).await.is_none(),
+            "an overlay overtaken by a forget stays out of the cache"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn overlay_lookups_and_builds_are_counted() {
+        // Arrange
+        let (test, registry) =
+            app_with_metrics(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
+        store_key(&test, "writer").await;
+        let ctx = context(
+            &test,
+            principal_as("writer", Access::Write, &[], Some("pg")),
+            None,
+        );
+        let handle = open(&ctx).await;
+        let edit = |path| PendingEdit {
+            path,
+            text: Some("# One\n"),
+            at: Utc::now(),
+        };
+        let row = pending_entry(&test, &handle, &edit("b.md")).await;
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
+        let (pool, rebuilds) = (test.app.pool(), test.app.rebuild_locks());
+        let overlays = test.app.overlays();
+
+        // Act: a miss that builds, then a hit, then a build that fails (the
+        // new entry's path is below a published file).
+        overlays.get(pool, rebuilds, &state, &row).await.unwrap();
+        overlays.get(pool, rebuilds, &state, &row).await.unwrap();
+        let clash = pending_entry(&test, &handle, &edit("a.md/c.md")).await;
+        let failed = overlays.get(pool, rebuilds, &state, &clash).await;
+
+        // Assert: one request per call (the second lookup under the build
+        // lock is not counted).
+        assert!(failed.is_err());
+        let text = render(&registry);
+        let series = |name: &str| sample_of(&text, name).unwrap_or(0.0);
+        assert_eq!(
+            series(r#"okf_cache_requests_total{cache="overlay",result="miss"}"#),
+            2.0
+        );
+        assert_eq!(
+            series(r#"okf_cache_requests_total{cache="overlay",result="hit"}"#),
+            1.0
+        );
+        assert_eq!(
+            series(r#"okf_cache_load_duration_seconds_count{cache="overlay",outcome="ok"}"#),
+            1.0
+        );
+        assert_eq!(
+            series(r#"okf_cache_load_duration_seconds_count{cache="overlay",outcome="error"}"#),
+            1.0
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_pending_md_that_is_not_utf8_names_the_changeset() {
         let test = app_with(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
-        let base = test.app.catalog("pg").unwrap().current();
+        let base = test.app.catalog("pg").await.unwrap().unwrap().current();
         let garbled = EntryRow {
             path: "bad.md".to_string(),
             base_revision: None,

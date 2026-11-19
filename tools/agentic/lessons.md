@@ -10,7 +10,7 @@ Each rule below records a real bug the review bot found in an earlier PR, mostly
 - **Every session insert is guarded against a concurrent credential change.** A password sign-in uses the stamped path (`passwords::Verified { stamp }`, then `user_sessions::start` with `password: Some(stamp)`). Other methods must not create a session that survives a reset or admin change. Ask: if a reset or `set_admin` commits between my check and my insert, does the session still appear? If so, fix it. Test that interleaving deterministically: hold the user row, queue both operations, and watch `pg_stat_activity`.
 - **After a commit, await nothing that can block or fail before returning the response:** record success events in the transaction; side effects are in-transaction or detached best-effort.
 - **Maps keyed by a client-chosen value** (IP, email, ceremony id) use `ExpiringMap::update_or_insert_sliding` (find-or-create plus change under one lock), never `get` followed by `insert`.
-- **Admin level and ceiling come from the key cache on every request**, never from a value read at sign-in.
+- **Admin level and ceiling come from the user cache on every request** (`App::session_principal`, `Credentials::user`), never from a value read at sign-in.
 
 - **A closure passed to `Ephemeral::update` may run more than once** (a Redis compare-and-set that lost a race reruns it on a fresh copy). It must compute its result from the value alone: clone captured inputs inside it, never `Option::take` or move them out, and do no I/O. Test it by racing two updates of one entry through two Redis handles (milestone 16 plan, Task 2; `shared::ephemeral`'s `a_lost_race_reruns_the_change_on_a_fresh_copy` forces the rerun).
 

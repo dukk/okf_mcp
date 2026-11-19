@@ -2,7 +2,8 @@
 //! catalog's published documents, under the catalog's publish lock.
 //!
 //! The lock is two locks, taken in this order. First the in-process mutex
-//! ([`CatalogState::publish_lock`]), held until the snapshot is swapped.
+//! ([`App::publish_lock`], keyed by catalog id so every `CatalogState` of
+//! one catalog shares it), held until the snapshot is swapped.
 //! Then, in the transaction, the user rows its audit entry resolves
 //! (`lock_people`), so the publish takes users before its changeset as
 //! `users::delete` does, then the advisory lock, which a CLI import takes
@@ -24,6 +25,8 @@ use tracing::Instrument;
 use crate::app::App;
 use crate::catalog::{CatalogState, Loaded};
 use crate::error::{ConflictFile, OkfError};
+use crate::invalidate::{invalidate, Invalidation};
+use crate::keyed_lock::KeyedLocks;
 use crate::mcp::blocking;
 use crate::okf::analysis::lint::LintReport;
 use crate::okf::analysis::Finding;
@@ -152,7 +155,14 @@ pub async fn publish(
     audit: &AuditActor,
 ) -> Result<PublishReport, OkfError> {
     let started = std::time::Instant::now();
+    let before = state.current().generation();
     let result = publish_locked(app, state, input, audit).await;
+    // Whatever the outcome: the publish may have refreshed the state in
+    // place, before it committed (`current_base`, even when the merge or
+    // lint then refuses) or after (step 6). The catalog cache weighs the
+    // new snapshot (M18 Decision 2), and drops one that no longer fits.
+    // An in-process cache operation only: nothing here waits on I/O.
+    app.catalog_cache().refreshed_if_moved(state, before).await;
     let outcome = if result.is_ok() {
         Outcome::Ok
     } else {
@@ -198,7 +208,7 @@ async fn publish_locked(
     // or early return) rolls back.
     let lock_started = std::time::Instant::now();
     let locks = async {
-        let publishing = state.publish_lock().lock().await;
+        let publishing = app.publish_lock(state.id()).await;
         let mut tx = app.pool().begin().await?;
         // The users the entry resolves (the actor, its key's owner and the
         // person of a personal owner team), before the changeset: the
@@ -232,7 +242,7 @@ async fn publish_locked(
         "okf.changeset.entries",
         i64::try_from(entries.len()).unwrap_or(i64::MAX),
     );
-    let base = current_base(state, &mut tx).await?;
+    let base = current_base(state, app.rebuild_locks(), &mut tx).await?;
 
     // Step 3: base revisions against the documents as stored now.
     let paths: Vec<String> = entries.iter().map(|entry| entry.path.clone()).collect();
@@ -290,6 +300,15 @@ async fn publish_locked(
                 }),
             };
             audit::record(&mut tx, audit, &entry, now).await?;
+            // Every replica's listener refreshes the catalog once this commits.
+            invalidate(
+                &mut tx,
+                &[Invalidation::Catalog {
+                    id: state.id(),
+                    generation,
+                }],
+            )
+            .await?;
             changed = Some(CatalogGeneration {
                 catalog_id: state.id(),
                 generation,
@@ -311,16 +330,18 @@ async fn publish_locked(
     // Step 6, still under the in-process lock (the advisory lock ended with
     // the transaction): the next publish of this catalog checks against
     // this one's result. A failed refresh does not undo a committed publish;
-    // the poll loop retries it, and the next publish refreshes first.
-    if let Err(error) = state.refresh(app.pool()).await {
+    // the next use retries it (it checks the snapshot against the catalog's
+    // row), and the next publish refreshes first. `publish` then has the
+    // catalog cache weigh the new snapshot.
+    if let Err(error) = state.refresh(app.pool(), app.rebuild_locks()).await {
         split_event!(
             error,
             { catalog = %state.name(), kind = error.kind(), },
             { %error, },
-            "refresh after publish failed; the poll loop retries"
+            "refresh after publish failed; the next use retries"
         );
     }
-    app.overlays().forget(locked.id);
+    app.overlays().forget(locked.id).await;
     Ok(PublishReport {
         published: true,
         revisions,
@@ -367,6 +388,7 @@ pub(crate) async fn lock_people(
 #[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "publish.current_base"))]
 async fn current_base(
     state: &CatalogState,
+    rebuilds: &KeyedLocks,
     conn: &mut PgConnection,
 ) -> Result<Arc<Loaded>, OkfError> {
     let generation: i64 = sqlx::query_scalar("SELECT generation FROM catalogs WHERE id = $1")
@@ -377,7 +399,7 @@ async fn current_base(
     // refresh builds exactly this generation, and it reads on this
     // transaction's connection: a publish never holds a second one.
     if state.current().generation() < generation {
-        state.refresh_locked(conn).await?;
+        state.refresh_locked(conn, rebuilds).await?;
     }
     let base = state.current();
     if base.generation() == generation {
@@ -836,5 +858,70 @@ mod tests {
         );
 
         assert_eq!(error.kind(), "Database");
+    }
+
+    /// One catalog loaded twice, as an evicted cache entry still in use and
+    /// its reload would be (M18 Decision 4): a publish through the second
+    /// state waits for the publish lock a publish through the first holds.
+    /// Before the locks moved to `App`, each state had its own mutex, and
+    /// the second publish ran (and committed) at once.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn publishes_of_one_catalog_serialize_across_two_states() {
+        use crate::config::Config;
+        use crate::mcp::testing::{app_with, open, pending_entry, writer, PendingEdit};
+        use std::time::Duration;
+
+        // Arrange: two states of `pg`, and a changeset with one edit.
+        const NOTE: &str = "---\ntype: Note\ntitle: B\ndescription: A note.\n---\n# B\n";
+        let test = app_with(&[("pg", &[("a.md", NOTE)])], Config::default()).await;
+        let first = test.app.catalog("pg").await.unwrap().expect("pg is loaded");
+        let second = Arc::new(
+            CatalogState::load(
+                test.app.pool(),
+                &test.app.catalog_row("pg").await.unwrap().expect("pg"),
+            )
+            .await
+            .expect("load pg again"),
+        );
+        assert!(!Arc::ptr_eq(&first, &second), "two separate states");
+        let ctx = writer(&test, "writer", "pg").await;
+        let handle = open(&ctx).await;
+        let edit = PendingEdit {
+            path: "b.md",
+            text: Some(NOTE),
+            at: Utc::now(),
+        };
+        let changeset = pending_entry(&test, &handle, &edit).await;
+        // Held as a publish through `first` holds it, for its whole length.
+        let held = test.app.publish_lock(first.id()).await;
+
+        // Act: publish through `second`, on its own task.
+        let app = Arc::clone(&test.app);
+        let publishing = tokio::spawn(async move {
+            let input = PublishInput {
+                changeset: &changeset,
+                actor: "writer",
+                message: "through the second state",
+            };
+            publish(&app, &second, &input, &AuditActor::cli()).await
+        });
+        // A publish takes well under this; one sharing the lock never ends.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let waited = !publishing.is_finished();
+        let still_open = crate::mcp::testing::changeset_row(&test, &handle)
+            .await
+            .state;
+        drop(held);
+        let published = tokio::time::timeout(Duration::from_secs(30), publishing)
+            .await
+            .expect("the publish finishes once the lock is released")
+            .expect("the publish task")
+            .expect("the publish");
+
+        // Assert: it waited, wrote nothing meanwhile, then published.
+        assert!(waited, "the publish waited for the other state's lock");
+        assert_eq!(still_open, ChangesetState::Open);
+        assert!(published.published);
+        assert_eq!(published.revisions.len(), 1);
     }
 }

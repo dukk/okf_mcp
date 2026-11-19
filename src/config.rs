@@ -32,11 +32,13 @@ pub const DEFAULT_LISTEN: SocketAddr =
 /// wrong behind an ingress, where the config must name the public host.
 pub const DEFAULT_ALLOWED_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 
-/// How often the server looks for changes made outside it.
-pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(10);
-
 /// How long an MCP session may sit idle before it is closed.
 pub const DEFAULT_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
+
+/// The default for `worker_shutdown_grace`: how long `serve` waits for the
+/// mail worker to finish the mail in hand once it is told to stop. It is the
+/// longest a provider may take to answer a send (30 s for Postmark and SES).
+pub const DEFAULT_WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 
 /// The default `get_concept` outline threshold: bodies over 20,000 characters.
 pub const DEFAULT_CONCEPT_OUTLINE_CHARS: usize = 20_000;
@@ -44,8 +46,32 @@ pub const DEFAULT_CONCEPT_OUTLINE_CHARS: usize = 20_000;
 /// The default database pool size.
 pub const DEFAULT_DATABASE_MAX_CONNECTIONS: u32 = 16;
 
-/// The default number of changeset overlays kept in memory.
-pub const DEFAULT_OVERLAY_CACHE_SIZE: usize = 64;
+/// The default `overlay_cache_bytes`: 256 MiB of estimated overlay memory.
+pub const DEFAULT_OVERLAY_CACHE_BYTES: u64 = 256 * 1024 * 1024;
+
+/// The default `catalog_cache_bytes`: 1 GiB of estimated snapshot memory.
+pub const DEFAULT_CATALOG_CACHE_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// The default `catalog_directory_entries`: catalog rows kept by name.
+pub const DEFAULT_CATALOG_DIRECTORY_ENTRIES: u64 = 100_000;
+
+/// The default `search_fanout_max`: the most catalogs `GET /api/v1/search`
+/// searches when the request names none (M18 spec Decision 8).
+pub const DEFAULT_SEARCH_FANOUT_MAX: u32 = 25;
+
+/// The default `catalog_ttl`: how long a cached catalog row is served.
+pub const DEFAULT_CATALOG_TTL: Duration = Duration::from_secs(10);
+
+/// The default `credential_cache_entries`: keys and OAuth grants kept, by
+/// hash and by id.
+pub const DEFAULT_CREDENTIAL_CACHE_ENTRIES: u64 = 100_000;
+
+/// The default `user_cache_entries`: users kept, by id.
+pub const DEFAULT_USER_CACHE_ENTRIES: u64 = 100_000;
+
+/// The default `credential_ttl`: how long a cached credential or user is
+/// served before it is read again.
+pub const DEFAULT_CREDENTIAL_TTL: Duration = Duration::from_secs(10);
 
 /// The default lifetime of an OAuth access token.
 pub const DEFAULT_ACCESS_TOKEN_TTL: Duration = Duration::from_secs(60 * 60);
@@ -53,7 +79,7 @@ pub const DEFAULT_ACCESS_TOKEN_TTL: Duration = Duration::from_secs(60 * 60);
 /// The default lifetime of an OAuth refresh token (restarted by each rotation).
 pub const DEFAULT_REFRESH_TOKEN_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
-/// The default idle period after which the poll loop revokes an OAuth grant
+/// The default idle period after which housekeeping revokes an OAuth grant
 /// that holds no live token.
 pub const DEFAULT_IDLE_GRANT_REVOKE_AFTER: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
@@ -90,7 +116,7 @@ pub struct OAuthConfig {
     #[serde(with = "humantime_serde")]
     pub refresh_token_ttl: Duration,
     /// How long an OAuth grant may go without a token being issued for it
-    /// before the poll loop revokes it (`"30d"`). A grant that still holds
+    /// before housekeeping revokes it (`"30d"`). A grant that still holds
     /// a live token is never revoked, whatever this says.
     #[serde(with = "humantime_serde")]
     pub idle_grant_revoke_after: Duration,
@@ -458,11 +484,13 @@ pub struct MailConfig {
     pub provider: MailProvider,
     /// The From address (`"okf <okf@example.com>"`).
     pub from: String,
-    /// Whether `serve` runs a mail worker. Off for a replica that should only
-    /// enqueue, and in the test servers (Decision 19). The worker uses a pool
-    /// of its own, up to 4 connections (one of them held by LISTEN), beside
-    /// `database_max_connections`.
-    pub worker: bool,
+    /// Deprecated and ignored: every `serve` runs the mail worker, so a
+    /// Deployment of several replicas needs no per-pod mail setting (issue
+    /// #458). The key still parses, so a configuration that has it keeps
+    /// starting; [`Config::deprecation_warnings`] names it. The worker's
+    /// pool is shared with the housekeeping worker: up to 3 connections
+    /// beside `database_max_connections`.
+    pub worker: Option<bool>,
     /// The SMTP relay, for `provider = "smtp"`.
     pub smtp: Option<SmtpConfig>,
     /// Postmark, for `provider = "postmark"`.
@@ -483,7 +511,7 @@ impl Default for MailConfig {
         Self {
             provider: MailProvider::Log,
             from: DEFAULT_MAIL_FROM.to_string(),
-            worker: true,
+            worker: None,
             smtp: None,
             postmark: None,
             ses: None,
@@ -657,7 +685,7 @@ pub struct FeedbackConfig {
     /// Submissions one credential may make in any hour (default 10).
     #[serde(default = "default_feedback_max_per_hour")]
     pub max_per_hour: u32,
-    /// How long forwarded (`sent`) feedback is kept before the poll loop
+    /// How long forwarded (`sent`) feedback is kept before housekeeping
     /// deletes it (default `"30d"`, at least `"1d"`).
     #[serde(default = "default_feedback_retention", with = "humantime_serde")]
     pub retention: Duration,
@@ -887,16 +915,27 @@ pub struct Config {
     /// The catalog a key with no default of its own reads and writes (design
     /// "Catalog selection", step 4).
     pub default_catalog: Option<String>,
-    /// How often to look for imports, catalog and key changes made by the
-    /// subcommands (`"10s"`).
+    /// Deprecated and ignored (milestone 18, spec Decision 18): the server no
+    /// longer polls. Changes reach every replica through the change feed,
+    /// with `catalog_ttl` and `credential_ttl` as the backstop. The key
+    /// still parses (`"10s"`), so a configuration that has it keeps
+    /// starting; [`Config::deprecation_warnings`] names it.
     // `with = "humantime_serde"` parses the field through that module's
     // functions instead of `Duration`'s own serde impl (which wants
-    // `{secs, nanos}`).
+    // `{secs, nanos}`); it reads `Option<Duration>` too, a missing key
+    // being `None`.
     #[serde(with = "humantime_serde")]
-    pub poll_interval: Duration,
+    pub poll_interval: Option<Duration>,
     /// How long an MCP session may be idle before it is closed (`"2h"`).
     #[serde(with = "humantime_serde")]
     pub session_idle_timeout: Duration,
+    /// How long `serve` waits, once told to stop, for the mail worker to
+    /// finish the mail in hand (`"30s"`). Match the pod's
+    /// `terminationGracePeriodSeconds` to it, plus a few seconds. Past it
+    /// `serve` logs and returns, and apalis hands the unfinished job to
+    /// another replica after the orphan timeout.
+    #[serde(with = "humantime_serde")]
+    pub worker_shutdown_grace: Duration,
     /// The NTP server the clock check measures against (`host`, `host:port`
     /// or an address); none means no check (design "Time").
     pub time_server: Option<String>,
@@ -909,12 +948,49 @@ pub struct Config {
     /// The most database connections one process opens (every command,
     /// `serve` included). A write holds one for its transaction, and a read
     /// that builds an overlay holds one to read the changeset's entries.
-    /// `serve`'s mail worker does not count against it: it opens up to
-    /// `mail::queue::WORKER_POOL_SIZE` (4) connections of its own.
+    /// `serve`'s workers do not count against it: they share one pool of up
+    /// to `mail::queue::WORKER_POOL_SIZE` (3) connections of their own.
     pub database_max_connections: u32,
-    /// The most changeset overlays kept in memory; past it, the least
-    /// recently used one is dropped (and rebuilt if read again).
-    pub overlay_cache_size: usize,
+    /// The most memory the changeset overlays held in this process may take,
+    /// estimated as a catalog snapshot's is, over the overlay's own files
+    /// (`"256MiB"`, or a number of bytes). Past it, the least recently used
+    /// is dropped (and rebuilt if read again); an overlay larger than the
+    /// whole budget is served but not kept.
+    pub overlay_cache_bytes: ByteSize,
+    /// Deprecated and ignored: use `overlay_cache_bytes`. Still read so an
+    /// old configuration starts (`deprecation_warnings` names it).
+    pub overlay_cache_size: Option<usize>,
+    /// The most memory the catalog snapshots held in this process may take,
+    /// as estimated from their stored size (`"1GiB"`, or a number of bytes).
+    /// Catalogs load on first use; past the budget, the least recently used
+    /// is dropped and loaded again when next read. A catalog larger than the
+    /// whole budget is still served, but not kept.
+    pub catalog_cache_bytes: ByteSize,
+    /// The most catalog rows the catalog directory keeps, by name (`100000`).
+    /// A row is a few hundred bytes, so this bounds the directory at tens of
+    /// megabytes however many catalogs exist.
+    pub catalog_directory_entries: u64,
+    /// How long the directory serves a catalog row before it reads it again
+    /// (`"10s"`). Invalidations drop a row sooner; this is the backstop for
+    /// one that is lost.
+    #[serde(with = "humantime_serde")]
+    pub catalog_ttl: Duration,
+    /// The most keys and OAuth grants the credential cache keeps (`100000`
+    /// each, by hash and by id). Only live credentials that were used are
+    /// kept; an unknown one is never cached.
+    pub credential_cache_entries: u64,
+    /// The most users the user cache keeps, by id (`100000`): each one's
+    /// admin flag, ceiling, teams, entitlements and live unlocks.
+    pub user_cache_entries: u64,
+    /// How long a cached credential or user is served before it is read
+    /// again (`"10s"`). Invalidations drop one sooner; this is the backstop
+    /// for one that is lost, and the bound on a revocation's reach then.
+    #[serde(with = "humantime_serde")]
+    pub credential_ttl: Duration,
+    /// The most catalogs `GET /api/v1/search` searches when the request
+    /// names none (`25`, from 1 to 999): a key that reaches more must name
+    /// them, so one request cannot search every catalog in the system.
+    pub search_fanout_max: u32,
     /// The externally visible origin (`"https://okf.example.com"`). Setting
     /// it turns OAuth on: it is the issuer, and `<public_url>/mcp` is the
     /// resource tokens are issued for. Its host must be in `allowed_hosts`.
@@ -951,13 +1027,22 @@ impl Default for Config {
             // `&str` into an owned `String`) without copying it a second time.
             allowed_hosts: Vec::from(DEFAULT_ALLOWED_HOSTS.map(String::from)),
             default_catalog: None,
-            poll_interval: DEFAULT_POLL_INTERVAL,
+            poll_interval: None,
             session_idle_timeout: DEFAULT_SESSION_IDLE_TIMEOUT,
+            worker_shutdown_grace: DEFAULT_WORKER_SHUTDOWN_GRACE,
             time_server: None,
             maintenance_review_intervals: BTreeMap::new(),
             concept_outline_chars: DEFAULT_CONCEPT_OUTLINE_CHARS,
             database_max_connections: DEFAULT_DATABASE_MAX_CONNECTIONS,
-            overlay_cache_size: DEFAULT_OVERLAY_CACHE_SIZE,
+            overlay_cache_bytes: ByteSize::b(DEFAULT_OVERLAY_CACHE_BYTES),
+            overlay_cache_size: None,
+            catalog_cache_bytes: ByteSize::b(DEFAULT_CATALOG_CACHE_BYTES),
+            catalog_directory_entries: DEFAULT_CATALOG_DIRECTORY_ENTRIES,
+            catalog_ttl: DEFAULT_CATALOG_TTL,
+            credential_cache_entries: DEFAULT_CREDENTIAL_CACHE_ENTRIES,
+            user_cache_entries: DEFAULT_USER_CACHE_ENTRIES,
+            credential_ttl: DEFAULT_CREDENTIAL_TTL,
+            search_fanout_max: DEFAULT_SEARCH_FANOUT_MAX,
             public_url: None,
             oauth: OAuthConfig::default(),
             auth: AuthConfig::default(),
@@ -1029,19 +1114,46 @@ impl Config {
         toml::from_str(text)
     }
 
+    /// Settings that are read but no longer do anything. `Config::load` runs
+    /// before the log subscriber exists, so it cannot log them; `serve` calls
+    /// this once the subscriber is up and logs each message as a warning.
+    ///
+    /// # Returns
+    /// One message per deprecated setting present in the file (empty when
+    /// there is none).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "pure check over the parsed settings, called once at start-up"
+        )
+    )]
+    pub fn deprecation_warnings(&self) -> Vec<&'static str> {
+        let mut warnings = Vec::new();
+        if self.mail.worker.is_some() {
+            warnings.push("mail.worker is deprecated and ignored: every serve runs the worker");
+        }
+        if self.poll_interval.is_some() {
+            warnings.push("poll_interval is deprecated and ignored");
+        }
+        if self.overlay_cache_size.is_some() {
+            warnings.push("overlay_cache_size is deprecated and ignored; set overlay_cache_bytes");
+        }
+        warnings
+    }
+
     /// Checks the values serde cannot: ones that would break the server.
     ///
     /// # Returns
     /// `Ok(())`, or the problem in words.
     ///
     /// # Errors
-    /// A zero `poll_interval` (tokio's interval panics on zero) or
-    /// `session_idle_timeout`, an empty `allowed_hosts` (which rmcp reads as
+    /// A zero `session_idle_timeout`, an empty `allowed_hosts` (which rmcp reads as
     /// "accept any `Host`"), or a blank entry in it (which no `Host` matches,
     /// so every request would get 403 with no hint why), or a blank
     /// `time_server` or one with surrounding whitespace (which the lookup
     /// would fail on every check, seen only as a `warn`), or a zero
-    /// `database_max_connections` or `overlay_cache_size`, a zero OAuth
+    /// `database_max_connections` or `overlay_cache_bytes`, a zero OAuth
     /// lifetime, an `[auth]` value out of range (see `AuthConfig`), a
     /// `[mail]` section that cannot send (see `MailConfig`), or a
     /// `public_url` that is not an `https` origin (`http` on
@@ -1056,17 +1168,42 @@ impl Config {
         )
     )]
     pub fn validate(&self) -> Result<(), String> {
-        if self.poll_interval.is_zero() {
-            return Err("poll_interval must be more than zero".to_string());
-        }
         if self.session_idle_timeout.is_zero() {
             return Err("session_idle_timeout must be more than zero".to_string());
+        }
+        if self.worker_shutdown_grace.is_zero() {
+            return Err("worker_shutdown_grace must be more than zero".to_string());
         }
         if self.database_max_connections == 0 {
             return Err("database_max_connections must be more than zero".to_string());
         }
-        if self.overlay_cache_size == 0 {
-            return Err("overlay_cache_size must be more than zero".to_string());
+        if self.overlay_cache_bytes.as_u64() == 0 {
+            return Err("overlay_cache_bytes must be more than zero".to_string());
+        }
+        if self.catalog_cache_bytes.as_u64() == 0 {
+            return Err("catalog_cache_bytes must be more than zero".to_string());
+        }
+        if self.catalog_directory_entries == 0 {
+            return Err("catalog_directory_entries must be more than zero".to_string());
+        }
+        if self.catalog_ttl.is_zero() {
+            return Err("catalog_ttl must be more than zero".to_string());
+        }
+        if self.credential_cache_entries == 0 {
+            return Err("credential_cache_entries must be more than zero".to_string());
+        }
+        if self.user_cache_entries == 0 {
+            return Err("user_cache_entries must be more than zero".to_string());
+        }
+        if self.credential_ttl.is_zero() {
+            return Err("credential_ttl must be more than zero".to_string());
+        }
+        // The cap is checked with one listing page of `search_fanout_max + 1`
+        // rows, and a page holds at most `MAX_PAGE` (1000).
+        if self.search_fanout_max == 0
+            || self.search_fanout_max >= crate::cache::directory::MAX_PAGE
+        {
+            return Err("search_fanout_max must be from 1 to 999".to_string());
         }
         if self.allowed_hosts.is_empty() {
             return Err(
@@ -1450,14 +1587,22 @@ mod tests {
         assert_eq!(config.listen.to_string(), "0.0.0.0:8080");
         assert_eq!(config.allowed_hosts, ["localhost", "127.0.0.1", "::1"]);
         assert_eq!(config.default_catalog, None);
-        assert_eq!(config.poll_interval, Duration::from_secs(10));
+        assert_eq!(config.poll_interval, None);
         assert_eq!(
             config.session_idle_timeout,
             Duration::from_secs(2 * 60 * 60)
         );
         assert_eq!(config.concept_outline_chars, 20_000);
         assert_eq!(config.database_max_connections, 16);
-        assert_eq!(config.overlay_cache_size, 64);
+        assert_eq!(config.overlay_cache_bytes.as_u64(), 256 * 1024 * 1024);
+        assert_eq!(config.overlay_cache_size, None);
+        assert_eq!(config.catalog_cache_bytes.as_u64(), 1024 * 1024 * 1024);
+        assert_eq!(config.catalog_directory_entries, 100_000);
+        assert_eq!(config.catalog_ttl, Duration::from_secs(10));
+        assert_eq!(config.credential_cache_entries, 100_000);
+        assert_eq!(config.user_cache_entries, 100_000);
+        assert_eq!(config.credential_ttl, Duration::from_secs(10));
+        assert_eq!(config.search_fanout_max, 25);
     }
 
     #[test]
@@ -1471,7 +1616,7 @@ mod tests {
                     time_server = \"ntp.example\"\n\
                     concept_outline_chars = 500\n\
                     database_max_connections = 32\n\
-                    overlay_cache_size = 8\n\
+                    overlay_cache_bytes = \"8MiB\"\n\
                     a_later_key = true\n";
 
         let config = Config::from_toml(text).unwrap();
@@ -1480,12 +1625,12 @@ mod tests {
         assert_eq!(config.listen.to_string(), "127.0.0.1:9000");
         assert_eq!(config.allowed_hosts, ["okf-mcp.example"]);
         assert_eq!(config.default_catalog.as_deref(), Some("pg"));
-        assert_eq!(config.poll_interval, Duration::from_secs(90));
+        assert_eq!(config.poll_interval, Some(Duration::from_secs(90)));
         assert_eq!(config.session_idle_timeout, Duration::from_secs(30 * 60));
         assert_eq!(config.time_server.as_deref(), Some("ntp.example"));
         assert_eq!(config.concept_outline_chars, 500);
         assert_eq!(config.database_max_connections, 32);
-        assert_eq!(config.overlay_cache_size, 8);
+        assert_eq!(config.overlay_cache_bytes.as_u64(), 8 * 1024 * 1024);
     }
 
     #[test]
@@ -1518,7 +1663,7 @@ mod tests {
     fn a_bad_value_names_the_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("okf.toml");
-        std::fs::write(&path, "poll_interval = \"soon\"\n").unwrap();
+        std::fs::write(&path, "session_idle_timeout = \"soon\"\n").unwrap();
 
         let error = Config::load(Some(&path)).unwrap_err();
 
@@ -1530,11 +1675,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("okf.toml");
         for (text, needle) in [
-            ("poll_interval = \"0s\"\n", "poll_interval"),
             ("session_idle_timeout = \"0s\"\n", "session_idle_timeout"),
             ("allowed_hosts = []\n", "allowed_hosts"),
             ("database_max_connections = 0\n", "database_max_connections"),
-            ("overlay_cache_size = 0\n", "overlay_cache_size"),
+            ("overlay_cache_bytes = 0\n", "overlay_cache_bytes"),
+            ("catalog_cache_bytes = 0\n", "catalog_cache_bytes"),
+            (
+                "catalog_directory_entries = 0\n",
+                "catalog_directory_entries",
+            ),
+            ("catalog_ttl = \"0s\"\n", "catalog_ttl"),
+            ("credential_cache_entries = 0\n", "credential_cache_entries"),
+            ("user_cache_entries = 0\n", "user_cache_entries"),
+            ("credential_ttl = \"0s\"\n", "credential_ttl"),
+            ("search_fanout_max = 0\n", "search_fanout_max"),
+            (
+                "search_fanout_max = 1000\n",
+                "search_fanout_max must be from 1 to 999",
+            ),
             (
                 "allowed_hosts = [\"\"]\n",
                 "allowed_hosts has a blank entry",
@@ -1833,8 +1991,67 @@ mod tests {
         assert_eq!(mail, MailConfig::default());
         assert_eq!(mail.provider, MailProvider::Log);
         assert_eq!(mail.from, "okf <okf@localhost>");
-        assert!(mail.worker);
+        assert_eq!(mail.worker, None);
+        assert!(Config::default().deprecation_warnings().is_empty());
         assert!(Config::default().validate().is_ok());
+    }
+
+    #[test]
+    fn mail_worker_false_parses_with_a_warning_and_is_ignored() {
+        let config = Config::from_toml("[mail]\nworker = false\n").unwrap();
+
+        assert_eq!(config.mail.worker, Some(false));
+        assert!(
+            config.validate().is_ok(),
+            "an old configuration still starts"
+        );
+        assert_eq!(
+            config.deprecation_warnings(),
+            ["mail.worker is deprecated and ignored: every serve runs the worker"]
+        );
+    }
+
+    #[test]
+    fn poll_interval_parses_with_a_warning_and_is_ignored() {
+        // A zero interval too: nothing runs on it any more.
+        for text in ["poll_interval = \"10s\"\n", "poll_interval = \"0s\"\n"] {
+            let config = Config::from_toml(text).unwrap();
+
+            assert!(
+                config.validate().is_ok(),
+                "an old configuration still starts"
+            );
+            assert_eq!(
+                config.deprecation_warnings(),
+                ["poll_interval is deprecated and ignored"]
+            );
+        }
+    }
+
+    #[test]
+    fn overlay_cache_size_parses_with_a_warning_and_is_ignored() {
+        let config = Config::from_toml("overlay_cache_size = 0\n").unwrap();
+
+        assert!(config.validate().is_ok(), "an old configuration starts");
+        assert_eq!(
+            config.deprecation_warnings(),
+            ["overlay_cache_size is deprecated and ignored; set overlay_cache_bytes"]
+        );
+    }
+
+    #[test]
+    fn worker_shutdown_grace_defaults_reads_and_must_be_positive() {
+        assert_eq!(
+            Config::default().worker_shutdown_grace,
+            Duration::from_secs(30)
+        );
+        let config = Config::from_toml("worker_shutdown_grace = \"45s\"\n").unwrap();
+        assert_eq!(config.worker_shutdown_grace, Duration::from_secs(45));
+        let error = Config::from_toml("worker_shutdown_grace = \"0s\"\n")
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(error.contains("worker_shutdown_grace"), "{error}");
     }
 
     #[test]
@@ -1858,7 +2075,7 @@ mod tests {
 
         assert_eq!(config.mail.provider, MailProvider::Smtp);
         assert_eq!(config.mail.from, "okf <okf@example.com>");
-        assert!(!config.mail.worker);
+        assert_eq!(config.mail.worker, Some(false));
         assert_eq!(
             config.mail.smtp,
             Some(SmtpConfig {

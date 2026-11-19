@@ -305,32 +305,10 @@ impl AccessTokens {
         if live.resource != resource {
             return Ok(None);
         }
-        Ok(find_grant(app, &live.grant_id).await)
+        // The credential cache reads a grant it does not hold, so one made on
+        // another replica is found at once.
+        app.find_grant(&live.grant_id).await
     }
-}
-
-/// A live grant's principal, catching the key cache up first when it does
-/// not hold the grant (spec Decision 14): the grant may have been made on
-/// another instance whose announcement has not reached this one yet. Only a
-/// caller holding a live token row or code calls this, so only such a holder
-/// can cause the catch-up's database read: one per request, serialized with
-/// the poll pass, while its grant stays missing (revoked or expired).
-///
-/// # Arguments
-/// * `app` - the shared state.
-/// * `grant_id` - the grant the live row names.
-///
-/// # Returns
-/// Its principal, or `None` when it is still missing after the catch-up
-/// (revoked, expired or unknown).
-#[tracing::instrument(level = "debug", skip_all)]
-pub(crate) async fn find_grant(app: &App, grant_id: &str) -> Option<Arc<Principal>> {
-    if let Some(principal) = app.keys().find_grant(grant_id) {
-        return Some(principal);
-    }
-    // A no-op without Redis, where the one replica polls after its changes.
-    app.catch_up_keys().await;
-    app.keys().find_grant(grant_id)
 }
 
 /// A random seed for the revocation counter: non-negative and below 2^62,
@@ -408,7 +386,7 @@ mod tests {
 
     const RESOURCE: &str = "https://okf.example.com/mcp";
 
-    /// An OAuth-on app with one grant on `main`, polled in.
+    /// An OAuth-on app with one grant on `main`.
     async fn with_grant() -> (TestApp, String) {
         let test = app_with(&[("main", &[])], oauth_config("https://okf.example.com")).await;
         let now = test.app.clock().now();
@@ -420,7 +398,6 @@ mod tests {
         )
         .await;
         let grant = insert_grant(test.app.pool(), &client, Access::Write, &["main"], now).await;
-        test.app.poll().await.unwrap();
         (test, grant)
     }
 
@@ -493,15 +470,17 @@ mod tests {
         let token = mint_access(&test.app, &grant, RESOURCE, TimeDelta::hours(1)).await;
         assert!(authenticate(&test.app, &token).await.unwrap().is_some());
 
-        key_rows::revoke_by_id(
-            test.app.pool(),
-            &grant,
-            &crate::store::audit::AuditActor::cli(),
-            test.app.clock().now(),
-        )
-        .await
-        .unwrap();
-        test.app.poll().await.unwrap();
+        crate::invalidate::testing::applied(&test.app, async {
+            key_rows::revoke_by_id(
+                test.app.pool(),
+                &grant,
+                &crate::store::audit::AuditActor::cli(),
+                test.app.clock().now(),
+            )
+            .await
+            .unwrap();
+        })
+        .await;
 
         assert!(authenticate(&test.app, &token).await.unwrap().is_none());
     }
@@ -841,16 +820,15 @@ mod tests {
             .expect("A admits its own token")
             .key_id
             .clone();
-        // Lib apps run no subscriber, and B polls hourly: B has not loaded
-        // the grant A's consent made.
-        assert!(b.keys().find_grant(&grant).is_none(), "B lacks the grant");
+        // Lib apps run no subscriber, and B polls hourly: B has never read
+        // the grant A's consent made; its credential cache reads it on use.
 
         let principal = verify_on(&b, &token).await;
 
         assert_eq!(
             principal.map(|principal| principal.key_id.clone()),
             Some(grant),
-            "B caught up on the grant and admitted the token"
+            "B read the grant and admitted the token"
         );
     }
 

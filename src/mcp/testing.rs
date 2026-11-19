@@ -14,6 +14,7 @@ use crate::clock::{Clock, SystemClock};
 use crate::config::Config;
 use crate::db::pg_support::TestDb;
 use crate::db::redis_support::TestRedis;
+use crate::invalidate::testing::applied;
 use crate::mcp::context::ToolContext;
 use crate::store::audit::AuditActor;
 use crate::store::catalogs;
@@ -154,8 +155,6 @@ pub(crate) async fn app_with_metrics(
 ) -> (TestApp, prometheus::Registry) {
     let (provider, metrics, registry) = local_metrics();
     let db = seed(catalogs_and_files, Utc::now()).await;
-    let mut config = config;
-    config.mail.worker = false;
     let app = App::load_with_metrics(db.pool.clone(), config, Arc::new(SystemClock), metrics)
         .await
         .expect("load the app");
@@ -238,13 +237,13 @@ async fn create_catalog(db: &TestDb, name: &str, at: DateTime<Utc>) {
 }
 
 /// Two apps over one database and one Redis, as two replicas: `app_with`'s
-/// catalogs, `config` with `[redis]` and `poll_interval = 1h` (so a test
-/// that passes was carried by Redis, not by a poll).
+/// catalogs, `config` with `[redis]`. Lib apps run no change-feed listener,
+/// so a test that passes was carried by Redis (or by the messages it applies
+/// itself, [`crate::invalidate::testing::applied`]).
 ///
 /// # Arguments
 /// * `catalogs_and_files` - `(catalog name, its files)` pairs, in creation order.
-/// * `config` - the server's settings (its `[redis]` and `poll_interval` are
-///   replaced).
+/// * `config` - the server's settings (its `[redis]` is replaced).
 ///
 /// # Returns
 /// The first app (it owns the database), the second app (its own pool on the
@@ -264,8 +263,7 @@ pub(crate) async fn replica_pair(
 ///
 /// # Arguments
 /// * `catalogs_and_files` - `(catalog name, its files)` pairs, in creation order.
-/// * `config` - the server's settings (its `[redis]` and `poll_interval` are
-///   replaced).
+/// * `config` - the server's settings (its `[redis]` is replaced).
 /// * `redis` - the server both apps connect to.
 ///
 /// # Returns
@@ -278,8 +276,7 @@ pub(crate) async fn replica_pair_on(
     config: Config,
     redis: TestRedis,
 ) -> (TestApp, Arc<App>, TestRedis) {
-    let mut config = redis_config(config, &redis);
-    config.poll_interval = std::time::Duration::from_secs(3600);
+    let config = redis_config(config, &redis);
     let db = seed(catalogs_and_files, Utc::now()).await;
     let first = load_shared(&db, config.clone(), &redis).await;
     let second_pool = crate::db::connect(&db.url, config.database_max_connections)
@@ -381,10 +378,9 @@ pub(crate) async fn app_on_redis_with(
     )
 }
 
-/// `config` with `[redis]` pointing at `redis` and no mail worker.
+/// `config` with `[redis]` pointing at `redis`.
 fn redis_config(mut config: Config, redis: &TestRedis) -> Config {
     config.redis = Some(crate::shared::testing::config(redis));
-    config.mail.worker = false;
     config
 }
 
@@ -403,9 +399,8 @@ async fn load_shared(db: &TestDb, config: Config, redis: &TestRedis) -> Arc<App>
 
 /// Loads the app over `db` with `clock`.
 async fn load(db: TestDb, config: Config, clock: Arc<dyn Clock>) -> TestApp {
-    // Test apps only enqueue (Decision 19); the investigator test serves one.
-    let mut config = config;
-    config.mail.worker = false;
+    // Test apps only enqueue (Decision 19): the tests that serve one start
+    // it with `ServeOptions::NO_WORKER`.
     let app = App::load(db.pool.clone(), config, clock)
         .await
         .expect("load the app");
@@ -465,8 +460,7 @@ pub(crate) fn principal_with_reporting(
         kind: CredentialKind::ApiKey,
         user: None,
         user_id: None,
-        gates: Default::default(),
-        suspended: Default::default(),
+        facts: Default::default(),
     })
 }
 
@@ -566,7 +560,12 @@ pub(crate) async fn open_at(
     catalog: &str,
     at: DateTime<Utc>,
 ) -> ChangesetRow {
-    let state = test.app.catalog(catalog).expect("a loaded catalog");
+    let state = test
+        .app
+        .catalog(catalog)
+        .await
+        .unwrap()
+        .expect("a loaded catalog");
     let principal = ctx.principal();
     let mut tx = test.app.pool().begin().await.expect("begin");
     changesets::lock_catalog(&mut tx, state.id())
@@ -671,7 +670,8 @@ pub(crate) const SUSPENSION_NOTICE: &str = "Paused for billing.";
 
 /// Moves `catalogs` to a new team, [`SUSPENDED_TEAM`] (owned by
 /// [`crate::db::TEST_USER`]), suspends it with [`SUSPENSION_NOTICE`], and
-/// polls, so the key cache sees the suspension. Every other catalog stays
+/// applies the writes' change messages, so the catalog directory sees the
+/// suspension. Every other catalog stays
 /// with [`crate::db::TEST_TEAM`], active.
 ///
 /// # Arguments
@@ -689,37 +689,42 @@ pub(crate) async fn suspend_catalogs(test: &TestApp, catalogs: &[&str]) {
         owner: crate::db::TEST_USER,
     };
     let actor = AuditActor::cli();
-    crate::store::teams::create(pool, &team, &actor, now)
-        .await
-        .expect("create the team to suspend");
-    for catalog in catalogs {
-        catalogs::set_owner(pool, catalog, SUSPENDED_TEAM, &actor, now)
+    applied(&test.app, async {
+        crate::store::teams::create(pool, &team, &actor, now)
             .await
-            .expect("move the catalog to the team");
-    }
-    crate::store::teams::suspend(pool, SUSPENDED_TEAM, Some(SUSPENSION_NOTICE), &actor, now)
-        .await
-        .expect("suspend the team");
-    test.app.poll().await.expect("poll the suspension in");
+            .expect("create the team to suspend");
+        for catalog in catalogs {
+            catalogs::set_owner(pool, catalog, SUSPENDED_TEAM, &actor, now)
+                .await
+                .expect("move the catalog to the team");
+        }
+        crate::store::teams::suspend(pool, SUSPENDED_TEAM, Some(SUSPENSION_NOTICE), &actor, now)
+            .await
+            .expect("suspend the team");
+    })
+    .await;
 }
 
-/// Lifts [`suspend_catalogs`]'s suspension and polls it in.
+/// Lifts [`suspend_catalogs`]'s suspension and applies its change messages.
 ///
 /// # Panics
-/// If the store or the poll fails.
+/// If the store fails.
 pub(crate) async fn lift_suspension(test: &TestApp) {
-    crate::store::teams::unsuspend(
-        test.app.pool(),
-        SUSPENDED_TEAM,
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("lift the suspension");
-    test.app.poll().await.expect("poll the lift in");
+    applied(&test.app, async {
+        crate::store::teams::unsuspend(
+            test.app.pool(),
+            SUSPENDED_TEAM,
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("lift the suspension");
+    })
+    .await;
 }
 
-/// Stores a live, admin-issued key and polls it in.
+/// Stores a live, admin-issued key (keys load on demand, so its first use
+/// reads it).
 ///
 /// # Arguments
 /// * `test` - the app.
@@ -730,10 +735,10 @@ pub(crate) async fn lift_suspension(test: &TestApp) {
 ///
 /// # Returns
 /// Its secret: look its principal up with [`cached_principal`] after each
-/// poll, as a request would.
+/// change, as a request would.
 ///
 /// # Panics
-/// If the store refuses the key or the poll fails.
+/// If the store refuses the key.
 pub(crate) async fn stored_secret(
     test: &TestApp,
     name: &str,
@@ -767,22 +772,24 @@ pub(crate) async fn stored_secret(
     .await
     .expect("create the key")
     .key;
-    test.app.poll().await.expect("poll the key in");
     secret
 }
 
-/// The principal the key cache holds now for `secret`, as the auth layer
-/// would put it in a request.
+/// The principal the credential cache assembles now for `secret`, as the
+/// auth layer would put it in a request.
 ///
 /// # Panics
-/// If the cache does not know the key.
-pub(crate) fn cached_principal(test: &TestApp, secret: &str) -> Arc<Principal> {
-    test.app.keys().find(secret).expect("the key is cached")
+/// If the key is unknown, revoked or expired, or its load fails.
+pub(crate) async fn cached_principal(test: &TestApp, secret: &str) -> Arc<Principal> {
+    test.app
+        .find_key(secret)
+        .await
+        .unwrap()
+        .expect("the key is cached")
 }
 
 /// Creates user `staff` (display name "Staff Member", outside every test
-/// catalog's owner team) and an every-catalog admin key of it, and polls
-/// it in: an operator whose reads of the test catalogs are admin reads.
+/// catalog's owner team) and an every-catalog admin key of it: an operator whose reads of the test catalogs are admin reads.
 ///
 /// # Arguments
 /// * `test` - the app (once per test: the names cannot be taken twice).
@@ -791,7 +798,7 @@ pub(crate) fn cached_principal(test: &TestApp, secret: &str) -> Arc<Principal> {
 /// The key's secret.
 ///
 /// # Panics
-/// If the store refuses the user or the key, or the poll fails.
+/// If the store refuses the user or the key.
 pub(crate) async fn staff_root(test: &TestApp) -> String {
     let pool = test.app.pool();
     let new_user = crate::store::users::NewUser {
@@ -817,7 +824,6 @@ pub(crate) async fn staff_root(test: &TestApp) -> String {
         .await
         .expect("create the staff key")
         .key;
-    test.app.poll().await.expect("poll the staff key in");
     secret
 }
 
@@ -833,10 +839,10 @@ pub(crate) async fn staff_root(test: &TestApp) -> String {
 /// * `maintenance_report` - whether it may report.
 ///
 /// # Returns
-/// The key's secret, polled in.
+/// The key's secret.
 ///
 /// # Panics
-/// If the store refuses the key or the poll fails.
+/// If the store refuses the key.
 pub(crate) async fn staff_key(
     test: &TestApp,
     name: &str,
@@ -860,26 +866,28 @@ pub(crate) async fn staff_key(
             .await
             .expect("create the staff key")
             .key;
-    test.app.poll().await.expect("poll the staff key in");
     secret
 }
 
-/// Turns the `require_unlock` setting on and polls it in (M14 Task 9b).
+/// Turns the `require_unlock` setting on and applies its change message (M14
+/// Task 9b).
 ///
 /// # Panics
-/// If the setting cannot be stored or the poll fails.
+/// If the setting cannot be stored.
 pub(crate) async fn require_unlock(test: &TestApp) {
     use crate::store::settings::{self, SettingKey};
-    settings::set(
-        test.app.pool(),
-        SettingKey::RequireUnlock,
-        "on",
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("turn require_unlock on");
-    test.app.poll().await.expect("poll the setting in");
+    applied(&test.app, async {
+        settings::set(
+            test.app.pool(),
+            SettingKey::RequireUnlock,
+            "on",
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("turn require_unlock on");
+    })
+    .await;
 }
 
 /// Waits, at most 30 seconds, for every background access write the app has

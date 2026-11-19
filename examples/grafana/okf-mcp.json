@@ -98,10 +98,10 @@
           "uid": "${DS_PROMETHEUS}"
         },
         "query": {
-          "query": "label_values(okf_catalog_concepts{job=~\"$job\"}, catalog)",
+          "query": "label_values(okf_publish_duration_seconds_count{job=~\"$job\"}, catalog)",
           "refId": "catalog"
         },
-        "definition": "label_values(okf_catalog_concepts{job=~\"$job\"}, catalog)",
+        "definition": "label_values(okf_publish_duration_seconds_count{job=~\"$job\"}, catalog)",
         "refresh": 2,
         "multi": true,
         "includeAll": true,
@@ -1813,7 +1813,7 @@
     {
       "type": "row",
       "id": 28,
-      "title": "Catalogs and polling",
+      "title": "Catalogs and change propagation",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -1824,98 +1824,9 @@
       "panels": []
     },
     {
-      "type": "heatmap",
-      "title": "Poll pass duration",
-      "description": "How long each poll pass took.",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "refId": "A",
-          "expr": "sum by (le) (increase(okf_poll_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval]))",
-          "legendFormat": "{{le}}",
-          "range": true,
-          "instant": false,
-          "format": "heatmap",
-          "interval": ""
-        }
-      ],
-      "maxDataPoints": 120,
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "scaleDistribution": {
-              "type": "linear"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "calculate": false,
-        "cellGap": 1,
-        "cellValues": {
-          "unit": "short",
-          "decimals": 0
-        },
-        "color": {
-          "mode": "scheme",
-          "scheme": "Greens",
-          "scale": "exponential",
-          "exponent": 0.5,
-          "steps": 64,
-          "reverse": false,
-          "fill": "dark-orange"
-        },
-        "exemplars": {
-          "color": "rgba(255,0,255,0.7)"
-        },
-        "filterValues": {
-          "le": 1e-09
-        },
-        "legend": {
-          "show": true
-        },
-        "rowsFrame": {
-          "layout": "auto",
-          "value": "Count"
-        },
-        "showValue": "never",
-        "tooltip": {
-          "mode": "single",
-          "yHistogram": true,
-          "showColorScale": true
-        },
-        "yAxis": {
-          "axisPlacement": "left",
-          "unit": "s",
-          "reverse": false,
-          "decimals": 0
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 79
-      },
-      "id": 29,
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      }
-    },
-    {
       "type": "timeseries",
-      "title": "Poll pass quantiles",
-      "description": "p50, p95 and p99 poll pass duration.",
+      "title": "Catalog announcements by result",
+      "description": "Catalog generation announcements received from other replicas (with [redis]), by result.",
       "targets": [
         {
           "datasource": {
@@ -1923,163 +1834,6 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "refId": "A",
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(okf_poll_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p50",
-          "range": true,
-          "instant": false
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(okf_poll_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p95",
-          "range": true,
-          "instant": false
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "refId": "C",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(okf_poll_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p99",
-          "range": true,
-          "instant": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "mean",
-            "max",
-            "lastNotNull"
-          ],
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 79
-      },
-      "id": 30,
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Poll passes by outcome",
-      "description": "Poll passes per interval, by outcome.",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "refId": "A",
-          "expr": "sum by (outcome) (increase(okf_poll_duration_seconds_count{job=~\"$job\"}[$__rate_interval]))",
-          "legendFormat": "{{outcome}}",
-          "range": true,
-          "instant": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "bars",
-            "lineWidth": 1,
-            "fillOpacity": 60,
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "mean",
-            "max",
-            "lastNotNull"
-          ],
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 87
-      },
-      "id": 31,
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Catalog refreshes and announcements by result",
-      "description": "Each catalog's turn in a poll pass, by result; and catalog announcements received from other replicas (with [redis]), by result.",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "refId": "A",
-          "expr": "sum by (catalog, result) (increase(okf_catalog_refreshes_total{job=~\"$job\",catalog=~\"$catalog\"}[$__rate_interval]))",
-          "legendFormat": "{{catalog}} {{result}}",
-          "range": true,
-          "instant": false
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "refId": "B",
           "expr": "sum by (result) (increase(okf_catalog_announcements_total{job=~\"$job\"}[$__rate_interval]))",
           "legendFormat": "announcement {{result}}",
           "range": true,
@@ -2122,8 +1876,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 87
+        "x": 0,
+        "y": 79
       },
       "id": 32,
       "datasource": {
@@ -2182,10 +1936,10 @@
         }
       },
       "gridPos": {
-        "h": 6,
-        "w": 24,
-        "x": 0,
-        "y": 95
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 79
       },
       "id": 33,
       "datasource": {
@@ -2195,132 +1949,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Concepts per catalog",
-      "description": "Concept documents in each catalog's current snapshot (max across replicas, which each report the same catalog).",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "refId": "A",
-          "expr": "max by (catalog) (okf_catalog_concepts{job=~\"$job\",catalog=~\"$catalog\"})",
-          "legendFormat": "{{catalog}}",
-          "range": true,
-          "instant": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "mean",
-            "max",
-            "lastNotNull"
-          ],
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 101
-      },
-      "id": 34,
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Snapshot generation",
-      "description": "Each catalog's current snapshot generation.",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "refId": "A",
-          "expr": "max by (catalog) (okf_catalog_generation{job=~\"$job\",catalog=~\"$catalog\"})",
-          "legendFormat": "{{catalog}}",
-          "range": true,
-          "instant": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "mean",
-            "max",
-            "lastNotNull"
-          ],
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 101
-      },
-      "id": 35,
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      }
-    },
-    {
-      "type": "timeseries",
       "title": "Open changesets",
-      "description": "Open changesets per catalog, as of the last poll pass (max across replicas).",
+      "description": "Open changesets in the cluster, as of the last cluster_stats housekeeping job (every replica reports the same value).",
       "targets": [
         {
           "datasource": {
@@ -2328,8 +1958,8 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "refId": "A",
-          "expr": "max by (catalog) (okf_changesets_open{job=~\"$job\",catalog=~\"$catalog\"})",
-          "legendFormat": "{{catalog}}",
+          "expr": "max(okf_changesets_open{job=~\"$job\"})",
+          "legendFormat": "open",
           "range": true,
           "instant": false
         }
@@ -2369,9 +1999,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 101
+        "w": 24,
+        "x": 0,
+        "y": 87
       },
       "id": 36,
       "datasource": {
@@ -2388,7 +2018,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 109
+        "y": 95
       },
       "panels": []
     },
@@ -2446,7 +2076,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 110
+        "y": 96
       },
       "id": 38,
       "datasource": {
@@ -2508,7 +2138,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 110
+        "y": 96
       },
       "id": 39,
       "datasource": {
@@ -2570,7 +2200,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 110
+        "y": 96
       },
       "id": 40,
       "datasource": {
@@ -2587,7 +2217,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 118
+        "y": 104
       },
       "panels": []
     },
@@ -2645,7 +2275,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 119
+        "y": 105
       },
       "id": 42,
       "datasource": {
@@ -2707,7 +2337,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 119
+        "y": 105
       },
       "id": 43,
       "datasource": {
@@ -2724,7 +2354,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 127
+        "y": 113
       },
       "panels": []
     },
@@ -2809,7 +2439,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 128
+        "y": 114
       },
       "id": 45,
       "datasource": {
@@ -2893,7 +2523,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 128
+        "y": 114
       },
       "id": 46,
       "datasource": {
@@ -2955,7 +2585,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 136
+        "y": 122
       },
       "id": 47,
       "datasource": {
@@ -3017,7 +2647,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 136
+        "y": 122
       },
       "id": 48,
       "datasource": {
@@ -3034,7 +2664,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 144
+        "y": 130
       },
       "panels": []
     },
@@ -3092,7 +2722,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 145
+        "y": 131
       },
       "id": 50,
       "datasource": {
@@ -3154,7 +2784,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 145
+        "y": 131
       },
       "id": 51,
       "datasource": {
@@ -3216,7 +2846,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 145
+        "y": 131
       },
       "id": 52,
       "datasource": {
@@ -3278,7 +2908,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 153
+        "y": 139
       },
       "id": 53,
       "datasource": {
@@ -3340,9 +2970,990 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 153
+        "y": 139
       },
       "id": 54,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      }
+    },
+    {
+      "type": "row",
+      "id": 55,
+      "title": "Caches",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 147
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Cache lookups by cache and result",
+      "description": "Bounded cache lookups per second, by cache and result (hit, miss, or a stale entry that was revalidated or reloaded).",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "sum by (cache, result) (rate(okf_cache_requests_total{job=~\"$job\"}[$__rate_interval]))",
+          "legendFormat": "{{cache}} {{result}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 148
+      },
+      "id": 56,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Cache evictions by cache and cause",
+      "description": "Entries removed from each bounded cache per interval, by cause: size (cache full), ttl (expired) or invalidated.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "sum by (cache, cause) (increase(okf_cache_evictions_total{job=~\"$job\"}[$__rate_interval]))",
+          "legendFormat": "{{cache}} {{cause}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 148
+      },
+      "id": 57,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Cache entries",
+      "description": "Entries currently held by each bounded cache.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "max by (cache) (okf_cache_entries{job=~\"$job\"})",
+          "legendFormat": "{{cache}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 156
+      },
+      "id": 58,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Cache bytes",
+      "description": "Estimated bytes held by each cache that is limited by bytes (caches limited by entry count report nothing).",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "max by (cache) (okf_cache_bytes{job=~\"$job\"})",
+          "legendFormat": "{{cache}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 156
+      },
+      "id": 59,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      }
+    },
+    {
+      "type": "heatmap",
+      "title": "Cache load duration",
+      "description": "Bounded cache load durations (the loader for a miss or a stale entry), across all caches.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "sum by (le) (increase(okf_cache_load_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval]))",
+          "legendFormat": "",
+          "range": true,
+          "instant": false,
+          "format": "heatmap",
+          "interval": ""
+        }
+      ],
+      "maxDataPoints": 120,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "calculate": false,
+        "cellGap": 1,
+        "cellValues": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "color": {
+          "mode": "scheme",
+          "scheme": "Reds",
+          "scale": "exponential",
+          "exponent": 0.5,
+          "steps": 64,
+          "reverse": false,
+          "fill": "dark-orange"
+        },
+        "exemplars": {
+          "color": "rgba(255,0,255,0.7)"
+        },
+        "filterValues": {
+          "le": 1e-09
+        },
+        "legend": {
+          "show": true
+        },
+        "rowsFrame": {
+          "layout": "auto",
+          "value": "Count"
+        },
+        "showValue": "never",
+        "tooltip": {
+          "mode": "single",
+          "yHistogram": true,
+          "showColorScale": true
+        },
+        "yAxis": {
+          "axisPlacement": "left",
+          "unit": "s",
+          "reverse": false,
+          "decimals": 0
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 164
+      },
+      "id": 60,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Cache load duration quantiles",
+      "description": "p50, p95 and p99 bounded cache load duration, by cache.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le, cache) (rate(okf_cache_load_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
+          "legendFormat": "{{cache}} p50",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le, cache) (rate(okf_cache_load_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
+          "legendFormat": "{{cache}} p95",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le, cache) (rate(okf_cache_load_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
+          "legendFormat": "{{cache}} p99",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 164
+      },
+      "id": 61,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      }
+    },
+    {
+      "type": "row",
+      "id": 62,
+      "title": "Change feed",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 172
+      },
+      "panels": []
+    },
+    {
+      "type": "heatmap",
+      "title": "Change feed lag",
+      "description": "Time from a change-feed message being sent to this replica applying it.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "sum by (le) (increase(okf_invalidations_lag_seconds_bucket{job=~\"$job\"}[$__rate_interval]))",
+          "legendFormat": "{{le}}",
+          "range": true,
+          "instant": false,
+          "format": "heatmap",
+          "interval": ""
+        }
+      ],
+      "maxDataPoints": 120,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "calculate": false,
+        "cellGap": 1,
+        "cellValues": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "color": {
+          "mode": "scheme",
+          "scheme": "Greens",
+          "scale": "exponential",
+          "exponent": 0.5,
+          "steps": 64,
+          "reverse": false,
+          "fill": "dark-orange"
+        },
+        "exemplars": {
+          "color": "rgba(255,0,255,0.7)"
+        },
+        "filterValues": {
+          "le": 1e-09
+        },
+        "legend": {
+          "show": true
+        },
+        "rowsFrame": {
+          "layout": "auto",
+          "value": "Count"
+        },
+        "showValue": "never",
+        "tooltip": {
+          "mode": "single",
+          "yHistogram": true,
+          "showColorScale": true
+        },
+        "yAxis": {
+          "axisPlacement": "left",
+          "unit": "s",
+          "reverse": false,
+          "decimals": 0
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 173
+      },
+      "id": 63,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Change feed lag quantiles",
+      "description": "p50, p95 and p99 of the change-feed lag.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(okf_invalidations_lag_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
+          "legendFormat": "p50",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(okf_invalidations_lag_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
+          "legendFormat": "p95",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(okf_invalidations_lag_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
+          "legendFormat": "p99",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 173
+      },
+      "id": 64,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Change feed messages queued and received by kind",
+      "description": "Messages queued by writes and messages received per interval, by kind. A rolled-back write is queued but never received.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "sum by (kind) (increase(okf_invalidations_queued_total{job=~\"$job\"}[$__rate_interval]))",
+          "legendFormat": "queued {{kind}}",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "B",
+          "expr": "sum by (kind) (increase(okf_invalidations_received_total{job=~\"$job\"}[$__rate_interval]))",
+          "legendFormat": "received {{kind}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 181
+      },
+      "id": 65,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Unreadable change-feed payloads",
+      "description": "Payloads this build could not read; each makes the replica reload its caches.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "sum(increase(okf_invalidations_unreadable_total{job=~\"$job\"}[$__rate_interval]))",
+          "legendFormat": "unreadable",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 181
+      },
+      "id": 66,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      }
+    },
+    {
+      "type": "row",
+      "id": 67,
+      "title": "Housekeeping",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 189
+      },
+      "panels": []
+    },
+    {
+      "type": "heatmap",
+      "title": "Housekeeping job duration",
+      "description": "How long each housekeeping job took, every task together.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "sum by (le) (increase(okf_housekeeping_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval]))",
+          "legendFormat": "{{le}}",
+          "range": true,
+          "instant": false,
+          "format": "heatmap",
+          "interval": ""
+        }
+      ],
+      "maxDataPoints": 120,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "calculate": false,
+        "cellGap": 1,
+        "cellValues": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "color": {
+          "mode": "scheme",
+          "scheme": "Greens",
+          "scale": "exponential",
+          "exponent": 0.5,
+          "steps": 64,
+          "reverse": false,
+          "fill": "dark-orange"
+        },
+        "exemplars": {
+          "color": "rgba(255,0,255,0.7)"
+        },
+        "filterValues": {
+          "le": 1e-09
+        },
+        "legend": {
+          "show": true
+        },
+        "rowsFrame": {
+          "layout": "auto",
+          "value": "Count"
+        },
+        "showValue": "never",
+        "tooltip": {
+          "mode": "single",
+          "yHistogram": true,
+          "showColorScale": true
+        },
+        "yAxis": {
+          "axisPlacement": "left",
+          "unit": "s",
+          "reverse": false,
+          "decimals": 0
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 190
+      },
+      "id": 68,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Housekeeping p95 by task",
+      "description": "p95 housekeeping job duration, by task.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, task) (rate(okf_housekeeping_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
+          "legendFormat": "{{task}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 190
+      },
+      "id": 69,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Housekeeping runs by task and outcome",
+      "description": "Housekeeping jobs run per interval across replicas, by task and outcome (an error is retried).",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "sum by (task, outcome) (increase(okf_housekeeping_runs_total{job=~\"$job\"}[$__rate_interval]))",
+          "legendFormat": "{{task}} {{outcome}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 198
+      },
+      "id": 70,
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"

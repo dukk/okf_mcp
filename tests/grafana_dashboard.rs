@@ -171,7 +171,7 @@ fn every_histogram_has_a_heatmap_of_its_buckets() {
         .flat_map(|panel| bucket_families(panel))
         .collect();
     assert_eq!(histograms, in_heatmaps);
-    assert_eq!(in_heatmaps.len(), 6, "{in_heatmaps:?}");
+    assert_eq!(in_heatmaps.len(), 8, "{in_heatmaps:?}");
 
     // And each one also has a quantile view beside its heatmap.
     let mut quantile_expressions = Vec::new();
@@ -259,11 +259,11 @@ fn every_selector_is_scoped_by_the_job_variable() {
 
 #[test]
 fn the_extractor_reads_labelled_selectors_with_variables() {
-    let expression = r#"sum by (le) (rate(okf_poll_duration_seconds_bucket{job=~"$job",outcome="error"}[$__rate_interval])) / okf_clock_offset_seconds{job=~"$job"}"#;
+    let expression = r#"sum by (le) (rate(okf_invalidations_lag_seconds_bucket{job=~"$job",outcome="error"}[$__rate_interval])) / okf_clock_offset_seconds{job=~"$job"}"#;
     assert_eq!(
         metric_names(expression),
         [
-            "okf_poll_duration_seconds_bucket",
+            "okf_invalidations_lag_seconds_bucket",
             "okf_clock_offset_seconds"
         ]
     );

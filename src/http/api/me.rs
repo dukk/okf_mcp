@@ -7,7 +7,8 @@
 //! - every route but `GET /me` needs a console session
 //!   ([`CredentialKind::Session`]); a bearer key or OAuth token is a 403,
 //!   since a key must not mint keys for itself;
-//! - `GET /me` also answers a key that belongs to a user;
+//! - `GET /me` and `GET /me/ceiling` also answer a key that belongs to a
+//!   user;
 //! - a route acts only on the session user's own rows: anyone else's key,
 //!   grant, passkey, identity or session is a 404, like an unknown id.
 //!
@@ -19,7 +20,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, patch, put};
 use axum::{Extension, Json, Router};
@@ -28,11 +29,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::App;
 use crate::auth::{CredentialKind, Principal};
+use crate::cache::directory::{cursor_of, page_size, parse_cursor};
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
 use crate::http::api::keys::{parse_access, CreatedKeyView, KeyView};
 use crate::http::api::people::DisplayNameBody;
-use crate::http::api::settle;
 use crate::http::console_session::ConsoleSession;
 use crate::http::passkeys::passkey_name;
 use crate::http::signin::notify_method_added;
@@ -170,8 +171,10 @@ pub(crate) struct AccountView {
     /// The same teams with what the account page needs to rename them,
     /// sorted by name like `owned_teams`.
     pub owned_team_details: Vec<OwnedTeamView>,
-    /// What its self-issued credentials may reach.
-    pub ceiling: Vec<CeilingEntry>,
+    /// The highest level its self-issued credentials may have on any
+    /// catalog (`read` or `write`), or `None` when its ceiling reaches no
+    /// catalog. The ceiling itself is paged: `GET /me/ceiling` (issue #736).
+    pub ceiling_access: Option<&'static str>,
     /// Whether the caller is a console session (`false` for a key).
     pub session: bool,
     /// Whether password sign-in is on (the `password_sign_in` setting), so
@@ -206,11 +209,38 @@ pub(crate) struct AccountLimits {
     pub max_key_lifetime_secs: Option<u64>,
 }
 
+/// `GET /me/ceiling`'s answer: one page of the caller's ceiling.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct CeilingListing {
+    /// The page's catalogs, in byte order of their names.
+    pub ceiling: Vec<CeilingEntry>,
+    /// The `after` of the next page; absent on the last page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+}
+
+/// `GET /me/ceiling`'s query.
+#[derive(Debug, Deserialize)]
+pub(crate) struct CeilingQuery {
+    /// Only the catalogs whose names start with this (lowercased, trimmed);
+    /// absent or empty for every catalog. One no name can start with
+    /// matches nothing.
+    prefix: Option<String>,
+    /// The `next` of the previous page; absent or empty for the first.
+    after: Option<String>,
+    /// The page size: default 100, at most 1000 (a larger one is cut).
+    limit: Option<u32>,
+}
+
 /// `GET /me/keys`' answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct OwnKeys {
     /// The user's API keys, revoked ones included.
     pub keys: Vec<KeyView>,
+    /// The user's ceiling on the catalogs of its live self-issued keys
+    /// (catalog to `read` or `write`; a catalog left out is outside it),
+    /// for the cap notes (issue #736: never the whole ceiling).
+    pub ceiling: BTreeMap<String, &'static str>,
 }
 
 /// `GET /me/grants`' answer.
@@ -218,6 +248,9 @@ pub(crate) struct OwnKeys {
 pub(crate) struct OwnGrants {
     /// The user's OAuth grants, revoked ones included.
     pub grants: Vec<KeyView>,
+    /// The user's ceiling on the catalogs of its live self-issued grants,
+    /// as [`OwnKeys::ceiling`].
+    pub ceiling: BTreeMap<String, &'static str>,
 }
 
 /// One passkey, never its public key.
@@ -498,6 +531,7 @@ impl std::fmt::Debug for PasswordBody {
 pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/me", get(account).patch(update_account))
+        .route("/me/ceiling", get(own_ceiling))
         .route("/me/keys", get(list_keys).post(create_key))
         .route("/me/keys/{id}", patch(rename_key).delete(revoke_key))
         .route("/me/grants", get(list_grants))
@@ -682,6 +716,94 @@ async fn own(
         })
 }
 
+/// The user's ceiling on the catalogs its live self-issued credentials
+/// name (issue #736): what the console's cap notes compare their levels
+/// with, read for those catalogs only ([`ceiling::ceiling_in`]).
+///
+/// # Arguments
+/// * `app` - the application.
+/// * `user` - the session user.
+/// * `credentials` - the user's keys or grants, as listed.
+///
+/// # Returns
+/// Catalog name to `read` or `write`; a named catalog outside the ceiling
+/// is left out.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
+async fn credentials_ceiling(
+    app: &App,
+    user: SessionUser<'_>,
+    credentials: &[KeyView],
+) -> Result<BTreeMap<String, &'static str>, OkfError> {
+    // A `BTreeSet` drops the names several credentials share.
+    let names: Vec<String> = credentials
+        .iter()
+        .filter(|view| view.self_issued && view.revoked_at.is_none())
+        .flat_map(|view| view.catalog_access.keys().cloned())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if names.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    // `&mut *` borrows the pooled connection, returned when the statement ends.
+    let ceiling = ceiling::ceiling_in(
+        &mut *app.pool().acquire().await.map_err(OkfError::from)?,
+        user.id,
+        &names,
+    )
+    .await?;
+    Ok(ceiling
+        .into_iter()
+        .map(|(catalog, access)| (catalog, access.as_str()))
+        .collect())
+}
+
+/// `GET /me/ceiling?prefix=&after=&limit=`: one page of the caller's
+/// ceiling (issue #736), the catalogs whose names start with `prefix`, in
+/// byte order. A session's user, or the user a key belongs to, as for
+/// `GET /me`. Each page is one bounded read ([`ceiling::page`]): the whole
+/// ceiling is never read.
+///
+/// # Errors
+/// 400 for a malformed `after`; 404 for a credential that belongs to no
+/// user; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn own_ceiling(
+    State(app): State<Arc<App>>,
+    Extension(principal): Extension<Arc<Principal>>,
+    Query(query): Query<CeilingQuery>,
+) -> Result<Json<CeilingListing>, AppError> {
+    // First, so a malformed cursor is refused before anything else is read.
+    let after = parse_cursor(query.after.as_deref())?;
+    let Some(user_id) = principal.user_id.as_deref() else {
+        return Err(OkfError::NotFound {
+            path: "me".to_string(),
+        }
+        .into());
+    };
+    let prefix = query
+        .prefix
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let page = ceiling::page(
+        app.pool(),
+        user_id,
+        &prefix,
+        after.as_deref(),
+        page_size(query.limit),
+    )
+    .await?;
+    Ok(Json(CeilingListing {
+        ceiling: ceiling_view(page.entries),
+        next: page.next.as_deref().map(cursor_of),
+    }))
+}
+
 /// Every credential of `kind` belonging to the user.
 ///
 /// # Arguments
@@ -739,13 +861,18 @@ async fn account_view(app: &App, principal: &Principal) -> Result<AccountView, O
             None => Ok(Vec::new()),
         }
     };
+    // The ceiling's highest level only: two bounded reads, never the
+    // whole ceiling (issue #736).
+    let ceiling_access = async {
+        match principal.user_id.as_deref() {
+            Some(user_id) => ceiling::top_level(app.pool(), user_id).await,
+            None => Ok(None),
+        }
+    };
     // `try_join!` runs the three reads at once (as `asyncio.gather` would)
     // and returns the first error, if any.
-    let (record, ceiling, owned) = tokio::try_join!(
-        users::find(app.pool(), name),
-        ceiling::ceiling_of(app.pool(), name),
-        owned_teams,
-    )?;
+    let (record, ceiling_access, owned) =
+        tokio::try_join!(users::find(app.pool(), name), ceiling_access, owned_teams,)?;
     let policy = app.settings();
     let label = user_label(&record.display_name, record.email.as_deref());
     let owned_teams = owned.iter().map(|team| team.name.clone()).collect();
@@ -769,7 +896,7 @@ async fn account_view(app: &App, principal: &Principal) -> Result<AccountView, O
         teams: record.teams,
         owned_teams,
         owned_team_details,
-        ceiling: ceiling_view(ceiling),
+        ceiling_access: ceiling_access.map(Access::as_str),
         session: matches!(principal.kind, CredentialKind::Session { .. }),
         password_sign_in: policy.password_sign_in,
         limits: AccountLimits {
@@ -779,8 +906,8 @@ async fn account_view(app: &App, principal: &Principal) -> Result<AccountView, O
     })
 }
 
-/// `PATCH /me`: sets the caller's own display name, then polls so the labels
-/// show it at once.
+/// `PATCH /me`: sets the caller's own display name; the labels show it at
+/// once (the write's own change messages are applied before the answer).
 ///
 /// # Returns
 /// The account as it now is.
@@ -814,7 +941,8 @@ async fn update_account(
         app.clock().now(),
     )
     .await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(account_view(&app, &principal).await?))
 }
 
@@ -828,9 +956,9 @@ async fn list_keys(
     Extension(principal): Extension<Arc<Principal>>,
 ) -> Result<Json<OwnKeys>, AppError> {
     let user = session_user(&principal)?;
-    Ok(Json(OwnKeys {
-        keys: owned(&app, user, KeyKind::Key).await?,
-    }))
+    let keys = owned(&app, user, KeyKind::Key).await?;
+    let ceiling = credentials_ceiling(&app, user, &keys).await?;
+    Ok(Json(OwnKeys { keys, ceiling }))
 }
 
 /// `POST /me/keys`: creates a self-issued key and returns its secret, once.
@@ -849,7 +977,16 @@ async fn create_key(
 ) -> Result<Json<CreatedKeyView>, AppError> {
     let user = session_user(&principal)?;
     let levels = requested_levels(&body.catalogs)?;
-    let ceiling = ceiling::ceiling_of(app.pool(), user.name).await?;
+    // The ceiling on the requested catalogs only (issue #728):
+    // `within_ceiling` looks up nothing else.
+    let requested: Vec<String> = levels.keys().cloned().collect();
+    // `&mut *` borrows the pooled connection, returned when the statement ends.
+    let ceiling = ceiling::ceiling_in(
+        &mut *app.pool().acquire().await.map_err(OkfError::from)?,
+        user.id,
+        &requested,
+    )
+    .await?;
     within_ceiling(&levels, &ceiling)?;
     let now = app.clock().now();
     // The cached policy (Task 5), not a query per request.
@@ -897,7 +1034,8 @@ async fn create_key(
         { user = %user.name, },
         "self-issued key created"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     let key = own(&app, user, KeyKind::Key, &created.id).await?;
     Ok(Json(CreatedKeyView {
         key: key.into(),
@@ -954,9 +1092,9 @@ async fn list_grants(
     Extension(principal): Extension<Arc<Principal>>,
 ) -> Result<Json<OwnGrants>, AppError> {
     let user = session_user(&principal)?;
-    Ok(Json(OwnGrants {
-        grants: owned(&app, user, KeyKind::OAuth).await?,
-    }))
+    let grants = owned(&app, user, KeyKind::OAuth).await?;
+    let ceiling = credentials_ceiling(&app, user, &grants).await?;
+    Ok(Json(OwnGrants { grants, ceiling }))
 }
 
 /// `DELETE /me/grants/{id}`: revokes one of the user's grants, and with it
@@ -1007,7 +1145,8 @@ async fn revoke_own(
         { user = %user.name, },
         "self-service revoke"
     );
-    settle(app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(own(app, user, kind, &target.id).await?.into()))
 }
 
@@ -1061,8 +1200,8 @@ async fn change_password(
     };
     // Hashed before the transaction opens, never while it holds the lock.
     let password = NewPassword::hash(&body.new_password).await?;
-    // For the notice's address, from the database: the key cache can be a
-    // poll interval behind an email change, and the notice must reach the
+    // For the notice's address, from the database: the user cache can be a
+    // `credential_ttl` behind an email change, and the notice must reach the
     // address the account has now.
     let account = users::find_auth(app.pool(), user.id)
         .await?
@@ -1351,21 +1490,23 @@ mod tests {
         )
         .await
         .expect("create the user");
-        for (catalog, access) in grants {
-            ceiling::entitle(
-                pool,
-                &NewEntitlement {
-                    user: name,
-                    catalog,
-                    access: *access,
-                },
-                &AuditActor::cli(),
-                Utc::now(),
-            )
-            .await
-            .expect("entitle");
-        }
-        test.app.poll().await.expect("poll the user in");
+        crate::invalidate::testing::applied(&test.app, async {
+            for (catalog, access) in grants {
+                ceiling::entitle(
+                    pool,
+                    &NewEntitlement {
+                        user: name,
+                        catalog,
+                        access: *access,
+                    },
+                    &AuditActor::cli(),
+                    Utc::now(),
+                )
+                .await
+                .expect("entitle");
+            }
+        })
+        .await;
         Browser::session_for(test, name).await
     }
 
@@ -1455,7 +1596,6 @@ mod tests {
             Utc::now(),
         )
         .await;
-        // The legacy insert bumps no generation; `keys` bumps and polls both in.
         let keys = keys(&test).await;
 
         let (status, me) = send(&test, "GET", "/api/v1/me", Some(&keys.read), None).await;
@@ -1521,6 +1661,8 @@ mod tests {
         assert_eq!(whoami["catalogs"], json!(["main"]));
         // Only alice's keys: the fixture user's are not listed.
         assert_eq!(listed["keys"].as_array().map(Vec::len), Some(1), "{listed}");
+        // Issue #736: the ceiling on the live keys' catalogs only.
+        assert_eq!(listed["ceiling"], json!({"main": "write"}));
         // The secret is shown once: no later answer holds it.
         for later in [&listed, &view, &gone] {
             assert!(!later.to_string().contains(&secret), "{later}");
@@ -1660,18 +1802,18 @@ mod tests {
     async fn the_key_limit_counts_live_self_issued_keys() {
         let test = app().await;
         let mut alice = member(&test, "alice", &[("main", Access::Read)]).await;
-        settings::set(
-            test.app.pool(),
-            SettingKey::MaxKeysPerUser,
-            "1",
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("set the limit");
-        // The poll loop's next pass, run now: the running app picks the
-        // setting up from `app.settings()` without a restart.
-        test.app.poll().await.expect("poll the setting in");
+        crate::invalidate::testing::applied(&test.app, async {
+            settings::set(
+                test.app.pool(),
+                SettingKey::MaxKeysPerUser,
+                "1",
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("set the limit");
+        })
+        .await;
 
         let (first, body) = alice
             .send(
@@ -1710,16 +1852,18 @@ mod tests {
             )
             .await
             .parts();
-        settings::set(
-            test.app.pool(),
-            SettingKey::MaxKeysPerUser,
-            "2",
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("raise the limit");
-        test.app.poll().await.expect("poll the setting in");
+        crate::invalidate::testing::applied(&test.app, async {
+            settings::set(
+                test.app.pool(),
+                SettingKey::MaxKeysPerUser,
+                "2",
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("raise the limit");
+        })
+        .await;
         let (_, me) = alice
             .send(&test, "GET", "/api/v1/me", Payload::Empty)
             .await
@@ -1747,16 +1891,18 @@ mod tests {
     async fn the_lifetime_limit_caps_and_defaults_the_expiry() {
         let test = app().await;
         let mut alice = member(&test, "alice", &[("main", Access::Read)]).await;
-        settings::set(
-            test.app.pool(),
-            SettingKey::MaxKeyLifetime,
-            "24h",
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("set the lifetime");
-        test.app.poll().await.expect("poll the setting in");
+        crate::invalidate::testing::applied(&test.app, async {
+            settings::set(
+                test.app.pool(),
+                SettingKey::MaxKeyLifetime,
+                "24h",
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("set the lifetime");
+        })
+        .await;
         let later = |hours: i64| {
             (Utc::now() + TimeDelta::hours(hours))
                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
@@ -1833,19 +1979,21 @@ mod tests {
         )
         .await
         .expect("entitle");
-        users::set_admin(
-            test.app.pool(),
-            "alice",
-            AdminChange {
-                on: true,
-                allow_last: true,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("make alice admin");
-        test.app.poll().await.expect("poll");
+        crate::invalidate::testing::applied(&test.app, async {
+            users::set_admin(
+                test.app.pool(),
+                "alice",
+                AdminChange {
+                    on: true,
+                    allow_last: true,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("make alice admin");
+        })
+        .await;
         let mut alice = Browser::session_for(&test, "alice").await;
 
         let (admin_route, _) = alice
@@ -1883,31 +2031,33 @@ mod tests {
         )
         .await;
         let mut grants = Vec::new();
-        for (name, user) in [("phone", "alice"), ("tablet", TEST_USER)] {
-            let catalogs = ["main".to_string()];
-            let code = code_rows::create(
-                test.app.pool(),
-                &NewSignInCode {
-                    name,
-                    access: Access::Read,
-                    grants: Grants::Catalogs(&catalogs),
-                    default_catalog: None,
-                    actor: name,
-                    expires_at: Utc::now() + TimeDelta::hours(1),
-                    user,
-                },
-                &crate::store::audit::AuditActor::cli(),
-                Utc::now(),
-            )
-            .await
-            .expect("mint a code");
-            grants.push(
-                code_rows::redeem(test.app.pool(), &code.id, &client, Utc::now())
-                    .await
-                    .expect("redeem"),
-            );
-        }
-        test.app.poll().await.expect("poll the grants in");
+        crate::invalidate::testing::applied(&test.app, async {
+            for (name, user) in [("phone", "alice"), ("tablet", TEST_USER)] {
+                let catalogs = ["main".to_string()];
+                let code = code_rows::create(
+                    test.app.pool(),
+                    &NewSignInCode {
+                        name,
+                        access: Access::Read,
+                        grants: Grants::Catalogs(&catalogs),
+                        default_catalog: None,
+                        actor: name,
+                        expires_at: Utc::now() + TimeDelta::hours(1),
+                        user,
+                    },
+                    &crate::store::audit::AuditActor::cli(),
+                    Utc::now(),
+                )
+                .await
+                .expect("mint a code");
+                grants.push(
+                    code_rows::redeem(test.app.pool(), &code.id, &client, Utc::now())
+                        .await
+                        .expect("redeem"),
+                );
+            }
+        })
+        .await;
 
         let (_, listed) = alice
             .send(&test, "GET", "/api/v1/me/grants", Payload::Empty)
@@ -1942,8 +2092,8 @@ mod tests {
         assert_eq!(foreign.as_u16(), 404);
         assert_eq!(own.as_u16(), 200, "{view}");
         assert!(view["revoked_at"].is_string());
-        assert!(test.app.keys().find_grant(&grants[0]).is_none());
-        assert!(test.app.keys().find_grant(&grants[1]).is_some());
+        assert!(test.app.find_grant(&grants[0]).await.unwrap().is_none());
+        assert!(test.app.find_grant(&grants[1]).await.unwrap().is_some());
     }
 
     #[tokio::test]
@@ -1982,13 +2132,96 @@ mod tests {
             json!({"max_keys_per_user": 20, "max_key_lifetime_secs": null})
         );
         assert_eq!(me["teams"], json!(["alice"]));
+        // Issue #736: the highest level only; the ceiling is paged.
+        assert!(me.get("ceiling").is_none(), "{me}");
+        assert_eq!(me["ceiling_access"], "write");
+        let (status, page) = alice
+            .send(&test, "GET", "/api/v1/me/ceiling", Payload::Empty)
+            .await
+            .parts();
+        assert_eq!(status.as_u16(), 200, "{page}");
         assert_eq!(
-            me["ceiling"],
+            page["ceiling"],
             json!([
                 {"catalog": "main", "access": "read"},
                 {"catalog": "other", "access": "write"},
             ])
         );
+        assert!(page.get("next").is_none(), "{page}");
+    }
+
+    /// Issue #736: `GET /me/ceiling` pages the ceiling in byte order with a
+    /// cursor, filters it by a name prefix (lowercased, trimmed; one no
+    /// name can start with finds nothing) and refuses a malformed cursor;
+    /// `ceiling_access` is null for an empty ceiling.
+    #[tokio::test]
+    async fn the_ceiling_is_paged_and_found_by_prefix() {
+        let test = app().await;
+        let mut alice = member(
+            &test,
+            "alice",
+            &[("main", Access::Read), ("other", Access::Write)],
+        )
+        .await;
+        let (_, first) = alice
+            .send(&test, "GET", "/api/v1/me/ceiling?limit=1", Payload::Empty)
+            .await
+            .parts();
+        let next = first["next"].as_str().expect("a cursor").to_string();
+        let (_, second) = alice
+            .send(
+                &test,
+                "GET",
+                &format!("/api/v1/me/ceiling?limit=1&after={next}"),
+                Payload::Empty,
+            )
+            .await
+            .parts();
+        let (_, found) = alice
+            .send(
+                &test,
+                "GET",
+                "/api/v1/me/ceiling?prefix=%20OT",
+                Payload::Empty,
+            )
+            .await
+            .parts();
+        let (_, nothing) = alice
+            .send(
+                &test,
+                "GET",
+                "/api/v1/me/ceiling?prefix=no%00pe",
+                Payload::Empty,
+            )
+            .await
+            .parts();
+        let (bad_status, _) = alice
+            .send(&test, "GET", "/api/v1/me/ceiling?after=%21", Payload::Empty)
+            .await
+            .parts();
+
+        assert_eq!(
+            first["ceiling"],
+            json!([{"catalog": "main", "access": "read"}])
+        );
+        assert_eq!(
+            second["ceiling"],
+            json!([{"catalog": "other", "access": "write"}])
+        );
+        assert!(second.get("next").is_none(), "{second}");
+        assert_eq!(
+            found["ceiling"],
+            json!([{"catalog": "other", "access": "write"}])
+        );
+        assert_eq!(nothing["ceiling"], json!([]));
+        assert_eq!(bad_status.as_u16(), 400);
+
+        let mut bob = member(&test, "bob", &[]).await;
+        let (_, me) = bob
+            .send(&test, "GET", "/api/v1/me", Payload::Empty)
+            .await
+            .parts();
+        assert_eq!(me.get("ceiling_access"), Some(&serde_json::Value::Null));
     }
 
     #[test]

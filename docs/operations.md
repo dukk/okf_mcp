@@ -28,17 +28,21 @@ changesets and the routes in detail.
   | OAuth consent pages in progress, and authorization codes | The consent POST or the token exchange lands elsewhere: an unknown request or code |
   | OIDC sign-in and link flows | The callback lands elsewhere and the flow is unknown |
   | Passkey registration and sign-in ceremonies | Finishing on another replica fails |
-  | The key cache | A key revoked on one replica still works on another until its next poll |
   | The OAuth access-token cache | A token revoked on one replica still works on another until it expires |
-  | Rate-limit buckets and the mail worker | Counted per replica (#357, #458); not fixed by `[redis]` |
+  | Rate-limit buckets | Counted per replica (#357); not fixed by `[redis]` |
+
+  The credential, user, settings and catalog caches are not in the table: since
+  milestone 18 they follow Postgres change messages on every replica, with or
+  without Redis.
 
 - **With `[redis]`, several replicas work.** Redis holds the first four rows'
-  short-lived state, and three caches learn of changes on every replica
-  promptly: the key cache (pub/sub announcements of each `admin_generation`
-  bump), the catalog snapshots (best-effort pub/sub announcements of each
-  catalog's new generation) and the access-token cache (a revocation
-  counter). Everything else stays as
-  it was. The Redis section below says what to run, what it holds and what
+  short-lived state, and two caches also learn of changes on every
+  replica promptly through Redis: the catalog snapshots (best-effort pub/sub
+  announcements of each catalog's new generation) and the access-token cache
+  (a revocation counter). Credentials, users, settings and catalog rows learn
+  of changes through the Postgres change feed, with or without Redis (the
+  `admin-generation` channel only bridges milestone 16 replicas during a
+  rolling upgrade). Everything else stays as it was. The Redis section below says what to run, what it holds and what
   happens when it fails; "Several replicas: what stays per replica" lists the
   caveats. Without the table nothing changes: no Redis code runs, no
   connection is made, and one replica is still required.
@@ -46,7 +50,7 @@ changesets and the routes in detail.
 
   | Route | Access | Does |
   |---|---|---|
-  | `GET /healthz` | none | The database's state, the catalog count and the last clock check (section 7) |
+  | `GET /healthz` | none | The database's state, the number of catalogs this replica holds and the last clock check (section 7) |
   | `POST/GET/DELETE /mcp` | any key (`read`, `write` or `admin`) | MCP streamable HTTP; each tool checks its own level and the key's catalog grants |
   | `GET /catalogs/{name}/export` | `read` on the catalog | The catalog as a `.tar.gz` |
   | `POST /catalogs/{name}/import[?replace=true&only_machinery=true&expect_generation=N]` | `write` on the catalog | Imports an uploaded `.tar.gz` |
@@ -54,12 +58,18 @@ changesets and the routes in detail.
   Keys are bearer tokens (`Authorization: Bearer <key>`). Only `/healthz` is
   open, and it names no catalog, host or secret.
 - **The command line** (`okf-mcp catalog`, `key`, `import`, `export`,
-  `migrate`) talks to the database directly, not to the server. The running
-  server notices catalogs, imports and key changes within `poll_interval`.
-  With `[redis]` the command line announces key changes, imports and
-  `catalog repair-indexes`, so the serving replicas normally pick those up
-  well within a second (best effort; `poll_interval` remains the bound); a
-  new or deleted catalog still shows within `poll_interval`.
+  `migrate`) talks to the database directly, not to the server. Each write
+  sends a change message (Postgres `NOTIFY`) from its own transaction, so
+  every running replica normally sees a new, changed, imported or deleted
+  catalog within a fraction of a second. If a message is missed while the
+  listener stays connected, a replica rereads a catalog's row after
+  `catalog_ttl` at the latest (10 seconds by default); after a reconnect it
+  rereads every row on next use. Key, user, team and settings changes travel
+  the same way (a lost message is bounded by `credential_ttl`, 10 seconds by
+  default). With `[redis]` the command line also announces imports and
+  `catalog repair-indexes` to the catalog subscribers, and sends the M16
+  bridge payload so that milestone 16 replicas, which still poll, notice at
+  once (best effort).
 
 ## 2. The image
 
@@ -103,17 +113,17 @@ unknown keys are ignored, so one file serves every version.
 | `allowed_hosts` | `["localhost", "127.0.0.1", "::1"]` | The `Host` names (optionally `host:port`) that `/mcp` accepts: rmcp's DNS-rebinding check. Behind an ingress, the public host name |
 | `default_catalog` | none | The catalog a key with no default of its own reads and writes |
 | `session_idle_timeout` | `"2h"` | An idle MCP session is closed after this; an open changeset with no change within it is `idle` in `list_changesets` |
-| `poll_interval` | `"10s"` | How often the server looks for catalog, import and key changes made by the subcommands |
+| `poll_interval` | none | Deprecated and ignored since milestone 18: the server no longer polls, and logs a warning at start-up when the key is set. Changes reach every replica through the change feed, with `catalog_ttl` and `credential_ttl` as the backstop |
 | `maintenance_review_intervals` | `{}` (30 days per catalog) | Per-catalog review durations, e.g. `{ pg = "30d" }`; each must be at least one day |
 | `max_import_bytes` | `"64MiB"` | The largest uncompressed import (`MiB` is binary, `MB` decimal, or a number of bytes). The import route caps the request body at this plus 0.1% and 64 KiB of gzip slack |
 | `time_server` | none | The NTP server for the clock check (`host`, `host:port` or an address). Without it there is no check |
 | `concept_outline_chars` | `20000` | `get_concept` returns an outline of the headings, not the body, for a body longer than this many characters, unless the call passes `full` or `section` |
 | `database_max_connections` | `16` | The most database connections one process opens (`serve` and every subcommand). Writers queued on one changeset wait without one; the writer whose turn it is, a publish, and a read that builds an overlay each hold one |
-| `overlay_cache_size` | `64` | The most changeset overlays (an open changeset's view of its catalog) kept in memory; past it, the least recently used is dropped and rebuilt on its next read |
+| `overlay_cache_bytes` | `"256MiB"` | The most memory the changeset overlays (an open changeset's view of its catalog) may take, estimated like a catalog snapshot (a fixed cost per file plus a multiple of the stored size, over the overlay's whole workspace, so many empty files count). Past it, an overlay is dropped and rebuilt on its next read; one larger than the whole budget is served but not kept. An overlay unused for `session_idle_timeout` is dropped too. `overlay_cache_size` is deprecated and ignored (a warning at start-up) |
 | `public_url` | none | The server's public origin, such as `"https://okf-mcp.example.com"` (no path, query or user info; a trailing `/` is dropped). Setting it turns on OAuth ("OAuth connectors") and console sign-in by account ("Signing in and self-service"); without it the OAuth and sign-in routes are 404. It must be `https`, except on a loopback host (such as `localhost`, `127.0.0.1` or `::1`) for local testing, and its host must be in `allowed_hosts` |
 | `oauth.access_token_ttl` | `"1h"` | How long an OAuth access token works |
 | `oauth.refresh_token_ttl` | `"30d"` | How long a refresh token works. Each refresh issues a new one with a fresh lifetime, so a connection used within this stays signed in |
-| `oauth.idle_grant_revoke_after` | `"30d"` | The poll loop revokes an OAuth grant that has had no token issued for this long and holds no live token ([Idle grants](#idle-grants)). At most 10 years; zero is refused |
+| `oauth.idle_grant_revoke_after` | `"30d"` | The hourly `prune_oauth` housekeeping job revokes an OAuth grant that has had no token issued for this long and holds no live token ([Idle grants](#idle-grants)). At most 10 years; zero is refused |
 | `oauth.code_max_expiry` | `"7d"` | The longest expiry a sign-in code may be given (`oauth code create --expires`, the console's expiry) |
 | `oauth.dcr_enabled` | `true` | Accept dynamic client registration (RFC 7591) at `/oauth/register`. Clients that publish a Client ID Metadata Document work either way |
 | `oauth.cimd_allow_private` | `false` | Fetch Client ID Metadata Documents from loopback and private addresses. For test rigs only: it opens the fetcher to the internal network |
@@ -128,7 +138,15 @@ unknown keys are ignored, so one file serves every version.
 | `[[auth.oidc]]` | none | One table per OIDC provider: `id` (1 to 32 of `a-z`, `0-9` and `-`; stable, since each linked identity stores it), `label` (the button text), `issuer`, `client_id`, `client_secret_env` (the environment variable holding the secret) and `scopes` (default `["openid", "email", "profile"]`). Needs `public_url` |
 | `mail.provider` | `"log"` | `"smtp"`, `"postmark"`, `"ses"` or `"log"`. **`log` is for development only:** it writes each whole message, setup and reset links included, to the log at `info`, and delivers nothing |
 | `mail.from` | `"okf <okf@localhost>"` | The From address, such as `"okf <okf@example.com>"`; it must parse as one mailbox. Set it for `smtp`, `postmark` and `ses` (for `ses`, an identity verified in SES) |
-| `mail.worker` | `true` | Run the mail worker in `serve`. Its own pool opens up to 4 connections, on top of `database_max_connections` |
+| `mail.worker` | none | Deprecated and ignored: every `serve` runs the mail worker, and logs a warning if the key is present. The workers share one pool of up to 3 connections per process, on top of `database_max_connections` |
+| `catalog_cache_bytes` | `"1GiB"` | The most memory this process's catalog snapshots may take, estimated from their stored size (`"512MiB"`, or a number of bytes). Catalogs load on first use, not at start-up; past the budget the least recently used one is dropped and loaded again when next read. A catalog larger than the whole budget is served but not kept |
+| `catalog_directory_entries` | `100000` | The most catalog rows the catalog directory keeps in memory, by name. It answers "does this catalog exist, and who owns it" without loading content |
+| `catalog_ttl` | `"10s"` | How long the directory serves a catalog row before reading it again, and so the longest a replica serves an older snapshot of a catalog whose change message it missed (each use refreshes the snapshot to its row). A change drops the row at once; this covers a change message that is lost while the listener stays connected (a reconnect marks every row stale). A name that does not exist is remembered for 5 seconds regardless |
+| `credential_cache_entries` | `100000` | The most API keys and OAuth grants each credential cache keeps in memory (one by key hash, one by grant id). A key or grant is read from the database the first time it is used; an unknown one is never cached |
+| `user_cache_entries` | `100000` | The most users the user cache keeps in memory: each one's admin flag, teams, entitlements and live unlocks, read on first use (a ceiling is resolved per catalog from these and the catalog's row, so an entry does not grow with the catalogs a user's teams own) |
+| `credential_ttl` | `"10s"` | How long a cached key, grant or user is served before it is read again. A change (a revocation, a team or admin change) drops it on every replica at once; this bounds how long one survives a change message that is lost |
+| `search_fanout_max` | `25` | The most catalogs `GET /api/v1/search` searches when the request names none, from 1 to 999. A credential that reaches more gets a 400 asking it to name the catalogs (`catalogs=`), so one request cannot search every catalog. MCP `search` is bounded by the connection's selection and does not use it, and neither does the console, which names every catalog it reaches in `catalogs=` |
+| `worker_shutdown_grace` | `"30s"` | How long `serve` waits, once told to stop, for the mail worker to finish the mail in hand. Set the pod's `terminationGracePeriodSeconds` a few seconds above it |
 | `mail.smtp.host`, `mail.smtp.port`, `mail.smtp.starttls`, `mail.smtp.username`, `mail.smtp.password_env` | none, `587`, `true`, none, none | The SMTP relay. `starttls = true` requires STARTTLS; `false` is TLS from the first byte (port 465); there is no plain-text mode. `username` and `password_env` (the environment variable holding the password) go together |
 | `mail.postmark.token_env`, `mail.postmark.message_stream` | none, `"outbound"` | Postmark's server token (by environment variable) and message stream |
 | `mail.ses.region` | none | The AWS region SES sends in. Unset, the AWS SDK's own resolution decides (`AWS_REGION`, then the profile, then instance metadata). The `[mail.ses]` table is optional; there is no credential key ([Mail](#mail)) |
@@ -153,8 +171,9 @@ unknown keys are ignored, so one file serves every version.
 | `telemetry.prometheus.listen` | none | The address of the separate, unauthenticated `/metrics` listener, such as `"[::]:9464"`. No listener without it. It must not equal `listen` or share its port when either is unspecified |
 
 The server refuses to start (and every subcommand refuses to run) with a zero
-`poll_interval`, `session_idle_timeout`, `database_max_connections` or
-`overlay_cache_size`, an empty `allowed_hosts` or a blank
+`session_idle_timeout`, `worker_shutdown_grace`,
+`database_max_connections`, `overlay_cache_bytes`, `catalog_cache_bytes`, `catalog_directory_entries`, `catalog_ttl`,
+`credential_cache_entries`, `user_cache_entries` or `credential_ttl`, a `search_fanout_max` outside 1 to 999, an empty `allowed_hosts` or a blank
 entry in it, or a `time_server` that is blank or has surrounding whitespace.
 `maintenance_review_intervals` also rejects invalid catalog names, malformed
 durations, durations below 86,400 seconds and durations beyond the supported
@@ -213,12 +232,11 @@ allowed_hosts = ["okf-mcp.example.com"]
 default_catalog = "notes"
 time_server = "time.example.com"
 session_idle_timeout = "2h"
-poll_interval = "10s"
 max_import_bytes = "64MiB"
 maintenance_review_intervals = { pg = "30d" }
 concept_outline_chars = 20000
 database_max_connections = 16
-overlay_cache_size = 64
+overlay_cache_bytes = "256MiB"
 public_url = "https://okf-mcp.example.com"   # turns on OAuth; see "OAuth connectors"
 
 [oauth]
@@ -324,10 +342,15 @@ reads the same file as the server, with no extra flags.
   `okf_mcp`. The server needs no superuser. The migrations create three
   extensions, `citext` (okf's) and `pgcrypto` and `hstore` (apalis', for the
   mail queue). All three are trusted extensions, so the database's owner can
-  create them (Postgres 13 or later). The pool opens up to
-  `database_max_connections` (16 by default) connections, and the mail
-  worker's own pool up to 4 more; keep the database's `max_connections`
-  above that sum times the number of replicas.
+  create them (Postgres 13 or later). **Connections per replica:**
+  up to `database_max_connections` (16 by default) for requests, plus 1 for
+  the change-feed listener (it holds one connection for the life of the
+  process, on its own one-connection pool, so it never takes a request slot),
+  plus up to 3 for the worker pool that the mail and housekeeping workers
+  share (the feedback worker, if on, has its own 3). For N replicas that is
+  `N x (database_max_connections + 4)`, plus `3 x N` with the feedback worker
+  on. Keep the database's `max_connections` above that, with room for the
+  command line, `okf-mcp migrate` and your own tools.
 - **Two schemas.** okf's tables are in `public`; the mail queue is apalis'
   `apalis` schema, which `migrate` sets up after okf's migrations, with its
   own migration table (`apalis._sqlx_migrations`).
@@ -441,7 +464,7 @@ session id: the keys and values that refer to one hold its hash.
 | `{p}oidc:link:<hash of the console session id>` | Which flow that console session has in progress | 10 minutes, renewed on use |
 | `{p}passkey:ceremony:h(cookie)` | A passkey registration or sign-in ceremony | 5 minutes, fixed |
 | `{p}passkey:session:<hash of the console session id>` | Which ceremony that console session has in progress | 5 minutes, renewed on use |
-| channel `{p}admin-generation` | Announcements that the key cache is out of date (the new generation, or empty from the command line) | Not stored |
+| channel `{p}admin-generation` | The M16 bridge: `notified` from milestone 18 servers and the command line, a generation number or an empty message from milestone 16 binaries | Not stored |
 | channel `{p}catalog-generation` | Announcements that a catalog's snapshot is out of date: `<catalog id> <generation>` | Not stored |
 
 - **Values** are JSON with a version. A value of another version, or one that
@@ -457,14 +480,20 @@ session id: the keys and values that refer to one hold its hash.
   pending authorization is changed by a compare-and-set that retries up to 8
   times and then answers 503, so two replicas racing for one code produce one
   exchange and one replay.
-- **The key cache** is announced, not stored. A replica that sees
-  `admin_generation` move publishes it, and every replica reloads its keys at
-  once, so a revoked key stops working everywhere without waiting for the
-  poll. This covers key revocation, user deletion, team suspension and grant
-  revocation. The command line announces too (an empty message) after each
-  successful command, so `okf-mcp key revoke` takes effect at once. A command
-  that cannot reach Redis logs a warning, and the replicas notice the change
-  within `poll_interval`.
+- **The `admin-generation` channel** is a bridge for a rolling upgrade from
+  milestone 16, not how milestone 18 replicas learn of key changes (they use
+  the Postgres change feed). A milestone 18 server, and the command line,
+  publish `notified` after each administrative change; a milestone 16
+  replica reads any payload as "check `admin_generation` now" and reloads its
+  keys. A milestone 18 replica that receives a number or an empty message
+  (from a milestone 16 binary) marks its credential, user and label caches
+  and its catalog directory stale, so each entry is read again on its next
+  use, and checks the settings against `admin_generation`; it ignores
+  `notified`, since the same change reached it through the change feed.
+  Settings are also checked against `admin_generation` once they are older
+  than `credential_ttl`. The bridge is removed in the release after 0.23.
+  A command that cannot reach Redis logs a warning; a milestone 16 replica
+  then notices within its own `poll_interval`.
 - **Catalog snapshots** are announced, not stored. After a publish, an HTTP
   import, or (from the command line) an import or `catalog repair-indexes`
   commits, the writer publishes the catalog's id and new generation, and every
@@ -473,13 +502,15 @@ session id: the keys and values that refer to one hold its hash.
   read-your-writes: the write's answer does not wait for the announcement or
   for any other replica's refresh, so a client whose next request lands on
   another replica can still read the old text for a moment (normally well
-  under a second), and the poll loop bounds the lag at `poll_interval` when an
-  announcement is lost. A replica that already reached the
-  generation (its own publish, or its poll) does nothing; one that has not
-  loaded the catalog (created since its last poll) or has deleted it leaves it
-  to the poll loop, so an announcement never loads a catalog. Refreshes of one
-  catalog from an announcement, the poll loop and a local publish wait for one
-  another and build each generation once; a snapshot never moves back. A
+  under a second). The same write also sends a change message through
+  Postgres, which reaches every replica without Redis; if both are lost, the
+  replica rereads the catalog's row after `catalog_ttl` at the latest and
+  refreshes the snapshot on its next use. A replica that already reached the
+  generation (its own publish) does nothing; one that has not cached the
+  catalog, or has deleted it, does nothing either, so an announcement never
+  loads a catalog (catalogs load on first use). Refreshes of one catalog from
+  an announcement, a change message, a request and a local publish wait for
+  one another and build each generation once; a snapshot never moves back. A
   replica's `pending_changes`, and its reads through a changeset, do give a
   guarantee for the changeset's own entries: they refresh first when an entry
   was made on a newer revision than the replica's snapshot holds, so a
@@ -506,19 +537,22 @@ back to memory, because that would split the state between replicas.
 | `GET /healthz` | Still 200: `"redis": "unavailable"` (section 7) |
 | A catalog read or write | Unaffected: Postgres alone serves them |
 
-- **Key announcements.** A failed publish is counted and logged, and the poll
-  loop covers it within `poll_interval`. Each replica's subscriber reloads its
-  key cache whenever it (re)subscribes, since a message sent while it was
+- **Bridge announcements.** A failed publish is counted and logged; it only
+  matters to milestone 16 replicas, whose own poll covers it, and the change
+  itself already reached every milestone 18 replica through Postgres. When a
+  replica's subscriber (re)subscribes it marks its credential, user and label
+  caches and its catalog directory stale, since a message sent while it was
   disconnected is lost. The client resubscribes by itself after a reconnect;
   a subscription that stays disconnected for 10 seconds is replaced by a new
-  one, retried with a wait that grows from 1 to 30 seconds. So an outage costs
-  at most `poll_interval` of key-revocation delay once Redis is back, and
-  during it each replica still polls Postgres.
+  one, retried with a wait that grows from 1 to 30 seconds. Key revocation
+  between milestone 18 replicas does not depend on Redis at all.
 - **Catalog announcements** fail the same way: a failed publish is counted and
-  logged, and each replica's catalog subscriber checks every loaded catalog
-  when it (re)subscribes, with the same reconnect and backoff. A lost
-  announcement costs at most `poll_interval` before that replica's reads show
-  the write; even a delivered one is applied asynchronously.
+  logged. When a replica's catalog subscriber (re)subscribes, with the same
+  reconnect and backoff, it marks every cached catalog row stale, so each
+  catalog is checked against the database on its next use (nothing is
+  reloaded at once). A lost announcement is normally covered by the Postgres
+  change message, and at worst costs `catalog_ttl` before that replica's reads
+  show the write; even a delivered one is applied asynchronously.
 - **The access-token cache** skips the cache on a Redis error: the lookup goes
   to Postgres and caches nothing.
 - **An entry Redis lost** (evicted, or Redis restarted without persistence)
@@ -579,20 +613,31 @@ two). What `[redis]` does not share:
   section), but not before the write's answer returns: a client's next read
   on another replica may still see the old text. There is no read-your-writes
   guarantee across replicas. A lost announcement (Redis down, or the
-  subscriber reconnecting) waits for that replica's poll, within
-  `poll_interval` (10 seconds by default). A catalog created or deleted on
-  one replica also shows on the others at their next poll. Within a
+  subscriber reconnecting) is covered by the Postgres change message the same
+  write sends; if that is missed too, by the catalog row's lifetime,
+  `catalog_ttl` (10 seconds by default). A catalog created or deleted on one
+  replica shows on the others the same way. Within a
   changeset, `pending_changes` and reads through it refresh a replica that is
   behind the changeset's own entries.
 - **Rate limits** (per address, per email, OIDC starts, OAuth) are counted per
   replica, so the effective limit is the configured limit times the number of
   replicas (#357). The shared Redis handle is the place to fix that.
-- **The mail worker.** Until #458 settles how it behaves with several
-  replicas, run it on one: `[mail] worker = false` turns it off for a replica,
-  which still enqueues mail in Postgres. Since one ConfigMap serves a
-  Deployment, that means a second, single-replica Deployment of the same image
-  with its own ConfigMap (`worker = true`), and `worker = false` in the
-  serving Deployment's.
+- **The mail worker** runs on every replica, with no per-pod setting.
+  apalis takes each job with `FOR UPDATE SKIP LOCKED`, so two replicas never
+  send the same mail at once. Each process opens up to 3 connections for
+  the worker pool the mail and housekeeping workers share, so N replicas add
+  `3 * N` to Postgres's `max_connections`, beside the request pools, plus
+  `3 * N` more with the feedback worker on (its pool is its own). A replica that
+  dies loses its mail in hand to another replica after about one minute (a
+  heartbeat every 10 seconds, six missed); the mail shows as `sending` and
+  cannot be deleted until then. Delivery is at least once: a replica killed
+  after the provider accepted a mail but before the job was acknowledged
+  (SIGKILL, out of memory, a grace period shorter than a send) causes a
+  second send. On SIGTERM a replica starts no new send and finishes the one
+  in hand, for at most `worker_shutdown_grace` (30 seconds by default, the
+  longest a provider may take); keep `terminationGracePeriodSeconds` above it.
+  The hourly `prune_workers` housekeeping job deletes the `apalis.workers`
+  rows of stopped replicas.
 - **The feedback worker** runs on every replica with `[feedback]` unless
   `[feedback] worker = false`, like the mail worker: turn it on for one
   replica, the same way. Fetching a job is exclusive in normal operation, so
@@ -600,15 +645,96 @@ two). What `[redis]` does not share:
   at-least-once (see [Feedback](#feedback)), and one worker is enough. The
   feedback rate limit is counted in Postgres, so unlike the
   limits above it holds across replicas.
-- **Pruning.** Every replica's poll loop prunes the OAuth tables, unbound
-  registered clients, console sessions, mail jobs, forwarded feedback,
-  sign-in events and emailed-link tokens (hourly), the audit log (daily) and empty changesets
-  (every pass). The deletes are idempotent, so this wastes a little work and
-  does nothing wrong.
+- **Housekeeping** runs once per cluster as apalis jobs on queue
+  `housekeeping`: `prune_changesets` (empty changesets a day old, every 5
+  minutes), `prune_oauth` (idle OAuth grants, expired tokens and codes,
+  unbound registered clients, sign-in events, emailed-link tokens, console
+  sessions, mail jobs, finished housekeeping jobs and forwarded feedback,
+  hourly), `prune_audit` (the audit log, daily), `prune_workers` (hourly)
+  and `cluster_stats` (every minute). Every replica's ticker pushes each
+  task's current slot once a minute; a unique key per slot makes the other
+  replicas' pushes no-ops, so each slot runs once, on whichever replica's
+  worker takes it. A failed job is retried twice with a backoff; a slot
+  missed while every replica was down is not caught up, and the next slot
+  does the same work. `okf_housekeeping_runs_total` counts the runs. A
+  replica looks a slot up before pushing it, so a slot already scheduled
+  costs one indexed read and leaves nothing in the Postgres log. Only when
+  two replicas push a new slot at the same moment does the loser hit the
+  unique index: the Postgres log then shows one `duplicate key value
+  violates unique constraint "idx_jobs_idempotency_key"` error, which the
+  server ignores.
+- **Cluster gauges.** `okf_changesets_open` and `okf_mail_queue_depth` come
+  from the `cluster_stats` row, which every replica reads once a minute, so
+  all replicas report the same value: use `max()` across replicas.
 - **`okf_mcp_sessions_active`** counts the sessions each replica holds. A
   session restored on a second replica counts there too, so the sum over
   replicas can exceed the number of live sessions.
 - **No session affinity** is needed on the Service or the Ingress.
+
+## Caches and change propagation
+
+Since milestone 18 the server holds a bounded amount of state, however many
+catalogs, keys and users the database has. Nothing is loaded at start-up:
+`serve` applies the migrations and starts serving, and each cache fills on
+first use.
+
+| Cache | Bounded by | Holds | Metrics (`cache` label) |
+|---|---|---|---|
+| Catalog snapshots | `catalog_cache_bytes` | A catalog's parsed files, built on first read | `catalog` |
+| Changeset overlays | `overlay_cache_bytes` | A changeset's view of its catalog | `overlay` |
+| Catalog directory | `catalog_directory_entries` | The catalog rows (id, name, owner, suspension, maintenance), by name, with no content | `directory` |
+| Credentials | `credential_cache_entries` each | API keys by hash, OAuth grants by id | `credential`, `grant` |
+| Users | `user_cache_entries` | Each user's admin flag, teams, entitlements and unlocks (the ceiling is resolved per catalog from these) | `user` |
+| Labels | 100,000 entries (fixed) | The display labels of the users, teams and catalogs a response shows, read for just those names | `labels` |
+
+- **A request pins what it uses.** A catalog evicted while a request reads it
+  stays alive for that request; the next request loads it again.
+- **Sizing `catalog_cache_bytes`.** A snapshot's weight is
+  `1024 + 1024 x files + 8 x stored bytes` per catalog (the method is in the
+  milestone 18 design, decision 2), so a count of catalogs and a stored size
+  give the figure. Watch `okf_cache_bytes{cache="catalog"}` against the
+  setting, and the hit ratio of `okf_cache_requests_total` for the same
+  cache. A ratio that stays low with the cache at its limit, and
+  `okf_cache_evictions_total{cause="size"}` rising, mean the working set is
+  larger than the budget: raise it (and the pod's memory limit above it, with
+  room for the overlays, the other caches and the process). A catalog larger
+  than the whole budget is built for the request that wants it and not kept,
+  with a warning naming its size.
+- **Change propagation.** Every administrative write and publish queues a
+  change message (Postgres `NOTIFY`, channel `okf_invalidate`) from its own
+  transaction, so it is delivered only if the transaction commits. Each
+  replica's listener applies it: it drops the named cache entries (a
+  catalog row and snapshot, a credential, a user, a team's members, the
+  settings). The replica that took the request applies its own messages
+  before it answers, so the writer reads its own change. Delivery needs
+  neither Redis nor an announcement, so any number of replicas may run.
+  `okf_invalidations_lag_seconds` is the time from send to application.
+- **What bounds a lost message.** While a listener is disconnected it loses
+  messages, so when it reconnects every cached entry is marked stale (not
+  dropped): each is read again on its next use, nothing is reloaded at once.
+  A message lost while the listener stays connected is bounded by the TTLs:
+  `credential_ttl` for credentials, users, labels and settings, and
+  `catalog_ttl` for catalog rows (and so snapshots). Both are 10 seconds by
+  default; a name that does not exist is remembered for 5 seconds. There is no
+  background sweep.
+- **Lists are queries.** `GET /api/v1/catalogs`, `/whoami`, `/labels` and MCP
+  `list_catalogs` page through the directory by name (`after`, `limit`),
+  rather than scanning memory; `GET /api/v1/search` refuses to search more
+  than `search_fanout_max` catalogs unless it is told which. See the
+  [API reference](#api-reference).
+- **Optional: ingress hashing on `Mcp-Session-Id`.** A session works on any
+  replica, so nothing depends on this. Routing each session to one replica
+  keeps the catalogs it reads in that replica's cache, so there are fewer
+  cold loads and each replica's cache holds a smaller share. With nginx:
+  `hash $http_mcp_session_id consistent;` in the upstream block. A replica
+  that leaves moves only its share of sessions.
+- **Dashboards.** The database-wide gauges (`okf_changesets_open`,
+  `okf_mail_queue_depth`) are the same on every replica: use `max()` across
+  replicas, not `sum()`. The per-catalog gauges `okf_catalog_concepts` and
+  `okf_catalog_generation` are gone (a series per catalog does not scale);
+  `okf_cache_entries` and `okf_cache_bytes` say how many catalogs this
+  replica holds, and `GET /healthz`'s `cached_catalogs` reports the same
+  number.
 
 ## 5. Kubernetes
 
@@ -670,7 +796,7 @@ metadata:
   name: okf-mcp
 spec:
   # One replica because, without [redis], MCP sessions, consent pages, sign-in
-  # flows and key caches live in this process's memory (section 1). Recreate
+  # flows live in this process's memory (section 1). Recreate
   # keeps two servers from running at once during an upgrade.
   replicas: 1
   strategy:
@@ -828,8 +954,9 @@ The objects for backups (`ObjectStore`, `ScheduledBackup`) are in section 9.
 - **Several replicas:** with `[redis]`, use the variant below. The Service
   needs no session affinity, and the Ingress needs no sticky annotation.
 - **Startup probe:** TCP on 8080, for up to 5 minutes (60 x 5 s). The server
-  opens its port only after it has run the migrations and loaded every
-  catalog's snapshot.
+  opens its port only after it has run the migrations and loaded its keys and
+  settings; catalogs load on first use, so start-up does not grow with their
+  number.
 - **Readiness probe:** `GET /healthz`, which answers 503 while the database
   does not answer within 2 seconds, so the pod leaves the Service during a
   database outage. The clock check never changes it.
@@ -891,9 +1018,9 @@ spec:
                   key: url
 ```
 
-The mail worker runs on every replica unless `[mail] worker = false`, and with
-`[feedback]` so does the feedback worker unless `[feedback] worker = false`: see
-"Several replicas: what stays per replica".
+The mail worker runs on every replica: see "Several replicas: what stays per
+replica", and set `terminationGracePeriodSeconds` above `worker_shutdown_grace`. With
+`[feedback]` so does the feedback worker unless `[feedback] worker = false`.
 
 **The Service:** it sets no `ipFamilyPolicy`. On a dual-stack cluster the
 server listens on both families (`listen = "[::]:8080"`), so any policy works,
@@ -1059,8 +1186,8 @@ reachable only through the cluster network. The Ingress must not route to it
 `/metrics`. Every other path on it is a 404. `listen` must not equal the main
 `listen` address, nor share its port when either is unspecified (`0.0.0.0`
 or `::`); the server refuses to start otherwise. A scrape reads state the
-server already holds (the snapshot cache, the pool's counters, the poll's
-last mail count), so it never queries Postgres.
+server already holds (the snapshot cache, the pool's counters, the
+housekeeping job's last mail count), so it never queries Postgres.
 
 Add a port named `metrics` to the Deployment and scrape it with a
 ServiceMonitor. [`examples/kubernetes/metrics-service.yaml`](../examples/kubernetes/metrics-service.yaml)
@@ -1073,7 +1200,7 @@ admits only the Prometheus pods to port 9464 is a sensible addition.
 example Grafana dashboard (import it, and pick the Prometheus data source;
 it needs Grafana 10.4 or later). It has a panel for every family the server
 exports, grouped in rows (overview, HTTP, MCP tools, publish, catalogs and
-polling, auth, mail, archives, platform), and shows each of the six duration
+change propagation, auth, mail, archives, platform), and shows each of the six duration
 histograms as a heatmap of the server's own buckets, next to p50/p95/p99
 lines. The `catalog` and `tool` variables narrow the panels that carry those
 labels; the tool-duration heatmap follows `tool`.
@@ -1133,10 +1260,9 @@ the `okf.catalog` span attribute and the `catalog` metric label.
 
 Metric labels come from closed sets only: route templates, registered tool
 names (anything else is `other`), catalog names, and fixed outcome, method,
-rule, reason and status words. Only the gauges that enumerate loaded catalogs
-(`okf_catalog_concepts`, `okf_catalog_generation`, `okf_changesets_open`) drop
-a deleted catalog's series at the next collection. The counters and histograms
-(`okf_catalog_refreshes_total`, `okf_publish_duration_seconds`, the tool and
+rule, reason and status words. No gauge has a series per catalog. The counters
+and histograms
+(`okf_publish_duration_seconds`, the tool and
 archive series) keep the series they recorded for that catalog until the
 process restarts, so a catalog created and deleted under many names leaves
 that many series behind.
@@ -1163,10 +1289,10 @@ Names are as `/metrics` shows them. Dots become underscores in names and in
 label names (`http.route` is `http_route`), durations are in seconds, and a
 counter ends in `_total`. A histogram is three series (`_bucket`, `_sum`,
 `_count`) with buckets from 1 ms to 60 s. Every family except
-`okf_build_info`, `okf_telemetry_export_failures_total`, `okf_mail_queue_depth`
-and the gauges that read loaded state (`okf_catalog_concepts`,
-`okf_catalog_generation`, `okf_changesets_open`, `db_client_connection_count`)
-has no series until its first event, so a scrape of an idle server lists
+`okf_build_info`, `okf_telemetry_export_failures_total`, `okf_mail_queue_depth`,
+`okf_changesets_open` and the gauges that read live state
+(`db_client_connection_count`, and `okf_cache_entries` and `okf_cache_bytes`
+while their cache exists) has no series until its first event, so a scrape of an idle server lists
 fewer families than this table. Over OTLP the names are
 the dotted originals.
 
@@ -1174,24 +1300,31 @@ the dotted originals.
 |---|---|---|---|
 | `http_server_request_duration_seconds` | histogram | `http_request_method`, `http_route`, `http_response_status_code` | Every HTTP request on the main port |
 | `http_server_active_requests` | gauge | `http_request_method`, `http_route` | Requests being served |
-| `okf_mcp_tool_duration_seconds` | histogram | `tool`, `catalog`, `outcome` | MCP tool calls. `tool` is a registered tool or `other`; `catalog` is a loaded catalog or `none`; `outcome` is `ok` or `error` |
+| `okf_mcp_tool_duration_seconds` | histogram | `tool`, `catalog`, `outcome` | MCP tool calls. `tool` is a registered tool or `other`; `catalog` is an existing catalog or `none`; `outcome` is `ok` or `error` |
 | `okf_mcp_sessions_active` | gauge | none | Open MCP sessions |
 | `okf_publish_duration_seconds` | histogram | `catalog`, `outcome` | A publish, from the first lock to the refreshed snapshot |
 | `okf_publish_lock_wait_seconds` | histogram | `catalog` | Time a publish waited for the catalog's locks |
 | `okf_lint_rejections_total` | counter | `catalog`, `rule` | Lint errors that refused a publish. `rule` is the lint's rule id, `secret` for any secret rule, or `other` |
-| `okf_changesets_open` | gauge | `catalog` | Open changesets, as of the last poll |
-| `okf_poll_duration_seconds` | histogram | `outcome` | One pass of the poll loop |
-| `okf_catalog_refreshes_total` | counter | `catalog`, `result` | Each catalog's turn in a pass: `unchanged`, `reloaded`, `loaded` or `failed` |
+| `okf_changesets_open` | gauge | none | Open changesets in the cluster, as of the last `cluster_stats` housekeeping job (the same on every replica) |
 | `okf_catalog_announcements_total` | counter | `result` | Catalog announcements handled, counting also each catalog found behind in the catch-up after a (re)subscribe: `applied` (rebuilt), `current` (already there), `unknown` (not loaded here, or deleted) or `failed`. Only with `[redis]` |
-| `okf_catalog_concepts` | gauge | `catalog` | Concepts in the current snapshot |
-| `okf_catalog_generation` | gauge | `catalog` | The snapshot's generation |
-| `okf_keycache_reloads_total` | counter | `outcome` | Key cache and settings reloads |
+| `okf_invalidations_queued_total` | counter | `kind` | Change-feed messages queued by this replica's write transactions; Postgres delivers one only if its transaction commits, so a rollback leaves this ahead of `received` (`catalog`, `catalog_meta`, `credential`, `user`, `team`, `settings`) |
+| `okf_invalidations_received_total` | counter | `kind` | Change-feed messages received and applied |
+| `okf_invalidations_unreadable_total` | counter | | Change-feed payloads this build could not read (each reloads the caches) |
+| `okf_invalidations_lag_seconds` | histogram | | Time from a message's send to its application on this replica |
+| `okf_cache_requests_total` | counter | `cache`, `result` | Lookups in the bounded caches. `cache` is `catalog`, `overlay`, `directory`, `credential`, `grant`, `user` or `labels`; `result` is `hit`, `miss` or `stale` (served but past its TTL or marked stale, so read again) |
+| `okf_cache_evictions_total` | counter | `cache`, `cause` | Entries removed from a bounded cache. `cause` is `size` (the cache was full), `ttl` or `invalidated` (a change message dropped it) |
+| `okf_cache_load_duration_seconds` | histogram | `cache`, `outcome` | Loads that fill a bounded cache (a catalog build, a database read); `outcome` is `ok` or `error` |
+| `okf_cache_entries` | gauge | `cache` | Entries a bounded cache holds now |
+| `okf_cache_bytes` | gauge | `cache` | Estimated bytes held, for the caches limited by bytes (`catalog` and `overlay`) |
+| `okf_keycache_reloads_total` | counter | `outcome` | Settings and label reloads (named for the key cache they used to include; keys and users load on demand since milestone 18) |
 | `okf_redis_errors_total` | counter | `operation` | Failed Redis calls. `operation` is `connect`, `get`, `set`, `take`, `update`, `remove`, `index`, `admit`, `bind`, `publish`, `subscribe`, `counter` or `decode` (a stored value that would not decode). A failed or late `/healthz` `PING` counts as `get`. Only with `[redis]` |
 | `okf_auth_attempts_total` | counter | `method`, `outcome` | Sign-in attempts. `method` is `password`, `passkey`, `oidc` or `setup`; `outcome` is `ok`, `failed` or `locked` |
 | `okf_oauth_tokens_issued_total` | counter | `grant` | Token pairs issued: `authorization_code` or `refresh_token` |
 | `okf_ratelimit_rejections_total` | counter | `limiter` | Requests a limiter refused: `sign_in_per_ip`, `forgot_per_email`, `forgot_per_ip`, `link_starts`, `oauth_register`, `oauth_token` or `oauth_consent` |
 | `okf_mail_jobs_total` | counter | `provider`, `outcome` | Mail tries. `provider` is the configured one; `outcome` is `sent`, `retry` or `failed` |
-| `okf_mail_queue_depth` | gauge | `status` | Mail not yet sent, as of the last poll: `pending`, `sending`, `retrying` or `failed` |
+| `okf_mail_queue_depth` | gauge | `status` | Mail not yet sent, as of the last `cluster_stats` housekeeping job (the same on every replica): `pending`, `sending`, `retrying` or `failed` |
+| `okf_housekeeping_runs_total` | counter | `task`, `outcome` | Housekeeping jobs run on this replica. `task` is `prune_changesets`, `prune_oauth`, `prune_audit`, `prune_workers` or `cluster_stats`; `outcome` is `ok` or `error` (an error is retried) |
+| `okf_housekeeping_duration_seconds` | histogram | `task` | Housekeeping job duration |
 | `db_client_connection_count` | gauge | `state` | Postgres pool connections: `idle` and `used` sum to the pool's size |
 | `okf_clock_checks_total` | counter | `outcome` | Clock checks against `time_server` |
 | `okf_clock_offset_seconds` | gauge | none | The time server's clock minus the server's, at the last good check |
@@ -1203,7 +1336,7 @@ the dotted originals.
 ### Span reference
 
 Spans are exported with `info` as the default filter. A request span is a
-root, and a poll pass, a clock check and a mail job are roots too, since no
+root, and a clock check, a housekeeping job and a mail job are roots too, since no
 request started them. A tool call's `mcp <tool>` span is not a child of its
 `POST /mcp` request span: it is seen as a trace of its own (rmcp runs the call
 on its own task), so find a call by its tool span, not by the request's trace.
@@ -1211,10 +1344,9 @@ on its own task), so find a call by its tool span, not by the request's trace.
 | Span | Attributes |
 |---|---|
 | `<METHOD> <route>`, such as `POST /signin` (server). No span for an unmatched route | `http.request.method` (`_OTHER` for an unknown method), `http.route`, `http.response.status_code`, `enduser.id`, `okf.key.id`. The status is `Error` for a 5xx only. The caller's `traceparent`, if any, is a link |
-| `mcp <tool>` (server): one per tool call; `other` for an unregistered name | `okf.tool`, `okf.catalog` (a loaded catalog, else `none`), `okf.outcome` (`ok` or `error`), `okf.error.kind` on failure, `enduser.id`, `okf.key.id` |
+| `mcp <tool>` (server): one per tool call; `other` for an unregistered name | `okf.tool`, `okf.catalog` (an existing catalog, else `none`), `okf.outcome` (`ok` or `error`), `okf.error.kind` on failure, `enduser.id`, `okf.key.id` |
 | `okf.publish`, with children `okf.publish.lock`, `okf.publish.lint` and `okf.publish.write` | `okf.catalog`, `okf.changeset.entries` |
-| `okf.poll`, with children `okf.catalog.refresh` (one per catalog) and `okf.keycache.reload` | `okf.catalog` and `okf.refresh.result` on the refresh |
-| `okf.catalog.announcement`: a root per catalog announcement handled (or catalog caught up after a resubscribe) | `okf.catalog` (a loaded catalog only), `okf.announcement.result` (as `okf_catalog_announcements_total`'s `result`) |
+| `okf.catalog.announcement`: a root per catalog announcement handled | `okf.catalog` (a catalog cached on this replica only), `okf.announcement.result` (as `okf_catalog_announcements_total`'s `result`) |
 | `okf.clock.check` | `okf.outcome`, `okf.clock.offset` (seconds) |
 | `okf.archive.export` and `okf.archive.import` | `okf.catalog` (only for a catalog that exists), `okf.archive.size` (bytes, on success), `okf.outcome` |
 | `okf.mail.job` | `okf.mail.template`, `okf.mail.provider`, `okf.outcome`. Never the address |
@@ -1283,9 +1415,9 @@ which of them it skipped (those with a root `index.md`, or misspelled). Listings
 without a title or description get `TODO` placeholders; the output names
 each one. A changeset someone left open on an affected index replays its
 bookkeeping onto the repaired text or conflicts at publish, as after any
-publish. The running server shows the result within `poll_interval`; with
-`[redis]` its announcement normally reaches every replica much sooner (best
-effort).
+publish. The command's change message reaches every running replica at once
+(at worst within `catalog_ttl`); with `[redis]` it also announces the change
+(best effort).
 
 An agent with write access can do the same for one catalog through a
 changeset, to review before publishing: `open_changeset`, `repair_indexes`,
@@ -1334,7 +1466,8 @@ sign-in code" below); for example,
 `okf-mcp key grant claude work --actor
 claude-ai-web`. A revoked name/actor pair can be created again for rotation;
 the old row and its changeset history remain attached to the old id. A revoked
-key stops working within `poll_interval`.
+key stops working on every replica within a fraction of a second (the change
+message; a lost one is bounded by `credential_ttl`).
 
 **Mint a sign-in code** for a person connecting an OAuth client. Codes are
 redeemed on the OAuth consent page, which exists only once OAuth is on
@@ -1385,9 +1518,9 @@ git -C ~/notes archive --format=tar.gz HEAD |
 ```
 
 The server picks up a catalog created, updated or imported from the command
-line within `poll_interval` (`/healthz`'s `catalogs` counts it once it is
-loaded; a description change does not rebuild the catalog's snapshot); an
-import through the HTTP route is visible at once.
+line as soon as the change message reaches it (each catalog loads on its
+first read; a description change does not rebuild the catalog's snapshot);
+an import through the HTTP route is visible at once.
 
 `okf-mcp export` inside the pod must write under `/tmp` (or to `-`, stdout),
 the only writable path:
@@ -1484,8 +1617,10 @@ create alice` is refused while a team `alice` exists, and the other way
 round. Every command below needs the database, as every subcommand does; the
 REST routes and console controls for each are in the
 [parity table](#cli-api-and-console-parity). A running server picks up each
-change within `poll_interval`; the same change through the API or the console
-takes effect at once.
+change through the change feed within a fraction of a second (a lost message
+is bounded by `catalog_ttl` or `credential_ttl`, 10 seconds by default); the
+same change through the API or the console takes effect at once on the
+replica that took the request.
 
 | Command | Does |
 |---|---|
@@ -1700,7 +1835,10 @@ name, else its description (cut to 80 characters), else "Untitled catalog".
   length of a display name, never the text.
 - **Where labels show.** Views gain `label` fields, MCP results gain
   `catalog_label` (and `actor_label`), and the console resolves ids
-  through `GET /api/v1/labels`. Where two catalogs or teams share a label,
+  through `GET /api/v1/labels` (its own user and teams, and the catalogs
+  it reaches) and, for the other users and teams a view shows, `GET
+  /api/v1/labels/named`; pickers label users and teams from their own
+  rows. Where two catalogs or teams share a label,
   the console pickers add the owner team where that tells them apart, then
   the slug, repeatedly, until the option texts are distinct. A new catalog's root
   `index.md` heading is its display name, else `Catalog`. An export is
@@ -1787,14 +1925,15 @@ do; the command line needs only the database, as every subcommand does.
   the team as it was. The console can't change a suspended team's notice
   without lifting it (#361); the CLI and REST can.
 - **Timing.** On the replica that took the request, the REST route (which
-  the console uses) polls before answering, so the next request there sees
-  the change. With `[redis]` that poll also announces the change, and the
-  other replicas reload at once; without it they follow within
-  `poll_interval`.
-  If that poll fails the change is still committed and takes effect at the
-  poll loop's next successful pass, within `poll_interval`. The command line
-  writes the database only, so a running server picks it up within
-  `poll_interval`, as for every other `team` command.
+  the console uses) applies the write's own change messages before
+  answering, so the next request there sees the change. Every other replica
+  follows when the change message reaches it, normally within a fraction of
+  a second, with or without `[redis]`. A message lost while a replica's
+  listener stays connected is covered by the caches' TTLs (`catalog_ttl` for
+  the suspension on a catalog's row, `credential_ttl` for users and
+  labels); a reconnect rereads everything. The command line writes the
+  database and sends the same message from its transaction, so a running
+  server sees it as it sees an API change.
 
 ### CLI, API and console parity
 
@@ -1953,8 +2092,8 @@ request and its write can lose that one count.
 
 The log is append-only: the database refuses any change to an entry, and
 any delete of one younger than `audit_retention_days` (at least 30 days,
-whatever the stored value). At its first poll after starting, and then
-once a day, the server deletes the entries older than
+whatever the stored value). The daily `prune_audit` housekeeping job (once per cluster)
+deletes the entries older than
 `audit_retention_days` plus an hour (a margin for clock skew between the
 server and the database); nothing else deletes them. Lowering the setting
 takes effect at the next daily pass; raising it keeps the entries not yet
@@ -2189,7 +2328,9 @@ token derived from it, stored hashed too.
 - **What a session reaches.** An admin user's session is an admin that
   reaches every catalog, as an every-catalog admin key is. A member's
   session reaches exactly its ceiling, at the ceiling's levels. The admin
-  flag and the ceiling are read from the key cache on every request.
+  flag, teams and entitlements are read from the user cache on every
+  request, and the ceiling on a catalog is resolved from them and the
+  catalog's directory row (owner team, member access) at the check.
 - **No changesets.** A session never owns a changeset, so MCP writes still
   need a key or a grant. An admin user's session may still publish or
   discard any key's changeset from the Changesets page, recorded as that
@@ -2325,7 +2466,7 @@ A request never sends mail itself. It queues a `SendMail` job in the
 server's own Postgres database (the `apalis` schema, section 4); a setup
 link and a "method added" notice are queued in the same transaction as the
 change they report. A worker in every `serve` process
-sends it, on a pool of its own (`mail.worker`); `user invite` and `mail test`
+sends it, on the workers' shared pool; `user invite` and `mail test`
 on the command line only queue. Two workers never send the same mail.
 
 - A provider error that may pass is retried: a network error, Postmark 401,
@@ -2513,8 +2654,8 @@ the table. A bad one is refused, naming the key: 422
 over REST, a non-zero exit on the command line, and an unknown key is clap's
 list of the keys. Each change records who made it (`cli:<os user>` for the
 command line, the admin's actor over REST and in the console), writes an
-[audit log](#audit-log) entry, and reaches every server within
-`poll_interval`. Setting the value already stored changes and records
+[audit log](#audit-log) entry, and reaches every server through
+the change feed (a lost message is bounded by `credential_ttl`). Setting the value already stored changes and records
 nothing. A stored value this server cannot read (from
 a newer version, or a hand edit) is logged at `warn` and the default used.
 Mail is rendered when it is queued, so a queued mail keeps the brand it was
@@ -2557,8 +2698,8 @@ A user's **ceiling** is what their self-issued keys and grants may reach:
 A self-issued key or grant reaches, on each catalog, the lower of its own
 level and the ceiling's; a catalog outside the ceiling is unreachable. Every
 change that can move a ceiling (team membership, a catalog's owner or member
-access, entitlements, the admin flag) reaches running servers within
-`poll_interval`, at once on the server that made it, so lowering a ceiling
+access, entitlements, the admin flag) reaches running servers through the change
+feed, at once on the server that made it, so lowering a ceiling
 lowers live keys and grants. An admin user's session is uncapped, but their
 self-issued keys and grants are capped like anyone's: the ceiling comes from
 teams and entitlements, never from the admin flag. Admin-issued keys and
@@ -2614,8 +2755,8 @@ Maintenance reports are separate database records, not canonical documents.
 There is no automatic canonical editing, merging, splitting, deletion,
 verification stamping or changeset publication. No scheduler, model service,
 inference, external fetching, embeddings, cross-catalog synthesis, new UI or
-report search indexing exists in this slice. The normal snapshot/key poll loop
-is not a maintenance scheduler. External URLs are lexical attributions only;
+report search indexing exists in this slice. The housekeeping jobs
+are not a maintenance scheduler. External URLs are lexical attributions only;
 the server never fetches them. Treat pinned source prose as untrusted evidence,
 not instructions.
 
@@ -2634,7 +2775,8 @@ okf-mcp key maintenance-report investigator --actor synthetic-investigator --ena
 
 Replace `REPORTER_ID` with the immutable ID printed on creation/listing.
 `key list` includes `maintenance_report true|false`. Changes reach a running
-server through the key cache within `poll_interval`. Read, Write and Admin keys
+server through the change feed (a lost message is bounded by
+`credential_ttl`). Read, Write and Admin keys
 all default to reporting disabled. Reporting plus Read permits claim, renew,
 submit and closing one's own runs; it grants no canonical write access. Plain
 Read permits pinned reads and all report get/list operations. Ordinary Write
@@ -3223,8 +3365,8 @@ key and acts only on the signed-in user's own rows. Every endpoint also takes a 
 
 | Method and path | Key | Does |
 |---|---|---|
-| `GET /api/v1/whoami` | any | The calling credential: `key_id`, `name`, `actor`, `access`, `maintenance_report`, `all_catalogs`, `catalogs` (the loaded catalogs it reaches, sorted), `default_catalog`, `kind` (`key`, `oauth` or `session`), `client_name` (a grant's client), `user` (the user it belongs to, `null` when unassigned), `teams` (that user's teams, sorted) and `user_admin` (whether that user is an admin user, `false` without one; the console offers Unlock only when it is true). A session's `key_id` is `session:<user>`, its `name` `null` and its `actor` the user's name. Never a key, token or hash |
-| `GET /api/v1/session` | console session | `{user, email, admin, csrf, ceiling, expires_at}`: the signed-in user's name, email and admin flag, the CSRF token writes must send as `X-OKF-CSRF`, the ceiling (`{catalog: "read"\|"write"}`) and when the session ends at the latest. 401 without a usable session (a dead cookie is cleared); a bearer credential gets 403 |
+| `GET /api/v1/whoami` | any | The calling credential: `key_id`, `name`, `actor`, `access`, `maintenance_report`, `all_catalogs`, `catalogs` (one page of the catalogs it reaches, sorted; see [Catalog listings are paginated](#catalog-listings-are-paginated)) with `next`, `levels` (its level on each catalog of the page, `{catalog: "read"\|"write"\|"admin"}`: for a console session the ceiling's level there, resolved per catalog), `default_catalog`, `kind` (`key`, `oauth` or `session`), `client_name` (a grant's client), `user` (the user it belongs to, `null` when unassigned), `teams` (that user's teams, sorted) and `user_admin` (whether that user is an admin user, `false` without one; the console offers Unlock only when it is true). A session's `key_id` is `session:<user>`, its `name` `null` and its `actor` the user's name. Never a key, token or hash |
+| `GET /api/v1/session` | console session | `{user, email, admin, csrf, expires_at}`: the signed-in user's name, email and admin flag, the CSRF token writes must send as `X-OKF-CSRF`, and when the session ends at the latest. It holds no ceiling (issue #736): the session's level on each catalog is in `GET /api/v1/whoami`'s `levels`, and `GET /api/v1/me/ceiling` pages the ceiling. 401 without a usable session (a dead cookie is cleared); a bearer credential gets 403 |
 | `DELETE /api/v1/session` | console session | Signs out: deletes the session and clears the cookie; 204. Needs `X-OKF-CSRF` (403 without); a bearer credential gets 403 |
 
 ```sh
@@ -3247,7 +3389,8 @@ take a key's immutable id, never its name.
 The secret is in the `POST /api/v1/keys` response only: it is not stored and
 cannot be shown again, and no other response holds a secret or a hash. A
 revoke, grant, ungrant or reporting change takes effect on the key's next
-request (the server reloads its keys at once). Key changes made here record
+request on the replica that took the change, and on the others when the
+change message reaches them (a lost message is bounded by `credential_ttl`). Key changes made here record
 no audit actor, as with the CLI.
 
 Every key belongs to a user ([Users and teams](#users-and-teams)). New key
@@ -3360,12 +3503,13 @@ does. Limits are in [Signing in and self-service](#signing-in-and-self-service).
 
 | Method and path | Key | Does |
 |---|---|---|
-| `GET /api/v1/me` | console session, or a key that belongs to a user | `{user, display_name, email, admin, has_password, teams, owned_teams, ceiling, session, password_sign_in, limits}`: `owned_teams` are the teams the user owns, sorted, its personal team included (whose audit log its console session can read); `ceiling` is `[{catalog, access}]`, `session` says whether a console session asked, and `limits` is `{max_keys_per_user, max_key_lifetime_secs}` (`null` for no lifetime limit). 404 for a key without a user |
-| `GET /api/v1/me/keys` | console session | `{keys}`: the user's keys, revoked and expired ones included, as `GET /api/v1/keys` shows them (with `catalog_access`, `expires_at`, `self_issued`) |
+| `GET /api/v1/me` | console session, or a key that belongs to a user | `{user, display_name, email, admin, has_password, teams, owned_teams, ceiling_access, session, password_sign_in, limits}`: `owned_teams` are the teams the user owns, sorted, its personal team included (whose audit log its console session can read); `ceiling_access` is the ceiling's highest level (`read` or `write`, `null` when it reaches no catalog; the ceiling itself is paged by `GET /api/v1/me/ceiling`), `session` says whether a console session asked, and `limits` is `{max_keys_per_user, max_key_lifetime_secs}` (`null` for no lifetime limit). 404 for a key without a user |
+| `GET /api/v1/me/ceiling` | console session, or a key that belongs to a user | `?prefix=&after=&limit=`: one page of the user's ceiling, `{ceiling: [{catalog, access}], next}`, by catalog name in byte order; `prefix` (trimmed, lowercased) keeps the names that start with it, and one no name can start with finds nothing; `next` is present when more follow (send it back as `after`); `limit` is 100 by default, at most 1000. Each page is one bounded read: no request reads the whole ceiling. 400 for a malformed `after`, 404 for a key without a user |
+| `GET /api/v1/me/keys` | console session | `{keys, ceiling}`: the user's keys, revoked and expired ones included, as `GET /api/v1/keys` shows them (with `catalog_access`, `expires_at`, `self_issued`), and the ceiling on the catalogs its live self-issued keys name (`{catalog: "read"\|"write"}`; a catalog left out is outside it) |
 | `POST /api/v1/me/keys` | console session | Body `{name, catalogs: [{catalog, access}], default_catalog, actor, expires_at}` (`actor` defaults to `name`; `expires_at` RFC 3339, and absent means the lifetime limit, or none). Answers `{key, secret}`, the secret once. 400 for no catalogs, a repeated catalog, an unknown level, or a malformed or past expiry; 409 for a bad or taken name or a default that is not one of `catalogs`; 422 above the ceiling (`admin` included), past the key limit or the lifetime limit (`limit` is `ceiling`, `max_keys_per_user` or `max_key_lifetime`), or for an unknown field such as `all`, `user` or `maintenance_report` |
 | `PATCH /api/v1/me/keys/{id}` | console session | Body `{name}`. Renames a live key; answers its view. 409 for a bad or taken name or a revoked key |
 | `DELETE /api/v1/me/keys/{id}` | console session | Revokes it (the row stays, revoked); answers its view. 409 if already revoked |
-| `GET /api/v1/me/grants` | console session | `{grants}`: the user's OAuth grants, revoked ones included, as key views (`client_name`, `catalog_access`, `self_issued`, `revoked_at`, ...) |
+| `GET /api/v1/me/grants` | console session | `{grants, ceiling}`: the user's OAuth grants, revoked ones included, as key views (`client_name`, `catalog_access`, `self_issued`, `revoked_at`, ...), and the ceiling on the catalogs its live self-issued grants name, as for `/me/keys` |
 | `DELETE /api/v1/me/grants/{id}` | console session | Revokes the grant and every token it holds; its client is refused from its next request. Answers its view; 409 if already revoked |
 | `PUT /api/v1/me/password` | console session | Body `{current_password, new_password, keep_sessions}` (`current_password` required while the user has a password). 204. 403 for a wrong current password, a locked account or a password changed meanwhile (never 401, which the console would read as signed out); 401 once this session has ended; 422 for the policy (`limit: "password"`). Signs the other sessions out unless `keep_sessions`, and queues the notice, in the same transaction |
 | `GET /api/v1/me/passkeys` | console session | `{passkeys}`, oldest first: `id` (unpadded base64url), `name`, `created_at`, `last_used_at` |
@@ -3583,7 +3727,7 @@ whole body and scrolls to that heading.
 | `GET /api/v1/catalogs/{catalog}/revisions/{n}/{path}` | read | `text` at revision `n` (null for a deletion or non-text bytes) and a unified `diff` from revision `n-1` |
 | `GET /api/v1/catalogs/{catalog}/documents/{path}` | read | `read_document` (any `index.md` or `log.md`, the root `AGENTS.md`) plus `body_html` |
 | `GET /api/v1/catalogs/{catalog}/recent-changes?limit=&after=` | read | The catalog's published revisions, newest first: `{catalog, catalog_label, changes, next_after}`, each change `{path, revision, op, actor, actor_label, message, at}`, content left out. Revisions sharing a time come by path, then revision, both descending. `limit` 1..=200 (default 50; outside is 409); `after` is the previous page's `next_after` (an unknown or malformed one is 404); `next_after` is `null` on the last page |
-| `GET /api/v1/search?q=&catalogs=&limit=` | read | The `search` tool. `catalogs` is comma-separated and defaults to every catalog the key reaches; a named catalog it does not reach is a 404 |
+| `GET /api/v1/search?q=&catalogs=&limit=` | read | The `search` tool. `catalogs` is comma-separated and defaults to every catalog the key reaches, if it reaches at most `search_fanout_max` (25); past that, leaving `catalogs` out is a 400 (`InvalidPath`, "name the catalogs to search (at most 25 are searched by default)"). A named catalog it does not reach is a 404 |
 
 A catalog the key does not reach, or that does not exist, is 404 on all
 eight.
@@ -3601,10 +3745,11 @@ curl -s -H "Authorization: Bearer $OKF_MCP_KEY" \
 
 | Method and path | Key | Does |
 |---|---|---|
-| `GET /api/v1/catalogs` | any | The catalogs the key reaches, by name: `name`, `display_name`, `label` (the display name, else the description, else "Untitled catalog"), `description`, `owner_team` (`null` when unassigned), `owner_team_label`, `files`, `concepts`, `generation` (of the loaded snapshot, what `expect_generation` compares against), `last_change` (`null` when empty), `suspended` (`{team, notice}` while its owner team is suspended, otherwise `null`: a suspended catalog is listed, never hidden; see [Suspending a team](#suspending-a-team)) and `maintenance` (`on` or `off`) |
+| `GET /api/v1/catalogs?after=&limit=` | any | One page of the catalogs the key reaches, by name (see [Catalog listings are paginated](#catalog-listings-are-paginated)), as `{catalogs, next}`, each catalog with `name`, `display_name`, `label` (the display name, else the description, else "Untitled catalog"), `description`, `owner_team` (`null` when unassigned), `owner_team_label`, `files`, `concepts`, `generation` (of the loaded snapshot, what `expect_generation` compares against), `last_change` (`null` when empty), `suspended` (`{team, notice}` while its owner team is suspended, otherwise `null`: a suspended catalog is listed, never hidden; see [Suspending a team](#suspending-a-team)) and `maintenance` (`on` or `off`) |
 | `POST /api/v1/catalogs` | admin, every catalog | `{name, display_name, description, owner}` (`display_name` and `description` optional, `display_name` checked as for users; `owner` required, a team's name). 201 with the new catalog's summary; 403 for a key granted named catalogs, since it would not reach the new one; 404 for an unknown owner; 409 for an invalid or taken name; 422 without `owner` or for a refused `display_name` |
 | `PATCH /api/v1/catalogs/{catalog}` | admin on the catalog; an owner of its owner team signed in to the console; a provisioner | `{display_name?, description?}`, at least one (`deny_unknown_fields`). Answers `{name, previous, description, previous_display_name, display_name, label}`. 422 for a refused `display_name`. The CLI is `catalog update` |
-| `GET /api/v1/labels` | any credential; not a provisioner | `{users, teams, catalogs}`, each a map from id to label. An admin that reaches every catalog gets every one; anyone else gets its own user, its teams, the catalogs it reaches and their owner teams. The console reads it to show labels where an answer names something by id (see [Display names and labels](#display-names-and-labels)) |
+| `GET /api/v1/labels?after=&limit=` | any credential; not a provisioner | `{users, teams, catalogs, next}`, each of the first three a map from id to label. `catalogs` is one page of the catalogs the caller reaches (paginated as `GET /api/v1/catalogs`; labels shared within a page are told apart). Every caller, an admin that reaches every catalog included, gets its own user, its teams and the owner teams of the catalogs on its page. The console reads it to show labels where an answer names something by id (see [Display names and labels](#display-names-and-labels)) |
+| `GET /api/v1/labels/named?users=&teams=` | any credential; not a provisioner | `{users, teams}`, maps from id to label for the comma-separated ids named, at most 100 of each (more, or an unknown parameter, is 400). An admin key or session (which may list every user and team with their labels, `GET /api/v1/users` and `/teams`) gets every one that exists; anyone else only its own user and its own teams. An id that does not exist, or that the caller may not see, is absent. The console reads the labels of the users and teams a view shows with it |
 | `PUT /api/v1/catalogs/{catalog}/owner` | admin, every catalog | `{team}`. Makes the team the owner; answers `{name, previous, owner_team}` (`previous` is `null` for a legacy catalog). 404 for an unknown catalog or team, 422 without `team`. Ownership grants no access |
 | `GET /api/v1/catalogs/{catalog}/member-access` | admin | `{name, member_access}` (`none`, `read` or `write`): what members of the owner team reach through their own keys and grants |
 | `PUT /api/v1/catalogs/{catalog}/member-access` | admin, every catalog | Body `{access: "none"\|"read"\|"write"}`. Sets it, and every member's own keys and grants are capped again at once; answers `{name, previous, member_access}`. 400 for another value, 404 for an unknown catalog, 422 without `access` |
@@ -3613,12 +3758,31 @@ curl -s -H "Authorization: Bearer $OKF_MCP_KEY" \
 | `GET /api/v1/catalogs/{catalog}/export` | read | The same handler and 120 s timeout as `/catalogs/{name}/export` |
 | `POST /api/v1/catalogs/{catalog}/import[?replace=true&only_machinery=true&expect_generation=N]` | write | The same handler, body cap and upload deadline as `/catalogs/{name}/import` |
 
+#### Catalog listings are paginated
+
+`GET /api/v1/catalogs`, `GET /api/v1/whoami` (its `catalogs`), `GET
+/api/v1/labels` (its `catalogs`) and the MCP `list_catalogs` tool answer one
+page at a time, by name:
+
+- `limit` is the page size: 100 when absent or 0, at most 1000 (a larger
+  one is cut to 1000). `list_catalogs` always serves 100.
+- `next` is set while more catalogs follow and absent on the last page.
+  Send it back as `after` (as it came; it is opaque) for the next page.
+- A malformed `after` is a 400 (`InvalidPath`, naming `after`). A cursor only
+  moves the start of the list: it never shows a catalog the key does not
+  reach, whatever it names.
+- A catalog this replica has not loaded yet is left out of its page, so a
+  page can hold fewer than `limit`; keep following `next`.
+
+The console follows `next`: the catalog switcher, the labels and the
+pickers read every page, and the Catalogs page shows Load more.
+
 A catalog the key does not reach, or that does not exist, is 404 on every
 route but the list, the create, the owner change, the member-access
 change and the maintenance switch (which reach every catalog).
 
-- Catalog changes take effect at once: the handler polls after each one, so
-  the next request (and the console's catalog switcher) sees it.
+- Catalog changes take effect at once: the handler applies the change's own
+  messages before answering, so the next request (and the console's catalog switcher) sees it.
 - Catalog rows record no actor, as with `okf-mcp catalog`; the server's log
   line for each change names the key id and its actor.
 - `only_machinery=true` is `--only-machinery`: only the archive's machinery
@@ -3759,8 +3923,11 @@ A person connecting a client signs in on the consent page with their
 account: `/oauth/authorize` sends them to `/signin` first, after checking the
 client and its redirect URI. Under **Advanced Options** they tick catalogs,
 choose `read` or `write` for each within their ceiling, pick a default and
-approve. With several catalogs to offer, Advanced Options starts open and
-nothing is preselected. With exactly one it starts closed, with that catalog
+approve. The page offers their ceiling 50 catalogs at a time: **Find** shows
+the catalogs whose name starts with what they type, and **Next catalogs** the
+50 after those shown; both keep what is ticked (at most 50 catalogs), at the
+ceiling's level now. With several catalogs to offer, Advanced Options starts open and
+nothing is preselected. With exactly one catalog in their whole ceiling it starts closed, with that catalog
 ticked, at `write` if their ceiling allows it (else `read`), and as the
 default; the page says so above the form, so approving as shown grants
 exactly that. Opening Advanced Options changes it. The grant is
@@ -3910,7 +4077,7 @@ the console's API keys page and My grants as Last active. `-` means no token
 is on record: the grant was never used, or its tokens expired more than a
 week ago and were pruned.
 
-Once an hour the poll loop revokes every grant whose last activity (or, with
+Once an hour the `prune_oauth` housekeeping job revokes every grant whose last activity (or, with
 no token on record, its creation) is older than
 `oauth.idle_grant_revoke_after` (30 days by default) and that holds no live
 token, unrevoked and unexpired. Such a grant can never be used again (only a
@@ -3955,8 +4122,10 @@ its id, with `okf-mcp oauth grant revoke` or the `/api/v1/keys/{id}` routes
 
 **Revoking.**
 
-- **A connection**: revoke its grant. Made with the CLI, the revoke takes
-  effect within `poll_interval`; made in the console, at once. The client
+- **A connection**: revoke its grant. Made with the CLI, the revoke reaches
+  every replica through the change feed within a fraction of a second (a
+  lost message is bounded by `credential_ttl`); made in the console, at once
+  on the replica that took the request. The client
   then gets 401 and must be connected again with a new code.
 - **A code** that was never redeemed: `okf-mcp oauth code revoke`, or its
   drawer in the console. It takes effect at once (codes are read from the
@@ -3971,8 +4140,8 @@ its id, with `okf-mcp oauth grant revoke` or the `/api/v1/keys/{id}` routes
   disconnects a client.
 
 Unused registered clients are deleted 24 hours after registration, and tokens
-and unredeemed codes 7 days after they expire, by an hourly pass of the
-server's poll loop.
+and unredeemed codes 7 days after they expire, by the hourly `prune_oauth`
+housekeeping job.
 
 ### What an operator sees in the console
 
@@ -4084,12 +4253,14 @@ fails: [Redis](#redis)) and the rest 400.
 `GET /healthz` needs no key:
 
 ```json
-{"database": "ok", "catalogs": 2, "clock": {"ok": true, "checked_at": "2026-11-03T12:00:00Z", "offset_ms": 3, "stratum": 2}, "redis": "ok"}
+{"database": "ok", "cached_catalogs": 2, "clock": {"ok": true, "checked_at": "2026-11-03T12:00:00Z", "offset_ms": 3, "stratum": 2}, "redis": "ok"}
 ```
 
 - **Status:** 200 when the database answers `SELECT 1` within 2 seconds;
   otherwise 503 with `"database": "unreachable"`. Nothing else changes it.
-- **`catalogs`:** how many catalogs are loaded (a count, never names).
+- **`cached_catalogs`:** how many catalogs this replica holds in its catalog
+  cache now (a count, never names). Catalogs load on first use, so it starts
+  at 0 and moves with traffic; it is not the number of catalogs that exist.
 - **`redis`:** `"ok"` when Redis answers `PING` within 2 seconds, `"unavailable"`
   when it fails or is late, and `null` without `[redis]`. **It never changes
   the status code.** A Redis outage would otherwise mark every replica unready
@@ -4132,7 +4303,7 @@ take the server out of service. Alert on the `error` log line, not on
 2. Change the image tag in the Deployment (in your GitOps repository, if you
    use one).
 3. The Deployment recreates the pod: the old one stops, the new one runs any
-   new migrations, loads the catalogs and becomes ready. With `[redis]` and
+   new migrations and becomes ready (catalogs load on first use). With `[redis]` and
    `RollingUpdate` (section 5), the new pod starts beside the old ones and
    each pod is replaced once the new one is ready.
 
@@ -4211,6 +4382,95 @@ take the server out of service. Alert on the `error` log line, not on
   `user U` cell, so a script that reads the user by position (`cut -f`)
   takes it from field 10, not 9. `user list` gains `--email`, and
   `GET /api/v1/catalogs` a `maintenance` field.
+
+- **Bounded memory (milestone 18; 0.23.0)** adds migrations
+  `0023_audit_backfill.sql`, `0024_cluster_stats.sql`,
+  `0025_catalogs_member_reach.sql`, `0026_catalogs_member_write.sql` and
+  `0027_catalogs_member_reach_bytes.sql`, and an older
+  binary refuses the migrated database. The migrations run before the new
+  binary serves. Old and new replicas can run together
+  during a rolling deploy: a milestone 18 server bridges both ways (it still
+  bumps `admin_generation` and, with `[redis]`, publishes `notified` on the
+  `admin-generation` channel, and it treats a milestone 16 announcement as
+  "mark the caches stale"). The bridge and the deprecated settings go in the
+  release after this one. What changes for operators:
+  - **Three indexes are built concurrently.** `0025`, `0026` and `0027` add
+    partial indexes on `catalogs` (a console session's catalogs, listed a
+    page at a time per owner team; its owner teams' writable catalogs; and
+    the same catalogs by name in byte order, which `GET /api/v1/me/ceiling`
+    and the consent page page and find by a name prefix) with
+    `CREATE INDEX CONCURRENTLY`, so the replicas still serving keep writing
+    catalogs while they build; on a large database the build takes a while
+    and waits for transactions already open on `catalogs`. If a build fails
+    part-way (a lost connection, a cancelled pod), Postgres leaves the index
+    INVALID and the migration unrecorded: the next start drops the invalid
+    index and builds it again, under a lock that keeps two starting replicas
+    from doing it at once. Check with
+    `SELECT indexrelid::regclass, indisvalid FROM pg_index WHERE indexrelid::regclass::text LIKE 'catalogs_member_%'`.
+  - **Settings added:** `catalog_cache_bytes` (`"1GiB"`),
+    `catalog_directory_entries` (100000), `catalog_ttl` (`"10s"`),
+    `credential_cache_entries` (100000), `user_cache_entries` (100000),
+    `credential_ttl` (`"10s"`), `overlay_cache_bytes` (`"256MiB"`),
+    `search_fanout_max` (25) and `worker_shutdown_grace` (`"30s"`). Size the
+    pod's memory limit above `catalog_cache_bytes` plus
+    `overlay_cache_bytes`, and the database's `max_connections` for
+    `N x (database_max_connections + 4)` ([Postgres](#4-postgres)).
+  - **Settings deprecated (still parsed; `serve` logs a warning):**
+    `poll_interval` (nothing polls any more), `overlay_cache_size` (use
+    `overlay_cache_bytes`) and `mail.worker` (every replica runs the worker).
+  - **Behaviour:** catalogs load on first use, not at start-up; changes
+    reach every replica through Postgres `NOTIFY` with or without Redis;
+    every replica runs the mail and housekeeping workers (the pruning runs
+    once per cluster); `/healthz` reports `cached_catalogs` instead of
+    `catalogs`.
+  - **Response shapes:** `GET /api/v1/catalogs`, `/whoami`, `/labels` and
+    MCP `list_catalogs` return one page (`next` is present when more follow;
+    send it back as `after`), and `GET /api/v1/search` answers 400 when no
+    catalogs are named and the key reaches more than `search_fanout_max`.
+    `GET /whoami` lists every reachable name without loading any catalog;
+    `GET /catalogs` and `list_catalogs` leave out a catalog whose data does
+    not build.
+  - **No answer holds a whole ceiling (issue #736).** A user's ceiling grows
+    with the catalogs their teams own, so it is paged now:
+    - `GET /api/v1/session` no longer has `ceiling`. A console session's
+      level on a catalog is in `GET /api/v1/whoami`'s new `levels`
+      (`{catalog: "read"|"write"|"admin"}` for the catalogs on that page).
+    - `GET /api/v1/me` no longer has `ceiling` (it was `[{catalog,
+      access}]`); `ceiling_access` (`"read"`, `"write"`, or `null` for an
+      empty ceiling) names its highest level. The new `GET
+      /api/v1/me/ceiling?prefix=&after=&limit=` pages it: `{ceiling:
+      [{catalog, access}], next}`, by name in byte order, `prefix` for the
+      names starting with it.
+    - `GET /api/v1/me/keys` and `GET /api/v1/me/grants` gain `ceiling`: the
+      ceiling on the catalogs their live self-issued credentials name, for
+      cap notes.
+    - The OAuth consent page offers 50 catalogs at a time, with Find (by
+      the start of a catalog's name) and Next catalogs, which keep what is
+      ticked (at most 50 ticked catalogs carry over).
+
+    What clients must change: a script that read `ceiling` from `/session`
+    or `/me` reads `GET /me/ceiling` page by page (follow `next` as
+    `after`), or `whoami`'s `levels` for the catalogs it lists. The console
+    shipped with the server is already changed.
+  - **Labels are read for what is shown (issue #749).** `GET
+    /api/v1/labels` no longer gives an admin that reaches every catalog
+    every user and team: like anyone else, it gets its own user, its teams
+    and the owner teams of the catalogs on its page. The labels of other
+    users and teams come from the new `GET
+    /api/v1/labels/named?users=&teams=` (comma-separated ids, at most 100
+    of each; `{users, teams}`), which answers any admin for any user or
+    team (as `GET /users` and `GET /teams` already did) and anyone else for
+    its own user and teams only. The
+    views that list users and teams (`GET /users`, `GET /teams`) already
+    carry each row's `label`. What clients must change: a script that
+    looked up an arbitrary user's or team's label in `/labels` asks
+    `/labels/named` for it, or reads the `label` of the user or team view.
+    The console shipped with the server is already changed.
+  - **Metrics removed:** `okf_poll_duration_seconds`,
+    `okf_catalog_refreshes_total`, `okf_catalog_concepts` and
+    `okf_catalog_generation` (and the `okf.poll` span). Added: the
+    `okf_cache_*`, `okf_invalidations_*` and `okf_housekeeping_*` families. The Grafana example
+    follows.
 
 ### Preparing and shipping a release
 
@@ -4506,6 +4766,6 @@ curl -sf -H "Authorization: Bearer $OKF_MCP_KEY" -o notes.tar.gz \
 | The consent page says the redirect URI is not one the client registered | The client sent a `redirect_uri` that is not, character for character, one of those it declared. Fix the client's registration or metadata document |
 | The consent page refuses a sign-in code | The code is mistyped, expired, already redeemed or revoked (the page does not say which, on purpose). `okf-mcp oauth code list` shows its state; mint a new one |
 | The consent page says "This sign-in request has expired or is not valid." or "Too many wrong sign-in codes." | The sign-in took longer than 10 minutes, the server restarted, or a code was refused five times. Start the connection again in the client |
-| An OAuth client was connected but now gets 401 and asks to sign in | Its grant was revoked (by an operator, or by the poll loop once idle: the audit actor is then `system:idle-grant-revocation`), it was unused for longer than `oauth.refresh_token_ttl`, the client revoked its refresh token, or a used refresh token was presented again (a sign of a copied token), which ends the connection's tokens. Mint a new code and reconnect |
+| An OAuth client was connected but now gets 401 and asks to sign in | Its grant was revoked (by an operator, or by the housekeeping job once idle: the audit actor is then `system:idle-grant-revocation`), it was unused for longer than `oauth.refresh_token_ttl`, the client revoked its refresh token, or a used refresh token was presented again (a sign of a copied token), which ends the connection's tokens. Mint a new code and reconnect |
 | Approve shows "Returning to your client" but the client never connects | The browser did not follow the refresh. Click Continue on the page; if that also fails, the client is not listening on its redirect URI (a native client's loopback port closed) |
 | `/oauth/register` or `/oauth/token` answers 429 `slow_down` | The global rate limit, or 500 registered clients without a grant (each is deleted 24 hours after registration). Wait and retry; look for a client registering in a loop |

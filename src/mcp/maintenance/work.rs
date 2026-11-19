@@ -114,8 +114,8 @@ pub(crate) async fn maintenance_claim(
     ctx: &ToolContext,
     params: MaintenanceClaimParams,
 ) -> Result<MaintenanceResult<ClaimResult>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
-    ctx.principal().require_maintenance_report(state.name())?;
+    let state = ctx.one(Some(&params.catalog)).await?;
+    ctx.require_maintenance_report(&state).await?;
     let mut result = runs::claim(
         ctx.app().pool(),
         state.id(),
@@ -137,8 +137,8 @@ pub(crate) async fn maintenance_renew(
     ctx: &ToolContext,
     params: MaintenanceRenewParams,
 ) -> Result<MaintenanceResult<Lease>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
-    ctx.principal().require_maintenance_report(state.name())?;
+    let state = ctx.one(Some(&params.catalog)).await?;
+    ctx.require_maintenance_report(&state).await?;
     let mut result = runs::renew(
         ctx.app().pool(),
         state.id(),
@@ -159,10 +159,9 @@ pub(crate) async fn maintenance_read_revision(
     ctx: &ToolContext,
     params: MaintenanceReadRevisionParams,
 ) -> Result<MaintenanceResult<evidence::PinnedConcept>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
+    let state = ctx.one(Some(&params.catalog)).await?;
     // Refused before `admit` below, which ignores refusals.
-    ctx.principal()
-        .require_contents(Access::Read, state.name(), ctx.app().clock().now())?;
+    ctx.require_contents(Access::Read, &state).await?;
     let pin = RevisionPin {
         path: params.path,
         revision: params.revision,
@@ -172,7 +171,7 @@ pub(crate) async fn maintenance_read_revision(
     // It answers a document's text at a revision: a read of the contents,
     // admitted once the request is valid. The other tools here claim,
     // renew, submit or close work and read none, so they admit nothing.
-    ctx.admit(&state, AccessKind::Read)?;
+    ctx.admit(&state, AccessKind::Read).await?;
     let mut result = evidence::read(ctx.app().pool(), state.id(), &pin).await?;
     super::pin_path(&mut result.pin);
     Ok(MaintenanceResult::new(state.name(), result))
@@ -183,8 +182,8 @@ pub(crate) async fn maintenance_submit(
     ctx: &ToolContext,
     params: MaintenanceSubmitParams,
 ) -> Result<MaintenanceResult<Receipt>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
-    ctx.principal().require_maintenance_report(state.name())?;
+    let state = ctx.one(Some(&params.catalog)).await?;
+    ctx.require_maintenance_report(&state).await?;
     let result = reports::submit(
         ctx.app().pool(),
         state.id(),
@@ -204,19 +203,16 @@ pub(crate) async fn maintenance_close(
     ctx: &ToolContext,
     params: MaintenanceCloseParams,
 ) -> Result<MaintenanceResult<runs::RunSummary>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
+    let state = ctx.one(Some(&params.catalog)).await?;
     // Ordinary Write is an operator override, never a client-supplied option.
     // It acts on the catalog as a write, so it needs the unlock a write
     // would (M14 Task 9b); without one, only the caller's own run closes.
-    // Both the name and the incarnation closed (`check_contents`), so a
-    // stale unlock does not make an operator of the replacement's runs.
-    let operator = ctx
-        .principal()
-        .require_contents(Access::Write, state.name(), ctx.app().clock().now())
-        .is_ok()
-        && ctx.check_contents(&state, Access::Write).is_ok();
+    // Checked against the row of this very incarnation
+    // (`ToolContext::require_contents`), so an unlock of a deleted catalog
+    // does not make an operator of the replacement's runs.
+    let operator = ctx.require_contents(Access::Write, &state).await.is_ok();
     if !operator {
-        ctx.principal().require_maintenance_report(state.name())?;
+        ctx.require_maintenance_report(&state).await?;
     }
     if params.run_id.trim().is_empty() {
         return Err(OkfError::Refused {
@@ -233,7 +229,7 @@ pub(crate) async fn maintenance_close(
     let owner = owner.ok_or_else(super::not_found)?;
     let own = owner == ctx.principal().key_id;
     if own {
-        ctx.principal().require_maintenance_report(state.name())?;
+        ctx.require_maintenance_report(&state).await?;
     } else if !operator {
         return Err(super::not_found());
     }
@@ -278,7 +274,7 @@ mod suspension_tests {
         fn outcome<T>(result: Result<T, OkfError>) -> String {
             result.map_or_else(|error| error.kind().to_string(), |_| "ok".to_string())
         }
-        let ctx = context(test, cached_principal(test, secret), None);
+        let ctx = context(test, cached_principal(test, secret).await, None);
         let catalog = catalog.to_string();
         let submission = Submission {
             outcome: WorkOutcome::Completed,

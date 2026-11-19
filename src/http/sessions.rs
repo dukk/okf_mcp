@@ -461,16 +461,16 @@ mod tests {
             )
             .await
             .expect("create a key");
-            test.app.poll().await.expect("poll the key in");
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
                 .await
                 .expect("bind");
             let endpoint = format!("http://{}/mcp", listener.local_addr().expect("address"));
             let shutdown = tokio_util::sync::CancellationToken::new();
-            let served = tokio::spawn(crate::http::serve(
+            let served = tokio::spawn(crate::http::serve_with(
                 Arc::clone(&test.app),
                 listener,
                 shutdown.clone(),
+                crate::http::ServeOptions::NO_WORKER,
             ));
             let store = test.app.sessions().store().expect("Redis bindings");
             store.fail_next_store();

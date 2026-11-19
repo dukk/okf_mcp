@@ -12,19 +12,19 @@ use axum::routing::{get, patch, put};
 use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 
-use super::{require_every_catalog, settle};
+use super::{reachable_page, require_every_catalog, PageQuery};
 use crate::app::App;
 use crate::auth::{CredentialKind, Principal};
 use crate::catalog::CatalogState;
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
 use crate::http::{archives, AppError};
-use crate::labels::directory::Labels;
+use crate::labels::directory::{Labels, Wanted};
 use crate::labels::{catalog_label, DisplayName};
 use crate::mcp::catalogs::SuspensionInfo;
 use crate::okf::ops::STARTER_FILE_COUNT;
 use crate::store::audit::AuditActor;
-use crate::store::catalogs::{self as catalog_rows, MaintenanceChange, Switch};
+use crate::store::catalogs::{self as catalog_rows, CatalogRow, MaintenanceChange, Switch};
 use crate::store::ceiling::{self, MemberAccess};
 use crate::store::keys::Access;
 use crate::telemetry::subscriber::split_event;
@@ -97,14 +97,15 @@ pub(crate) struct CatalogSummary {
 }
 
 impl CatalogSummary {
-    /// The summary of one loaded catalog, as `principal` sees it.
+    /// The summary of one listed catalog, as `principal` sees it.
     ///
     /// # Arguments
-    /// * `name` - its name.
-    /// * `state` - its state.
+    /// * `row` - its directory row: name, display name, description, owner.
+    /// * `state` - its loaded state, of the same incarnation as `row`: the
+    ///   file and concept counts, generation and last change.
     /// * `principal` - the caller, which must reach the catalog (its
     ///   suspension is shown only to those who do).
-    /// * `labels` - the key cache's directory, for the labels.
+    /// * `labels` - the label directory, for the owner team's label.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -112,34 +113,29 @@ impl CatalogSummary {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    fn of(name: &str, state: &CatalogState, principal: &Principal, labels: &Labels) -> Self {
+    fn of(row: &CatalogRow, state: &CatalogState, principal: &Principal, labels: &Labels) -> Self {
         // `current()` is an `Arc` of the loaded snapshot: one consistent
         // generation, file count and concept count.
         let loaded = state.current();
-        let description = state.description();
-        let display_name = labels.catalog_display_name(name).unwrap_or_default();
-        // `as_deref` borrows the `Arc<str>` inside as a `&str`.
-        let owner_team = state.owner_team().as_deref().map(str::to_string);
         Self {
-            name: name.to_string(),
-            // A catalog loaded since the directory was: its label comes from
-            // what the state knows.
-            label: labels
-                .catalog(name)
-                .map_or_else(|| catalog_label(display_name, &description), str::to_string),
-            display_name: display_name.to_string(),
-            description: description.to_string(),
-            owner_team_label: owner_team
+            name: row.name.clone(),
+            label: catalog_label(&row.display_name, &row.description),
+            display_name: row.display_name.clone(),
+            description: row.description.clone(),
+            owner_team_label: row
+                .owner_team
                 .as_deref()
                 .and_then(|team| labels.team(team))
                 .map(str::to_string),
-            owner_team,
+            owner_team: row.owner_team.clone(),
             files: loaded.files(),
             concepts: loaded.snapshot().concepts().count(),
             generation: loaded.generation(),
             last_change: loaded.last_change().map(format_timestamp),
-            suspended: principal.suspension(name).map(SuspensionInfo::from),
-            maintenance: Switch::from(!principal.gates.maintenance_off.contains(name)),
+            // Suspension and maintenance come from the catalog's row, as
+            // every admission decision does.
+            suspended: principal.suspension(row).map(SuspensionInfo::from),
+            maintenance: Switch::from(!row.maintenance_off),
         }
     }
 }
@@ -147,8 +143,11 @@ impl CatalogSummary {
 /// `GET /catalogs`' answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct CatalogListing {
-    /// The catalogs the key reaches, by name.
+    /// One page of the catalogs the key reaches, by name.
     pub catalogs: Vec<CatalogSummary>,
+    /// The `after` of the next page; absent on the last page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
 }
 
 /// `POST /catalogs`' body.
@@ -233,29 +232,46 @@ pub(crate) struct CatalogDeleted {
     pub name: String,
 }
 
-/// `GET /catalogs`: every loaded catalog the key reaches, any access level.
+/// `GET /catalogs?after=&limit=`: one page of the catalogs the key reaches,
+/// any access level (M18 spec Decision 7).
 ///
 /// # Returns
-/// The listing, by name (`Catalogs` is a `BTreeMap`, so it iterates sorted).
+/// The page, by name, with `next` while more follow. Each listed catalog's
+/// snapshot fields (files, concepts, last change) come from the catalog
+/// cache, so a page loads at most its own catalogs. A catalog whose stored
+/// data does not build (or deleted since the page was read) is left out of
+/// its page, as it was left out of the list.
+///
+/// # Errors
+/// 400 for a malformed `after`; 500 if the directory read or a load fails.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn list_catalogs(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
+    Query(query): Query<PageQuery>,
 ) -> Result<Json<CatalogListing>, AppError> {
-    // Held in a local so the map outlives the iteration that borrows it.
-    let loaded = app.catalogs();
-    let labels = app.keys().labels();
-    let catalogs = loaded
-        .iter()
-        .filter(|(name, _)| principal.reaches(name))
-        .map(|(name, state)| CatalogSummary::of(name, state, &principal, &labels))
-        .collect();
-    Ok(Json(CatalogListing { catalogs }))
+    let page = reachable_page(&app, &principal, &query).await?;
+    let mut wanted = Wanted::default();
+    for row in &page.items {
+        if let Some(team) = row.owner_team.as_deref() {
+            wanted.team(team);
+        }
+    }
+    let labels = app.labels().labels_for(&wanted).await?;
+    let mut catalogs = Vec::with_capacity(page.items.len());
+    for row in &page.items {
+        if let Some(state) = app.listed_state(row).await? {
+            catalogs.push(CatalogSummary::of(row, &state, &principal, &labels));
+        }
+    }
+    Ok(Json(CatalogListing {
+        catalogs,
+        next: page.next,
+    }))
 }
 
 /// `POST /catalogs`: creates a catalog holding only its starter files (a
-/// root `index.md` and a `log.md`), then polls so it is served at
-/// once. It needs an admin key that reaches every catalog: a key granted
+/// root `index.md` and a `log.md`); it is served at once. It needs an admin key that reaches every catalog: a key granted
 /// named catalogs would not reach the new one, and grants are made with the
 /// keys routes.
 ///
@@ -298,19 +314,24 @@ async fn create_catalog(
         { key = %principal.key_id, actor = %principal.actor, },
         "catalog created"
     );
-    settle(&app).await;
-    // The owner may be a suspended team. Creating bumps the admin generation,
-    // so the poll `settle` ran reloaded the cache's suspension map; if that
-    // poll failed, this reads null until the next one, as for every team write.
-    let suspended = app
-        .keys()
-        .suspensions()
-        .get(&row.name)
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
+    // The owner may be a suspended team: read the new row's access facts
+    // from the database (one query), not from the directory, which may
+    // still remember the name as absent until the create's message lands.
+    let suspended = catalog_rows::row_by_name(app.pool(), &row.name)
+        .await?
+        .and_then(|created| principal.suspension(&created))
         .map(SuspensionInfo::from);
     // Built from the row, not the loaded state: a new catalog holds only its
     // starter files (a root index.md and a log.md, no concepts), written
-    // when it was created, and the answer must not depend on the poll
-    // having loaded it.
+    // when it was created, and the answer must not depend on the catalog
+    // cache having loaded it.
+    let mut wanted = Wanted::default();
+    if let Some(team) = row.owner_team.as_deref() {
+        wanted.team(team);
+    }
+    let labels = app.labels().labels_for(&wanted).await?;
     let summary = CatalogSummary {
         name: row.name,
         label: catalog_label(&row.display_name, &row.description),
@@ -319,7 +340,7 @@ async fn create_catalog(
         owner_team_label: row
             .owner_team
             .as_deref()
-            .and_then(|team| app.keys().labels().team(team).map(str::to_string)),
+            .and_then(|team| labels.team(team).map(str::to_string)),
         owner_team: row.owner_team,
         files: STARTER_FILE_COUNT,
         concepts: 0,
@@ -341,31 +362,39 @@ async fn create_catalog(
 /// suspended. Anyone else goes on to the store, which refuses a non-owner.
 ///
 /// # Arguments
-/// * `app` - the application, for the team memberships the key cache holds.
+/// * `app` - the application, for the catalog's row and the team labels.
 /// * `principal` - the caller.
 /// * `catalog` - the catalog to edit.
 ///
 /// # Errors
-/// [`OkfError::Suspended`].
+/// [`OkfError::Suspended`]; [`OkfError::Database`] when the row's read fails.
 #[tracing::instrument(level = "debug", skip_all)]
-fn refuse_suspended_owner(app: &App, principal: &Principal, catalog: &str) -> Result<(), OkfError> {
-    let Some(suspended) = principal.suspension(catalog) else {
+async fn refuse_suspended_owner(
+    app: &App,
+    principal: &Principal,
+    catalog: &str,
+) -> Result<(), OkfError> {
+    // An unknown catalog is not suspended: the store refuses it.
+    let Some(row) = app.directory().resolve(catalog).await? else {
         return Ok(());
     };
-    let labels = app.keys().labels();
-    let in_team = principal
-        .user
-        .as_deref()
-        .is_some_and(|user| labels.teams_of(user).any(|team| team == suspended.team));
-    if in_team || principal.reaches(catalog) {
-        principal.check_not_suspended(catalog)
+    let Some(suspended) = principal.suspension(&row) else {
+        return Ok(());
+    };
+    let in_team = match principal.user.as_deref() {
+        Some(user) => app.labels().teams_of(user).await?.contains(&suspended.team),
+        None => false,
+    };
+    if in_team || principal.reaches_row(&row) {
+        principal.check_not_suspended(&row)
     } else {
         Ok(())
     }
 }
 
 /// `PATCH /catalogs/{catalog}`: replaces the display name, the description
-/// or both, then polls so the listing shows them at once.
+/// or both; the listing shows them at once (the write's own change
+/// messages are applied before the answer).
 ///
 /// Who may: a provisioner (it reaches no catalog content; this touches only
 /// the row), a key or session with `admin` on the catalog, or a console
@@ -402,14 +431,17 @@ async fn update_catalog(
     // lists every combination: a provisioner and an admin pass as they are;
     // a console session may still be an owner; any other credential gets
     // the admin refusal.
-    let owner = match (
-        principal.provisioner,
-        principal.require(Access::Admin, &catalog),
-        &principal.kind,
-    ) {
+    let admin = principal
+        .require_in(app.directory(), Access::Admin, &catalog)
+        .await;
+    let owner = match (principal.provisioner, admin, &principal.kind) {
         (true, _, _) | (false, Ok(()), _) => None,
+        // A failed read of the catalog's row is not a refusal.
+        (false, Err(error @ (OkfError::Database { .. } | OkfError::Busy { .. })), _) => {
+            return Err(error.into())
+        }
         (false, Err(_), CredentialKind::Session { user_id }) => {
-            refuse_suspended_owner(&app, &principal, &catalog)?;
+            refuse_suspended_owner(&app, &principal, &catalog).await?;
             Some(user_id.as_str())
         }
         (false, Err(refusal), CredentialKind::ApiKey | CredentialKind::OAuth { .. }) => {
@@ -430,7 +462,8 @@ async fn update_catalog(
         { key = %principal.key_id, actor = %principal.actor, },
         "catalog details changed"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     let description = change
         .description
         .unwrap_or_else(|| previous.description.clone());
@@ -448,8 +481,8 @@ async fn update_catalog(
     }))
 }
 
-/// `PUT /catalogs/{catalog}/owner`: makes `team` the catalog's owner, then
-/// polls so the listing shows it at once. Ownership grants no access, so it
+/// `PUT /catalogs/{catalog}/owner`: makes `team` the catalog's owner; the
+/// listing shows it at once. Ownership grants no access, so it
 /// needs an admin key that reaches every catalog, like the users and teams
 /// routes (plan Decision 3), not `admin` on the catalog.
 ///
@@ -479,7 +512,8 @@ async fn set_owner(
         { key = %principal.key_id, actor = %principal.actor, },
         "catalog owner changed"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(OwnerChanged {
         name: catalog,
         previous,
@@ -508,8 +542,8 @@ pub(crate) struct MaintenanceChanged {
 }
 
 /// `PUT /catalogs/{catalog}/maintenance`: lets the maintenance runner in, or
-/// keeps it out (spec Part 6), then polls so the key cache refuses or admits
-/// the runner at once. An admin that reaches every catalog, or an owner of
+/// keeps it out (spec Part 6); the catalog directory refuses or admits the
+/// runner at once. An admin that reaches every catalog, or an owner of
 /// the catalog's owner team signed in to the console: the one
 /// owner-managed control of this milestone. The store checks the owner
 /// under its locks.
@@ -549,7 +583,8 @@ async fn set_maintenance(
         { key = %principal.key_id, actor = %principal.actor, },
         "catalog maintenance set"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(MaintenanceChanged {
         name: catalog,
         previous,
@@ -597,7 +632,9 @@ async fn member_access(
     Extension(principal): Extension<Arc<Principal>>,
     Path(catalog): Path<String>,
 ) -> Result<Json<MemberAccessView>, AppError> {
-    principal.require(Access::Admin, &catalog)?;
+    principal
+        .require_in(app.directory(), Access::Admin, &catalog)
+        .await?;
     let access = ceiling::member_access(app.pool(), &catalog).await?;
     Ok(Json(MemberAccessView {
         name: catalog,
@@ -605,8 +642,8 @@ async fn member_access(
     }))
 }
 
-/// `PUT /catalogs/{catalog}/member-access`: sets it, then polls so every
-/// member's self-issued credentials are re-capped at once. The permission
+/// `PUT /catalogs/{catalog}/member-access`: sets it; every member's
+/// self-issued credentials are re-capped at once. The permission
 /// is `ceiling::may_set_member_access`, the one hook team owners will
 /// later share (spec "Admin surface").
 ///
@@ -639,7 +676,8 @@ async fn set_member_access(
         { key = %principal.key_id, actor = %principal.actor, },
         "member access set"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(MemberAccessChanged {
         name: catalog,
         previous: previous.as_str(),
@@ -648,8 +686,8 @@ async fn set_member_access(
 }
 
 /// `DELETE /catalogs/{catalog}[?force=true]`: deletes the catalog with its
-/// documents, history, changesets and grants (`admin` on the catalog), then
-/// polls so it is gone at once.
+/// documents, history, changesets and grants (`admin` on the catalog); it is
+/// gone at once.
 ///
 /// # Errors
 /// 404 for a catalog the key does not reach or that does not exist; 403
@@ -664,7 +702,9 @@ async fn delete_catalog(
     Query(query): Query<DeleteQuery>,
 ) -> Result<Json<CatalogDeleted>, AppError> {
     if !principal.provisioner {
-        principal.require(Access::Admin, &catalog)?;
+        principal
+            .require_in(app.directory(), Access::Admin, &catalog)
+            .await?;
     }
     catalog_rows::delete(app.pool(), &catalog, query.force, &actor, app.clock().now())
         .await
@@ -681,7 +721,8 @@ async fn delete_catalog(
         { key = %principal.key_id, actor = %principal.actor, },
         "catalog deleted"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(CatalogDeleted { name: catalog }))
 }
 
@@ -855,18 +896,21 @@ mod tests {
             )
             .await
             .parts();
-        crate::store::users::set_admin(
-            test.app.pool(),
-            "alice",
-            AdminChange {
-                on: true,
-                allow_last: false,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("make alice an admin");
+        crate::invalidate::testing::applied(&test.app, async {
+            crate::store::users::set_admin(
+                test.app.pool(),
+                "alice",
+                AdminChange {
+                    on: true,
+                    allow_last: false,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("make alice an admin");
+        })
+        .await;
         let mut admin = Browser::session_for(&test, "alice").await;
         let (write_admin, answer) = admin
             .send(
@@ -1149,11 +1193,16 @@ mod tests {
         assert_eq!(created["files"], 2);
         assert_eq!(created["concepts"], 0);
         assert!(created["last_change"].is_string(), "{created}");
-        let served = test.app.catalog("scratch").expect("loaded at once");
+        let served = test
+            .app
+            .catalog("scratch")
+            .await
+            .unwrap()
+            .expect("loaded at once");
         assert_eq!(served.current().files(), 2);
         assert!(served.current().snapshot().get("index.md").is_some());
         // Polled at once: loaded, and listed for a key that reaches it.
-        assert!(test.app.catalog("scratch").is_some());
+        assert!(test.app.catalog("scratch").await.unwrap().is_some());
         assert_eq!(names(&test, &root).await, ["main", "other", "scratch"]);
         assert_eq!(names(&test, &keys.read).await, ["main"]);
         assert_eq!(again, StatusCode::CONFLICT);
@@ -1223,7 +1272,7 @@ mod tests {
             None,
         )
         .await;
-        let still_there = test.app.catalog("main").is_some();
+        let still_there = test.app.catalog("main").await.unwrap().is_some();
         let (forced, deleted) = send(
             &test,
             "DELETE",
@@ -1244,8 +1293,61 @@ mod tests {
         assert!(still_there);
         assert_eq!(forced, StatusCode::OK);
         assert_eq!(deleted, json!({ "name": "main" }));
-        assert!(test.app.catalog("main").is_none());
+        // No listener runs here: the route applied its own write.
+        assert!(test.app.catalog("main").await.unwrap().is_none());
         assert!(names(&test, &keys.read).await.is_empty());
+    }
+
+    /// Read-your-writes on the replica that made a write: with no change
+    /// feed listener running (none does in a unit test), a REST write's own
+    /// invalidations reach this replica's directory before it answers, so
+    /// the very next read sees the cached row replaced.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_rest_admin_write_is_seen_by_the_next_read_on_this_replica() {
+        let test = app().await;
+        let keys = keys(&test).await;
+        // Cached before the write, as a catalog in use is.
+        let before = test.app.catalog_row("main").await.unwrap().expect("main");
+        assert_ne!(before.description, "Changed through the API.");
+
+        let (status, _) = send(
+            &test,
+            "PATCH",
+            "/api/v1/catalogs/main",
+            Some(&keys.admin),
+            Some(json!({ "description": "Changed through the API." })),
+        )
+        .await;
+        let after = test.app.catalog_row("main").await.unwrap().expect("main");
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(after.description, "Changed through the API.");
+    }
+
+    /// As above, for labels: a REST rename reaches this replica's label
+    /// cache before the route answers, so the next labels read shows it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_rest_rename_is_seen_by_the_next_labels_read_on_this_replica() {
+        let test = app().await;
+        let keys = keys(&test).await;
+        let mut wanted = crate::labels::directory::Wanted::default();
+        wanted.catalog("main");
+        // Cached before the write.
+        let before = test.app.labels().labels_for(&wanted).await.unwrap();
+        assert_ne!(before.catalog("main"), Some("Renamed Main"));
+
+        let (status, _) = send(
+            &test,
+            "PATCH",
+            "/api/v1/catalogs/main",
+            Some(&keys.admin),
+            Some(json!({ "display_name": "Renamed Main" })),
+        )
+        .await;
+        let after = test.app.labels().labels_for(&wanted).await.unwrap();
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(after.catalog("main"), Some("Renamed Main"));
     }
 
     #[tokio::test(flavor = "multi_thread")]

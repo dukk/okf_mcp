@@ -240,8 +240,9 @@ async fn approve_with_a_code(journey: Journey) {
     assert!(journey
         .server
         .app
-        .keys()
         .find_grant(&grants[0].id)
+        .await
+        .unwrap()
         .is_some());
 }
 
@@ -277,11 +278,8 @@ async fn a_person_signs_in_on_the_way_and_approves_from_their_ceiling() {
         .execute(pool)
         .await
         .expect("catalog display name");
-    sqlx::query("UPDATE server_state SET admin_generation = admin_generation + 1")
-        .execute(pool)
-        .await
-        .expect("bump");
-    journey.server.app.poll().await.expect("poll");
+    // Raw updates send no change message: catch up as a reconnect does.
+    journey.server.app.apply_reconnect().await;
     let authorize = journey.authorize(&[]);
     let landing = journey.landing.clone();
 
@@ -325,8 +323,9 @@ async fn a_person_signs_in_on_the_way_and_approves_from_their_ceiling() {
     let principal = journey
         .server
         .app
-        .keys()
         .find_grant(&grant.id)
+        .await
+        .unwrap()
         .expect("cached grant");
     assert_eq!(principal.level("main"), Some(Access::Write));
     assert_eq!(principal.level("other"), None);
@@ -439,4 +438,82 @@ async fn advanced_options_open_to_change_the_only_catalogs_defaults() {
         [("main".to_string(), Access::Read)].into_iter().collect()
     );
     assert_eq!(grant.default_catalog, None);
+}
+
+/// Issue #736: the signed-in page offers the ceiling a page at a time. A
+/// person ticks `main`, finds `other` by its name's start (Find, a plain
+/// form post), sees `main` still ticked at write, ticks `other` too, and
+/// approves one grant with both.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_person_finds_another_catalog_and_approves_both() {
+    let journey = Journey::start().await;
+    let pool = &journey.server.db.pool;
+    journey
+        .server
+        .user_with_password("alice", "alice@example.com", PASSWORD)
+        .await;
+    for (catalog, access) in [("main", Access::Write), ("other", Access::Read)] {
+        ceiling::entitle(
+            pool,
+            &NewEntitlement {
+                user: "alice",
+                catalog,
+                access,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("entitle");
+    }
+    let authorize = journey.authorize(&[]);
+    let landing = journey.landing.clone();
+
+    let ran = drive(journey.server.base.clone(), move |ui| {
+        ui.page
+            .goto(&authorize, GotoOptions::default())
+            .expect("open the authorize URL");
+        ui.wait_visible("#signin-form");
+        ui.fill("#signin-email", "alice@example.com");
+        ui.fill("#signin-password", PASSWORD);
+        ui.click("#signin-submit");
+        ui.wait_visible("#consent-find");
+        ui.click("#consent-catalog-main");
+        ui.select("#consent-level-main", "write");
+        ui.fill("#consent-find", "OT");
+        ui.click("#consent-find-go");
+        // The found page (its Find box holds the prefix, lowercased):
+        // `other`, and `main` carried over, still ticked.
+        ui.wait_visible("#consent-find[value=ot]");
+        assert_eq!(
+            ui.eval(
+                "() => [document.querySelector('#consent-find').value, \
+                 document.querySelector('#consent-catalog-main').checked, \
+                 document.querySelector('#consent-level-main').value, \
+                 document.querySelector('#consent-catalog-other').checked]",
+                serde_json::json!(null)
+            ),
+            serde_json::json!(["ot", true, "write", false])
+        );
+        ui.click("#consent-catalog-other");
+        ui.select("#consent-default", "other");
+        ui.click("#consent-approve");
+        assert_back_at_the_client(ui, &landing);
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let grants = journey.grants().await;
+    assert_eq!(grants.len(), 1);
+    assert_eq!(
+        grants[0].catalog_access,
+        [
+            ("main".to_string(), Access::Write),
+            ("other".to_string(), Access::Read),
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert_eq!(grants[0].default_catalog.as_deref(), Some("other"));
 }

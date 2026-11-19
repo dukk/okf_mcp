@@ -27,13 +27,14 @@ use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
+use crate::invalidate::{invalidate, Invalidation};
 use crate::labels::catalog_label;
 use crate::mail::queue;
 use crate::mail::templates::Template;
 use crate::store::audit::{
     self, AccessKind, Action, AuditActor, Entry, FixedPerson, People, RowLock, Target,
 };
-use crate::store::catalogs::{self, bump_admin_generation, is_valid_name};
+use crate::store::catalogs::{self, is_valid_name};
 
 /// `unlock_max_hours` with no override.
 pub const DEFAULT_MAX_HOURS: u32 = 4;
@@ -506,7 +507,7 @@ pub async fn create(
     if policy.notify_owners {
         notify_owners(&mut tx, catalog.id, new, expires_at, now).await?;
     }
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::user(&user_id)]).await?;
     // Read before the commit: nothing that can fail runs after it.
     let record = find_in(&mut tx, id).await?;
     tx.commit().await?;
@@ -628,16 +629,16 @@ pub async fn end(
     };
     audit::lock_people(&mut tx, actor, &people).await?;
     // `GREATEST`: a clock behind `created_at` still ends it, at its start.
-    let ended: Option<(i64, i64)> = sqlx::query_as(
+    let ended: Option<(i64, i64, Option<String>)> = sqlx::query_as(
         "UPDATE unlocks SET ended_at = GREATEST($2, created_at) \
          WHERE id = $1 AND ended_at IS NULL AND expires_at > $2 \
-         RETURNING catalog_id, person_id",
+         RETURNING catalog_id, person_id, user_id",
     )
     .bind(id)
     .bind(now)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((catalog_id, person_id)) = ended else {
+    let Some((catalog_id, person_id, user_id)) = ended else {
         let exists: bool =
             sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM unlocks WHERE id = $1)")
                 .bind(id)
@@ -666,7 +667,13 @@ pub async fn end(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    // The unlocked admin's reach; an unlock whose user was deleted
+    // (`ON DELETE SET NULL`) reaches nobody, so nothing is invalidated.
+    let invalidations: Vec<Invalidation> = user_id
+        .iter()
+        .map(|user_id| Invalidation::user(user_id))
+        .collect();
+    invalidate(&mut tx, &invalidations).await?;
     let record = find_in(&mut tx, id).await?;
     tx.commit().await?;
     Ok(record)

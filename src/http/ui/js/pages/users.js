@@ -16,8 +16,8 @@ import { guard, once } from '../core/pending.js';
 import { ago, when } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
 import { confirmDialog } from '../components/confirm.js';
-import { assignControl, namesOf, rowsOf, teamChoices } from '../components/picker.js';
-import { named, userLabel } from '../core/labels.js';
+import { assignControl, rowsOf, teamChoices, userChoices } from '../components/picker.js';
+import { named } from '../core/labels.js';
 import { accountSections, loadAccount } from '../components/user-account.js';
 import { canAdministerPeople, keyUserChanged, refreshIdentity, refreshUnassigned } from '../core/shell.js';
 
@@ -289,21 +289,22 @@ async function renderUnassigned(main) {
         let users;
         let teams;
         try {
-            [rows, users, teams] = await Promise.all([api.get('/unassigned'), namesOf('users'), rowsOf('teams')]);
+            [rows, users, teams] = await Promise.all([api.get('/unassigned'), rowsOf('users'), rowsOf('teams')]);
         } catch { return; }
         if (!main.isConnected) return;
         const teamPick = teamChoices(teams);
+        const userPick = userChoices(users);
         const items = [
             ...rows.keys.map(key => assignRow(`key-${key.name}`,
                 [key.kind === 'oauth' ? 'Grant ' : 'Key ', h('code', {}, key.name), ` (actor ${key.actor})`,
                     key.revoked_at ? [' ', pill('revoked', 'error')] : null],
-                users, async user => {
+                userPick.names, async user => {
                     await api.put(`/keys/${enc(key.id)}/user`, { user });
                     await keyUserChanged(key.id);
-                }, `${key.name} now belongs to`, userLabel)),
+                }, `${key.name} now belongs to`, userPick.labelOf)),
             ...rows.codes.map(code => assignRow(`code-${code.name}`,
                 ['Sign-in code ', h('code', {}, code.name), ' ', pill(code.state)],
-                users, user => api.put(`/oauth/codes/${enc(code.id)}/user`, { user }), `${code.name} now belongs to`, userLabel)),
+                userPick.names, user => api.put(`/oauth/codes/${enc(code.id)}/user`, { user }), `${code.name} now belongs to`, userPick.labelOf)),
             ...rows.catalogs.map(name => assignRow(`catalog-${name}`,
                 ['Catalog ', h('code', {}, name)],
                 teamPick.names, team => api.put(`/catalogs/${enc(name)}/owner`, { team }), `${name} is now owned by`, teamPick.labelOf)),

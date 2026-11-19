@@ -13,9 +13,10 @@ use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use sqlx::{PgConnection, PgPool};
 
 use crate::auth::{CatalogScope, CredentialKind, Principal};
+use crate::cache::labels::LabelLookup;
 use crate::error::OkfError;
 use crate::http::requester::Requester;
-use crate::labels::directory::Labels;
+use crate::labels::directory::{Labels, Wanted};
 use crate::labels::user_label;
 use crate::store::keys::Access;
 
@@ -785,6 +786,39 @@ pub async fn team_ref(conn: &mut PgConnection, team: &str) -> Result<i64, OkfErr
         .ok_or_else(unknown)
 }
 
+/// Creates a new key's or grant's `audit_credentials` row in the
+/// transaction that inserts it (M18 spec Decision 20), labelled with its
+/// `actor` as [`record`] labels it when it acts, so caches read the audit
+/// id with the credential and never have to write one. Call it after the
+/// insert and after [`lock_people`] has locked the owner: the SQL resolver
+/// takes the owner `FOR KEY SHARE` again (a no-op under the stronger lock
+/// already held) and inserts a row no other transaction can see yet, so it
+/// waits on nothing (`migrations/0014_audit_row_locks.sql`).
+///
+/// # Arguments
+/// * `conn` - the creating transaction.
+/// * `credential_id` - the new `api_keys.id`.
+/// * `label` - its `actor`.
+///
+/// # Returns
+/// Nothing; the row lasts with the transaction.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.credential_created"))]
+pub async fn credential_created(
+    conn: &mut PgConnection,
+    credential_id: &str,
+    label: &str,
+) -> Result<(), OkfError> {
+    sqlx::query("SELECT audit_credential($1, NULL, $2)")
+        .bind(credential_id)
+        .bind(label)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
 /// The `audit_teams` id of a catalog's owner team: what a catalog event
 /// belongs to.
 ///
@@ -1296,7 +1330,7 @@ pub const OWNER_REDACTED: &[(&str, &[&str])] = &[("catalog.unlocked", &["reason"
 /// * `pool` - the database.
 /// * `viewer` - who reads.
 /// * `query` - the filters.
-/// * `labels` - the directory that labels catalog and shared-team targets.
+/// * `labels` - the lookup that labels catalog and shared-team targets.
 ///
 /// # Returns
 /// At most [`AuditQuery::page_size`] records. A filter that cannot name
@@ -1309,7 +1343,7 @@ pub async fn list(
     pool: &PgPool,
     viewer: &Viewer,
     query: &AuditQuery<'_>,
-    labels: &Labels,
+    labels: &LabelLookup,
 ) -> Result<Vec<AuditRecord>, OkfError> {
     // Postgres refuses a NUL in text, and no stored name holds one (team
     // names are `[a-z0-9-]+`): such a filter is "nothing", never a 500.
@@ -1348,9 +1382,20 @@ pub async fn list(
         .bind(team_name)
         .fetch_all(pool)
         .await?;
+    // The labels of this page's catalog and team targets, read together.
+    let mut wanted = Wanted::default();
+    for row in &rows {
+        if let (true, Some(slug)) = (row.target_kind == "catalog", row.target_catalog.as_deref()) {
+            wanted.catalog(slug);
+        }
+        if let (true, Some(slug)) = (row.target_kind == "team", row.target_team.as_deref()) {
+            wanted.team(slug);
+        }
+    }
+    let labels = labels.labels_for(&wanted).await?;
     Ok(rows
         .into_iter()
-        .map(|row| row.into_record(owner, labels))
+        .map(|row| row.into_record(owner, &labels))
         .collect())
 }
 
@@ -1366,7 +1411,7 @@ pub async fn list(
 /// * `pool` - the database.
 /// * `viewer` - who reads ([`list`] redacts for them).
 /// * `query` - the filters.
-/// * `labels` - the directory [`list`] labels targets with.
+/// * `labels` - the lookup [`list`] labels targets with.
 ///
 /// # Returns
 /// The lines, each ending in `\n` (empty when nothing matches).
@@ -1378,7 +1423,7 @@ pub async fn export_lines(
     pool: &PgPool,
     viewer: &Viewer,
     query: &AuditQuery<'_>,
-    labels: &Labels,
+    labels: &LabelLookup,
 ) -> Result<String, OkfError> {
     // A copy with the page size fixed; `..query.clone()` takes the other
     // fields from the caller's query, like `dataclasses.replace`.
@@ -1617,6 +1662,23 @@ impl ListedRow {
 pub(crate) mod testing {
     use sqlx::PgPool;
 
+    /// A credential's `audit_credentials` row as `(label, owner's user id)`,
+    /// or `None` when it has none: what the create paths must leave behind
+    /// (M18 spec Decision 20).
+    pub(crate) async fn credential_row(
+        pool: &PgPool,
+        credential_id: &str,
+    ) -> Option<(Option<String>, Option<String>)> {
+        sqlx::query_as(
+            "SELECT a.label, p.user_id FROM audit_credentials a \
+             LEFT JOIN audit_people p ON p.id = a.person_id WHERE a.credential_id = $1",
+        )
+        .bind(credential_id)
+        .fetch_optional(pool)
+        .await
+        .expect("read the credential's audit row")
+    }
+
     /// One stored entry, flattened for assertions.
     #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
     pub(crate) struct RecordedEntry {
@@ -1710,13 +1772,57 @@ mod tests {
     use chrono::TimeDelta;
     use sqlx::PgPool;
 
-    /// [`list`] with an empty label directory.
+    /// [`list`] with a fresh label lookup.
     async fn list_plain(
         pool: &PgPool,
         viewer: &Viewer,
         query: &AuditQuery<'_>,
     ) -> Result<Vec<AuditRecord>, OkfError> {
-        list(pool, viewer, query, &Labels::default()).await
+        let lookup = LabelLookup::new(pool.clone(), 100, std::time::Duration::from_secs(60));
+        list(pool, viewer, query, &lookup).await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_audit_page_reads_its_target_labels_once() {
+        use crate::mcp::testing::{local_metrics, render};
+        use crate::store::catalogs::{self, NewCatalog};
+        let db = crate::db::test_db().await;
+        for n in 0..5 {
+            let display = crate::labels::DisplayName::parse(&format!("Notes {n}")).unwrap();
+            let new = NewCatalog {
+                name: &format!("notes-{n}"),
+                display_name: &display,
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            };
+            catalogs::create(&db.pool, &new, &AuditActor::cli(), now())
+                .await
+                .unwrap();
+        }
+        let (_provider, metrics, registry) = local_metrics();
+        let lookup = LabelLookup::new(db.pool.clone(), 100, std::time::Duration::from_secs(60))
+            .with_metrics(metrics);
+
+        let page = list(&db.pool, &Viewer::Admin, &AuditQuery::default(), &lookup)
+            .await
+            .unwrap();
+
+        let labelled = page
+            .iter()
+            .filter_map(|record| record.target.target_label.as_deref())
+            .filter(|label| label.starts_with("Notes "))
+            .count();
+        assert_eq!(labelled, 5, "every catalog target is labelled");
+        let loads: u64 = render(&registry)
+            .lines()
+            .find(|line| {
+                line.starts_with("okf_cache_load_duration_seconds_count")
+                    && line.contains("cache=\"labels\"")
+            })
+            .and_then(|line| line.rsplit(' ').next())
+            .and_then(|count| count.parse().ok())
+            .unwrap_or(0);
+        assert_eq!(loads, 1, "one read for the whole page");
     }
 
     fn now() -> DateTime<Utc> {
@@ -1962,14 +2068,7 @@ mod tests {
             .unwrap()
             .unwrap();
         // A real console-session principal: its `actor` is the user's name.
-        // (M13's three arguments; Task 7b adds the gates: pass
-        // `Default::default()` once more.)
-        let principal = Principal::for_session(
-            &alice,
-            Default::default(),
-            Default::default(),
-            Default::default(),
-        );
+        let principal = Principal::for_session(&alice, Default::default());
         let requester = Requester {
             ip: None,
             source: Source::Console,

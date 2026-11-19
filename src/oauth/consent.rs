@@ -8,6 +8,8 @@
 //! piece of text goes through `escape`. There is no template engine; the
 //! document shell and the response headers come from `crate::http::pages`.
 
+use std::collections::BTreeMap;
+
 use axum::http::StatusCode;
 use axum::response::Response;
 
@@ -263,14 +265,47 @@ pub fn summary_page(
     )
 }
 
+/// How a signed-in consent page's offer was found (issue #736): the page
+/// shows one page of the ceiling at a time, found by a name prefix, and
+/// carries over the catalogs ticked before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Browse<'a> {
+    /// The prefix the page's catalogs start with; empty for none.
+    pub prefix: &'a str,
+    /// Whether another page of the ceiling follows ("Next catalogs").
+    pub more: bool,
+    /// Whether the offer is the user's whole ceiling: only then may a
+    /// lone catalog start preselected, and an empty offer say the user
+    /// has nothing to share.
+    pub whole: bool,
+    /// The catalogs carried over ticked, at the level chosen; `None` for
+    /// none.
+    pub chosen: Option<&'a BTreeMap<String, Access>>,
+}
+
+impl Browse<'_> {
+    /// An offer that is the whole ceiling, with nothing ticked.
+    pub const WHOLE: Browse<'static> = Browse {
+        prefix: "",
+        more: false,
+        whole: true,
+        chosen: None,
+    };
+}
+
 /// What the signed-in consent page shows beyond [`PageView`].
 // `Debug` by hand: the consent nonce never reaches a log.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct UserPage<'a> {
     /// The signed-in user's label (never its slug).
     pub user_label: &'a str,
-    /// The ceiling it offers: the catalogs and levels the user may grant.
+    /// What it offers: the catalogs and levels the user may grant, one page
+    /// of the ceiling and the catalogs carried over ticked (issue #736),
+    /// never the whole ceiling.
     pub ceiling: &'a Ceiling,
+    /// How the offer was found: its prefix, whether more follow, whether
+    /// it is the whole ceiling, and what stays ticked.
+    pub browse: Browse<'a>,
     /// `(slug, shown text)` for each catalog of the ceiling, in order, every
     /// text distinct (`Labels::catalog_choices`). The slug stays in ids,
     /// names and values; only the text is shown to the person.
@@ -294,6 +329,7 @@ impl std::fmt::Debug for UserPage<'_> {
             .debug_struct("UserPage")
             .field("user_label", &self.user_label)
             .field("ceiling", &self.ceiling)
+            .field("browse", &self.browse)
             .field("nonce", &"<redacted>")
             .field("code_href", &self.code_href)
             .finish()
@@ -329,7 +365,8 @@ pub(crate) fn user_page_html(view: &PageView, user: &UserPage<'_>, error: Option
         r#"        <p class="muted"><a href="{}" id="consent-use-code">Use a sign-in code instead</a></p>"#,
         escape(user.code_href)
     );
-    if user.ceiling.is_empty() {
+    let browse = user.browse;
+    if user.ceiling.is_empty() && browse.whole {
         return format!(
             r#"        <h1>Allow access?</h1>
 {client}
@@ -349,9 +386,18 @@ pub(crate) fn user_page_html(view: &PageView, user: &UserPage<'_>, error: Option
     // preselected. Several catalogs keep the old defaults (nothing ticked,
     // read, no default), since guessing among them would be a choice the
     // person did not make.
-    let sole = match user.ceiling.len() {
-        1 => user.ceiling.keys().next().map(String::as_str),
+    // Only when the offer is the whole ceiling: one catalog found by a
+    // prefix is not the only one the person could mean.
+    let sole = match (user.ceiling.len(), browse.whole) {
+        (1, true) => user.ceiling.keys().next().map(String::as_str),
         _ => None,
+    };
+    // A catalog carried over ticked, and its chosen level.
+    let carried = |catalog: &str| {
+        browse
+            .chosen
+            .and_then(|chosen| chosen.get(catalog))
+            .copied()
     };
     // Catalog names are `[a-z0-9-]+` (a schema CHECK), so they are safe in
     // ids and names; they are escaped anyway, as everything is. The label
@@ -366,12 +412,18 @@ pub(crate) fn user_page_html(view: &PageView, user: &UserPage<'_>, error: Option
         .map(|(catalog, shown, allowed)| {
             let name = escape(catalog);
             let label = escape(shown);
+            let kept = carried(catalog);
             let preselected = sole == Some(catalog.as_str());
-            let checked = if preselected { " checked" } else { "" };
+            let checked = if preselected || kept.is_some() {
+                " checked"
+            } else {
+                ""
+            };
             // Write is offered only within the ceiling, and preselected only
-            // where it is offered; a read-only catalog starts at read, its
-            // only option.
-            let write = match (allowed >= Access::Write, preselected) {
+            // where it is offered (or was chosen); a read-only catalog
+            // starts at read, its only option.
+            let write_chosen = kept.map_or(preselected, |level| level >= Access::Write);
+            let write = match (allowed >= Access::Write, write_chosen) {
                 (true, true) => {
                     r#"
                             <option value="write" selected>write</option>"#
@@ -393,6 +445,36 @@ pub(crate) fn user_page_html(view: &PageView, user: &UserPage<'_>, error: Option
             )
         })
         .collect();
+    // Found by a prefix and nothing matched: say so where the rows go.
+    let rows = if rows.is_empty() {
+        format!(
+            r#"                    <p class="muted" id="consent-none-found">No catalog of yours starts with <strong>{}</strong>.</p>
+"#,
+            escape(browse.prefix)
+        )
+    } else {
+        rows
+    };
+    // The finder: a prefix and Find, which keep the ticked catalogs, and
+    // Next catalogs when the ceiling has more after this page. Plain
+    // submit buttons, so the page stays script-free.
+    let more = if browse.more {
+        r#"
+                <button type="submit" name="action" value="more" id="consent-more" class="secondary" formnovalidate>Next catalogs</button>"#
+    } else {
+        ""
+    };
+    let finder = format!(
+        r#"                <div class="consent-find">
+                    <label>Find catalogs whose name starts with
+                        <input type="search" name="find" id="consent-find" value="{prefix}" autocomplete="off">
+                    </label>
+                    <button type="submit" name="action" value="find" id="consent-find-go" class="secondary" formnovalidate>Find</button>{more}
+                    <p class="muted small">Catalogs you tick stay chosen when you find others.</p>
+                </div>
+"#,
+        prefix = escape(browse.prefix),
+    );
     let defaults: String = user
         .catalog_labels
         .iter()
@@ -445,7 +527,7 @@ pub(crate) fn user_page_html(view: &PageView, user: &UserPage<'_>, error: Option
             <input type="hidden" name="summary" value="{nonce}">
             <details id="consent-advanced"{open}>
                 <summary id="consent-advanced-toggle">Advanced Options</summary>
-                <fieldset id="consent-catalogs">
+{finder}                <fieldset id="consent-catalogs">
                     <legend>Catalogs</legend>
 {rows}                </fieldset>
                 <label>Default catalog
@@ -622,6 +704,7 @@ mod tests {
             ceiling: &ceiling,
             nonce: "consent-nonce-that-must-not-leak",
             code_href: "/oauth/authorize?a=1&signin=code",
+            browse: Browse::WHOLE,
         };
 
         let printed = format!("{user:?}");
@@ -776,6 +859,7 @@ mod tests {
             ceiling: &ceiling,
             nonce: "n1",
             code_href: "/oauth/authorize?a=1&signin=code",
+            browse: Browse::WHOLE,
         };
 
         let html = user_page_html(&view(), &user, Some("bad <choice>"));
@@ -815,6 +899,7 @@ mod tests {
             ceiling,
             nonce: "n1",
             code_href: "/oauth/authorize?a=1&signin=code",
+            browse: Browse::WHOLE,
         };
         user_page_html(&view(), &user, error)
     }
@@ -969,6 +1054,7 @@ mod tests {
             ceiling: &empty,
             nonce: "n1",
             code_href: "/oauth/authorize?a=1&signin=code",
+            browse: Browse::WHOLE,
         };
 
         let html = user_page_html(&view(), &user, None);

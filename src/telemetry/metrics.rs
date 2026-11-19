@@ -14,7 +14,9 @@ use opentelemetry::KeyValue;
 
 use super::otlp::{ExportFailures, FailureReason, Signal};
 use crate::app::App;
+use crate::cache::bounded::{CacheName, CacheSize, Eviction, Lookup};
 use crate::config::MailProvider;
+use crate::housekeeping::Task;
 use crate::mcp::annotations::{DESTRUCTIVE, EXTERNAL, READS, STAGED};
 use crate::store::sign_in_events::{Method, Outcome as SignInOutcome};
 
@@ -96,32 +98,6 @@ impl RedisOp {
     }
 }
 
-/// What one catalog's turn in a poll pass came to: a closed set for the
-/// `result` label of `okf.catalog.refreshes`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RefreshResult {
-    /// Nothing to do: the snapshot is current, or a failed generation waits.
-    Unchanged,
-    /// The loaded catalog's snapshot was rebuilt in place.
-    Reloaded,
-    /// The catalog was loaded from scratch (new, or created again).
-    Loaded,
-    /// The refresh or load failed.
-    Failed,
-}
-
-impl RefreshResult {
-    /// The label value (also the `okf.refresh.result` span attribute).
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Unchanged => "unchanged",
-            Self::Reloaded => "reloaded",
-            Self::Loaded => "loaded",
-            Self::Failed => "failed",
-        }
-    }
-}
-
 /// What one catalog announcement came to on the replica that received it
 /// (issue #659): a closed set for the `result` label of
 /// `okf.catalog.announcements`.
@@ -131,12 +107,12 @@ pub enum AnnouncementResult {
     /// newer one.
     Applied,
     /// Nothing to rebuild: the snapshot already reached that generation (its
-    /// own publish, the poll loop or an earlier announcement got there).
+    /// own publish, the change feed or an earlier announcement got there).
     Current,
-    /// This replica has not loaded the catalog, or it was deleted: the poll
-    /// loop loads or drops it.
+    /// This replica has not loaded the catalog, or it was deleted: it loads
+    /// on its next use, or is gone.
     Unknown,
-    /// The refresh failed; the old snapshot stays and the poll loop retries.
+    /// The refresh failed; the old snapshot stays and its next use retries.
     Failed,
 }
 
@@ -224,9 +200,12 @@ struct Instruments {
     publish_duration: Histogram<f64>,
     publish_lock_wait: Histogram<f64>,
     lint_rejections: Counter<u64>,
-    poll_duration: Histogram<f64>,
-    catalog_refreshes: Counter<u64>,
     catalog_announcements: Counter<u64>,
+    // Task 1 of milestone 18: the change feed.
+    invalidations_queued: Counter<u64>,
+    invalidations_received: Counter<u64>,
+    invalidations_unreadable: Counter<u64>,
+    invalidation_lag: Histogram<f64>,
     keycache_reloads: Counter<u64>,
     redis_errors: Counter<u64>,
     // Task 3: HTTP and MCP.
@@ -240,11 +219,21 @@ struct Instruments {
     ratelimit_rejections: Counter<u64>,
     mail_jobs: Counter<u64>,
     mail_queue_depth: Arc<MailQueueDepth>,
+    // The cluster-wide open changeset count `okf.changesets.open` reports,
+    // as the last `cluster_stats` row read held it (issue #693).
+    open_changesets: Arc<AtomicI64>,
+    // Housekeeping jobs (issue #693).
+    housekeeping_runs: Counter<u64>,
+    housekeeping_duration: Histogram<f64>,
     // Clock checks and archives (Task 6).
     clock_checks: Counter<u64>,
     clock_offset: Gauge<f64>,
     archive_size: Counter<u64>,
     archive_duration: Histogram<f64>,
+    // The bounded caches (M18 task 4).
+    cache_requests: Counter<u64>,
+    cache_evictions: Counter<u64>,
+    cache_load_duration: Histogram<f64>,
 }
 
 impl Metrics {
@@ -256,17 +245,17 @@ impl Metrics {
         "okf_build_info",
         "okf_telemetry_export_failures_total",
         "okf_mail_queue_depth",
+        "okf_changesets_open",
     ];
-    // The catalog gauges join them once `App::load_with_metrics` registers
-    // them (`observe_catalogs`), and the pool gauge (`observe_pool`); the
-    // catalog ones have a series only per loaded catalog.
+    // The pool gauge joins them once `App::load_with_metrics` registers it
+    // (`observe_pool`).
 
     /// Every Prometheus family the server can export, as `/metrics` names
-    /// it: the three in [`Metrics::FAMILIES`], plus each one that appears
+    /// it: the four in [`Metrics::FAMILIES`], plus each one that appears
     /// only once its event has happened (a counter or histogram has no
-    /// series until the first record) or once a catalog is loaded (the
-    /// observable gauges [`Metrics::observe_catalogs`] and
-    /// [`Metrics::observe_pool`] register). The Grafana example's test
+    /// series until the first record) or once an `App` or a cache exists
+    /// (the observable gauges [`Metrics::observe_pool`] and
+    /// [`Metrics::observe_cache`] register). The Grafana example's test
     /// (`tests/grafana_dashboard.rs`) checks the dashboard against this
     /// list, and the `all_families_...` unit test checks the list against
     /// the instruments, so a renamed instrument fails a test.
@@ -274,6 +263,7 @@ impl Metrics {
         "okf_build_info",
         "okf_telemetry_export_failures_total",
         "okf_mail_queue_depth",
+        "okf_changesets_open",
         "http_server_request_duration_seconds",
         "http_server_active_requests",
         "okf_mcp_tool_duration_seconds",
@@ -281,9 +271,11 @@ impl Metrics {
         "okf_publish_duration_seconds",
         "okf_publish_lock_wait_seconds",
         "okf_lint_rejections_total",
-        "okf_poll_duration_seconds",
-        "okf_catalog_refreshes_total",
         "okf_catalog_announcements_total",
+        "okf_invalidations_queued_total",
+        "okf_invalidations_received_total",
+        "okf_invalidations_unreadable_total",
+        "okf_invalidations_lag_seconds",
         "okf_keycache_reloads_total",
         "okf_redis_errors_total",
         "okf_auth_attempts_total",
@@ -294,12 +286,17 @@ impl Metrics {
         "okf_clock_offset_seconds",
         "okf_archive_size_bytes_total",
         "okf_archive_duration_seconds",
-        // Registered by `observe_catalogs` and `observe_pool`: they need a
-        // loaded `App`, so their own tests (`app.rs`, `mcp/changesets.rs`)
-        // check the rendered names.
-        "okf_catalog_concepts",
-        "okf_catalog_generation",
-        "okf_changesets_open",
+        "okf_housekeeping_runs_total",
+        "okf_housekeeping_duration_seconds",
+        "okf_cache_requests_total",
+        "okf_cache_evictions_total",
+        "okf_cache_load_duration_seconds",
+        // Registered by `observe_cache`: a gauge reports only while its
+        // cache is alive.
+        "okf_cache_entries",
+        "okf_cache_bytes",
+        // Registered by `observe_pool`: it needs a loaded `App`, so its own
+        // test (`app.rs`) checks the rendered name.
         "db_client_connection_count",
     ];
 
@@ -331,21 +328,29 @@ impl Metrics {
                     .u64_counter("okf.lint.rejections")
                     .with_description("Publish lint errors, by rule.")
                     .build(),
-                poll_duration: seconds_histogram(
-                    meter,
-                    "okf.poll.duration",
-                    "Poll passes, by outcome.",
-                ),
-                catalog_refreshes: meter
-                    .u64_counter("okf.catalog.refreshes")
-                    .with_description("Each catalog's turn in a poll pass, by result.")
-                    .build(),
                 catalog_announcements: meter
                     .u64_counter("okf.catalog.announcements")
                     .with_description(
                         "Catalog generation announcements received from Redis, by result.",
                     )
                     .build(),
+                invalidations_queued: meter
+                    .u64_counter("okf.invalidations.queued")
+                    .with_description("Change-feed messages queued in a transaction, by kind; a rollback discards them.")
+                    .build(),
+                invalidations_received: meter
+                    .u64_counter("okf.invalidations.received")
+                    .with_description("Change-feed messages received, by kind.")
+                    .build(),
+                invalidations_unreadable: meter
+                    .u64_counter("okf.invalidations.unreadable")
+                    .with_description("Change-feed payloads this build could not read.")
+                    .build(),
+                invalidation_lag: seconds_histogram(
+                    meter,
+                    "okf.invalidations.lag",
+                    "Time from a change-feed message's send to its application.",
+                ),
                 keycache_reloads: meter
                     .u64_counter("okf.keycache.reloads")
                     .with_description("Key cache and settings reloads, by outcome.")
@@ -389,6 +394,17 @@ impl Metrics {
                     "Mail jobs, by provider and outcome.",
                 ),
                 mail_queue_depth: MailQueueDepth::observe(meter),
+                open_changesets: observe_open_changesets(meter),
+                housekeeping_runs: counter(
+                    meter,
+                    "okf.housekeeping.runs",
+                    "Housekeeping jobs run, by task and outcome.",
+                ),
+                housekeeping_duration: seconds_histogram(
+                    meter,
+                    "okf.housekeeping.duration",
+                    "Housekeeping job duration, by task.",
+                ),
                 clock_checks: counter(meter, "okf.clock.checks", "Clock checks, by outcome."),
                 clock_offset: meter
                     .f64_gauge("okf.clock.offset")
@@ -404,6 +420,21 @@ impl Metrics {
                     meter,
                     "okf.archive.duration",
                     "Archive exports and imports, by direction and outcome.",
+                ),
+                cache_requests: counter(
+                    meter,
+                    "okf.cache.requests",
+                    "Bounded cache lookups, by cache and result.",
+                ),
+                cache_evictions: counter(
+                    meter,
+                    "okf.cache.evictions",
+                    "Bounded cache entries removed, by cache and cause.",
+                ),
+                cache_load_duration: seconds_histogram(
+                    meter,
+                    "okf.cache.load.duration",
+                    "Bounded cache loads, by cache and outcome.",
                 ),
             }),
             meter: meter.clone(),
@@ -456,35 +487,6 @@ impl Metrics {
         );
     }
 
-    /// Records a poll pass.
-    ///
-    /// # Arguments
-    /// * `outcome` - whether the pass returned `Ok`.
-    /// * `elapsed` - its duration, the wait for an overlapping pass included.
-    #[tracing::instrument(level = "trace", skip_all)]
-    pub fn poll(&self, outcome: Outcome, elapsed: Duration) {
-        self.inner.poll_duration.record(
-            elapsed.as_secs_f64(),
-            &[KeyValue::new("outcome", outcome.as_str())],
-        );
-    }
-
-    /// Counts one catalog's turn in a poll pass.
-    ///
-    /// # Arguments
-    /// * `catalog` - the catalog's name.
-    /// * `result` - what the turn came to.
-    #[tracing::instrument(level = "trace", skip_all)]
-    pub fn catalog_refresh(&self, catalog: &str, result: RefreshResult) {
-        self.inner.catalog_refreshes.add(
-            1,
-            &[
-                KeyValue::new("catalog", catalog.to_owned()),
-                KeyValue::new("result", result.as_str()),
-            ],
-        );
-    }
-
     /// Counts one catalog announcement received (issue #659).
     ///
     /// # Arguments
@@ -494,6 +496,37 @@ impl Metrics {
         self.inner
             .catalog_announcements
             .add(1, &[KeyValue::new("result", result.as_str())]);
+    }
+
+    /// Counts one change-feed message queued in a transaction. The message is
+    /// delivered only if that transaction commits, so a rollback leaves this
+    /// counter ahead of `received`.
+    ///
+    /// # Arguments
+    /// * `kind` - the invalidation's kind (a fixed set, never an id).
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn invalidation_queued(&self, kind: &'static str) {
+        self.inner
+            .invalidations_queued
+            .add(1, &[KeyValue::new("kind", kind)]);
+    }
+
+    /// Counts one change-feed message received and records its lag.
+    ///
+    /// # Arguments
+    /// * `kind` - the invalidation's kind.
+    /// * `lag` - send to receipt (zero when the clocks disagree).
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn invalidation_received(&self, kind: &'static str, lag: Duration) {
+        let labels = [KeyValue::new("kind", kind)];
+        self.inner.invalidations_received.add(1, &labels);
+        self.inner.invalidation_lag.record(lag.as_secs_f64(), &[]);
+    }
+
+    /// Counts one change-feed payload that could not be read.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn invalidation_unreadable(&self) {
+        self.inner.invalidations_unreadable.add(1, &[]);
     }
 
     /// Counts one key cache and settings reload.
@@ -516,69 +549,6 @@ impl Metrics {
         self.inner
             .redis_errors
             .add(1, &[KeyValue::new("operation", op.as_str())]);
-    }
-
-    /// Registers the catalog gauges: `okf.catalog.concepts`,
-    /// `okf.catalog.generation` and `okf.changesets.open`, one series per
-    /// loaded catalog. Each callback holds only a [`Weak`] handle, so the
-    /// meter provider (which outlives the app) keeps no strong cycle, and
-    /// reads what `app` already holds: a scrape never queries Postgres.
-    ///
-    /// # Arguments
-    /// * `app` - the app to read; a callback finding it dropped reports
-    ///   nothing.
-    #[tracing::instrument(level = "trace", skip_all)]
-    pub fn observe_catalogs(&self, app: Weak<App>) {
-        // The gauge handles may be dropped: a callback stays registered with
-        // the provider (see `observe_export_failures`).
-        let concepts = app.clone();
-        self.meter
-            .u64_observable_gauge("okf.catalog.concepts")
-            .with_description("Concept documents in each catalog's current snapshot.")
-            .with_callback(move |observer| {
-                let Some(app) = concepts.upgrade() else {
-                    return;
-                };
-                for (name, state) in app.catalogs().iter() {
-                    let count = state.current().snapshot().concepts().count();
-                    observer.observe(
-                        u64::try_from(count).unwrap_or(u64::MAX),
-                        &[KeyValue::new("catalog", name.clone())],
-                    );
-                }
-            })
-            .build();
-        let generations = app.clone();
-        self.meter
-            .i64_observable_gauge("okf.catalog.generation")
-            .with_description("Each catalog's current snapshot generation.")
-            .with_callback(move |observer| {
-                let Some(app) = generations.upgrade() else {
-                    return;
-                };
-                for (name, state) in app.catalogs().iter() {
-                    observer.observe(
-                        state.current().generation(),
-                        &[KeyValue::new("catalog", name.clone())],
-                    );
-                }
-            })
-            .build();
-        self.meter
-            .i64_observable_gauge("okf.changesets.open")
-            .with_description("Open changesets per catalog, as of the last poll pass.")
-            .with_callback(move |observer| {
-                let Some(app) = app.upgrade() else {
-                    return;
-                };
-                for name in app.catalogs().keys() {
-                    observer.observe(
-                        app.open_changesets(name),
-                        &[KeyValue::new("catalog", name.clone())],
-                    );
-                }
-            })
-            .build();
     }
 
     /// The instruments on the global meter provider: a no-op until `serve`
@@ -709,6 +679,93 @@ impl Drop for SessionGuard {
     )]
     fn drop(&mut self) {
         self.counter.add(-1, &[]);
+    }
+}
+
+/// The bounded caches' instruments (M18 task 4). Labels are closed sets:
+/// the cache, the lookup result and the eviction cause; never a key.
+impl Metrics {
+    /// Counts one lookup of a bounded cache.
+    ///
+    /// # Arguments
+    /// * `cache` - which cache.
+    /// * `result` - hit, miss, or a stale entry that was revalidated.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn cache_request(&self, cache: CacheName, result: Lookup) {
+        self.inner.cache_requests.add(
+            1,
+            &[
+                KeyValue::new("cache", cache.as_str()),
+                KeyValue::new("result", result.as_str()),
+            ],
+        );
+    }
+
+    /// Counts one entry removed from a bounded cache.
+    ///
+    /// # Arguments
+    /// * `cache` - which cache.
+    /// * `cause` - why it left.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn cache_eviction(&self, cache: CacheName, cause: Eviction) {
+        self.inner.cache_evictions.add(
+            1,
+            &[
+                KeyValue::new("cache", cache.as_str()),
+                KeyValue::new("cause", cause.as_str()),
+            ],
+        );
+    }
+
+    /// Records one finished load of a bounded cache.
+    ///
+    /// # Arguments
+    /// * `cache` - which cache.
+    /// * `outcome` - whether the loader succeeded.
+    /// * `elapsed` - how long it ran.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn cache_load(&self, cache: CacheName, outcome: Outcome, elapsed: Duration) {
+        self.inner.cache_load_duration.record(
+            elapsed.as_secs_f64(),
+            &[
+                KeyValue::new("cache", cache.as_str()),
+                KeyValue::new("outcome", outcome.as_str()),
+            ],
+        );
+    }
+
+    /// Registers `okf.cache.entries` and `okf.cache.bytes` for one cache.
+    /// The callbacks hold only a [`Weak`] handle (the meter provider
+    /// outlives the cache), and report nothing once it is dropped.
+    ///
+    /// # Arguments
+    /// * `cache` - which cache the series is labelled with.
+    /// * `size` - the cache's size probe.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn observe_cache(&self, cache: CacheName, size: Weak<dyn CacheSize>) {
+        let label = [KeyValue::new("cache", cache.as_str())];
+        let entries_probe = size.clone();
+        let entries_label = label.clone();
+        self.meter
+            .u64_observable_gauge("okf.cache.entries")
+            .with_description("Entries held by a bounded cache.")
+            .with_callback(move |observer| {
+                if let Some(probe) = entries_probe.upgrade() {
+                    observer.observe(probe.entries(), &entries_label);
+                }
+            })
+            .build();
+        self.meter
+            .u64_observable_gauge("okf.cache.bytes")
+            .with_description("Estimated bytes held by a bounded cache that is limited by bytes.")
+            .with_callback(move |observer| {
+                if let Some(probe) = size.upgrade() {
+                    if let Some(bytes) = probe.bytes() {
+                        observer.observe(bytes, &label);
+                    }
+                }
+            })
+            .build();
     }
 }
 
@@ -863,8 +920,8 @@ impl MailStatus {
     }
 }
 
-/// The mail queue's depth by status, as the last poll counted it. A scrape
-/// reads these numbers; it never queries Postgres.
+/// The mail queue's depth by status, as the last `cluster_stats` row read
+/// held it. A scrape reads these numbers; it never queries Postgres.
 #[derive(Debug, Default)]
 struct MailQueueDepth {
     counts: [AtomicI64; MailStatus::ALL.len()],
@@ -872,7 +929,7 @@ struct MailQueueDepth {
 
 impl MailQueueDepth {
     /// Registers the `okf.mail.queue.depth` gauge on `meter`: one series per
-    /// status from the first scrape (zero until a poll counts).
+    /// status from the first scrape (zero until the first row is read).
     #[tracing::instrument(level = "trace", skip_all)]
     fn observe(meter: &Meter) -> Arc<Self> {
         let depth = Arc::new(Self::default());
@@ -881,7 +938,9 @@ impl MailQueueDepth {
         // registered with the meter provider.
         meter
             .i64_observable_gauge("okf.mail.queue.depth")
-            .with_description("Mail jobs not yet sent, by status, as of the last poll.")
+            .with_description(
+                "Mail jobs not yet sent, by status, as of the last cluster_stats job.",
+            )
             .with_callback(move |observer| {
                 for status in MailStatus::ALL {
                     observer.observe(
@@ -893,6 +952,25 @@ impl MailQueueDepth {
             .build();
         depth
     }
+}
+
+/// Registers the `okf.changesets.open` gauge on `meter`: one series, the
+/// cluster's total (zero until the first `cluster_stats` row is read). Every
+/// replica reports the same value, so dashboards take `max()`.
+///
+/// # Returns
+/// The number the gauge reports; [`Metrics::set_open_changesets`] stores it.
+#[tracing::instrument(level = "trace", skip_all)]
+fn observe_open_changesets(meter: &Meter) -> Arc<AtomicI64> {
+    let open = Arc::new(AtomicI64::new(0));
+    let read = Arc::clone(&open);
+    // The instrument handle may be dropped: the callback stays registered.
+    meter
+        .i64_observable_gauge("okf.changesets.open")
+        .with_description("Open changesets in the cluster, as of the last cluster_stats job.")
+        .with_callback(move |observer| observer.observe(read.load(Ordering::Relaxed), &[]))
+        .build();
+    open
 }
 
 impl Metrics {
@@ -952,7 +1030,8 @@ impl Metrics {
     }
 
     /// Stores the mail queue's depth for the gauge: the count per status
-    /// the poll just read. A status missing from `counts` is zero.
+    /// the last `cluster_stats` row read held. A status missing from
+    /// `counts` is zero.
     ///
     /// # Arguments
     /// * `counts` - `(status, jobs)` pairs.
@@ -966,6 +1045,36 @@ impl Metrics {
                 .sum();
             self.inner.mail_queue_depth.counts[status.slot()].store(jobs, Ordering::Relaxed);
         }
+    }
+
+    /// Stores the cluster's open changeset count for `okf.changesets.open`.
+    ///
+    /// # Arguments
+    /// * `open` - the count the last `cluster_stats` row read held.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn set_open_changesets(&self, open: i64) {
+        self.inner.open_changesets.store(open, Ordering::Relaxed);
+    }
+
+    /// Records one housekeeping job's run.
+    ///
+    /// # Arguments
+    /// * `task` - which task ran.
+    /// * `outcome` - whether it succeeded (a failure is retried by apalis).
+    /// * `elapsed` - how long it took.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn housekeeping_run(&self, task: Task, outcome: Outcome, elapsed: Duration) {
+        self.inner.housekeeping_runs.add(
+            1,
+            &[
+                KeyValue::new("task", task.as_str()),
+                KeyValue::new("outcome", outcome.as_str()),
+            ],
+        );
+        self.inner.housekeeping_duration.record(
+            elapsed.as_secs_f64(),
+            &[KeyValue::new("task", task.as_str())],
+        );
     }
 }
 
@@ -1178,22 +1287,18 @@ mod tests {
     #[test]
     fn all_families_names_every_family_the_instruments_render() {
         use crate::mcp::testing::local_metrics;
-        // The four gauges that read a loaded `App`.
-        const NEEDS_APP: [&str; 4] = [
-            "okf_catalog_concepts",
-            "okf_catalog_generation",
-            "okf_changesets_open",
-            "db_client_connection_count",
-        ];
+        // The gauge that reads a loaded `App`.
+        const NEEDS_APP: [&str; 1] = ["db_client_connection_count"];
         let (_provider, metrics, registry) = local_metrics();
         let elapsed = Duration::from_millis(5);
 
         metrics.publish("notes", Outcome::Ok, elapsed);
         metrics.publish_lock_wait("notes", elapsed);
         metrics.lint_rejection("notes", "orphan");
-        metrics.poll(Outcome::Ok, elapsed);
-        metrics.catalog_refresh("notes", RefreshResult::Reloaded);
         metrics.catalog_announcement(AnnouncementResult::Applied);
+        metrics.invalidation_queued("settings");
+        metrics.invalidation_received("settings", Duration::from_millis(5));
+        metrics.invalidation_unreadable();
         metrics.keycache_reload(Outcome::Ok);
         metrics.redis_error(RedisOp::Get);
         metrics.http_request("GET", "/health", 200, elapsed);
@@ -1206,6 +1311,17 @@ mod tests {
         metrics.mail_job(MailProvider::Log, MailOutcome::Sent);
         metrics.clock_check(Outcome::Ok, Some(10));
         metrics.archive(Direction::Export, "notes", Outcome::Ok, elapsed, Some(10));
+        metrics.housekeeping_run(Task::PruneOauth, Outcome::Ok, elapsed);
+        metrics.cache_request(CacheName::Directory, Lookup::Hit);
+        metrics.cache_eviction(CacheName::Directory, Eviction::Size);
+        metrics.cache_load(CacheName::Directory, Outcome::Ok, elapsed);
+        // The gauges report while their cache is alive.
+        let _cache = crate::cache::bounded::Bounded::<i64, i64>::new(
+            CacheName::Directory,
+            crate::cache::bounded::Limit::Bytes(10),
+            Duration::from_secs(60),
+        )
+        .with_metrics(metrics.clone());
 
         let rendered: std::collections::BTreeSet<String> = registry
             .gather()

@@ -6,12 +6,14 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::error::OkfError;
+use crate::invalidate::{invalidate, Invalidation};
 use crate::labels::DisplayName;
 use crate::okf::ops::replay::ROOT_HEADING;
 use crate::okf::ops::starter_files;
 use crate::okf::snapshot::Snapshot;
 use crate::okf::workspace::{MemWorkspace, StoredFile};
 use crate::store::audit::{self, Action, AuditActor, Entry, People, Target};
+use crate::store::ceiling::MemberAccess;
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
 use crate::store::teams;
 
@@ -187,7 +189,17 @@ pub async fn create(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(
+        &mut tx,
+        &[
+            Invalidation::CatalogMeta {
+                id: catalog.id,
+                name: catalog.name.clone(),
+            },
+            Invalidation::Team { id: team_id },
+        ],
+    )
+    .await?;
     tx.commit().await?;
     Ok(catalog)
 }
@@ -295,20 +307,21 @@ pub async fn set_owner(
     // replaced even with two changes racing. The outer `Option` is "no such
     // catalog"; the old owner's id and name are `None` for a catalog that
     // had none.
-    let previous: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+    let previous: Option<(i64, Option<String>, Option<String>)> = sqlx::query_as(
         "UPDATE catalogs c SET owner_team_id = $2 \
          FROM (SELECT id, owner_team_id FROM catalogs WHERE name = $1 FOR UPDATE) old \
          WHERE c.id = old.id \
-         RETURNING old.owner_team_id, \
+         RETURNING c.id, old.owner_team_id, \
                    (SELECT t.name FROM teams t WHERE t.id = old.owner_team_id)",
     )
     .bind(name)
     .bind(&team_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (previous_id, previous) = previous.ok_or_else(|| OkfError::CatalogNotSelected {
-        catalog: name.to_string(),
-    })?;
+    let (catalog_id, previous_id, previous) =
+        previous.ok_or_else(|| OkfError::CatalogNotSelected {
+            catalog: name.to_string(),
+        })?;
     if previous_id.as_deref() == Some(team_id.as_str()) {
         // Dropping `tx` rolls back the `UPDATE`, which wrote the same value.
         return Ok(previous);
@@ -334,7 +347,14 @@ pub async fn set_owner(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    // The catalog, and both owners: each team's catalogs changed.
+    let mut invalidations = vec![Invalidation::CatalogMeta {
+        id: catalog_id,
+        name: name.to_string(),
+    }];
+    invalidations.extend(previous_id.map(|id| Invalidation::Team { id }));
+    invalidations.push(Invalidation::Team { id: team_id });
+    invalidate(&mut tx, &invalidations).await?;
     tx.commit().await?;
     Ok(previous)
 }
@@ -502,7 +522,14 @@ pub async fn update_details(
         )
         .await?;
     }
-    bump_admin_generation(&mut tx).await?;
+    invalidate(
+        &mut tx,
+        &[Invalidation::CatalogMeta {
+            id: catalog_id,
+            name: name.to_string(),
+        }],
+    )
+    .await?;
     tx.commit().await?;
     Ok(previous)
 }
@@ -739,7 +766,14 @@ pub async fn set_maintenance(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(
+        &mut tx,
+        &[Invalidation::CatalogMeta {
+            id: catalog_id,
+            name: name.to_string(),
+        }],
+    )
+    .await?;
     tx.commit().await?;
     Ok(previous)
 }
@@ -786,6 +820,333 @@ pub async fn find<'e>(executor: impl PgExecutor<'e>, name: &str) -> Result<Catal
             catalog: name.to_string(),
         })
 }
+
+/// An owner team's suspension, as the directory holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SuspendedRow {
+    /// The owner team's name.
+    pub team: String,
+    /// Its notice, if any.
+    pub notice: Option<String>,
+    /// The owner team's label, so a refusal names the team without a label
+    /// lookup (M18 Task 12). The directory drops the row when the team's
+    /// label or its personal owner's can change.
+    pub team_label: String,
+}
+
+/// A catalog's row with its access facts (M18 spec Decisions 6 and 9): what a
+/// request needs to know about a catalog without reading its content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogRow {
+    /// `catalogs.id`, never reused.
+    pub id: i64,
+    /// Unique name, `[a-z0-9-]+`.
+    pub name: String,
+    /// Its display name; empty when unset.
+    pub display_name: String,
+    /// Free text.
+    pub description: String,
+    /// Bumped by every publish and import.
+    pub generation: i64,
+    /// The owner team's name.
+    pub owner_team: Option<String>,
+    /// The owner team's id (`teams.id`).
+    pub owner_team_id: Option<String>,
+    /// The owner team's suspension, if it is suspended.
+    pub suspended: Option<SuspendedRow>,
+    /// `NOT catalogs.maintenance`.
+    pub maintenance_off: bool,
+    /// The owner team's `audit_teams.id` (the gates' `CatalogScope::team`).
+    pub audit_team: Option<i64>,
+    /// What members of the owner team reach through self-issued credentials
+    /// and console sessions: one half of every user's ceiling on this
+    /// catalog ([`crate::store::ceiling::level_on`], issue #728).
+    pub member_access: MemberAccess,
+}
+
+/// [`CatalogRow`] as the query returns it: the suspension as two columns.
+#[derive(sqlx::FromRow)]
+struct CatalogRowColumns {
+    id: i64,
+    name: String,
+    display_name: String,
+    description: String,
+    generation: i64,
+    owner_team: Option<String>,
+    owner_team_id: Option<String>,
+    suspended: bool,
+    suspension_notice: Option<String>,
+    team_display_name: Option<String>,
+    team_personal: bool,
+    team_owner_display_name: Option<String>,
+    team_owner_email: Option<String>,
+    maintenance_off: bool,
+    audit_team: Option<i64>,
+    member_access: String,
+}
+
+impl From<CatalogRowColumns> for CatalogRow {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    fn from(columns: CatalogRowColumns) -> Self {
+        // A catalog is suspended when its owner team is.
+        let suspended = columns
+            .suspended
+            .then(|| columns.owner_team.clone())
+            .flatten()
+            .map(|team| {
+                let owner = columns.team_personal.then(|| {
+                    crate::labels::user_label(
+                        columns
+                            .team_owner_display_name
+                            .as_deref()
+                            .unwrap_or_default(),
+                        columns.team_owner_email.as_deref(),
+                    )
+                });
+                SuspendedRow {
+                    team_label: crate::labels::team_label(
+                        columns.team_display_name.as_deref().unwrap_or_default(),
+                        owner.as_deref(),
+                    ),
+                    team,
+                    notice: columns.suspension_notice,
+                }
+            });
+        Self {
+            id: columns.id,
+            name: columns.name,
+            display_name: columns.display_name,
+            description: columns.description,
+            generation: columns.generation,
+            owner_team: columns.owner_team,
+            owner_team_id: columns.owner_team_id,
+            suspended,
+            maintenance_off: columns.maintenance_off,
+            audit_team: columns.audit_team,
+            // The schema's CHECK allows only the three spellings; anything
+            // else would reach nothing through the team, never more.
+            member_access: MemberAccess::parse(&columns.member_access)
+                .unwrap_or(MemberAccess::None),
+        }
+    }
+}
+
+// The directory's SELECT, shared by the four queries below. The owner,
+// suspension, maintenance and audit-team columns are what every access
+// check reads about the catalog it acts on (M18 spec Decision 9).
+macro_rules! select_catalog_rows {
+    () => {
+        "SELECT c.id, c.name, c.display_name, c.description, c.generation, \
+                t.name AS owner_team, c.owner_team_id, \
+                (t.suspended_at IS NOT NULL) AS suspended, t.suspension_notice, \
+                t.display_name AS team_display_name, \
+                (t.personal_of IS NOT NULL) AS team_personal, \
+                pu.display_name AS team_owner_display_name, \
+                pu.email::text AS team_owner_email, \
+                NOT c.maintenance AS maintenance_off, a.id AS audit_team, \
+                c.member_access \
+         FROM catalogs c \
+         LEFT JOIN teams t ON t.id = c.owner_team_id \
+         LEFT JOIN users pu ON pu.id = t.personal_of \
+         LEFT JOIN audit_teams a ON a.team_id = c.owner_team_id"
+    };
+}
+
+/// The row of the catalog called `name`, with its access facts.
+///
+/// # Arguments
+/// * `executor` - a pool, connection or transaction.
+/// * `name` - the catalog's name; a malformed one (which Postgres might
+///   refuse, such as one with a NUL) is the same as an unknown one.
+///
+/// # Returns
+/// Its row, or `None` if there is no such catalog.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.row_by_name"))]
+pub async fn row_by_name<'e>(
+    executor: impl PgExecutor<'e>,
+    name: &str,
+) -> Result<Option<CatalogRow>, OkfError> {
+    if !is_valid_name(name) {
+        return Ok(None);
+    }
+    let row = sqlx::query_as::<_, CatalogRowColumns>(concat!(
+        select_catalog_rows!(),
+        " WHERE c.name = $1"
+    ))
+    .bind(name)
+    .fetch_optional(executor)
+    .await?;
+    Ok(row.map(CatalogRow::from))
+}
+
+/// The row of the catalog with this `catalogs.id`, with its access facts:
+/// for a caller that holds an id (a changeset's catalog), so it reaches that
+/// incarnation and never another catalog created since under the name.
+///
+/// # Arguments
+/// * `executor` - a pool, connection or transaction.
+/// * `id` - the catalog's id.
+///
+/// # Returns
+/// Its row, or `None` if there is no catalog with that id (it was deleted).
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.row_by_id"))]
+pub async fn row_by_id<'e>(
+    executor: impl PgExecutor<'e>,
+    id: i64,
+) -> Result<Option<CatalogRow>, OkfError> {
+    let row =
+        sqlx::query_as::<_, CatalogRowColumns>(concat!(select_catalog_rows!(), " WHERE c.id = $1"))
+            .bind(id)
+            .fetch_optional(executor)
+            .await?;
+    Ok(row.map(CatalogRow::from))
+}
+
+/// The rows of the catalogs called `names`, in one query.
+///
+/// # Arguments
+/// * `executor` - a pool, connection or transaction.
+/// * `names` - catalog names; malformed ones and ones that do not exist are
+///   left out of the answer.
+///
+/// # Returns
+/// The rows found, ordered by name.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.rows_by_names"))]
+pub async fn rows_by_names<'e>(
+    executor: impl PgExecutor<'e>,
+    names: &[String],
+) -> Result<Vec<CatalogRow>, OkfError> {
+    // Drop what Postgres could not take (a NUL) or cannot match.
+    let valid: Vec<&str> = names
+        .iter()
+        .map(String::as_str)
+        .filter(|name| is_valid_name(name))
+        .collect();
+    if valid.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query_as::<_, CatalogRowColumns>(concat!(
+        select_catalog_rows!(),
+        " WHERE c.name = ANY($1) ORDER BY c.name"
+    ))
+    .bind(valid)
+    .fetch_all(executor)
+    .await?;
+    Ok(rows.into_iter().map(CatalogRow::from).collect())
+}
+
+/// One page of catalog rows, ordered by name.
+///
+/// # Arguments
+/// * `executor` - a pool, connection or transaction.
+/// * `after` - the last name of the previous page (exclusive); `None` for
+///   the first page.
+/// * `limit` - the most rows to return.
+///
+/// # Returns
+/// Up to `limit` rows, ordered by name.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.page"))]
+pub async fn page<'e>(
+    executor: impl PgExecutor<'e>,
+    after: Option<&str>,
+    limit: i64,
+) -> Result<Vec<CatalogRow>, OkfError> {
+    // A cursor Postgres cannot take (a NUL) can match nothing, so it is the
+    // end of the list.
+    if after.is_some_and(|name| name.contains('\0')) {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query_as::<_, CatalogRowColumns>(concat!(
+        select_catalog_rows!(),
+        " WHERE ($1::text IS NULL OR c.name > $1) ORDER BY c.name LIMIT $2"
+    ))
+    .bind(after)
+    .bind(limit)
+    .fetch_all(executor)
+    .await?;
+    Ok(rows.into_iter().map(CatalogRow::from).collect())
+}
+
+/// One page of the catalogs a user's ceiling reaches, ordered by name
+/// (issue #728): those owned by one of `teams` with a `member_access` other
+/// than `none`, and those in `entitled`. Each team's catalogs are read from
+/// the `catalogs_member_reach` index (owner team, name) one page at a time,
+/// so the cost is bounded by the teams, the entitlements and the page,
+/// never by how many catalogs a team owns.
+///
+/// # Arguments
+/// * `executor` - a pool, connection or transaction.
+/// * `teams` - the user's `teams.id`s.
+/// * `entitled` - the `catalogs.id`s the user is entitled to.
+/// * `after` - the last name of the previous page (exclusive); `None` for
+///   the first page.
+/// * `limit` - the most rows to return.
+///
+/// # Returns
+/// Up to `limit` rows, ordered by name.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.ceiling_page"))]
+pub async fn ceiling_page<'e>(
+    executor: impl PgExecutor<'e>,
+    teams: &[String],
+    entitled: &[i64],
+    after: Option<&str>,
+    limit: i64,
+) -> Result<Vec<CatalogRow>, OkfError> {
+    // As in `page`: a cursor Postgres cannot take matches nothing.
+    if after.is_some_and(|name| name.contains('\0')) || (teams.is_empty() && entitled.is_empty()) {
+        return Ok(Vec::new());
+    }
+    // `LATERAL` runs the inner query once per team (like a loop over
+    // `unnest`), each an index range scan stopping after `limit` rows.
+    let rows = sqlx::query_as::<_, CatalogRowColumns>(concat!(
+        select_catalog_rows!(),
+        " WHERE c.id IN ( \
+              SELECT owned.id FROM unnest($1::text[]) AS team (id) \
+              CROSS JOIN LATERAL ( \
+                  SELECT i.id FROM catalogs i \
+                  WHERE i.owner_team_id = team.id AND i.member_access <> 'none' \
+                    AND ($3::text IS NULL OR i.name > $3) \
+                  ORDER BY i.name LIMIT $4) owned \
+              UNION \
+              (SELECT i.id FROM catalogs i \
+               WHERE i.id = ANY($2) AND ($3::text IS NULL OR i.name > $3) \
+               ORDER BY i.name LIMIT $4)) \
+          ORDER BY c.name LIMIT $4"
+    ))
+    .bind(teams)
+    .bind(entitled)
+    .bind(after)
+    .bind(limit)
+    .fetch_all(executor)
+    .await?;
+    Ok(rows.into_iter().map(CatalogRow::from).collect())
+}
+
+// Its own file: the directory's queries are tested away from `tests` below.
+#[cfg(test)]
+#[path = "catalogs_rows_tests.rs"]
+mod rows_tests;
 
 /// Deletes a catalog with its documents, history, changesets and grants
 /// (cascading foreign keys), under the catalog's lock, and bumps the
@@ -839,12 +1200,12 @@ pub async fn delete(
     lock(&mut tx, catalog.id).await?;
     // A delete that waited on the lock may find the row already gone. The
     // generation is the one no publish can move any more.
-    let still_there: Option<i64> =
-        sqlx::query_scalar("SELECT generation FROM catalogs WHERE id = $1 FOR UPDATE")
+    let still_there: Option<(i64, Option<String>)> =
+        sqlx::query_as("SELECT generation, owner_team_id FROM catalogs WHERE id = $1 FOR UPDATE")
             .bind(catalog.id)
             .fetch_optional(&mut *tx)
             .await?;
-    let Some(generation) = still_there else {
+    let Some((generation, owner_team_id)) = still_there else {
         return Err(OkfError::CatalogNotSelected {
             catalog: name.to_string(),
         });
@@ -891,7 +1252,13 @@ pub async fn delete(
         .bind(catalog.id)
         .execute(&mut *tx)
         .await?;
-    bump_admin_generation(&mut tx).await?;
+    // The catalog, and its owner's list of catalogs.
+    let mut invalidations = vec![Invalidation::CatalogMeta {
+        id: catalog.id,
+        name: catalog.name,
+    }];
+    invalidations.extend(owner_team_id.map(|id| Invalidation::Team { id }));
+    invalidate(&mut tx, &invalidations).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -1035,21 +1402,6 @@ pub fn check_incarnation(catalog: &str, found: i64, expected: Option<i64>) -> Re
         }),
         Some(_) | None => Ok(()),
     }
-}
-
-/// Bumps `server_state.admin_generation` inside the caller's transaction.
-///
-/// # Arguments
-/// * `conn` - the transaction's connection (pass `&mut tx`).
-///
-/// # Errors
-/// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.bump_admin_generation"))]
-pub(crate) async fn bump_admin_generation(conn: &mut PgConnection) -> Result<(), OkfError> {
-    sqlx::query("UPDATE server_state SET admin_generation = admin_generation + 1")
-        .execute(&mut *conn)
-        .await?;
-    Ok(())
 }
 
 /// The current administrative generation (design "Noticing changes made

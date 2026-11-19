@@ -33,7 +33,7 @@ use crate::app::App;
 use crate::auth::{CredentialKind, Principal};
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
-use crate::http::api::{require_admin, require_every_catalog, settle};
+use crate::http::api::{require_admin, require_every_catalog};
 use crate::http::AppError;
 use crate::store::audit::AuditActor;
 use crate::store::keys::Access;
@@ -275,13 +275,14 @@ async fn create_unlock(
     // Only operator staff make unlocks (spec Part 6, decided 2026-11-15,
     // issue #447): the credential's own user must be an admin user, so the
     // audit log's granting person is always staff. Refused here, from the
-    // key cache, before any target is chosen; `unlocks::create` checks it
-    // again under the user's lock, so a demotion committed meanwhile is
-    // refused too.
+    // user cache (as of this request), before any target is chosen;
+    // `unlocks::create` checks it again under the user's lock, so a
+    // demotion committed meanwhile is refused too.
     let staff = principal
-        .user_id
+        .facts
+        .user
         .as_deref()
-        .is_some_and(|id| principal.gates.admins.contains(id));
+        .is_some_and(|user| user.is_admin);
     if !staff {
         return Err(OkfError::Forbidden {
             reason: format!("{own:?} is not an admin user; only operator staff make unlocks"),
@@ -309,7 +310,8 @@ async fn create_unlock(
     };
     let now = app.clock().now();
     let created = unlocks::create(app.pool(), &new, &policy, &actor, now).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok((StatusCode::CREATED, Json(UnlockView::of(created, now))))
 }
 
@@ -390,7 +392,8 @@ async fn end_unlock(
     }
     let now = app.clock().now();
     let ended = unlocks::end(app.pool(), id, &actor, now).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(UnlockView::of(ended, now)))
 }
 

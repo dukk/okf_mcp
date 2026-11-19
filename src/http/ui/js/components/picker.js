@@ -1,28 +1,33 @@
 import { h } from '../core/dom.js';
 import { api } from '../core/api.js';
-import { teamLabel, userLabel } from '../core/labels.js';
 
-// The names of every user or team, for a picker: `kind` is 'users' or
-// 'teams', the collection GET /<kind> answers with. Any admin may list them
-// (plan Decision 3). Throws the toasted ApiError on failure.
-export async function namesOf(kind) {
-    return (await rowsOf(kind)).map(row => row.name);
-}
-
-// The rows of every user or team (name, display_name, personal_of for a
-// team, label), for a picker that needs more than the name.
+// The rows of every user or team (name, display_name, label, and for a team
+// personal_of and members), for a picker: `kind` is 'users' or 'teams', the
+// collection GET /<kind> answers with. Any admin may list them (plan
+// Decision 3). A picker labels its options from these rows, not from the
+// shell's label table, which holds only the caller's own user and teams
+// (issue #749). Throws the toasted ApiError on failure.
 export async function rowsOf(kind) {
     return (await api.get(`/${kind}`))[kind];
 }
 
+// User rows as `{ names, labelOf }`, the two arguments a picker or
+// `assignControl` takes for a user picker; `labelOf` answers each row's own
+// `label` (the slug for a name not among the rows).
+export function userChoices(rows) {
+    const byName = new Map(rows.map(row => [row.name, row.label]));
+    return { names: rows.map(row => row.name), labelOf: name => byName.get(name) ?? name };
+}
+
 // The option text of one team row, which says what kind of thing it is: a
 // personal team reads "Alice Example (personal team)" (its user's label,
-// from M17's label table), any other "Acme (team)". Returned as text, to be
-// set with textContent by `picker`; the value stays the bare team name.
+// which the row carries as that member's label), any other "Acme (team)".
+// Returned as text, to be set with textContent by `picker`; the value
+// stays the bare team name.
 export function teamKindText(row) {
-    return row.personal_of
-        ? `${userLabel(row.personal_of)} (personal team)`
-        : `${teamLabel(row.name)} (team)`;
+    if (!row.personal_of) return `${row.label} (team)`;
+    const owner = row.members?.find(member => member.user === row.personal_of);
+    return `${owner?.label ?? row.personal_of} (personal team)`;
 }
 
 // Team rows as `{ names, labelOf }`, the two arguments a picker or
@@ -35,9 +40,9 @@ export function teamChoices(rows) {
 // A <select> over `names`, with `selected` chosen. Without one, a disabled
 // empty first option is chosen, so a `required` picker refuses to submit
 // until someone picks a name. Each option's value is the name (the slug);
-// its text is `labelOf(name)` when given (`userLabel`, `teamLabel` or
-// `catalogLabel` from core/labels.js), else the name itself, with the name
-// added when two options would read the same.
+// its text is `labelOf(name)` when given (`userChoices` or `teamChoices`'
+// `labelOf`, or `catalogLabel` from core/labels.js), else the name itself,
+// with the name added when two options would read the same.
 export function picker(attrs, names, selected = null, labelOf = null) {
     const texts = optionTexts(names, labelOf);
     return h('select', attrs,

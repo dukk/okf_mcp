@@ -213,10 +213,11 @@ Lint a catalog: errors and warnings with file, line, rule and message. Without `
 
 **List Catalogs** (read-only)
 
-List the catalogs this connection offers (name, display name, label, description, file count, last change). Pass `name` (the id) in other tools and say `label` to people: those the API key can reach, limited to the connection's X-OKF-Catalogs list when it has one. A catalog whose team is suspended is listed with `suspended` set, and only export works on it. Also this connection's selection: the catalogs a call without a `catalog` argument reads, and the default write target. It comes from the X-OKF-Catalogs header or `?catalogs=`, else the key's or the server's default catalog, else the only catalog the key reaches (a key granted every catalog has no such fallback). When the selection is empty, `selection_error` says why: pass `catalog`.
+List the catalogs this connection offers (name, display name, label, description, file count, last change). Pass `name` (the id) in other tools and say `label` to people: those the API key can reach, limited to the connection's X-OKF-Catalogs list when it has one. A catalog whose team is suspended is listed with `suspended` set, and only export works on it. Returns up to 100 catalogs, by name; when `next` is set, call again with it as `after` for the rest. Also this connection's selection: the catalogs a call without a `catalog` argument reads, and the default write target. It comes from the X-OKF-Catalogs header or `?catalogs=`, else the key's or the server's default catalog, else the only catalog the key reaches (a key granted every catalog has no such fallback). When the selection is empty, `selection_error` says why: pass `catalog`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
+| `after` | string | no | The `next` of the previous call, for the page after it; omit it for the first page. |
 
 ## `list_changesets`
 

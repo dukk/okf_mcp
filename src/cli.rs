@@ -175,7 +175,7 @@ pub enum CatalogCommand {
         owner: String,
     },
     /// Change an existing catalog's display name and/or description. A
-    /// running server shows the new text within one `poll_interval`.
+    /// running server shows the new text at once (its change feed).
     // At least one flag is required; both may be given.
     #[command(group(
         clap::ArgGroup::new("details")
@@ -219,8 +219,7 @@ pub enum CatalogCommand {
     /// catalog's log.md records it). Existing text is kept, except that an
     /// old raw (unencoded) concept or folder listing is percent-encoded in
     /// place, or removed beside a working one; a second run changes
-    /// nothing. A running server shows the result within one
-    /// `poll_interval`.
+    /// nothing. A running server shows the result at once (its change feed).
     RepairIndexes {
         /// The catalogs to repair. With `--missing-only`, only those of them
         /// without a root index.md; with none named, every such catalog.
@@ -501,8 +500,8 @@ pub enum TeamCommand {
 pub enum SettingsCommand {
     /// List every setting with its value and where it comes from.
     List,
-    /// Override a setting (validated; a running server applies it within
-    /// one poll interval).
+    /// Override a setting (validated; a running server applies it at once,
+    /// through its change feed).
     Set {
         /// The setting, by its snake_case name.
         // `SettingKey` spells its clap values as stored (`max_keys_per_user`),
@@ -707,7 +706,8 @@ pub enum CodeCommand {
 pub enum GrantCommand {
     /// List OAuth grants, revoked ones included.
     List,
-    /// Revoke an OAuth grant: its tokens stop working within `poll_interval`.
+    /// Revoke an OAuth grant: its tokens stop working at once (the change
+    /// feed), or within `credential_ttl` should the message be lost.
     Revoke {
         /// The grant's id (from `oauth grant list`).
         id: String,
@@ -3227,8 +3227,8 @@ mod tests {
         )
     }
 
-    /// Runs `key revoke` with `[redis]` on `server` and checks one empty
-    /// message reaches a subscriber.
+    /// Runs `key revoke` with `[redis]` on `server` and checks one M16
+    /// bridge message reaches a subscriber.
     async fn revoke_announces(server: crate::db::redis_support::TestRedis) {
         use crate::shared::{announce::CHANNEL, SubscriptionEvent};
         const WAIT: Duration = Duration::from_secs(10);
@@ -3253,7 +3253,7 @@ mod tests {
             .await
             .expect("an announcement arrives");
         assert!(
-            matches!(message, Some(SubscriptionEvent::Message(ref payload)) if payload.is_empty())
+            matches!(message, Some(SubscriptionEvent::Message(ref payload)) if payload == crate::shared::announce::BRIDGE_PAYLOAD.as_bytes())
         );
         // One message only: the next wait finds nothing.
         let more = tokio::time::timeout(Duration::from_millis(300), subscription.next()).await;
@@ -3282,11 +3282,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut config = Config::default();
         config.redis = Some(crate::shared::testing::config(&server));
-        let holds = |text: &str| {
-            b.catalog("pg")
+        // Whether `app` serves `pg` with an `index.md` ending in `text`.
+        async fn holds(app: &App, text: &str) -> bool {
+            app.catalog("pg")
+                .await
+                .unwrap()
                 .and_then(|state| state.current().workspace().stored("index.md"))
                 .is_some_and(|file| file.content.ends_with(text.as_bytes()))
-        };
+        }
         let mut reached = Vec::new();
 
         for text in ["First.\n", "Imported.\n"] {
@@ -3317,7 +3320,7 @@ mod tests {
             .await
             .unwrap();
             let refreshed = tokio::time::timeout(WAIT, async {
-                while !holds(text) {
+                while !holds(&b, text).await {
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }
             })
@@ -3367,7 +3370,7 @@ mod tests {
             .await
             .expect("an announcement arrives");
         assert!(
-            matches!(message, Some(SubscriptionEvent::Message(ref payload)) if payload.is_empty())
+            matches!(message, Some(SubscriptionEvent::Message(ref payload)) if payload == crate::shared::announce::BRIDGE_PAYLOAD.as_bytes())
         );
     }
 

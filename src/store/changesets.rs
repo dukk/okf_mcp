@@ -19,12 +19,11 @@
 //! it never waits for anyone. A deadlock Postgres still detects is
 //! [`OkfError::Busy`], through `From<sqlx::Error>`.
 
-use std::collections::BTreeMap;
-
 use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::error::OkfError;
+use crate::store::catalogs;
 
 /// What [`lock_catalog`] reports when the catalog row is gone: it was
 /// deleted while the write waited for the delete to finish.
@@ -569,7 +568,8 @@ pub async fn set_state(
 }
 
 /// Every open changeset in `catalog_ids`, optionally only one key's, empty
-/// ones included: what `list_changesets` shows (M8 Decision 8).
+/// ones included: what `list_changesets` shows for a named catalog (M8
+/// Decision 8).
 ///
 /// # Arguments
 /// * `pool` - the database.
@@ -589,13 +589,64 @@ pub async fn list_open(
     catalog_ids: &[i64],
     key_id: Option<&str>,
 ) -> Result<Vec<ListedRow>, OkfError> {
+    listed(pool, Some(catalog_ids), None, key_id).await
+}
+
+/// Every open changeset in the catalogs called `names` (every catalog for
+/// `None`), optionally only one key's, empty ones included: what
+/// `list_changesets` shows without a catalog (M18 spec Decision 7), read
+/// without enumerating the catalogs first.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `names` - the catalogs the calling key reaches, or `None` for a key
+///   that reaches every catalog. The caller still checks each row's catalog
+///   against its gates.
+/// * `key_id` - as for [`list_open`].
+///
+/// # Returns
+/// As [`list_open`].
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.open_for_catalogs"))]
+pub async fn open_for_catalogs(
+    pool: &PgPool,
+    names: Option<&[String]>,
+    key_id: Option<&str>,
+) -> Result<Vec<ListedRow>, OkfError> {
+    // Drop what Postgres could not take (a NUL) or cannot match, as
+    // `catalogs::rows_by_names` does.
+    let valid: Option<Vec<&str>> = names.map(|names| {
+        names
+            .iter()
+            .map(String::as_str)
+            .filter(|name| catalogs::is_valid_name(name))
+            .collect()
+    });
+    // A list with nothing valid in it matches nothing: skip the query.
+    if valid.as_ref().is_some_and(Vec::is_empty) {
+        return Ok(Vec::new());
+    }
+    listed(pool, None, valid.as_deref(), key_id).await
+}
+
+/// The query behind [`list_open`] and [`open_for_catalogs`]: a `NULL`
+/// filter (a Rust `None`) is turned off.
+#[tracing::instrument(level = "trace", skip_all)]
+async fn listed(
+    pool: &PgPool,
+    catalog_ids: Option<&[i64]>,
+    names: Option<&[&str]>,
+    key_id: Option<&str>,
+) -> Result<Vec<ListedRow>, OkfError> {
     // The `LEFT JOIN` keeps changesets without entries; their one joined row
     // has a `NULL` path, which `FILTER` leaves out of `array_agg`, and
     // `COALESCE` turns the resulting `NULL` array into an empty one.
     // Grouping by the primary key `c.id` lets the other `c` columns be
     // selected without listing them in `GROUP BY`. `= ANY($1)` matches a
-    // Postgres array, which sqlx binds from a Rust slice. A `NULL` key (a
-    // Rust `None`) turns that filter off.
+    // Postgres array, which sqlx binds from a Rust slice. A `NULL` filter
+    // turns that filter off.
     let rows = sqlx::query_as::<_, RawListed>(
         "SELECT c.id, c.handle, c.catalog_id, c.key_id, c.actor, c.state, c.version, \
          c.created_at, c.updated_at, k.name AS catalog, a.name AS key_name, \
@@ -605,12 +656,15 @@ pub async fn list_open(
          JOIN catalogs k ON k.id = c.catalog_id \
          LEFT JOIN api_keys a ON a.id = c.key_id \
          LEFT JOIN changeset_entries e ON e.changeset_id = c.id \
-         WHERE c.state = 'open' AND c.catalog_id = ANY($1) \
-         AND ($2::text IS NULL OR c.key_id = $2) \
+         WHERE c.state = 'open' \
+         AND ($1::bigint[] IS NULL OR c.catalog_id = ANY($1)) \
+         AND ($2::text[] IS NULL OR k.name = ANY($2)) \
+         AND ($3::text IS NULL OR c.key_id = $3) \
          GROUP BY c.id, k.name, a.name \
          ORDER BY k.name, c.updated_at, c.id",
     )
     .bind(catalog_ids)
+    .bind(names)
     .bind(key_id)
     .fetch_all(pool)
     .await?;
@@ -670,20 +724,22 @@ pub async fn prune_empty(
     Ok(pruned)
 }
 
-/// The statement behind [`open_counts`]; `changesets_open` (migration 0018)
+/// The statement behind [`open_total`]; `changesets_open` (migration 0018)
 /// serves its filter, and a test plans it.
-const OPEN_COUNTS_SQL: &str = "SELECT c.name, count(*) FROM changesets s \
-     JOIN catalogs c ON c.id = s.catalog_id WHERE s.state = 'open' GROUP BY c.name";
+const OPEN_TOTAL_SQL: &str = "SELECT count(*) FROM changesets WHERE state = 'open'";
 
-/// How many changesets are open in each catalog that has any, by name.
-/// One grouped read: the poll pass stores it for `okf.changesets.open`.
+/// How many changesets are open, in every catalog. One count over the
+/// partial index of open rows: the `cluster_stats` housekeeping job stores
+/// it for `okf.changesets.open` (M18 spec Decision 16).
+///
+/// # Returns
+/// The number of open changesets.
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.open_counts"))]
-pub async fn open_counts(pool: &PgPool) -> Result<BTreeMap<String, i64>, OkfError> {
-    let rows: Vec<(String, i64)> = sqlx::query_as(OPEN_COUNTS_SQL).fetch_all(pool).await?;
-    Ok(rows.into_iter().collect())
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.open_total"))]
+pub async fn open_total(pool: &PgPool) -> Result<i64, OkfError> {
+    Ok(sqlx::query_scalar(OPEN_TOTAL_SQL).fetch_one(pool).await?)
 }
 
 #[cfg(test)]
@@ -945,6 +1001,43 @@ mod tests {
         assert!(no_catalogs.is_empty());
     }
 
+    /// M18 Task 10: the list without a catalog, narrowed by name in SQL.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn open_for_catalogs_narrows_by_name_or_lists_every_catalog() {
+        let db = test_db().await;
+        let pg = setup(&db.pool).await;
+        let first = opened(&db.pool, pg, "alice", now() - TimeDelta::hours(1)).await;
+        let second = opened(&db.pool, pg, "alice", now()).await;
+        let names =
+            |list: &[&str]| -> Vec<String> { list.iter().map(|name| (*name).to_owned()).collect() };
+
+        let every = open_for_catalogs(&db.pool, None, None).await.unwrap();
+        let named = open_for_catalogs(&db.pool, Some(&names(&["pg", "nope"])), None)
+            .await
+            .unwrap();
+        let other = open_for_catalogs(&db.pool, Some(&names(&["work"])), None)
+            .await
+            .unwrap();
+        let malformed = open_for_catalogs(&db.pool, Some(&names(&["p\0g", "P G"])), None)
+            .await
+            .unwrap();
+        let none = open_for_catalogs(&db.pool, Some(&[]), None).await.unwrap();
+        let by_other_key = open_for_catalogs(&db.pool, None, Some("nobody"))
+            .await
+            .unwrap();
+
+        let ids: Vec<i64> = every.iter().map(|row| row.changeset.id).collect();
+        assert_eq!(ids, [first.id, second.id]);
+        assert_eq!(named, every);
+        assert!(other.is_empty());
+        assert!(
+            malformed.is_empty(),
+            "a NUL matches nothing and fails nothing"
+        );
+        assert!(none.is_empty());
+        assert!(by_other_key.is_empty());
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn prune_discards_only_empty_changesets_idle_past_the_cutoff() {
         let db = test_db().await;
@@ -1161,7 +1254,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn open_counts_reads_open_rows_through_the_partial_index() {
+    async fn open_total_reads_open_rows_through_the_partial_index() {
         let db = test_db().await;
         let catalog_id = setup(&db.pool).await;
         // A long history of closed changesets, and two open ones.
@@ -1181,15 +1274,15 @@ mod tests {
             .await
             .unwrap();
 
-        let counts = open_counts(&db.pool).await.unwrap();
-        // The statement `open_counts` runs, planned.
+        let total = open_total(&db.pool).await.unwrap();
+        // The statement `open_total` runs, planned.
         let plan: Vec<String> = // `AssertSqlSafe`: the text is a constant of this module.
-        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("EXPLAIN {OPEN_COUNTS_SQL}")))
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("EXPLAIN {OPEN_TOTAL_SQL}")))
             .fetch_all(&db.pool)
             .await
             .unwrap();
 
-        assert_eq!(counts, BTreeMap::from([("pg".to_string(), 2)]));
+        assert_eq!(total, 2);
         let plan = plan.join("\n");
         assert!(plan.contains("changesets_open"), "{plan}");
         assert!(!plan.contains("Seq Scan on changesets"), "{plan}");

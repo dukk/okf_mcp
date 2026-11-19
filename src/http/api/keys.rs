@@ -25,7 +25,7 @@ use crate::app::App;
 use crate::auth::{Principal, Reach};
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
-use crate::http::api::{require_admin, settle};
+use crate::http::api::require_admin;
 use crate::http::AppError;
 use crate::store::keys::{self as key_rows, Access, Grants, KeyRecord, NewKey};
 
@@ -260,6 +260,10 @@ pub(crate) fn manages_grants(
         Reach::Catalogs(_) => {
             !all_catalogs && catalogs.iter().all(|catalog| principal.reaches(catalog))
         }
+        // Only admin credentials manage others' (every caller checks
+        // `require_admin` first), and a console session's ceiling is never
+        // admin: it manages nothing here.
+        Reach::Ceiling => false,
     }
 }
 
@@ -320,13 +324,15 @@ pub(crate) fn requested_grants<'a>(
         }
         Grants::All
     } else {
+        // The caller is an admin credential, which suspension never
+        // refuses: reach and level are the whole check.
         for catalog in catalogs {
-            principal.require(Access::Admin, catalog)?;
+            principal.require_level(Access::Admin, catalog)?;
         }
         Grants::Catalogs(catalogs)
     };
     if let Some(name) = default_catalog {
-        principal.require(Access::Admin, name)?;
+        principal.require_level(Access::Admin, name)?;
     }
     Ok(grants)
 }
@@ -373,15 +379,17 @@ async fn managed(app: &App, principal: &Principal, id: &str) -> Result<KeyRecord
         })
 }
 
-/// Reloads the key cache at once (plan Decision 12), then answers with the
-/// key as it now is. The change is already committed, so a failed reload is
-/// logged, not returned: the background poll retries within `poll_interval`.
+/// Answers with the key as it now is, once the change has committed: this
+/// replica's caches take the write's own change messages before the answer
+/// goes out (`invalidate::capturing`), and every other replica's through
+/// the change feed.
 ///
 /// # Errors
 /// As [`managed`].
 #[tracing::instrument(level = "debug", skip_all)]
 async fn changed(app: &App, principal: &Principal, id: &str) -> Result<Json<KeyView>, AppError> {
-    settle(app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(managed(app, principal, id).await?.into()))
 }
 
@@ -588,7 +596,8 @@ async fn grant_catalog(
     Path((id, catalog)): Path<(String, String)>,
 ) -> Result<Json<KeyView>, AppError> {
     require_admin(&principal)?;
-    principal.require(Access::Admin, &catalog)?;
+    // An admin credential: suspension never refuses it.
+    principal.require_level(Access::Admin, &catalog)?;
     let target = managed(&app, &principal, &id).await?;
     key_rows::grant_by_id(app.pool(), &target.id, &catalog, &audit, app.clock().now()).await?;
     changed(&app, &principal, &target.id).await
@@ -607,7 +616,8 @@ async fn ungrant_catalog(
     Path((id, catalog)): Path<(String, String)>,
 ) -> Result<Json<KeyView>, AppError> {
     require_admin(&principal)?;
-    principal.require(Access::Admin, &catalog)?;
+    // An admin credential: suspension never refuses it.
+    principal.require_level(Access::Admin, &catalog)?;
     let target = managed(&app, &principal, &id).await?;
     key_rows::ungrant_by_id(app.pool(), &target.id, &catalog, &audit, app.clock().now()).await?;
     changed(&app, &principal, &target.id).await
@@ -622,8 +632,8 @@ mod tests {
     use crate::mcp::testing::TestApp;
     use crate::store::keys::{self as key_rows, Access, CreatedKey, Grants, NewKey};
 
-    /// Creates a key straight in the store, as `okf-mcp key create` would,
-    /// and polls so the server knows it.
+    /// Creates a key straight in the store, as `okf-mcp key create` would
+    /// (keys load on their first use).
     async fn stored(test: &TestApp, name: &str, access: Access, grants: Grants<'_>) -> CreatedKey {
         let new = NewKey {
             name,
@@ -645,7 +655,6 @@ mod tests {
         )
         .await
         .expect("create a key");
-        test.app.poll().await.expect("poll the key in");
         created
     }
 
@@ -1093,7 +1102,6 @@ mod tests {
         )
         .await
         .expect("create the newer key");
-        test.app.poll().await.expect("poll the keys in");
         let state = |listed: &serde_json::Value, id: &str| -> serde_json::Value {
             listed["keys"]
                 .as_array()
@@ -1134,7 +1142,6 @@ mod tests {
         )
         .await
         .expect("create the replacement");
-        test.app.poll().await.expect("poll the keys in");
         let (status, _) = send(
             &test,
             "POST",
@@ -1243,7 +1250,6 @@ mod tests {
             )
             .await
             .expect("create the newer key");
-            test.app.poll().await.expect("poll the keys in");
 
             let key_view = |listed: &serde_json::Value, id: &str| -> serde_json::Value {
                 listed["keys"]
@@ -1412,7 +1418,6 @@ mod tests {
         )
         .await
         .expect("create a self-issued key");
-        test.app.poll().await.expect("poll the key in");
 
         let (status, refused) = send(
             &test,

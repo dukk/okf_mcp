@@ -13,7 +13,11 @@
 //! Who approves (spec "OAuth consent as the user"): with `signin=code`, the
 //! sign-in code path (step 1 and 2), whose grants stay admin-issued. Else a
 //! signed-in person (the console session cookie) chooses catalogs within
-//! their ceiling, and the approval is a self-issued grant. Without a
+//! their ceiling, and the approval is a self-issued grant. The page offers
+//! one page of the ceiling at a time (`CONSENT_PAGE` catalogs), found by
+//! a name prefix (Find) or continued (Next catalogs), and carries the
+//! ticked catalogs over (at most `MAX_CARRIED`): it never reads or holds
+//! the whole ceiling (issue #736). Without a
 //! session, the GET sends the browser to `/signin` first, before anything
 //! is stored.
 
@@ -35,7 +39,7 @@ use crate::error::OkfError;
 use crate::http::console_session::{cookie, signed_in_user, COOKIE};
 use crate::http::signin::cross_site;
 use crate::keys;
-use crate::labels::directory::Labels;
+use crate::labels::directory::{Labels, Wanted};
 use crate::labels::user_label;
 use crate::maintenance::types::new_id;
 use crate::oauth::clients;
@@ -81,6 +85,16 @@ const NOTHING_CHOSEN: &str = "Choose at least one catalog, or Deny.";
 const DEFAULT_NOT_CHOSEN: &str = "The default catalog must be one you allow.";
 /// A form posted from another site (403).
 const CROSS_SITE: &str = "This form can only be sent from this site. Start again from your client.";
+/// The message for a Find or Next catalogs with too many catalogs ticked.
+const TOO_MANY_CARRIED: &str =
+    "You can carry at most 50 ticked catalogs to another search. Approve these first, or untick some.";
+/// How many catalogs of the ceiling a signed-in consent page shows at once
+/// (issue #736).
+pub(crate) const CONSENT_PAGE: u32 = 50;
+/// The most ticked catalogs a Find or Next catalogs carries over (named in
+/// [`TOO_MANY_CARRIED`]), so a pending authorization holds at most
+/// `CONSENT_PAGE + MAX_CARRIED` offered catalogs.
+pub(crate) const MAX_CARRIED: usize = 50;
 /// The busy page (503): a Redis failure or a database deadlock, or no room
 /// for an authorization code.
 const BUSY: &str = "The server is busy. Start again from your client in a minute.";
@@ -132,6 +146,8 @@ struct ConsentForm {
     summary: Option<String>,
     /// The signed-in page's default catalog select (empty: none).
     default_catalog: Option<String>,
+    /// The signed-in page's Find box: the name prefix to find catalogs by.
+    find: Option<String>,
     /// Every other field: the signed-in page's `grant.<catalog>` checkboxes
     /// and `level.<catalog>` selects. `flatten` collects the fields not
     /// named above into this map, like `**kwargs`.
@@ -336,6 +352,49 @@ fn view(pending_id: &str, pending: &PendingAuthorization) -> PageView {
     }
 }
 
+/// The labels a sign-in code's summary shows: its catalogs, its default
+/// and its user.
+///
+/// # Arguments
+/// * `app` - the application, for its label lookup.
+/// * `record` - the code.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all)]
+async fn summary_labels(app: &App, record: &SignInCodeRecord) -> Result<Labels, OkfError> {
+    let mut wanted = Wanted::default();
+    for slug in record.catalogs.iter().chain(record.default_catalog.iter()) {
+        wanted.catalog(slug);
+    }
+    if let Some(user) = &record.user {
+        wanted.user(user);
+    }
+    app.labels().labels_with_owners(&wanted).await
+}
+
+/// The labels a consent page shows: the catalogs it offers.
+///
+/// # Arguments
+/// * `app` - the application, for its label lookup.
+/// * `pending` - the request; its `consent` is set (an unset one offers
+///   nothing).
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all)]
+async fn consent_labels(app: &App, pending: &PendingAuthorization) -> Result<Labels, OkfError> {
+    let mut wanted = Wanted::default();
+    for slug in pending
+        .consent
+        .iter()
+        .flat_map(|consent| consent.offered.keys())
+    {
+        wanted.catalog(slug);
+    }
+    app.labels().labels_with_owners(&wanted).await
+}
+
 /// What a sign-in code grants, as step 2 states it.
 #[tracing::instrument(level = "trace", skip_all)]
 fn summary(record: &SignInCodeRecord, labels: &Labels) -> GrantSummary {
@@ -479,18 +538,44 @@ enum Choice {
 ///
 /// # Arguments
 /// * `choices` - the form's `grant.<catalog>` and `level.<catalog>` fields.
-/// * `offered` - the ceiling the page showed.
+/// * `offered` - what the page offered.
 ///
 /// # Returns
 /// Each ticked catalog's level.
 ///
 /// # Errors
-/// [`Choice::Empty`] when nothing is ticked; [`Choice::Tampered`] for a
-/// catalog not offered, a level above the offer or unknown, a ticked
-/// catalog without a level, a checkbox value other than `on`, or any
-/// other field.
+/// [`Choice::Empty`] when nothing is ticked; [`Choice::Tampered`] as for
+/// [`ticked_levels`].
 #[tracing::instrument(level = "trace", skip_all)]
 fn chosen_levels(
+    choices: &BTreeMap<String, String>,
+    offered: &Ceiling,
+) -> Result<BTreeMap<String, Access>, Choice> {
+    let chosen = ticked_levels(choices, offered)?;
+    if chosen.is_empty() {
+        Err(Choice::Empty)
+    } else {
+        Ok(chosen)
+    }
+}
+
+/// The catalogs ticked on a signed-in consent page and their levels,
+/// checked against what the page offered; none ticked is an empty map (a
+/// Find or Next catalogs carries what is ticked, which may be nothing).
+///
+/// # Arguments
+/// * `choices` - the form's `grant.<catalog>` and `level.<catalog>` fields.
+/// * `offered` - what the page offered.
+///
+/// # Returns
+/// Each ticked catalog's level.
+///
+/// # Errors
+/// [`Choice::Tampered`] for a catalog not offered, a level above the offer
+/// or unknown, a ticked catalog without a level, a checkbox value other
+/// than `on`, or any other field.
+#[tracing::instrument(level = "trace", skip_all)]
+fn ticked_levels(
     choices: &BTreeMap<String, String>,
     offered: &Ceiling,
 ) -> Result<BTreeMap<String, Access>, Choice> {
@@ -517,18 +602,16 @@ fn chosen_levels(
             return Err(Choice::Tampered);
         }
     }
-    if chosen.is_empty() {
-        Err(Choice::Empty)
-    } else {
-        Ok(chosen)
-    }
+    Ok(chosen)
 }
 
 /// Renders the signed-in consent page for a pending authorization.
 ///
 /// # Arguments
 /// * `pending_id`, `pending` - the request; its `consent` is set.
-/// * `user` - the signed-in user's name.
+/// * `user` - the signed-in user, and the labels of what it is offered.
+/// * `chosen` - the catalogs carried over ticked (a Find or Next
+///   catalogs), if any.
 /// * `error` - a message, if the page is shown again.
 /// * `brand` - the product name and support contact.
 ///
@@ -539,6 +622,7 @@ fn user_consent_page(
     pending_id: &str,
     pending: &PendingAuthorization,
     (user, labels): (&UserAuth, &Labels),
+    chosen: Option<&BTreeMap<String, Access>>,
     error: Option<&str>,
     brand: &Brand,
 ) -> Response {
@@ -554,6 +638,12 @@ fn user_consent_page(
             user_label: &user_label,
             catalog_labels: &catalog_labels,
             ceiling: &consent.offered,
+            browse: consent::Browse {
+                prefix: &consent.prefix,
+                more: consent.next.is_some(),
+                whole: consent.whole,
+                chosen,
+            },
             nonce: &consent.nonce,
             code_href: &code_href(&pending.query),
         },
@@ -562,18 +652,22 @@ fn user_consent_page(
     )
 }
 
-/// The consent a signed-in person's page starts with: their ceiling now
-/// and a fresh nonce.
+/// The consent a signed-in person's page starts with: the first page of
+/// their ceiling now (never the whole ceiling, issue #736) and a fresh
+/// nonce.
 ///
 /// # Errors
-/// [`OkfError::UnknownName`] once the user is gone; [`OkfError::Io`] if
-/// the OS random source fails; [`OkfError::Database`].
+/// [`OkfError::Io`] if the OS random source fails; [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all)]
 async fn new_consent(app: &App, user: &UserAuth) -> Result<UserConsent, OkfError> {
+    let page = ceiling::page(app.pool(), &user.id, "", None, CONSENT_PAGE).await?;
     Ok(UserConsent {
         user_id: user.id.clone(),
         nonce: keys::generate_with("")?,
-        offered: ceiling::ceiling_of(app.pool(), &user.name).await?,
+        whole: page.next.is_none(),
+        offered: page.entries,
+        prefix: String::new(),
+        next: page.next,
     })
 }
 
@@ -750,13 +844,12 @@ async fn authorize(
         query: query_string,
     };
     let page = match &user {
-        Some(user) => user_consent_page(
-            &pending_id,
-            &pending,
-            (user, &app.keys().labels()),
-            None,
-            &brand,
-        ),
+        Some(user) => match consent_labels(&app, &pending).await {
+            Ok(labels) => {
+                user_consent_page(&pending_id, &pending, (user, &labels), None, None, &brand)
+            }
+            Err(error) => return server_error(&error, &brand),
+        },
         None => consent::code_page(&view(&pending_id, &pending), None, &brand),
     };
     // `insert` is `false` when the bounded memory map is full: an
@@ -882,7 +975,7 @@ async fn consent_post(
     };
     // A signed-in Approve spends its page's nonce; the replacement is made
     // here, outside the update, because making it can fail.
-    let fresh = if form.action == "consent" {
+    let fresh = if matches!(form.action.as_str(), "consent" | "find" | "more") {
         match keys::generate_with("") {
             Ok(nonce) => Some(nonce),
             Err(error) => return server_error(&error, &brand),
@@ -934,6 +1027,9 @@ async fn consent_post(
         },
         // `claimed`: on the user path, with this page's current nonce.
         "consent" if claimed => consent_as_user(&app, oauth, &form, &pending, &parts).await,
+        "find" | "more" if claimed => {
+            consent_browse(&app, oauth, &form, &pending, &parts.headers).await
+        }
         _ => consent::error_page(StatusCode::BAD_REQUEST, EXPIRED, &brand),
     }
 }
@@ -1069,10 +1165,14 @@ async fn check_code(
                 Ok(None) => return consent::error_page(StatusCode::BAD_REQUEST, EXPIRED, &brand),
                 Err(error) => return server_error(&error, &brand),
             }
+            let labels = match summary_labels(app, &record).await {
+                Ok(labels) => labels,
+                Err(error) => return server_error(&error, &brand),
+            };
             decision.accept();
             consent::summary_page(
                 &view(pending_id, pending),
-                &summary(&record, &app.keys().labels()),
+                &summary(&record, &labels),
                 &summary_nonce,
                 &brand,
             )
@@ -1136,12 +1236,11 @@ async fn finish(
     if let Err(error) = oauth.pending.remove(pending_id).await {
         return server_error(&error, &brand);
     }
-    // Creating the grant bumped admin_generation, so this loads it into the
-    // key cache before the client's token request can arrive. Only the keys
-    // are reloaded (not every catalog, as a full poll pass does), and the
-    // new generation is announced to the other replicas. A failure is
-    // logged inside; the next poll pass retries.
-    app.reload_keys_now(true).await;
+    // The credential cache reads the new grant on first use, so nothing
+    // needs loading here. Creating it bumped admin_generation: tell
+    // milestone 16 replicas, which still reload on announcements.
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     let (code, family_id) = match (
         keys::generate_with(keys::AUTHORIZATION_CODE_PREFIX),
         new_id(),
@@ -1232,10 +1331,15 @@ async fn consent_as_user(
     let chosen = match chosen_levels(&form.choices, &consent.offered) {
         Ok(chosen) => chosen,
         Err(Choice::Empty) => {
+            let labels = match consent_labels(app, pending).await {
+                Ok(labels) => labels,
+                Err(error) => return server_error(&error, brand),
+            };
             return user_consent_page(
                 &form.pending,
                 pending,
-                (&user, &app.keys().labels()),
+                (&user, &labels),
+                None,
                 Some(NOTHING_CHOSEN),
                 brand,
             );
@@ -1255,10 +1359,15 @@ async fn consent_as_user(
         .as_deref()
         .filter(|name| !name.is_empty());
     if default_catalog.is_some_and(|name| !chosen.contains_key(name)) {
+        let labels = match consent_labels(app, pending).await {
+            Ok(labels) => labels,
+            Err(error) => return server_error(&error, brand),
+        };
         return user_consent_page(
             &form.pending,
             pending,
-            (&user, &app.keys().labels()),
+            (&user, &labels),
+            None,
             Some(DEFAULT_NOT_CHOSEN),
             brand,
         );
@@ -1298,6 +1407,213 @@ async fn consent_as_user(
         "consent granted as the signed-in user"
     );
     finish(app, oauth, &form.pending, pending, grant_id).await
+}
+
+/// The offer a Find or Next catalogs moves to, read from the database now:
+/// the ticked catalogs at the user's ceiling on each now (one dropped when
+/// the ceiling no longer reaches it, its level lowered with the ceiling),
+/// and one page of the ceiling (issue #736). Bounded by [`MAX_CARRIED`]
+/// and [`CONSENT_PAGE`]: no read here grows with the ceiling.
+///
+/// # Arguments
+/// * `app` - the application.
+/// * `user_id` - the signed-in user's id.
+/// * `ticked` - the catalogs ticked on the page, checked against its offer.
+/// * `(prefix, after)` - the page to read: its name prefix and the name it
+///   continues after (`None` for the first).
+///
+/// # Returns
+/// The new consent (without its nonce, which the caller keeps) and the
+/// carried catalogs at their (possibly lowered) chosen levels.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
+async fn browse_offer(
+    app: &App,
+    user_id: &str,
+    ticked: &BTreeMap<String, Access>,
+    (prefix, after): (&str, Option<&str>),
+) -> Result<(UserConsent, BTreeMap<String, Access>), OkfError> {
+    let names: Vec<String> = ticked.keys().cloned().collect();
+    // `&mut *` borrows the pooled connection, returned when the statement ends.
+    let carried_ceiling = ceiling::ceiling_in(
+        &mut *app.pool().acquire().await.map_err(OkfError::from)?,
+        user_id,
+        &names,
+    )
+    .await?;
+    let page = ceiling::page(app.pool(), user_id, prefix, after, CONSENT_PAGE).await?;
+    // Each ticked catalog the ceiling still reaches, at the lower of the
+    // level chosen and the ceiling's now.
+    let carried: BTreeMap<String, Access> = ticked
+        .iter()
+        .filter_map(|(catalog, &level)| {
+            let allowed = *carried_ceiling.get(catalog)?;
+            Some((catalog.clone(), level.min(allowed)))
+        })
+        .collect();
+    let whole = prefix.is_empty() && after.is_none() && page.next.is_none();
+    // The page, and the carried catalogs at the ceiling's level (what the
+    // page may offer for them); `extend` overwrites a page entry with the
+    // same level read a moment apart.
+    let mut offered = page.entries;
+    offered.extend(
+        carried
+            .keys()
+            .filter_map(|catalog| Some((catalog.clone(), *carried_ceiling.get(catalog)?))),
+    );
+    Ok((
+        UserConsent {
+            user_id: user_id.to_string(),
+            nonce: String::new(),
+            offered,
+            prefix: prefix.to_string(),
+            next: page.next,
+            whole,
+        },
+        carried,
+    ))
+}
+
+/// `action=find` or `action=more`: a signed-in page's Find (catalogs whose
+/// names start with the Find box) or Next catalogs (the page after the
+/// one shown), its nonce already spent by [`claim_consent`] and replaced.
+/// The ticked catalogs are carried over (checked against the page's offer,
+/// at most [`MAX_CARRIED`]); the new offer is read now ([`browse_offer`])
+/// and stored in the pending authorization in one atomic update that
+/// checks the replacement nonce is still current, then shown (issue #736).
+///
+/// # Arguments
+/// * `app`, `oauth` - the application and its OAuth state.
+/// * `form` - the posted form.
+/// * `pending` - the request, holding the replacement nonce.
+/// * `headers` - the request's headers (the session cookie).
+///
+/// # Returns
+/// The page with the new offer, the page again (too many ticked), or an
+/// error page.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn consent_browse(
+    app: &App,
+    oauth: &OAuth,
+    form: &ConsentForm,
+    pending: &PendingAuthorization,
+    headers: &HeaderMap,
+) -> Response {
+    let brand = app.settings().brand();
+    let Some(consent) = pending.consent.as_ref() else {
+        return consent::error_page(StatusCode::BAD_REQUEST, EXPIRED, &brand);
+    };
+    let brand = &brand;
+    let refuse = move |message| {
+        let refused = consent::error_page(StatusCode::BAD_REQUEST, message, brand);
+        ending(oauth, &form.pending, brand, refused)
+    };
+    let user = match signed_in_user(app, headers).await {
+        Ok(Some(user)) if user.id == consent.user_id => user,
+        Ok(_) => return refuse(SIGNED_OUT).await,
+        Err(error) => return server_error(&error, brand),
+    };
+    let ticked = match ticked_levels(&form.choices, &consent.offered) {
+        Ok(ticked) => ticked,
+        Err(Choice::Empty | Choice::Tampered) => {
+            split_event!(
+                warn,
+                {},
+                { user = %user.name, client = %pending.client.client_id, },
+                "refused a consent search outside the offered choices"
+            );
+            return refuse(TAMPERED).await;
+        }
+    };
+    // What to show: the page as it was (its replacement nonce is stored)
+    // with its ticks and a message, or the new offer.
+    let (shown, chosen, error) = if ticked.len() > MAX_CARRIED {
+        (pending.clone(), ticked, Some(TOO_MANY_CARRIED))
+    } else {
+        match browse_to(app, oauth, form, consent, &ticked).await {
+            Ok(Some((updated, carried))) => (updated, carried, None),
+            // Gone, or another POST of this page spent the nonce meanwhile.
+            Ok(None) => return consent::error_page(StatusCode::BAD_REQUEST, EXPIRED, brand),
+            Err(error) => return server_error(&error, brand),
+        }
+    };
+    match consent_labels(app, &shown).await {
+        Ok(labels) => user_consent_page(
+            &form.pending,
+            &shown,
+            (&user, &labels),
+            Some(&chosen),
+            error,
+            brand,
+        ),
+        Err(error) => server_error(&error, brand),
+    }
+}
+
+/// What a stored Find or Next catalogs gives back: the request as stored,
+/// and the carried catalogs at their (possibly lowered) chosen levels.
+type Browsed = (PendingAuthorization, BTreeMap<String, Access>);
+
+/// Moves a signed-in page to the offer its Find or Next catalogs asks for:
+/// reads it ([`browse_offer`]) and stores it in the pending authorization
+/// while the page's replacement nonce is still current.
+///
+/// # Arguments
+/// * `app`, `oauth` - the application and its OAuth state.
+/// * `form` - the posted form: its action, Find box and pending id.
+/// * `consent` - the page's consent, its nonce already replaced.
+/// * `ticked` - the ticked catalogs, checked against its offer.
+///
+/// # Returns
+/// The stored request and the carried catalogs at their levels, or `None`
+/// when the request is gone or its nonce was spent meanwhile.
+///
+/// # Errors
+/// [`OkfError::Database`]; [`OkfError::Busy`] when Redis fails.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn browse_to(
+    app: &App,
+    oauth: &OAuth,
+    form: &ConsentForm,
+    consent: &UserConsent,
+    ticked: &BTreeMap<String, Access>,
+) -> Result<Option<Browsed>, OkfError> {
+    // Find starts over from the box's prefix; Next continues the shown
+    // page's. An unusable prefix finds nothing (`ceiling::page`).
+    let found;
+    let (prefix, after) = if form.action == "find" {
+        found = form
+            .find
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        (found.as_str(), None)
+    } else {
+        (consent.prefix.as_str(), consent.next.as_deref())
+    };
+    let (mut offer, carried) = browse_offer(app, &consent.user_id, ticked, (prefix, after)).await?;
+    offer.nonce.clone_from(&consent.nonce);
+    // Stored only while the replacement nonce is still the page's: the
+    // closure may run again on a fresh copy (Redis), so it clones `offer`
+    // inside and does nothing else (`lessons.md`).
+    let stored = oauth
+        .pending
+        .update(&form.pending, Instant::now(), |entry| {
+            let current = entry.consent.as_ref().is_some_and(|now| {
+                now.user_id == offer.user_id
+                    && bool::from(now.nonce.as_bytes().ct_eq(offer.nonce.as_bytes()))
+            });
+            current.then(|| {
+                entry.consent = Some(offer.clone());
+                entry.clone()
+            })
+        })
+        .await?;
+    // `flatten`: absent (outer `None`) or not current (inner) alike.
+    Ok(stored.flatten().map(|updated| (updated, carried)))
 }
 
 /// The page for a failure; the details go to the log only.
@@ -1340,7 +1656,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
     use tower::ServiceExt;
 
-    use super::{chosen_levels, Choice};
+    use super::{chosen_levels, Choice, CONSENT_PAGE, MAX_CARRIED, TOO_MANY_CARRIED};
     use crate::http::api::testing::Browser;
     use crate::http::console_session::COOKIE;
     use crate::labels::directory::Labels;
@@ -1765,8 +2081,9 @@ mod tests {
         assert_eq!(waiting.resource, oauth.settings.resource);
         let principal = test
             .app
-            .keys()
             .find_grant(&waiting.grant_id)
+            .await
+            .unwrap()
             .expect("cached grant");
         assert_eq!(principal.actor, "example-actor");
         assert_eq!(principal.access, Access::Write);
@@ -2060,8 +2377,9 @@ mod tests {
             .expect("the code is stored");
         let principal = test
             .app
-            .keys()
             .find_grant(&waiting.grant_id)
+            .await
+            .unwrap()
             .expect("cached grant");
         assert_eq!(principal.access, Access::Write);
         let read_live = code_rows::find_live(test.app.pool(), &read_code, now)
@@ -2085,15 +2403,17 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn consent_pages_name_the_product_and_show_the_contact() {
         let test = oauth_app().await;
-        for (key, value) in [
-            (SettingKey::ProductName, "Acme Notes"),
-            (SettingKey::SupportContact, "help@example.com"),
-        ] {
-            settings::set(test.app.pool(), key, value, &AuditActor::cli(), Utc::now())
-                .await
-                .unwrap();
-        }
-        test.app.poll().await.unwrap();
+        crate::invalidate::testing::applied(&test.app, async {
+            for (key, value) in [
+                (SettingKey::ProductName, "Acme Notes"),
+                (SettingKey::SupportContact, "help@example.com"),
+            ] {
+                settings::set(test.app.pool(), key, value, &AuditActor::cli(), Utc::now())
+                    .await
+                    .unwrap();
+            }
+        })
+        .await;
 
         let (_, _, unknown_client) = send(&test, "GET", "/oauth/authorize", None).await;
         let (_, _, malformed) = send(
@@ -2341,11 +2661,9 @@ mod tests {
                 .await
                 .unwrap();
         }
-        sqlx::query("UPDATE server_state SET admin_generation = admin_generation + 1")
-            .execute(pool)
-            .await
-            .unwrap();
-        test.app.poll().await.unwrap();
+        // A raw update sends no change message: a catch-up (what a
+        // reconnect does) makes the label cache read the labels again.
+        test.app.apply_reconnect().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2480,7 +2798,6 @@ mod tests {
             Vec::new(),
             vec![team("t-a", "Acme"), team("t-b", "Other team")],
             vec![catalog("notes-a", "t-a"), catalog("notes-b", "t-b")],
-            Vec::new(),
         )
     }
 
@@ -2579,7 +2896,12 @@ mod tests {
         assert!(target.as_str().starts_with(REDIRECT_URI));
         assert_eq!(param(&target, "state").as_deref(), Some("xyz"));
         let grant = grant_of(&test, &target).await;
-        let principal = test.app.keys().find_grant(&grant).expect("cached grant");
+        let principal = test
+            .app
+            .find_grant(&grant)
+            .await
+            .unwrap()
+            .expect("cached grant");
         assert_eq!(principal.user.as_deref(), Some("alice"));
         assert_eq!(principal.actor, "Example Client");
         assert_eq!(principal.level("main"), Some(Access::Write));
@@ -2615,44 +2937,51 @@ mod tests {
         let grant = grant_of(&test, &forwarded(status, &headers, &body)).await;
         let granted = test
             .app
-            .keys()
             .find_grant(&grant)
+            .await
+            .unwrap()
             .expect("cached")
             .level("main");
 
-        ceiling::entitle(
-            test.app.pool(),
-            &NewEntitlement {
-                user: "alice",
-                catalog: "main",
-                access: Access::Read,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("lower");
-        test.app.poll().await.expect("reload");
+        crate::invalidate::testing::applied(&test.app, async {
+            ceiling::entitle(
+                test.app.pool(),
+                &NewEntitlement {
+                    user: "alice",
+                    catalog: "main",
+                    access: Access::Read,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("lower");
+        })
+        .await;
         let lowered = test
             .app
-            .keys()
             .find_grant(&grant)
+            .await
+            .unwrap()
             .expect("cached")
             .level("main");
-        ceiling::unentitle(
-            test.app.pool(),
-            "alice",
-            "main",
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("remove");
-        test.app.poll().await.expect("reload");
+        crate::invalidate::testing::applied(&test.app, async {
+            ceiling::unentitle(
+                test.app.pool(),
+                "alice",
+                "main",
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("remove");
+        })
+        .await;
         let removed = test
             .app
-            .keys()
             .find_grant(&grant)
+            .await
+            .unwrap()
             .map(|principal| principal.level("main"));
 
         assert_eq!(granted, Some(Access::Write));
@@ -3046,7 +3375,12 @@ mod tests {
         let (status, headers, body) = approve_as_shown(&test, &alice, &page).await;
 
         let grant = grant_of(&test, &forwarded(status, &headers, &body)).await;
-        let principal = test.app.keys().find_grant(&grant).expect("cached grant");
+        let principal = test
+            .app
+            .find_grant(&grant)
+            .await
+            .unwrap()
+            .expect("cached grant");
         assert_eq!(principal.user.as_deref(), Some("alice"));
         assert_eq!(principal.level("main"), Some(Access::Write));
         assert_eq!(principal.default_catalog.as_deref(), Some("main"));
@@ -3063,7 +3397,12 @@ mod tests {
         let (status, headers, body) = approve_as_shown(&test, &alice, &page).await;
 
         let grant = grant_of(&test, &forwarded(status, &headers, &body)).await;
-        let principal = test.app.keys().find_grant(&grant).expect("cached grant");
+        let principal = test
+            .app
+            .find_grant(&grant)
+            .await
+            .unwrap()
+            .expect("cached grant");
         assert_eq!(principal.level("main"), Some(Access::Read));
         assert_eq!(principal.default_catalog.as_deref(), Some("main"));
     }
@@ -3144,7 +3483,12 @@ mod tests {
         )
         .await;
         let grant = grant_of(&test, &forwarded(status, &headers, &body)).await;
-        let principal = test.app.keys().find_grant(&grant).expect("cached grant");
+        let principal = test
+            .app
+            .find_grant(&grant)
+            .await
+            .unwrap()
+            .expect("cached grant");
         assert_eq!(principal.level("main"), Some(Access::Read));
         assert_eq!(principal.default_catalog, None);
     }
@@ -3161,6 +3505,7 @@ mod tests {
             sign_in_code: None,
             summary: Some("page-nonce".to_string()),
             default_catalog: None,
+            find: None,
             choices: BTreeMap::new(),
         };
         let pending = super::PendingAuthorization {
@@ -3188,6 +3533,9 @@ mod tests {
                 user_id: "user-id".to_string(),
                 nonce: "page-nonce".to_string(),
                 offered: Ceiling::new(),
+                prefix: String::new(),
+                next: None,
+                whole: true,
             }),
             query: String::new(),
         };
@@ -3233,6 +3581,7 @@ mod tests {
             sign_in_code: Some("okfsc_code-that-must-not-leak".to_string()),
             summary: Some("consent-nonce-that-must-not-leak".to_string()),
             default_catalog: None,
+            find: None,
             choices: BTreeMap::new(),
         };
 
@@ -3513,6 +3862,7 @@ mod tests {
                 sign_in_code: None,
                 summary: Some(hidden(&page, "summary")),
                 default_catalog: None,
+                find: None,
                 choices: BTreeMap::new(),
             };
             // Two replicas, two Redis handles: A's update, B's interference.
@@ -3766,5 +4116,426 @@ mod tests {
             a_redis_outage_answers_the_busy_page,
             a_failed_removal_answers_the_busy_page,
         );
+    }
+
+    // Issue #736: the signed-in page offers the ceiling a page at a time.
+
+    /// Gives `count` catalogs (`c00001`...) to `user`'s personal team by
+    /// SQL, their `member_access` cycling none, read, write.
+    async fn seed_owned(test: &TestApp, user: &str, count: i64) {
+        sqlx::query(
+            "INSERT INTO catalogs (name, description, created_at, owner_team_id, member_access) \
+             SELECT 'c' || lpad(n::text, 5, '0'), '', now(), \
+                    (SELECT id FROM teams WHERE name = $1), \
+                    (ARRAY['none', 'read', 'write'])[n % 3 + 1] \
+             FROM generate_series(1, $2) AS n",
+        )
+        .bind(user)
+        .bind(count)
+        .execute(test.app.pool())
+        .await
+        .unwrap();
+        sqlx::query("ANALYZE catalogs")
+            .execute(test.app.pool())
+            .await
+            .unwrap();
+    }
+
+    /// A Find (`find` set) or Next catalogs (`None`) of a signed-in page,
+    /// with `choices` ticked.
+    async fn browse_as(
+        test: &TestApp,
+        session: &Browser,
+        page: &str,
+        find: Option<&str>,
+        choices: &[(&str, &str)],
+    ) -> (StatusCode, String) {
+        let (pending, csrf, summary) = (
+            hidden(page, "pending"),
+            hidden(page, "csrf"),
+            hidden(page, "summary"),
+        );
+        let mut pairs = vec![
+            ("pending", pending.as_str()),
+            ("csrf", csrf.as_str()),
+            ("summary", summary.as_str()),
+        ];
+        match find {
+            Some(prefix) => pairs.extend([("action", "find"), ("find", prefix)]),
+            None => pairs.push(("action", "more")),
+        }
+        pairs.extend_from_slice(choices);
+        let (status, _, body) = send_as(
+            test,
+            "POST",
+            "/oauth/authorize",
+            Some(form(&pairs)),
+            Some(session),
+        )
+        .await;
+        (status, body)
+    }
+
+    /// What the page's pending authorization holds for its consent.
+    async fn consent_of(test: &TestApp, page: &str) -> crate::oauth::state::UserConsent {
+        test.app
+            .oauth()
+            .expect("oauth on")
+            .pending
+            .update(&hidden(page, "pending"), Instant::now(), |pending| {
+                pending.consent.clone()
+            })
+            .await
+            .unwrap()
+            .flatten()
+            .expect("a signed-in consent")
+    }
+
+    /// Equivalence with the whole-ceiling page it replaces: walking Next
+    /// catalogs offers exactly `ceiling_of` (every catalog once, at its
+    /// level), a page of at most `CONSENT_PAGE` at a time, and a Find
+    /// offers exactly the ceiling's catalogs with that prefix. Team
+    /// catalogs at each `member_access`, and entitlements raising one,
+    /// matching one, reaching a `none` one and one of another team.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn walking_the_consent_pages_offers_exactly_the_whole_ceiling() {
+        let test = oauth_app().await;
+        let alice = signed_in(&test, "alice", &[("main", Access::Read)]).await;
+        seed_owned(&test, "alice", 160).await;
+        for (catalog, access) in [
+            ("c00001", Access::Write),
+            ("c00002", Access::Write),
+            ("c00003", Access::Read),
+            ("c00004", Access::Read),
+        ] {
+            ceiling::entitle(
+                test.app.pool(),
+                &NewEntitlement {
+                    user: "alice",
+                    catalog,
+                    access,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("entitle");
+        }
+        let whole = ceiling::ceiling_of(test.app.pool(), "alice").await.unwrap();
+
+        let mut page = user_page(&test, &alice).await;
+        let mut walked = Ceiling::new();
+        let mut pages = 0;
+        loop {
+            let consent = consent_of(&test, &page).await;
+            assert!(consent.offered.len() <= CONSENT_PAGE as usize);
+            assert!(!consent.whole, "160 catalogs do not fit a page");
+            for (catalog, level) in &consent.offered {
+                assert!(page.contains(&format!("name=\"grant.{catalog}\"")));
+                assert_eq!(
+                    walked.insert(catalog.clone(), *level),
+                    None,
+                    "{catalog} twice"
+                );
+            }
+            pages += 1;
+            if consent.next.is_none() {
+                assert!(!page.contains("id=\"consent-more\""));
+                break;
+            }
+            assert!(page.contains("id=\"consent-more\""));
+            let (status, next) = browse_as(&test, &alice, &page, None, &[]).await;
+            assert_eq!(status, StatusCode::OK, "{next}");
+            page = next;
+        }
+        assert_eq!(walked, whole);
+        assert!(pages >= 3, "{pages} pages");
+
+        let (status, found) = browse_as(&test, &alice, &page, Some(" C0001"), &[]).await;
+        assert_eq!(status, StatusCode::OK, "{found}");
+        let wanted: Ceiling = whole
+            .iter()
+            .filter(|(catalog, _)| catalog.starts_with("c0001"))
+            .map(|(catalog, level)| (catalog.clone(), *level))
+            .collect();
+        let consent = consent_of(&test, &found).await;
+        assert_eq!(consent.offered, wanted);
+        assert_eq!(consent.prefix, "c0001");
+        assert!(
+            found.contains("value=\"c0001\""),
+            "the box keeps the prefix"
+        );
+    }
+
+    /// Ticked catalogs are carried across a Find, preselected at their
+    /// level, and approved with the found ones in one grant; a Find for a
+    /// prefix nothing starts with says so and still offers what is carried.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_find_carries_the_ticked_catalogs_into_one_grant() {
+        let test = oauth_app().await;
+        let alice = signed_in(
+            &test,
+            "alice",
+            &[("main", Access::Write), ("other", Access::Read)],
+        )
+        .await;
+        let page = user_page(&test, &alice).await;
+
+        let (status, found) = browse_as(
+            &test,
+            &alice,
+            &page,
+            Some("ot"),
+            &[("grant.main", "on"), ("level.main", "write")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{found}");
+        assert!(
+            found.contains("name=\"grant.main\" value=\"on\" id=\"consent-catalog-main\" checked")
+        );
+        assert!(found.contains("<option value=\"write\" selected>write</option>"));
+        assert!(found.contains("name=\"grant.other\" value=\"on\" id=\"consent-catalog-other\">"));
+        let (status, none) = browse_as(
+            &test,
+            &alice,
+            &found,
+            Some("zz"),
+            &[("grant.main", "on"), ("level.main", "write")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{none}");
+        assert!(
+            !none.contains("id=\"consent-none-found\""),
+            "main is carried"
+        );
+        assert_eq!(
+            consent_of(&test, &none).await.offered,
+            [("main".to_string(), Access::Write)]
+                .into_iter()
+                .collect::<Ceiling>()
+        );
+        let (status, empty) = browse_as(&test, &alice, &none, Some("zz"), &[]).await;
+        assert_eq!(status, StatusCode::OK, "{empty}");
+        assert!(empty.contains("id=\"consent-none-found\""), "{empty}");
+        assert!(!empty.contains("id=\"consent-empty\""), "she has catalogs");
+
+        let (status, again) = browse_as(&test, &alice, &empty, Some("ot"), &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, carried) = browse_as(
+            &test,
+            &alice,
+            &again,
+            Some("ma"),
+            &[("grant.other", "on"), ("level.other", "read")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, headers, body) = consent_as(
+            &test,
+            Some(&alice),
+            &carried,
+            &[
+                ("grant.main", "on"),
+                ("level.main", "write"),
+                ("grant.other", "on"),
+                ("level.other", "read"),
+                ("default_catalog", "main"),
+            ],
+        )
+        .await;
+        let grant = grant_of(&test, &forwarded(status, &headers, &body)).await;
+        let principal = test
+            .app
+            .find_grant(&grant)
+            .await
+            .unwrap()
+            .expect("cached grant");
+        assert_eq!(principal.level("main"), Some(Access::Write));
+        assert_eq!(principal.level("other"), Some(Access::Read));
+        assert_eq!(principal.default_catalog.as_deref(), Some("main"));
+    }
+
+    /// A carried catalog is offered at the ceiling's level now: lowered
+    /// since the page, it is carried at the lower level, and a write
+    /// chosen from the old page is refused; one the ceiling no longer
+    /// reaches is dropped. A tick the page never offered is refused, and so
+    /// is any later use of a page whose nonce a Find spent.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_find_rechecks_what_it_carries_and_spends_the_page() {
+        let test = oauth_app().await;
+        let alice = signed_in(
+            &test,
+            "alice",
+            &[("main", Access::Write), ("other", Access::Read)],
+        )
+        .await;
+        let page = user_page(&test, &alice).await;
+        ceiling::entitle(
+            test.app.pool(),
+            &NewEntitlement {
+                user: "alice",
+                catalog: "main",
+                access: Access::Read,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("lower");
+        ceiling::unentitle(
+            test.app.pool(),
+            "alice",
+            "other",
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("remove");
+
+        let (status, found) = browse_as(
+            &test,
+            &alice,
+            &page,
+            Some("zz"),
+            &[
+                ("grant.main", "on"),
+                ("level.main", "write"),
+                ("grant.other", "on"),
+                ("level.other", "read"),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{found}");
+        assert_eq!(
+            consent_of(&test, &found).await.offered,
+            [("main".to_string(), Access::Read)]
+                .into_iter()
+                .collect::<Ceiling>()
+        );
+        assert!(!found.contains("value=\"write\""), "{found}");
+        // The old page's nonce was spent by the Find.
+        let (stale, _, _) = consent_as(&test, Some(&alice), &page, READ_MAIN).await;
+        assert_eq!(stale, StatusCode::BAD_REQUEST);
+        let (write, _, body) = consent_as(
+            &test,
+            Some(&alice),
+            &found,
+            &[("grant.main", "on"), ("level.main", "write")],
+        )
+        .await;
+        assert_eq!(write, StatusCode::BAD_REQUEST);
+        assert!(body.contains("did not match what was offered"), "{body}");
+        assert_eq!(oauth_grants(&test).await, 0);
+
+        let page = user_page(&test, &alice).await;
+        let (tampered, body) = browse_as(
+            &test,
+            &alice,
+            &page,
+            Some("ma"),
+            &[("grant.other", "on"), ("level.other", "read")],
+        )
+        .await;
+        assert_eq!(tampered, StatusCode::BAD_REQUEST);
+        assert!(body.contains("did not match what was offered"), "{body}");
+    }
+
+    /// The offer stays bounded: more than `MAX_CARRIED` ticked catalogs are
+    /// not carried; the page comes back with the message and its ticks.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_find_carries_at_most_max_carried_catalogs() {
+        let test = oauth_app().await;
+        let alice = signed_in(&test, "alice", &[]).await;
+        // 160 catalogs, two thirds reachable: over two pages.
+        seed_owned(&test, "alice", 160).await;
+        let first = user_page(&test, &alice).await;
+        let ticks = |consent: &crate::oauth::state::UserConsent| -> Vec<(String, String)> {
+            consent
+                .offered
+                .keys()
+                .flat_map(|catalog| {
+                    [
+                        (format!("grant.{catalog}"), "on".to_string()),
+                        (format!("level.{catalog}"), "read".to_string()),
+                    ]
+                })
+                .collect()
+        };
+        let all = ticks(&consent_of(&test, &first).await);
+        let pairs: Vec<(&str, &str)> = all.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let (status, second) = browse_as(&test, &alice, &first, None, &pairs).await;
+        assert_eq!(status, StatusCode::OK, "{second}");
+        let offered = consent_of(&test, &second).await;
+        assert_eq!(offered.offered.len(), 2 * CONSENT_PAGE as usize);
+        let all = ticks(&offered);
+        let pairs: Vec<(&str, &str)> = all.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+
+        let (status, refused) = browse_as(&test, &alice, &second, None, &pairs).await;
+
+        assert_eq!(status, StatusCode::OK, "{refused}");
+        assert!(refused.contains("at most 50 ticked catalogs"), "{refused}");
+        assert_eq!(consent_of(&test, &refused).await.offered, offered.offered);
+        assert!(TOO_MANY_CARRIED.contains(&MAX_CARRIED.to_string()));
+    }
+
+    /// Issue #736's size bound: with a team owning 50,000 catalogs, `GET
+    /// /me`, `GET /session`, `GET /me/ceiling`, the consent page and a Find
+    /// each read a bounded number of rows (sqlx's `rows_returned`), not one
+    /// per catalog.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_team_owning_many_catalogs_keeps_each_page_small() {
+        use crate::rows_returned::counting;
+        let test = oauth_app().await;
+        let alice = signed_in(&test, "alice", &[]).await;
+        sqlx::query(
+            "INSERT INTO catalogs (name, description, created_at, owner_team_id) \
+             SELECT 'c' || lpad(n::text, 6, '0'), '', now(), \
+                    (SELECT id FROM teams WHERE name = 'alice') \
+             FROM generate_series(1, 50000) AS n",
+        )
+        .execute(test.app.pool())
+        .await
+        .unwrap();
+        sqlx::query("ANALYZE catalogs")
+            .execute(test.app.pool())
+            .await
+            .unwrap();
+        let (test, alice) = (&test, &alice);
+        let get = |path: &'static str| async move {
+            let (status, _, body) = send_as(test, "GET", path, None, Some(alice)).await;
+            assert_eq!(status, StatusCode::OK, "{path}: {body}");
+            body
+        };
+        // Warm the session and the caches, so only the page's own reads count.
+        get("/api/v1/session").await;
+
+        let (me, me_rows, _) = counting(get("/api/v1/me")).await;
+        let (_, session_rows, _) = counting(get("/api/v1/session")).await;
+        let (_, listing_rows, _) = counting(get("/api/v1/me/ceiling")).await;
+        let authorize = format!("/oauth/authorize?{}", user_authorize_query());
+        let (page, page_rows, _) =
+            counting(async { send_as(test, "GET", &authorize, None, Some(alice)).await.2 }).await;
+        // The page's offer is one page (the Find below replaces it).
+        assert_eq!(
+            consent_of(test, &page).await.offered.len(),
+            CONSENT_PAGE as usize
+        );
+        let ((status, found), find_rows, _) =
+            counting(browse_as(test, alice, &page, Some("c04999"), &[])).await;
+        assert_eq!(consent_of(test, &found).await.offered.len(), 10);
+
+        assert!(me.contains("\"ceiling_access\":\"write\""), "{me}");
+        assert_eq!(status, StatusCode::OK, "{found}");
+        assert!(found.contains("name=\"grant.c049999\""), "{found}");
+        for (what, rows) in [
+            ("GET /me", me_rows),
+            ("GET /session", session_rows),
+            ("GET /me/ceiling", listing_rows),
+            ("the consent page", page_rows),
+            ("a Find", find_rows),
+        ] {
+            assert!(rows < 1_000, "{what} returned {rows} rows");
+        }
+        assert!(page_rows > 0, "the page's reads are counted");
     }
 }

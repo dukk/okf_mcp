@@ -725,6 +725,23 @@ impl MemWorkspace {
         })
     }
 
+    /// How many files the workspace holds and the total size of their
+    /// contents, for estimating what it costs in memory.
+    ///
+    /// # Returns
+    /// `(files, bytes)`, the byte total saturating at `u64::MAX`.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn totals(&self) -> (u64, u64) {
+        let files = self.files();
+        // `usize` to `u64` never loses anything on the 64-bit targets this
+        // builds for; `try_from` says so without a silent cast.
+        let bytes = files
+            .values()
+            .map(|file| u64::try_from(file.content.len()).unwrap_or(u64::MAX))
+            .fold(0_u64, u64::saturating_add);
+        (u64::try_from(files.len()).unwrap_or(u64::MAX), bytes)
+    }
+
     /// The stored file at `path`, if there is one.
     ///
     /// # Arguments

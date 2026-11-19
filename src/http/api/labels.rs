@@ -2,26 +2,39 @@
 //! console can show a person, team or catalog by its label wherever an
 //! answer names it by id (display names spec, Part 3).
 //!
-//! Scope:
-//! - an admin that reaches every catalog sees every user, team and catalog;
-//! - anyone else sees its own user, its teams, the loaded catalogs it
-//!   reaches and those catalogs' owner teams;
-//! - a provisioner never gets here: the route is not in
-//!   [`PROVISIONER_ROUTES`](super::PROVISIONER_ROUTES).
+//! Scope of `GET /labels`, for every caller (M18 issue #749: an
+//! every-catalog admin included, so no answer grows with the number of
+//! users or teams):
+//! - the caller's own user and its teams, and the owner teams of the
+//!   catalogs on its page;
+//! - the catalogs are one page of those the caller reaches (M18 spec
+//!   Decision 7: `?after=&limit=` and `next`, as `GET /catalogs`). Labels
+//!   shared within a page are told apart; across pages they are not.
+//!
+//! `GET /labels/named?users=&teams=` answers the labels of the users and
+//! teams a view is about to show, at most [`NAMED_MAX`] of each: every one
+//! that exists for an admin (any admin may list every user and team, with
+//! their labels: `GET /users`, `GET /teams`), and for anyone else only its
+//! own user and its own teams, so no caller receives a label it could not
+//! read before.
+//!
+//! A provisioner never gets here: neither route is in
+//! [`PROVISIONER_ROUTES`](super::PROVISIONER_ROUTES).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::routing::get;
 use axum::{Extension, Json, Router};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-use super::require_every_catalog;
+use super::{reachable_page, require_reader, PageQuery};
 use crate::app::App;
 use crate::auth::Principal;
+use crate::error::OkfError;
 use crate::http::AppError;
-use crate::labels::directory::Labels;
+use crate::labels::directory::Wanted;
 
 /// This area's routes.
 #[cfg_attr(
@@ -32,7 +45,9 @@ use crate::labels::directory::Labels;
     )
 )]
 pub(crate) fn routes() -> Router<Arc<App>> {
-    Router::new().route("/labels", get(labels))
+    Router::new()
+        .route("/labels", get(labels))
+        .route("/labels/named", get(named))
 }
 
 /// `GET /labels`' answer: the labels the caller may see, by slug.
@@ -43,12 +58,16 @@ pub(crate) struct LabelsView {
     pub users: BTreeMap<String, String>,
     /// Team slug -> label.
     pub teams: BTreeMap<String, String>,
-    /// Catalog slug -> label, told apart where two share one.
+    /// Catalog slug -> label for one page of the catalogs the caller
+    /// reaches, told apart where two on the page share one.
     pub catalogs: BTreeMap<String, String>,
+    /// The `after` of the next page of `catalogs`; absent on the last page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
 }
 
 /// The labels of `slugs`, as `(slug, label)` pairs, for a team or a user
-/// the directory may not know (created since it loaded: skipped).
+/// that may not exist (deleted since: skipped).
 #[tracing::instrument(level = "trace", skip_all)]
 fn known<'a, 'l>(
     slugs: impl IntoIterator<Item = &'a str>,
@@ -60,71 +79,190 @@ fn known<'a, 'l>(
         .collect()
 }
 
-/// The labels `principal` may see (see the module docs for the scope).
+/// The labels `principal` may see (see the module docs for the scope),
+/// read for exactly the slugs the answer holds: its own user and teams, and
+/// the page's catalogs with their owner teams, whoever the caller is.
 ///
 /// # Arguments
-/// * `labels` - the key cache's directory.
-/// * `reachable` - the loaded catalogs `principal` reaches, which only the
+/// * `app` - the application, for its label lookup.
+/// * `reachable` - the page of catalogs `principal` reaches, which only the
 ///   caller can name.
 /// * `principal` - the caller.
 ///
 /// # Returns
 /// The view.
+///
+/// # Errors
+/// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all)]
-fn scoped(labels: &Labels, reachable: &[&str], principal: &Principal) -> LabelsView {
-    if require_every_catalog(principal).is_ok() {
-        return LabelsView {
-            users: labels
-                .users()
-                .map(|(slug, label)| (slug.to_string(), label.to_string()))
-                .collect(),
-            teams: labels
-                .teams()
-                .map(|(slug, label)| (slug.to_string(), label.to_string()))
-                .collect(),
-            catalogs: labels
-                .catalog_choices(labels.catalog_slugs())
-                .into_iter()
-                .collect(),
-        };
+async fn scoped(
+    app: &App,
+    reachable: &[&str],
+    principal: &Principal,
+) -> Result<LabelsView, OkfError> {
+    let lookup = app.labels();
+    let mut wanted = Wanted::default();
+    for catalog in reachable {
+        wanted.catalog(catalog);
     }
-    let own_teams = principal
-        .user
-        .as_deref()
+    let mut own_teams = Vec::new();
+    if let Some(user) = principal.user.as_deref() {
+        wanted.user(user);
+        own_teams = lookup.teams_of(user).await?;
+        for team in &own_teams {
+            wanted.team(team);
+        }
+    }
+    // Includes the owner teams of the catalogs on the page.
+    let labels = lookup.labels_with_owners(&wanted).await?;
+    let catalogs = labels
+        .catalog_choices(reachable.iter().copied())
         .into_iter()
-        .flat_map(|user| labels.teams_of(user));
+        .collect();
     let owner_teams = reachable
         .iter()
         .filter_map(|catalog| labels.catalog_owner(catalog));
-    LabelsView {
+    Ok(LabelsView {
         users: known(principal.user.as_deref(), |user| labels.user(user)),
-        teams: known(own_teams.chain(owner_teams), |team| labels.team(team)),
-        catalogs: labels
-            .catalog_choices(reachable.iter().copied())
-            .into_iter()
-            .collect(),
-    }
+        teams: known(
+            own_teams.iter().map(String::as_str).chain(owner_teams),
+            |team| labels.team(team),
+        ),
+        catalogs,
+        next: None,
+    })
 }
 
-/// `GET /labels`.
+/// `GET /labels?after=&limit=`.
 ///
 /// # Returns
-/// The labels the caller may see.
+/// The labels the caller may see, with `next` while more of its catalogs
+/// follow.
 ///
 /// # Errors
-/// 403 for a provisioner (by the allow-list, before this runs).
+/// 403 for a provisioner (by the allow-list, before this runs); 400 for a
+/// malformed `after`; 500 if the catalog directory cannot be read.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn labels(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
+    Query(query): Query<PageQuery>,
 ) -> Result<Json<LabelsView>, AppError> {
-    // Held in locals so the borrows below outlive the call.
-    let loaded = app.catalogs();
-    let reachable: Vec<&str> = loaded
-        .keys()
-        .map(String::as_str)
-        .filter(|catalog| principal.reaches(catalog))
+    let page = reachable_page(&app, &principal, &query).await?;
+    let reachable: Vec<&str> = page.items.iter().map(|row| row.name.as_str()).collect();
+    Ok(Json(LabelsView {
+        next: page.next,
+        ..scoped(&app, &reachable, &principal).await?
+    }))
+}
+
+/// The most users, and the most teams, one `GET /labels/named` may name.
+pub(crate) const NAMED_MAX: usize = 100;
+
+/// `GET /labels/named`' query: comma-separated slugs.
+#[derive(Debug, Default, Deserialize)]
+// An unknown parameter (`?user=`, a typo) is a 400, never an empty answer
+// that would leave the console showing slugs without saying why.
+#[serde(deny_unknown_fields)]
+struct NamedQuery {
+    /// User slugs, `alice,bob`.
+    users: Option<String>,
+    /// Team slugs.
+    teams: Option<String>,
+}
+
+/// `GET /labels/named`' answer: the labels of the named users and teams
+/// the caller may see. A slug that does not exist, or that the caller may
+/// not see, is absent.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub(crate) struct NamedView {
+    /// User slug -> label.
+    pub users: BTreeMap<String, String>,
+    /// Team slug -> label.
+    pub teams: BTreeMap<String, String>,
+}
+
+/// The distinct slugs of one comma-separated parameter, empty items
+/// skipped.
+///
+/// # Arguments
+/// * `list` - the parameter as sent, if any.
+/// * `field` - its name, for the refusal.
+///
+/// # Returns
+/// The slugs, sorted.
+///
+/// # Errors
+/// [`OkfError::InvalidPath`] (400) for more than [`NAMED_MAX`] slugs.
+#[tracing::instrument(level = "trace", skip_all)]
+fn slugs(list: Option<&str>, field: &str) -> Result<BTreeSet<String>, OkfError> {
+    let slugs: BTreeSet<String> = list
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|slug| !slug.is_empty())
+        .map(str::to_string)
         .collect();
-    let directory = app.keys().labels();
-    Ok(Json(scoped(&directory, &reachable, &principal)))
+    if slugs.len() > NAMED_MAX {
+        return Err(OkfError::InvalidPath {
+            path: field.to_string(),
+            reason: format!("name at most {NAMED_MAX} at a time"),
+        });
+    }
+    Ok(slugs)
+}
+
+/// `GET /labels/named?users=&teams=`: the labels of the users and teams a
+/// view shows (see the module docs for who sees which).
+///
+/// # Returns
+/// The labels the caller may see, of the slugs it named.
+///
+/// # Errors
+/// 403 for a provisioner (by the allow-list, before this runs); 400 for an
+/// unknown parameter or more than [`NAMED_MAX`] slugs of one kind; 500 if
+/// the labels cannot be read.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn named(
+    State(app): State<Arc<App>>,
+    Extension(principal): Extension<Arc<Principal>>,
+    Query(query): Query<NamedQuery>,
+) -> Result<Json<NamedView>, AppError> {
+    let users = slugs(query.users.as_deref(), "users")?;
+    let teams = slugs(query.teams.as_deref(), "teams")?;
+    let lookup = app.labels();
+    // An admin may list every user and team with their labels (`GET
+    // /users` and `GET /teams` take the same check), so it may see any
+    // label; anyone else only its own user's and its own teams'.
+    let wanted = if require_reader(&principal).is_ok() {
+        Wanted {
+            users,
+            teams,
+            ..Wanted::default()
+        }
+    } else {
+        let mut wanted = Wanted::default();
+        if let Some(user) = principal.user.as_deref() {
+            if users.contains(user) {
+                wanted.user(user);
+            }
+            if !teams.is_empty() {
+                for team in lookup.teams_of(user).await? {
+                    if teams.contains(&team) {
+                        wanted.team(&team);
+                    }
+                }
+            }
+        }
+        wanted
+    };
+    let labels = lookup.labels_for(&wanted).await?;
+    Ok(Json(NamedView {
+        users: known(wanted.users.iter().map(String::as_str), |user| {
+            labels.user(user)
+        }),
+        teams: known(wanted.teams.iter().map(String::as_str), |team| {
+            labels.team(team)
+        }),
+    }))
 }

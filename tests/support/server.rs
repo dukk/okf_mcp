@@ -90,7 +90,8 @@ pub fn files(entries: &[(&str, &str)]) -> Files {
 pub struct TestServer {
     /// `http://127.0.0.1:<port>`.
     pub base: String,
-    /// The server's state, to `poll` after changing the database.
+    /// The server's state, to apply a write's change messages to
+    /// ([`applied`]) after changing the database.
     pub app: Arc<App>,
     shutdown: CancellationToken,
     /// The task running `http::serve`, awaited by `restart`.
@@ -148,15 +149,14 @@ impl TestServer {
         Self::start_serving(catalogs_and_files, make_config, false).await
     }
 
-    /// As [`TestServer::start_with`], optionally running the mail worker
-    /// (`[mail] worker` as the settings say), for tests that watch a queued
+    /// As [`TestServer::start_with`], optionally running the mail worker,
+    /// for tests that watch a queued
     /// mail get sent. The other starters only enqueue.
     ///
     /// # Arguments
     /// * `catalogs_and_files` - as for `start`.
     /// * `make_config` - builds the settings from `http://127.0.0.1:<port>`.
-    /// * `mail_worker` - `true` keeps the settings' `mail.worker` (on by
-    ///   default); `false` turns the worker off.
+    /// * `mail_worker` - `true` runs the worker; `false` turns it off.
     ///
     /// # Returns
     /// The running server.
@@ -172,8 +172,9 @@ impl TestServer {
     }
 
     /// As [`TestServer::start_with`], with `[redis]` on `redis`, the first of
-    /// a group of replicas. `poll_interval` is forced to one hour, so what a
-    /// test sees change was carried by Redis, not by the poll loop. The
+    /// a group of replicas. `credential_ttl` and `catalog_ttl` are forced to
+    /// one hour, so what a test sees change was carried by Redis or the
+    /// change feed, not by an entry's expiry. The
     /// caller keeps the `TestRedis` alive for the test.
     ///
     /// # Arguments
@@ -191,7 +192,30 @@ impl TestServer {
         redis: &TestRedis,
         make_config: impl FnOnce(&str) -> Config,
     ) -> Self {
-        Self::start_inner(catalogs_and_files, make_config, false, Some(redis)).await
+        Self::start_shared_serving(catalogs_and_files, redis, make_config, false).await
+    }
+
+    /// As [`TestServer::start_shared`], optionally running the background
+    /// workers (mail and housekeeping) and the housekeeping ticker.
+    ///
+    /// # Arguments
+    /// * `catalogs_and_files` - as for `start`.
+    /// * `redis` - the Redis every replica of the test shares.
+    /// * `make_config` - builds the settings from `http://127.0.0.1:<port>`.
+    /// * `worker` - `true` runs the workers; `false` turns them off.
+    ///
+    /// # Returns
+    /// The running server.
+    ///
+    /// # Panics
+    /// As [`TestServer::start_shared`].
+    pub async fn start_shared_serving(
+        catalogs_and_files: Vec<(&str, Files)>,
+        redis: &TestRedis,
+        make_config: impl FnOnce(&str) -> Config,
+        worker: bool,
+    ) -> Self {
+        Self::start_inner(catalogs_and_files, make_config, worker, Some(redis)).await
     }
 
     /// Another replica: a new `App` (its own pool on the same database, its
@@ -211,10 +235,32 @@ impl TestServer {
         redis: &TestRedis,
         make_config: impl FnOnce(&str) -> Config,
     ) -> Sibling {
+        self.sibling_serving(redis, make_config, false).await
+    }
+
+    /// As [`TestServer::sibling`], optionally running the background workers
+    /// (mail and housekeeping) and the housekeeping ticker.
+    ///
+    /// # Arguments
+    /// * `redis` - the Redis the first replica uses.
+    /// * `make_config` - builds the settings from the new server's base URL.
+    /// * `worker` - `true` runs the workers; `false` turns them off.
+    ///
+    /// # Returns
+    /// The running replica; it does not own the database.
+    ///
+    /// # Panics
+    /// As [`TestServer::sibling`].
+    pub async fn sibling_serving(
+        &self,
+        redis: &TestRedis,
+        make_config: impl FnOnce(&str) -> Config,
+        worker: bool,
+    ) -> Sibling {
         let pool = okf_mcp::db::connect(&self.db.url, self.app.config().database_max_connections)
             .await
             .expect("a second pool on the test database");
-        let (base, app, shutdown, served) = serve_app(pool, make_config, false, Some(redis)).await;
+        let (base, app, shutdown, served) = serve_app(pool, make_config, worker, Some(redis)).await;
         Sibling {
             base,
             app,
@@ -275,7 +321,7 @@ impl TestServer {
     /// # Arguments
     /// * `config` - the new server's settings.
     ///
-    /// The old server has stopped (its poll loop ended, its connections
+    /// The old server has stopped (its listener ended, its connections
     /// closed) before the new one starts, so the two never share the database.
     /// Close every client first: an open connection holds the old server up.
     ///
@@ -301,7 +347,7 @@ impl TestServer {
         self.served = served;
     }
 
-    /// Stops the server (its poll loop, its mail worker and its connections)
+    /// Stops the server (its listener, its mail worker and its connections)
     /// and waits until it has, leaving the database up. Close every client
     /// first: an open connection holds the server up.
     ///
@@ -324,7 +370,7 @@ impl TestServer {
         format!("{}/mcp", self.base)
     }
 
-    /// Creates a key and reloads the server's key cache.
+    /// Creates a key (keys load on their first use, so nothing is reloaded).
     ///
     /// # Arguments
     /// * `id` - the key's id (also its actor).
@@ -336,7 +382,7 @@ impl TestServer {
     /// The key, to send as a bearer token.
     ///
     /// # Panics
-    /// If the store refuses the key or the poll fails.
+    /// If the store refuses the key.
     pub async fn key(
         &self,
         id: &str,
@@ -370,18 +416,17 @@ impl TestServer {
         )
         .await
         .expect("create key");
-        self.app.poll().await.expect("poll");
         key
     }
 
-    /// Sets a catalog's display name and reloads the label directory.
+    /// Sets a catalog's display name and makes the label cache read it again.
     ///
     /// # Arguments
     /// * `slug` - the catalog's slug.
     /// * `label` - its new display name.
     ///
     /// # Panics
-    /// If the update or the poll fails.
+    /// If the update fails.
     pub async fn set_catalog_label(&self, slug: &str, label: &str) {
         sqlx::query("UPDATE catalogs SET display_name = $1 WHERE name = $2")
             .bind(label)
@@ -392,14 +437,15 @@ impl TestServer {
         self.reload_labels().await;
     }
 
-    /// Sets a user's display name (which names their personal team) and reloads the label directory.
+    /// Sets a user's display name (which names their personal team) and makes the label cache read
+    /// it again.
     ///
     /// # Arguments
     /// * `slug` - the user's slug.
     /// * `label` - its new display name.
     ///
     /// # Panics
-    /// If the update or the poll fails.
+    /// If the update fails.
     pub async fn set_user_label(&self, slug: &str, label: &str) {
         sqlx::query("UPDATE users SET display_name = $1 WHERE name = $2")
             .bind(label)
@@ -410,20 +456,16 @@ impl TestServer {
         self.reload_labels().await;
     }
 
-    /// Bumps the administrative generation and polls, so the label directory
-    /// reloads.
+    /// A raw update sends no change message, so this catches up as a
+    /// change-feed reconnect does: every cached label (and credential, user
+    /// and catalog row) is read again on its next use.
     async fn reload_labels(&self) {
-        sqlx::query("UPDATE server_state SET admin_generation = admin_generation + 1")
-            .execute(&self.db.pool)
-            .await
-            .expect("bump the generation");
-        self.app.poll().await.expect("poll");
+        self.app.apply_reconnect().await;
     }
 
     /// Inserts a key called `name`, granted every catalog, with no user, as
-    /// a key made before users existed is, then reloads the key cache. No
-    /// store function makes one any more, so this writes the row itself,
-    /// and bumps the administrative generation so the poll sees it.
+    /// a key made before users existed is. No store function makes one any
+    /// more, so this writes the row itself (keys load on their first use).
     ///
     /// # Arguments
     /// * `name` - its id, name and actor.
@@ -433,7 +475,7 @@ impl TestServer {
     /// The key, to send as a bearer token.
     ///
     /// # Panics
-    /// If the insert or the poll fails.
+    /// If the insert fails.
     pub async fn legacy_key(&self, name: &str, access: Access) -> String {
         let secret = okf_mcp::keys::generate().expect("generate a key");
         sqlx::query(
@@ -446,16 +488,11 @@ impl TestServer {
         .execute(&self.db.pool)
         .await
         .expect("insert a legacy key");
-        sqlx::query("UPDATE server_state SET admin_generation = admin_generation + 1")
-            .execute(&self.db.pool)
-            .await
-            .expect("bump the admin generation");
-        self.app.poll().await.expect("poll");
         secret
     }
 
-    /// Creates a user with an email and a password, and polls it into the
-    /// key cache.
+    /// Creates a user with an email and a password (users load on their
+    /// first use).
     ///
     /// # Arguments
     /// * `name` - the user's name.
@@ -490,12 +527,12 @@ impl TestServer {
         okf_mcp::store::passwords::set(pool, &user.id, password, Utc::now())
             .await
             .expect("set the password");
-        self.app.poll().await.expect("poll the user in");
         user.id
     }
 
     /// Gives the fixture user [`OWNER`], whose personal team owns the
-    /// catalogs, the email `tester@example.com` and `password`, and polls.
+    /// catalogs, the email `tester@example.com` and `password`, and applies
+    /// the change messages (the owner may be cached already).
     ///
     /// # Arguments
     /// * `password` - the password (within the policy).
@@ -508,41 +545,47 @@ impl TestServer {
     pub async fn owner_with_password(&self, password: &str) -> String {
         let pool = &self.db.pool;
         let email = format!("{OWNER}@example.com");
-        users::set_email(pool, OWNER, Some(&email), &AuditActor::cli(), Utc::now())
-            .await
-            .expect("set the owner's email");
-        let owner = users::find_by_email(pool, &email)
-            .await
-            .expect("find the owner")
-            .expect("the owner exists");
-        okf_mcp::store::passwords::set(pool, &owner.id, password, Utc::now())
-            .await
-            .expect("set the owner's password");
-        self.app.poll().await.expect("poll the owner in");
+        applied(&self.app, async {
+            users::set_email(pool, OWNER, Some(&email), &AuditActor::cli(), Utc::now())
+                .await
+                .expect("set the owner's email");
+            let owner = users::find_by_email(pool, &email)
+                .await
+                .expect("find the owner")
+                .expect("the owner exists");
+            okf_mcp::store::passwords::set(pool, &owner.id, password, Utc::now())
+                .await
+                .expect("set the owner's password");
+        })
+        .await;
         email
     }
 
-    /// Creates a read-only maintenance reporter and refreshes the key cache.
+    /// Creates a read-only maintenance reporter, applying the change message
+    /// that drops its cached principal.
     pub async fn reporter_key(&self, name: &str, catalogs: &[&str]) -> String {
         let key = self.key(name, Access::Read, catalogs, None).await;
         let id = self
             .app
-            .keys()
-            .find(&key)
+            .find_key(&key)
+            .await
+            .unwrap()
             .expect("created principal")
             .key_id
             .clone();
-        keys::set_maintenance_report_target(
-            &self.db.pool,
-            &id,
-            None,
-            true,
-            &okf_mcp::store::audit::AuditActor::cli(),
-            chrono::Utc::now(),
+        applied(
+            &self.app,
+            keys::set_maintenance_report_target(
+                &self.db.pool,
+                &id,
+                None,
+                true,
+                &okf_mcp::store::audit::AuditActor::cli(),
+                chrono::Utc::now(),
+            ),
         )
         .await
         .expect("enable reporting");
-        self.app.poll().await.expect("poll");
         key
     }
 
@@ -677,9 +720,9 @@ impl Drop for Sibling {
 /// # Arguments
 /// * `pool` - a pool on the database, already migrated and imported.
 /// * `make_config` - builds the settings from the base URL.
-/// * `mail_worker` - whether the settings' `mail.worker` stands.
-/// * `redis` - `[redis]` on this server, if any; `poll_interval` is then one
-///   hour.
+/// * `mail_worker` - whether `serve` runs the mail worker.
+/// * `redis` - `[redis]` on this server, if any; `credential_ttl` and
+///   `catalog_ttl` are then one hour.
 ///
 /// # Returns
 /// The base URL, the app, the token that stops the server, and the task
@@ -701,11 +744,14 @@ async fn serve_app(
     let base = format!("http://{}", listener.local_addr().expect("address"));
     let mut config = make_config(&base);
     // Test servers only enqueue unless a test asks for the worker.
-    config.mail.worker &= mail_worker;
     let shared = match redis {
         Some(server) => {
             config.redis = Some(redis_config(server));
-            config.poll_interval = Duration::from_secs(3600);
+            // Neither the credential TTL nor the directory's TTL
+            // may do a change message's work: a two-replica test passes
+            // only through it.
+            config.credential_ttl = Duration::from_secs(3600);
+            config.catalog_ttl = Duration::from_secs(3600);
             Some(redis_connect(server).await)
         }
         None => None,
@@ -720,12 +766,36 @@ async fn serve_app(
     .await
     .expect("app loads");
     let shutdown = CancellationToken::new();
-    let served = tokio::spawn(okf_mcp::http::serve(
+    let served = tokio::spawn(okf_mcp::http::serve_with(
         Arc::clone(&app),
         listener,
         shutdown.clone(),
+        okf_mcp::http::ServeOptions {
+            worker: mail_worker,
+        },
     ));
     (base, app, shutdown, served)
+}
+
+/// Runs `write` and applies the change messages it queued to `app` before
+/// returning, as the HTTP layer does for a request's own writes
+/// ([`okf_mcp::invalidate::capturing`], [`App::apply_own_writes`]). A test
+/// that writes through the store outside a request uses it to make the
+/// write visible to the server at once: the server's change-feed listener
+/// applies the same messages too, but a moment later.
+///
+/// # Arguments
+/// * `app` - the server's state.
+/// * `write` - the write, an `async { .. }` block or a store call's future
+///   (a Rust future does nothing until awaited, so it runs inside the
+///   capture).
+///
+/// # Returns
+/// What `write` returned.
+pub async fn applied<T>(app: &App, write: impl std::future::Future<Output = T>) -> T {
+    let (output, written) = okf_mcp::invalidate::capturing(write).await;
+    app.apply_own_writes(&written).await;
+    output
 }
 
 /// Calls a tool.

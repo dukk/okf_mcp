@@ -16,8 +16,9 @@ use crate::store::keys::Access;
 
 const NOTE: &str = "---\ntype: Note\ntitle: Note\n---\nBody.\n";
 
-/// Runs `statements`, then bumps the admin generation and polls, so the key
-/// cache reloads the label directory (the store's own writers do the same).
+/// Runs `statements`, then catches up (what a change-feed reconnect does),
+/// so the label cache reads the labels again: a raw update sends no change
+/// message, as the store's own writers do.
 async fn relabel(test: &TestApp, statements: &[&'static str]) {
     for statement in statements {
         sqlx::query(*statement)
@@ -25,11 +26,7 @@ async fn relabel(test: &TestApp, statements: &[&'static str]) {
             .await
             .expect("relabel");
     }
-    sqlx::query("UPDATE server_state SET admin_generation = admin_generation + 1")
-        .execute(test.app.pool())
-        .await
-        .expect("bump the generation");
-    test.app.poll().await.expect("poll the labels in");
+    test.app.apply_reconnect().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -45,7 +42,9 @@ async fn list_catalogs_carries_display_name_and_label() {
     )
     .await;
 
-    let listed = list(&context(&test, principal(&[], None), None));
+    let listed = list(&context(&test, principal(&[], None), None), None)
+        .await
+        .unwrap();
 
     let main = listed.catalogs.iter().find(|c| c.name == "main").unwrap();
     assert_eq!(main.display_name, "Work notes");
@@ -66,7 +65,12 @@ async fn list_catalogs_names_a_suspended_team_by_label() {
     )
     .await;
 
-    let listed = list(&context(&test, cached_principal(&test, &reader), None));
+    let listed = list(
+        &context(&test, cached_principal(&test, &reader).await, None),
+        None,
+    )
+    .await
+    .unwrap();
 
     let suspended = listed.catalogs[0].suspended.as_ref().expect("suspended");
     assert_eq!(suspended.team, "family");
@@ -225,7 +229,9 @@ async fn the_suspended_error_names_label_and_id() {
     .await;
 
     let refused = cached_principal(&test, &reader)
-        .require(Access::Read, "m-1")
+        .await
+        .require_in(test.app.directory(), Access::Read, "m-1")
+        .await
         .unwrap_err();
 
     assert!(matches!(refused, OkfError::Suspended { .. }));
@@ -241,7 +247,7 @@ async fn an_unknown_catalog_error_is_unchanged() {
     let test = app_with(&[("pg", &[])], Config::default()).await;
     let ctx = context(&test, principal(&[], Some("pg")), None);
 
-    let error = ctx.one(Some("nope")).unwrap_err();
+    let error = ctx.one(Some("nope")).await.unwrap_err();
 
     assert_eq!(
         error.to_string(),

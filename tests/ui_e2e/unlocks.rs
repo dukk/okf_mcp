@@ -39,16 +39,18 @@ async fn locked_server() -> TestServer {
     )
     .await
     .expect("make staff an admin");
-    settings::set(
-        pool,
-        SettingKey::RequireUnlock,
-        "true",
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("require unlocks");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        settings::set(
+            pool,
+            SettingKey::RequireUnlock,
+            "true",
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("require unlocks");
+    })
+    .await;
     server
 }
 
@@ -142,7 +144,6 @@ async fn a_non_admin_users_admin_key_is_not_offered_unlock() {
     let key = keys::create(pool, &new, &AuditActor::cli(), Utc::now())
         .await
         .expect("create helper's admin key");
-    server.app.poll().await.expect("poll");
     drive(console_base(&server), move |ui| {
         ui.login(&key);
         ui.open("/browse/main");
@@ -339,6 +340,56 @@ async fn an_unlock_is_sent_once_its_refusals_stay_and_a_late_read_never_draws() 
         ui.click("#unlocks-refresh");
         ui.wait_hidden("#unlocks-stale");
         ui.wait_text("#unlocks-table", "ended");
+    })
+    .await;
+}
+
+/// Issue #749: an admin's shell holds only its own user's label, so the
+/// Unlocks table reads the label of each staff member its rows name: an
+/// admin reads another's unlock by that person's label.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_admin_reads_another_staff_members_unlock_by_label() {
+    const CHIEF_EMAIL: &str = "chief@example.com";
+    let server = locked_server().await;
+    let pool = &server.db.pool;
+    server
+        .user_with_password("chief", CHIEF_EMAIL, PASSWORD)
+        .await;
+    users::set_admin(
+        pool,
+        "chief",
+        AdminChange {
+            on: true,
+            allow_last: true,
+        },
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("make chief an admin");
+    users::set_display_name(
+        pool,
+        "staff",
+        &okf_mcp::labels::DisplayName::parse("Staff Member").expect("a display name"),
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("name staff");
+    drive(console_base(&server), move |ui| {
+        ui.sign_in_password(STAFF_EMAIL, PASSWORD);
+        ui.open("/browse/main");
+        ui.wait_visible("#browse-locked");
+        ui.click("#browse-unlock");
+        fill_unlock(ui, "ticket 7");
+        ui.click("#unlock-form button[type=submit]");
+        ui.wait_text("#toasts", "Unlocked main");
+        ui.click("#signout");
+        ui.wait_visible("#login");
+        ui.sign_in_password(CHIEF_EMAIL, PASSWORD);
+        ui.open("/unlocks");
+        ui.wait_text("#unlocks-table", "ticket 7");
+        ui.wait_text("#unlocks-table", "Staff Member");
     })
     .await;
 }

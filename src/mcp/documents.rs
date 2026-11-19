@@ -341,7 +341,7 @@ pub(crate) async fn get_concept(
                 let limit = ctx.app().config().concept_outline_chars;
                 return concept(
                     state.name(),
-                    &ctx.catalog_label(state.name()),
+                    &ctx.catalog_label(state.name()).await?,
                     snapshot,
                     doc,
                     &params,
@@ -381,7 +381,7 @@ async fn read_set(
     catalog: Option<&str>,
     changeset: Option<&str>,
 ) -> Result<(Vec<Arc<CatalogState>>, Option<Pinned>), OkfError> {
-    let states = ctx.read_set(catalog)?;
+    let states = ctx.read_set(catalog).await?;
     let pinned = ctx.pin(changeset).await?;
     require_selected(pinned.as_ref(), &states)?;
     Ok((states, pinned))
@@ -480,7 +480,7 @@ pub(crate) async fn read_document(
         if let Some(doc) = view.snapshot().get(&path) {
             return Ok(Document {
                 catalog: state.name().to_string(),
-                catalog_label: ctx.catalog_label(state.name()),
+                catalog_label: ctx.catalog_label(state.name()).await?,
                 path: format!("/{path}"),
                 text: doc.raw(),
             });

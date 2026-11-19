@@ -253,7 +253,7 @@ where
     tx.commit().await?;
     // The version moved, so the cached overlay is stale; dropping it now
     // also frees its memory before the next read rebuilds it.
-    app.overlays().forget(changeset_row.id);
+    app.overlays().forget(changeset_row.id).await;
     Ok(WriteReport {
         catalog: state.name().to_string(),
         changeset: changeset_row.handle,
@@ -700,8 +700,11 @@ mod tests {
         import(test.app.pool(), "pg", republished, &options)
             .await
             .unwrap();
-        let state = test.app.catalog("pg").unwrap();
-        state.refresh(test.app.pool()).await.unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
+        state
+            .refresh(test.app.pool(), test.app.rebuild_locks())
+            .await
+            .unwrap();
         assert_eq!(state.current().revision("a.md"), Some(2));
 
         write(&ctx, &handle, "a.md", format!("{NOTE}Two.\n"))
@@ -778,7 +781,7 @@ mod tests {
         let author = writer(&test, "writer-a", "pg").await;
         let handle = open(&author).await;
         let other_handle = open(&author).await;
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         let pinned = author.changeset(&handle, Access::Read).await.unwrap();
         let other = author.changeset(&other_handle, Access::Read).await.unwrap();
         // The view before the write, to show the write invalidates the cache.

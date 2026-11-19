@@ -16,10 +16,10 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgPool};
 
 use crate::error::OkfError;
+use crate::invalidate::{invalidate, Invalidation};
 use crate::keys;
 use crate::maintenance::types::new_id;
 use crate::store::audit::{self, Action, AuditActor, Entry, Target};
-use crate::store::catalogs::bump_admin_generation;
 use crate::store::ceiling;
 use crate::store::keys::{resolve_grants, Access, Grants};
 use crate::store::oauth::clients::ClientRecord;
@@ -247,7 +247,9 @@ pub async fn create_self_issued(
         other => other,
     })?;
     let user = lock_signed_in(&mut tx, new, now).await?;
-    let ceiling = ceiling::ceiling_in(&mut tx, new.user_id).await?;
+    // The ceiling on the chosen catalogs only (issue #728): the check below
+    // looks up nothing else.
+    let ceiling = ceiling::ceiling_in(&mut tx, new.user_id, &names).await?;
     // `is_none_or`: absent from the ceiling, or allowed below the choice.
     if let Some(catalog) = new.levels.iter().find_map(|(catalog, &level)| {
         ceiling
@@ -268,6 +270,7 @@ pub async fn create_self_issued(
         new.default_catalog,
     )
     .await?;
+    let actor = actor_for(new.client);
     let grant_id: String = sqlx::query_scalar(
         "INSERT INTO api_keys \
          (name, sha256, kind, client_id, access, maintenance_report, all_catalogs, \
@@ -278,7 +281,7 @@ pub async fn create_self_issued(
     .bind(&new.client.client_id)
     .bind(access.as_str())
     .bind(default_catalog_id)
-    .bind(actor_for(new.client))
+    .bind(&actor)
     .bind(now)
     .bind(new.user_id)
     .fetch_one(&mut *tx)
@@ -295,6 +298,8 @@ pub async fn create_self_issued(
     .bind(&levels)
     .execute(&mut *tx)
     .await?;
+    // The grant's audit row from birth (`audit::credential_created`).
+    audit::credential_created(&mut tx, &grant_id, &actor).await?;
     let teams = audit::key_teams(&mut tx, &grant_id).await?;
     audit::record(
         &mut tx,
@@ -309,7 +314,7 @@ pub async fn create_self_issued(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::credential(&grant_id)]).await?;
     tx.commit().await?;
     Ok(grant_id)
 }
@@ -508,6 +513,12 @@ mod tests {
         assert_eq!(record.catalog_access, chosen);
         assert_eq!(record.default_catalog.as_deref(), Some("main"));
         assert_eq!(record.actor, "Example Client");
+        // Its audit row from birth, labelled with that actor (M18 spec
+        // Decision 20).
+        assert_eq!(
+            crate::store::audit::testing::credential_row(&db.pool, &grant_id).await,
+            Some((Some("Example Client".to_string()), Some(user_id.clone())))
+        );
         assert_eq!(record.client_id.as_deref(), Some("test-client"));
         assert!(
             record.name.starts_with("alice.client.example.com-"),

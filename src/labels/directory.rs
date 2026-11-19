@@ -1,14 +1,12 @@
-//! [`Labels`]: every user's, team's and catalog's label, by slug, loaded
-//! with the key cache (plan Decision 1). Every input to a label bumps
-//! `admin_generation`, so this reloads exactly when a label can change.
+//! [`Labels`]: the labels of the slugs one response shows, as
+//! [`crate::cache::labels::LabelLookup::labels_for`] returns them (M18 spec
+//! Decision 9). A [`Wanted`] names what a response will show; nothing here
+//! holds every label.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
-use sqlx::PgPool;
-
 use super::{catalog_label, team_label, user_label};
-use crate::error::OkfError;
 
 /// A `users` row as the directory reads it.
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
@@ -47,77 +45,183 @@ pub struct CatalogRow {
 
 /// One catalog's label and owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct CatalogEntry {
-    // The stored value: Tasks 5 and 7 return it as `display_name`, and a
-    // label cannot tell whether it was unset.
+pub struct CatalogEntry {
+    // The stored value: a label cannot tell whether it was unset.
     display_name: Arc<str>,
     label: Arc<str>,
     owner_team: Option<Arc<str>>,
 }
 
-/// Every label, by slug. Users and teams are separate maps: a user and its
-/// personal team share a slug.
+impl CatalogEntry {
+    /// The entry of a catalog row.
+    ///
+    /// # Arguments
+    /// * `display_name` - the stored display name.
+    /// * `description` - the stored description.
+    /// * `owner_team` - the owner team's slug.
+    ///
+    /// # Returns
+    /// The entry, with the label the rule gives.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn new(display_name: &str, description: &str, owner_team: Option<&str>) -> Self {
+        Self {
+            label: Arc::from(catalog_label(display_name, description)),
+            display_name: Arc::from(display_name),
+            owner_team: owner_team.map(Arc::from),
+        }
+    }
+}
+
+/// The slugs a response will show: what [`Labels`] is built for.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Wanted {
+    /// User slugs.
+    pub users: BTreeSet<String>,
+    /// Team slugs.
+    pub teams: BTreeSet<String>,
+    /// Catalog slugs.
+    pub catalogs: BTreeSet<String>,
+}
+
+impl Wanted {
+    /// Adds a user slug.
+    ///
+    /// # Arguments
+    /// * `slug` - the user's slug.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn user(&mut self, slug: &str) -> &mut Self {
+        self.users.insert(slug.to_string());
+        self
+    }
+
+    /// Adds a team slug.
+    ///
+    /// # Arguments
+    /// * `slug` - the team's slug.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn team(&mut self, slug: &str) -> &mut Self {
+        self.teams.insert(slug.to_string());
+        self
+    }
+
+    /// Adds a catalog slug.
+    ///
+    /// # Arguments
+    /// * `slug` - the catalog's slug.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn catalog(&mut self, slug: &str) -> &mut Self {
+        self.catalogs.insert(slug.to_string());
+        self
+    }
+
+    /// Whether nothing is wanted.
+    ///
+    /// # Returns
+    /// `true` for no slug at all.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn is_empty(&self) -> bool {
+        self.users.is_empty() && self.teams.is_empty() && self.catalogs.is_empty()
+    }
+}
+
+/// The labels of some slugs, by slug. Users and teams are separate maps: a
+/// user and its personal team share a slug. A slug that does not exist (or
+/// was not asked for) has no label.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Labels {
     users: HashMap<String, Arc<str>>,
     teams: HashMap<String, Arc<str>>,
     catalogs: HashMap<String, CatalogEntry>,
-    // user slug -> the slugs of its teams.
-    memberships: HashMap<String, Vec<String>>,
 }
 
 impl Labels {
-    /// Reads every user, team, catalog and membership.
+    /// Adds a user's label.
     ///
     /// # Arguments
-    /// * `pool` - the database.
+    /// * `slug` - the user's slug.
+    /// * `label` - its label.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub(crate) fn insert_user(&mut self, slug: String, label: Arc<str>) {
+        self.users.insert(slug, label);
+    }
+
+    /// Adds a team's label.
     ///
-    /// # Returns
-    /// The directory.
+    /// # Arguments
+    /// * `slug` - the team's slug.
+    /// * `label` - its label.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub(crate) fn insert_team(&mut self, slug: String, label: Arc<str>) {
+        self.teams.insert(slug, label);
+    }
+
+    /// Adds a catalog's entry.
     ///
-    /// # Errors
-    /// [`OkfError::Database`].
-    #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "labels.load"))]
-    pub async fn load(pool: &PgPool) -> Result<Self, OkfError> {
-        let (users, teams, catalogs, memberships) = tokio::try_join!(
-            sqlx::query_as::<_, UserRow>(
-                "SELECT name, display_name, email::text AS email FROM users"
-            )
-            .fetch_all(pool),
-            sqlx::query_as::<_, TeamRow>(
-                "SELECT t.name, t.display_name, u.name AS personal_of \
-                 FROM teams t LEFT JOIN users u ON u.id = t.personal_of",
-            )
-            .fetch_all(pool),
-            sqlx::query_as::<_, CatalogRow>(
-                "SELECT c.name, c.display_name, c.description, t.name AS owner_team \
-                 FROM catalogs c LEFT JOIN teams t ON t.id = c.owner_team_id",
-            )
-            .fetch_all(pool),
-            sqlx::query_as::<_, (String, String)>(
-                "SELECT u.name, t.name FROM team_members m \
-                 JOIN users u ON u.id = m.user_id JOIN teams t ON t.id = m.team_id",
-            )
-            .fetch_all(pool),
-        )?;
-        Ok(Self::from_rows(users, teams, catalogs, memberships))
+    /// # Arguments
+    /// * `slug` - the catalog's slug.
+    /// * `entry` - its label and owner.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub(crate) fn insert_catalog(&mut self, slug: String, entry: CatalogEntry) {
+        self.catalogs.insert(slug, entry);
     }
 
     /// Builds the directory from rows (the unit tests' entry point).
     ///
     /// # Arguments
     /// * `users`, `teams`, `catalogs` - the rows.
-    /// * `memberships` - `(user slug, team slug)` pairs.
     ///
     /// # Returns
     /// The directory.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn from_rows(
-        users: Vec<UserRow>,
-        teams: Vec<TeamRow>,
-        catalogs: Vec<CatalogRow>,
-        memberships: Vec<(String, String)>,
-    ) -> Self {
+    pub fn from_rows(users: Vec<UserRow>, teams: Vec<TeamRow>, catalogs: Vec<CatalogRow>) -> Self {
         let users: HashMap<String, Arc<str>> = users
             .into_iter()
             .map(|row| {
@@ -138,24 +242,18 @@ impl Labels {
         let catalogs = catalogs
             .into_iter()
             .map(|row| {
-                let entry = CatalogEntry {
-                    label: Arc::from(catalog_label(&row.display_name, &row.description)),
-                    display_name: Arc::from(row.display_name),
-                    owner_team: row.owner_team.map(Arc::from),
-                };
+                let entry = CatalogEntry::new(
+                    &row.display_name,
+                    &row.description,
+                    row.owner_team.as_deref(),
+                );
                 (row.name, entry)
             })
             .collect();
-        let mut by_user: HashMap<String, Vec<String>> = HashMap::new();
-        for (user, team) in memberships {
-            // `entry(..).or_default()` is Python's `setdefault(key, [])`.
-            by_user.entry(user).or_default().push(team);
-        }
         Self {
             users,
             teams,
             catalogs,
-            memberships: by_user,
         }
     }
 }
@@ -177,57 +275,6 @@ impl Labels {
     )]
     pub fn user(&self, slug: &str) -> Option<&str> {
         self.users.get(slug).map(|label| &**label)
-    }
-
-    /// Every user and its label, for the one reader that may see them all
-    /// (`GET /labels` for an every-catalog admin).
-    ///
-    /// # Returns
-    /// `(slug, label)` pairs in no particular order.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    pub fn users(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.users
-            .iter()
-            .map(|(slug, label)| (slug.as_str(), &**label))
-    }
-
-    /// Every team and its label.
-    ///
-    /// # Returns
-    /// `(slug, label)` pairs in no particular order.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    pub fn teams(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.teams
-            .iter()
-            .map(|(slug, label)| (slug.as_str(), &**label))
-    }
-
-    /// The slug of every catalog.
-    ///
-    /// # Returns
-    /// The slugs in no particular order; show them with
-    /// [`Labels::catalog_choices`].
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    pub fn catalog_slugs(&self) -> impl Iterator<Item = &str> {
-        self.catalogs.keys().map(String::as_str)
     }
 
     /// A team's label.
@@ -323,28 +370,6 @@ impl Labels {
         self.catalogs
             .get(slug)
             .and_then(|entry| entry.owner_team.as_deref())
-    }
-
-    /// The slugs of a user's teams.
-    ///
-    /// # Arguments
-    /// * `user` - the user's slug.
-    ///
-    /// # Returns
-    /// An iterator over the team slugs (empty for an unknown user).
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    pub fn teams_of(&self, user: &str) -> impl Iterator<Item = &str> {
-        self.memberships
-            .get(user)
-            .into_iter()
-            .flatten()
-            .map(String::as_str)
     }
 
     /// The text to show for each of some catalogs, every text distinct.
@@ -471,7 +496,6 @@ mod tests {
                     owner_team: Some("acme".into()),
                 },
             ],
-            vec![("u-1".into(), "acme".into()), ("u-1".into(), "u-1".into())],
         )
     }
 
@@ -524,7 +548,6 @@ mod tests {
                     owner_team: Some("acme".into()),
                 },
             ],
-            vec![],
         );
         let choices = labels.catalog_choices(["m-1", "m-2"]);
         assert_eq!(choices[0].1, "Notes (id: m-1)");
@@ -561,7 +584,6 @@ mod tests {
                     owner_team: Some("acme".into()),
                 },
             ],
-            vec![],
         );
         let choices = labels.catalog_choices(["m-1", "m-2", "m-3"]);
         assert_eq!(choices[0].1, "Notes (id: m-1)");
@@ -605,7 +627,6 @@ mod tests {
                     owner_team: Some("acme-1".into()),
                 },
             ],
-            vec![],
         );
         let choices = labels.catalog_choices(["m-1", "m-2", "m-3"]);
         assert_eq!(choices[0].1, "Notes (id: m-1)");
@@ -649,7 +670,7 @@ mod tests {
             })
             .collect();
         let slugs: Vec<String> = rows.iter().map(|row| row.name.clone()).collect();
-        let labels = Labels::from_rows(vec![], teams, rows, vec![]);
+        let labels = Labels::from_rows(vec![], teams, rows);
         let choices = labels.catalog_choices(slugs.iter().map(String::as_str));
         let distinct: std::collections::HashSet<&str> =
             choices.iter().map(|(_, label)| label.as_str()).collect();
@@ -664,13 +685,5 @@ mod tests {
         assert_eq!(labels.catalog("m-1"), Some("Personal memory"));
         assert_eq!(labels.catalog_display_name("m-2"), Some("Personal memory"));
         assert_eq!(labels.catalog_display_name("m-9"), None);
-    }
-
-    #[test]
-    fn teams_of_lists_a_users_teams() {
-        let labels = sample();
-        let mut teams: Vec<&str> = labels.teams_of("u-1").collect();
-        teams.sort_unstable();
-        assert_eq!(teams, ["acme", "u-1"]);
     }
 }

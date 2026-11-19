@@ -43,10 +43,12 @@ async fn publish(server: &TestServer, catalog: &str, entries: Files, actor: &str
         audit: &okf_mcp::store::audit::AuditActor::cli(),
         now: Utc::now(),
     };
-    import(&server.db.pool, catalog, entries, &options)
-        .await
-        .expect("import");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        import(&server.db.pool, catalog, entries, &options)
+            .await
+            .expect("import");
+    })
+    .await;
 }
 
 /// A server with `main` (created, imported by `tester`, then by `editor`,
@@ -97,10 +99,12 @@ async fn add_late(pool: &sqlx::PgPool, app: &std::sync::Arc<okf_mcp::app::App>) 
         audit: &okf_mcp::store::audit::AuditActor::cli(),
         now: Utc::now(),
     };
-    import(pool, "main", entries, &options)
-        .await
-        .expect("import late.md");
-    app.poll().await.expect("poll");
+    crate::support::server::applied(app, async {
+        import(pool, "main", entries, &options)
+            .await
+            .expect("import late.md");
+    })
+    .await;
 }
 
 /// Each row of the feed as `path@revision op actor`, in the order shown;

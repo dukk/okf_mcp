@@ -42,6 +42,56 @@ pub async fn connect(url: &str, max_connections: u32) -> Result<PgPool, OkfError
     Ok(pool)
 }
 
+/// The indexes okf's migrations build `CONCURRENTLY` (in `no-transaction`
+/// migrations). A build that fails part-way leaves the index behind,
+/// marked INVALID, and its migration unrecorded; `CREATE INDEX ... IF NOT
+/// EXISTS` on the retry would then keep the invalid index for good.
+const CONCURRENT_INDEXES: [&str; 3] = [
+    "catalogs_member_reach",
+    "catalogs_member_write",
+    "catalogs_member_reach_bytes",
+];
+
+/// The advisory lock [`migrate`] holds around the cleanup and the
+/// migrations (an arbitrary constant, distinct from sqlx's own lock key).
+const CONCURRENT_INDEX_LOCK: i64 = 0x6f6b_665f_6964_7831;
+
+/// Drops each of [`CONCURRENT_INDEXES`] that exists but is INVALID (a
+/// failed concurrent build), so its migration builds it again.
+///
+/// # Arguments
+/// * `conn` - a connection outside any transaction (`DROP INDEX
+///   CONCURRENTLY` cannot run in one).
+///
+/// # Returns
+/// How many it dropped.
+///
+/// # Errors
+/// [`sqlx::Error`] if a read or a drop fails.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "db.drop_invalid_indexes"))]
+async fn drop_invalid_indexes(conn: &mut sqlx::PgConnection) -> Result<usize, sqlx::Error> {
+    let invalid: Vec<String> = sqlx::query_scalar(
+        "SELECT c.relname::text FROM pg_index i \
+         JOIN pg_class c ON c.oid = i.indexrelid \
+         WHERE c.relnamespace = 'public'::regnamespace \
+           AND c.relname = ANY($1) AND NOT i.indisvalid",
+    )
+    .bind(&CONCURRENT_INDEXES[..])
+    .fetch_all(&mut *conn)
+    .await?;
+    for name in &invalid {
+        tracing::warn!(index = %name, "dropping an invalid index left by a failed build");
+        // The name is one of the constants above, never input: safe to
+        // splice (an identifier cannot be a bound parameter).
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP INDEX CONCURRENTLY IF EXISTS {name}"
+        )))
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(invalid.len())
+}
+
 /// Applies every okf migration not yet applied, then apalis' own (both are
 /// no-ops when up to date).
 ///
@@ -57,7 +107,32 @@ pub async fn connect(url: &str, max_connections: u32) -> Result<PgPool, OkfError
 /// [`OkfError::Database`] if apalis' setup cannot reach the database.
 #[tracing::instrument(level = "debug", skip_all)]
 pub async fn migrate(pool: &PgPool) -> Result<(), OkfError> {
-    MIGRATOR.run(pool).await?;
+    // One connection holds the lock for the cleanup and the migrations, so
+    // two replicas starting together never drop an index the other is
+    // still building (one being built CONCURRENTLY is INVALID until done).
+    // The migrator runs on that same connection: a pool of one
+    // (`database_max_connections = 1`) has no second to give it.
+    let mut conn = pool.acquire().await?;
+    sqlx::query("SELECT pg_advisory_lock($1)")
+        .bind(CONCURRENT_INDEX_LOCK)
+        .execute(&mut *conn)
+        .await?;
+    // The lock is released below whatever this returns, so no `?` here.
+    let migrated = match drop_invalid_indexes(&mut conn).await {
+        // `&mut *conn`: the pooled connection itself (sqlx's migrator takes
+        // its own advisory lock on it, and runs `no-transaction` files on
+        // it outside any transaction, as on a pool).
+        Ok(_) => MIGRATOR.run(&mut *conn).await.map_err(OkfError::from),
+        Err(error) => Err(OkfError::from(error)),
+    };
+    // Released on every path; a lost connection releases it too.
+    sqlx::query("SELECT pg_advisory_unlock($1)")
+        .bind(CONCURRENT_INDEX_LOCK)
+        .execute(&mut *conn)
+        .await?;
+    // Back to the pool before apalis' setup, which takes one of its own.
+    drop(conn);
+    migrated?;
     // `::<()>`: `setup` is defined on `PostgresStorage<()>`; the job type
     // a storage carries does not matter for creating the schema.
     apalis_postgres::PostgresStorage::<()>::setup(pool)
@@ -178,6 +253,7 @@ mod tests {
                 "catalogs",
                 "changeset_entries",
                 "changesets",
+                "cluster_stats",
                 "documents",
                 "email_tokens",
                 "feedback",
@@ -939,6 +1015,193 @@ mod tests {
         );
     }
 
+    /// Every audit row, as `(table, entity id, name or label, person's user)`,
+    /// sorted: what the backfill test compares.
+    async fn audit_rows(pool: &PgPool) -> Vec<(String, String, Option<String>, Option<String>)> {
+        let mut rows: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT 'person', user_id, name, user_id FROM audit_people \
+             UNION ALL SELECT 'team', a.team_id, a.name, p.user_id FROM audit_teams a \
+                 LEFT JOIN audit_people p ON p.id = a.person_id \
+             UNION ALL SELECT 'credential', a.credential_id, a.label, p.user_id \
+                 FROM audit_credentials a LEFT JOIN audit_people p ON p.id = a.person_id",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        // Sorted here, not by `ORDER BY`, whose collation may order `-`
+        // differently from Rust's byte order.
+        rows.sort();
+        rows
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_backfill_creates_missing_rows_and_is_idempotent() {
+        // Arrange: rows written directly, as before the audit log, so none
+        // has its audit row: bob with a personal team, a shared team, a key
+        // of bob's, a legacy key with no user, an OAuth grant and a revoked
+        // key. The fixture user's rows exist already, and one is stale (a
+        // renamed user): the backfill must leave it as it is.
+        let db = test_db().await;
+        sqlx::raw_sql(
+            "INSERT INTO users (id, name, display_name, created_at)
+                 VALUES ('u-bob', 'bob', 'Bob', now());
+             INSERT INTO teams (id, name, personal_of, created_at)
+                 VALUES ('t-bob', 'bob', 'u-bob', now());
+             INSERT INTO teams (id, name, created_at) VALUES ('t-family', 'family', now());
+             INSERT INTO api_keys (id, name, sha256, access, all_catalogs, actor, created_at,
+                                   user_id)
+                 VALUES ('k-bob', 'k-bob', sha256('k-bob'::bytea), 'read', true, 'laptop',
+                         now(), 'u-bob');
+             INSERT INTO api_keys (id, name, sha256, access, all_catalogs, actor, created_at)
+                 VALUES ('k-legacy', 'k-legacy', sha256('k-legacy'::bytea), 'read', true,
+                         'ci', now());
+             INSERT INTO oauth_clients (client_id, kind, redirect_uris, metadata, created_at)
+                 VALUES ('client', 'dcr', '{https://client.example.com/cb}', '{}', now());
+             INSERT INTO api_keys (id, name, kind, client_id, access, all_catalogs, actor,
+                                   created_at, user_id)
+                 VALUES ('g-bob', 'g-bob', 'oauth', 'client', 'read', true, 'Example Client',
+                         now(), 'u-bob');
+             INSERT INTO api_keys (id, name, sha256, access, all_catalogs, actor, created_at,
+                                   revoked_at)
+                 VALUES ('k-revoked', 'k-revoked', sha256('k-revoked'::bytea), 'read', true,
+                         'old', now(), now());
+             UPDATE audit_people SET name = 'stale' WHERE name = 'test-user';",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let fixture_team: String = sqlx::query_scalar(
+            "SELECT id FROM teams WHERE personal_of IS NOT NULL AND id <> 't-bob'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        let fixture_user: String = sqlx::query_scalar("SELECT id FROM users WHERE id <> 'u-bob'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        let row = |table: &str, id: &str, name: Option<&str>, user: Option<&str>| {
+            (
+                table.to_string(),
+                id.to_string(),
+                name.map(str::to_string),
+                user.map(str::to_string),
+            )
+        };
+
+        // Act
+        sqlx::raw_sql(include_str!("../migrations/0023_audit_backfill.sql"))
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let once = audit_rows(&db.pool).await;
+        sqlx::raw_sql(include_str!("../migrations/0023_audit_backfill.sql"))
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        // Assert: the rows the resolvers would have made, nothing for the
+        // revoked key, the stale row untouched, and a rerun adds nothing.
+        let mut expected = vec![
+            row("credential", "g-bob", Some("Example Client"), Some("u-bob")),
+            row("credential", "k-bob", Some("laptop"), Some("u-bob")),
+            row("credential", "k-legacy", Some("ci"), None),
+            row("person", &fixture_user, Some("stale"), Some(&fixture_user)),
+            row("person", "u-bob", Some("bob"), Some("u-bob")),
+            row("team", &fixture_team, None, Some(&fixture_user)),
+            row("team", "t-bob", None, Some("u-bob")),
+            row("team", "t-family", Some("family"), None),
+        ];
+        expected.sort();
+        assert_eq!(once, expected);
+        assert_eq!(audit_rows(&db.pool).await, once, "a rerun changes nothing");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_backfill_waits_for_a_deletion_and_recreates_nothing_it_forgot() {
+        use std::time::Duration;
+        // Arrange: bob, with a key and a grant that never acted (no audit
+        // rows), is being deleted by an old replica during a rolling deploy:
+        // `users::delete` holds him `FOR UPDATE` and has run `forget_person`,
+        // but has not yet deleted the row.
+        let db = test_db().await;
+        sqlx::raw_sql(
+            "INSERT INTO users (id, name, display_name, created_at)
+                 VALUES ('u-bob', 'bob', 'Bob', now());
+             INSERT INTO api_keys (id, name, sha256, access, all_catalogs, actor, created_at,
+                                   user_id)
+                 VALUES ('k-bob', 'k-bob', sha256('k-bob'::bytea), 'read', true, 'laptop',
+                         now(), 'u-bob');",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let mut deletion = db.pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM users WHERE id = 'u-bob' FOR UPDATE")
+            .execute(&mut *deletion)
+            .await
+            .unwrap();
+        crate::store::audit::forget_person(&mut deletion, "u-bob")
+            .await
+            .unwrap();
+
+        // Act: the backfill starts while the deletion is in progress, which
+        // then commits once the backfill waits on bob's row (or, without the
+        // owner lock, once the backfill has already finished).
+        let pool = db.pool.clone();
+        let backfill = tokio::spawn(async move {
+            sqlx::raw_sql(include_str!("../migrations/0023_audit_backfill.sql"))
+                .execute(&pool)
+                .await
+        });
+        let waited = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let waiting: i64 = sqlx::query_scalar(
+                    "SELECT count(*) FROM pg_stat_activity \
+                     WHERE datname = current_database() AND wait_event_type = 'Lock'",
+                )
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+                if waiting > 0 || backfill.is_finished() {
+                    return waiting > 0;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the backfill neither waited on a lock nor finished within 30 s");
+        sqlx::query("DELETE FROM users WHERE id = 'u-bob'")
+            .execute(&mut *deletion)
+            .await
+            .unwrap();
+        deletion.commit().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(30), backfill)
+            .await
+            .expect("the backfill finished within 30 s of the deletion")
+            .unwrap()
+            .unwrap();
+
+        // Assert: nothing names bob or his key again.
+        let left: Vec<(String, String, Option<String>, Option<String>)> = audit_rows(&db.pool)
+            .await
+            .into_iter()
+            .filter(|(_, id, name, user)| {
+                id == "u-bob"
+                    || id == "k-bob"
+                    || name.as_deref() == Some("bob")
+                    || name.as_deref() == Some("laptop")
+                    || user.as_deref() == Some("u-bob")
+            })
+            .collect();
+        assert_eq!(
+            left,
+            [],
+            "the backfill re-created what forget_person cleared"
+        );
+        assert!(waited, "the backfill waited for the deletion's lock");
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn maintenance_schema_preserves_existing_rows_and_defaults_to_opt_out() {
         let db = pg_support::TestDb::start().await;
@@ -1540,5 +1803,79 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    /// Review of PR #739: a concurrent index build that failed part-way
+    /// leaves an INVALID index and no record of its migration; the next
+    /// `migrate` drops it and builds it again, valid.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_concurrent_build_is_rebuilt_by_the_next_migrate() {
+        let db = super::test_db().await;
+        let valid = |name: &'static str| {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid \
+                 WHERE c.relname = $1",
+            )
+            .bind(name)
+        };
+        // As a failed `0025` leaves it: the index there but invalid (the
+        // test database's user is a superuser), the migration unrecorded.
+        sqlx::query(
+            "UPDATE pg_index SET indisvalid = false \
+             WHERE indexrelid = 'catalogs_member_reach'::regclass",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 25")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert!(!valid("catalogs_member_reach")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap());
+
+        super::migrate(&db.pool).await.unwrap();
+
+        assert!(valid("catalogs_member_reach")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap());
+        let recorded: bool =
+            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM _sqlx_migrations WHERE version = 25)")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert!(recorded, "the rebuilt migration is recorded");
+    }
+
+    /// Review of PR #739: with a pool of one connection (the smallest
+    /// `database_max_connections`), `migrate` finishes on a fresh database
+    /// and on one already migrated, instead of waiting for a second
+    /// connection the pool cannot give.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn migrate_needs_only_one_connection() {
+        let db = pg_support::TestDb::start().await;
+        let one = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(std::time::Duration::from_secs(5))
+            .connect(&db.url)
+            .await
+            .unwrap();
+        for state in ["fresh", "already migrated"] {
+            tokio::time::timeout(std::time::Duration::from_secs(120), super::migrate(&one))
+                .await
+                .unwrap_or_else(|_| panic!("migrating a {state} database timed out"))
+                .unwrap_or_else(|error| panic!("migrating a {state} database: {error}"));
+        }
+        let applied: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
+            .fetch_one(&one)
+            .await
+            .unwrap();
+        assert_eq!(
+            applied,
+            i64::try_from(super::MIGRATOR.iter().count()).unwrap()
+        );
     }
 }

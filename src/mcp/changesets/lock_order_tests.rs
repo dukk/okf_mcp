@@ -29,7 +29,7 @@ async fn pg() -> TestApp {
 }
 
 /// Creates user `name` (an admin user if `admin`) with an every-catalog
-/// key at `access` defaulting to `pg`, polls it in, and returns the
+/// key at `access` defaulting to `pg`, and returns the
 /// context of a connection with that key.
 async fn user_context(test: &TestApp, name: &str, access: Access, admin: bool) -> ToolContext {
     let pool = test.app.pool();
@@ -67,8 +67,7 @@ async fn user_context(test: &TestApp, name: &str, access: Access, admin: bool) -
         .await
         .expect("create the key")
         .key;
-    test.app.poll().await.expect("poll the key in");
-    context(test, cached_principal(test, &secret), None)
+    context(test, cached_principal(test, &secret).await, None)
 }
 
 async fn body(ctx: &ToolContext, handle: &str, text: &str) {
@@ -148,7 +147,13 @@ async fn a_publish_holding_its_changeset_finishes_before_its_users_deletion() {
     let alice = Arc::new(user_context(&test, "alice", Access::Write, false).await);
     let handle = open(&alice).await;
     body(&alice, &handle, "# A\n\nAlice.\n").await;
-    let catalog_id = test.app.catalog("pg").expect("catalog pg").id();
+    let catalog_id = test
+        .app
+        .catalog("pg")
+        .await
+        .unwrap()
+        .expect("catalog pg")
+        .id();
     let mut holder = test.app.pool().begin().await.expect("begin the holder");
     sqlx::query("SELECT id FROM catalogs WHERE id = $1 FOR NO KEY UPDATE")
         .bind(catalog_id)

@@ -17,7 +17,7 @@
 //!    [`MAX_TRIES`] tries, then the row is `failed`. Any other 4xx
 //!    (`FORM_NOT_FOUND`, `FORM_DISABLED`, a validation error): `failed` at
 //!    once, with Forminit's error code, never retried.
-//! 4. [`prune`] (the poll loop's hourly pass) deletes `sent` rows past
+//! 4. [`prune`] (a housekeeping job) deletes `sent` rows past
 //!    `[feedback] retention`, and the finished jobs that named them.
 //!
 //! Delivery is at-least-once. Fetching a job is exclusive in normal
@@ -330,7 +330,7 @@ fn queue_error(error: impl std::fmt::Display) -> OkfError {
 
 /// Deletes `sent` feedback finished more than `retention` before `now`,
 /// and the finished jobs of [`QUEUE`] as old. `failed` rows are kept for the
-/// operator. Called by `App::poll`'s hourly prune.
+/// operator. Called by the housekeeping job's prune.
 ///
 /// # Arguments
 /// * `pool` - the database.
@@ -902,7 +902,8 @@ async fn run_until_cancelled(
     for restarts in 0_u64.. {
         let config = QueueConfig::default()
             .queue(QUEUE)
-            .heartbeat_interval(timing.heartbeat);
+            .heartbeat_interval(timing.heartbeat)
+            .missed_heartbeats(timing.missed_heartbeats);
         let backend = PostgresStorage::<FeedbackJob>::new(&context.pool)
             .with_config(config)
             .with_pubsub()
@@ -1084,6 +1085,7 @@ pub(crate) mod tests {
         poll: Duration::from_millis(100),
         heartbeat: Duration::from_secs(1),
         restart: Duration::from_millis(200),
+        ..WorkerTiming::SERVE
     };
 
     fn start(pool: &PgPool, forminit: Forminit) -> (CancellationToken, JoinHandle<()>) {

@@ -193,7 +193,6 @@ async fn patch_me_sets_my_display_name_and_refuses_the_rest() {
         chrono::Utc::now(),
     )
     .await;
-    test.app.poll().await.unwrap();
     let mut bob = Browser::session_for(&test, "bob").await;
 
     let (status, set) = patch(
@@ -633,12 +632,13 @@ async fn labels_scope() {
         .json();
     let (_, scoped) = send(&test, "GET", "/api/v1/labels", Some(&keys.stranger), None).await;
 
-    // An every-catalog admin sees everything.
+    // An every-catalog admin sees its own user and teams and the page's
+    // catalogs with their owners, like anyone else (issue #749): the other
+    // users and teams are read on demand (`GET /labels/named`).
     assert_eq!(status, StatusCode::OK, "{all}");
-    assert_eq!(keys_of(&all, "users"), ["alice", "bob", TEST_USER]);
-    assert_eq!(keys_of(&all, "teams"), ["acme", "alice", "bob", TEST_TEAM]);
+    assert_eq!(keys_of(&all, "users"), [TEST_USER]);
+    assert_eq!(keys_of(&all, "teams"), ["acme", TEST_TEAM]);
     assert_eq!(keys_of(&all, "catalogs"), ["acme-notes", "main", "other"]);
-    assert_eq!(all["users"]["alice"], "Alice Example");
     assert_eq!(all["teams"]["acme"], "Acme");
     assert_eq!(all["catalogs"]["acme-notes"], "Acme notes");
     // A session member sees itself, its teams, what it reaches, and those
@@ -651,6 +651,143 @@ async fn labels_scope() {
     assert_eq!(keys_of(&scoped, "catalogs"), ["other"]);
     assert_eq!(keys_of(&scoped, "teams"), [TEST_TEAM]);
     assert_eq!(keys_of(&scoped, "users"), [TEST_USER]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn labels_named_answers_an_admin_any_and_others_only_their_own() {
+    let test = app().await;
+    let root = every_catalog_admin(&test).await;
+    let keys = keys(&test).await;
+    acme(&test, &root).await;
+    let mut bob = Browser::session_for(&test, "bob").await;
+    let unnamed = user_label("", None);
+    let uri = "/api/v1/labels/named?users=alice,bob,nobody&teams=acme,alice,nobody";
+
+    let (status, all) = send(&test, "GET", uri, Some(&root), None).await;
+    let member = bob.send(&test, "GET", uri, Payload::Empty).await.json();
+    let (_, scoped) = send(&test, "GET", uri, Some(&keys.stranger), None).await;
+    let (_, admin_scoped) = send(&test, "GET", uri, Some(&keys.admin), None).await;
+
+    // An admin may list every user and team: it gets each one named that
+    // exists, and only those; a catalog-scoped admin too (`GET /users`
+    // already gives it every label).
+    assert_eq!(status, StatusCode::OK, "{all}");
+    assert_eq!(
+        all,
+        json!({
+            "users": {"alice": "Alice Example", "bob": unnamed},
+            "teams": {"acme": "Acme", "alice": "Alice Example's team"},
+        })
+    );
+    // Anyone else gets only its own user and its own teams.
+    assert_eq!(
+        member,
+        json!({"users": {"bob": unnamed}, "teams": {"acme": "Acme"}})
+    );
+    assert_eq!(scoped, all);
+    assert_eq!(admin_scoped, all);
+    let (_, reader) = send(&test, "GET", uri, Some(&keys.read), None).await;
+    assert_eq!(reader, json!({"users": {}, "teams": {}}));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn labels_named_refuses_a_typo_and_too_many_slugs() {
+    let test = app().await;
+    let root = every_catalog_admin(&test).await;
+    let many = (0..=super::labels::NAMED_MAX)
+        .map(|n| format!("u{n}"))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let (typo, _) = send(
+        &test,
+        "GET",
+        "/api/v1/labels/named?user=a",
+        Some(&root),
+        None,
+    )
+    .await;
+    let (too_many, body) = send(
+        &test,
+        "GET",
+        &format!("/api/v1/labels/named?users={many}"),
+        Some(&root),
+        None,
+    )
+    .await;
+    let (none, empty) = send(&test, "GET", "/api/v1/labels/named", Some(&root), None).await;
+
+    assert_eq!(typo, StatusCode::BAD_REQUEST);
+    assert_eq!(too_many, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(none, StatusCode::OK);
+    assert_eq!(empty, json!({"users": {}, "teams": {}}));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_admin_labels_page_reads_a_bounded_number_of_rows() {
+    const OTHERS: i64 = 50_000;
+    let test = app().await;
+    let root = every_catalog_admin(&test).await;
+    sqlx::query(
+        "WITH made AS ( \
+             INSERT INTO users (name, display_name, created_at) \
+             SELECT 'bulk' || n, 'Bulk ' || n, now() FROM generate_series(1, $1) AS n \
+             RETURNING id, name) \
+         INSERT INTO teams (name, personal_of, created_at) \
+         SELECT name, id, now() FROM made",
+    )
+    .bind(OTHERS)
+    .execute(test.app.pool())
+    .await
+    .expect("seed users and their personal teams");
+    sqlx::query("ANALYZE users, teams")
+        .execute(test.app.pool())
+        .await
+        .expect("analyze");
+    let named = (1..=super::labels::NAMED_MAX)
+        .map(|n| format!("bulk{n}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let named_uri = format!("/api/v1/labels/named?users={named}&teams={named}");
+
+    let within = std::time::Duration::from_secs(30);
+
+    // Cold caches: everything the requests show is read while counted.
+    let (page, page_rows, page_statements) = crate::rows_returned::counting(tokio::time::timeout(
+        within,
+        send(&test, "GET", "/api/v1/labels", Some(&root), None),
+    ))
+    .await;
+    let (named, named_rows, named_statements) = crate::rows_returned::counting(
+        tokio::time::timeout(within, send(&test, "GET", &named_uri, Some(&root), None)),
+    )
+    .await;
+
+    let (page_status, page) = page.expect("the labels page answers");
+    let (named_status, named) = named.expect("the named labels answer");
+    assert_eq!(page_status, StatusCode::OK, "{page}");
+    assert_eq!(named_status, StatusCode::OK, "{named}");
+    assert!(
+        page_statements > 0 && named_statements > 0,
+        "statements are counted"
+    );
+    assert!(
+        page_rows < 100,
+        "an admin's labels page returned {page_rows} rows in {page_statements} \
+         statements beside {OTHERS} users and teams"
+    );
+    assert!(page["users"].get("bulk1").is_none(), "{page}");
+    let asked = 2 * super::labels::NAMED_MAX as u64;
+    assert!(
+        named_rows < asked + 50,
+        "naming {asked} users and teams returned {named_rows} rows in {named_statements} statements"
+    );
+    assert_eq!(named["users"]["bulk1"], "Bulk 1");
+    assert_eq!(named["teams"]["bulk1"], "Bulk 1's team");
+    assert_eq!(
+        named["users"].as_object().map(serde_json::Map::len),
+        Some(super::labels::NAMED_MAX)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

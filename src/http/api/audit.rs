@@ -139,7 +139,7 @@ async fn list_audit(
 ) -> Result<Json<AuditPage>, AppError> {
     let query = params.query()?;
     let viewer = viewer(&app, &principal, query.team).await?;
-    let entries = audit::list(app.pool(), &viewer, &query, &app.keys().labels()).await?;
+    let entries = audit::list(app.pool(), &viewer, &query, app.labels()).await?;
     // A full page may have more after it. `try_from` converts the length,
     // a `usize`, to the `i64` the page size is.
     let full = i64::try_from(entries.len()).is_ok_and(|len| len >= query.page_size());
@@ -167,7 +167,7 @@ async fn export_audit(
 ) -> Result<Response, AppError> {
     let query = params.query()?;
     let viewer = viewer(&app, &principal, query.team).await?;
-    let body = audit::export_lines(app.pool(), &viewer, &query, &app.keys().labels()).await?;
+    let body = audit::export_lines(app.pool(), &viewer, &query, app.labels()).await?;
     let headers = [
         (header::CONTENT_TYPE, "application/x-ndjson"),
         (

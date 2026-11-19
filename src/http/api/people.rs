@@ -31,8 +31,9 @@
 //! admin. No answer or log line holds a session id, token or hash: a
 //! session is shown by its id prefix only.
 //!
-//! Every write bumps the administrative generation; the handlers poll after
-//! it, so the next request sees the change.
+//! Every write sends its change messages (`invalidate`); this replica applies
+//! them before the answer goes out (`invalidate::capturing`), so the next
+//! request sees the change, and the change feed carries them to the others.
 
 use std::sync::Arc;
 
@@ -49,11 +50,9 @@ use crate::error::OkfError;
 use crate::http::api::keys::{manages, manages_grants, parse_access, KeyView};
 use crate::http::api::me::{SessionList, SessionView, SignInList, SignInView, RECENT_SIGN_INS};
 use crate::http::api::oauth::SignInCodeView;
-use crate::http::api::{
-    require_admin, require_every_catalog, require_manager, require_reader, settle,
-};
+use crate::http::api::{require_admin, require_every_catalog, require_manager, require_reader};
 use crate::http::AppError;
-use crate::labels::directory::Labels;
+use crate::labels::directory::{Labels, Wanted};
 use crate::labels::{team_label, user_label, DisplayName};
 use crate::mail::invite;
 use crate::store::audit::AuditActor;
@@ -273,14 +272,61 @@ pub(crate) struct TeamView {
 }
 
 impl TeamView {
+    /// The views of team records, with the labels of every user they show
+    /// read together (members and personal owners).
+    ///
+    /// # Arguments
+    /// * `app` - the application, for its label lookup.
+    /// * `records` - the teams.
+    ///
+    /// # Returns
+    /// One view per record, in order.
+    ///
+    /// # Errors
+    /// [`OkfError::Database`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) async fn many(app: &App, records: Vec<TeamRecord>) -> Result<Vec<Self>, OkfError> {
+        let mut wanted = Wanted::default();
+        for record in &records {
+            if let Some(user) = record.personal_of.as_deref() {
+                wanted.user(user);
+            }
+            for member in &record.members {
+                wanted.user(&member.user);
+            }
+        }
+        let labels = app.labels().labels_for(&wanted).await?;
+        Ok(records
+            .into_iter()
+            .map(|record| Self::of(record, &labels))
+            .collect())
+    }
+
+    /// [`TeamView::many`] for one record.
+    ///
+    /// # Arguments
+    /// * `app` - the application, for its label lookup.
+    /// * `record` - the team.
+    ///
+    /// # Returns
+    /// Its view.
+    ///
+    /// # Errors
+    /// [`OkfError::Database`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) async fn one(app: &App, record: TeamRecord) -> Result<Self, OkfError> {
+        let mut views = Self::many(app, vec![record]).await?;
+        Ok(views.remove(0))
+    }
+
     /// The view of a team record.
     ///
     /// The record cannot see the user a personal team is named after, so
-    /// the labels come from the directory the key cache holds.
+    /// the labels come from the lookup ([`TeamView::many`] reads them).
     ///
     /// # Arguments
     /// * `record` - the team.
-    /// * `labels` - the directory, read after the write's `settle`.
+    /// * `labels` - the labels of the users the record shows.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -288,7 +334,7 @@ impl TeamView {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    pub(crate) fn of(record: TeamRecord, labels: &Labels) -> Self {
+    fn of(record: TeamRecord, labels: &Labels) -> Self {
         let TeamRecord {
             name,
             display_name,
@@ -551,7 +597,8 @@ async fn create_user(
         display_name: &display_name,
     };
     let created = users::create(app.pool(), &new, &actor, app.clock().now()).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok((StatusCode::CREATED, Json(created.into())))
 }
 
@@ -668,7 +715,8 @@ async fn set_admin(
         { user = %name, key = %principal.key_id, actor = %principal.actor, },
         "admin flag set"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(AdminChanged {
         name,
         previous,
@@ -700,7 +748,8 @@ async fn set_email(
         { user = %name, key = %principal.key_id, actor = %principal.actor, },
         "email set"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(users::find(app.pool(), &name).await?.into()))
 }
 
@@ -767,7 +816,8 @@ async fn entitle(
         { user = %name, key = %principal.key_id, actor = %principal.actor, },
         "entitlement set"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     let entitlements = entitlement_views(&app, &name).await?;
     Ok(Json(Entitlements { name, entitlements }))
 }
@@ -794,7 +844,8 @@ async fn unentitle(
         { user = %name, key = %principal.key_id, actor = %principal.actor, },
         "entitlement removed"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     let entitlements = entitlement_views(&app, &name).await?;
     Ok(Json(Entitlements { name, entitlements }))
 }
@@ -924,7 +975,8 @@ async fn delete_user(
         ..users::DeleteOptions::default()
     };
     users::delete(app.pool(), &name, options, &actor, app.clock().now()).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -940,12 +992,7 @@ async fn list_teams(
     Extension(principal): Extension<Arc<Principal>>,
 ) -> Result<Json<TeamList>, AppError> {
     require_reader(&principal)?;
-    let labels = app.keys().labels();
-    let teams = teams::list(app.pool())
-        .await?
-        .into_iter()
-        .map(|record| TeamView::of(record, &labels))
-        .collect();
+    let teams = TeamView::many(&app, teams::list(app.pool()).await?).await?;
     Ok(Json(TeamList { teams }))
 }
 
@@ -973,10 +1020,11 @@ async fn create_team(
         owner: &body.owner,
     };
     let created = teams::create(app.pool(), &new, &actor, app.clock().now()).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok((
         StatusCode::CREATED,
-        Json(TeamView::of(created, &app.keys().labels())),
+        Json(TeamView::one(&app, created).await?),
     ))
 }
 
@@ -992,7 +1040,7 @@ async fn team_detail(
 ) -> Result<Json<TeamView>, AppError> {
     require_reader(&principal)?;
     let record = teams::find(app.pool(), &name).await?;
-    Ok(Json(TeamView::of(record, &app.keys().labels())))
+    Ok(Json(TeamView::one(&app, record).await?))
 }
 
 /// `DELETE /teams/{name}`: deletes a shared team that owns no catalog.
@@ -1013,7 +1061,8 @@ async fn delete_team(
 ) -> Result<StatusCode, AppError> {
     require_manager(&principal)?;
     teams::delete(app.pool(), &name, &actor, app.clock().now()).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1040,10 +1089,11 @@ async fn set_member(
         role: body.role,
     };
     let change = teams::set_member(app.pool(), &membership, &actor, app.clock().now()).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(MembershipChanged {
         change: change_name(change),
-        team: TeamView::of(teams::find(app.pool(), &team).await?, &app.keys().labels()),
+        team: TeamView::one(&app, teams::find(app.pool(), &team).await?).await?,
     }))
 }
 
@@ -1065,17 +1115,18 @@ async fn remove_member(
 ) -> Result<Json<TeamView>, AppError> {
     require_manager(&principal)?;
     teams::remove_member(app.pool(), &team, &user, &actor, app.clock().now()).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     let record = teams::find(app.pool(), &team).await?;
-    Ok(Json(TeamView::of(record, &app.keys().labels())))
+    Ok(Json(TeamView::one(&app, record).await?))
 }
 
 /// `PUT /teams/{name}/suspension`: suspends the team (or replaces its
 /// notice, keeping the first suspension time), or lifts its suspension.
-/// Polls before answering, so when that poll succeeds the next request is
-/// refused (or served again). A failed poll is logged, not returned (see
-/// `settle`): the committed change then takes effect at the poll loop's next
-/// successful pass.
+/// The write's own change messages are applied before the answer, so the
+/// next request on this replica is refused (or served again); the others
+/// follow through the change feed, or within `catalog_ttl` should a message
+/// be lost.
 ///
 /// # Returns
 /// The team as it now is.
@@ -1100,8 +1151,9 @@ async fn set_suspension(
     } else {
         teams::unsuspend(app.pool(), &name, &actor, now).await?
     };
-    settle(&app).await;
-    Ok(Json(TeamView::of(team, &app.keys().labels())))
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
+    Ok(Json(TeamView::one(&app, team).await?))
 }
 
 /// `PATCH /users/{name}`'s and `PATCH /me`'s body: the new display name.
@@ -1113,8 +1165,8 @@ pub(crate) struct DisplayNameBody {
     pub display_name: String,
 }
 
-/// `PATCH /users/{name}`: sets the user's display name, then polls so the
-/// labels show it at once.
+/// `PATCH /users/{name}`: sets the user's display name; the labels show it
+/// at once.
 ///
 /// # Returns
 /// The user as it now is.
@@ -1135,12 +1187,13 @@ async fn update_user(
     require_manager(&principal)?;
     let display_name = DisplayName::parse(&body.display_name)?;
     users::set_display_name(app.pool(), &name, &display_name, &actor, app.clock().now()).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(users::find(app.pool(), &name).await?.into()))
 }
 
-/// `PATCH /teams/{name}`: sets a shared team's display name, then polls so
-/// the labels show it at once. A manager (an admin reaching every catalog,
+/// `PATCH /teams/{name}`: sets a shared team's display name; the labels show
+/// it at once. A manager (an admin reaching every catalog,
 /// or a provisioner) may rename any shared team; a console session may
 /// rename one it owns, which the store checks under its locks.
 ///
@@ -1176,9 +1229,10 @@ async fn update_team(
         owner,
     };
     teams::set_display_name(app.pool(), &change, &actor, app.clock().now()).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     let record = teams::find(app.pool(), &name).await?;
-    Ok(Json(TeamView::of(record, &app.keys().labels())))
+    Ok(Json(TeamView::one(&app, record).await?))
 }
 
 /// `GET /unassigned`: every key, grant, code and catalog without a user or
@@ -1758,7 +1812,21 @@ mod tests {
         let ceiling_now = ceiling::ceiling_of(test.app.pool(), "alice")
             .await
             .expect("ceiling");
-        let cached = test.app.keys().ceiling_of(&detail_id(&test, "alice").await);
+        // Her session's ceiling on `main`, resolved from the cached gates
+        // and the catalog's row (issue #728).
+        let main_row = test
+            .app
+            .directory()
+            .resolve("main")
+            .await
+            .unwrap()
+            .expect("main");
+        let cached = test
+            .app
+            .session_principal(&detail_id(&test, "alice").await)
+            .await
+            .unwrap()
+            .and_then(|session| session.level_at(&main_row));
         let (admin, _) = put("main", "admin").await;
         let (bogus, _) = put("main", "owner").await;
         let (unknown_catalog, _) = put("nowhere", "read").await;
@@ -1778,7 +1846,11 @@ mod tests {
         assert!(body["entitlements"][0]["created_at"].is_string());
         assert_eq!(detail["entitlements"], body["entitlements"]);
         assert_eq!(ceiling_now.get("main"), Some(&Access::Read));
-        assert_eq!(cached.get("main"), Some(&Access::Read), "the route polls");
+        assert_eq!(
+            cached,
+            Some(Access::Read),
+            "the route's messages reach the cache"
+        );
         assert_eq!(admin.as_u16(), 400, "an entitlement is read or write");
         assert_eq!(bogus.as_u16(), 400);
         assert_eq!(unknown_catalog.as_u16(), 404);
@@ -2578,7 +2650,15 @@ mod tests {
         // The legacy insert bumps no generation, so the admin key is created
         // after it: its create bumps, and its poll loads both.
         let root = every_catalog_admin(&test).await;
-        assert_eq!(test.app.keys().find(&legacy).expect("cached").user, None);
+        assert_eq!(
+            test.app
+                .find_key(&legacy)
+                .await
+                .unwrap()
+                .expect("cached")
+                .user,
+            None
+        );
 
         let (status, _) = send(
             &test,
@@ -2593,8 +2673,9 @@ mod tests {
         assert_eq!(status.as_u16(), 200);
         assert_eq!(
             test.app
-                .keys()
-                .find(&legacy)
+                .find_key(&legacy)
+                .await
+                .unwrap()
                 .expect("cached")
                 .user
                 .as_deref(),

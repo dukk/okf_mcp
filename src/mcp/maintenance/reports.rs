@@ -142,8 +142,8 @@ pub(crate) async fn maintenance_list_runs(
     ctx: &ToolContext,
     params: MaintenanceListRunsParams,
 ) -> Result<MaintenanceResult<runs::Page<runs::RunSummary>>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
-    ctx.principal().require(Access::Read, state.name())?;
+    let state = ctx.one(Some(&params.catalog)).await?;
+    ctx.require(Access::Read, &state).await?;
     let result = runs::list_runs(
         ctx.app().pool(),
         state.id(),
@@ -160,13 +160,12 @@ pub(crate) async fn maintenance_get_run(
     ctx: &ToolContext,
     params: MaintenanceGetRunParams,
 ) -> Result<MaintenanceResult<runs::RunReport>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
+    let state = ctx.one(Some(&params.catalog)).await?;
     // The whole content check, before `admit`, which ignores refusals.
-    ctx.principal()
-        .require_contents(Access::Read, state.name(), ctx.app().clock().now())?;
+    ctx.require_contents(Access::Read, &state).await?;
     // Its work, findings and evidence describe the documents: a read of
     // the contents (a run list or a count is not).
-    ctx.admit(&state, AccessKind::Read)?;
+    ctx.admit(&state, AccessKind::Read).await?;
     let mut result = runs::get_run(ctx.app().pool(), state.id(), &params.run_id).await?;
     for work in &mut result.work {
         pin_path(&mut work.pin);
@@ -203,13 +202,12 @@ pub(crate) async fn maintenance_list_findings_by(
     params: MaintenanceListFindingsParams,
     disposition: Option<Disposition>,
 ) -> Result<MaintenanceResult<runs::Page<reports::FindingRecord>>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
+    let state = ctx.one(Some(&params.catalog)).await?;
     // The whole content check, before `admit`, which ignores refusals.
-    ctx.principal()
-        .require_contents(Access::Read, state.name(), ctx.app().clock().now())?;
+    ctx.require_contents(Access::Read, &state).await?;
     // Its work, findings and evidence describe the documents: a read of
     // the contents (a run list or a count is not).
-    ctx.admit(&state, AccessKind::Read)?;
+    ctx.admit(&state, AccessKind::Read).await?;
     let mut result = reports::list_findings_with(
         ctx.app().pool(),
         state.id(),
@@ -229,13 +227,12 @@ pub(crate) async fn maintenance_get_finding(
     ctx: &ToolContext,
     params: MaintenanceGetFindingParams,
 ) -> Result<MaintenanceResult<reports::FindingRecord>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
+    let state = ctx.one(Some(&params.catalog)).await?;
     // The whole content check, before `admit`, which ignores refusals.
-    ctx.principal()
-        .require_contents(Access::Read, state.name(), ctx.app().clock().now())?;
+    ctx.require_contents(Access::Read, &state).await?;
     // Its work, findings and evidence describe the documents: a read of
     // the contents (a run list or a count is not).
-    ctx.admit(&state, AccessKind::Read)?;
+    ctx.admit(&state, AccessKind::Read).await?;
     let mut result = reports::get_finding(ctx.app().pool(), state.id(), &params.finding_id).await?;
     finding_paths(&mut result);
     Ok(MaintenanceResult::new(state.name(), result))
@@ -258,8 +255,8 @@ pub(crate) async fn maintenance_finding_counts(
     ctx: &ToolContext,
     catalog: &str,
 ) -> Result<MaintenanceResult<reports::FindingCounts>, OkfError> {
-    let state = ctx.one(Some(catalog))?;
-    ctx.principal().require(Access::Read, state.name())?;
+    let state = ctx.one(Some(catalog)).await?;
+    ctx.require(Access::Read, &state).await?;
     let counts = reports::count_findings(ctx.app().pool(), state.id()).await?;
     Ok(MaintenanceResult::new(state.name(), counts))
 }
@@ -269,8 +266,8 @@ pub(crate) async fn maintenance_dispose(
     ctx: &ToolContext,
     params: MaintenanceDisposeParams,
 ) -> Result<MaintenanceResult<reports::FindingRecord>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
-    ctx.principal().require(Access::Write, state.name())?;
+    let state = ctx.one(Some(&params.catalog)).await?;
+    ctx.require(Access::Write, &state).await?;
     let mut result = reports::dispose(
         ctx.app().pool(),
         state.id(),

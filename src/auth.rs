@@ -1,45 +1,45 @@
 //! API-key and OAuth-token authentication (design "Data flow", "Read", step
-//! 1): the in-memory key cache, the [`Principal`] a request acts as, the
-//! [`BearerVerifier`] seam between credential kinds, the axum middleware
-//! that requires a bearer credential on MCP and the archive routes, and
-//! the principal of a console session (`/api/v1` admits those through
+//! 1): the [`Principal`] a request acts as, the [`BearerVerifier`] seam
+//! between credential kinds, the axum middleware that requires a bearer
+//! credential on MCP and the archive routes, and the principal of a console
+//! session (`/api/v1` admits those through
 //! `http::console_session::require_principal`).
-//! The cache caps each self-issued credential by its user's ceiling
-//! ([`crate::store::ceiling`]); admin-issued ones keep their stored levels.
+//! Principals are assembled per request from the credential and user caches
+//! ([`crate::cache::credentials`]); each self-issued credential is capped by
+//! its user's ceiling ([`crate::store::ceiling`]), and admin-issued ones keep
+//! their stored levels. A check against a catalog takes that catalog's
+//! directory row ([`CatalogRow`]), read at the moment of the check.
 //!
-//! Keys are looked up by their SHA-256 in a `HashMap`. A timing difference
-//! in that lookup can tell an attacker only how the *hash* of a guess
-//! compares with stored hashes, which does not help find a key, so there is
-//! no constant-time scan (the design's deviation, recorded in the M4 plan).
+//! Keys are looked up by their SHA-256. A timing difference in that lookup
+//! can tell an attacker only how the *hash* of a guess compares with stored
+//! hashes, which does not help find a key, so there is no constant-time scan
+//! (the design's deviation, recorded in the M4 plan).
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fmt;
+use std::collections::BTreeMap;
 // `Future` is not in the 2021 prelude; the trait below names it.
 use std::future::Future;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use axum::extract::{Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
 
 use crate::app::App;
-use crate::clock::Clock;
+use crate::cache::directory::CatalogDirectory;
 use crate::error::OkfError;
 use crate::http::requester::Requester;
 use crate::http::AppError;
 use crate::keys;
-use crate::labels::directory::Labels;
 use crate::oauth::access::OAuthVerifier;
 use crate::store::audit::{AccessRecord, AuditActor};
-use crate::store::ceiling::{self, cap, Ceiling};
-use crate::store::gates;
-use crate::store::keys::{self as key_rows, Access, KeyKind, KeyRecord};
-use crate::store::teams::{self, SuspendedCatalog};
-use crate::store::unlocks::LiveUnlock;
-use crate::store::users::{self, UserAuth};
+use crate::store::catalogs::CatalogRow;
+use crate::store::ceiling::{cap, Ceiling};
+use crate::store::gates::UserGates;
+use crate::store::keys::{Access, KeyKind, KeyRecord};
+use crate::store::teams::SuspendedCatalog;
+use crate::store::users::UserAuth;
 use crate::telemetry::subscriber::split_event;
 
 /// The `key_id` prefix of a console session's principal. Key ids match
@@ -55,6 +55,14 @@ pub enum Reach {
     All,
     /// These catalogs, by name, each at its own level (Decision 1).
     Catalogs(BTreeMap<String, Access>),
+    /// A non-admin console session: the catalogs its user's ceiling reaches,
+    /// each at the ceiling's level there. It is resolved per catalog, from
+    /// the catalog's directory row and the user's gates in
+    /// [`AccessFacts::user`] ([`crate::store::ceiling::level_on`]), never
+    /// listed whole, so a session costs nothing per catalog its user's teams
+    /// own (issue #728). A name alone cannot decide it: checks that a
+    /// session can reach take the row ([`Principal::level_at`]).
+    Ceiling,
 }
 
 /// What credential a request came with.
@@ -77,41 +85,22 @@ pub enum CredentialKind {
     },
 }
 
-/// Every catalog whose owner team is suspended, by catalog name. One map per
-/// key-cache load, shared (through an `Arc`) by every principal built from it.
-pub type Suspensions = HashMap<String, SuspendedCatalog>;
-
-/// Who reaches which catalog as a customer, who needs an unlock, and the
-/// audit ids an operator's access is recorded with: loaded with the key
-/// cache and shared by every principal of that load (as the suspension map
-/// is).
+/// What a principal's admissions depend on besides its credential and the
+/// catalog's own row: its user's gates, its credential's audit id and the
+/// `require_unlock` setting, as they were when the principal
+/// was assembled for this request (M18 spec Decision 9). Empty for a
+/// principal built outside the credential cache (`From<KeyRecord>`, tests),
+/// which then admits no one as a customer and records nothing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AccessGates {
-    /// By `users.id`: the catalogs owned by the user's teams.
-    pub members: HashMap<String, HashSet<String>>,
-    /// By `users.id`: the catalogs the user is entitled to (`user_catalogs`).
-    /// An entitled non-admin is a customer; an admin user's entitlement is
-    /// not (spec "Who needs an unlock").
-    pub entitled: HashMap<String, HashSet<String>>,
-    /// The `users.id` of every admin user.
-    pub admins: HashSet<String>,
+pub struct AccessFacts {
+    /// The credential's user's teams, entitlements, unlocks, admin flag and
+    /// audit id; `None` for a credential without a user (or one built
+    /// outside the cache).
+    pub user: Option<Arc<UserGates>>,
+    /// The credential's `audit_credentials` id.
+    pub credential: Option<i64>,
     /// The `require_unlock` setting.
     pub require_unlock: bool,
-    /// By `users.id`: the user's live unlocks. Expiry is checked on every
-    /// request ([`Principal::admission`]), so an unlock ends on time even
-    /// between reloads.
-    pub unlocks: HashMap<String, Vec<LiveUnlock>>,
-    /// The catalogs whose `maintenance` flag is off: the maintenance
-    /// runner is refused there ([`OkfError::MaintenanceOff`]).
-    pub maintenance_off: HashSet<String>,
-    /// By `users.id`: the user's `audit_people` id. Resolved here, at load,
-    /// so an access is recorded with ids fixed at admission (M14 Decision 21).
-    pub people: HashMap<String, i64>,
-    /// By key or grant id: its `audit_credentials` id.
-    pub credentials: HashMap<String, i64>,
-    /// By catalog name: its immutable id and its owner team's `audit_teams`
-    /// id (M14 Decision 22).
-    pub catalogs: HashMap<String, CatalogScope>,
 }
 
 /// A catalog as an access record names it, fixed at admission.
@@ -121,6 +110,29 @@ pub struct CatalogScope {
     pub id: i64,
     /// The owner team's `audit_teams` id; `None` for an unowned catalog.
     pub team: Option<i64>,
+}
+
+impl CatalogScope {
+    /// The scope of the catalog incarnation `row` describes.
+    ///
+    /// # Arguments
+    /// * `row` - the catalog's directory row.
+    ///
+    /// # Returns
+    /// Its id and owner team's audit id.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn of(row: &CatalogRow) -> Self {
+        Self {
+            id: row.id,
+            team: row.audit_team,
+        }
+    }
 }
 
 /// How a content read or write is let in (spec Parts 5 and 6).
@@ -192,24 +204,25 @@ pub struct Principal {
     /// what the audit log and the access gates key people by. It grants
     /// nothing by itself.
     pub user_id: Option<String>,
-    /// The catalogs suspended when the key cache was loaded, shared by every
-    /// principal of that load. Read by [`Principal::require`] (and, from
-    /// Task 4 of M13, selection); an admin credential ignores it. Empty for a
-    /// principal built outside the cache (`From<KeyRecord>`, tests).
-    pub suspended: Arc<Suspensions>,
-    /// The access gates of the cache it came from (shared). Empty for a
-    /// principal built outside the cache, which then records no access.
-    pub gates: Arc<AccessGates>,
+    /// What its admissions depend on besides the catalog's row (shared by
+    /// the request's checks). Empty for a principal built outside the
+    /// credential cache, which then records no access.
+    pub facts: Arc<AccessFacts>,
 }
 
 impl Principal {
-    /// The level this principal has on `catalog`.
+    /// The level this principal has on `catalog`, decided by name alone.
+    ///
+    /// A [`Reach::Ceiling`] (a non-admin console session) cannot be decided
+    /// by name, so it answers `None` here: it fails closed. Every check a
+    /// session can reach uses [`Self::level_at`] with the catalog's row.
     ///
     /// # Arguments
     /// * `catalog` - a catalog name.
     ///
     /// # Returns
-    /// Its level there, or `None` when it does not reach the catalog.
+    /// Its level there, or `None` when it does not reach the catalog (or
+    /// the reach is a ceiling).
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn level(&self, catalog: &str) -> Option<Access> {
         match &self.reach {
@@ -217,6 +230,72 @@ impl Principal {
             // `copied` turns the map's `Option<&Access>` into
             // `Option<Access>` (`Access` is `Copy`).
             Reach::Catalogs(levels) => levels.get(catalog).copied(),
+            Reach::Ceiling => None,
+        }
+    }
+
+    /// The level this principal has on the catalog `row` describes: what
+    /// every reach check uses, and the only one a [`Reach::Ceiling`]
+    /// answers.
+    ///
+    /// # Arguments
+    /// * `row` - the catalog's directory row.
+    ///
+    /// # Returns
+    /// Its level there, or `None` when it does not reach the catalog.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn level_at(&self, row: &CatalogRow) -> Option<Access> {
+        match &self.reach {
+            Reach::All | Reach::Catalogs(_) => self.level(&row.name),
+            // A session without gates (built outside the credential cache)
+            // reaches nothing.
+            Reach::Ceiling => self
+                .facts
+                .user
+                .as_deref()
+                .and_then(|gates| crate::store::ceiling::level_on(row, gates)),
+        }
+    }
+
+    /// Does the key reach the catalog `row` describes ([`Self::level_at`])?
+    ///
+    /// # Arguments
+    /// * `row` - the catalog's directory row.
+    ///
+    /// # Returns
+    /// `true` when it reaches it at any level.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn reaches_row(&self, row: &CatalogRow) -> bool {
+        self.level_at(row).is_some()
+    }
+
+    /// Whether the name alone shows the key does not reach `catalog`: a
+    /// [`Reach::Catalogs`] that does not name it. Lets a caller skip the
+    /// row's lookup; a `false` decides nothing, so the caller then checks
+    /// the row ([`Self::reaches_row`]).
+    ///
+    /// # Arguments
+    /// * `catalog` - a catalog name.
+    ///
+    /// # Returns
+    /// `true` only for a by-name reach without the catalog.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn excludes(&self, catalog: &str) -> bool {
+        match &self.reach {
+            Reach::Catalogs(levels) => !levels.contains_key(catalog),
+            Reach::All | Reach::Ceiling => false,
         }
     }
 
@@ -251,9 +330,58 @@ impl Principal {
     /// catalogs exist); [`OkfError::Forbidden`] if it does but its level
     /// there is lower than `access`.
     #[tracing::instrument(level = "trace", skip_all)]
-    fn require_level(&self, access: Access, catalog: &str) -> Result<(), OkfError> {
+    pub fn require_level(&self, access: Access, catalog: &str) -> Result<(), OkfError> {
+        self.check_level(self.level(catalog), access, catalog)
+    }
+
+    /// [`Self::require_level`] on the catalog `row` describes
+    /// ([`Self::level_at`]): the form a [`Reach::Ceiling`] passes.
+    ///
+    /// # Arguments
+    /// * `access` - the level the operation needs.
+    /// * `row` - the catalog's directory row.
+    ///
+    /// # Errors
+    /// As [`Self::require_level`].
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn require_level_at(&self, access: Access, row: &CatalogRow) -> Result<(), OkfError> {
+        self.check_level(self.level_at(row), access, &row.name)
+    }
+
+    /// [`Self::require_level`] where the name decides it, run before a
+    /// row's lookup so a key that does not reach the catalog learns nothing
+    /// from it. A [`Reach::Ceiling`] passes here: its caller must then
+    /// check the row ([`Self::require_level_at`], which [`Self::require`]
+    /// runs).
+    ///
+    /// # Arguments
+    /// * `access` - the level the operation needs.
+    /// * `catalog` - the catalog's name.
+    ///
+    /// # Errors
+    /// As [`Self::require_level`], never for a ceiling.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn precheck_level(&self, access: Access, catalog: &str) -> Result<(), OkfError> {
+        match self.reach {
+            Reach::Ceiling => Ok(()),
+            Reach::All | Reach::Catalogs(_) => self.require_level(access, catalog),
+        }
+    }
+
+    /// The refusal, if any, of `level` (this principal's on `catalog`) for
+    /// an operation needing `access`.
+    ///
+    /// # Errors
+    /// As [`Self::require_level`].
+    #[tracing::instrument(level = "trace", skip_all)]
+    fn check_level(
+        &self,
+        level: Option<Access>,
+        access: Access,
+        catalog: &str,
+    ) -> Result<(), OkfError> {
         // `let ... else`: bind the level, or leave early when there is none.
-        let Some(level) = self.level(catalog) else {
+        let Some(level) = level else {
             return Err(OkfError::CatalogNotSelected {
                 catalog: catalog.to_string(),
             });
@@ -272,60 +400,65 @@ impl Principal {
         Ok(())
     }
 
-    /// The suspension of `catalog`, if its owner team is suspended: a fact
-    /// shown to anyone who reaches the catalog (listing), whatever their
-    /// level. Callers check reach first, so a credential that does not reach
-    /// a catalog never learns it is suspended.
+    /// The suspension of the catalog `row` describes, if its owner team is
+    /// suspended: a fact shown to anyone who reaches the catalog (listing),
+    /// whatever their level. Callers check reach first, so a credential
+    /// that does not reach a catalog never learns it is suspended.
     ///
     /// # Arguments
-    /// * `catalog` - a catalog name.
+    /// * `row` - the catalog's directory row.
     ///
     /// # Returns
-    /// The owner team and its notice, or `None` for an active catalog.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    pub fn suspension(&self, catalog: &str) -> Option<&SuspendedCatalog> {
-        self.suspended.get(catalog)
+    /// The owner team, its notice and both labels, or `None` for an active
+    /// catalog.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn suspension(&self, row: &CatalogRow) -> Option<SuspendedCatalog> {
+        let suspended = row.suspended.as_ref()?;
+        // Both labels come from the row itself: the catalog's from its
+        // display name and description, the team's from the suspension.
+        Some(SuspendedCatalog {
+            team: suspended.team.clone(),
+            notice: suspended.notice.clone(),
+            catalog_label: crate::labels::catalog_label(&row.display_name, &row.description),
+            team_label: suspended.team_label.clone(),
+        })
     }
 
     /// Refuses a suspended catalog for every credential but an admin (M13
     /// Decision 1: the operator must still inspect, export and repair it).
     ///
     /// # Arguments
-    /// * `catalog` - a catalog the principal reaches (check reach first).
+    /// * `row` - the directory row of a catalog the principal reaches (check
+    ///   reach first).
     ///
     /// # Errors
     /// [`OkfError::Suspended`] when the catalog's owner team is suspended and
     /// the principal is not an admin.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn check_not_suspended(&self, catalog: &str) -> Result<(), OkfError> {
+    pub fn check_not_suspended(&self, row: &CatalogRow) -> Result<(), OkfError> {
         if self.access == Access::Admin {
             return Ok(());
         }
-        match self.suspension(catalog) {
+        match self.suspension(row) {
             None => Ok(()),
             Some(suspended) => Err(OkfError::Suspended {
-                catalog: catalog.to_string(),
-                catalog_label: suspended.catalog_label.clone(),
-                team: suspended.team.clone(),
-                team_label: suspended.team_label.clone(),
-                notice: suspended.notice.clone(),
+                catalog: row.name.clone(),
+                catalog_label: suspended.catalog_label,
+                team: suspended.team,
+                team_label: suspended.team_label,
+                notice: suspended.notice,
             }),
         }
     }
 
-    /// Checks that the key may do something needing `access` to `catalog`:
-    /// reach, then level, then suspension (M13 Decision 2), so a credential
-    /// that does not reach the catalog never learns it is suspended.
+    /// Checks that the key may do something needing `access` to the catalog
+    /// `row` describes: reach, then level, then suspension (M13 Decision 2),
+    /// so a credential that does not reach the catalog never learns it is
+    /// suspended.
     ///
     /// # Arguments
     /// * `access` - the level the operation needs.
-    /// * `catalog` - the catalog it acts on.
+    /// * `row` - the directory row of the catalog it acts on.
     ///
     /// # Errors
     /// [`OkfError::CatalogNotSelected`] if the key does not reach the
@@ -340,16 +473,92 @@ impl Principal {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    pub fn require(&self, access: Access, catalog: &str) -> Result<(), OkfError> {
+    pub fn require(&self, access: Access, row: &CatalogRow) -> Result<(), OkfError> {
+        self.require_level_at(access, row)?;
+        self.check_not_suspended(row)
+    }
+
+    /// [`Self::require`] for a catalog known only by name, reading its row
+    /// from the directory only when the answer depends on it: after the
+    /// reach and level checks pass, and for a credential below admin. A
+    /// catalog with no row (unknown, or deleted) is not suspended: the
+    /// operation's own lookup then refuses it as before.
+    ///
+    /// # Arguments
+    /// * `directory` - the catalog directory.
+    /// * `access` - the level the operation needs.
+    /// * `catalog` - the catalog's name.
+    ///
+    /// # Errors
+    /// As [`Self::require`]; [`OkfError::Database`] when the row's read fails.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn require_in(
+        &self,
+        directory: &CatalogDirectory,
+        access: Access,
+        catalog: &str,
+    ) -> Result<(), OkfError> {
+        if matches!(self.reach, Reach::Ceiling) {
+            // Decided by the row: one that does not exist is not reached.
+            // A ceiling never holds admin, so suspension is always checked.
+            return match directory.resolve(catalog).await? {
+                Some(row) => self.require(access, &row),
+                None => Err(OkfError::CatalogNotSelected {
+                    catalog: catalog.to_string(),
+                }),
+            };
+        }
         self.require_level(access, catalog)?;
-        self.check_not_suspended(catalog)
+        if self.access == Access::Admin {
+            return Ok(());
+        }
+        match directory.resolve(catalog).await? {
+            Some(row) => self.check_not_suspended(&row),
+            None => Ok(()),
+        }
+    }
+
+    /// The row of a catalog known by name that this principal reaches at
+    /// `access`: reach and level are checked first, so a key that does not
+    /// reach the catalog learns nothing from the lookup.
+    ///
+    /// # Arguments
+    /// * `directory` - the catalog directory.
+    /// * `access` - the level the operation needs.
+    /// * `catalog` - the catalog's name.
+    ///
+    /// # Returns
+    /// Its directory row, as it is now.
+    ///
+    /// # Errors
+    /// As [`Self::require_level`]; [`OkfError::CatalogNotSelected`] for a
+    /// catalog that does not exist; [`OkfError::Database`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn reached_row(
+        &self,
+        directory: &CatalogDirectory,
+        access: Access,
+        catalog: &str,
+    ) -> Result<Arc<CatalogRow>, OkfError> {
+        self.precheck_level(access, catalog)?;
+        let row =
+            directory
+                .resolve(catalog)
+                .await?
+                .ok_or_else(|| OkfError::CatalogNotSelected {
+                    catalog: catalog.to_string(),
+                })?;
+        // The whole check for a ceiling; for the others, the same answer
+        // as the precheck.
+        self.require_level_at(access, &row)?;
+        Ok(row)
     }
 
     /// Checks that the key may export `catalog`: read access, suspended or
     /// not (M13 spec: export stays open so members can take their data).
     ///
     /// # Arguments
-    /// * `catalog` - the catalog to export.
+    /// * `row` - the directory row of the catalog to export.
     ///
     /// # Errors
     /// As [`Self::require`] with [`Access::Read`], but never
@@ -361,42 +570,35 @@ impl Principal {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    pub fn require_export(&self, catalog: &str) -> Result<(), OkfError> {
-        self.require_level(Access::Read, catalog)
+    pub fn require_export(&self, row: &CatalogRow) -> Result<(), OkfError> {
+        self.require_level_at(Access::Read, row)
     }
 
     /// The principal of a console session (plan Decision 5): an admin
     /// user acts as an admin on every catalog; anyone else reaches exactly
-    /// their ceiling, at the ceiling's level for each catalog.
+    /// their ceiling, at the ceiling's level for each catalog
+    /// ([`Reach::Ceiling`], resolved per catalog from `facts`' gates).
     ///
-    /// Callers pass the user as the key cache knows it now, never as read
+    /// Callers pass the user as the user cache knows it now, never as read
     /// at sign-in: the admin flag can change between the password check
     /// and the session's first request.
     ///
     /// # Arguments
-    /// * `user` - the signed-in user, from the key cache.
-    /// * `ceiling` - the user's ceiling (unused for an admin).
-    /// * `suspended` - the suspended catalogs, from the key cache
-    ///   ([`Keys::suspensions`]); an admin ignores them.
-    /// * `gates` - the access gates, from the key cache ([`Keys::gates`]).
+    /// * `user` - the signed-in user, from the user cache.
+    /// * `facts` - the access facts, with this user's gates (what a
+    ///   non-admin's ceiling is resolved from).
     ///
     /// # Returns
-    /// The principal; its `access` is the highest level it holds, for
-    /// display and the admin checks (which a non-admin never passes).
+    /// The principal. An admin's `access` is `Admin`; a non-admin's is
+    /// `Read`, which grants nothing by itself (its levels are the ceiling's,
+    /// per catalog) and only ever fails the admin checks; `GET /whoami`
+    /// shows the ceiling's highest level instead ([`crate::store::ceiling::highest`]).
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn for_session(
-        user: &UserAuth,
-        ceiling: Ceiling,
-        suspended: Arc<Suspensions>,
-        gates: Arc<AccessGates>,
-    ) -> Self {
+    pub fn for_session(user: &UserAuth, facts: Arc<AccessFacts>) -> Self {
         let (access, reach) = if user.is_admin {
             (Access::Admin, Reach::All)
         } else {
-            // `copied()` turns the `&Access` items into `Access` values;
-            // `max()` is `None` for an empty ceiling.
-            let highest = ceiling.values().copied().max().unwrap_or(Access::Read);
-            (highest, Reach::Catalogs(ceiling))
+            (Access::Read, Reach::Ceiling)
         };
         Self {
             key_id: format!("{SESSION_KEY_PREFIX}{}", user.name),
@@ -411,14 +613,13 @@ impl Principal {
             },
             user: Some(user.name.clone()),
             user_id: Some(user.id.clone()),
-            suspended,
-            gates,
+            facts,
         }
     }
 
-    /// How this principal is let into `catalog`'s contents for `access`
-    /// (spec "Who needs an unlock"). Call it only on a catalog the
-    /// principal reaches at that level.
+    /// How this principal is let into the contents of the catalog `row`
+    /// describes, for `access` (spec "Who needs an unlock"). Call it only on
+    /// a catalog the principal reaches at that level.
     ///
     /// In order: the maintenance runner (a non-admin reporting key) is
     /// refused where the catalog's owners turned maintenance off, whatever
@@ -429,8 +630,13 @@ impl Principal {
     /// as an admin read; with it on, everyone else needs a live unlock of
     /// their own user on this catalog.
     ///
+    /// Every fact is matched by the row's `catalogs.id` (the owner team by
+    /// its `teams.id`), never by name, so an entitlement or unlock of a
+    /// catalog deleted and created again under its name never opens the new
+    /// one.
+    ///
     /// # Arguments
-    /// * `catalog` - the catalog.
+    /// * `row` - the catalog's directory row.
     /// * `access` - what the operation needs.
     /// * `now` - the server clock, for the unlock's expiry.
     ///
@@ -444,47 +650,52 @@ impl Principal {
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn admission(
         &self,
-        catalog: &str,
+        row: &CatalogRow,
         access: Access,
         now: DateTime<Utc>,
     ) -> Result<Admission, OkfError> {
-        let gates = &*self.gates;
         if self.maintenance_report && self.access != Access::Admin {
-            if gates.maintenance_off.contains(catalog) {
+            if row.maintenance_off {
                 return Err(OkfError::MaintenanceOff {
-                    catalog: catalog.to_string(),
+                    catalog: row.name.clone(),
                 });
             }
             if access == Access::Read {
                 return Ok(Admission::Maintenance);
             }
         }
-        let user = self.user_id.as_deref();
-        let admin_user = user.is_some_and(|id| gates.admins.contains(id));
-        if self.is_member_of_owner(catalog) || (!admin_user && self.holds(&gates.entitled, catalog))
-        {
+        // `as_deref` borrows the gates out of the `Option<Arc<..>>`.
+        let user = self.facts.user.as_deref();
+        let admin_user = user.is_some_and(|user| user.is_admin);
+        let member = user.is_some_and(|user| {
+            row.owner_team_id
+                .as_ref()
+                .is_some_and(|team| user.teams.contains(team))
+        });
+        let entitled = user.is_some_and(|user| user.entitled.contains_key(&row.id));
+        if member || (!admin_user && entitled) {
             return Ok(Admission::Customer);
         }
-        if !gates.require_unlock {
+        if !self.facts.require_unlock {
             return Ok(if self.access == Access::Admin && access == Access::Read {
                 Admission::AdminRead
             } else {
                 Admission::Untracked
             });
         }
-        // `and_then` chains lookups that may each be missing, like Python's
-        // `a and a.get(...)`; `find` stops at the first live match.
-        let unlock = user.and_then(|id| gates.unlocks.get(id)).and_then(|live| {
-            live.iter()
-                .find(|unlock| unlock.catalog == catalog && unlock.expires_at > now)
+        // `find` stops at the first live unlock of this very catalog.
+        let unlock = user.and_then(|user| {
+            user.unlocks
+                .iter()
+                .find(|unlock| unlock.catalog_id == row.id && unlock.expires_at > now)
         });
         match unlock {
             Some(unlock) => Ok(Admission::Unlocked {
                 unlock_id: unlock.id,
             }),
             None => Err(OkfError::UnlockRequired {
-                catalog: catalog.to_string(),
-                has_user: user.is_some(),
+                catalog: row.name.clone(),
+                has_user: self.user_id.is_some(),
             }),
         }
     }
@@ -495,7 +706,8 @@ impl Principal {
     /// a lock is refused before a low level is.
     ///
     /// # Arguments
-    /// * `catalog` - a catalog the principal reaches (check reach first).
+    /// * `row` - the directory row of a catalog the principal reaches (check
+    ///   reach first).
     /// * `access` - what the operation needs.
     /// * `now` - the server clock.
     ///
@@ -508,12 +720,12 @@ impl Principal {
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn check_open(
         &self,
-        catalog: &str,
+        row: &CatalogRow,
         access: Access,
         now: DateTime<Utc>,
     ) -> Result<Admission, OkfError> {
-        self.check_not_suspended(catalog)?;
-        self.admission(catalog, access, now)
+        self.check_not_suspended(row)?;
+        self.admission(row, access, now)
     }
 
     /// The whole check for a route that reads or writes a catalog's
@@ -523,7 +735,7 @@ impl Principal {
     ///
     /// # Arguments
     /// * `access` - the level the operation needs.
-    /// * `catalog` - the catalog it acts on.
+    /// * `row` - the directory row of the catalog it acts on.
     /// * `now` - the server clock.
     ///
     /// # Returns
@@ -535,68 +747,22 @@ impl Principal {
     pub fn require_contents(
         &self,
         access: Access,
-        catalog: &str,
+        row: &CatalogRow,
         now: DateTime<Utc>,
     ) -> Result<Admission, OkfError> {
-        self.require(access, catalog)?;
-        self.admission(catalog, access, now)
-    }
-
-    /// Whether the credential's user holds `catalog` in `map` (one of the
-    /// gates' by-user catalog maps).
-    #[tracing::instrument(level = "trace", skip_all)]
-    fn holds(&self, map: &HashMap<String, HashSet<String>>, catalog: &str) -> bool {
-        self.user_id
-            .as_deref()
-            .and_then(|user_id| map.get(user_id))
-            .is_some_and(|catalogs| catalogs.contains(catalog))
-    }
-
-    /// Whether the credential's user is in the catalog's owner team.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    fn is_member_of_owner(&self, catalog: &str) -> bool {
-        self.holds(&self.gates.members, catalog)
-    }
-
-    /// The scope of the catalog incarnation `catalog_id`, if this
-    /// principal's gates were loaded with that incarnation under `catalog`.
-    /// The gates and the catalog map a call reads are published separately
-    /// (`App::poll` swaps the key cache first), so a call can read one
-    /// incarnation of a name (deleted and created again) while the gates
-    /// describe another; only a matching id makes the gates' membership and
-    /// owner team true of what is read.
-    ///
-    /// # Arguments
-    /// * `catalog` - the catalog's name.
-    /// * `catalog_id` - the `catalogs.id` of the state the call reads.
-    ///
-    /// # Returns
-    /// Its id and owner team, or `None` when the gates do not know that
-    /// incarnation.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn scope_of(&self, catalog: &str, catalog_id: i64) -> Option<CatalogScope> {
-        self.gates
-            .catalogs
-            .get(catalog)
-            .copied()
-            .filter(|scope| scope.id == catalog_id)
+        self.require(access, row)?;
+        self.admission(row, access, now)
     }
 
     /// This principal's access to `catalog` as the audit log will record
-    /// it, with every identity and scope fixed now from the key cache, so
-    /// a write that runs later neither looks anything up by name nor
+    /// it, with every identity and scope fixed now from the access facts,
+    /// so a write that runs later neither looks anything up by name nor
     /// creates a person or credential row (M14 Decisions 21 and 22).
     ///
     /// # Arguments
     /// * `requester` - the request's address and source.
     /// * `catalog` - the catalog's name.
-    /// * `scope` - the incarnation read, from [`Self::scope_of`].
+    /// * `scope` - the incarnation read ([`CatalogScope::of`] its row).
     /// * `now` - when it was admitted (server clock).
     ///
     /// # Returns
@@ -610,26 +776,16 @@ impl Principal {
         now: DateTime<Utc>,
     ) -> AccessRecord {
         let actor = AuditActor::of(self, requester);
+        let user = self.facts.user.as_deref();
         AccessRecord {
             source: requester.source,
-            actor_credential: actor
-                .credential
-                .as_deref()
-                .and_then(|id| self.gates.credentials.get(id))
-                .copied(),
-            actor_person: self
-                .user_id
-                .as_deref()
-                .and_then(|id| self.gates.people.get(id))
-                .copied(),
+            // A session acts with no credential, so it records none.
+            actor_credential: actor.credential.as_ref().and(self.facts.credential),
+            actor_person: user.and_then(|user| user.person),
             actor_label: actor.stored_label(),
             // As `audit::record` marks it: an operator credential, or a
             // credential of an admin user.
-            operator: actor.operator
-                || self
-                    .user_id
-                    .as_deref()
-                    .is_some_and(|id| self.gates.admins.contains(id)),
+            operator: actor.operator || user.is_some_and(|user| user.is_admin),
             ip: requester.ip,
             catalog: catalog.to_string(),
             scope,
@@ -639,11 +795,14 @@ impl Principal {
 
     /// Requires read access to the catalog and the independent reporting flag.
     ///
+    /// # Arguments
+    /// * `row` - the catalog's directory row.
+    ///
     /// # Errors
     /// As [`Self::require`], or [`OkfError::Forbidden`] when reporting is disabled.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn require_maintenance_report(&self, catalog: &str) -> Result<(), OkfError> {
-        self.require(Access::Read, catalog)?;
+    pub fn require_maintenance_report(&self, row: &CatalogRow) -> Result<(), OkfError> {
+        self.require(Access::Read, row)?;
         if !self.maintenance_report {
             return Err(OkfError::Forbidden {
                 reason: format!("key {:?} cannot submit maintenance reports", self.key_id),
@@ -683,10 +842,10 @@ impl From<KeyRecord> for Principal {
             kind,
             user: record.user,
             user_id: record.user_id,
-            // Filled in by the key cache (`principal_of`); a principal
-            // built outside it sees nothing suspended and records nothing.
-            suspended: Arc::default(),
-            gates: Arc::default(),
+            // Filled in by the credential cache (`principal_of`); a
+            // principal built outside it admits no customer and records
+            // nothing.
+            facts: Arc::default(),
         }
     }
 }
@@ -706,54 +865,9 @@ impl From<KeyRecord> for Principal {
         reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
     )
 )]
-fn unexpired(expires_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
+pub(crate) fn unexpired(expires_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
     // `is_none_or`: true for `None`, else the test's answer.
     expires_at.is_none_or(|at| at > now)
-}
-
-/// One cached credential and when it stops working.
-#[derive(Debug)]
-struct Cached {
-    principal: Arc<Principal>,
-    expires_at: Option<DateTime<Utc>>,
-}
-
-impl Cached {
-    /// The principal, unless the credential has expired since the cache
-    /// was built (it can be up to one `poll_interval` old).
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    fn live_at(&self, now: DateTime<Utc>) -> Option<Arc<Principal>> {
-        // `then` runs the closure only when the test is true.
-        unexpired(self.expires_at, now).then(|| Arc::clone(&self.principal))
-    }
-}
-
-/// Every live key, by SHA-256, every live OAuth grant, by id, and every
-/// user with its ceiling, by user id. Immutable: a reload builds a new one.
-#[derive(Debug, Default)]
-pub struct KeyCache {
-    by_hash: HashMap<[u8; 32], Cached>,
-    // Grants have no secret of their own: an access token names one by id.
-    by_id: HashMap<String, Cached>,
-    // Each user's ceiling, by user id: self-issued credentials are capped
-    // by it here, and console sessions are built from it.
-    by_user: HashMap<String, Ceiling>,
-    // Every user, by id: what a session principal is built from without a
-    // query (admin flag, name, email).
-    users: HashMap<String, UserAuth>,
-    // Every user's, team's and catalog's label, by slug (reloaded with the
-    // rest of the cache on every `admin_generation` bump).
-    labels: Arc<Labels>,
-    // The suspended catalogs this cache's principals share.
-    suspended: Arc<Suspensions>,
-    // The access gates this cache's principals share.
-    gates: Arc<AccessGates>,
 }
 
 /// The ceiling of a self-issued credential whose user has none.
@@ -765,38 +879,30 @@ static NO_CEILING: Ceiling = BTreeMap::new();
 ///
 /// # Arguments
 /// * `record` - the row.
-/// * `ceilings` - every user's ceiling, by user id.
-/// * `suspended` - the cache's suspended catalogs, shared with the principal.
-/// * `gates` - the cache's access gates, shared with the principal.
+/// * `ceiling` - its user's current ceiling, at least on the record's own
+///   catalogs (the cache passes it restricted to them,
+///   [`crate::store::ceiling::ceiling_over`]); `None` for a credential whose
+///   user is unknown (a self-issued one then reaches nothing).
+/// * `facts` - the access facts, shared with the principal.
 ///
 /// # Returns
 /// The principal.
 #[tracing::instrument(level = "trace", skip_all)]
-fn principal_of(
+pub(crate) fn principal_of(
     record: KeyRecord,
-    ceilings: &HashMap<String, Ceiling>,
-    suspended: &Arc<Suspensions>,
-    gates: &Arc<AccessGates>,
+    ceiling: Option<&Ceiling>,
+    facts: Arc<AccessFacts>,
 ) -> Principal {
-    // Looked up before `record` moves into the principal. `get` borrows
-    // only `ceilings`, so the reference outlives the borrow of `record`.
-    let ceiling = record.self_issued.then(|| {
-        record
-            .user_id
-            .as_deref()
-            .and_then(|user_id| ceilings.get(user_id))
-            .unwrap_or(&NO_CEILING)
-    });
+    let ceiling = record.self_issued.then(|| ceiling.unwrap_or(&NO_CEILING));
     let mut principal = Principal::from(record);
-    // `Arc::clone` copies the pointer, not the map: one map per load.
-    principal.suspended = Arc::clone(suspended);
-    principal.gates = Arc::clone(gates);
+    principal.facts = facts;
     if let Some(ceiling) = ceiling {
         let levels = match &principal.reach {
             Reach::Catalogs(levels) => cap(levels, ceiling),
             // The schema refuses a self-issued all-catalogs row; one edited
-            // by hand reaches nothing rather than everything.
-            Reach::All => Ceiling::new(),
+            // by hand reaches nothing rather than everything. A stored
+            // record is never a ceiling reach (only a session is).
+            Reach::All | Reach::Ceiling => Ceiling::new(),
         };
         // Its highest level left, for display; `Read` when nothing is left
         // (it then reaches no catalog at all).
@@ -806,405 +912,8 @@ fn principal_of(
     principal
 }
 
-impl KeyCache {
-    /// Builds the cache from stored rows, leaving out revoked ones and
-    /// those already expired, and capping self-issued ones.
-    ///
-    /// # Arguments
-    /// * `records` - the rows, as [`key_rows::list`] returns them.
-    /// * `ceilings` - every user's ceiling by user id, as
-    ///   [`ceiling::ceilings`] returns them (kept in the cache).
-    /// * `suspended` - the suspended catalogs, as
-    ///   [`teams::suspended_catalogs`] returns them (kept in the cache and
-    ///   shared by every principal it builds).
-    /// * `gates` - the access gates, as [`gates::load`] returns them (kept
-    ///   in the cache and shared by every principal it builds).
-    /// * `now` - the server clock.
-    ///
-    /// # Returns
-    /// The cache.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn from_records(
-        records: Vec<KeyRecord>,
-        ceilings: HashMap<String, Ceiling>,
-        suspended: Arc<Suspensions>,
-        gates: Arc<AccessGates>,
-        now: DateTime<Utc>,
-    ) -> Self {
-        let mut cache = Self {
-            by_user: ceilings,
-            suspended,
-            gates,
-            ..Self::default()
-        };
-        for record in records
-            .into_iter()
-            .filter(|record| record.revoked_at.is_none() && unexpired(record.expires_at, now))
-        {
-            let expires_at = record.expires_at;
-            match record.kind {
-                KeyKind::Key => {
-                    // The schema checks `length(sha256) = 32`, so this fails
-                    // only on a row edited by hand; such a key cannot
-                    // authenticate. `let ... else` skips it.
-                    let Some(hash) = record
-                        .sha256
-                        .as_deref()
-                        .and_then(|sha256| <[u8; 32]>::try_from(sha256).ok())
-                    else {
-                        continue;
-                    };
-                    let principal = Arc::new(principal_of(
-                        record,
-                        &cache.by_user,
-                        &cache.suspended,
-                        &cache.gates,
-                    ));
-                    cache.by_hash.insert(
-                        hash,
-                        Cached {
-                            principal,
-                            expires_at,
-                        },
-                    );
-                }
-                KeyKind::OAuth => {
-                    let id = record.id.clone();
-                    let principal = Arc::new(principal_of(
-                        record,
-                        &cache.by_user,
-                        &cache.suspended,
-                        &cache.gates,
-                    ));
-                    cache.by_id.insert(
-                        id,
-                        Cached {
-                            principal,
-                            expires_at,
-                        },
-                    );
-                }
-            }
-        }
-        cache
-    }
-
-    /// Adds the users a session principal is built from.
-    ///
-    /// # Arguments
-    /// * `users` - every user, by id ([`users::auth_by_id`]).
-    ///
-    /// # Returns
-    /// The cache with them.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    pub fn with_users(mut self, users: HashMap<String, UserAuth>) -> Self {
-        self.users = users;
-        self
-    }
-
-    /// Adds the label directory.
-    ///
-    /// # Arguments
-    /// * `labels` - every label ([`Labels::load`]).
-    ///
-    /// # Returns
-    /// The cache with it.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    pub fn with_labels(mut self, labels: Labels) -> Self {
-        self.labels = Arc::new(labels);
-        self
-    }
-
-    /// A user, by id.
-    ///
-    /// # Arguments
-    /// * `user_id` - the user's id.
-    ///
-    /// # Returns
-    /// The user, or `None` for one not loaded (deleted, or created since).
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    pub fn user(&self, user_id: &str) -> Option<&UserAuth> {
-        self.users.get(user_id)
-    }
-
-    /// Reads every key, every ceiling, every user, every suspended catalog,
-    /// every label and the access gates, and builds the cache.
-    ///
-    /// # Errors
-    /// [`OkfError::Database`].
-    #[tracing::instrument(level = "debug", skip_all)]
-    async fn read(pool: &PgPool, now: DateTime<Utc>) -> Result<Self, OkfError> {
-        // All five at once, on pooled connections (`try_join!` is
-        // `asyncio.gather` that stops at the first error). A change committed
-        // between the reads also moved `admin_generation`, which every
-        // caller reads first, so the next poll reloads again.
-        let (records, ceilings, users, mut suspended, labels) = tokio::try_join!(
-            key_rows::list(pool),
-            ceiling::ceilings(pool),
-            users::auth_by_id(pool),
-            teams::suspended_catalogs(pool),
-            Labels::load(pool)
-        )?;
-        // The suspension notices carry labels from the same load; a row
-        // missing from it (a race) keeps the slugs `suspended_catalogs` set.
-        for (catalog, suspension) in &mut suspended {
-            if let Some(label) = labels.catalog(catalog) {
-                suspension.catalog_label = label.to_string();
-            }
-            if let Some(label) = labels.team(&suspension.team) {
-                suspension.team_label = label.to_string();
-            }
-        }
-        // After the keys and users, not beside them: `gates::load` creates
-        // the audit rows of every credential and user read above, so each
-        // principal of this load finds its audit ids (a key created since
-        // also moved `admin_generation`, so the next poll reloads).
-        let gates = Arc::new(gates::load(pool, now).await?);
-        Ok(
-            Self::from_records(records, ceilings, Arc::new(suspended), gates, now)
-                .with_users(users)
-                .with_labels(labels),
-        )
-    }
-
-    /// The principal of a presented key.
-    ///
-    /// # Arguments
-    /// * `presented` - the key from the request.
-    /// * `now` - the server clock.
-    ///
-    /// # Returns
-    /// Its principal, or `None` for an unknown, revoked or expired key.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn find(&self, presented: &str, now: DateTime<Utc>) -> Option<Arc<Principal>> {
-        self.by_hash
-            .get(&keys::hash(presented))
-            .and_then(|cached| cached.live_at(now))
-    }
-
-    /// A live OAuth grant's principal.
-    ///
-    /// # Arguments
-    /// * `grant_id` - the grant's id (from its access token).
-    /// * `now` - the server clock.
-    ///
-    /// # Returns
-    /// Its principal, or `None` for an unknown, revoked or expired grant.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn find_grant(&self, grant_id: &str, now: DateTime<Utc>) -> Option<Arc<Principal>> {
-        self.by_id
-            .get(grant_id)
-            .and_then(|cached| cached.live_at(now))
-    }
-}
-
-/// The key cache the server shares, replaced whole on reload. It holds the
-/// server clock, so a lookup refuses a key that expired since the load.
-pub struct Keys {
-    // As in `CatalogState`: a `std` lock held only to clone or swap the
-    // `Arc`, never across an `.await`.
-    cache: RwLock<Arc<KeyCache>>,
-    clock: Arc<dyn Clock>,
-}
-
-// By hand: `dyn Clock` has no `Debug`. `finish_non_exhaustive` prints `..`
-// for the field left out.
-impl fmt::Debug for Keys {
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "Debug impl: runs while an event is formatted, and a span there re-enters the subscriber"
-        )
-    )]
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("Keys")
-            .field("cache", &self.cache)
-            .finish_non_exhaustive()
-    }
-}
-
-impl Keys {
-    /// Wraps a cache.
-    ///
-    /// # Arguments
-    /// * `cache` - the keys to start with.
-    /// * `clock` - the server clock, for expiry at lookup.
-    ///
-    /// # Returns
-    /// The shared cache.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn new(cache: KeyCache, clock: Arc<dyn Clock>) -> Self {
-        Self {
-            cache: RwLock::new(Arc::new(cache)),
-            clock,
-        }
-    }
-
-    /// Loads every live key from the database.
-    ///
-    /// # Arguments
-    /// * `pool` - the database.
-    /// * `clock` - the server clock.
-    ///
-    /// # Returns
-    /// The shared cache.
-    ///
-    /// # Errors
-    /// [`OkfError::Database`].
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn load(pool: &PgPool, clock: Arc<dyn Clock>) -> Result<Self, OkfError> {
-        let cache = KeyCache::read(pool, clock.now()).await?;
-        Ok(Self::new(cache, clock))
-    }
-
-    /// Re-reads every key and swaps the new cache in.
-    ///
-    /// # Arguments
-    /// * `pool` - the database.
-    ///
-    /// # Errors
-    /// [`OkfError::Database`]; the old cache stays in place.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn reload(&self, pool: &PgPool) -> Result<(), OkfError> {
-        let cache = Arc::new(KeyCache::read(pool, self.clock.now()).await?);
-        *self.cache.write().expect("key cache lock poisoned") = cache;
-        Ok(())
-    }
-
-    /// A user's ceiling, from the current cache.
-    ///
-    /// # Arguments
-    /// * `user_id` - the user's id (`users.id`).
-    ///
-    /// # Returns
-    /// A copy of the ceiling; empty for an unknown user or one who reaches
-    /// nothing.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn ceiling_of(&self, user_id: &str) -> Ceiling {
-        self.cache
-            .read()
-            .expect("key cache lock poisoned")
-            .by_user
-            .get(user_id)
-            .cloned()
-            .unwrap_or_default()
-    }
-
-    /// A user's name, email and admin flag, from the current cache.
-    ///
-    /// # Arguments
-    /// * `user_id` - the user's id.
-    ///
-    /// # Returns
-    /// A copy of the user, or `None` when the cache does not know it.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn user_admin(&self, user_id: &str) -> Option<UserAuth> {
-        self.cache
-            .read()
-            .expect("key cache lock poisoned")
-            .user(user_id)
-            .cloned()
-    }
-
-    /// The label directory, from the current cache.
-    ///
-    /// # Returns
-    /// The shared directory (a pointer copy, not a copy of the maps).
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn labels(&self) -> Arc<Labels> {
-        Arc::clone(&self.cache.read().expect("key cache lock poisoned").labels)
-    }
-
-    /// The suspended catalogs, from the current cache: what a console
-    /// session principal is built with.
-    ///
-    /// # Returns
-    /// The shared map (a pointer copy, not a copy of the map).
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn suspensions(&self) -> Arc<Suspensions> {
-        Arc::clone(
-            &self
-                .cache
-                .read()
-                .expect("key cache lock poisoned")
-                .suspended,
-        )
-    }
-
-    /// The access gates, from the current cache: what a console session
-    /// principal is built with.
-    ///
-    /// # Returns
-    /// The shared gates (a pointer copy).
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    pub fn gates(&self) -> Arc<AccessGates> {
-        Arc::clone(&self.cache.read().expect("key cache lock poisoned").gates)
-    }
-
-    /// The principal of a presented key, from the current cache.
-    ///
-    /// # Arguments
-    /// * `presented` - the key from the request.
-    ///
-    /// # Returns
-    /// Its principal, or `None` for an unknown, revoked or expired key.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn find(&self, presented: &str) -> Option<Arc<Principal>> {
-        // The clock is read before the lock is taken.
-        let now = self.clock.now();
-        self.cache
-            .read()
-            .expect("key cache lock poisoned")
-            .find(presented, now)
-    }
-
-    /// A live OAuth grant's principal, from the current cache.
-    ///
-    /// # Arguments
-    /// * `grant_id` - the grant's id.
-    ///
-    /// # Returns
-    /// Its principal, or `None` for an unknown, revoked or expired grant (a
-    /// revoke takes effect at the next reload, within `poll_interval`; an
-    /// expiry at once).
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn find_grant(&self, grant_id: &str) -> Option<Arc<Principal>> {
-        let now = self.clock.now();
-        self.cache
-            .read()
-            .expect("key cache lock poisoned")
-            .find_grant(grant_id, now)
-    }
-}
-
 /// Turns a presented bearer token into the principal it acts as. The seam
-/// for credential kinds: API keys ([`Keys`]), OAuth access tokens
+/// for credential kinds: API keys ([`KeyVerifier`]), OAuth access tokens
 /// ([`OAuthVerifier`]) and, in a later round, an external issuer.
 // `-> impl Future<...> + Send`: the method returns some future that can move
 // between threads (tokio's worker threads need that), without naming its
@@ -1227,10 +936,16 @@ pub trait BearerVerifier {
     ) -> impl Future<Output = Result<Option<Arc<Principal>>, OkfError>> + Send;
 }
 
-impl BearerVerifier for Keys {
+/// API keys, through the credential cache.
+pub struct KeyVerifier<'a> {
+    /// The shared state.
+    pub app: &'a App,
+}
+
+impl BearerVerifier for KeyVerifier<'_> {
     #[tracing::instrument(level = "debug", skip_all)]
     async fn verify(&self, token: &str) -> Result<Option<Arc<Principal>>, OkfError> {
-        Ok(self.find(token))
+        self.app.find_key(token).await
     }
 }
 
@@ -1248,7 +963,8 @@ impl BearerVerifier for Keys {
 /// The principal, or `None`.
 ///
 /// # Errors
-/// [`OkfError::Database`] from an access-token lookup.
+/// [`OkfError::Database`] when a credential's load fails;
+/// [`OkfError::Busy`] for a lookup that shared another's failed load.
 #[tracing::instrument(level = "debug", skip_all)]
 pub async fn authenticate(app: &App, token: &str) -> Result<Option<Arc<Principal>>, OkfError> {
     if token.starts_with(keys::ACCESS_TOKEN_PREFIX) {
@@ -1257,7 +973,7 @@ pub async fn authenticate(app: &App, token: &str) -> Result<Option<Arc<Principal
             None => Ok(None),
         };
     }
-    app.keys().verify(token).await
+    KeyVerifier { app }.verify(token).await
 }
 
 /// The `WWW-Authenticate` value of a 401: with OAuth on, it names the
@@ -1421,10 +1137,11 @@ mod tests {
     use axum::Router;
     use chrono::Utc;
 
-    use crate::clock::FixedClock;
     use crate::config::Config;
-    use crate::store::audit::AuditActor;
-    use crate::store::ceiling::NewEntitlement;
+    use crate::store::catalogs::SuspendedRow;
+    use crate::store::ceiling::MemberAccess;
+    use crate::store::gates::UserUnlock;
+    use crate::store::keys as key_rows;
     // `oneshot` sends one request through a router without a socket.
     use tower::ServiceExt;
 
@@ -1462,6 +1179,54 @@ mod tests {
         }
     }
 
+    fn grant_record(id: &str, revoked: bool) -> KeyRecord {
+        KeyRecord {
+            sha256: None,
+            kind: KeyKind::OAuth,
+            client_id: Some("https://client.example.com/client.json".into()),
+            client_name: Some("Example Client".into()),
+            ..record(id, "unused", revoked)
+        }
+    }
+
+    /// The directory row of catalog `name` (id `id`), owned by team
+    /// `family` (`t-family`), active, with maintenance on.
+    fn row(name: &str, id: i64) -> CatalogRow {
+        CatalogRow {
+            id,
+            name: name.to_string(),
+            display_name: String::new(),
+            description: String::new(),
+            generation: 1,
+            owner_team: Some("family".to_string()),
+            owner_team_id: Some("t-family".to_string()),
+            suspended: None,
+            maintenance_off: false,
+            audit_team: Some(40 + id),
+            member_access: MemberAccess::Write,
+        }
+    }
+
+    /// The access facts of a console session whose user has `gates`.
+    fn session_facts(gates: UserGates) -> Arc<AccessFacts> {
+        Arc::new(AccessFacts {
+            user: Some(Arc::new(gates)),
+            ..AccessFacts::default()
+        })
+    }
+
+    /// [`row`], with its owner team suspended.
+    fn suspended_row(name: &str, id: i64) -> CatalogRow {
+        CatalogRow {
+            suspended: Some(SuspendedRow {
+                team: "family".to_string(),
+                notice: Some("Paused.".to_string()),
+                team_label: "family".to_string(),
+            }),
+            ..row(name, id)
+        }
+    }
+
     fn headers(value: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(header::AUTHORIZATION, value.parse().unwrap());
@@ -1479,34 +1244,27 @@ mod tests {
     }
 
     #[test]
-    fn the_cache_finds_live_keys_only() {
-        let now = Utc::now();
-        let cache = KeyCache::from_records(
-            vec![
-                record("reader", "reader-key", false),
-                record("old", "old-key", true),
-                KeyRecord {
-                    sha256: Some(vec![0; 5]),
-                    ..record("short", "short-key", false)
-                },
-            ],
-            HashMap::new(),
-            Arc::default(),
-            Arc::default(),
-            now,
+    fn a_record_becomes_its_principal_and_a_grant_carries_its_client() {
+        let key = Principal::from(record("reader", "reader-key", false));
+        let grant = Principal::from(grant_record("grant-1", false));
+
+        assert_eq!(key.key_id, "reader");
+        assert_eq!(key.actor, "actor-reader");
+        assert_eq!(key.user.as_deref(), Some(crate::db::TEST_USER));
+        assert_eq!(key.default_catalog.as_deref(), Some("pg"));
+        assert_eq!(key.kind, CredentialKind::ApiKey);
+        assert_eq!(
+            grant.kind,
+            CredentialKind::OAuth {
+                client_id: Some("https://client.example.com/client.json".into()),
+                client_name: Some("Example Client".into())
+            }
         );
-
-        let found = cache.find("reader-key", now).expect("live key");
-
-        assert_eq!(found.key_id, "reader");
-        assert_eq!(found.actor, "actor-reader");
-        assert_eq!(found.user.as_deref(), Some(crate::db::TEST_USER));
-        assert_eq!(found.default_catalog.as_deref(), Some("pg"));
-        assert!(cache.find("old-key", now).is_none());
-        // A stored hash of the wrong length is left out, not a panic.
-        assert!(cache.find("short-key", now).is_none());
-        assert_eq!(cache.by_hash.len(), 1);
-        assert!(cache.find("no-such-key", now).is_none());
+        assert_eq!(
+            *key.facts,
+            AccessFacts::default(),
+            "nothing outside the cache"
+        );
     }
 
     #[test]
@@ -1514,10 +1272,11 @@ mod tests {
         let mut reporter_record = record("reporter", "reporter-key", false);
         reporter_record.maintenance_report = true;
         let reporter = Principal::from(reporter_record);
-        assert!(reporter.require_maintenance_report("pg").is_ok());
-        assert!(reporter.require(Access::Write, "pg").is_err());
+        let pg = row("pg", 1);
+        assert!(reporter.require_maintenance_report(&pg).is_ok());
+        assert!(reporter.require(Access::Write, &pg).is_err());
         assert!(matches!(
-            reporter.require_maintenance_report("other"),
+            reporter.require_maintenance_report(&row("other", 2)),
             Err(OkfError::CatalogNotSelected { .. })
         ));
         let writer_without_flag = Principal {
@@ -1527,27 +1286,28 @@ mod tests {
             ..reporter.clone()
         };
         assert!(matches!(
-            writer_without_flag.require_maintenance_report("pg"),
+            writer_without_flag.require_maintenance_report(&pg),
             Err(OkfError::Forbidden { .. })
         ));
         let admin_without_flag = Principal {
             access: Access::Admin,
             ..writer_without_flag
         };
-        assert!(admin_without_flag.require_maintenance_report("pg").is_err());
+        assert!(admin_without_flag.require_maintenance_report(&pg).is_err());
     }
 
     #[test]
     fn require_checks_reach_before_access() {
         let principal = Principal::from(record("reader", "reader-key", false));
+        let pg = row("pg", 1);
 
-        assert!(principal.require(Access::Read, "pg").is_ok());
+        assert!(principal.require(Access::Read, &pg).is_ok());
         assert!(matches!(
-            principal.require(Access::Write, "pg"),
+            principal.require(Access::Write, &pg),
             Err(OkfError::Forbidden { .. })
         ));
         assert!(matches!(
-            principal.require(Access::Admin, "pg"),
+            principal.require(Access::Admin, &pg),
             Err(OkfError::Forbidden { .. })
         ));
         // A write key may write and read, but not administer. Its level is
@@ -1557,15 +1317,15 @@ mod tests {
             catalog_access: levels(&["pg"], Access::Write),
             ..record("writer", "writer-key", false)
         });
-        assert!(writer.require(Access::Write, "pg").is_ok());
-        assert!(writer.require(Access::Read, "pg").is_ok());
+        assert!(writer.require(Access::Write, &pg).is_ok());
+        assert!(writer.require(Access::Read, &pg).is_ok());
         assert!(matches!(
-            writer.require(Access::Admin, "pg"),
+            writer.require(Access::Admin, &pg),
             Err(OkfError::Forbidden { .. })
         ));
         // A catalog the key does not reach is "not available", whatever the access.
         assert!(matches!(
-            principal.require(Access::Read, "work"),
+            principal.require(Access::Read, &row("work", 2)),
             Err(OkfError::CatalogNotSelected { catalog }) if catalog == "work"
         ));
         let mut everything = record("all", "all-key", false);
@@ -1596,14 +1356,14 @@ mod tests {
         assert_eq!(principal.level("pg"), Some(Access::Write));
         assert_eq!(principal.level("work"), Some(Access::Read));
         assert_eq!(principal.level("other"), None);
-        assert!(principal.require(Access::Write, "pg").is_ok());
-        assert!(principal.require(Access::Read, "work").is_ok());
+        assert!(principal.require(Access::Write, &row("pg", 1)).is_ok());
+        assert!(principal.require(Access::Read, &row("work", 2)).is_ok());
         assert!(matches!(
-            principal.require(Access::Write, "work"),
+            principal.require(Access::Write, &row("work", 2)),
             Err(OkfError::Forbidden { reason }) if reason.contains("\"work\"")
         ));
         assert!(matches!(
-            principal.require(Access::Read, "other"),
+            principal.require_level(Access::Read, "other"),
             Err(OkfError::CatalogNotSelected { .. })
         ));
         // Every catalog: the principal's own level everywhere.
@@ -1611,74 +1371,55 @@ mod tests {
     }
 
     #[test]
-    fn the_cache_leaves_out_keys_expired_at_load_and_refuses_them_at_lookup() {
-        let now = Utc::now();
-        let hour = chrono::TimeDelta::hours(1);
-        let cache = KeyCache::from_records(
-            vec![
-                KeyRecord {
-                    expires_at: Some(now - hour),
-                    ..record("expired", "expired-key", false)
-                },
-                KeyRecord {
-                    expires_at: Some(now + hour),
-                    ..record("soon", "soon-key", false)
-                },
-                KeyRecord {
-                    expires_at: Some(now + hour),
-                    ..grant_record("grant-soon", false)
-                },
-                record("forever", "forever-key", false),
-            ],
-            HashMap::new(),
-            Arc::default(),
-            Arc::default(),
-            now,
-        );
-
-        assert!(cache.find("expired-key", now).is_none());
-        assert_eq!(cache.by_hash.len(), 2, "the expired key is not even cached");
-        assert!(cache.find("soon-key", now).is_some());
-        assert!(cache.find_grant("grant-soon", now).is_some());
-        // The cache may be one poll old: an expiry passed since the load
-        // is still refused.
-        let later = now + hour * 2;
-        assert!(cache.find("soon-key", later).is_none());
-        assert!(cache.find_grant("grant-soon", later).is_none());
-        assert!(cache.find("forever-key", later).is_some());
-    }
-
-    #[test]
-    fn keys_check_expiry_against_their_clock() {
-        let now = Utc::now();
-        let hour = chrono::TimeDelta::hours(1);
-        let soon = KeyRecord {
-            expires_at: Some(now + hour),
-            ..record("soon", "soon-key", false)
+    fn self_issued_credentials_are_capped_by_their_users_ceiling_and_admin_issued_ones_are_not() {
+        // A key of user `alice-id` granted pg and work at write.
+        let alices = |id: &str, secret: &str, self_issued: bool| KeyRecord {
+            access: Access::Write,
+            catalogs: vec!["pg".to_string(), "work".to_string()],
+            catalog_access: levels(&["pg", "work"], Access::Write),
+            user_id: Some("alice-id".to_string()),
+            self_issued,
+            last_activity: None,
+            ..record(id, secret, false)
         };
-        let fresh = Keys::new(
-            KeyCache::from_records(
-                vec![soon.clone()],
-                HashMap::new(),
-                Arc::default(),
-                Arc::default(),
-                now,
-            ),
-            Arc::new(FixedClock(now)),
-        );
-        let stale = Keys::new(
-            KeyCache::from_records(
-                vec![soon],
-                HashMap::new(),
-                Arc::default(),
-                Arc::default(),
-                now,
-            ),
-            Arc::new(FixedClock(now + hour * 2)),
-        );
+        // A self-issued OAuth grant of hers on pg at write.
+        let self_grant = KeyRecord {
+            access: Access::Write,
+            catalog_access: levels(&["pg"], Access::Write),
+            user_id: Some("alice-id".to_string()),
+            self_issued: true,
+            last_activity: None,
+            ..grant_record("grant-mine", false)
+        };
+        let alice = BTreeMap::from([
+            ("pg".to_string(), Access::Read),
+            ("docs".to_string(), Access::Write),
+        ]);
+        let capped = |record: KeyRecord, ceiling: Option<&Ceiling>| {
+            principal_of(record, ceiling, Arc::default())
+        };
 
-        assert!(fresh.find("soon-key").is_some());
-        assert!(stale.find("soon-key").is_none());
+        let mine = capped(alices("mine", "mine-key", true), Some(&alice));
+        let issued = capped(alices("issued", "issued-key", false), Some(&alice));
+        let grant = capped(self_grant, Some(&alice));
+        // A self-issued key whose user is unknown: no ceiling at all.
+        let unknown_user = capped(alices("stranger", "stranger-key", true), None);
+
+        // pg: the lower of write and read; work: not in the ceiling; docs:
+        // not in the grant.
+        assert_eq!(mine.reach, Reach::Catalogs(levels(&["pg"], Access::Read)));
+        assert_eq!(mine.access, Access::Read, "its highest level left");
+        assert_eq!(
+            issued.reach,
+            Reach::Catalogs(levels(&["pg", "work"], Access::Write))
+        );
+        assert_eq!(issued.access, Access::Write);
+        assert_eq!(
+            grant.level("pg"),
+            Some(Access::Read),
+            "grants are capped too"
+        );
+        assert_eq!(unknown_user.reach, Reach::Catalogs(BTreeMap::new()));
     }
 
     /// A router whose one route echoes the principal's key id, behind the
@@ -1730,7 +1471,7 @@ mod tests {
         )
     }
 
-    /// A stored read key on `main` called `name`, polled into the app's cache.
+    /// A stored read key on `main` called `name`.
     async fn stored_key(app: &App, name: &str) -> (String, String) {
         let names = ["main".to_string()];
         let created = key_rows::create_with_id(
@@ -1752,7 +1493,6 @@ mod tests {
         )
         .await
         .unwrap();
-        app.poll().await.unwrap();
         (created.id, created.key)
     }
 
@@ -1769,7 +1509,6 @@ mod tests {
         )
         .await
         .unwrap();
-        test.app.poll().await.unwrap();
         let router = || echo(&test.app);
 
         let admitted = status_and_body(router(), Some(&format!("Bearer {key}"))).await;
@@ -1810,491 +1549,6 @@ mod tests {
         assert_eq!(admitted.0, StatusCode::OK);
     }
 
-    fn grant_record(id: &str, revoked: bool) -> KeyRecord {
-        KeyRecord {
-            sha256: None,
-            kind: KeyKind::OAuth,
-            client_id: Some("https://client.example.com/client.json".into()),
-            client_name: Some("Example Client".into()),
-            ..record(id, "unused", revoked)
-        }
-    }
-
-    #[test]
-    fn grants_are_found_by_id_only_and_carry_their_client() {
-        let now = Utc::now();
-        let cache = KeyCache::from_records(
-            vec![
-                record("reader", "reader-key", false),
-                grant_record("grant-1", false),
-                grant_record("grant-old", true),
-            ],
-            HashMap::new(),
-            Arc::default(),
-            Arc::default(),
-            now,
-        );
-
-        let grant = cache.find_grant("grant-1", now).expect("live grant");
-
-        assert_eq!(
-            grant.kind,
-            CredentialKind::OAuth {
-                client_id: Some("https://client.example.com/client.json".into()),
-                client_name: Some("Example Client".into())
-            }
-        );
-        assert_eq!(grant.actor, "actor-grant-1");
-        assert!(cache.find_grant("grant-old", now).is_none());
-        // A key is not a grant, and a grant has no key to present.
-        assert!(cache.find_grant("reader", now).is_none());
-        assert!(cache.find("unused", now).is_none());
-        assert_eq!(
-            cache.find("reader-key", now).unwrap().kind,
-            CredentialKind::ApiKey
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn maintenance_capability_change_refreshes_cache() {
-        use crate::store::{catalogs, keys as key_rows};
-        let db = crate::db::test_db().await;
-        catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "pg",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        let new = key_rows::NewKey {
-            name: "reporter",
-            access: Access::Read,
-            grants: key_rows::Grants::Catalogs(&["pg".to_string()]),
-            default_catalog: Some("pg"),
-            actor: "tester",
-            maintenance_report: true,
-            user: crate::db::TEST_USER,
-            self_issued: false,
-            expires_at: None,
-            levels: &[],
-        };
-        let created = key_rows::create_with_id(
-            &db.pool,
-            &new,
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        let app = crate::app::App::load(
-            db.pool.clone(),
-            crate::config::Config::default(),
-            Arc::new(crate::clock::SystemClock),
-        )
-        .await
-        .unwrap();
-        assert!(app.keys().find(&created.key).unwrap().maintenance_report);
-        let before = catalogs::admin_generation(&db.pool).await.unwrap();
-        assert_eq!(
-            key_rows::set_maintenance_report_target(
-                &db.pool,
-                &created.id,
-                None,
-                false,
-                &crate::store::audit::AuditActor::cli(),
-                chrono::Utc::now()
-            )
-            .await
-            .unwrap(),
-            created.id
-        );
-        assert_eq!(
-            catalogs::admin_generation(&db.pool).await.unwrap(),
-            before + 1
-        );
-        assert!(app.keys().find(&created.key).unwrap().maintenance_report);
-        app.poll().await.unwrap();
-        let principal_after_poll = app.keys().find(&created.key).unwrap();
-        assert!(!principal_after_poll.maintenance_report);
-        assert!(principal_after_poll
-            .require_maintenance_report("pg")
-            .is_err());
-        key_rows::set_maintenance_report_target(
-            &db.pool,
-            &created.id,
-            None,
-            false,
-            &crate::store::audit::AuditActor::cli(),
-            chrono::Utc::now(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            catalogs::admin_generation(&db.pool).await.unwrap(),
-            before + 1
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn keys_load_from_the_database_and_reload_after_a_revoke() {
-        use crate::store::{catalogs, keys as key_rows};
-        let db = crate::db::test_db().await;
-        catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "pg",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        let names = ["pg".to_string()];
-        let new = key_rows::NewKey {
-            name: "reader",
-            access: Access::Read,
-            maintenance_report: false,
-            grants: key_rows::Grants::Catalogs(&names),
-            default_catalog: Some("pg"),
-            actor: "tester",
-            user: crate::db::TEST_USER,
-            self_issued: false,
-            expires_at: None,
-            levels: &[],
-        };
-        let created = key_rows::create_with_id(
-            &db.pool,
-            &new,
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        let key = created.key;
-
-        let loaded = Keys::load(&db.pool, Arc::new(crate::clock::SystemClock))
-            .await
-            .unwrap();
-        assert_eq!(loaded.find(&key).unwrap().key_id, created.id);
-        key_rows::revoke(
-            &db.pool,
-            "reader",
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        // The cache keeps the key until it is reloaded (the poll loop does that).
-        assert!(loaded.find(&key).is_some());
-        loaded.reload(&db.pool).await.unwrap();
-
-        assert!(loaded.find(&key).is_none());
-        // A reload that fails keeps the cache it had.
-        let other = key_rows::create_with_id(
-            &db.pool,
-            &key_rows::NewKey {
-                name: "other",
-                ..new
-            },
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        loaded.reload(&db.pool).await.unwrap();
-        db.pool.close().await;
-        assert!(loaded.reload(&db.pool).await.is_err());
-        assert_eq!(loaded.find(&other.key).unwrap().key_id, other.id);
-    }
-
-    #[test]
-    fn self_issued_credentials_are_capped_by_their_users_ceiling_and_admin_issued_ones_are_not() {
-        let now = Utc::now();
-        // A key of user `alice-id` granted pg and work at write.
-        let alices = |id: &str, secret: &str, self_issued: bool| KeyRecord {
-            access: Access::Write,
-            catalogs: vec!["pg".to_string(), "work".to_string()],
-            catalog_access: levels(&["pg", "work"], Access::Write),
-            user_id: Some("alice-id".to_string()),
-            self_issued,
-            last_activity: None,
-            ..record(id, secret, false)
-        };
-        // A self-issued OAuth grant of hers on pg at write.
-        let self_grant = KeyRecord {
-            access: Access::Write,
-            catalog_access: levels(&["pg"], Access::Write),
-            user_id: Some("alice-id".to_string()),
-            self_issued: true,
-            last_activity: None,
-            ..grant_record("grant-mine", false)
-        };
-        // A self-issued key of a user with no ceiling at all.
-        let stranger = KeyRecord {
-            user_id: Some("nobody-id".to_string()),
-            ..alices("stranger", "stranger-key", true)
-        };
-        let alice = BTreeMap::from([
-            ("pg".to_string(), Access::Read),
-            ("docs".to_string(), Access::Write),
-        ]);
-        let cache = KeyCache::from_records(
-            vec![
-                alices("mine", "mine-key", true),
-                alices("issued", "issued-key", false),
-                self_grant,
-                stranger,
-            ],
-            HashMap::from([("alice-id".to_string(), alice.clone())]),
-            Arc::default(),
-            Arc::default(),
-            now,
-        );
-
-        let mine = cache.find("mine-key", now).expect("live");
-        let issued = cache.find("issued-key", now).expect("live");
-        let grant = cache.find_grant("grant-mine", now).expect("live");
-        let unknown_user = cache.find("stranger-key", now).expect("live");
-
-        // pg: the lower of write and read; work: not in the ceiling; docs:
-        // not in the grant.
-        assert_eq!(mine.reach, Reach::Catalogs(levels(&["pg"], Access::Read)));
-        assert_eq!(mine.access, Access::Read, "its highest level left");
-        assert_eq!(
-            issued.reach,
-            Reach::Catalogs(levels(&["pg", "work"], Access::Write))
-        );
-        assert_eq!(issued.access, Access::Write);
-        assert_eq!(
-            grant.level("pg"),
-            Some(Access::Read),
-            "grants are capped too"
-        );
-        assert_eq!(unknown_user.reach, Reach::Catalogs(BTreeMap::new()));
-        let shared = Keys::new(cache, Arc::new(FixedClock(now)));
-        assert_eq!(shared.ceiling_of("alice-id"), alice);
-        assert!(shared.ceiling_of("nobody-id").is_empty());
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_ceiling_change_lowers_self_issued_credentials_at_reload_and_leaves_admin_issued_ones(
-    ) {
-        use crate::store::{catalogs, ceiling, teams, users};
-        let db = crate::db::test_db().await;
-        let now = Utc::now();
-        users::create(
-            &db.pool,
-            &users::NewUser {
-                name: "alice",
-                display_name: &crate::labels::DisplayName::default(),
-            },
-            &AuditActor::cli(),
-            now,
-        )
-        .await
-        .unwrap();
-        let team = teams::NewTeam {
-            name: "family",
-            display_name: &crate::labels::DisplayName::default(),
-            owner: "alice",
-        };
-        teams::create(
-            &db.pool,
-            &team,
-            &crate::store::audit::AuditActor::cli(),
-            now,
-        )
-        .await
-        .unwrap();
-        catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "shared",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "",
-                owner_team: "family",
-            },
-            &crate::store::audit::AuditActor::cli(),
-            now,
-        )
-        .await
-        .unwrap();
-        catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "solo",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "",
-                owner_team: "alice",
-            },
-            &crate::store::audit::AuditActor::cli(),
-            now,
-        )
-        .await
-        .unwrap();
-        let names = ["shared".to_string(), "solo".to_string()];
-        let new = |name: &'static str, self_issued: bool| key_rows::NewKey {
-            name,
-            access: Access::Write,
-            maintenance_report: false,
-            grants: key_rows::Grants::Catalogs(&names),
-            default_catalog: None,
-            actor: name,
-            user: "alice",
-            self_issued,
-            expires_at: None,
-            levels: &[],
-        };
-        let mine = key_rows::create_with_id(
-            &db.pool,
-            &new("mine", true),
-            &crate::store::audit::AuditActor::cli(),
-            now,
-        )
-        .await
-        .unwrap();
-        let issued = key_rows::create_with_id(
-            &db.pool,
-            &new("issued", false),
-            &crate::store::audit::AuditActor::cli(),
-            now,
-        )
-        .await
-        .unwrap();
-        // A self-issued OAuth grant, as consent signed in as alice will make
-        // one (Task 11).
-        let client = crate::store::oauth::testing::insert_client(
-            &db.pool,
-            "https://client.example.com/client.json",
-            "Example Client",
-            now,
-        )
-        .await;
-        let grant: String = sqlx::query_scalar(
-            "INSERT INTO api_keys \
-             (name, kind, client_id, access, all_catalogs, actor, created_at, user_id, self_issued) \
-             SELECT 'laptop.example', 'oauth', $1, 'write', false, 'Example Client', $2, id, true \
-             FROM users WHERE name = 'alice' RETURNING id",
-        )
-        .bind(&client)
-        .bind(now)
-        .fetch_one(&db.pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO key_catalogs (key_id, catalog_id) \
-             SELECT $1, id FROM catalogs WHERE name = 'shared'",
-        )
-        .bind(&grant)
-        .execute(&db.pool)
-        .await
-        .unwrap();
-        let app = crate::app::App::load(
-            db.pool.clone(),
-            crate::config::Config::default(),
-            Arc::new(crate::clock::SystemClock),
-        )
-        .await
-        .unwrap();
-        let level = |secret: &str, catalog: &str| {
-            app.keys().find(secret).expect("a live key").level(catalog)
-        };
-        let grant_level = || {
-            app.keys()
-                .find_grant(&grant)
-                .expect("a live grant")
-                .level("shared")
-        };
-        assert_eq!(level(&mine.key, "shared"), Some(Access::Write));
-        assert_eq!(level(&mine.key, "solo"), Some(Access::Write));
-        assert_eq!(grant_level(), Some(Access::Write));
-        let generation = || catalogs::admin_generation(&db.pool);
-
-        // Member access: read-only for the team's members.
-        let before = generation().await.unwrap();
-        ceiling::set_member_access(
-            &db.pool,
-            "shared",
-            ceiling::MemberAccess::Read,
-            &crate::store::audit::AuditActor::cli(),
-            chrono::Utc::now(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(generation().await.unwrap(), before + 1);
-        assert_eq!(
-            level(&mine.key, "shared"),
-            Some(Access::Write),
-            "until the reload"
-        );
-        app.poll().await.unwrap();
-        assert_eq!(level(&mine.key, "shared"), Some(Access::Read));
-        assert_eq!(grant_level(), Some(Access::Read));
-        assert_eq!(
-            level(&issued.key, "shared"),
-            Some(Access::Write),
-            "admin-issued: unchanged"
-        );
-
-        // An entitlement: the higher level wins.
-        ceiling::entitle(
-            &db.pool,
-            &NewEntitlement {
-                user: "alice",
-                catalog: "shared",
-                access: Access::Write,
-            },
-            &AuditActor::cli(),
-            now,
-        )
-        .await
-        .unwrap();
-        app.poll().await.unwrap();
-        assert_eq!(level(&mine.key, "shared"), Some(Access::Write));
-
-        // A new owner the user is not in: the catalog leaves her ceiling.
-        catalogs::set_owner(
-            &db.pool,
-            "solo",
-            crate::db::TEST_TEAM,
-            &crate::store::audit::AuditActor::cli(),
-            chrono::Utc::now(),
-        )
-        .await
-        .unwrap();
-        app.poll().await.unwrap();
-        assert_eq!(level(&mine.key, "solo"), None);
-        assert_eq!(
-            level(&issued.key, "solo"),
-            Some(Access::Write),
-            "admin-issued: unchanged"
-        );
-
-        // The entitlement goes: back to the team's read.
-        ceiling::unentitle(&db.pool, "alice", "shared", &AuditActor::cli(), Utc::now())
-            .await
-            .unwrap();
-        app.poll().await.unwrap();
-        assert_eq!(level(&mine.key, "shared"), Some(Access::Read));
-        let alice_id: String = sqlx::query_scalar("SELECT id FROM users WHERE name = 'alice'")
-            .fetch_one(&db.pool)
-            .await
-            .unwrap();
-        assert_eq!(
-            app.keys().ceiling_of(&alice_id),
-            BTreeMap::from([("shared".to_string(), Access::Read)])
-        );
-    }
-
     fn user(is_admin: bool) -> UserAuth {
         UserAuth {
             id: "9eaae459-441c-49c2-8613-e3996bdc96ee".to_string(),
@@ -2307,35 +1561,38 @@ mod tests {
 
     #[test]
     fn a_non_admin_session_reaches_its_ceiling_at_each_level() {
-        let ceiling = Ceiling::from([
-            ("main".to_string(), Access::Write),
-            ("other".to_string(), Access::Read),
-        ]);
-
-        let principal =
-            Principal::for_session(&user(false), ceiling, Arc::default(), Arc::default());
+        // Entitled to `main` (1) at write and `other` (2) at read; in no
+        // team, so the owner's member access gives nothing.
+        let principal = Principal::for_session(
+            &user(false),
+            session_facts(UserGates {
+                entitled: [(1, Access::Write), (2, Access::Read)].into(),
+                ..UserGates::default()
+            }),
+        );
 
         assert_eq!(principal.key_id, "session:alice");
         assert_eq!(principal.actor, "alice");
         assert_eq!(principal.user.as_deref(), Some("alice"));
+        assert_eq!(principal.reach, Reach::Ceiling);
         assert_eq!(
             principal.access,
-            Access::Write,
-            "the highest level in the ceiling"
+            Access::Read,
+            "grants nothing by itself: the levels are the ceiling's"
         );
         assert!(!principal.maintenance_report);
-        assert!(principal.require(Access::Write, "main").is_ok());
+        assert!(principal.require(Access::Write, &row("main", 1)).is_ok());
         assert!(matches!(
-            principal.require(Access::Write, "other"),
+            principal.require(Access::Write, &row("other", 2)),
             Err(OkfError::Forbidden { .. })
         ));
-        assert!(principal.require(Access::Read, "other").is_ok());
+        assert!(principal.require(Access::Read, &row("other", 2)).is_ok());
         assert!(matches!(
-            principal.require(Access::Read, "elsewhere"),
+            principal.require(Access::Read, &row("elsewhere", 3)),
             Err(OkfError::CatalogNotSelected { .. })
         ));
         assert!(matches!(
-            principal.require(Access::Admin, "main"),
+            principal.require(Access::Admin, &row("main", 1)),
             Err(OkfError::Forbidden { .. })
         ));
         assert!(
@@ -2345,45 +1602,31 @@ mod tests {
 
     #[test]
     fn an_admin_users_session_is_an_admin_on_every_catalog() {
-        let principal =
-            Principal::for_session(&user(true), Ceiling::new(), Arc::default(), Arc::default());
+        let principal = Principal::for_session(&user(true), Arc::default());
 
         assert_eq!(principal.access, Access::Admin);
         assert_eq!(principal.reach, Reach::All);
-        assert!(principal.require(Access::Admin, "anything").is_ok());
+        assert!(principal
+            .require(Access::Admin, &row("anything", 1))
+            .is_ok());
     }
 
     #[test]
     fn a_session_with_an_empty_ceiling_reaches_nothing() {
-        let principal =
-            Principal::for_session(&user(false), Ceiling::new(), Arc::default(), Arc::default());
+        let principal = Principal::for_session(&user(false), session_facts(UserGates::default()));
+        let gateless = Principal::for_session(&user(false), Arc::default());
 
         assert_eq!(principal.access, Access::Read);
         assert!(!principal.reaches("main"));
+        assert!(!principal.reaches_row(&row("main", 1)));
+        assert!(
+            !gateless.reaches_row(&row("main", 1)),
+            "no gates, no ceiling"
+        );
     }
 
-    /// A suspension map holding each of `catalogs`, owned by `family`.
-    fn suspended_on(catalogs: &[&str]) -> Arc<Suspensions> {
-        Arc::new(
-            catalogs
-                .iter()
-                .map(|catalog| {
-                    (
-                        catalog.to_string(),
-                        SuspendedCatalog {
-                            team: "family".to_string(),
-                            notice: Some("Paused.".to_string()),
-                            catalog_label: catalog.to_string(),
-                            team_label: "family".to_string(),
-                        },
-                    )
-                })
-                .collect(),
-        )
-    }
-
-    /// An API key reaching `catalogs`, each at `access`, seeing `suspended`.
-    fn key_on(catalogs: &[&str], access: Access, suspended: Arc<Suspensions>) -> Principal {
+    /// An API key reaching `catalogs`, each at `access`, with no user.
+    fn key_on(catalogs: &[&str], access: Access) -> Principal {
         Principal {
             key_id: "k".to_string(),
             access,
@@ -2395,36 +1638,39 @@ mod tests {
             kind: CredentialKind::ApiKey,
             user: None,
             user_id: None,
-            gates: Default::default(),
-            suspended,
+            facts: Arc::default(),
         }
     }
 
-    fn gates_with_member(user_id: &str, catalog: &str) -> Arc<AccessGates> {
-        Arc::new(AccessGates {
-            members: HashMap::from([(user_id.to_string(), HashSet::from([catalog.to_string()]))]),
-            ..AccessGates::default()
-        })
+    /// The gates of a user in team `family`, which owns every [`row`].
+    fn member() -> UserGates {
+        UserGates {
+            teams: ["t-family".to_string()].into(),
+            ..UserGates::default()
+        }
     }
 
     #[test]
     fn an_admin_reading_outside_its_teams_is_an_admin_read_and_a_member_is_a_customer() {
-        let gates = gates_with_member("u-member", "main");
-        let principal = |user: Option<&str>, access| Principal {
-            user_id: user.map(str::to_string),
-            gates: Arc::clone(&gates),
+        let principal = |user: Option<UserGates>, access| Principal {
+            user_id: user.as_ref().map(|_| "u".to_string()),
+            facts: Arc::new(AccessFacts {
+                user: user.map(Arc::new),
+                ..AccessFacts::default()
+            }),
             // `key_on` opts into reporting; Task 9b exempts reporting keys.
             maintenance_report: false,
-            ..key_on(&["main"], access, Arc::default())
+            ..key_on(&["main"], access)
         };
         let now = Utc::now();
-        let admitted = |user, access, needs| principal(user, access).admission("main", needs, now);
+        let main = row("main", 1);
+        let admitted = |user, access, needs| principal(user, access).admission(&main, needs, now);
 
-        let member_admin = admitted(Some("u-member"), Access::Admin, Access::Read);
-        let staff = admitted(Some("u-staff"), Access::Admin, Access::Read);
+        let member_admin = admitted(Some(member()), Access::Admin, Access::Read);
+        let staff = admitted(Some(UserGates::default()), Access::Admin, Access::Read);
         let legacy = admitted(None, Access::Admin, Access::Read);
-        let staff_write = admitted(Some("u-staff"), Access::Admin, Access::Write);
-        let reader = admitted(Some("u-staff"), Access::Read, Access::Read);
+        let staff_write = admitted(Some(UserGates::default()), Access::Admin, Access::Write);
+        let reader = admitted(Some(UserGates::default()), Access::Read, Access::Read);
 
         assert_eq!(member_admin.unwrap(), Admission::Customer);
         assert_eq!(staff.unwrap(), Admission::AdminRead);
@@ -2443,83 +1689,62 @@ mod tests {
         assert!(!Admission::Customer.is_recorded() && !Admission::Untracked.is_recorded());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn the_cache_loads_memberships_and_admins_for_every_principal() {
-        let db = crate::db::test_db().await;
-        crate::store::catalogs::create(
-            &db.pool,
-            &crate::store::catalogs::NewCatalog {
-                name: "main",
-                display_name: &crate::labels::DisplayName::default(),
-                description: "",
-                owner_team: crate::db::TEST_TEAM,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        let new = key_rows::NewKey {
-            name: "member",
-            access: Access::Read,
+    #[test]
+    fn membership_and_entitlement_follow_the_rows_owner_and_id_not_the_name() {
+        let now = Utc::now();
+        let customer = |gates: UserGates| Principal {
+            user_id: Some("u".to_string()),
+            facts: Arc::new(AccessFacts {
+                user: Some(Arc::new(gates)),
+                require_unlock: true,
+                ..AccessFacts::default()
+            }),
             maintenance_report: false,
-            grants: key_rows::Grants::All,
-            default_catalog: None,
-            actor: "member",
-            user: crate::db::TEST_USER,
-            self_issued: false,
-            expires_at: None,
-            levels: &[],
+            ..key_on(&["main"], Access::Read)
         };
-        let secret = key_rows::create(&db.pool, &new, &AuditActor::cli(), Utc::now())
-            .await
-            .unwrap();
-        crate::store::users::set_admin(
-            &db.pool,
-            crate::db::TEST_USER,
-            crate::store::users::AdminChange {
-                on: true,
-                allow_last: false,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
+        let entitled = customer(UserGates {
+            entitled: [(1, Access::Read)].into(),
+            ..UserGates::default()
+        });
+        // `main` deleted and created again (id 2) for another team.
+        let replacement = CatalogRow {
+            owner_team_id: Some("t-acme".to_string()),
+            ..row("main", 2)
+        };
 
-        let keys = Keys::load(&db.pool, Arc::new(crate::clock::SystemClock))
-            .await
-            .unwrap();
-
-        let me: String = sqlx::query_scalar("SELECT id FROM users WHERE name = $1")
-            .bind(crate::db::TEST_USER)
-            .fetch_one(&db.pool)
-            .await
-            .unwrap();
-        let gates = keys.gates();
-        assert!(gates.members[&me].contains("main"));
-        assert!(gates.admins.contains(&me));
-        assert!(gates.people.contains_key(&me));
-        assert!(gates.catalogs.contains_key("main"));
-        let principal = keys.find(&secret).expect("the key is cached");
-        assert!(Arc::ptr_eq(&principal.gates, &gates), "one map, shared");
-        assert!(gates.credentials.contains_key(&principal.key_id));
+        assert_eq!(
+            entitled
+                .admission(&row("main", 1), Access::Read, now)
+                .unwrap(),
+            Admission::Customer
+        );
+        assert!(
+            matches!(
+                entitled.admission(&replacement, Access::Read, now),
+                Err(OkfError::UnlockRequired { .. })
+            ),
+            "an entitlement of the old catalog does not open the new one"
+        );
+        assert!(
+            matches!(
+                customer(member()).admission(&replacement, Access::Read, now),
+                Err(OkfError::UnlockRequired { .. })
+            ),
+            "a member of the old owner is not one of the new"
+        );
     }
 
     #[test]
     fn require_refuses_a_suspended_catalog_after_reach_and_level() {
         // `theirs` is suspended too, but this key does not reach it.
-        let principal = key_on(
-            &["shared", "mine"],
-            Access::Write,
-            suspended_on(&["shared", "theirs"]),
-        );
+        let principal = key_on(&["shared", "mine"], Access::Write);
+        let shared = suspended_row("shared", 1);
 
-        let suspended = principal.require(Access::Read, "shared");
-        let unreached = principal.require(Access::Read, "theirs");
-        let too_low = principal.require(Access::Admin, "shared");
-        let fine = principal.require(Access::Write, "mine");
-        let reporting = principal.require_maintenance_report("shared");
+        let suspended = principal.require(Access::Read, &shared);
+        let unreached = principal.require(Access::Read, &suspended_row("theirs", 2));
+        let too_low = principal.require(Access::Admin, &shared);
+        let fine = principal.require(Access::Write, &row("mine", 3));
+        let reporting = principal.require_maintenance_report(&shared);
 
         assert!(matches!(
             suspended,
@@ -2539,202 +1764,65 @@ mod tests {
     }
 
     #[test]
-    fn an_admin_is_not_suspended_and_export_ignores_suspension() {
-        let admin = key_on(&["shared"], Access::Admin, suspended_on(&["shared"]));
-        let reader = key_on(
-            &["shared"],
-            Access::Read,
-            suspended_on(&["shared", "other"]),
-        );
+    fn a_suspension_is_named_with_the_labels_of_its_row() {
+        let principal = key_on(&["shared", "new"], Access::Read);
+        let mut shared = suspended_row("shared", 1);
+        shared.display_name = "Shared notes".to_string();
+        if let Some(suspended) = shared.suspended.as_mut() {
+            suspended.team_label = "The Family".to_string();
+        }
+        let unlabelled = suspended_row("new", 2);
 
-        assert!(admin.require(Access::Admin, "shared").is_ok());
-        assert!(admin.require(Access::Write, "shared").is_ok());
-        assert!(reader.require_export("shared").is_ok());
+        let named = principal.suspension(&shared).unwrap();
+        let plain = principal.suspension(&unlabelled).unwrap();
+
+        assert_eq!(
+            (named.catalog_label.as_str(), named.team_label.as_str()),
+            ("Shared notes", "The Family")
+        );
+        assert_eq!(
+            plain.catalog_label,
+            crate::labels::catalog_label("", ""),
+            "a catalog with no name or description reads as the rule says"
+        );
+        assert_eq!(principal.suspension(&row("shared", 1)), None);
+    }
+
+    #[test]
+    fn an_admin_is_not_suspended_and_export_ignores_suspension() {
+        let admin = key_on(&["shared"], Access::Admin);
+        let reader = key_on(&["shared"], Access::Read);
+        let shared = suspended_row("shared", 1);
+
+        assert!(admin.require(Access::Admin, &shared).is_ok());
+        assert!(admin.require(Access::Write, &shared).is_ok());
+        assert!(reader.require_export(&shared).is_ok());
         assert!(matches!(
-            reader.require_export("other"),
+            reader.require_export(&row("other", 2)),
             Err(OkfError::CatalogNotSelected { .. })
         ));
         assert_eq!(
-            reader.suspension("shared").map(|s| s.team.as_str()),
-            Some("family"),
+            reader.suspension(&shared).map(|s| s.team),
+            Some("family".to_string()),
             "the fact is visible to anyone who reaches it"
         );
-        assert_eq!(reader.suspension("mine"), None);
+        assert_eq!(reader.suspension(&row("mine", 2)), None);
     }
 
     #[test]
     fn a_member_session_is_suspended_and_an_admin_session_is_not() {
-        let ceiling = Ceiling::from([("shared".to_string(), Access::Write)]);
+        let shared = suspended_row("shared", 1);
 
-        let member = Principal::for_session(
-            &user(false),
-            ceiling,
-            suspended_on(&["shared"]),
-            Arc::default(),
-        );
-        let admin = Principal::for_session(
-            &user(true),
-            Ceiling::new(),
-            suspended_on(&["shared"]),
-            Arc::default(),
-        );
+        // In the owner team, whose member access is `write`.
+        let member = Principal::for_session(&user(false), session_facts(member()));
+        let admin = Principal::for_session(&user(true), Arc::default());
 
         assert!(matches!(
-            member.require(Access::Read, "shared"),
+            member.require(Access::Read, &shared),
             Err(OkfError::Suspended { .. })
         ));
-        assert!(member.require_export("shared").is_ok());
-        assert!(admin.require(Access::Write, "shared").is_ok());
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn the_cache_gives_every_principal_the_suspended_catalogs() {
-        use crate::store::{catalogs, keys as key_rows};
-        let db = crate::db::test_db().await;
-        for name in ["main", "other"] {
-            catalogs::create(
-                &db.pool,
-                &crate::store::catalogs::NewCatalog {
-                    name,
-                    display_name: &crate::labels::DisplayName::default(),
-                    description: "",
-                    owner_team: crate::db::TEST_TEAM,
-                },
-                &crate::store::audit::AuditActor::cli(),
-                Utc::now(),
-            )
-            .await
-            .unwrap();
-        }
-        let names = ["main".to_string()];
-        let new = key_rows::NewKey {
-            name: "writer",
-            access: Access::Write,
-            maintenance_report: false,
-            grants: key_rows::Grants::Catalogs(&names),
-            default_catalog: Some("main"),
-            actor: "writer",
-            user: crate::db::TEST_USER,
-            self_issued: false,
-            expires_at: None,
-            levels: &[],
-        };
-        let secret = key_rows::create_with_id(
-            &db.pool,
-            &new,
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap()
-        .key;
-        teams::suspend(
-            &db.pool,
-            crate::db::TEST_TEAM,
-            Some("Paused."),
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-
-        let keys = Keys::load(&db.pool, Arc::new(crate::clock::SystemClock))
-            .await
-            .unwrap();
-        let writer = keys.find(&secret).expect("the key is live");
-
-        assert_eq!(keys.suspensions().len(), 2, "both of the team's catalogs");
-        let labels = keys.labels();
-        let suspended = keys.suspensions();
-        let main = suspended.get("main").expect("main is suspended");
-        assert_eq!(Some(main.catalog_label.as_str()), labels.catalog("main"));
-        assert_eq!(
-            Some(main.team_label.as_str()),
-            labels.team(crate::db::TEST_TEAM)
-        );
-        assert_eq!(
-            main.catalog_label, "Untitled catalog",
-            "a label, not the slug"
-        );
-        assert!(
-            Arc::ptr_eq(&writer.suspended, &keys.suspensions()),
-            "one shared map per load"
-        );
-        assert!(matches!(
-            writer.require(Access::Read, "main"),
-            Err(OkfError::Suspended { ref notice, .. }) if notice.as_deref() == Some("Paused.")
-        ));
-
-        teams::unsuspend(
-            &db.pool,
-            crate::db::TEST_TEAM,
-            &crate::store::audit::AuditActor::cli(),
-            chrono::Utc::now(),
-        )
-        .await
-        .unwrap();
-        keys.reload(&db.pool).await.unwrap();
-        let writer = keys.find(&secret).expect("the key is live");
-
-        assert!(keys.suspensions().is_empty());
-        assert!(
-            writer.require(Access::Write, "main").is_ok(),
-            "lifting restores the key exactly as it was"
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn the_cache_loads_labels_and_reloads_them_after_a_create() {
-        use crate::store::{catalogs, users};
-        let db = crate::db::test_db().await;
-        let keys = Keys::load(&db.pool, Arc::new(crate::clock::SystemClock))
-            .await
-            .unwrap();
-        assert_eq!(keys.labels().user("alice"), None, "not created yet");
-
-        users::create(
-            &db.pool,
-            &users::NewUser {
-                name: "alice",
-                display_name: &crate::labels::DisplayName::parse("Alice Example").unwrap(),
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        catalogs::create(
-            &db.pool,
-            &catalogs::NewCatalog {
-                name: "notes",
-                display_name: &crate::labels::DisplayName::parse("Team notes").unwrap(),
-                description: "",
-                owner_team: "alice",
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        keys.reload(&db.pool).await.unwrap();
-
-        let labels = keys.labels();
-        assert_eq!(labels.user("alice"), Some("Alice Example"));
-        assert_eq!(labels.team("alice"), Some("Alice Example's team"));
-        assert_eq!(labels.catalog("notes"), Some("Team notes"));
-        assert_eq!(labels.catalog_owner("notes"), Some("alice"));
-        assert!(labels.teams_of("alice").any(|team| team == "alice"));
-    }
-
-    #[test]
-    fn the_cache_knows_users_by_id() {
-        let alice = user(true);
-        let cache =
-            KeyCache::default().with_users(HashMap::from([(alice.id.clone(), alice.clone())]));
-        let keys = Keys::new(cache, Arc::new(crate::clock::SystemClock));
-
-        assert_eq!(keys.user_admin(&alice.id), Some(alice));
-        assert_eq!(keys.user_admin("nobody"), None);
+        assert!(member.require_export(&shared).is_ok());
+        assert!(admin.require(Access::Write, &shared).is_ok());
     }
 
     #[hegel::test]
@@ -2752,64 +1840,66 @@ mod tests {
         }
     }
 
-    /// M14 Task 9b's gates: `u-member` is in `main`'s owner team,
-    /// `u-entitled` (a customer) and `u-staff` (an admin user) are entitled
-    /// to it, and nobody has an unlock.
-    fn unlock_gates(require_unlock: bool) -> AccessGates {
-        AccessGates {
-            members: HashMap::from([("u-member".to_string(), HashSet::from(["main".to_string()]))]),
-            entitled: HashMap::from([
-                (
-                    "u-entitled".to_string(),
-                    HashSet::from(["main".to_string()]),
-                ),
-                ("u-staff".to_string(), HashSet::from(["main".to_string()])),
-            ]),
-            admins: HashSet::from(["u-staff".to_string()]),
-            require_unlock,
-            // The audit-id maps (Task 7b) play no part in admission.
-            ..AccessGates::default()
+    /// M14 Task 9b's users of `main` (catalog 1, owned by `family`):
+    /// `member` is in the owner team, `entitled` (a customer) and `staff`
+    /// (an admin user) are entitled to it, `other` is neither, and nobody has
+    /// an unlock.
+    fn gates_of(who: &str) -> UserGates {
+        match who {
+            "member" => member(),
+            "entitled" => UserGates {
+                entitled: [(1, Access::Read)].into(),
+                ..UserGates::default()
+            },
+            "staff" => UserGates {
+                is_admin: true,
+                entitled: [(1, Access::Read)].into(),
+                ..UserGates::default()
+            },
+            _ => UserGates::default(),
         }
     }
 
     /// A key of `user` (none for a legacy key) on `main` at `access`, with
-    /// `gates`, and not a reporting key (`key_on` opts into reporting,
+    /// its gates, and not a reporting key (`key_on` opts into reporting,
     /// which `admission` treats as the maintenance runner).
-    fn as_user(user: Option<&str>, access: Access, gates: AccessGates) -> Principal {
+    fn as_user(user: Option<UserGates>, access: Access, require_unlock: bool) -> Principal {
         Principal {
-            user_id: user.map(str::to_string),
-            gates: Arc::new(gates),
+            user_id: user.as_ref().map(|_| "u".to_string()),
+            facts: Arc::new(AccessFacts {
+                user: user.map(Arc::new),
+                require_unlock,
+                ..AccessFacts::default()
+            }),
             maintenance_report: false,
-            ..key_on(&["main"], access, Arc::default())
+            ..key_on(&["main"], access)
         }
     }
 
     #[test]
     fn with_require_unlock_operators_are_refused_and_customers_are_not() {
         let now = Utc::now();
+        let main = row("main", 1);
         let refused = |principal: Principal| {
             matches!(
-                principal.admission("main", Access::Read, now),
+                principal.admission(&main, Access::Read, now),
                 Err(OkfError::UnlockRequired { .. })
             )
         };
-        let admitted = |principal: Principal| principal.admission("main", Access::Read, now);
+        let admitted = |principal: Principal| principal.admission(&main, Access::Read, now);
+        let of = |who| Some(gates_of(who));
 
         assert!(
-            refused(as_user(Some("u-staff"), Access::Admin, unlock_gates(true))),
+            refused(as_user(of("staff"), Access::Admin, true)),
             "an admin user, even entitled"
         );
         assert!(
-            refused(as_user(Some("u-other"), Access::Read, unlock_gates(true))),
+            refused(as_user(of("other"), Access::Read, true)),
             "an admin-issued key outside its teams"
         );
         assert!(
             matches!(
-                as_user(None, Access::Read, unlock_gates(true)).admission(
-                    "main",
-                    Access::Read,
-                    now
-                ),
+                as_user(None, Access::Read, true).admission(&main, Access::Read, now),
                 Err(OkfError::UnlockRequired {
                     has_user: false,
                     ..
@@ -2818,27 +1908,22 @@ mod tests {
             "a key with no user, told it has none"
         );
         assert_eq!(
-            admitted(as_user(Some("u-member"), Access::Admin, unlock_gates(true))).unwrap(),
+            admitted(as_user(of("member"), Access::Admin, true)).unwrap(),
             Admission::Customer,
             "a member's admin key"
         );
         assert_eq!(
-            admitted(as_user(
-                Some("u-entitled"),
-                Access::Read,
-                unlock_gates(true)
-            ))
-            .unwrap(),
+            admitted(as_user(of("entitled"), Access::Read, true)).unwrap(),
             Admission::Customer,
             "an entitled customer"
         );
         assert_eq!(
-            admitted(as_user(Some("u-staff"), Access::Admin, unlock_gates(false))).unwrap(),
+            admitted(as_user(of("staff"), Access::Admin, false)).unwrap(),
             Admission::AdminRead,
             "off: nothing changes but the hourly record"
         );
         assert_eq!(
-            admitted(as_user(None, Access::Read, unlock_gates(false))).unwrap(),
+            admitted(as_user(None, Access::Read, false)).unwrap(),
             Admission::Untracked
         );
     }
@@ -2846,88 +1931,87 @@ mod tests {
     #[test]
     fn an_unlock_admits_exactly_its_user_to_exactly_its_catalog_until_it_expires() {
         let now = Utc::now();
-        let mut with_unlock = unlock_gates(true);
-        with_unlock.unlocks.insert(
-            "u-staff".to_string(),
-            vec![LiveUnlock {
+        let with_unlock = UserGates {
+            unlocks: vec![UserUnlock {
                 id: 7,
-                user_id: "u-staff".into(),
-                catalog: "main".into(),
+                catalog_id: 1,
                 expires_at: now + chrono::TimeDelta::hours(1),
             }],
-        );
-        let staff = as_user(Some("u-staff"), Access::Admin, with_unlock.clone());
-        let other = as_user(Some("u-other"), Access::Admin, with_unlock);
+            ..gates_of("staff")
+        };
+        let staff = as_user(Some(with_unlock), Access::Admin, true);
+        let other = as_user(Some(gates_of("staff")), Access::Admin, true);
         let elsewhere = Principal {
             reach: Reach::All,
             ..staff.clone()
         };
+        let main = row("main", 1);
 
         assert_eq!(
-            staff.admission("main", Access::Write, now).unwrap(),
+            staff.admission(&main, Access::Write, now).unwrap(),
             Admission::Unlocked { unlock_id: 7 }
         );
         assert_eq!(
-            staff.admission("main", Access::Read, now).unwrap(),
+            staff.admission(&main, Access::Read, now).unwrap(),
             Admission::Unlocked { unlock_id: 7 }
         );
         assert!(Admission::Unlocked { unlock_id: 7 }.is_recorded());
         assert!(
             staff
-                .admission("main", Access::Read, now + chrono::TimeDelta::hours(1))
+                .admission(&main, Access::Read, now + chrono::TimeDelta::hours(1))
                 .is_err(),
             "expired at its expiry"
         );
         assert!(
-            other.admission("main", Access::Read, now).is_err(),
+            other.admission(&main, Access::Read, now).is_err(),
             "another admin"
         );
         assert!(
-            elsewhere.admission("other", Access::Read, now).is_err(),
+            elsewhere
+                .admission(&row("other", 2), Access::Read, now)
+                .is_err(),
             "another catalog"
+        );
+        assert!(
+            staff.admission(&row("main", 3), Access::Read, now).is_err(),
+            "the catalog created again under its name"
         );
     }
 
     #[test]
     fn the_maintenance_runner_needs_no_unlock_unless_the_catalog_opted_out() {
         let now = Utc::now();
-        let runner = |maintenance_off: bool, access| Principal {
+        let main = row("main", 1);
+        let opted_out = CatalogRow {
+            maintenance_off: true,
+            ..row("main", 1)
+        };
+        let runner = |access, require_unlock| Principal {
             maintenance_report: true,
-            ..as_user(
-                Some("u-other"),
-                access,
-                AccessGates {
-                    maintenance_off: if maintenance_off {
-                        HashSet::from(["main".to_string()])
-                    } else {
-                        HashSet::new()
-                    },
-                    ..unlock_gates(true)
-                },
-            )
+            ..as_user(Some(gates_of("other")), access, require_unlock)
         };
 
         assert_eq!(
-            runner(false, Access::Read)
-                .admission("main", Access::Read, now)
+            runner(Access::Read, true)
+                .admission(&main, Access::Read, now)
                 .unwrap(),
             Admission::Maintenance
         );
         assert!(!Admission::Maintenance.is_recorded());
         assert!(matches!(
-            runner(true, Access::Read).admission("main", Access::Read, now),
+            runner(Access::Read, true).admission(&opted_out, Access::Read, now),
             Err(OkfError::MaintenanceOff { .. })
         ));
         assert!(
             matches!(
-                runner(false, Access::Admin).admission("main", Access::Read, now),
+                runner(Access::Admin, true).admission(&main, Access::Read, now),
                 Err(OkfError::UnlockRequired { .. })
             ),
             "an admin key with the flag is not exempt"
         );
         assert!(
             matches!(
-                runner(false, Access::Write).admission("main", Access::Write, now),
+                runner(Access::Write, true).admission(&main, Access::Write, now),
                 Err(OkfError::UnlockRequired { .. })
             ),
             "the exemption covers reads and reports only"
@@ -2936,16 +2020,9 @@ mod tests {
             matches!(
                 Principal {
                     maintenance_report: true,
-                    ..as_user(
-                        Some("u-member"),
-                        Access::Read,
-                        AccessGates {
-                            maintenance_off: HashSet::from(["main".to_string()]),
-                            ..unlock_gates(false)
-                        }
-                    )
+                    ..as_user(Some(member()), Access::Read, false)
                 }
-                .admission("main", Access::Read, now),
+                .admission(&opted_out, Access::Read, now),
                 Err(OkfError::MaintenanceOff { .. })
             ),
             "off keeps the runner out on any server, whatever its grants"
@@ -2955,38 +2032,76 @@ mod tests {
     #[test]
     fn require_contents_checks_level_and_suspension_before_the_unlock() {
         let now = Utc::now();
-        let reader = as_user(Some("u-other"), Access::Read, unlock_gates(true));
-        let suspended = Principal {
-            suspended: suspended_on(&["main"]),
-            ..reader.clone()
-        };
+        let reader = as_user(Some(gates_of("other")), Access::Read, true);
+        let main = row("main", 1);
+        let suspended = suspended_row("main", 1);
 
         assert!(matches!(
-            reader.require_contents(Access::Write, "main", now),
+            reader.require_contents(Access::Write, &main, now),
             Err(OkfError::Forbidden { .. })
         ));
         assert!(matches!(
-            reader.require_contents(Access::Read, "elsewhere", now),
+            reader.require_contents(Access::Read, &row("elsewhere", 2), now),
             Err(OkfError::CatalogNotSelected { .. })
         ));
         assert!(matches!(
-            suspended.require_contents(Access::Read, "main", now),
+            reader.require_contents(Access::Read, &suspended, now),
             Err(OkfError::Suspended { .. })
         ));
         assert!(matches!(
-            reader.require_contents(Access::Read, "main", now),
+            reader.require_contents(Access::Read, &main, now),
             Err(OkfError::UnlockRequired { .. })
         ));
         assert!(matches!(
-            suspended.check_open("main", Access::Read, now),
+            reader.check_open(&suspended, Access::Read, now),
             Err(OkfError::Suspended { .. })
         ));
         assert!(
             matches!(
-                reader.check_open("main", Access::Write, now),
+                reader.check_open(&main, Access::Write, now),
                 Err(OkfError::UnlockRequired { .. })
             ),
             "the selection checks no level"
+        );
+    }
+
+    #[test]
+    fn an_access_record_takes_its_ids_from_the_facts() {
+        let principal = Principal {
+            user_id: Some("u".to_string()),
+            facts: Arc::new(AccessFacts {
+                user: Some(Arc::new(UserGates {
+                    person: Some(11),
+                    is_admin: true,
+                    ..UserGates::default()
+                })),
+                credential: Some(22),
+                ..AccessFacts::default()
+            }),
+            ..key_on(&["main"], Access::Read)
+        };
+        let requester = Requester {
+            ip: None,
+            source: crate::store::audit::Source::Api,
+        };
+        let scope = CatalogScope::of(&row("main", 1));
+
+        let record = principal.access_record(&requester, "main", scope, Utc::now());
+
+        assert_eq!(
+            (
+                record.actor_credential,
+                record.actor_person,
+                record.operator
+            ),
+            (Some(22), Some(11), true)
+        );
+        assert_eq!(
+            record.scope,
+            CatalogScope {
+                id: 1,
+                team: Some(41)
+            }
         );
     }
 }

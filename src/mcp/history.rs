@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
+use crate::labels::directory::Wanted;
 use crate::mcp::context::ToolContext;
 use crate::mcp::{reply, OkfServer};
 use crate::okf::paths::{escapes_root, normpath};
@@ -121,11 +122,11 @@ fn revision_limit(requested: Option<u32>) -> i64 {
 pub(crate) async fn history(ctx: &ToolContext, params: HistoryParams) -> Result<History, OkfError> {
     let limit = revision_limit(params.limit);
     let paths = candidates(&params.path);
-    for state in ctx.read_set(params.catalog.as_deref())? {
+    for state in ctx.read_set(params.catalog.as_deref()).await? {
         // Admitted right before its revisions are read, so a catalog after
         // the one that answers is never recorded (plan Decision 23). A
         // `Busy` here leaves the catalogs already read recorded: they were.
-        ctx.admit(&state, AccessKind::Read)?;
+        ctx.admit(&state, AccessKind::Read).await?;
         for path in &paths {
             // `.await` suspends this call until Postgres answers, freeing the
             // thread for other requests meanwhile.
@@ -135,7 +136,11 @@ pub(crate) async fn history(ctx: &ToolContext, params: HistoryParams) -> Result<
             }
             // `into_iter` consumes `rows`, so each row's strings move into
             // the result instead of being copied.
-            let labels = ctx.labels();
+            let mut wanted = Wanted::default();
+            for row in &rows {
+                wanted.user(&row.actor);
+            }
+            let labels = ctx.labels_for(&wanted).await?;
             let revisions = rows
                 .into_iter()
                 .map(|row| Revision {
@@ -149,7 +154,7 @@ pub(crate) async fn history(ctx: &ToolContext, params: HistoryParams) -> Result<
                 .collect();
             return Ok(History {
                 catalog: state.name().to_string(),
-                catalog_label: ctx.catalog_label(state.name()),
+                catalog_label: ctx.catalog_label(state.name()).await?,
                 path: format!("/{path}"),
                 revisions,
             });

@@ -194,8 +194,10 @@ impl IntoResponse for AppError {
 struct Health {
     /// `"ok"` or `"unreachable"`.
     database: &'static str,
-    /// How many catalogs are loaded (no names: the route needs no key).
-    catalogs: usize,
+    /// How many catalogs this replica holds in its catalog cache now (no
+    /// names: the route needs no key). Catalogs load on first use, so this
+    /// is not how many exist.
+    cached_catalogs: u64,
     /// The last clock check (design "Time"); `null` without a `time_server`
     /// or before the first check. It never changes the status.
     clock: Option<ClockStatus>,
@@ -226,7 +228,7 @@ async fn healthz(State(app): State<Arc<App>>) -> Response {
     let (reachable, redis) = tokio::join!(database, redis_health(&app));
     let health = Health {
         database: if reachable { "ok" } else { "unreachable" },
-        catalogs: app.catalogs().len(),
+        cached_catalogs: app.catalog_cache().cached(),
         clock: app.clock_status(),
         redis,
     };
@@ -385,11 +387,9 @@ pub fn router(app: Arc<App>, shutdown: &CancellationToken) -> Router {
     // The OAuth routes exist only with OAuth on; without it `/oauth/*` and
     // `/.well-known/*` stay 404, as before M10. They take no bearer token.
     let open = if app.oauth().is_some() {
-        Router::new()
-            .merge(health)
-            .merge(oauth::routes().layer(timeout_layer()))
+        Router::new().merge(oauth::routes().layer(timeout_layer()))
     } else {
-        Router::new().merge(health)
+        Router::new()
     };
     // The passkey routes exist only with passkeys on (a domain
     // `public_url`); otherwise `/auth/passkey/*` stays 404.
@@ -419,6 +419,27 @@ pub fn router(app: Arc<App>, shutdown: &CancellationToken) -> Router {
         // routes (`keyed`) take only a bearer credential.
         .nest("/api/v1", api::routes(&app))
         .merge(keyed)
+        // Every route but `/healthz` (merged after it, so a probe never
+        // waits on the database) starts by checking the settings when they
+        // are older than `credential_ttl` (M18 spec Decision 9), so what
+        // its handlers read through `App::settings` is never older. The
+        // check has its own bound (`SETTINGS_CHECK_TIMEOUT`), since it runs
+        // before the routes' timeouts.
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&app),
+            check_settings,
+        ))
+        .merge(health)
+        // Every route's own writes reach this replica's caches before it
+        // answers (read-your-writes on the writing replica, M18 Task 8): the
+        // API, the archive routes, the console's sign-in and account forms,
+        // the OAuth pages and MCP. In process only; a write made on a task
+        // the handler spawned is not collected, and the change feed
+        // delivers it a moment later.
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&app),
+            api::apply_own_writes,
+        ))
         // One `info` line per response (status, latency) in a span naming the
         // method and the matched route. The span records no headers, so a
         // bearer key never reaches the log; no query, so neither does an
@@ -440,6 +461,34 @@ pub fn router(app: Arc<App>, shutdown: &CancellationToken) -> Router {
         )
         // Hands `app` to every handler that asks for `State<Arc<App>>`.
         .with_state(app)
+}
+
+/// Checks the settings before the request goes on ([`App::fresh_settings`]):
+/// a cheap read while they are younger than `credential_ttl`, one
+/// `admin_generation` read (shared by the requests that arrive together)
+/// once they are older.
+///
+/// # Arguments
+/// * `app` - the shared state.
+/// * `request` - the request, after routing.
+/// * `next` - the rest of the stack.
+///
+/// # Returns
+/// The route's response.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "middleware around every request: a span here would parent every handler's; fresh_settings has its own"
+    )
+)]
+async fn check_settings(
+    State(app): State<Arc<App>>,
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    app.fresh_settings().await;
+    next.run(request).await
 }
 
 /// The request span `TraceLayer` opened, for code deeper in the stack that
@@ -627,20 +676,44 @@ async fn request_telemetry(
 /// How long a stopping server waits for its background access writes.
 const ACCESS_SETTLE_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Serves until `shutdown` is cancelled, running the poll loop, the clock
-/// check and (unless `[mail] worker = false`) the mail worker beside it.
+/// What `serve_with` starts beside the HTTP server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServeOptions {
+    /// Whether to run the background workers (mail and housekeeping) and
+    /// the housekeeping ticker. Always
+    /// `true` in production: every replica runs them (issue #458). Test
+    /// servers that only enqueue set it to `false`.
+    pub worker: bool,
+}
+
+impl ServeOptions {
+    /// A server that starts no worker, for tests that only enqueue mail.
+    pub const NO_WORKER: Self = Self { worker: false };
+}
+
+impl Default for ServeOptions {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "a constant value, called once at start-up"
+        )
+    )]
+    fn default() -> Self {
+        Self { worker: true }
+    }
+}
+
+/// Serves until `shutdown` is cancelled, with every worker: [`serve_with`]
+/// and the default [`ServeOptions`].
 ///
 /// # Arguments
 /// * `app` - the shared state.
 /// * `listener` - a bound socket.
-/// * `shutdown` - cancelled to stop: it ends the MCP sessions, the poll loop,
-///   the clock check, the mail worker and the listener, and `serve` returns
-///   once open connections close, the mail worker has stopped and the
-///   access counts in flight are written.
+/// * `shutdown` - cancelled to stop.
 ///
 /// # Errors
-/// The listener's I/O error, after the loops and the sessions are
-/// stopped (`shutdown` is cancelled on every return).
+/// As [`serve_with`].
 #[cfg_attr(
     dylint_lib = "hyp_tracing",
     allow(
@@ -653,10 +726,99 @@ pub async fn serve(
     listener: TcpListener,
     shutdown: CancellationToken,
 ) -> std::io::Result<()> {
+    serve_with(app, listener, shutdown, ServeOptions::default()).await
+}
+
+/// Waits for a worker (mail or housekeeping) and enforces the shutdown
+/// grace: once `shutdown` is cancelled the worker has `grace` to finish the
+/// job in hand; past that it is aborted and an error is logged (another
+/// replica takes the job after the orphan timeout). It returns when the
+/// worker has finished or been aborted, and runs beside the server's own
+/// draining, so a slow request or message never lengthens the grace.
+///
+/// # Arguments
+/// * `worker` - the worker's task.
+/// * `shutdown` - the server's stop signal; the grace starts when it is cancelled.
+/// * `grace` - how long the worker may take after the signal.
+/// * `queue` - the worker's queue (`send_mail`, `housekeeping`), for the
+///   log lines.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn supervise_worker(
+    mut worker: tokio::task::JoinHandle<()>,
+    shutdown: CancellationToken,
+    grace: std::time::Duration,
+    queue: &'static str,
+) {
+    // `&mut worker` polls the handle without consuming it, so it can still
+    // be aborted afterwards.
+    let finished = tokio::select! {
+        result = &mut worker => Some(result),
+        () = shutdown.cancelled() => None,
+    };
+    let result = match finished {
+        Some(result) => result,
+        None => match tokio::time::timeout(grace, &mut worker).await {
+            Ok(result) => result,
+            Err(_) => {
+                worker.abort();
+                tracing::error!(
+                    queue,
+                    grace_secs = grace.as_secs_f64(),
+                    "a worker did not finish within worker_shutdown_grace; \
+                     its job in hand is retried by another replica"
+                );
+                return;
+            }
+        },
+    };
+    if let Err(error) = result {
+        split_event!(
+            error,
+            { queue, },
+            { %error, },
+            "a worker panicked"
+        );
+    }
+}
+
+/// Serves until `shutdown` is cancelled, running the change-feed listener,
+/// the announcement subscribers, the clock check and (unless `options.worker` is off) the mail worker, the
+/// housekeeping worker and the housekeeping ticker beside it.
+///
+/// # Arguments
+/// * `app` - the shared state.
+/// * `listener` - a bound socket.
+/// * `shutdown` - cancelled to stop: it ends the MCP sessions, the listener,
+///   the subscribers, the clock check, the workers, the ticker and the listener, and `serve`
+///   returns once open connections close, each worker has finished the job
+///   in hand (at most `worker_shutdown_grace`) and the access counts in
+///   flight are written.
+/// * `options` - what to start beside the server.
+///
+/// # Errors
+/// The listener's I/O error, after the loops and the sessions are
+/// stopped (`shutdown` is cancelled on every return).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "long-lived server loop: its span would stay open until shutdown and be exported only then"
+    )
+)]
+pub async fn serve_with(
+    app: Arc<App>,
+    listener: TcpListener,
+    shutdown: CancellationToken,
+    options: ServeOptions,
+) -> std::io::Result<()> {
+    for warning in app.config().deprecation_warnings() {
+        tracing::warn!("{warning}");
+    }
     let router = router(Arc::clone(&app), &shutdown);
-    let poller = tokio::spawn(Arc::clone(&app).poll_until(shutdown.clone()));
-    // Reloads the key cache on every `admin_generation` announcement; ends
-    // at once without `[redis]`.
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    // Marks the credential caches and the catalog directory stale on every
+    // announcement from a milestone 16 replica; ends at once without
+    // `[redis]`.
     let announcements = tokio::spawn(crate::shared::announce::listen(
         Arc::clone(&app),
         shutdown.clone(),
@@ -667,14 +829,46 @@ pub async fn serve(
         Arc::clone(&app),
         shutdown.clone(),
     ));
+    // Applies the Postgres change feed (milestone 18) to this replica's caches.
+    let invalidations = tokio::spawn(crate::invalidate::listen(
+        Arc::clone(&app),
+        shutdown.clone(),
+    ));
     let clock_checker = tokio::spawn(Arc::clone(&app).check_clock_until(shutdown.clone()));
-    // The mail worker (Task 6), unless this process only enqueues.
+    // The workers' one pool, shared by every worker this process runs.
     // `bool::then` runs the closure only for `true`, giving an `Option`.
-    let mail_worker = app
-        .config()
-        .mail
+    let worker_pool = options
         .worker
-        .then(|| crate::mail::queue::spawn_worker(Arc::clone(&app), shutdown.clone()));
+        .then(|| crate::mail::queue::WorkerPool::new(app.pool()));
+    // Each worker runs under a supervisor that enforces
+    // `worker_shutdown_grace` from the moment `shutdown` is cancelled,
+    // concurrently with the HTTP drain and the other joins below.
+    let grace = app.config().worker_shutdown_grace;
+    let supervisors = worker_pool.as_ref().map(|pool| {
+        [
+            tokio::spawn(supervise_worker(
+                crate::mail::queue::spawn_worker(Arc::clone(&app), pool, shutdown.clone()),
+                shutdown.clone(),
+                grace,
+                crate::mail::queue::QUEUE,
+            )),
+            tokio::spawn(supervise_worker(
+                crate::housekeeping::spawn_worker(Arc::clone(&app), pool, shutdown.clone()),
+                shutdown.clone(),
+                grace,
+                crate::housekeeping::QUEUE,
+            )),
+        ]
+    });
+    // Schedules each housekeeping slot (once per cluster: the other
+    // replicas' pushes of a slot are ignored) and reads the cluster stats
+    // into this replica's gauges, once a minute; with the workers only.
+    let ticker = options.worker.then(|| {
+        tokio::spawn(crate::housekeeping::tick_until(
+            Arc::clone(&app),
+            shutdown.clone(),
+        ))
+    });
     // The feedback worker (issue #674): only with `[feedback]` and its
     // `worker` switch on, so one replica forwards.
     let feedback_worker = app
@@ -699,14 +893,6 @@ pub async fn serve(
     // rmcp's sessions) before returning; cancelling twice is harmless.
     shutdown.cancel();
     // The loops return once `shutdown` is cancelled; a panic in one is logged.
-    if let Err(error) = poller.await {
-        split_event!(
-            error,
-            {},
-            { %error, },
-            "the poll loop panicked"
-        );
-    }
     if let Err(error) = announcements.await {
         split_event!(
             error,
@@ -723,6 +909,14 @@ pub async fn serve(
             "the catalog announcement subscriber panicked"
         );
     }
+    if let Err(error) = invalidations.await {
+        split_event!(
+            error,
+            {},
+            { %error, },
+            "the change feed listener panicked"
+        );
+    }
     if let Err(error) = clock_checker.await {
         split_event!(
             error,
@@ -731,16 +925,32 @@ pub async fn serve(
             "the clock check panicked"
         );
     }
-    // It finishes the mail in hand first.
-    if let Some(mail_worker) = mail_worker {
-        if let Err(error) = mail_worker.await {
+    if let Some(ticker) = ticker {
+        if let Err(error) = ticker.await {
             split_event!(
                 error,
                 {},
                 { %error, },
-                "the mail worker panicked"
+                "the housekeeping ticker panicked"
             );
         }
+    }
+    // The supervisors started their clocks when `shutdown` was cancelled,
+    // so the grace did not wait for the drains above. Each ends once its
+    // worker has finished or been aborted; after both, nothing uses the pool.
+    // `into_iter().flatten()`: the `Option`'s array, or nothing.
+    for supervisor in supervisors.into_iter().flatten() {
+        if let Err(error) = supervisor.await {
+            split_event!(
+                error,
+                {},
+                { %error, },
+                "a worker supervisor panicked"
+            );
+        }
+    }
+    if let Some(worker_pool) = &worker_pool {
+        worker_pool.close().await;
     }
     if let Some(feedback_worker) = feedback_worker {
         if let Err(error) = feedback_worker.await {
@@ -1137,6 +1347,47 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
+    /// Every request checks settings older than `credential_ttl` before its
+    /// handler reads them (M18 spec Decision 9): with no listener and no
+    /// poll, a setting written through the store reaches an anonymous page
+    /// once the loaded settings are older than the TTL.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_request_checks_settings_older_than_the_credential_ttl() {
+        use crate::store::audit::AuditActor;
+        use crate::store::settings::{self, SettingKey};
+        let test = crate::mcp::testing::app_with(
+            &[],
+            Config {
+                credential_ttl: Duration::from_millis(100),
+                ..Config::default()
+            },
+        )
+        .await;
+        let product_name = || async {
+            let response = router(Arc::clone(&test.app), &CancellationToken::new())
+                .oneshot(Request::get("/ui/brand.json").body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            json_body(response).await["product_name"].clone()
+        };
+        let before = product_name().await;
+
+        settings::set(
+            test.app.pool(),
+            SettingKey::ProductName,
+            "Acme Notes",
+            &AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let after = product_name().await;
+
+        assert_eq!(before, "okf");
+        assert_eq!(after, "Acme Notes");
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn brand_json_is_public_and_follows_the_settings() {
         use crate::store::audit::AuditActor;
@@ -1170,16 +1421,18 @@ mod tests {
         )
         .await
         .unwrap();
-        settings::set(
-            test.app.pool(),
-            SettingKey::FeedbackUrl,
-            "https://example.com/feedback",
-            &AuditActor::cli(),
-            chrono::Utc::now(),
-        )
-        .await
-        .unwrap();
-        test.app.poll().await.unwrap();
+        crate::invalidate::testing::applied(&test.app, async {
+            settings::set(
+                test.app.pool(),
+                SettingKey::FeedbackUrl,
+                "https://example.com/feedback",
+                &AuditActor::cli(),
+                chrono::Utc::now(),
+            )
+            .await
+            .unwrap();
+        })
+        .await;
         let (_, _, after) = get_brand().await;
 
         assert_eq!(status, StatusCode::OK);
@@ -1251,7 +1504,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
             json_body(response).await,
-            serde_json::json!({"database": "unreachable", "catalogs": 1, "clock": null, "redis": null})
+            serde_json::json!({"database": "unreachable", "cached_catalogs": 0, "clock": null, "redis": null})
         );
     }
 
@@ -1424,11 +1677,15 @@ mod tests {
             .connect_with(db.pool.connect_options().as_ref().clone())
             .await
             .unwrap();
+        // The deprecated `mail.worker = false` is ignored: the worker runs.
         let config = Config {
             database_max_connections: 1,
+            mail: crate::config::MailConfig {
+                worker: Some(false),
+                ..crate::config::MailConfig::default()
+            },
             ..Config::default()
         };
-        // The default `[mail]`: the log provider, with a worker.
         let app = App::load(one, config, Arc::new(crate::clock::SystemClock))
             .await
             .unwrap();
@@ -1447,7 +1704,8 @@ mod tests {
         .unwrap();
         let mut status = String::new();
         for _ in 0..200 {
-            status = sqlx::query_scalar("SELECT status FROM apalis.jobs")
+            status = sqlx::query_scalar("SELECT status FROM apalis.jobs WHERE job_type = $1")
+                .bind(crate::mail::queue::QUEUE)
                 .fetch_one(&db.pool)
                 .await
                 .unwrap();
@@ -1490,6 +1748,69 @@ mod tests {
         assert!(
             matches!(stopped, Ok(Ok(Ok(())))),
             "serve returns once the worker stops: {stopped:?}"
+        );
+    }
+
+    /// The grace runs from the cancellation, and a worker that ignores it is
+    /// aborted while the rest of shutdown (here: nothing awaited) goes on.
+    #[tokio::test]
+    async fn a_stuck_mail_worker_is_aborted_at_the_grace_deadline() {
+        let worker = tokio::spawn(std::future::pending::<()>());
+        let watch = worker.abort_handle();
+        let shutdown = CancellationToken::new();
+        let supervisor = tokio::spawn(supervise_worker(
+            worker,
+            shutdown.clone(),
+            std::time::Duration::from_millis(200),
+            "send_mail",
+        ));
+        // Before the signal the clock has not started, however long it takes.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(!watch.is_finished() && !supervisor.is_finished());
+
+        shutdown.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(30), supervisor)
+            .await
+            .expect("the supervisor ends at the grace deadline")
+            .unwrap();
+
+        // `abort` takes effect at the task's next poll; give it a moment.
+        for _ in 0..100 {
+            if watch.is_finished() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(watch.is_finished(), "the stuck worker was aborted");
+    }
+
+    #[tokio::test]
+    async fn a_mail_worker_that_finishes_within_the_grace_is_not_aborted() {
+        let shutdown = CancellationToken::new();
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&done);
+        let stop = shutdown.clone();
+        let worker = tokio::spawn(async move {
+            stop.cancelled().await;
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let supervisor = tokio::spawn(supervise_worker(
+            worker,
+            shutdown.clone(),
+            std::time::Duration::from_secs(20),
+            "send_mail",
+        ));
+
+        shutdown.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(30), supervisor)
+            .await
+            .expect("the supervisor ends once the worker does")
+            .unwrap();
+
+        assert!(
+            done.load(std::sync::atomic::Ordering::SeqCst),
+            "the mail in hand finished"
         );
     }
 }

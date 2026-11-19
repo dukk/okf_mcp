@@ -217,7 +217,7 @@ pub(crate) async fn approval_form(test: &TestApp, query: &str) -> String {
 }
 
 /// [`oauth_app`] as two replicas over one database and one Redis
-/// (`mcp::testing::replica_pair`, `poll_interval = 1h`). The client is
+/// (`mcp::testing::replica_pair`; no change-feed listener in a lib test). The client is
 /// registered after both loaded, which needs no key cache.
 ///
 /// # Returns

@@ -192,8 +192,13 @@ mod tests {
     }
 
     /// The MCP tool context of the key `secret`, from the REST API.
-    fn ctx_of(test: &TestApp, secret: &str) -> ToolContext {
-        let principal = test.app.keys().find(secret).expect("a live key");
+    async fn ctx_of(test: &TestApp, secret: &str) -> ToolContext {
+        let principal = test
+            .app
+            .find_key(secret)
+            .await
+            .unwrap()
+            .expect("a live key");
         let requester = Requester {
             ip: None,
             source: Source::Api,
@@ -205,7 +210,7 @@ mod tests {
     /// returns the handle.
     async fn open_empty(test: &TestApp, secret: &str) -> String {
         open_changeset(
-            &ctx_of(test, secret),
+            &ctx_of(test, secret).await,
             OpenParams {
                 catalog: Some("main".to_string()),
             },
@@ -411,18 +416,21 @@ mod tests {
         let theirs = open_as(&test, &keys.write, "systems/gamma.md").await;
         let own = open_as(&test, &keys.write, "systems/delta.md").await;
         let user = crate::db::TEST_USER;
-        crate::store::users::set_admin(
-            test.app.pool(),
-            user,
-            AdminChange {
-                on: true,
-                allow_last: false,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("make the user an admin");
+        crate::invalidate::testing::applied(&test.app, async {
+            crate::store::users::set_admin(
+                test.app.pool(),
+                user,
+                AdminChange {
+                    on: true,
+                    allow_last: false,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("make the user an admin");
+        })
+        .await;
         let mut admin = Browser::session_for(&test, user).await;
 
         let mine = format!("/api/v1/changesets/{own}");
@@ -590,18 +598,21 @@ mod tests {
         let body = || Payload::Json(json!({"message": "Reviewed delta"}));
         let mut member = Browser::session_for(&test, user).await;
         let (unknown, refused) = member.send(&test, "POST", &uri, body()).await.parts();
-        crate::store::users::set_admin(
-            test.app.pool(),
-            user,
-            AdminChange {
-                on: true,
-                allow_last: false,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("make the user an admin");
+        crate::invalidate::testing::applied(&test.app, async {
+            crate::store::users::set_admin(
+                test.app.pool(),
+                user,
+                AdminChange {
+                    on: true,
+                    allow_last: false,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("make the user an admin");
+        })
+        .await;
         let mut admin = Browser::session_for(&test, user).await;
 
         let (status, keyed) = publish_with(&test, &keys.admin, &by_key, "Reviewed gamma").await;
@@ -673,6 +684,8 @@ mod tests {
         assert!(test
             .app
             .catalog("main")
+            .await
+            .unwrap()
             .expect("main")
             .current()
             .snapshot()
@@ -704,7 +717,7 @@ mod tests {
             revision: 1,
             changeset: no_op.clone(),
         };
-        revert(&ctx_of(&test, &keys.write), same)
+        revert(&ctx_of(&test, &keys.write).await, same)
             .await
             .expect("stage the published text");
 
@@ -767,7 +780,13 @@ mod tests {
                 .any(|e| e["file"] == "/systems/zeta.md" && e["rule"] == "broken-link"),
             "{failing}"
         );
-        let snapshot = test.app.catalog("main").expect("main").current();
+        let snapshot = test
+            .app
+            .catalog("main")
+            .await
+            .unwrap()
+            .expect("main")
+            .current();
         assert!(snapshot
             .snapshot()
             .get("systems/gamma.md")
@@ -803,7 +822,7 @@ mod tests {
 
         let (status, refused) = publish_with(&test, &keys.write, &writers, "Gamma").await;
         let tool = publish(
-            &ctx_of(&test, &keys.write),
+            &ctx_of(&test, &keys.write).await,
             PublishParams {
                 message: "Gamma".to_string(),
                 changeset: writers.clone(),
@@ -845,23 +864,31 @@ mod tests {
         let locked = open_as(&test, &staff, "systems/gamma.md").await;
         let opted_out = open_as(&test, &runner, "systems/delta.md").await;
         require_unlock(&test).await;
-        let mut tx = test.app.pool().begin().await.expect("begin");
-        sqlx::query("UPDATE catalogs SET maintenance = false WHERE name = 'main'")
-            .execute(&mut *tx)
+        crate::invalidate::testing::applied(&test.app, async {
+            let mut tx = test.app.pool().begin().await.expect("begin");
+            let id: i64 = sqlx::query_scalar(
+                "UPDATE catalogs SET maintenance = false WHERE name = 'main' RETURNING id",
+            )
+            .fetch_one(&mut *tx)
             .await
             .expect("turn maintenance off");
-        crate::store::catalogs::bump_admin_generation(&mut tx)
-            .await
-            .expect("bump");
-        tx.commit().await.expect("commit");
-        test.app.poll().await.expect("poll");
-        let tool = |secret: &str, handle: &str| {
-            let ctx = ctx_of(&test, secret);
+            let main = crate::invalidate::Invalidation::CatalogMeta {
+                id,
+                name: "main".to_owned(),
+            };
+            crate::invalidate::invalidate(&mut tx, &[main])
+                .await
+                .expect("invalidate");
+            tx.commit().await.expect("commit");
+        })
+        .await;
+        let tool = async |secret: &str, handle: &str| {
+            let ctx = ctx_of(&test, secret).await;
             let params = PublishParams {
                 message: "Publish".to_string(),
                 changeset: handle.to_string(),
             };
-            async move { publish(&ctx, params).await }
+            publish(&ctx, params).await
         };
 
         let (unlock, needs) = publish_with(&test, &staff, &locked, "Publish").await;

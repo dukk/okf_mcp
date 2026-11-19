@@ -6,7 +6,6 @@
 use std::sync::Arc;
 
 use crate::http::AppError;
-use crate::telemetry::subscriber::split_event;
 use axum::extract::{MatchedPath, Request};
 use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::middleware;
@@ -14,13 +13,16 @@ use axum::middleware::Next;
 use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::Router;
+use serde::Deserialize;
 
 use crate::app::App;
 use crate::auth::{Principal, Reach};
+use crate::cache::directory::{page_size, Page};
 use crate::error::OkfError;
 use crate::http::console_session::require_principal;
 use crate::http::requester::Requester;
 use crate::mcp::context::ToolContext;
+use crate::store::catalogs::CatalogRow;
 use crate::store::keys::Access;
 
 #[cfg(test)]
@@ -35,6 +37,8 @@ mod keys;
 mod labels;
 #[cfg(test)]
 mod labels_tests;
+#[cfg(test)]
+mod listing_tests;
 mod mail;
 mod maintenance;
 #[cfg(test)]
@@ -103,6 +107,38 @@ pub(crate) fn routes(app: &Arc<App>) -> Router<Arc<App>> {
         // A plain `layer` wraps everything above, `require_principal` and
         // the fallback included, so the 401 and the 404 get these headers too.
         .layer(middleware::map_response(api_headers))
+}
+
+/// Runs the handler, collecting the invalidations its writes queued, and
+/// applies them to this replica's directory and credential caches before the response
+/// goes out ([`App::apply_own_writes`]): in-process cache drops only, so
+/// nothing after the commit waits on I/O.
+///
+/// # Arguments
+/// * `app` - the application.
+/// * `request` - the request.
+/// * `next` - the handler.
+///
+/// # Returns
+/// The handler's response, unchanged.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "wraps every HTTP request, an unmatched path included, which must make no span"
+    )
+)]
+pub(crate) async fn apply_own_writes(
+    axum::extract::State(app): axum::extract::State<Arc<App>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let (response, written) = crate::invalidate::capturing(next.run(request)).await;
+    // Most requests write nothing: then nothing runs (and no span opens).
+    if !written.is_empty() {
+        app.apply_own_writes(&written).await;
+    }
+    response
 }
 
 /// Adds the headers every API response carries: never cached (keys and
@@ -178,7 +214,8 @@ pub(crate) fn require_every_catalog(principal: &Principal) -> Result<(), OkfErro
     require_admin(principal)?;
     match &principal.reach {
         Reach::All => Ok(()),
-        Reach::Catalogs(_) => Err(OkfError::Forbidden {
+        // A ceiling is never admin, so `require_admin` refused it already.
+        Reach::Catalogs(_) | Reach::Ceiling => Err(OkfError::Forbidden {
             reason: "this needs an admin key that reaches every catalog".to_string(),
         }),
     }
@@ -297,21 +334,36 @@ pub(crate) fn require_reader(principal: &Principal) -> Result<(), OkfError> {
     require_admin(principal)
 }
 
-/// Polls after an administrative change, so the key cache and the catalog
-/// list reflect it for the next request. The change has committed, so a
-/// failed poll is logged, not returned: the poll loop retries it.
+/// `?after=&limit=` of a paginated catalog listing (M18 spec Decision 7):
+/// `GET /catalogs`, `GET /whoami` and `GET /labels`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct PageQuery {
+    /// The `next` of the previous page; absent or empty for the first.
+    after: Option<String>,
+    /// The page size: default 100, at most 1000 (a larger one is cut).
+    limit: Option<u32>,
+}
+
+/// One page of the catalogs `principal` reaches, for `query`.
 ///
 /// # Arguments
-/// * `app` - the application. An `&Arc<App>` argument coerces to `&App`
-///   automatically (deref coercion).
+/// * `app` - the application, for its catalog directory.
+/// * `principal` - the caller.
+/// * `query` - the request's paging parameters.
+///
+/// # Returns
+/// The page, as [`crate::cache::directory::CatalogDirectory::reachable_page`]
+/// gives it.
+///
+/// # Errors
+/// 400 for a malformed cursor; 500 if the read fails.
 #[tracing::instrument(level = "debug", skip_all)]
-pub(crate) async fn settle(app: &App) {
-    if let Err(error) = app.poll().await {
-        split_event!(
-            error,
-            { kind = error.kind(), },
-            { %error, },
-            "poll after an administrative change failed; the poll loop retries"
-        );
-    }
+pub(crate) async fn reachable_page(
+    app: &App,
+    principal: &Principal,
+    query: &PageQuery,
+) -> Result<Page<Arc<CatalogRow>>, OkfError> {
+    app.directory()
+        .reachable_page(principal, query.after.as_deref(), page_size(query.limit))
+        .await
 }

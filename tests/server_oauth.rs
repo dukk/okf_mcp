@@ -256,15 +256,17 @@ async fn a_revoked_grant_stops_its_tokens_at_the_next_poll() {
     let (client, tokens) = signed_in(&server, Access::Read, &["main"]).await;
     let grant_id = grant_of(&server, &tokens.access()).await;
 
-    key_rows::revoke_by_id(
-        &server.db.pool,
-        &grant_id,
-        &okf_mcp::store::audit::AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("revoke");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        key_rows::revoke_by_id(
+            &server.db.pool,
+            &grant_id,
+            &okf_mcp::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("revoke");
+    })
+    .await;
 
     assert!(server.client(&tokens.access(), None).await.is_err());
     assert_eq!(client.refresh(&tokens.refresh()).await.status, 400);

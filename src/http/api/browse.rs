@@ -23,6 +23,7 @@ use crate::error::OkfError;
 use crate::http::api::context;
 use crate::http::requester::Requester;
 use crate::http::AppError;
+use crate::labels::directory::Wanted;
 use crate::mcp::blocking;
 use crate::mcp::changesets::unified_diff;
 use crate::mcp::documents::{
@@ -261,10 +262,10 @@ async fn tree(
     Path(catalog): Path<String>,
 ) -> Result<Json<Tree>, AppError> {
     let ctx = context(&app, principal, requester);
-    let state = ctx.one(Some(&catalog))?;
+    let state = ctx.one(Some(&catalog)).await?;
     // The tree lists the catalog's documents: a read of its contents.
-    ctx.admit(&state, AccessKind::Read)?;
-    let loaded = state.current();
+    ctx.admit(&state, AccessKind::Read).await?;
+    let loaded = ctx.snapshot(&state);
     let documents = loaded
         .snapshot()
         .docs()
@@ -312,7 +313,8 @@ async fn concept(
         },
     )
     .await?;
-    let loaded = ctx.one(Some(&concept.catalog))?.current();
+    let state = ctx.one(Some(&concept.catalog)).await?;
+    let loaded = ctx.snapshot(&state);
     // Rendering is CPU work proportional to the body: off the async threads.
     // `move` hands `concept` and `loaded` (an `Arc`) to the blocking thread.
     Ok(Json(blocking(move || with_html(concept, &loaded)).await))
@@ -430,7 +432,10 @@ async fn revision(
 ) -> Result<Json<RevisionView>, AppError> {
     // This reads the store directly, so it checks access itself, the unlock
     // included (before the principal moves into the context).
-    principal.require_contents(Access::Read, &catalog, app.clock().now())?;
+    let row = principal
+        .reached_row(app.directory(), Access::Read, &catalog)
+        .await?;
+    principal.require_contents(Access::Read, &row, app.clock().now())?;
     let ctx = context(&app, principal, requester);
     // `history` resolves the path as the History tab spelled it (`.md`
     // optional) and answers 404 for a path that never existed.
@@ -443,7 +448,7 @@ async fn revision(
         },
     )
     .await?;
-    let state = ctx.one(Some(&found.catalog))?;
+    let state = ctx.one(Some(&found.catalog)).await?;
     let stored = found.path.trim_start_matches('/');
     let current = content_at(app.pool(), state.id(), stored, revision)
         .await?
@@ -496,7 +501,8 @@ async fn document(
         },
     )
     .await?;
-    let loaded = ctx.one(Some(&document.catalog))?.current();
+    let state = ctx.one(Some(&document.catalog)).await?;
+    let loaded = ctx.snapshot(&state);
     let view = blocking(move || {
         // A block, so the borrow of `document` ends before it moves below.
         let body_html = {
@@ -538,17 +544,24 @@ async fn recent_changes(
     // route does: the unlock first (before the principal moves into the
     // context), then the catalog's selection and its admission, which also
     // binds the read to the incarnation admitted.
-    principal.require_contents(Access::Read, &catalog, app.clock().now())?;
+    let row = principal
+        .reached_row(app.directory(), Access::Read, &catalog)
+        .await?;
+    principal.require_contents(Access::Read, &row, app.clock().now())?;
     let ctx = context(&app, principal, requester);
-    let state = ctx.one(Some(&catalog))?;
-    ctx.admit(&state, AccessKind::Read)?;
+    let state = ctx.one(Some(&catalog)).await?;
+    ctx.admit(&state, AccessKind::Read).await?;
     // The parameters are checked only once the catalog is admitted, so a
     // refusal never depends on them.
     // `transpose` turns Option<Result<..>> into Result<Option<..>> for `?`.
     let after = query.after.as_deref().map(parse_cursor).transpose()?;
     let limit = query.limit.unwrap_or(RECENT_DEFAULT);
     let page = recent(app.pool(), state.id(), after.as_ref(), limit).await?;
-    let labels = ctx.labels();
+    let mut wanted = Wanted::default();
+    for row in &page.rows {
+        wanted.user(&row.actor);
+    }
+    let labels = ctx.labels_for(&wanted).await?;
     let changes = page
         .rows
         .into_iter()
@@ -564,7 +577,7 @@ async fn recent_changes(
         .collect();
     Ok(Json(RecentChanges {
         catalog: state.name().to_string(),
-        catalog_label: ctx.catalog_label(state.name()),
+        catalog_label: ctx.catalog_label(state.name()).await?,
         changes,
         next_after: page.next.as_ref().map(cursor_text),
     }))
@@ -946,18 +959,21 @@ mod tests {
             .send(&test, "GET", "/api/v1/catalogs/main/export", Payload::Empty)
             .await
             .parts();
-        crate::store::users::set_admin(
-            test.app.pool(),
-            user,
-            AdminChange {
-                on: true,
-                allow_last: false,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("make the user an admin");
+        crate::invalidate::testing::applied(&test.app, async {
+            crate::store::users::set_admin(
+                test.app.pool(),
+                user,
+                AdminChange {
+                    on: true,
+                    allow_last: false,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("make the user an admin");
+        })
+        .await;
         let mut admin = Browser::session_for(&test, user).await;
         let (as_admin, answer) = admin.send(&test, "GET", uri, Payload::Empty).await.parts();
 
@@ -1047,7 +1063,7 @@ mod tests {
         }
     }
 
-    /// Imports `entries` into `catalog` as `actor`, replacing it, then polls.
+    /// Imports `entries` into `catalog` as `actor`, replacing it, and applies its change messages.
     async fn publish(
         test: &crate::mcp::testing::TestApp,
         catalog: &str,
@@ -1063,10 +1079,12 @@ mod tests {
             audit: &AuditActor::cli(),
             now: Utc::now(),
         };
-        import(test.app.pool(), catalog, files(entries), &options)
-            .await
-            .expect("import");
-        test.app.poll().await.expect("poll");
+        crate::invalidate::testing::applied(&test.app, async {
+            import(test.app.pool(), catalog, files(entries), &options)
+                .await
+                .expect("import");
+        })
+        .await;
     }
 
     /// `(path, revision, op, actor)` of each change in a recent-changes page.
@@ -1099,7 +1117,7 @@ mod tests {
         use crate::mcp::testing::{pending_entry, PendingEdit};
         let ctx = crate::mcp::testing::context(
             test,
-            crate::mcp::testing::cached_principal(test, key),
+            crate::mcp::testing::cached_principal(test, key).await,
             None,
         );
         let opened = open_changeset(

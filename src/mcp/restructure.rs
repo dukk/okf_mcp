@@ -322,7 +322,7 @@ mod tests {
 
     /// The text of `path` as reads through the changeset `handle` see it.
     async fn seen(ctx: &ToolContext, handle: &str, path: &str) -> Option<String> {
-        let state = ctx.app().catalog("pg").unwrap();
+        let state = ctx.app().catalog("pg").await.unwrap().unwrap();
         let pinned = ctx.pin(Some(handle)).await.unwrap();
         let view = ctx.view(&state, pinned.as_ref()).await.unwrap();
         view.snapshot().get(path).map(|doc| doc.text().to_string())

@@ -12,7 +12,7 @@ fn lines(text: &str) -> Vec<Value> {
         .collect()
 }
 
-/// A provisioner key `signup` of TEST_USER, polled in.
+/// A provisioner key `signup` of TEST_USER.
 async fn provisioner(test: &TestApp) -> String {
     let created = crate::store::keys::create_provisioner(
         test.app.pool(),
@@ -26,7 +26,6 @@ async fn provisioner(test: &TestApp) -> String {
     )
     .await
     .unwrap();
-    test.app.poll().await.unwrap();
     created.key
 }
 

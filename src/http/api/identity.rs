@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -14,14 +14,16 @@ use axum::{Extension, Json, Router};
 use serde::Serialize;
 use sqlx::PgPool;
 
+use super::{reachable_page, PageQuery};
 use crate::app::App;
 use crate::auth::{CredentialKind, Principal, Reach};
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
 use crate::http::console_session::{self, ConsoleSession};
 use crate::http::AppError;
+use crate::labels::directory::Wanted;
 use crate::store::keys::{self as key_rows, Access};
-use crate::store::{user_sessions, users};
+use crate::store::{ceiling, user_sessions, users};
 
 /// The calling key, as the console sees it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -39,8 +41,17 @@ pub(crate) struct WhoAmI {
     pub maintenance_report: bool,
     /// Whether it reaches every catalog.
     pub all_catalogs: bool,
-    /// The loaded catalogs it reaches, sorted.
+    /// One page of the loaded catalogs it reaches, sorted (M18 spec
+    /// Decision 7: `?after=&limit=`, as `GET /catalogs`).
     pub catalogs: Vec<String>,
+    /// Its level on each catalog of this page (`read`, `write` or
+    /// `admin`): for a console session, its ceiling's level there, which
+    /// differs per catalog (issue #736: the console reads levels here, a
+    /// page at a time, instead of a whole ceiling from `GET /session`).
+    pub levels: BTreeMap<String, &'static str>,
+    /// The `after` of the next page of `catalogs`; absent on the last page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
     /// Its default catalog.
     pub default_catalog: Option<String>,
     /// `key`, `oauth` for a grant, or `session` for a console session.
@@ -72,8 +83,6 @@ pub(crate) struct SessionView {
     pub admin: bool,
     /// The token every write must send as `X-OKF-CSRF`.
     pub csrf: String,
-    /// The user's ceiling: catalog name to `read` or `write`.
-    pub ceiling: BTreeMap<String, &'static str>,
     /// When the session ends regardless of activity.
     pub expires_at: String,
 }
@@ -93,7 +102,6 @@ impl std::fmt::Debug for SessionView {
             .field("user", &self.user)
             .field("admin", &self.admin)
             .field("csrf", &"<redacted>")
-            .field("ceiling", &self.ceiling)
             .field("expires_at", &self.expires_at)
             .finish_non_exhaustive()
     }
@@ -136,43 +144,59 @@ async fn teams_of(pool: &PgPool, name: &str) -> Result<(Vec<String>, bool), OkfE
     }
 }
 
-/// `GET /whoami`.
+/// `GET /whoami?after=&limit=`.
 ///
 /// # Errors
-/// 500 if the key list or the user cannot be read.
+/// 400 for a malformed `after`; 500 if the key row, the user or the
+/// catalog directory cannot be read.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn whoami(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
+    Query(query): Query<PageQuery>,
 ) -> Result<Json<WhoAmI>, AppError> {
+    // First, so a malformed cursor is refused before anything else is read.
+    let page = reachable_page(&app, &principal, &query).await?;
     let (name, user) = match &principal.kind {
         // A session has no key row: it is its user.
         CredentialKind::Session { .. } => (None, principal.user.clone()),
         CredentialKind::ApiKey | CredentialKind::OAuth { .. } => {
-            // The user comes from the row read now, not the principal, in
-            // case it was reassigned since the last poll. `unzip` splits an
-            // `Option<(a, b)>` into `(Option<a>, Option<b>)`.
-            let (name, user) = key_rows::list(app.pool())
+            // The user comes from the one row read now, not the principal,
+            // in case it was reassigned since the principal was cached. A
+            // row that is gone has no name or user; a row revoked since the
+            // principal was cached is still read (revoked or not), so it
+            // keeps both, as the whole-table read did.
+            // `unzip` splits an `Option<(a, b)>` into
+            // `(Option<a>, Option<b>)`.
+            let (name, user) = key_rows::record_by_id(app.pool(), &principal.key_id)
                 .await?
-                .into_iter()
-                .find(|record| record.id == principal.key_id)
-                .map(|record| (record.name, record.user))
+                .map(|credential| (credential.record.name, credential.record.user))
                 .unzip();
             // `flatten` turns the `Option<Option<String>>` (row found, user
             // set) into one `Option<String>`.
             (name, user.flatten())
         }
     };
+    // A console session's levels are its ceiling's, resolved per catalog:
+    // its highest is read now, one row (issue #728).
+    let access = match (&principal.reach, principal.user_id.as_deref()) {
+        (Reach::Ceiling, Some(user_id)) => ceiling::highest(app.pool(), user_id).await?,
+        _ => principal.access,
+    };
     let (teams, user_admin) = match &user {
         Some(name) => teams_of(app.pool(), name).await?,
         None => (Vec::new(), false),
     };
-    // `Catalogs` is a BTreeMap, so its keys come out sorted.
-    let catalogs = app
-        .catalogs()
-        .keys()
-        .filter(|catalog| principal.reaches(catalog))
-        .cloned()
+    // The page is sorted by name. Only names are listed, so nothing is
+    // loaded: every catalog the key reaches is named, whether or not this
+    // replica holds it in its cache (M18 Task 8).
+    let catalogs = page.items.iter().map(|row| row.name.clone()).collect();
+    // Each row's level, resolved per catalog as every check does (a
+    // ceiling's from the row and the user's gates); bounded by the page.
+    let levels = page
+        .items
+        .iter()
+        .filter_map(|row| Some((row.name.clone(), principal.level_at(row)?.as_str())))
         .collect();
     // `match` on a reference: `client_name` binds a `&Option<String>`.
     let (kind, client_name) = match &principal.kind {
@@ -180,17 +204,28 @@ async fn whoami(
         CredentialKind::OAuth { client_name, .. } => ("oauth", client_name.clone()),
         CredentialKind::Session { .. } => ("session", None),
     };
-    let user_label = user
-        .as_deref()
-        .and_then(|name| app.keys().labels().user(name).map(str::to_string));
+    let user_label = match user.as_deref() {
+        Some(name) => {
+            let mut wanted = Wanted::default();
+            wanted.user(name);
+            app.labels()
+                .labels_for(&wanted)
+                .await?
+                .user(name)
+                .map(str::to_string)
+        }
+        None => None,
+    };
     Ok(Json(WhoAmI {
         key_id: principal.key_id.clone(),
         name,
         actor: principal.actor.clone(),
-        access: principal.access.as_str(),
+        access: access.as_str(),
         maintenance_report: principal.maintenance_report,
         all_catalogs: matches!(principal.reach, Reach::All),
         catalogs,
+        levels,
+        next: page.next,
         default_catalog: principal.default_catalog.clone(),
         kind,
         client_name,
@@ -222,9 +257,11 @@ fn console(
     }
 }
 
-/// `GET /session`: the signed-in user, their ceiling and the CSRF token.
-/// The admin flag and the ceiling are the principal's, which the middleware
-/// built from the key cache for this request.
+/// `GET /session`: the signed-in user, the admin flag and the CSRF token.
+/// The admin flag is the principal's, which the middleware built from the
+/// user cache for this request. It holds no ceiling (issue #736): the
+/// levels are on `GET /whoami`'s pages, and `GET /me/ceiling` pages the
+/// ceiling.
 ///
 /// # Errors
 /// 403 for a key or grant; 401 once the user is gone; 500 on a lookup failure.
@@ -241,21 +278,11 @@ async fn session(
             reason: "this session's user no longer exists".to_string(),
         })?;
     let admin = principal.access == Access::Admin;
-    // A non-admin's ceiling is exactly what it reaches; an admin reaches
-    // everything, so its own ceiling is shown for information.
-    let ceiling = match &principal.reach {
-        Reach::Catalogs(levels) => levels.clone(),
-        Reach::All => app.keys().ceiling_of(&user_id),
-    };
     Ok(Json(SessionView {
         user: user.name,
         email: user.email,
         admin,
         csrf: session.csrf,
-        ceiling: ceiling
-            .into_iter()
-            .map(|(catalog, access)| (catalog, access.as_str()))
-            .collect(),
         expires_at: format_timestamp(session.expires_at),
     }))
 }
@@ -280,6 +307,7 @@ async fn sign_out(
 #[cfg(test)]
 mod tests {
     use crate::http::api::testing::{app, assert_matrix, keys, send, Row};
+    use crate::rows_returned::RowsReturned;
     // `oneshot` sends one request through a router without a socket.
     use tower::ServiceExt;
 
@@ -348,8 +376,6 @@ mod tests {
             chrono::Utc::now(),
         )
         .await;
-        // The legacy insert bumps no generation, so a bare poll would skip
-        // it; creating the fixture keys bumps it and polls.
         keys(&test).await;
 
         let (status, body) = send(&test, "GET", "/api/v1/whoami", Some(&key), None).await;
@@ -430,7 +456,6 @@ mod tests {
             email: Some("alice@example.com".to_string()),
             admin: false,
             csrf: "csrf-token-secret".to_string(),
-            ceiling: std::collections::BTreeMap::new(),
             expires_at: "2026-01-01T00:00:00Z".to_string(),
         };
 
@@ -445,5 +470,87 @@ mod tests {
         let test = app().await;
         let (status, _) = send(&test, "GET", "/api/v1/nothing-here", None, None).await;
         assert_eq!(status.as_u16(), 404);
+    }
+
+    /// A key deleted after its credential was cached still authenticates
+    /// until the cache expires; its row is gone, so `whoami` names no key
+    /// and no user (the answer the whole-table read gave).
+    #[tokio::test]
+    async fn whoami_of_a_key_deleted_after_it_was_cached_has_no_name_or_user() {
+        let test = app().await;
+        let keys = keys(&test).await;
+        let (warm, _) = send(&test, "GET", "/api/v1/whoami", Some(&keys.read), None).await;
+        assert_eq!(warm.as_u16(), 200);
+        sqlx::query("DELETE FROM api_keys WHERE name = 'reader'")
+            .execute(test.app.pool())
+            .await
+            .expect("delete the key row");
+
+        let (status, body) = send(&test, "GET", "/api/v1/whoami", Some(&keys.read), None).await;
+
+        assert_eq!(status.as_u16(), 200, "{body}");
+        assert_eq!(body.get("name"), Some(&serde_json::Value::Null));
+        assert_eq!(body.get("user"), Some(&serde_json::Value::Null));
+        assert_eq!(body["teams"], serde_json::json!([]));
+    }
+
+    /// Issue #737: `GET /whoami` read every key to find the caller's. With
+    /// 50,000 other keys present (seeded by SQL), the request's queries
+    /// return a handful of rows, and the answer is the caller's own.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn whoami_reads_the_callers_key_not_every_key() {
+        use tracing_subscriber::layer::SubscriberExt;
+        // `with_filter` is a method of the `Layer` trait.
+        use tracing_subscriber::Layer as _;
+
+        const OTHERS: i64 = 50_000;
+        let test = app().await;
+        let keys = keys(&test).await;
+        sqlx::query(
+            "INSERT INTO api_keys (id, name, actor, sha256, access, all_catalogs, created_at) \
+             SELECT 'k' || n, 'bulk' || n, 'bulk' || n, sha256(('bulk' || n)::bytea), \
+                    'read', false, now() \
+             FROM generate_series(1, $1) AS n",
+        )
+        .bind(OTHERS)
+        .execute(test.app.pool())
+        .await
+        .expect("seed keys");
+        sqlx::query("ANALYZE api_keys")
+            .execute(test.app.pool())
+            .await
+            .unwrap();
+        // Warm the caches, so the measured request is the steady state.
+        let (warm, _) = send(&test, "GET", "/api/v1/whoami", Some(&keys.read), None).await;
+        assert_eq!(warm.as_u16(), 200);
+        let counter = RowsReturned::default();
+        let subscriber = tracing_subscriber::registry().with(
+            counter.clone().with_filter(
+                tracing_subscriber::filter::Targets::new()
+                    .with_target("sqlx::query", tracing::Level::TRACE),
+            ),
+        );
+
+        let (status, body) = {
+            // Only this thread's events: the request runs on it.
+            let _guard = tracing::subscriber::set_default(subscriber);
+            tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                send(&test, "GET", "/api/v1/whoami", Some(&keys.read), None),
+            )
+            .await
+            .expect("whoami answers")
+        };
+
+        let relaxed = std::sync::atomic::Ordering::Relaxed;
+        let rows = counter.rows.load(relaxed);
+        let statements = counter.statements.load(relaxed);
+        assert_eq!(status.as_u16(), 200);
+        assert_eq!(body["name"], "reader");
+        assert!(statements > 0, "the request's statements are counted");
+        assert!(
+            rows < 50,
+            "whoami returned {rows} rows in {statements} statements beside {OTHERS} other keys"
+        );
     }
 }

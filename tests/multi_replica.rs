@@ -1,8 +1,16 @@
 //! Two replicas over one Postgres and one Redis (milestone 16). Every test
-//! sets `poll_interval = 1h` (`TestServer::start_shared`): what passes was
-//! carried by Redis announcements, not by the poll loop. The MCP session
+//! sets `credential_ttl` and `catalog_ttl` to 1h (`TestServer::start_shared`):
+//! what passes was carried by Redis announcements or by the change feed
+//! (`NOTIFY`, milestone 18), not by a cache's expiry. The change-feed tests write through the store
+//! on the pool, as the command line does, so no Redis announcement is sent
+//! and only `NOTIFY` can carry the change. The MCP session
 //! tests (milestone 16 Task 5) open a session on one replica and use it, or
 //! are refused, on the other.
+
+// The tests' futures hold whole servers, whose router's middleware stack
+// nests deeply enough to overflow the default query depth (128) when their
+// layout is computed, as in the library (`src/lib.rs`).
+#![recursion_limit = "256"]
 
 mod support;
 
@@ -31,14 +39,18 @@ fn pg() -> Vec<(&'static str, Files)> {
 
 /// Retries `check` every 50 ms until it is true, or panics naming `what`
 /// after [`WAIT`].
-async fn eventually(what: &str, check: impl Fn() -> bool) {
-    let waited = tokio::time::timeout(WAIT, async {
-        while !check() {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await;
-    assert!(waited.is_ok(), "timed out waiting until {what}");
+macro_rules! eventually {
+    // A macro rather than a function so the check can `.await` (an async
+    // closure borrowing the test's locals is not expressible here).
+    ($what:expr, $check:expr) => {{
+        let waited = tokio::time::timeout(WAIT, async {
+            while !$check {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+        assert!(waited.is_ok(), "timed out waiting until {}", $what);
+    }};
 }
 
 /// Two replicas on one Redis, with an admin key known to both.
@@ -47,10 +59,10 @@ async fn pair(redis: &TestRedis) -> (TestServer, Sibling, String) {
     let b = a.sibling(redis, |_| Config::default()).await;
     let admin = a.key("admin", Access::Admin, &[], None).await;
     // B has not polled: wait until it holds the admin key through Redis.
-    eventually("B knows the admin key", || {
-        b.app.keys().find(&admin).is_some()
-    })
-    .await;
+    eventually!(
+        "B knows the admin key",
+        b.app.find_key(&admin).await.unwrap().is_some()
+    );
     (a, b, admin)
 }
 
@@ -70,9 +82,19 @@ async fn api(method: reqwest::Method, base: &str, path: &str, key: &str, body: s
 async fn revoked_key_is_refused_on_the_other(redis: &TestRedis) {
     let (a, b, admin) = pair(redis).await;
     let key = a.key("reader", Access::Read, &[], None).await;
-    eventually("B knows the new key", || b.app.keys().find(&key).is_some()).await;
+    eventually!(
+        "B knows the new key",
+        b.app.find_key(&key).await.unwrap().is_some()
+    );
 
-    let id = b.app.keys().find(&key).expect("cached").key_id.clone();
+    let id = b
+        .app
+        .find_key(&key)
+        .await
+        .unwrap()
+        .expect("cached")
+        .key_id
+        .clone();
     api(
         reqwest::Method::POST,
         &a.base,
@@ -82,10 +104,10 @@ async fn revoked_key_is_refused_on_the_other(redis: &TestRedis) {
     )
     .await;
 
-    eventually("B refuses the revoked key", || {
-        b.app.keys().find(&key).is_none()
-    })
-    .await;
+    eventually!(
+        "B refuses the revoked key",
+        b.app.find_key(&key).await.unwrap().is_none()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -126,8 +148,10 @@ async fn a_user_deleted_on_one_replica_loses_access_on_the_other() {
     let key = keys::create(&a.db.pool, &new, &AuditActor::cli(), Utc::now())
         .await
         .expect("create alice's key");
-    a.app.poll().await.expect("A's poll");
-    eventually("B knows alice's key", || b.app.keys().find(&key).is_some()).await;
+    eventually!(
+        "B knows alice's key",
+        b.app.find_key(&key).await.unwrap().is_some()
+    );
 
     api(
         reqwest::Method::DELETE,
@@ -138,10 +162,10 @@ async fn a_user_deleted_on_one_replica_loses_access_on_the_other() {
     )
     .await;
 
-    eventually("B no longer finds alice's key", || {
-        b.app.keys().find(&key).is_none()
-    })
-    .await;
+    eventually!(
+        "B no longer finds alice's key",
+        b.app.find_key(&key).await.unwrap().is_none()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -149,10 +173,10 @@ async fn a_team_suspended_on_one_replica_closes_its_catalogs_on_the_other() {
     let redis = TestRedis::start().await;
     let (a, b, admin) = pair(&redis).await;
     let reader = a.key("reader", Access::Read, &[], None).await;
-    eventually("B knows the reader", || {
-        b.app.keys().find(&reader).is_some()
-    })
-    .await;
+    eventually!(
+        "B knows the reader",
+        b.app.find_key(&reader).await.unwrap().is_some()
+    );
     let args = json!({"catalog": "main", "path": "a"});
     let client = tokio::time::timeout(WAIT, async {
         let url = b.mcp_url();
@@ -219,75 +243,288 @@ async fn a_grant_revoked_on_one_replica_is_refused_on_the_other() {
         .expect("a principal")
         .key_id
         .clone();
-    a.app.poll().await.expect("A's poll");
-    eventually("B knows the grant", || {
-        b.app.keys().find_grant(&grant_id).is_some()
-    })
-    .await;
+    eventually!(
+        "B knows the grant",
+        b.app.find_grant(&grant_id).await.unwrap().is_some()
+    );
 
     keys::revoke_by_id(&a.db.pool, &grant_id, &AuditActor::cli(), Utc::now())
         .await
         .expect("revoke the grant");
-    // What `settle` does after a change made through the API.
-    a.app.poll().await.expect("A's poll");
 
-    eventually("B refuses the revoked grant", || {
-        b.app.keys().find_grant(&grant_id).is_none()
-    })
-    .await;
+    eventually!(
+        "B refuses the revoked grant",
+        b.app.find_grant(&grant_id).await.unwrap().is_none()
+    );
 }
 
+// ---- The M16 bridge (milestone 18 spec Decision 14) ----
+// M16 bridge (spec Decision 14): remove in the release after 0.23.
+
+/// What a milestone 16 replica's write looks like from here: `statement`
+/// (bound to `bind`) and an `admin_generation` bump in one transaction, and
+/// no change message, since an M16 replica sends none.
+///
+/// # Returns
+/// The `admin_generation` it committed, which its announcement names.
+async fn write_as_an_m16_replica(pool: &sqlx::PgPool, statements: &[(&'static str, &str)]) -> i64 {
+    let mut tx = pool.begin().await.expect("begin");
+    for (statement, bind) in statements {
+        sqlx::query(*statement)
+            .bind(bind)
+            .execute(&mut *tx)
+            .await
+            .expect("the M16 write");
+    }
+    let generation: i64 = sqlx::query_scalar(
+        "UPDATE server_state SET admin_generation = admin_generation + 1 \
+         RETURNING admin_generation",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .expect("bump admin_generation");
+    tx.commit().await.expect("commit");
+    generation
+}
+
+/// Publishes `payload` on the `admin_generation` channel, as an M16 replica
+/// announces a generation it loaded.
+async fn announce_as_an_m16_replica(redis: &TestRedis, payload: &str) {
+    let handle = support::server::redis_connect(redis).await;
+    let mut connection = handle.connection();
+    let _: i64 = redis::cmd("PUBLISH")
+        .arg(handle.channel(okf_mcp::shared::announce::CHANNEL))
+        .arg(payload)
+        .query_async(&mut connection)
+        .await
+        .expect("publish");
+}
+
+/// The `api_keys.id` of `key`, through A's credential cache.
+async fn key_id(a: &TestServer, key: &str) -> String {
+    a.app
+        .find_key(key)
+        .await
+        .unwrap()
+        .expect("a live key")
+        .key_id
+        .clone()
+}
+
+const REVOKE_KEY: &str = "UPDATE api_keys SET revoked_at = now() WHERE id = $1";
+
+/// Waits until B's announcement subscriber is up and has answered an M16
+/// announcement: a probe key revoked as an M16 replica would is announced
+/// until B refuses it. B's first `Subscribed` catch-up marks every cache
+/// stale too, and it comes before any message, so after this nothing but a
+/// later announcement can make B reread what it caches.
+async fn until_b_hears_m16_announcements(a: &TestServer, b: &Sibling, redis: &TestRedis) {
+    let probe = a.key("probe", Access::Read, &[], None).await;
+    eventually!(
+        "B knows the probe key",
+        b.app.find_key(&probe).await.unwrap().is_some()
+    );
+    let generation =
+        write_as_an_m16_replica(&a.db.pool, &[(REVOKE_KEY, &key_id(a, &probe).await)]).await;
+    // One announcement per attempt, each given 2 s: one still queued at B
+    // when this returns would mark B's caches stale after the caller warmed
+    // them. A first one sent before B subscribed is lost, but then B's
+    // `Subscribed` catch-up refuses the probe.
+    for _ in 0..5 {
+        announce_as_an_m16_replica(redis, &generation.to_string()).await;
+        let heard = tokio::time::timeout(Duration::from_secs(2), async {
+            while b.app.find_key(&probe).await.unwrap().is_some() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+        if heard.is_ok() {
+            return;
+        }
+    }
+    panic!("B's subscriber never answered an M16 announcement");
+}
+
+/// Old writes reach new replicas (spec Decision 14): an M16 replica revokes
+/// a key, suspends the team owning `main` and turns `require_unlock` on, in
+/// one transaction with no change message, then announces its generation.
+/// Catalog rows and credentials live an hour and the poll runs hourly, so
+/// only the announcement can make B reread the credential, the catalog row
+/// and the settings.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_change_still_announces_after_a_non_announcing_reload_saw_it_first() {
+async fn an_m16_replicas_write_reaches_a_new_replica_through_its_announcement() {
     let redis = TestRedis::start().await;
-    let (a, b, _admin) = pair(&redis).await;
-    let key = a.key("reader", Access::Read, &[], None).await;
-    eventually("B knows the key", || b.app.keys().find(&key).is_some()).await;
-    let id = a.app.keys().find(&key).expect("cached").key_id.clone();
-
-    // A change made through the store, as the CLI would: nothing settles yet.
-    keys::revoke_by_id(&a.db.pool, &id, &AuditActor::cli(), Utc::now())
+    let long_lived = |_: &str| Config {
+        catalog_ttl: Duration::from_secs(3600),
+        ..Config::default()
+    };
+    let a = TestServer::start_shared(pg(), &redis, long_lived).await;
+    let b = a.sibling(&redis, long_lived).await;
+    until_b_hears_m16_announcements(&a, &b, &redis).await;
+    let reader = a.key("reader", Access::Read, &[], None).await;
+    let doomed = a.key("doomed", Access::Read, &[], None).await;
+    eventually!(
+        "B knows both keys",
+        b.app.find_key(&reader).await.unwrap().is_some()
+            && b.app.find_key(&doomed).await.unwrap().is_some()
+    );
+    let principal = b.app.find_key(&reader).await.unwrap().expect("reader");
+    assert!(!principal.facts.require_unlock);
+    principal
+        .require_in(b.app.directory(), Access::Read, "main")
         .await
-        .expect("revoke");
-    // A reload that does not announce still loads the new generation.
-    a.app.catch_up_keys().await;
-    assert!(a.app.keys().find(&key).is_none(), "A loaded the change");
-    // The poll `settle` makes next must still announce it.
-    a.app.poll().await.expect("A's poll");
+        .expect("main is open, and its row is cached on B");
 
-    eventually("B refuses the key A's silent reload saw first", || {
-        b.app.keys().find(&key).is_none()
-    })
+    let generation = write_as_an_m16_replica(
+        &a.db.pool,
+        &[
+            (REVOKE_KEY, &key_id(&a, &doomed).await),
+            (
+                "UPDATE teams SET suspended_at = now(), suspension_notice = 'Paused.' \
+                 WHERE name = $1",
+                OWNER,
+            ),
+            (
+                "INSERT INTO server_settings (key, value, updated_at, updated_by) \
+                 VALUES ($1, 'true', now(), 'cli')",
+                "require_unlock",
+            ),
+        ],
+    )
     .await;
+    assert!(
+        b.app.find_key(&doomed).await.unwrap().is_some(),
+        "nothing reached B before the announcement"
+    );
+    principal
+        .require_in(b.app.directory(), Access::Read, "main")
+        .await
+        .expect("B still serves main's cached row");
+
+    announce_as_an_m16_replica(&redis, &generation.to_string()).await;
+
+    // The announcement marks the credentials, then the catalog rows, then
+    // checks the settings: wait for all three.
+    eventually!(
+        "B refuses the revoked key, reads main as suspended and requires unlocks",
+        b.app.find_key(&doomed).await.unwrap().is_none() && {
+            let principal = b.app.find_key(&reader).await.unwrap().expect("reader");
+            principal.facts.require_unlock
+                && matches!(
+                    principal
+                        .require_in(b.app.directory(), Access::Read, "main")
+                        .await,
+                    Err(okf_mcp::error::OkfError::Suspended { .. })
+                )
+        }
+    );
 }
 
-/// Revokes `key` on A through the store and polls A, which announces.
-async fn revoke_on_a(a: &TestServer, key: &str) {
-    let id = a.app.keys().find(key).expect("cached").key_id.clone();
-    keys::revoke_by_id(&a.db.pool, &id, &AuditActor::cli(), Utc::now())
+/// New writes reach old replicas (spec Decision 14), and this is the
+/// announcement half: an administrative HTTP write on A publishes the bridge
+/// payload once it committed. An M16 replica's subscriber reloads on any
+/// payload but its loaded generation, and the bridge's is not a number; its
+/// reload (and its poll) load the change because `admin_generation` moved.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_administrative_http_write_publishes_the_m16_announcement() {
+    let redis = TestRedis::start().await;
+    let (a, _b, admin) = pair(&redis).await;
+    let key = a.key("reader", Access::Read, &[], None).await;
+    let id = key_id(&a, &key).await;
+    let handle = support::server::redis_connect(&redis).await;
+    let mut subscription = handle
+        .subscribe(&handle.channel(okf_mcp::shared::announce::CHANNEL))
         .await
-        .expect("revoke");
-    a.app.poll().await.expect("A's poll");
+        .expect("subscribe");
+    assert_eq!(
+        next_event(&mut subscription).await,
+        okf_mcp::shared::SubscriptionEvent::Subscribed
+    );
+    let before: i64 = sqlx::query_scalar("SELECT admin_generation FROM server_state")
+        .fetch_one(&a.db.pool)
+        .await
+        .expect("admin_generation");
+
+    api(
+        reqwest::Method::POST,
+        &a.base,
+        &format!("/api/v1/keys/{id}/revoke"),
+        &admin,
+        serde_json::Value::Null,
+    )
+    .await;
+
+    let okf_mcp::shared::SubscriptionEvent::Message(payload) = next_event(&mut subscription).await
+    else {
+        panic!("expected an announcement");
+    };
+    assert_eq!(
+        payload,
+        okf_mcp::shared::announce::BRIDGE_PAYLOAD.as_bytes()
+    );
+    assert!(
+        std::str::from_utf8(&payload)
+            .expect("text")
+            .parse::<i64>()
+            .is_err(),
+        "never mistaken for an M16 replica's loaded generation"
+    );
+    let after: i64 = sqlx::query_scalar("SELECT admin_generation FROM server_state")
+        .fetch_one(&a.db.pool)
+        .await
+        .expect("admin_generation");
+    assert!(
+        after > before,
+        "an M16 replica's check finds a new generation"
+    );
+    let revoked: Option<chrono::DateTime<Utc>> =
+        sqlx::query_scalar("SELECT revoked_at FROM api_keys WHERE id = $1")
+            .bind(&id)
+            .fetch_one(&a.db.pool)
+            .await
+            .expect("the key row");
+    assert!(revoked.is_some(), "and reads the revocation");
+}
+
+/// The subscription's next event, within [`WAIT`].
+async fn next_event(
+    subscription: &mut okf_mcp::shared::Subscription,
+) -> okf_mcp::shared::SubscriptionEvent {
+    tokio::time::timeout(WAIT, subscription.next())
+        .await
+        .expect("an event in time")
+        .expect("the stream")
+}
+
+/// Revokes `key` as an M16 replica would, then announces it.
+async fn revoke_as_an_m16_replica(a: &TestServer, redis: &TestRedis, key: &str) {
+    let generation =
+        write_as_an_m16_replica(&a.db.pool, &[(REVOKE_KEY, &key_id(a, key).await)]).await;
+    announce_as_an_m16_replica(redis, &generation.to_string()).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 // Whether B hears the revoke from the resubscribed stream or from its
-// `Subscribed` reload depends on timing; the missed-announcement ordering is
-// pinned by `shared::announce::catch_up_tests`. This one checks the whole
-// server keeps announcing to a subscriber whose connection was killed.
+// `Subscribed` catch-up depends on timing; the missed-announcement ordering
+// is pinned by `shared::announce::catch_up_tests`. This one checks the
+// whole server keeps hearing an M16 replica whose announcement arrives
+// after its subscriber connection was killed.
 async fn a_subscriber_whose_connection_is_killed_still_learns_of_a_revoke() {
     let redis = TestRedis::start().await;
     let (a, b, _admin) = pair(&redis).await;
     let key = a.key("reader", Access::Read, &[], None).await;
-    eventually("B knows the key", || b.app.keys().find(&key).is_some()).await;
+    eventually!(
+        "B knows the key",
+        b.app.find_key(&key).await.unwrap().is_some()
+    );
 
     kill_pubsub_connections(&redis).await;
-    revoke_on_a(&a, &key).await;
+    revoke_as_an_m16_replica(&a, &redis, &key).await;
 
-    eventually("B refuses the key after resubscribing", || {
-        b.app.keys().find(&key).is_none()
-    })
-    .await;
+    eventually!(
+        "B refuses the key after resubscribing",
+        b.app.find_key(&key).await.unwrap().is_none()
+    );
 }
 
 /// `CLIENT KILL TYPE pubsub`: ends every subscriber connection.
@@ -311,10 +548,10 @@ async fn session_pair(redis: &TestRedis, config: Config) -> (TestServer, Sibling
     let a = TestServer::start_shared(pg(), redis, |_| config.clone()).await;
     let b = a.sibling(redis, |_| config.clone()).await;
     let key = a.key("reader", Access::Read, &[], Some("main")).await;
-    eventually("B knows the reader key", || {
-        b.app.keys().find(&key).is_some()
-    })
-    .await;
+    eventually!(
+        "B knows the reader key",
+        b.app.find_key(&key).await.unwrap().is_some()
+    );
     (a, b, key)
 }
 
@@ -399,10 +636,10 @@ async fn another_key_on_that_session_is_refused_on_either_replica() {
     let redis = TestRedis::start().await;
     let (a, b, owner) = session_pair(&redis, Config::default()).await;
     let intruder = a.key("intruder", Access::Read, &[], Some("main")).await;
-    eventually("B knows the intruder key", || {
-        b.app.keys().find(&intruder).is_some()
-    })
-    .await;
+    eventually!(
+        "B knows the intruder key",
+        b.app.find_key(&intruder).await.unwrap().is_some()
+    );
     let session = open_ready(&a.mcp_url(), &owner).await;
 
     let mut refusals = Vec::new();
@@ -456,14 +693,21 @@ async fn a_revoked_keys_session_is_refused_on_every_replica() {
     let redis = TestRedis::start().await;
     let (a, b, admin) = pair(&redis).await;
     let key = a.key("reader", Access::Read, &[], Some("main")).await;
-    eventually("B knows the reader key", || {
-        b.app.keys().find(&key).is_some()
-    })
-    .await;
+    eventually!(
+        "B knows the reader key",
+        b.app.find_key(&key).await.unwrap().is_some()
+    );
     let session = open_ready(&a.mcp_url(), &key).await;
     assert_eq!(tools_list(&b.mcp_url(), &key, &session).await, 200);
 
-    let id = a.app.keys().find(&key).expect("cached").key_id.clone();
+    let id = a
+        .app
+        .find_key(&key)
+        .await
+        .unwrap()
+        .expect("cached")
+        .key_id
+        .clone();
     api(
         reqwest::Method::POST,
         &a.base,
@@ -472,10 +716,10 @@ async fn a_revoked_keys_session_is_refused_on_every_replica() {
         serde_json::Value::Null,
     )
     .await;
-    eventually("B refuses the revoked key", || {
-        b.app.keys().find(&key).is_none()
-    })
-    .await;
+    eventually!(
+        "B refuses the revoked key",
+        b.app.find_key(&key).await.unwrap().is_none()
+    );
 
     assert_eq!(tools_list(&a.mcp_url(), &key, &session).await, 401);
     assert_eq!(tools_list(&b.mcp_url(), &key, &session).await, 401);
@@ -533,10 +777,10 @@ async fn delete_ends_the_session_everywhere() {
     let redis = TestRedis::start().await;
     let (a, b, owner) = session_pair(&redis, Config::default()).await;
     let intruder = a.key("intruder", Access::Read, &[], Some("main")).await;
-    eventually("B knows the intruder key", || {
-        b.app.keys().find(&intruder).is_some()
-    })
-    .await;
+    eventually!(
+        "B knows the intruder key",
+        b.app.find_key(&intruder).await.unwrap().is_some()
+    );
     let handle = support::server::redis_connect(&redis).await;
 
     // Another key's DELETE on B is refused and releases nothing.
@@ -747,7 +991,7 @@ async fn until_index_reads(client: &support::server::Client, text: &str) -> bool
 }
 
 /// Issue #659's acceptance criterion on two real servers with
-/// `poll_interval = 1h`: a publish on A propagates to B well within it (a
+/// `catalog_ttl = 1h`: a publish on A propagates to B well within it (a
 /// bounded wait, not a first-read guarantee). B's
 /// subscriber answers events in order, so once B reads the first publish
 /// (by its announcement or by the catch-up when B subscribed), the second
@@ -758,10 +1002,10 @@ async fn a_publish_on_one_replica_propagates_to_the_other_promptly() {
     let a = TestServer::start_shared(indexed(), &redis, |_| Config::default()).await;
     let b = a.sibling(&redis, |_| Config::default()).await;
     let writer = a.key("writer", Access::Write, &[], Some("main")).await;
-    eventually("B knows the writer", || {
-        b.app.keys().find(&writer).is_some()
-    })
-    .await;
+    eventually!(
+        "B knows the writer",
+        b.app.find_key(&writer).await.unwrap().is_some()
+    );
     let on_a = a.client(&writer, None).await.expect("a client on A");
     let on_b = tokio::time::timeout(WAIT, a.client_at(&writer, &b.mcp_url(), &[]))
         .await
@@ -777,5 +1021,267 @@ async fn a_publish_on_one_replica_propagates_to_the_other_promptly() {
     assert!(
         second,
         "the second publish reached B through its announcement"
+    );
+}
+
+/// Two serving replicas, both ticking and both running the housekeeping
+/// worker (issue #693): each task's first slot is scheduled once in the
+/// cluster and run once, by whichever worker took it, and the
+/// `cluster_stats` row it writes is there for both replicas' gauges.
+#[tokio::test(flavor = "multi_thread")]
+async fn housekeeping_runs_each_slot_once_across_two_serving_replicas() {
+    let redis = TestRedis::start().await;
+    let a = TestServer::start_shared_serving(pg(), &redis, |_| Config::default(), true).await;
+    let b = a.sibling_serving(&redis, |_| Config::default(), true).await;
+    let pool = a.db.pool.clone();
+    let tasks = okf_mcp::housekeeping::Task::ALL;
+
+    // Both tickers pushed every task's current slot at start-up. The
+    // workers poll every 10 seconds, so allow a few polls; wait too until
+    // both workers have registered.
+    let done = tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            let finished: i64 = sqlx::query_scalar(
+                "SELECT count(DISTINCT split_part(idempotency_key, ':', 1)) FROM apalis.jobs \
+                 WHERE job_type = $1 AND status = 'Done'",
+            )
+            .bind(okf_mcp::housekeeping::QUEUE)
+            .fetch_one(&pool)
+            .await
+            .expect("count the finished jobs");
+            // Each worker registers once it starts polling, which can be
+            // after the other has already run every job.
+            let workers: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM apalis.workers WHERE worker_type = $1")
+                    .bind(okf_mcp::housekeeping::QUEUE)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("count the workers");
+            if finished == tasks.len() as i64 && workers == 2 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await;
+    let jobs: Vec<(String, String, i32)> = sqlx::query_as(
+        "SELECT idempotency_key, status, attempts FROM apalis.jobs \
+         WHERE job_type = $1 ORDER BY idempotency_key",
+    )
+    .bind(okf_mcp::housekeeping::QUEUE)
+    .fetch_all(&pool)
+    .await
+    .expect("list the jobs");
+    let workers: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM apalis.workers WHERE worker_type = $1")
+            .bind(okf_mcp::housekeeping::QUEUE)
+            .fetch_one(&pool)
+            .await
+            .expect("count the workers");
+    let stats = okf_mcp::housekeeping::read_stats(&pool)
+        .await
+        .expect("read the cluster stats");
+    drop(b);
+    drop(a);
+
+    assert!(done.is_ok(), "every task ran within the wait: {jobs:?}");
+    assert_eq!(workers, 2, "each replica runs a housekeeping worker");
+    for task in tasks {
+        let slots: Vec<&(String, String, i32)> = jobs
+            .iter()
+            .filter(|(key, ..)| key.starts_with(&format!("{}:", task.as_str())))
+            .collect();
+        // Within a minute or two only `cluster_stats` can reach a second slot.
+        assert!(!slots.is_empty(), "{task:?}: {jobs:?}");
+        assert!(slots.len() <= 3, "{task:?}: {jobs:?}");
+        assert!(
+            slots
+                .iter()
+                .all(|(_, status, attempts)| status != "Done" || *attempts == 1),
+            "a finished slot ran once: {jobs:?}"
+        );
+    }
+    assert!(stats.is_some(), "the cluster_stats job wrote its row");
+}
+
+// ---- The change feed (milestone 18 Task 2) ----
+
+/// A catalog imported through the store on the pool, as `okf-mcp import`
+/// does, announces nothing over Redis: both replicas serve the new
+/// generation because the import's transaction sent a `catalog` `NOTIFY`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_catalog_imported_through_the_store_is_served_on_both_replicas() {
+    let redis = TestRedis::start().await;
+    let (a, b, _admin) = pair(&redis).await;
+    let before = a
+        .app
+        .catalog("main")
+        .await
+        .unwrap()
+        .expect("main")
+        .current()
+        .generation();
+    let audit = AuditActor::cli();
+    let options = okf_mcp::store::import::ImportOptions {
+        replace: true,
+        scope: okf_mcp::store::import::ImportScope::Everything,
+        expect_generation: None,
+        expect_catalog_id: None,
+        actor: "test/import",
+        audit: &audit,
+        now: Utc::now(),
+    };
+    let report = okf_mcp::store::import::import(
+        &a.db.pool,
+        "main",
+        files(&[("b.md", "---\ntype: Note\n---\n# B\n")]),
+        &options,
+    )
+    .await
+    .expect("import");
+    let generation = report.changed.expect("the import wrote").generation;
+    assert!(generation > before);
+
+    // Each replica's own lookup: the row its directory holds, and the
+    // snapshot its cache serves for that row.
+    async fn at(app: &okf_mcp::app::App, generation: i64) -> bool {
+        app.catalog("main")
+            .await
+            .unwrap()
+            .is_some_and(|state| state.current().generation() == generation)
+    }
+    eventually!(
+        "A serves the imported generation",
+        at(&a.app, generation).await
+    );
+    eventually!(
+        "B serves the imported generation",
+        at(&b.app, generation).await
+    );
+}
+
+/// A catalog created through the store on one replica's pool, as
+/// `okf-mcp catalog create` does, is readable on the other with no poll and
+/// no Redis announcement: the create's `catalog_meta` `NOTIFY` makes B's
+/// directory forget that the name was absent, and the catalog loads on its
+/// first read there.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_catalog_created_on_one_replica_is_readable_on_the_other() {
+    let redis = TestRedis::start().await;
+    let (a, b, admin) = pair(&redis).await;
+    // B looks for it first, so its directory remembers that it is absent.
+    assert!(b.app.catalog("notes").await.unwrap().is_none());
+
+    let new = okf_mcp::store::catalogs::NewCatalog {
+        name: "notes",
+        display_name: &okf_mcp::labels::DisplayName::default(),
+        description: "",
+        owner_team: OWNER,
+    };
+    okf_mcp::store::catalogs::create(&a.db.pool, &new, &AuditActor::cli(), Utc::now())
+        .await
+        .expect("create notes");
+
+    async fn readable(app: &okf_mcp::app::App) -> bool {
+        app.catalog("notes").await.unwrap().is_some()
+    }
+    eventually!("B serves the new catalog", readable(&b.app).await);
+    // And over MCP, through B's tool path.
+    let client = tokio::time::timeout(WAIT, async {
+        let url = b.mcp_url();
+        a.client_at(&admin, &url, &[]).await
+    })
+    .await
+    .expect("connecting to B in time")
+    .expect("a client on B");
+    let read = call(
+        &client,
+        "read_document",
+        json!({"catalog": "notes", "path": "/index.md"}),
+    )
+    .await;
+    assert_ne!(
+        read.is_error,
+        Some(true),
+        "B reads the new catalog: {read:?}"
+    );
+}
+
+/// Revokes `key` through the store on the pool, as `okf-mcp key revoke`
+/// does: no `settle`, no poll, no Redis announcement.
+async fn revoke_through_the_store(a: &TestServer, key: &str) {
+    let id = a
+        .app
+        .find_key(key)
+        .await
+        .unwrap()
+        .expect("cached")
+        .key_id
+        .clone();
+    keys::revoke_by_id(&a.db.pool, &id, &AuditActor::cli(), Utc::now())
+        .await
+        .expect("revoke");
+}
+
+/// The case milestone 16 could not cover without the poll: a revocation
+/// made outside any server reaches both replicas through `NOTIFY` alone.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_key_revoked_through_the_store_is_refused_on_the_other_replica() {
+    let redis = TestRedis::start().await;
+    let (a, b, _admin) = pair(&redis).await;
+    let key = a.key("reader", Access::Read, &[], None).await;
+    eventually!(
+        "B knows the key",
+        b.app.find_key(&key).await.unwrap().is_some()
+    );
+
+    revoke_through_the_store(&a, &key).await;
+
+    eventually!(
+        "B refuses the key",
+        b.app.find_key(&key).await.unwrap().is_none()
+    );
+    eventually!(
+        "A refuses the key",
+        a.app.find_key(&key).await.unwrap().is_none()
+    );
+}
+
+/// Ends every change-feed `LISTEN` backend of the test's database (both
+/// replicas'), as a dropped connection would.
+///
+/// # Returns
+/// How many it ended.
+async fn kill_listener_connections(pool: &sqlx::PgPool) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+         WHERE query LIKE 'LISTEN%' AND query LIKE '%okf_invalidate%' \
+               AND datname = current_database() AND pid <> pg_backend_pid()) t",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("end the listener backends")
+}
+
+/// A listener whose connection was killed reconnects and catches up, so a
+/// revocation made through the store right after is still refused on B,
+/// whether B hears its `NOTIFY` or reads it in the catch-up.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_killed_listener_connection_reloads_on_reconnect() {
+    let redis = TestRedis::start().await;
+    let (a, b, _admin) = pair(&redis).await;
+    let key = a.key("reader", Access::Read, &[], None).await;
+    eventually!(
+        "B knows the key",
+        b.app.find_key(&key).await.unwrap().is_some()
+    );
+
+    let ended = kill_listener_connections(&a.db.pool).await;
+    assert!(ended >= 1, "at least B's listener backend was ended");
+    revoke_through_the_store(&a, &key).await;
+
+    eventually!(
+        "B refuses the key after reconnecting",
+        b.app.find_key(&key).await.unwrap().is_none()
     );
 }
