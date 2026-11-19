@@ -24,7 +24,7 @@ mod restructure;
 pub(crate) mod search;
 #[cfg(test)]
 pub(crate) mod testing;
-mod writes;
+pub(crate) mod writes;
 
 use std::sync::Arc;
 

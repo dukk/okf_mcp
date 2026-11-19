@@ -28,7 +28,7 @@ use crate::http;
 use crate::labels::DisplayName;
 use crate::shared::announce::announce_from_cli;
 use crate::store::audit::AuditActor;
-use crate::store::catalogs;
+use crate::store::catalogs::{self, CatalogGeneration};
 use crate::store::ceiling::MemberAccess;
 use crate::store::export;
 use crate::store::import::{self, ImportOptions, ImportScope};
@@ -38,6 +38,7 @@ use crate::store::repair;
 use crate::store::settings::SettingKey;
 use crate::store::teams::Role;
 use crate::store::unlocks::Category;
+use crate::telemetry::metrics::Metrics;
 use crate::telemetry::subscriber::split_event;
 use crate::telemetry::{self, StartUp, Telemetry};
 
@@ -918,6 +919,9 @@ async fn dispatch(
     clock: Arc<dyn Clock>,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> anyhow::Result<()> {
+    // The catalog generations the command committed (an import or a
+    // repair), announced with the rest after it succeeds (issue #659).
+    let mut changed: Vec<CatalogGeneration> = Vec::new();
     // `unwrap_or_else` builds the default only when no subcommand was given.
     match cli
         .command
@@ -946,7 +950,12 @@ async fn dispatch(
         }
         Command::Catalog(command) => {
             let pool = connect(cli.database_url.as_deref(), &config).await?;
-            run_catalog(&pool, command, clock.as_ref()).await?;
+            let ran = run_catalog(&pool, command, clock.as_ref(), &mut changed).await;
+            if ran.is_err() {
+                // What it committed before failing is announced all the same.
+                announce_from_cli(&config, env, &Metrics::global(), &changed, false).await;
+            }
+            ran?;
         }
         Command::Key(command) => {
             let pool = connect(cli.database_url.as_deref(), &config).await?;
@@ -1028,6 +1037,7 @@ async fn dispatch(
                 now: clock.now(),
             };
             let report = import::import(&pool, &catalog, files, &options).await?;
+            changed.extend(report.changed);
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Command::Export { catalog, output } => {
@@ -1057,7 +1067,7 @@ async fn dispatch(
     // Every command that got here succeeded. Read-only ones announce too: it
     // costs each instance one row read, and a list of the mutating commands
     // would go stale.
-    announce_from_cli(&config, env, &crate::telemetry::metrics::Metrics::global()).await;
+    announce_from_cli(&config, env, &Metrics::global(), &changed, true).await;
     Ok(())
 }
 
@@ -1237,6 +1247,9 @@ fn describe_details_change(
 /// * `pool` - the migrated database.
 /// * `command` - which catalog subcommand.
 /// * `clock` - the source of `created_at`.
+/// * `changed` - gets each catalog generation the command committed
+///   (`repair-indexes`), for the announcement (issue #659), even when the
+///   command then fails.
 ///
 /// # Errors
 /// The store's refusal or database error.
@@ -1245,6 +1258,7 @@ async fn run_catalog(
     pool: &PgPool,
     command: CatalogCommand,
     clock: &dyn Clock,
+    changed: &mut Vec<CatalogGeneration>,
 ) -> anyhow::Result<()> {
     match command {
         CatalogCommand::Create {
@@ -1329,7 +1343,10 @@ async fn run_catalog(
                 audit: &audit,
                 now: clock.now(),
             };
-            print!("{}", repair_catalogs(pool, &targets, &options).await?);
+            print!(
+                "{}",
+                repair_catalogs(pool, &targets, &options, changed).await?
+            );
         }
     }
     Ok(())
@@ -1379,6 +1396,7 @@ async fn repair_targets(
 /// * `pool` - the migrated database.
 /// * `targets` - the catalogs.
 /// * `options` - dry run, actor and time.
+/// * `changed` - gets the generation of each catalog a repair wrote.
 ///
 /// # Returns
 /// The report: per catalog its summary, the files written (or that would
@@ -1392,6 +1410,7 @@ async fn repair_catalogs(
     pool: &PgPool,
     targets: &[String],
     options: &repair::RepairOptions<'_>,
+    changed: &mut Vec<CatalogGeneration>,
 ) -> anyhow::Result<String> {
     let mut out = String::new();
     let mut failures = Vec::new();
@@ -1407,6 +1426,8 @@ async fn repair_catalogs(
                 if !report.written.is_empty() {
                     repaired += 1;
                 }
+                // `Vec::extend` with an `Option` adds its one value, if any.
+                changed.extend(report.changed);
                 out.push_str(&format!("{name}{mode}: {}\n", report.message));
                 for path in &report.written {
                     out.push_str(&format!("  {path}\n"));
@@ -2814,13 +2835,15 @@ mod tests {
         let (targets, none_skipped) = repair_targets(&db.pool, Vec::new(), true).await.unwrap();
         let named = vec!["fresh".into(), "old".into(), "typo".into()];
         let (filtered, skipped) = repair_targets(&db.pool, named, true).await.unwrap();
-        let dry = repair_catalogs(&db.pool, &targets, &options(true))
+        let mut changed = Vec::new();
+        let dry = repair_catalogs(&db.pool, &targets, &options(true), &mut changed)
             .await
             .unwrap();
         let still_missing = repair_targets(&db.pool, Vec::new(), true).await.unwrap().0;
         // A failing catalog in the middle of a batch stops neither neighbour.
         let batch = ["old".to_string(), "nope".to_string(), "other".to_string()];
-        let mixed = repair_catalogs(&db.pool, &batch, &options(false))
+        let dry_changed = std::mem::take(&mut changed);
+        let mixed = repair_catalogs(&db.pool, &batch, &options(false), &mut changed)
             .await
             .unwrap_err()
             .to_string();
@@ -2845,6 +2868,19 @@ mod tests {
             "{mixed}"
         );
         assert!(after.is_empty(), "{after:?}");
+        assert!(
+            dry_changed.is_empty(),
+            "a dry run commits nothing to announce"
+        );
+        let ids: Vec<i64> = changed.iter().map(|change| change.catalog_id).collect();
+        let expected = vec![
+            catalogs::find(&db.pool, "old").await.unwrap().id,
+            catalogs::find(&db.pool, "other").await.unwrap().id,
+        ];
+        assert_eq!(
+            ids, expected,
+            "both repairs are announced, the failure is not"
+        );
     }
 
     #[test]
@@ -3220,6 +3256,79 @@ mod tests {
         // One message only: the next wait finds nothing.
         let more = tokio::time::timeout(Duration::from_millis(300), subscription.next()).await;
         assert!(more.is_err(), "a second announcement arrived");
+    }
+
+    /// `okf-mcp import` on a database two replicas serve announces the
+    /// catalog's new generation: B refreshes its snapshot without a poll
+    /// (issue #659). B's subscriber handles events in order, so once B has
+    /// the first import (through its announcement or the catch-up on
+    /// subscribing), the second can reach it only through its announcement.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_import_on_the_command_line_is_announced_to_the_serving_replicas() {
+        const WAIT: Duration = Duration::from_secs(10);
+        let (first, b, server) = tokio::time::timeout(
+            Duration::from_secs(120),
+            crate::mcp::testing::replica_pair(
+                &[("pg", &[("index.md", "# PG\n")])],
+                Config::default(),
+            ),
+        )
+        .await
+        .expect("starting two replicas within 120 s");
+        let (shutdown, listener) = crate::shared::testing::listening_for_catalogs(&b).await;
+        let clock = fixed_now();
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.redis = Some(crate::shared::testing::config(&server));
+        let holds = |text: &str| {
+            b.catalog("pg")
+                .and_then(|state| state.current().workspace().stored("index.md"))
+                .is_some_and(|file| file.content.ends_with(text.as_bytes()))
+        };
+        let mut reached = Vec::new();
+
+        for text in ["First.\n", "Imported.\n"] {
+            let tarball = dir.path().join("pg.tar.gz");
+            let content = format!("# PG\n\n{text}");
+            let index = archive::ExportFile {
+                path: "index.md",
+                content: content.as_bytes(),
+                executable: false,
+                modified: clock.now(),
+            };
+            archive::write_tarball(File::create(&tarball).unwrap(), &[index]).unwrap();
+            let import = Command::Import {
+                catalog: "pg".to_string(),
+                source: tarball,
+                replace: true,
+                only_machinery: false,
+                expect_generation: None,
+                actor: "test".to_string(),
+            };
+            dispatch(
+                cli(Some(first.db_url().to_string()), import),
+                config.clone(),
+                None,
+                Arc::clone(&clock),
+                &server.env(),
+            )
+            .await
+            .unwrap();
+            let refreshed = tokio::time::timeout(WAIT, async {
+                while !holds(text) {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await;
+            reached.push(refreshed.is_ok());
+        }
+        shutdown.cancel();
+        tokio::time::timeout(WAIT, listener)
+            .await
+            .expect("the subscriber stops")
+            .expect("the subscriber's task");
+
+        assert_eq!(reached, [true, true], "B refreshed after each import");
     }
 
     #[tokio::test(flavor = "multi_thread")]

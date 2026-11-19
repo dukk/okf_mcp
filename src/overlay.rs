@@ -38,6 +38,11 @@ pub struct Overlay {
     dirty: BTreeSet<String>,
     // The base's commit times with `dirty` marked uncommitted, made once.
     commit_times: CommitTimes,
+    // Whether `base` is older than some entry's base revision (an entry made
+    // on a replica whose snapshot had moved on, issue #659). A write's
+    // `get_in` may cache such an overlay, since it cannot refresh on its
+    // connection; a read never reuses it (`Overlays::get`).
+    behind_entries: bool,
 }
 
 impl Overlay {
@@ -160,6 +165,14 @@ pub async fn build_overlay(
     // Owned, so the blocking closure can take it: errors name the handle,
     // which is what a client knows the changeset by (M8 Decision 1).
     let handle = changeset.handle.clone();
+    // Before `entries` moves: whether any entry was made on a newer revision
+    // than `base` holds (or on a path `base` lacks), as
+    // `CatalogState::current_covering` decides it.
+    let behind_entries = entries.iter().any(|entry| {
+        entry
+            .base_revision
+            .is_some_and(|wanted| base.revision(&entry.path).is_none_or(|have| have < wanted))
+    });
     // `move` hands `base` and `entries` to the blocking thread, which must
     // own what it reads.
     blocking(move || {
@@ -189,6 +202,7 @@ pub async fn build_overlay(
             snapshot,
             dirty,
             commit_times,
+            behind_entries,
         })
     })
     .await
@@ -307,7 +321,12 @@ impl Overlays {
         state: &CatalogState,
         changeset: &ChangesetRow,
     ) -> Result<Arc<Overlay>, OkfError> {
-        if let Some(overlay) = self.lookup(changeset, state.current().generation(), Instant::now())
+        // A cached overlay built on a snapshot behind its entries (a write's
+        // `get_in` on a lagging replica caches one, even when the write is
+        // then refused) is not reused: the build below refreshes first.
+        if let Some(overlay) = self
+            .lookup(changeset, state.current().generation(), Instant::now())
+            .filter(|overlay| !overlay.behind_entries)
         {
             return Ok(overlay);
         }
@@ -320,7 +339,26 @@ impl Overlays {
         let _building = self.builds.lock(changeset.id).await;
         // Read the state again: a build that finished while this one waited
         // may be the overlay wanted, and the published state may have moved.
-        self.lookup_or_build(pool, state, changeset).await
+        let now = Instant::now();
+        if let Some(overlay) = self
+            .lookup(changeset, state.current().generation(), now)
+            .filter(|overlay| !overlay.behind_entries)
+        {
+            return Ok(overlay);
+        }
+        let entries = changesets::entries(pool, changeset.id).await?;
+        // Unlike `get_in`, a read may take a second connection: so before
+        // building, bring a snapshot that is behind the entries' bases up to
+        // date (an entry made on another replica, issue #659). Otherwise the
+        // paths the changeset does not touch would show older text than the
+        // entries were made on.
+        let bases = entries
+            .iter()
+            .map(|entry| (entry.path.as_str(), entry.base_revision));
+        let base = state.current_covering(pool, bases).await?;
+        let overlay = Arc::new(build_overlay(base, changeset, entries).await?);
+        self.store(Arc::clone(&overlay), now);
+        Ok(overlay)
     }
 
     /// As [`Overlays::get`], for a write that holds a connection (its

@@ -578,6 +578,10 @@ async fn import_catalog(
         // a committed import whose client disconnects (dropping this future)
         // during the refresh; a disconnect during `import` itself drops its
         // transaction, which rolls back, and nothing is imported.
+        // Committed: tell the other replicas, on its own task (issue #659).
+        if let Some(change) = report.changed {
+            app.announce_catalog(change);
+        }
         if let Some(state) = app.catalog(&name) {
             if let Err(error) = state.refresh(app.pool()).await {
                 split_event!(

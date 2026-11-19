@@ -661,6 +661,12 @@ pub async fn serve(
         Arc::clone(&app),
         shutdown.clone(),
     ));
+    // Refreshes a catalog's snapshot on every catalog generation
+    // announcement (issue #659); ends at once without `[redis]`.
+    let catalog_announcements = tokio::spawn(crate::shared::announce::listen_catalogs(
+        Arc::clone(&app),
+        shutdown.clone(),
+    ));
     let clock_checker = tokio::spawn(Arc::clone(&app).check_clock_until(shutdown.clone()));
     // The mail worker (Task 6), unless this process only enqueues.
     // `bool::then` runs the closure only for `true`, giving an `Option`.
@@ -698,6 +704,14 @@ pub async fn serve(
             {},
             { %error, },
             "the announcement subscriber panicked"
+        );
+    }
+    if let Err(error) = catalog_announcements.await {
+        split_event!(
+            error,
+            {},
+            { %error, },
+            "the catalog announcement subscriber panicked"
         );
     }
     if let Err(error) = clock_checker.await {

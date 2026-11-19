@@ -673,3 +673,109 @@ async fn a_redis_failure_after_admission_answers_503_not_404() {
     assert_eq!(failed, 503, "retryable, not rmcp's 404");
     assert_eq!(retried, 200, "the session was there all along");
 }
+
+/// One `pg`-like catalog that publishes cleanly: a root index, a folder
+/// index and one concept.
+fn indexed() -> Vec<(&'static str, Files)> {
+    vec![(
+        "main",
+        files(&[
+            (
+                "index.md",
+                "# Main\n\n# Sections\n\n* [Infra](/infra/index.md) - systems\n",
+            ),
+            (
+                "infra/index.md",
+                "# Infra\n\n# Concepts\n\n* [X](x.md) - x\n",
+            ),
+            (
+                "infra/x.md",
+                "---\ntype: Note\ntitle: X\ndescription: X.\n---\n# X\n",
+            ),
+        ]),
+    )]
+}
+
+/// Opens a changeset on `client`, replaces `old` with `new` in
+/// `/index.md`, and publishes.
+async fn publish_index_edit(client: &support::server::Client, old: &str, new: &str) {
+    let handle = support::server::open_changeset(client, Some("main")).await;
+    let edited = call(
+        client,
+        "edit_document",
+        json!({"path": "/index.md", "old_str": old, "new_str": new, "changeset": handle}),
+    )
+    .await;
+    support::server::structured(&edited);
+    let published = call(
+        client,
+        "publish",
+        json!({"message": "test", "changeset": handle}),
+    )
+    .await;
+    assert_eq!(
+        support::server::structured(&published)["published"],
+        json!(true),
+        "{published:?}"
+    );
+}
+
+/// Waits (bounded by [`WAIT`]) until `read_document` of `/index.md` on
+/// `client` contains `text`. Propagation is asynchronous and best effort, so
+/// this checks the change arrives promptly, not that the first read is fresh.
+async fn until_index_reads(client: &support::server::Client, text: &str) -> bool {
+    tokio::time::timeout(WAIT, async {
+        loop {
+            let read = call(
+                client,
+                "read_document",
+                json!({"path": "/index.md", "catalog": "main"}),
+            )
+            .await;
+            let body = support::server::structured(&read)["text"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            if body.contains(text) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
+/// Issue #659's acceptance criterion on two real servers with
+/// `poll_interval = 1h`: a publish on A propagates to B well within it (a
+/// bounded wait, not a first-read guarantee). B's
+/// subscriber answers events in order, so once B reads the first publish
+/// (by its announcement or by the catch-up when B subscribed), the second
+/// can reach B only by its announcement.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_publish_on_one_replica_propagates_to_the_other_promptly() {
+    let redis = TestRedis::start().await;
+    let a = TestServer::start_shared(indexed(), &redis, |_| Config::default()).await;
+    let b = a.sibling(&redis, |_| Config::default()).await;
+    let writer = a.key("writer", Access::Write, &[], Some("main")).await;
+    eventually("B knows the writer", || {
+        b.app.keys().find(&writer).is_some()
+    })
+    .await;
+    let on_a = a.client(&writer, None).await.expect("a client on A");
+    let on_b = tokio::time::timeout(WAIT, a.client_at(&writer, &b.mcp_url(), &[]))
+        .await
+        .expect("connecting to B in time")
+        .expect("a client on B");
+
+    publish_index_edit(&on_a, "- systems", "- the systems").await;
+    let first = until_index_reads(&on_b, "the systems").await;
+    publish_index_edit(&on_a, "- the systems", "- all systems").await;
+    let second = until_index_reads(&on_b, "all systems").await;
+
+    assert!(first, "the first publish reached B within the wait");
+    assert!(
+        second,
+        "the second publish reached B through its announcement"
+    );
+}

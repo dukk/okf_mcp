@@ -32,6 +32,13 @@ pub(crate) struct TestApp {
     _db: TestDb,
 }
 
+impl TestApp {
+    /// The test database's URL, for a command-line run against it.
+    pub(crate) fn db_url(&self) -> &str {
+        &self._db.url
+    }
+}
+
 /// Creates each catalog, imports its files now, and loads the app with the
 /// system clock.
 ///

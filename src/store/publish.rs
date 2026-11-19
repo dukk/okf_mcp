@@ -32,7 +32,7 @@ use crate::okf::rules;
 use crate::okf::snapshot::Snapshot;
 use crate::overlay::{build_overlay, Overlay};
 use crate::store::audit::{self, Action, AuditActor, Entry, People, Target};
-use crate::store::catalogs::{self, is_unique_violation};
+use crate::store::catalogs::{self, is_unique_violation, CatalogGeneration};
 use crate::store::changesets::{self, ChangesetRow, ChangesetState, EntryRow};
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
 use crate::telemetry::metrics::Outcome;
@@ -252,7 +252,7 @@ async fn publish_locked(
         now,
     };
     // `tx` moves into the block (it is consumed by `commit`); the rest is borrowed.
-    let revisions = async {
+    let (revisions, changed) = async {
         let revisions = match write_all(&mut tx, &publication, &overlay, &current, &paths).await {
             Ok(revisions) => revisions,
             // The backstop's conflict: roll back first, so the re-read below
@@ -265,7 +265,9 @@ async fn publish_locked(
             Err(error) => return Err(error),
         };
         // A publish that wrote no revision changed no document: it is not a
-        // catalog write, so it bumps nothing and records nothing.
+        // catalog write, so it bumps nothing, records nothing and announces
+        // nothing.
+        let mut changed = None;
         if !revisions.is_empty() {
             let generation: i64 = sqlx::query_scalar(
             "UPDATE catalogs SET generation = generation + 1 WHERE id = $1 RETURNING generation",
@@ -288,13 +290,23 @@ async fn publish_locked(
                 }),
             };
             audit::record(&mut tx, audit, &entry, now).await?;
+            changed = Some(CatalogGeneration {
+                catalog_id: state.id(),
+                generation,
+            });
         }
         changesets::set_state(&mut tx, locked.id, ChangesetState::Published, now).await?;
         tx.commit().await?;
-        Ok::<_, OkfError>(revisions)
+        Ok::<_, OkfError>((revisions, changed))
     }
     .instrument(tracing::info_span!("okf.publish.write"))
     .await?;
+    // Committed, so another replica that reads now sees it: announce it, on
+    // its own task (issue #659). Never before the commit, or a replica could
+    // refresh to the old generation and skip this one's announcement.
+    if let Some(change) = changed {
+        app.announce_catalog(change);
+    }
 
     // Step 6, still under the in-process lock (the advisory lock ended with
     // the transaction): the next publish of this catalog checks against

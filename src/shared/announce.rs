@@ -1,9 +1,20 @@
-//! `admin_generation` announcements (spec Decision 12): the instance whose
-//! reload saw a bump publishes it; every instance's subscriber reloads.
+//! Redis pub/sub announcements, on two channels.
+//!
+//! - `admin_generation` (spec Decision 12): the instance whose reload saw a
+//!   bump publishes it; every instance's subscriber reloads its key cache.
+//! - Catalog generations (issue #659): after a publish, an import or a
+//!   repair commits, the writer publishes `<catalog id> <generation>`; every
+//!   instance's subscriber refreshes that catalog's snapshot
+//!   ([`App::apply_catalog_announcement`]), so other replicas normally pick
+//!   the write up well before their poll. Best effort: the writer does not
+//!   wait for the publish or for anyone's refresh, so this is prompt
+//!   eventual consistency, not read-your-writes.
 //!
 //! Messages are not stored: one sent while an instance is not subscribed is
-//! lost. So the subscriber reloads once after every (re)subscribe, and the
-//! poll loop stays as the backstop.
+//! lost. So each subscriber catches up once after every (re)subscribe, and
+//! the poll loop stays as the backstop. Both subscribers share one loop
+//! (`run`): the same reconnect, backoff and grace, with a `Handler`
+//! saying what a message and a resubscribe do.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,10 +25,13 @@ use tokio_util::sync::CancellationToken;
 use crate::app::App;
 use crate::config::Config;
 use crate::shared::{Redis, SubscriptionEvent};
+use crate::store::catalogs::CatalogGeneration;
 use crate::telemetry::metrics::{Metrics, RedisOp};
 
-/// The channel's name under the prefix.
+/// The `admin_generation` channel's name under the prefix.
 pub const CHANNEL: &str = "admin-generation";
+/// The catalog generation channel's name under the prefix.
+pub const CATALOG_CHANNEL: &str = "catalog-generation";
 /// The first wait before resubscribing; doubles up to [`BACKOFF_MAX`].
 const BACKOFF_MIN: Duration = Duration::from_secs(1);
 /// The longest wait between resubscribe attempts.
@@ -52,25 +66,96 @@ pub async fn publish(redis: &Redis, generation: Option<i64>) {
     }
 }
 
+/// Publishes a catalog's new generation (issue #659). A failure is counted
+/// and logged; the poll loop covers a lost announcement.
+///
+/// # Arguments
+/// * `redis` - the shared Redis (owned: [`App::announce_catalog`] runs this
+///   on its own task).
+/// * `change` - the catalog and the generation its write committed.
+#[tracing::instrument(
+    level = "debug",
+    skip_all,
+    fields(db.system.name = "redis", db.operation.name = "publish")
+)]
+pub async fn publish_catalog(redis: Redis, change: CatalogGeneration) {
+    let published: redis::RedisResult<usize> = redis
+        .connection()
+        .publish(redis.channel(CATALOG_CHANNEL), catalog_payload(change))
+        .await;
+    if let Err(error) = published {
+        let _ = redis.failed(RedisOp::Publish, &error);
+    }
+}
+
+/// A catalog announcement's payload: `<catalog id> <generation>`.
+///
+/// # Arguments
+/// * `change` - what to announce.
+///
+/// # Returns
+/// The payload text.
+#[tracing::instrument(level = "trace", skip_all)]
+fn catalog_payload(change: CatalogGeneration) -> String {
+    format!("{} {}", change.catalog_id, change.generation)
+}
+
+/// The catalog and generation a catalog announcement names; `None` for any
+/// other payload, which the subscriber answers by checking every loaded
+/// catalog ([`App::catch_up_catalogs`]), as for a resubscribe.
+///
+/// # Arguments
+/// * `payload` - the message's bytes.
+///
+/// # Returns
+/// The announced change, if the payload is `<id> <generation>`.
+#[tracing::instrument(level = "trace", skip_all)]
+fn announced_catalog(payload: &[u8]) -> Option<CatalogGeneration> {
+    let text = std::str::from_utf8(payload).ok()?;
+    let (id, generation) = text.split_once(' ')?;
+    Some(CatalogGeneration {
+        catalog_id: id.parse().ok()?,
+        generation: generation.parse().ok()?,
+    })
+}
+
 /// After a CLI command that may have changed keys, users, teams or grants,
 /// tells every serving instance to check `admin_generation` (spec Decision
 /// 13). Best effort: the change is committed whatever happens here, so a
 /// missing variable or an unreachable Redis is a `warn`, never a failure.
-/// Nothing printed names the URL.
+/// Nothing printed names the URL. Each catalog in `catalogs` (an import or a
+/// repair the command committed) is announced first, on the catalog channel
+/// (issue #659).
 ///
 /// # Arguments
 /// * `config` - the loaded configuration; without `[redis]` nothing happens.
 /// * `env` - reads an environment variable (injectable for tests).
 /// * `metrics` - where `okf.redis.errors` is counted.
+/// * `catalogs` - the catalog generations the command committed.
+/// * `admin` - whether to send the `admin_generation` "check now" as well
+///   (`false` after a failed command, which announces only what it
+///   committed).
 #[tracing::instrument(level = "debug", skip_all)]
 pub async fn announce_from_cli(
     config: &Config,
     env: &dyn Fn(&str) -> Option<String>,
     metrics: &Metrics,
+    catalogs: &[CatalogGeneration],
+    admin: bool,
 ) {
     let Some(table) = &config.redis else { return };
+    if !admin && catalogs.is_empty() {
+        return;
+    }
     match Redis::connect(table, env, metrics).await {
-        Ok(redis) => publish(&redis, None).await,
+        Ok(redis) => {
+            for change in catalogs {
+                publish_catalog(redis.clone(), *change).await;
+            }
+            if admin {
+                publish(&redis, None).await;
+            }
+        }
         // The error's text names the variable and a kind, never the URL, but
         // only the kind is logged: the rest adds nothing a log reader needs.
         Err(error) => tracing::warn!(
@@ -114,8 +199,102 @@ pub async fn listen(app: Arc<App>, shutdown: CancellationToken) {
     let Some(redis) = app.redis().cloned() else {
         return;
     };
-    let source = RedisSource(redis.clone());
-    run(&app, &redis, &source, RESUBSCRIBE_GRACE, &shutdown).await;
+    let source = RedisSource {
+        redis: redis.clone(),
+        channel: CHANNEL,
+    };
+    run(
+        &KeyCache(&app),
+        &redis,
+        &source,
+        RESUBSCRIBE_GRACE,
+        &shutdown,
+    )
+    .await;
+}
+
+/// Runs until `shutdown`: subscribes to catalog announcements, checks every
+/// loaded catalog once (messages sent while it was not subscribed are lost),
+/// then refreshes the catalog each announcement names
+/// ([`App::apply_catalog_announcement`]). Messages are answered one at a
+/// time, in order. Reconnects as [`listen`] does. Returns at once without
+/// `[redis]`.
+///
+/// # Arguments
+/// * `app` - the instance whose snapshots are refreshed.
+/// * `shutdown` - cancelled when the server stops.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "long-lived loop: a span would stay open until shutdown"
+    )
+)]
+pub async fn listen_catalogs(app: Arc<App>, shutdown: CancellationToken) {
+    let Some(redis) = app.redis().cloned() else {
+        return;
+    };
+    let source = RedisSource {
+        redis: redis.clone(),
+        channel: CATALOG_CHANNEL,
+    };
+    run(
+        &Snapshots(&app),
+        &redis,
+        &source,
+        RESUBSCRIBE_GRACE,
+        &shutdown,
+    )
+    .await;
+}
+
+/// What a subscriber does with its channel's events.
+#[async_trait::async_trait]
+trait Handler: Send + Sync {
+    /// After every (re)subscribe: catch up on whatever was missed.
+    async fn subscribed(&self);
+
+    /// On one message.
+    async fn message(&self, payload: &[u8]);
+}
+
+/// The `admin_generation` subscriber: reloads the key cache.
+struct KeyCache<'a>(&'a App);
+
+#[async_trait::async_trait]
+impl Handler for KeyCache<'_> {
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn subscribed(&self) {
+        self.0.reload_keys_now(false).await;
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn message(&self, payload: &[u8]) {
+        if announced_generation(payload) != Some(self.0.loaded_admin_generation()) {
+            self.0.reload_keys_now(false).await;
+        }
+    }
+}
+
+/// The catalog subscriber: refreshes catalog snapshots.
+struct Snapshots<'a>(&'a App);
+
+#[async_trait::async_trait]
+impl Handler for Snapshots<'_> {
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn subscribed(&self) {
+        self.0.catch_up_catalogs().await;
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn message(&self, payload: &[u8]) {
+        match announced_catalog(payload) {
+            Some(change) => {
+                self.0.apply_catalog_announcement(change).await;
+            }
+            None => self.0.catch_up_catalogs().await,
+        }
+    }
 }
 
 /// Where the subscriber's events come from: a live [`crate::shared::Subscription`]
@@ -136,8 +315,13 @@ trait Source: Send + Sync {
     async fn subscribe(&self) -> redis::RedisResult<Self::Stream>;
 }
 
-/// The real source: a subscription on the shared Redis.
-struct RedisSource(Redis);
+/// The real source: a subscription to one channel on the shared Redis.
+struct RedisSource {
+    /// The shared Redis.
+    redis: Redis,
+    /// The channel's name under the prefix.
+    channel: &'static str,
+}
 
 #[async_trait::async_trait]
 impl Events for crate::shared::Subscription {
@@ -165,18 +349,20 @@ impl Source for RedisSource {
         )
     )]
     async fn subscribe(&self) -> redis::RedisResult<Self::Stream> {
-        self.0.subscribe(&self.0.channel(CHANNEL)).await
+        self.redis
+            .subscribe(&self.redis.channel(self.channel))
+            .await
     }
 }
 
-/// The subscriber's loop, with its subscription source and grace period
-/// injected: subscribes, reloads on `Subscribed` and on an announcement of
-/// another generation, replaces a subscription that stays `Disconnected` for
+/// The subscriber's loop, with its handler, subscription source and grace
+/// period injected: subscribes, calls the handler on `Subscribed` and on
+/// every message, replaces a subscription that stays `Disconnected` for
 /// `grace`, and subscribes again with backoff after the stream ends or a
 /// subscribe fails.
 ///
 /// # Arguments
-/// * `app` - the instance whose key cache is reloaded.
+/// * `handler` - what `Subscribed` and a message do.
 /// * `redis` - where failures are counted.
 /// * `source` - opens each subscription.
 /// * `grace` - how long a subscription may stay disconnected.
@@ -188,8 +374,8 @@ impl Source for RedisSource {
         reason = "long-lived loop: a span would stay open until shutdown"
     )
 )]
-async fn run<S: Source>(
-    app: &App,
+async fn run<H: Handler, S: Source>(
+    handler: &H,
     redis: &Redis,
     source: &S,
     grace: Duration,
@@ -219,17 +405,14 @@ async fn run<S: Source>(
                     };
                     match event {
                         // The first subscribe and every automatic resubscribe:
-                        // messages sent before it may have been lost, so reload.
+                        // messages sent before it may have been lost, so catch up.
                         Some(SubscriptionEvent::Subscribed) => {
                             backoff = BACKOFF_MIN;
                             disconnected_at = None;
-                            app.reload_keys_now(false).await;
+                            handler.subscribed().await;
                         }
                         Some(SubscriptionEvent::Message(payload)) => {
-                            if announced_generation(&payload) != Some(app.loaded_admin_generation())
-                            {
-                                app.reload_keys_now(false).await;
-                            }
+                            handler.message(&payload).await;
                         }
                         // The library resubscribes by itself; a `Subscribed`
                         // follows, or the grace above replaces the subscription.
@@ -258,7 +441,24 @@ async fn run<S: Source>(
 
 #[cfg(test)]
 mod tests {
-    use super::announced_generation;
+    use super::{announced_catalog, announced_generation, catalog_payload};
+    use crate::store::catalogs::CatalogGeneration;
+
+    #[test]
+    fn a_catalog_payload_round_trips_and_anything_else_names_none() {
+        let change = CatalogGeneration {
+            catalog_id: 7,
+            generation: 42,
+        };
+        assert_eq!(catalog_payload(change), "7 42");
+        assert_eq!(
+            announced_catalog(catalog_payload(change).as_bytes()),
+            Some(change)
+        );
+        for other in [&b""[..], b"7", b"7 x", b"x 42", b"7 42 1", &[0xff, 0xfe]] {
+            assert_eq!(announced_catalog(other), None, "{other:?}");
+        }
+    }
 
     #[test]
     fn a_payload_names_a_generation_only_when_it_is_a_number() {
@@ -270,13 +470,16 @@ mod tests {
 }
 
 #[cfg(test)]
+mod catalog_tests;
+
+#[cfg(test)]
 mod catch_up_tests {
     use std::time::Duration;
 
     use tokio_util::sync::CancellationToken;
 
     use super::listen;
-    use super::{run, Events, Source};
+    use super::{run, Events, KeyCache, Source};
     use crate::config::Config;
     use crate::mcp::testing::replica_pair;
     use crate::shared::SubscriptionEvent;
@@ -360,7 +563,14 @@ mod catch_up_tests {
         let shutdown = CancellationToken::new();
         let redis = b.redis().expect("B's redis").clone();
         let finished = tokio::time::timeout(Duration::from_secs(20), async {
-            let looped = run(&b, &redis, &source, Duration::from_millis(200), &shutdown);
+            let handler = KeyCache(&b);
+            let looped = run(
+                &handler,
+                &redis,
+                &source,
+                Duration::from_millis(200),
+                &shutdown,
+            );
             tokio::pin!(looped);
             loop {
                 tokio::select! {

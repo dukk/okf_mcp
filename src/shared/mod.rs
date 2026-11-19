@@ -472,6 +472,47 @@ pub(crate) mod testing {
             .expect("connect to the test redis")
     }
 
+    /// How many connections are subscribed to `name` (a channel under the
+    /// prefix), as `PUBSUB NUMSUB` counts them on a standalone server.
+    pub(crate) async fn subscribers(redis: &Redis, name: &str) -> i64 {
+        let (_channel, count): (String, i64) = redis::cmd("PUBSUB")
+            .arg("NUMSUB")
+            .arg(redis.channel(name))
+            .query_async(&mut redis.connection())
+            .await
+            .expect("PUBSUB NUMSUB");
+        count
+    }
+
+    /// Starts `app`'s catalog announcement subscriber and waits (up to 10 s)
+    /// until Redis counts it.
+    ///
+    /// # Returns
+    /// The token that stops it and its task.
+    pub(crate) async fn listening_for_catalogs(
+        app: &std::sync::Arc<crate::app::App>,
+    ) -> (
+        tokio_util::sync::CancellationToken,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use super::announce::{listen_catalogs, CATALOG_CHANNEL};
+        let redis = app.redis().expect("the app has redis").clone();
+        let before = subscribers(&redis, CATALOG_CHANNEL).await;
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let task = tokio::spawn(listen_catalogs(
+            std::sync::Arc::clone(app),
+            shutdown.clone(),
+        ));
+        let subscribed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while subscribers(&redis, CATALOG_CHANNEL).await <= before {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(subscribed.is_ok(), "the catalog subscriber subscribed");
+        (shutdown, task)
+    }
+
     /// The value of `okf_redis_errors_total{operation="<op>"}` in a scrape.
     pub(crate) fn error_count(rendered: &str, op: &str) -> u64 {
         let series = format!("okf_redis_errors_total{{operation=\"{op}\"}}");

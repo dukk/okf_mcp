@@ -22,6 +22,18 @@ pub const STARTER_MESSAGE: &str = "create catalog";
 /// crate's advisory locks from anyone else's on a shared database.
 pub(crate) const CATALOG_LOCK_NAMESPACE: i32 = 0x006f_6b66;
 
+/// A catalog's published generation as one committed write left it: what
+/// a replica announces so the others refresh that catalog's snapshot
+/// (issue #659).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CatalogGeneration {
+    /// The catalog's id (`catalogs.id`), never reused, so an announcement
+    /// cannot reach a catalog created again under the same name.
+    pub catalog_id: i64,
+    /// The generation the write committed.
+    pub generation: i64,
+}
+
 /// A catalog row.
 // `derive(sqlx::FromRow)` maps a result row's columns onto the fields by
 // name, like building a dataclass from a `dict` row.

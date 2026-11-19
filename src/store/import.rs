@@ -13,7 +13,7 @@ use crate::okf::rules::is_machinery;
 use crate::okf::snapshot::Snapshot;
 use crate::okf::workspace::{MemWorkspace, StoredFile};
 use crate::store::audit::{self, Action, AuditActor, People};
-use crate::store::catalogs::{self, CatalogEvent};
+use crate::store::catalogs::{self, CatalogEvent, CatalogGeneration};
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionRecord};
 
 /// Which of a catalog's paths an import replaces.
@@ -70,6 +70,11 @@ pub struct ImportReport {
     pub unchanged: usize,
     /// Lint of the imported files (reported, never refused on).
     pub lint: LintReport,
+    /// The catalog and the generation this import committed; `None` when it
+    /// wrote nothing. Not part of the printed or returned report: the server
+    /// and the command line announce it to the other replicas (issue #659).
+    #[serde(skip)]
+    pub changed: Option<CatalogGeneration>,
 }
 
 /// A document row as import compares it (tombstones included).
@@ -306,6 +311,10 @@ pub async fn import(
             now,
         )
         .await?;
+        report.changed = Some(CatalogGeneration {
+            catalog_id: found.id,
+            generation,
+        });
     }
     tx.commit().await?;
     Ok(report)

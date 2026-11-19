@@ -344,6 +344,48 @@ impl CatalogState {
             .await
     }
 
+    /// The current loaded state, refreshed first if it is older than a
+    /// changeset's entries: when any entry's base revision is newer than the
+    /// snapshot's revision of its path (or the snapshot lacks the path). An
+    /// entry's base is the revision it was made on, possibly on another
+    /// replica whose snapshot had already moved on, so a snapshot behind it
+    /// is simply out of date (issue #659). An entry with no base (a create)
+    /// never triggers a refresh.
+    ///
+    /// The refresh is [`CatalogState::refresh`]: a read of the generation,
+    /// and a rebuild only if it moved.
+    ///
+    /// # Arguments
+    /// * `pool` - the database.
+    /// * `bases` - each entry's normalized path and base revision.
+    ///
+    /// # Returns
+    /// The loaded state to diff or overlay against.
+    ///
+    /// # Errors
+    /// As [`CatalogState::refresh`].
+    // `impl IntoIterator<Item = ...>` takes any sequence of pairs (a `Vec`,
+    // or a lazy `map` over the entries) without collecting it first.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn current_covering<'a>(
+        &self,
+        pool: &PgPool,
+        bases: impl IntoIterator<Item = (&'a str, Option<i32>)>,
+    ) -> Result<Arc<Loaded>, OkfError> {
+        let loaded = self.current();
+        let behind = bases.into_iter().any(|(path, base)| match base {
+            // `is_none_or`: a path missing from the snapshot counts as
+            // behind too; the refresh then finds out whether it was deleted.
+            Some(base) => loaded.revision(path).is_none_or(|current| current < base),
+            None => false,
+        });
+        if !behind {
+            return Ok(loaded);
+        }
+        self.refresh(pool).await?;
+        Ok(self.current())
+    }
+
     /// [`CatalogState::refresh`] on the caller's connection, for a caller
     /// that holds the catalog's advisory lock ([`catalogs::lock`]) in its
     /// transaction, so no import or publish can change the catalog while
