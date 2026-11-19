@@ -336,9 +336,11 @@ pub(crate) async fn reachable_page(
         .await
 }
 
-/// Polls after an administrative change, so the key cache and the catalog
-/// list reflect it for the next request. The change has committed, so a
-/// failed poll is logged, not returned: the poll loop retries it.
+/// After an administrative change: polls, so this replica's caches and
+/// catalog list reflect it for the next request (until Task 16 of
+/// milestone 18 removes the poll), and tells milestone 16 replicas to check
+/// `admin_generation` ([`App::bridge_to_m16`]). The change has committed, so
+/// a failed poll is logged, not returned: the poll loop retries it.
 ///
 /// # Arguments
 /// * `app` - the application. An `&Arc<App>` argument coerces to `&App`
@@ -353,4 +355,6 @@ pub(crate) async fn settle(app: &App) {
             "poll after an administrative change failed; the poll loop retries"
         );
     }
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
 }

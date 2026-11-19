@@ -385,11 +385,9 @@ pub fn router(app: Arc<App>, shutdown: &CancellationToken) -> Router {
     // The OAuth routes exist only with OAuth on; without it `/oauth/*` and
     // `/.well-known/*` stay 404, as before M10. They take no bearer token.
     let open = if app.oauth().is_some() {
-        Router::new()
-            .merge(health)
-            .merge(oauth::routes().layer(timeout_layer()))
+        Router::new().merge(oauth::routes().layer(timeout_layer()))
     } else {
-        Router::new().merge(health)
+        Router::new()
     };
     // The passkey routes exist only with passkeys on (a domain
     // `public_url`); otherwise `/auth/passkey/*` stays 404.
@@ -419,6 +417,15 @@ pub fn router(app: Arc<App>, shutdown: &CancellationToken) -> Router {
         // routes (`keyed`) take only a bearer credential.
         .nest("/api/v1", api::routes(&app))
         .merge(keyed)
+        // Every route but `/healthz` (merged after it, so a probe never
+        // waits on the database) starts by checking the settings when they
+        // are older than `credential_ttl` (M18 spec Decision 9), so what
+        // its handlers read through `App::settings` is never older.
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&app),
+            check_settings,
+        ))
+        .merge(health)
         // One `info` line per response (status, latency) in a span naming the
         // method and the matched route. The span records no headers, so a
         // bearer key never reaches the log; no query, so neither does an
@@ -440,6 +447,34 @@ pub fn router(app: Arc<App>, shutdown: &CancellationToken) -> Router {
         )
         // Hands `app` to every handler that asks for `State<Arc<App>>`.
         .with_state(app)
+}
+
+/// Checks the settings before the request goes on ([`App::fresh_settings`]):
+/// a cheap read while they are younger than `credential_ttl`, one
+/// `admin_generation` read (shared by the requests that arrive together)
+/// once they are older.
+///
+/// # Arguments
+/// * `app` - the shared state.
+/// * `request` - the request, after routing.
+/// * `next` - the rest of the stack.
+///
+/// # Returns
+/// The route's response.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "middleware around every request: a span here would parent every handler's; fresh_settings has its own"
+    )
+)]
+async fn check_settings(
+    State(app): State<Arc<App>>,
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    app.fresh_settings().await;
+    next.run(request).await
 }
 
 /// The request span `TraceLayer` opened, for code deeper in the stack that
@@ -767,8 +802,10 @@ pub async fn serve_with(
     }
     let router = router(Arc::clone(&app), &shutdown);
     let poller = tokio::spawn(Arc::clone(&app).poll_until(shutdown.clone()));
-    // Reloads the key cache on every `admin_generation` announcement; ends
-    // at once without `[redis]`.
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    // Marks the credential caches and the catalog directory stale on every
+    // announcement from a milestone 16 replica; ends at once without
+    // `[redis]`.
     let announcements = tokio::spawn(crate::shared::announce::listen(
         Arc::clone(&app),
         shutdown.clone(),
@@ -1303,6 +1340,47 @@ mod tests {
         let response = slow.oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    /// Every request checks settings older than `credential_ttl` before its
+    /// handler reads them (M18 spec Decision 9): with no listener and no
+    /// poll, a setting written through the store reaches an anonymous page
+    /// once the loaded settings are older than the TTL.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_request_checks_settings_older_than_the_credential_ttl() {
+        use crate::store::audit::AuditActor;
+        use crate::store::settings::{self, SettingKey};
+        let test = crate::mcp::testing::app_with(
+            &[],
+            Config {
+                credential_ttl: Duration::from_millis(100),
+                ..Config::default()
+            },
+        )
+        .await;
+        let product_name = || async {
+            let response = router(Arc::clone(&test.app), &CancellationToken::new())
+                .oneshot(Request::get("/ui/brand.json").body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            json_body(response).await["product_name"].clone()
+        };
+        let before = product_name().await;
+
+        settings::set(
+            test.app.pool(),
+            SettingKey::ProductName,
+            "Acme Notes",
+            &AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let after = product_name().await;
+
+        assert_eq!(before, "okf");
+        assert_eq!(after, "Acme Notes");
     }
 
     #[tokio::test(flavor = "multi_thread")]

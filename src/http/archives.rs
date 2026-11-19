@@ -1097,7 +1097,7 @@ mod tests {
         )
         .await
         .unwrap();
-        test.app.reload_settings_now(false).await;
+        test.app.reload_labels_now().await;
         let exported = router(&test, admin())
             .oneshot(
                 Request::get("/catalogs/pg/export")

@@ -1131,10 +1131,10 @@ async fn finish(
         return server_error(&error, &brand);
     }
     // The credential cache reads the new grant on first use, so nothing
-    // needs loading here. Creating it bumped admin_generation: announce it
-    // to milestone 16 replicas, which still reload on announcements. A
-    // failure is logged inside; the next poll pass retries.
-    app.reload_settings_now(true).await;
+    // needs loading here. Creating it bumped admin_generation: tell
+    // milestone 16 replicas, which still reload on announcements.
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     let (code, family_id) = match (
         keys::generate_with(keys::AUTHORIZATION_CODE_PREFIX),
         new_id(),

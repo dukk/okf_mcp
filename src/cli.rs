@@ -3225,8 +3225,8 @@ mod tests {
         )
     }
 
-    /// Runs `key revoke` with `[redis]` on `server` and checks one empty
-    /// message reaches a subscriber.
+    /// Runs `key revoke` with `[redis]` on `server` and checks one M16
+    /// bridge message reaches a subscriber.
     async fn revoke_announces(server: crate::db::redis_support::TestRedis) {
         use crate::shared::{announce::CHANNEL, SubscriptionEvent};
         const WAIT: Duration = Duration::from_secs(10);
@@ -3251,7 +3251,7 @@ mod tests {
             .await
             .expect("an announcement arrives");
         assert!(
-            matches!(message, Some(SubscriptionEvent::Message(ref payload)) if payload.is_empty())
+            matches!(message, Some(SubscriptionEvent::Message(ref payload)) if payload == crate::shared::announce::BRIDGE_PAYLOAD.as_bytes())
         );
         // One message only: the next wait finds nothing.
         let more = tokio::time::timeout(Duration::from_millis(300), subscription.next()).await;
@@ -3365,7 +3365,7 @@ mod tests {
             .await
             .expect("an announcement arrives");
         assert!(
-            matches!(message, Some(SubscriptionEvent::Message(ref payload)) if payload.is_empty())
+            matches!(message, Some(SubscriptionEvent::Message(ref payload)) if payload == crate::shared::announce::BRIDGE_PAYLOAD.as_bytes())
         );
     }
 
