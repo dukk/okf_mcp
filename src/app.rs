@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use crate::auth::{Admission, Keys};
+use crate::cache::directory::CatalogDirectory;
 use crate::catalog::CatalogState;
 use crate::clock::Clock;
 use crate::clock_check::{self, ClockStatus};
@@ -70,6 +71,9 @@ pub struct App {
     // Each catalog's rebuild lock (`CatalogState::refresh`), by catalog id,
     // for the same reason.
     rebuild_locks: KeyedLocks,
+    // Catalog rows by name with their access facts (M18 Decision 6). Nothing
+    // reads it yet but tests: later tasks move the map's readers onto it.
+    directory: CatalogDirectory,
     // As in `CatalogState`: the lock is held only to clone or swap the `Arc`.
     catalogs: RwLock<Arc<Catalogs>>,
     // The `admin_generation` the key cache was loaded at. Written only under
@@ -257,6 +261,12 @@ impl App {
         let passkeys = Passkeys::new(&config, redis.as_ref())?;
         // A provider whose secret variable is unset fails start-up here.
         let oidc = OidcProviders::new(&config, |name| std::env::var(name).ok(), redis.as_ref())?;
+        let directory = CatalogDirectory::new(
+            pool.clone(),
+            config.catalog_directory_entries,
+            config.catalog_ttl,
+            metrics.clone(),
+        );
         let app = Arc::new(Self {
             pool,
             config,
@@ -268,6 +278,7 @@ impl App {
             write_queue: KeyedLocks::new(),
             publish_locks: KeyedLocks::new(),
             rebuild_locks: KeyedLocks::new(),
+            directory,
             catalogs: RwLock::new(Arc::new(loaded)),
             admin_generation: AtomicI64::new(admin_generation),
             announced_generation: AtomicI64::new(admin_generation),
@@ -357,6 +368,15 @@ impl App {
     )]
     pub fn redis(&self) -> Option<&shared::Redis> {
         self.redis.as_ref()
+    }
+
+    /// The catalog directory: rows by name with their access facts.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor")
+    )]
+    pub fn directory(&self) -> &CatalogDirectory {
+        &self.directory
     }
 
     /// The instruments this app records on.
@@ -988,6 +1008,9 @@ impl App {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn apply(&self, message: &crate::invalidate::Message) {
         use crate::invalidate::Invalidation;
+        // The directory first: it is a few map operations, and nothing below
+        // should be able to delay dropping a row that changed.
+        self.directory.apply(&message.invalidation).await;
         match &message.invalidation {
             Invalidation::Catalog { id, generation } => {
                 self.refresh_announced(
@@ -1013,6 +1036,7 @@ impl App {
     /// cache and refreshes every loaded catalog.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn apply_reconnect(&self) {
+        self.directory.mark_all_stale().await;
         self.reload_keys_now(false).await;
         self.catch_up_catalogs().await;
     }
@@ -1447,6 +1471,38 @@ mod tests {
             app.catalog("pg").unwrap().current().generation(),
             generation
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn change_feed_messages_reach_the_catalog_directory() {
+        use crate::invalidate::Invalidation;
+        let db = test_db().await;
+        let id = create_pg(&db.pool).await;
+        let app = app(&db.pool).await;
+        assert!(app.directory().resolve("pg").await.unwrap().is_some());
+        assert!(app.directory().resolve("later").await.unwrap().is_none());
+        sqlx::query("UPDATE catalogs SET description = 'second' WHERE id = $1")
+            .bind(id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        app.apply(&message(Invalidation::CatalogMeta {
+            id,
+            name: "pg".to_owned(),
+        }))
+        .await;
+        let row = app.directory().resolve("pg").await.unwrap().unwrap();
+        assert_eq!(row.description, "second");
+
+        // A lost connection forgets the remembered absence as well.
+        sqlx::query("INSERT INTO catalogs (name, created_at) VALUES ('later', now())")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert!(app.directory().resolve("later").await.unwrap().is_none());
+        app.apply_reconnect().await;
+        assert!(app.directory().resolve("later").await.unwrap().is_some());
     }
 
     #[tokio::test(flavor = "multi_thread")]
