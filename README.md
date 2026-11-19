@@ -278,8 +278,12 @@ they form one list, the `X-OKF-Catalogs` names first. A header takes
 precedence over `?catalogs=`.
 
 Without a list, a tool's argument is used, else the key's default catalog,
-then the server's `default_catalog`, and `list_catalogs` offers every catalog
-the key reaches. Every step is limited to the key's grants: a list never
+then the server's `default_catalog`, else the only catalog the key reaches when
+it is granted exactly one (a key granted every catalog, `key create --all`, has
+no such fallback), and `list_catalogs` offers every catalog the key reaches.
+With none of these, a call without `catalog` is refused and `list_catalogs`
+shows an empty selection, so an ordinary OAuth connection to a key with one
+catalog needs no `?catalogs=`. Every step is limited to the key's grants: a list never
 grants anything, and a catalog the key cannot reach (or that does not exist)
 is an error naming it, never silently dropped or replaced by a default.
 

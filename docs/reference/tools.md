@@ -13,8 +13,10 @@ How a session usually goes:
 - `search` for a concept, then `get_concept` to read it.
 - A concept path looks like `/infra/time-server.md`; the leading slash and the `.md` are
   optional.
-- Without `catalog`, a tool uses the catalogs your connection can see (`list_catalogs` names
-  them).
+- Without `catalog`, a tool uses your connection's selection: the catalogs the connection or
+  the key's default names, else the only catalog the key reaches (`list_catalogs` shows it). A
+  key granted every catalog has no such fallback. When `list_catalogs` shows an empty
+  selection, pass `catalog`.
 - To write, call `open_changeset` first and pass the handle it returns as `changeset` to every
   edit, `publish`, `discard`, `revert` and `pending_changes`. Reads take it too, to see the
   drafts. Nothing is visible to others until `publish`.
@@ -151,7 +153,7 @@ Get a concept: its frontmatter as JSON, its body and the body's size (`lines`, `
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `path` | string | yes | The concept: `/infra/time-server.md`, `infra/time-server` or `/infra/time-server`. |
-| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the first selected catalog that has it). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the first selected catalog that has it; when `list_catalogs` shows an empty selection, pass `catalog`). |
 | `links` | boolean | no | Also return its resolved outbound links and its backlinks. |
 | `raw` | boolean | no | Also return the file verbatim, when the body is within the server's limit or with `full`. |
 | `section` | string | no | Return only this section, its subsections included: a heading's anchor slug, as the outline and a link's `#fragment` give it (an exact slug wins), or else its text (case-insensitive). Works at any size. |
@@ -167,7 +169,7 @@ A document's revisions, newest first: revision, op (create, update, delete, impo
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `path` | string | yes | The document: `/infra/time-server.md`, `infra/time-server`, `/log.md`. |
-| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the first selected catalog with any revision of it). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the first selected catalog with any revision of it; when `list_catalogs` shows an empty selection, pass `catalog`). |
 | `limit` | integer | no | At most this many revisions (default 20, at most 200; 0 counts as 1). |
 
 ## `index`
@@ -192,7 +194,7 @@ The link report: broken links and anchors, relative links, orphans, dead ends, i
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog; when `list_catalogs` shows an empty selection, pass `catalog`). |
 | `changeset` | string | no | Read through this changeset's drafts (its handle); the report then runs on its catalog unless `catalog` names it. |
 | `mentions` | boolean | no | Also look for unlinked mentions of concept names (default true; the slowest part). |
 
@@ -204,14 +206,14 @@ Lint a catalog: errors and warnings with file, line, rule and message. Without `
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog; when `list_catalogs` shows an empty selection, pass `catalog`). |
 | `changeset` | string | no | Lint this changeset's drafts (its handle) applied to the published catalog, instead of the published catalog; its changed paths count as uncommitted for `generated-after-commit`. |
 
 ## `list_catalogs`
 
 **List Catalogs** (read-only)
 
-List the catalogs this connection offers (name, display name, label, description, file count, last change). Pass `name` (the id) in other tools and say `label` to people: those the API key can reach, limited to the connection's X-OKF-Catalogs list when it has one. A catalog whose team is suspended is listed with `suspended` set, and only export works on it. Also this connection's selection: the catalogs a call without a `catalog` argument reads, and the default write target.
+List the catalogs this connection offers (name, display name, label, description, file count, last change). Pass `name` (the id) in other tools and say `label` to people: those the API key can reach, limited to the connection's X-OKF-Catalogs list when it has one. A catalog whose team is suspended is listed with `suspended` set, and only export works on it. Also this connection's selection: the catalogs a call without a `catalog` argument reads, and the default write target. It comes from the X-OKF-Catalogs header or `?catalogs=`, else the key's or the server's default catalog, else the only catalog the key reaches (a key granted every catalog has no such fallback). When the selection is empty, `selection_error` says why: pass `catalog`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -395,7 +397,7 @@ The stalest concepts: last stamp, by whom, age in days, stale flag and queued qu
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog; when `list_catalogs` shows an empty selection, pass `catalog`). |
 | `changeset` | string | no | Read through this changeset's drafts (its handle); the report then runs on its catalog unless `catalog` names it. |
 | `n` | integer | no | How many concepts (default 5; ignored with `open_questions_only`). |
 | `open_questions_only` | boolean | no | Only concepts with queued `open_questions`, all of them. |
@@ -408,7 +410,7 @@ Open a changeset in a catalog and return its handle. Every edit, publish, discar
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: this connection's write target). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: this connection's write target; when `list_catalogs` shows none, pass `catalog`). |
 
 ## `open_questions`
 
@@ -418,7 +420,7 @@ Every queued open_questions entry in a catalog, grouped by concept and numbered 
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog; when `list_catalogs` shows an empty selection, pass `catalog`). |
 | `changeset` | string | no | Read through this changeset's drafts (its handle); the report then runs on its catalog unless `catalog` names it. |
 
 ## `pending_changes`
@@ -463,7 +465,7 @@ Read the raw text of an index.md (default /index.md), log.md or AGENTS.md. Witho
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `path` | string | no | An `index.md` (any folder's), `log.md` or `AGENTS.md`; default `/index.md`. Use `get_concept` for concepts. |
-| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the first selected catalog that has it). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the first selected catalog that has it; when `list_catalogs` shows an empty selection, pass `catalog`). |
 | `changeset` | string | no | Read through this changeset's drafts (its handle); its catalog must be one this call reads. |
 
 ## `remove_source`
@@ -536,7 +538,7 @@ Search concepts across this connection's catalogs (or `catalogs`). Every term of
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `query` | string | yes | Free text. Every whitespace-separated term must occur (case-insensitive substring) in a concept's title or aliases, tags, description or body; free text matches tags by substring. Empty matches every concept that passes the filters. |
-| `catalogs` | array of string | no | The catalog ids to search (the `name`s from `list_catalogs`; default: this connection's catalogs). |
+| `catalogs` | array of string | no | The catalog ids to search (the `name`s from `list_catalogs`; default: this connection's selection, which may be the only catalog the key reaches; when `list_catalogs` shows an empty selection, pass `catalogs`). |
 | `type` | string | no | Only concepts of this `type` (case-insensitive). |
 | `tags` | array of string | no | Only concepts carrying every one of these tags. These match whole tags only (case-insensitive): `infra` does not match `infrastructure`, while the same text in `query` would, by substring. |
 | `status` | string | no | Only concepts with this `status` (case-insensitive; a missing status counts as `stable`). |
@@ -597,7 +599,7 @@ Sprawl scores: which concepts have grown too long or volatile, with sections and
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog; when `list_catalogs` shows an empty selection, pass `catalog`). |
 | `changeset` | string | no | Read through this changeset's drafts (its handle); the report then runs on its catalog unless `catalog` names it. |
 | `path` | string | no | One concept to score (default: the worst `n`). |
 | `n` | integer | no | How many concepts (default 5). |
