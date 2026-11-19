@@ -915,13 +915,14 @@ mod tests {
                     admin: 200,
                     stranger: 404,
                 },
-                // `{}` is not gzip: an admin gets past the key check to 400.
+                // `{}` is not gzip: a writer or an admin gets past the key
+                // check to 400 (import needs `write`, issue #260).
                 Row {
                     method: "POST",
                     uri: "/api/v1/catalogs/main/import".into(),
                     body: Some(json!({})),
                     read: 403,
-                    write: 403,
+                    write: 400,
                     admin: 400,
                     stranger: 404,
                 },
@@ -1289,7 +1290,8 @@ mod tests {
             "/api/v1/catalogs/main/import?replace=true&expect_generation={}",
             generation + 1
         );
-        let (status, _, body) = raw(&test, "POST", &stale, &keys.admin, archive()).await;
+        // A `write` key imports (issue #260); the admin key did above.
+        let (status, _, body) = raw(&test, "POST", &stale, &keys.write, archive()).await;
         let refused: serde_json::Value = serde_json::from_slice(&body).expect("an error");
         assert_eq!(status, StatusCode::CONFLICT);
         assert!(
@@ -1302,7 +1304,7 @@ mod tests {
 
         let current =
             format!("/api/v1/catalogs/main/import?replace=true&expect_generation={generation}");
-        let (status, _, body) = raw(&test, "POST", &current, &keys.admin, archive()).await;
+        let (status, _, body) = raw(&test, "POST", &current, &keys.write, archive()).await;
         let report: serde_json::Value = serde_json::from_slice(&body).expect("a report");
         assert_eq!(status, StatusCode::OK, "{report}");
         assert_eq!(report["updated"], json!(["index.md"]));

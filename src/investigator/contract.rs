@@ -40,28 +40,49 @@ pub fn validate_tools(tools: &[Tool]) -> Result<(), RunnerError> {
         if matches.next().is_some() {
             return Err(RunnerError::Contract);
         }
-        let expected = expected(allowed);
-        for (actual, expected) in [
-            (
-                Value::Object((*actual.input_schema).clone()),
-                Value::Object((*expected.input_schema).clone()),
+        same_contract(actual, expected(allowed))?;
+    }
+    Ok(())
+}
+
+/// Compare one live tool with its checked-in contract.
+///
+/// This is the single definition of what the runner treats as the contract: the
+/// tool's name (the caller matches by it) plus its normalized input and output
+/// schemas. `title`, `description`, `annotations` and the like are not part of
+/// it. `validate_tools` and the contract test both call this function, so the
+/// test cannot drift from the runtime check.
+///
+/// # Arguments
+/// * `actual` - the tool as the server lists it.
+/// * `expected` - the checked-in contract for the same tool.
+///
+/// # Errors
+/// `RunnerError::Contract` when the names differ, the output schema is missing,
+/// or a schema does not normalize to the same value.
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) fn same_contract(actual: &Tool, expected: &Tool) -> Result<(), RunnerError> {
+    if actual.name != expected.name {
+        return Err(RunnerError::Contract);
+    }
+    for (actual, expected) in [
+        (
+            Value::Object((*actual.input_schema).clone()),
+            Value::Object((*expected.input_schema).clone()),
+        ),
+        (
+            Value::Object((**actual.output_schema.as_ref().ok_or(RunnerError::Contract)?).clone()),
+            Value::Object(
+                (**expected
+                    .output_schema
+                    .as_ref()
+                    .ok_or(RunnerError::Contract)?)
+                .clone(),
             ),
-            (
-                Value::Object(
-                    (**actual.output_schema.as_ref().ok_or(RunnerError::Contract)?).clone(),
-                ),
-                Value::Object(
-                    (**expected
-                        .output_schema
-                        .as_ref()
-                        .ok_or(RunnerError::Contract)?)
-                    .clone(),
-                ),
-            ),
-        ] {
-            if normalize(&actual, &actual, 0)? != normalize(&expected, &expected, 0)? {
-                return Err(RunnerError::Contract);
-            }
+        ),
+    ] {
+        if normalize(&actual, &actual, 0)? != normalize(&expected, &expected, 0)? {
+            return Err(RunnerError::Contract);
         }
     }
     Ok(())
@@ -396,16 +417,10 @@ mod tests {
                     .count(),
                 1
             );
-            assert_eq!(
-                serde_json::to_value(expected(allowed)).unwrap(),
-                serde_json::to_value(
-                    tools
-                        .iter()
-                        .find(|tool| tool.name == allowed.name())
-                        .unwrap()
-                )
-                .unwrap()
-            );
+            // Same comparison as the runtime check; a title or annotation
+            // change on the server must not fail this test.
+            let live = tools.iter().find(|t| t.name == allowed.name()).unwrap();
+            assert!(same_contract(live, expected(allowed)).is_ok());
         }
         let mut missing = tools.clone();
         missing.retain(|t| t.name != "maintenance_submit");
@@ -418,6 +433,46 @@ mod tests {
         std::sync::Arc::make_mut(&mut renew.input_schema)["required"] =
             serde_json::json!(["catalog", "work_id", "idempotency_key"]);
         assert!(validate_tools(&changed).is_err());
+    }
+
+    #[test]
+    fn investigator_contract_ignores_titles_and_hints_but_not_schemas() {
+        let tools = OkfServer::tools().list_all();
+        let edit = |tool: &str, change: &dyn Fn(&mut Value)| {
+            let mut wire = serde_json::to_value(&tools).unwrap();
+            let entry = wire
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|t| t["name"] == tool)
+                .unwrap();
+            change(entry);
+            serde_json::from_value::<Vec<Tool>>(wire).unwrap()
+        };
+        for allowed in ALLOWED {
+            let name = allowed.name();
+            // Metadata outside name and schemas: still accepted.
+            let relabelled = edit(name, &|t| {
+                t["title"] = json!("A different title");
+                t["description"] = json!("A different description");
+                t["annotations"] = json!({"readOnlyHint": false, "destructiveHint": true});
+            });
+            assert!(validate_tools(&relabelled).is_ok(), "{name}");
+            let live = relabelled.iter().find(|t| t.name == name).unwrap();
+            assert!(same_contract(live, expected(allowed)).is_ok(), "{name}");
+            // A schema change: rejected, in either schema.
+            for schema in ["inputSchema", "outputSchema"] {
+                let changed = edit(name, &|t| {
+                    t[schema]["properties"]["__added"] = json!({"type": "string"});
+                });
+                assert!(validate_tools(&changed).is_err(), "{name} {schema}");
+                let live = changed.iter().find(|t| t.name == name).unwrap();
+                assert!(
+                    same_contract(live, expected(allowed)).is_err(),
+                    "{name} {schema}"
+                );
+            }
+        }
     }
 
     #[test]

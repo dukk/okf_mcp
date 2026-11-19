@@ -17,6 +17,10 @@ fn refused(reason: &str) -> OkfError {
 
 #[tracing::instrument(level = "trace", skip_all)]
 fn scan(value: &str) -> Result<(), OkfError> {
+    // Postgres refuses a NUL in text, which would be a 500 (issue #339).
+    if value.contains('\0') {
+        return Err(refused("maintenance text must not contain a NUL byte"));
+    }
     if let Some(hit) = scan_secrets("maintenance/report.md", value)
         .into_iter()
         .next()

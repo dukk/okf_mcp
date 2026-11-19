@@ -34,9 +34,9 @@ use crate::store::users;
 pub enum Access {
     /// The read tools and export.
     Read,
-    /// Read, plus the write tools and publish.
+    /// Read, plus the write tools, publish and import into granted catalogs.
     Write,
-    /// Write, plus import into granted catalogs and using any key's changeset.
+    /// Write, plus using any key's changeset.
     Admin,
 }
 
@@ -236,6 +236,11 @@ pub struct KeyRecord {
     pub user_id: Option<String>,
     /// Made by its user, so capped by the user's ceiling.
     pub self_issued: bool,
+    /// A grant's last token activity: when its newest token still on record
+    /// was issued (each authorization-code exchange and each refresh issues
+    /// one). `None` for a key, and for a grant with no token on record (none
+    /// issued yet, or all pruned a week after they expired).
+    pub last_activity: Option<DateTime<Utc>>,
 }
 
 /// The row as selected, before `access` is parsed.
@@ -261,6 +266,7 @@ struct KeyRow {
     expires_at: Option<DateTime<Utc>>,
     user_id: Option<String>,
     self_issued: bool,
+    last_activity: Option<DateTime<Utc>>,
 }
 
 /// Is `name` valid under the schema's `api_keys_name_check` constraint? Sign-in
@@ -816,13 +822,19 @@ pub(crate) async fn insert_legacy_test_key(
 /// Their ids, in `names`' order.
 ///
 /// # Errors
-/// [`OkfError::CatalogNotSelected`] for the first name with no catalog;
-/// [`OkfError::Database`].
+/// [`OkfError::CatalogNotSelected`] for the first name with no catalog (a
+/// name that cannot be one, a NUL included, counts as one with none:
+/// Postgres refuses a NUL, issue #339); [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "keys.catalog_ids"))]
 pub(crate) async fn catalog_ids(
     conn: &mut PgConnection,
     names: &[String],
 ) -> Result<Vec<i64>, OkfError> {
+    if let Some(name) = names.iter().find(|name| !catalogs::is_valid_name(name)) {
+        return Err(OkfError::CatalogNotSelected {
+            catalog: name.clone(),
+        });
+    }
     // `WITH ORDINALITY` numbers the array's elements, so the rows come back in
     // the caller's order with a NULL id for each unknown name.
     let rows: Vec<(String, Option<i64>)> = sqlx::query_as(
@@ -916,6 +928,8 @@ pub async fn list(pool: &PgPool) -> Result<Vec<KeyRecord>, OkfError> {
         "SELECT k.id, k.name, k.sha256, k.access, k.maintenance_report, k.provisioner, k.all_catalogs, \
                 d.name AS default_catalog, k.actor, k.created_at, k.revoked_at, k.expires_at, \
                 k.kind, k.client_id, oc.client_name, u.name AS user, k.user_id, k.self_issued, \
+                (SELECT max(t.created_at) FROM oauth_tokens t WHERE t.grant_id = k.id) \
+                    AS last_activity, \
                 COALESCE(array_agg(c.name ORDER BY c.name) FILTER (WHERE c.name IS NOT NULL), \
                          '{}'::text[]) AS catalogs, \
                 COALESCE(array_agg(COALESCE(g.access, k.access) ORDER BY c.name) \
@@ -963,6 +977,7 @@ pub async fn list(pool: &PgPool) -> Result<Vec<KeyRecord>, OkfError> {
                 user: row.user,
                 user_id: row.user_id,
                 self_issued: row.self_issued,
+                last_activity: row.last_activity,
             }
         })
         .collect())
@@ -1180,6 +1195,32 @@ async fn revoke_with(
             reason: format!("no active key {id:?}"),
         });
     }
+    record_revocation(&mut tx, &id, audit, serde_json::json!({}), now).await?;
+    tx.commit().await?;
+    Ok(id)
+}
+
+/// Records a revocation the transaction just made and bumps the
+/// administrative generation: what every revocation of a key or grant does
+/// after its `UPDATE`, whoever asked for it.
+///
+/// # Arguments
+/// * `conn` - the revocation's transaction, its people already locked.
+/// * `id` - the revoked key's or grant's id.
+/// * `audit` - who revoked it.
+/// * `details` - the entry's details (`{}` for an operator's revocation).
+/// * `now` - the revocation time.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "keys.record_revocation"))]
+async fn record_revocation(
+    conn: &mut PgConnection,
+    id: &str,
+    audit: &AuditActor,
+    details: serde_json::Value,
+    now: DateTime<Utc>,
+) -> Result<(), OkfError> {
     // `|target| ...` is a closure (Python's `lambda target: ...`): the
     // action follows the target `record_change` reads once.
     let action = |target: &Target<'_>| {
@@ -1189,10 +1230,156 @@ async fn revoke_with(
             Action::KeyRevoked
         }
     };
-    record_change(&mut tx, &id, action, audit, serde_json::json!({}), now).await?;
-    bump_admin_generation(&mut tx).await?;
+    record_change(conn, id, action, audit, details, now).await?;
+    bump_admin_generation(conn).await?;
+    Ok(())
+}
+
+/// The audit label of the poll loop's idle-grant revocations: entries show
+/// the actor as `system:idle-grant-revocation`.
+pub const IDLE_REVOCATION_ACTOR: &str = "idle-grant-revocation";
+
+/// Which `api_keys` rows (aliased `k`) are idle OAuth grants: a live grant
+/// (never a key) with no live token (unrevoked and unexpired, `$1` being
+/// now) whose last token activity, or its creation when it has no token on
+/// record, is before `$2`.
+///
+/// Every token is issued by an authorization-code exchange or a refresh,
+/// and refreshing needs a live refresh token, so a grant this matches can
+/// gain no new token: no client can still be using it. A grant made by a
+/// consent or a code redemption is matched only once `$2` has passed its
+/// creation. An issue already admitted when the pass runs (a refresh that
+/// validated its token just before it expired) holds the grant's share
+/// lock (`store::oauth::tokens::lock_grant`) until it commits, so the
+/// pass's `FOR UPDATE` waits for it and the re-check then sees its new
+/// tokens.
+///
+/// A macro, not a `const`, so `concat!` can splice it into the two queries
+/// at compile time: sqlx refuses SQL built with `format!` at run time.
+macro_rules! idle_grant {
+    () => {
+        "k.kind = 'oauth' AND k.revoked_at IS NULL \
+         AND NOT EXISTS (SELECT 1 FROM oauth_tokens t \
+                         WHERE t.grant_id = k.id AND t.revoked_at IS NULL AND t.expires_at > $1) \
+         AND COALESCE((SELECT max(t.created_at) FROM oauth_tokens t WHERE t.grant_id = k.id), \
+                      k.created_at) < $2"
+    };
+}
+
+/// A grant [`revoke_idle_grants`] revoked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdleRevocation {
+    /// The grant's id.
+    pub id: String,
+    /// Its last activity: its newest token's issue time, else its creation.
+    pub last_activity: DateTime<Utc>,
+}
+
+/// Revokes every OAuth grant that has been idle since before
+/// `idle_before` and holds no live token (`idle_grant!`), each the way an
+/// operator's `oauth grant revoke` does: one transaction that locks its
+/// people and its row, revokes it, records `oauth.grant_revoked` (actor
+/// `system:idle-grant-revocation`, details `{"reason": "idle",
+/// "last_activity": ...}`) and bumps the administrative generation. Static
+/// keys (`kind = 'key'`) are never touched.
+///
+/// Safe to run on several replicas at once: each grant is re-checked under
+/// its row lock, so a grant another pass (or an operator) revoked meanwhile
+/// is skipped, and revoked and audited once.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `idle_before` - the cut-off: `now` minus `oauth.idle_grant_revoke_after`.
+/// * `now` - the revocation time (server clock).
+///
+/// # Returns
+/// The grants this call revoked, in id order.
+///
+/// # Errors
+/// [`OkfError::Database`]. A grant whose owner or catalogs changed while it
+/// was being locked is skipped for the next pass, not an error.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "keys.revoke_idle_grants"))]
+pub async fn revoke_idle_grants(
+    pool: &PgPool,
+    idle_before: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Result<Vec<IdleRevocation>, OkfError> {
+    let candidates: Vec<String> = sqlx::query_scalar(concat!(
+        "SELECT k.id FROM api_keys k WHERE ",
+        idle_grant!(),
+        " ORDER BY k.id"
+    ))
+    .bind(now)
+    .bind(idle_before)
+    .fetch_all(pool)
+    .await?;
+    let audit = AuditActor::system(IDLE_REVOCATION_ACTOR);
+    let mut revoked = Vec::new();
+    for id in candidates {
+        match revoke_if_idle(pool, &id, idle_before, &audit, now).await {
+            Ok(Some(last_activity)) => revoked.push(IdleRevocation { id, last_activity }),
+            // Revoked meanwhile, or no longer idle.
+            Ok(None) => {}
+            // `lock_credential_people` refuses a grant whose owner or
+            // catalogs changed while it locked them; the next pass retries.
+            Err(OkfError::Refused { .. }) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(revoked)
+}
+
+/// One grant of [`revoke_idle_grants`], in its own transaction.
+///
+/// # Returns
+/// The grant's last activity if this revoked it; `None` if it is gone, was
+/// revoked meanwhile or is no longer idle (nothing is recorded then).
+///
+/// # Errors
+/// [`OkfError::Refused`] from `lock_credential_people`; [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "keys.revoke_if_idle"))]
+async fn revoke_if_idle(
+    pool: &PgPool,
+    id: &str,
+    idle_before: DateTime<Utc>,
+    audit: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<Option<DateTime<Utc>>, OkfError> {
+    // Dropping `tx` without `commit` (the early return) rolls it back.
+    let mut tx = pool.begin().await?;
+    // The same lock order as `revoke_with`: the people, then the row
+    // (`FOR UPDATE`), so a second pass waits here for the first to commit.
+    audit::lock_credential_people(&mut tx, audit, id, false, &audit::People::default()).await?;
+    // Started after the row lock was granted, so it reads the committed
+    // state; `idle_grant!` again, so a grant revoked or used meanwhile is
+    // left alone.
+    let last_activity: Option<DateTime<Utc>> = sqlx::query_scalar(concat!(
+        "UPDATE api_keys k SET revoked_at = $1 WHERE k.id = $3 AND ",
+        idle_grant!(),
+        " RETURNING COALESCE((SELECT max(t.created_at) FROM oauth_tokens t \
+                              WHERE t.grant_id = k.id), k.created_at)"
+    ))
+    .bind(now)
+    .bind(idle_before)
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(last_activity) = last_activity else {
+        return Ok(None);
+    };
+    record_revocation(
+        &mut tx,
+        id,
+        audit,
+        serde_json::json!({
+            "reason": "idle",
+            "last_activity": crate::clock::format_timestamp(last_activity),
+        }),
+        now,
+    )
+    .await?;
     tx.commit().await?;
-    Ok(id)
+    Ok(Some(last_activity))
 }
 
 /// Revokes a key selected by immutable id or an unambiguous live name.
@@ -1812,6 +1999,9 @@ async fn require_named_grants(conn: &mut PgConnection, id: &str) -> Result<(), O
 #[cfg(test)]
 #[path = "keys/audit_tests.rs"]
 mod audit_tests;
+#[cfg(test)]
+#[path = "keys/idle_tests.rs"]
+mod idle_tests;
 
 #[cfg(test)]
 mod tests {

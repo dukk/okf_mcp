@@ -10,12 +10,12 @@ import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
 import { catalogLabel, teamLabel } from '../core/labels.js';
 import { go, browseHash, route } from '../core/router.js';
-import { openDrawer } from '../core/drawer.js';
-import { ago, when, count } from '../core/format.js';
+import { ago, count } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
 import { segments } from '../components/segments.js';
 import { tree } from '../components/tree.js';
 import { canUnlock, openUnlock } from '../components/unlock.js';
+import { openRevision } from '../components/revision.js';
 
 // Read through /documents; everything else is a concept.
 const DOCUMENTS = new Set(['index.md', 'log.md', 'AGENTS.md']);
@@ -268,32 +268,9 @@ async function historyTab(view, where) {
         { key: 'actor', label: 'Actor', class: 'mono' },
         { key: 'message', label: 'Message' },
         { key: 'at', label: 'When', render: row => ago(row.at), sort: row => row.at },
-    ], data.revisions, { onRow: row => openRevision(view, where, row), empty: 'No revisions.' });
+    ], data.revisions, { onRow: row => openRevision(view, where.catalog, where.path, row), empty: 'No revisions.' });
     table.id = 'history';
     return table;
-}
-
-// One revision in the drawer: its diff from the revision before, and its text.
-// The drawer is outside this page's container, so it opens only while the
-// page is still shown (view is inside it, and detached with it).
-async function openRevision(view, where, row) {
-    let revision;
-    try {
-        revision = await api.get(`${base(where)}/revisions/${row.revision}/${encPath(where.path)}`);
-    } catch {
-        return;
-    }
-    if (!view.isConnected) return;
-    const lines = revision.diff.split('\n').map(line => h('span', {
-        class: line.startsWith('+') && !line.startsWith('+++') ? 'add'
-            : line.startsWith('-') && !line.startsWith('---') ? 'del' : null,
-    }, `${line}\n`));
-    openDrawer(`${revision.path} @ ${revision.revision}`, `${revision.op} by ${row.actor}, ${when(row.at)}: ${row.message}`,
-        h('h3', {}, 'Changes from the previous revision'),
-        h('pre', { class: 'diff', id: 'revision-diff' }, lines),
-        revision.text === null
-            ? h('p', { class: 'muted' }, 'No text at this revision (deleted, or not text).')
-            : h('details', {}, h('summary', {}, 'Text at this revision'), h('pre', { class: 'raw', id: 'revision-text' }, revision.text)));
 }
 
 function rawTab(raw, note) {

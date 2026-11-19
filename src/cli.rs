@@ -1636,8 +1636,10 @@ fn format_catalog(catalog: &catalogs::Catalog) -> String {
 }
 
 /// One `key list` line, tab-separated: name, actor, id, access, state,
-/// catalogs (`*` for all), `default X`, `maintenance_report B`, `user U`
-/// (`-` for none).
+/// catalogs (`*` for all), `default X`, `maintenance_report B`,
+/// `provisioner yes|no`, `user U` (`-` for none), `kind key|oauth`,
+/// `client NAME` (`-` for a key) and `last_activity T` (a grant's newest
+/// token's issue time; `-` for a key or a grant with no token on record).
 ///
 /// # Arguments
 /// * `key` - the key or grant.
@@ -1667,6 +1669,12 @@ fn format_key_record(key: &keys::KeyRecord) -> String {
         &format!("maintenance_report {}", key.maintenance_report),
         &format!("provisioner {}", if key.provisioner { "yes" } else { "no" }),
         &labelled("user", key.user.as_deref()),
+        &format!("kind {}", key.kind.as_str()),
+        &labelled("client", key.client_name.as_deref()),
+        &labelled(
+            "last_activity",
+            key.last_activity.map(format_timestamp).as_deref(),
+        ),
     ])
 }
 
@@ -1731,11 +1739,7 @@ async fn run_oauth(
         OauthCommand::Grant(GrantCommand::List) => {
             for grant in keys::list(pool).await? {
                 if grant.kind == KeyKind::OAuth {
-                    println!(
-                        "{}\t{}",
-                        format_key_record(&grant),
-                        labelled("client", grant.client_name.as_deref())
-                    );
+                    println!("{}", format_key_record(&grant));
                 }
             }
         }
@@ -2257,7 +2261,10 @@ mod tests {
         );
         assert!(
             format_key_record(records.iter().find(|record| record.id == old_id).unwrap())
-                .ends_with("\tmaintenance_report false\tprovisioner no\tuser test-user")
+                .ends_with(
+                "\tmaintenance_report false\tprovisioner no\tuser test-user\tkind key\tclient -\t\
+                 last_activity -"
+            )
         );
         run(
             cli(
@@ -2377,6 +2384,7 @@ mod tests {
             user: None,
             user_id: None,
             self_issued: false,
+            last_activity: None,
         };
         let assigned = keys::KeyRecord {
             user: Some("alice".to_string()),
@@ -2386,9 +2394,20 @@ mod tests {
         assert_eq!(
             format_key_record(&record),
             "claude\tclaude-code-tui\tcredential-id\twrite\tactive\tpg,work\tdefault pg\t\
-             maintenance_report false\tprovisioner no\tuser -"
+             maintenance_report false\tprovisioner no\tuser -\tkind key\tclient -\t\
+             last_activity -"
         );
-        assert!(format_key_record(&assigned).ends_with("\tuser alice"));
+        assert!(format_key_record(&assigned)
+            .ends_with("\tuser alice\tkind key\tclient -\tlast_activity -"));
+        let grant = keys::KeyRecord {
+            kind: keys::KeyKind::OAuth,
+            client_name: Some("Example Client".to_string()),
+            last_activity: Some("2026-11-09T12:00:00Z".parse().expect("a time")),
+            ..record.clone()
+        };
+        assert!(format_key_record(&grant).ends_with(
+            "\tuser -\tkind oauth\tclient Example Client\tlast_activity 2026-11-09T12:00:00Z"
+        ));
     }
 
     #[test]

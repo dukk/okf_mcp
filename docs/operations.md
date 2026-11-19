@@ -47,7 +47,7 @@ changesets and the routes in detail.
   | `GET /healthz` | none | The database's state, the catalog count and the last clock check (section 7) |
   | `POST/GET/DELETE /mcp` | any key (`read`, `write` or `admin`) | MCP streamable HTTP; each tool checks its own level and the key's catalog grants |
   | `GET /catalogs/{name}/export` | `read` on the catalog | The catalog as a `.tar.gz` |
-  | `POST /catalogs/{name}/import[?replace=true&only_machinery=true&expect_generation=N]` | `admin` on the catalog | Imports an uploaded `.tar.gz` |
+  | `POST /catalogs/{name}/import[?replace=true&only_machinery=true&expect_generation=N]` | `write` on the catalog | Imports an uploaded `.tar.gz` |
 
   Keys are bearer tokens (`Authorization: Bearer <key>`). Only `/healthz` is
   open, and it names no catalog, host or secret.
@@ -107,6 +107,7 @@ unknown keys are ignored, so one file serves every version.
 | `public_url` | none | The server's public origin, such as `"https://okf-mcp.example.com"` (no path, query or user info; a trailing `/` is dropped). Setting it turns on OAuth ("OAuth connectors") and console sign-in by account ("Signing in and self-service"); without it the OAuth and sign-in routes are 404. It must be `https`, except on a loopback host (such as `localhost`, `127.0.0.1` or `::1`) for local testing, and its host must be in `allowed_hosts` |
 | `oauth.access_token_ttl` | `"1h"` | How long an OAuth access token works |
 | `oauth.refresh_token_ttl` | `"30d"` | How long a refresh token works. Each refresh issues a new one with a fresh lifetime, so a connection used within this stays signed in |
+| `oauth.idle_grant_revoke_after` | `"30d"` | The poll loop revokes an OAuth grant that has had no token issued for this long and holds no live token ([Idle grants](#idle-grants)). At most 10 years; zero is refused |
 | `oauth.code_max_expiry` | `"7d"` | The longest expiry a sign-in code may be given (`oauth code create --expires`, the console's expiry) |
 | `oauth.dcr_enabled` | `true` | Accept dynamic client registration (RFC 7591) at `/oauth/register`. Clients that publish a Client ID Metadata Document work either way |
 | `oauth.cimd_allow_private` | `false` | Fetch Client ID Metadata Documents from loopback and private addresses. For test rigs only: it opens the fetcher to the internal network |
@@ -207,6 +208,7 @@ public_url = "https://okf-mcp.example.com"   # turns on OAuth; see "OAuth connec
 [oauth]
 access_token_ttl = "1h"
 refresh_token_ttl = "30d"
+idle_grant_revoke_after = "30d"
 code_max_expiry = "7d"
 dcr_enabled = true
 cimd_allow_private = false
@@ -1253,8 +1255,8 @@ id on stderr; only the key's SHA-256 is stored. Put it straight
 into a password manager or a secret store. Never paste it into logs, tickets,
 chat or shell history (a leading space keeps a command out of history in most
 shells). `key list` shows name, actor, id, access, state, grants, `default
-X`, `maintenance_report true|false`, `provisioner yes|no` and `user U` (`-` for a key from before
-users existed that nobody has assigned), grouped by name. Use
+X`, `maintenance_report true|false`, `provisioner yes|no`, `user U` (`-` for a key from before
+users existed that nobody has assigned), `kind key|oauth`, `client NAME` (the OAuth client's name for a grant, `-` for a key) and `last_activity T` (when a grant's newest token was issued, `-` for a key or a grant with none on record; see "Idle grants" below), grouped by name. OAuth grants appear in the list too and may share a name and actor with a key, so check `kind`. Use
 `okf-mcp key maintenance-report ID --enabled true|false [--actor ACTOR]` to
 change the reporting flag. `revoke`, `grant`, `ungrant` and `maintenance-report`
 accept an id, an unambiguous live name, or `NAME --actor ACTOR` of an API key;
@@ -1453,7 +1455,7 @@ takes effect at once.
 
 `catalog list` prints name, `generation N`, `owner T` (`-` when unassigned),
 then the description. `key list`, `oauth grant list` and `oauth code list`
-end with `user U` (`-` when unassigned). Every listing is tab-separated with
+end with `user U` (`-` when unassigned); `key list` and `oauth grant list` then add `kind` and `client`. Every listing is tab-separated with
 no header row, so `cut -f` works on it.
 
 ### Provisioner keys
@@ -1687,7 +1689,7 @@ do; the command line needs only the database, as every subcommand does.
   Import & export, and the 403 shows its own message.
 - **Admins are exempt.** An `admin` key, or an admin user's console session,
   is not affected, so the operator can still inspect, export and repair the
-  catalogs. Import needs `admin` anyway, so only an admin can import into a
+  catalogs. Import is a write, so only an admin can import into a
   suspended catalog.
 - **Only credentials that reach the catalog learn of it.** Reach is checked
   first: a credential that doesn't reach the catalog still gets
@@ -1845,7 +1847,7 @@ of `docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`).
 | `setting.changed` | `settings set` or `PUT /api/v1/settings/{key}` changes a setting ([Settings](#settings)). Setting the value already stored records nothing | `from` (the stored value before, `null` without an override) and `to`; for `support_contact` only `set` (whether a contact is set now), never the address |
 | `setting.cleared` | `settings reset` or `DELETE /api/v1/settings/{key}` removes an override (with none, nothing is recorded) | `from`; nothing for `support_contact` |
 | **Catalog writes** | | |
-| `catalog.published` | A publish writes at least one revision (one that changes nothing writes none and records nothing). Moves, splits and concept deletes are publishes and are recorded as such | `changeset` (the handle; the diff stays in the catalog's history), `files` (revisions written), `generation_from`, `generation_to` |
+| `catalog.published` | A publish (the `publish` tool, `POST /api/v1/changesets/{handle}/publish`, the console's Publish) writes at least one revision (one that changes nothing writes none and records nothing). Moves, splits and concept deletes are publishes and are recorded as such | `changeset` (the handle; the diff stays in the catalog's history), `files` (revisions written), `generation_from`, `generation_to` |
 | `catalog.reverted` | A `revert` succeeds: a document's old revision (or its deletion) goes into a changeset. A refused revert records nothing | `path`, `revision`, `changeset` |
 | `catalog.changeset_discarded` | An admin closes another key's changeset (`discard` without `paths`, or `DELETE /api/v1/changesets/{handle}`), or a user deletion discards an open changeset of one of the user's keys (the entry's person is that user). A key discarding its own changeset records nothing | `changeset`, `files` (entries dropped), `reason` (`admin` or `user_deleted`) |
 | **Data access** | | |
@@ -2119,7 +2121,9 @@ token derived from it, stored hashed too.
   session reaches exactly its ceiling, at the ceiling's levels. The admin
   flag and the ceiling are read from the key cache on every request.
 - **No changesets.** A session never owns a changeset, so MCP writes still
-  need a key or a grant.
+  need a key or a grant. An admin user's session may still publish or
+  discard any key's changeset from the Changesets page, recorded as that
+  user.
 - **Ending sessions.**
   - Sign-out (the console's Sign out, `DELETE /api/v1/session`) deletes the
     session.
@@ -2399,7 +2403,8 @@ renames and revokes the keys they made themselves. A self-issued key:
 Creating one above the ceiling, past the key limit or beyond the lifetime
 limit answers 422 naming the limit (`ceiling`, `max_keys_per_user` or
 `max_key_lifetime`). An expired key stops working at once. **My grants**
-(`/ui/#/my-grants`) lists and revokes the user's OAuth grants. My keys also
+(`/ui/#/my-grants`) lists and revokes the user's OAuth grants, with when
+each was last active ([Idle grants](#idle-grants)). My keys also
 lists the keys an admin made for the user: those are admin-issued, so not
 capped by the ceiling, and an admin manages them on the API keys page.
 **Account** (`/ui/#/account`) changes the password, adds, renames and
@@ -3067,7 +3072,7 @@ reason and hours.
 
 ### API reference
 
-The API has 94 endpoints (a method and path each). The identity endpoints
+The API has 95 endpoints (a method and path each). The identity endpoints
 are below (3), and each area's endpoints are in its own subsection:
 [API keys](#api-keys) (7),
 [OAuth sign-in codes](#oauth-sign-in-codes) (4),
@@ -3075,7 +3080,7 @@ are below (3), and each area's endpoints are in its own subsection:
 [Your account](#your-account-api) (19),
 [Settings and mail](#settings-and-mail-api) (7),
 [Audit](#audit-api) (2), [Unlocks](#unlocks-api) (3),
-[Health](#health) (2), [Browse and search](#browse-and-search) (7),
+[Health](#health) (2), [Browse and search](#browse-and-search) (8),
 [Catalogs and import/export](#catalogs-and-importexport) (10),
 [Findings and runs](#findings-and-runs) (6) and [Changesets](#changesets) (3).
 Each area's tests but Your account's check every endpoint against the
@@ -3412,6 +3417,16 @@ the revision's diff in a drawer. Choosing another catalog in the switcher
 while browsing opens that catalog's root `index.md`. Search
 (`#/search/<query>`) searches every catalog the key reaches.
 
+Recent changes (`#/recent`) lists the revisions published in the selected
+catalog, newest first: every document's, one row per revision (a path
+changed three times has three rows), creates, updates, deletions and
+imports alike, with the path, revision, operation, actor, message and time.
+Open changesets never show; only what was published. A row opens that
+revision's diff and text in the same drawer as Browse's History tab, a
+deleted document's included. Refresh reads the newest page again, and Load
+older continues from the last row shown. Choosing another catalog in the
+switcher shows that catalog's changes.
+
 Concepts are rendered to HTML on the server (`src/render.rs`):
 
 - raw HTML in a document is shown as text, never run;
@@ -3435,10 +3450,11 @@ whole body and scrolls to that heading.
 | `GET /api/v1/catalogs/{catalog}/history/{path}?limit=` | read | The `history` tool |
 | `GET /api/v1/catalogs/{catalog}/revisions/{n}/{path}` | read | `text` at revision `n` (null for a deletion or non-text bytes) and a unified `diff` from revision `n-1` |
 | `GET /api/v1/catalogs/{catalog}/documents/{path}` | read | `read_document` (any `index.md` or `log.md`, the root `AGENTS.md`) plus `body_html` |
+| `GET /api/v1/catalogs/{catalog}/recent-changes?limit=&after=` | read | The catalog's published revisions, newest first: `{catalog, catalog_label, changes, next_after}`, each change `{path, revision, op, actor, actor_label, message, at}`, content left out. Revisions sharing a time come by path, then revision, both descending. `limit` 1..=200 (default 50; outside is 409); `after` is the previous page's `next_after` (an unknown or malformed one is 404); `next_after` is `null` on the last page |
 | `GET /api/v1/search?q=&catalogs=&limit=` | read | The `search` tool. `catalogs` is comma-separated and defaults to every catalog the key reaches; a named catalog it does not reach is a 404 |
 
 A catalog the key does not reach, or that does not exist, is 404 on all
-seven.
+eight.
 
 The per-document routes put their kind before the path (`/links/{path}`,
 not `/concepts/{path}/links`), because the path is a wildcard and must come
@@ -3463,7 +3479,7 @@ curl -s -H "Authorization: Bearer $OKF_MCP_KEY" \
 | `PUT /api/v1/catalogs/{catalog}/maintenance` | admin, every catalog; or an owner of the catalog's team, signed in | Body `{maintenance: "on"\|"off"}`. Lets the maintenance runner in or keeps it out; answers `{name, previous, maintenance}`. 403 for anyone else (a non-owner's session also for an unknown catalog), 404 for an unknown catalog asked by an admin, 422 for another value or without `maintenance` |
 | `DELETE /api/v1/catalogs/{catalog}[?force=true]` | admin | Deletes the catalog with its documents, history, changesets and grants; answers `{name}`. 409 while an open changeset holds unpublished changes, unless `force=true` |
 | `GET /api/v1/catalogs/{catalog}/export` | read | The same handler and 120 s timeout as `/catalogs/{name}/export` |
-| `POST /api/v1/catalogs/{catalog}/import[?replace=true&only_machinery=true&expect_generation=N]` | admin | The same handler, body cap and upload deadline as `/catalogs/{name}/import` |
+| `POST /api/v1/catalogs/{catalog}/import[?replace=true&only_machinery=true&expect_generation=N]` | write | The same handler, body cap and upload deadline as `/catalogs/{name}/import` |
 
 A catalog the key does not reach, or that does not exist, is 404 on every
 route but the list, the create, the owner change, the member-access
@@ -3488,10 +3504,12 @@ The Catalogs page lists the catalogs with their owner team and counts. An
 admin opens a row to change its description or delete it (typing its name to
 confirm, with a force box for unpublished changes); an admin key that reaches
 every catalog also gets New catalog (with a required owner team) and the
-drawer's Change owner (Assign for an unassigned catalog). The Import & export page exports the selected catalog
-as a `.tar.gz` download, and, for an admin, uploads one with the import
-options, a progress bar and the import report (or the refusal and its
-problems). It pre-fills the expected generation from `GET /api/v1/catalogs`,
+drawer's Change owner (Assign for an unassigned catalog). The Import & export
+page sits in the main navigation, outside Administer, for anyone signed in.
+Its picker lists the catalogs the credential reaches; it exports the picked
+catalog as a `.tar.gz` download for `read` or more, and, for `write` or more
+on that catalog, uploads one with the import options, a progress bar and the
+import report (or the refusal and its problems). It pre-fills the expected generation from `GET /api/v1/catalogs`,
 so an import is refused if the catalog moved since the page loaded; clear the
 field to skip the check.
 
@@ -3529,19 +3547,52 @@ curl -fsS -H "Authorization: Bearer $OKF_MCP_KEY" -H 'Content-Type: application/
 The Changesets page (`/ui/#/changesets`) lists the selected catalog's open
 changesets: a key sees its own, an admin every key's. It marks the idle ones
 (no change within `session_idle_timeout`), and a row opens the changeset's
-pending diff in a drawer, with Discard. These are the `list_changesets`,
-`pending_changes` and `discard` tools over HTTP, with the same rules: the
-diff is for the key that opened the changeset or an admin (a read key opens
-none, so it sees none), and another key's handle answers 404, as an unknown
-one does, never 403.
+pending diff in a drawer, with Publish and Discard. These are the
+`list_changesets`, `pending_changes`, `publish` and `discard` tools over
+HTTP, with the same rules: the diff is for the key that opened the changeset
+or an admin (a read key opens none, so it sees none), publishing and
+discarding are for that key (at write) or an admin, and another key's handle
+answers 404, as an unknown one does, never 403. A suspended or locked
+catalog, and the maintenance runner on a catalog with maintenance off, are
+refused as the tools refuse them.
+
+A console session owns no changeset, so a member's session sees none here;
+an admin user's session sees every key's, and may publish or discard them.
+To publish your own key's changeset from the console as a member, sign in
+to the console with that key.
+
+**Publishing from the console.** This is the manual way to finish what an
+agent staged, for instance when its own `publish` call keeps failing.
+Review the diff, type a revision message (it is required, and recorded on
+every revision the publish writes), click Publish and confirm. Cancel sends
+nothing. While the publish runs, Publish and Discard stay disabled, even in
+a drawer opened again meanwhile.
+- **Published.** The drawer closes, the handle leaves the list, and a note
+  above the list shows the revisions written, with any lint warnings and
+  replayed bookkeeping paths. The revisions and the `catalog.published`
+  audit entry name whoever published: an admin publishing an agent's
+  changeset is recorded as that admin (its key, or its console session),
+  never as the key that opened the changeset. A changeset whose edits all
+  match the published text closes with no revisions.
+- **Nothing to publish.** A changeset with no pending files is not
+  published and stays open (discard it, or let the 24-hour prune of empty
+  changesets close it).
+- **Refused.** A conflict (a document changed since the changeset read it)
+  lists the conflicting files; a lint failure lists the errors. Nothing is
+  published or discarded and the message stays in the form: fix the
+  changeset through the agent or another MCP client, then publish again.
 
 | Method and path | Key | Does |
 |---|---|---|
 | `GET /api/v1/changesets?catalog=` | read | The key's own open changesets; an admin's: every key's. `catalog` is optional (absent or empty: every catalog the key reaches; an unreached one is 404). As `list_changesets`: `changeset`, `catalog`, `key`, `key_name`, `actor`, `created`, `last_change`, `idle`, `paths` |
 | `GET /api/v1/changesets/{handle}/diff` | owner or admin | As `pending_changes`: `{catalog, changeset, files}`, each file with its unified `diff`. 404 for another key's handle; 409 once published or discarded |
+| `POST /api/v1/changesets/{handle}/publish` | write (owner) or admin | As `publish`, with the body `{"message": "..."}`: `{catalog, catalog_label, changeset, published, revisions, warnings, replayed}`, each revision `{path, revision, op}`. `published: false` means the changeset held no entries and stays open; `published: true` with no revisions means every edit matched the published text, and it is closed. The revisions and the `catalog.published` entry are the caller's (an admin's own, when it publishes another key's changeset). 404 for another key's handle or an unknown one; 403 for a suspended or locked catalog, or the maintenance runner where maintenance is off; 409 for a blank message (`Refused`), a published or discarded handle (`Refused`) or a conflict (`Conflict`, with `files`: `path`, `base_revision`, `current_revision`); 422 for lint errors in the changed files (`LintFailed`, with `errors` and `warnings`) or a body without `message`. A refused publish leaves the changeset open and unchanged |
 | `DELETE /api/v1/changesets/{handle}` | write (owner) or admin | As `discard` without `paths`: drops every entry and closes the handle for good (`{catalog, changeset, removed, closed}`). An admin closing another key's changeset is recorded in the [audit log](#audit-log). 404 for another key's handle; 409 once published or discarded |
 
 ```sh
+curl -s -X POST -H "Authorization: Bearer $OKF_MCP_KEY" \
+    -H 'Content-Type: application/json' -d '{"message": "Reviewed the agent edits"}' \
+    https://okf-mcp.example.com/api/v1/changesets/$HANDLE/publish
 curl -s -X DELETE -H "Authorization: Bearer $OKF_MCP_KEY" \
     https://okf-mcp.example.com/api/v1/changesets/$HANDLE
 ```
@@ -3640,8 +3691,15 @@ appended), `/.well-known/oauth-authorization-server`, `/oauth/` and `/ui/`
 (an `https://` `client_id`) makes the server fetch that document from the
 client's host over HTTPS. The fetch ignores `HTTP_PROXY` and the other proxy
 variables, so a network policy that blocks the pod's direct outbound HTTPS
-breaks such clients. Clients that register themselves (dynamic client
-registration) need no egress.
+breaks such clients. A fetched document is cached (5 minutes to 24 hours, from
+its `Cache-Control`). If a refetch fails in transport (timeout, refused
+connection, no DNS answer, a non-200 status), the cached copy keeps working
+for up to 24 hours after it was fetched. If the refetch delivers an invalid
+document (not JSON, too large, a changed `client_id`, invalid
+`redirect_uris`), that authorization fails at once. The cached copy is left
+in place, not replaced or evicted, so a later refetch that fails in transport
+can still use it within the 24 hours, and the next valid document replaces it. Clients that register
+themselves (dynamic client registration) need no egress.
 
 **State.** Without `[redis]` the server stays single-replica. Consent pages in
 progress and authorization codes not yet exchanged live in memory, so a
@@ -3703,6 +3761,33 @@ The client renews its access itself: access tokens last
 `oauth.refresh_token_ttl` from its last use. A connection used at least that
 often stays connected.
 
+#### Idle grants
+
+A grant's **last activity** is when its newest token was issued: the
+client's first token exchange after sign-in, and every refresh since (each
+refresh issues a new pair). Requests made with an access token are not
+recorded one by one, but a client that keeps working refreshes at least
+every `oauth.access_token_ttl`, so the time lags real use by at most that
+much. `okf-mcp oauth grant list` and `key list` show it as `last_activity T`,
+the console's API keys page and My grants as Last active. `-` means no token
+is on record: the grant was never used, or its tokens expired more than a
+week ago and were pruned.
+
+Once an hour the poll loop revokes every grant whose last activity (or, with
+no token on record, its creation) is older than
+`oauth.idle_grant_revoke_after` (30 days by default) and that holds no live
+token, unrevoked and unexpired. Such a grant can never be used again (only a
+live refresh token gets a new one), so the revocation only tidies the list.
+With a `refresh_token_ttl` longer than the idle period, a grant is kept
+until its last refresh token expires. Static API keys are never touched.
+
+The revocation is the one `oauth grant revoke` makes: the grant shows as
+revoked, and the audit log records `oauth.grant_revoked` with the actor
+`system:idle-grant-revocation` and the details `{"reason": "idle",
+"last_activity": "..."}`. With several replicas, each runs the pass; a grant
+is re-checked under its row lock, so it is revoked and audited once. The
+client reconnects with a new sign-in, as after any revoke.
+
 Each connection needs its own code. Connecting ChatGPT and Claude.ai, two
 people, or the same client again after a revoke, takes a new code each time.
 
@@ -3714,7 +3799,7 @@ people, or the same client again after a revoke, takes a new code each time.
 | `okf-mcp oauth code list` | Every code, never the code itself. Tab-separated: name, actor, id, access, state (`live`, `expired`, `redeemed` or `revoked`), catalogs (`*` for all), `default D`, `expires T`, `grant G` (the grant a redeemed code became), `user U`; an empty cell is `-` |
 | `okf-mcp oauth code revoke ID` | Revokes a code nobody has redeemed. Refuses a redeemed or already revoked one |
 | `okf-mcp oauth code assign ID --user USER` | Gives a code, in any state, a user. The grant a redeemed code became keeps its own user: assign that with `okf-mcp key assign` ([Users and teams](#users-and-teams)) |
-| `okf-mcp oauth grant list` | The OAuth grants, revoked ones included, with `key list`'s columns (ending in `user U`) and `client <name>` |
+| `okf-mcp oauth grant list` | The OAuth grants, revoked ones included, with `key list`'s columns (ending in `user U`, `kind oauth`, `client <name>`, `last_activity T`; see [Idle grants](#idle-grants)) |
 | `okf-mcp oauth grant revoke ID` | Revokes a grant by its exact id, and with it every token it holds. Refuses a plain key's id |
 
 Each takes `--database-url` and `--config` like every subcommand; inside the
@@ -4266,7 +4351,7 @@ curl -sf -H "Authorization: Bearer $OKF_MCP_KEY" -o notes.tar.gz \
 | `user delete` is refused (409) | Its personal team owns a catalog, it is the last owner of a shared team, or (over REST and in the console) it is the last admin user. The message names the cause ([Deletion rules](#deletion-rules)) |
 | A tool returns `CatalogNotSelected` or `Forbidden` | The key is not granted that catalog, or its access level is too low (a `read` key calling a write tool). `okf-mcp key grant`, or a key with more access |
 | 404 on an archive route | The catalog doesn't exist or the key isn't granted it (never 403, so a key can't probe which catalogs exist) |
-| 403 on an archive route | The key reaches the catalog but its level is too low: import needs `admin` |
+| 403 on an archive route | The key reaches the catalog but its level is too low: import needs `write` (export needs only `read`). A `Suspended` 403 on import means the catalog's owner team is suspended: only an admin imports then |
 | 413 on import | The body is over `max_import_bytes` plus slack (a plain-text axum rejection), or, if the answer comes from nginx, over the ingress's `proxy-body-size`. Raise both together |
 | 409 on import | The catalog is not empty: add `?replace=true` (or `--replace` on the command line). Or, with `?expect_generation=N`, the catalog has moved since that export: export it again |
 | `/healthz` is 503 and the pod is not ready | The database did not answer within 2 seconds: check the `Cluster`'s state, the `okf-mcp-db-app` secret and network policies |
@@ -4284,6 +4369,6 @@ curl -sf -H "Authorization: Bearer $OKF_MCP_KEY" -o notes.tar.gz \
 | The consent page says the redirect URI is not one the client registered | The client sent a `redirect_uri` that is not, character for character, one of those it declared. Fix the client's registration or metadata document |
 | The consent page refuses a sign-in code | The code is mistyped, expired, already redeemed or revoked (the page does not say which, on purpose). `okf-mcp oauth code list` shows its state; mint a new one |
 | The consent page says "This sign-in request has expired or is not valid." or "Too many wrong sign-in codes." | The sign-in took longer than 10 minutes, the server restarted, or a code was refused five times. Start the connection again in the client |
-| An OAuth client was connected but now gets 401 and asks to sign in | Its grant was revoked, it was unused for longer than `oauth.refresh_token_ttl`, the client revoked its refresh token, or a used refresh token was presented again (a sign of a copied token), which ends the connection's tokens. Mint a new code and reconnect |
+| An OAuth client was connected but now gets 401 and asks to sign in | Its grant was revoked (by an operator, or by the poll loop once idle: the audit actor is then `system:idle-grant-revocation`), it was unused for longer than `oauth.refresh_token_ttl`, the client revoked its refresh token, or a used refresh token was presented again (a sign of a copied token), which ends the connection's tokens. Mint a new code and reconnect |
 | Approve shows "Returning to your client" but the client never connects | The browser did not follow the refresh. Click Continue on the page; if that also fails, the client is not listening on its redirect URI (a native client's loopback port closed) |
 | `/oauth/register` or `/oauth/token` answers 429 `slow_down` | The global rate limit, or 500 registered clients without a grant (each is deleted 24 hours after registration). Wait and retry; look for a client registering in a loop |

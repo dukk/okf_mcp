@@ -124,11 +124,10 @@ impl IntoResponse for TokenResponse {
     fn into_response(self) -> Response {
         // RFC 6749 section 5.1: a response carrying tokens must not be
         // cached, by HTTP/1.1 (`Cache-Control`) or HTTP/1.0 (`Pragma`) caches.
+        // `Cache-Control: no-store` comes from the `/oauth/*` route layer
+        // (`oauth::routes`), so it is not set here as well; only `Pragma` is.
         (
-            [
-                (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
-                (header::PRAGMA, HeaderValue::from_static("no-cache")),
-            ],
+            [(header::PRAGMA, HeaderValue::from_static("no-cache"))],
             Json(self),
         )
             .into_response()
@@ -430,8 +429,15 @@ async fn exchange_code(
         resource: &stored.resource,
     };
     let mut tx = app.pool().begin().await.map_err(OkfError::from)?;
-    // The family's lock, as a rotation takes it (`use_refresh`), so a
-    // family revocation waits for this commit and then sees these tokens.
+    // The grant's share lock, then the family's, as a rotation takes them
+    // (`use_refresh`): a grant revoked since the key-cache check above is
+    // refused here, and a revocation that starts now waits for this commit.
+    if !token_rows::lock_grant(&mut tx, &stored.grant_id).await? {
+        return Err(OAuthError::InvalidGrant(
+            "the grant was revoked".to_string(),
+        ));
+    }
+    // A family revocation waits for this commit and then sees these tokens.
     token_rows::lock_family(&mut tx, &stored.family_id).await?;
     let minted = mint(&mut tx, oauth, binding, app.clock().now()).await?;
     tx.commit().await.map_err(OkfError::from)?;
@@ -650,6 +656,8 @@ mod tests {
 
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(headers["cache-control"], "no-store");
+        // Exactly one `Cache-Control`, from the route layer alone (issue #270).
+        assert_eq!(headers.get_all("cache-control").iter().count(), 1);
         assert_eq!(headers["pragma"], "no-cache");
         assert_eq!(body["token_type"], "Bearer");
         assert_eq!(body["expires_in"], 3600);

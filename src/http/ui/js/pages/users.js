@@ -11,12 +11,13 @@ import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
 import { toast } from '../core/toast.js';
 import { drawerTicket } from '../core/drawer.js';
+import { latest } from '../core/latest.js';
 import { guard, once } from '../core/pending.js';
 import { ago, when } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
 import { confirmDialog } from '../components/confirm.js';
-import { assignControl, namesOf } from '../components/picker.js';
-import { named, teamLabel, userLabel } from '../core/labels.js';
+import { assignControl, namesOf, rowsOf, teamChoices } from '../components/picker.js';
+import { named, userLabel } from '../core/labels.js';
 import { accountSections, loadAccount } from '../components/user-account.js';
 import { canAdministerPeople, keyUserChanged, refreshIdentity, refreshUnassigned } from '../core/shell.js';
 
@@ -73,6 +74,9 @@ export async function render(main, rest) {
                 h('button', { type: 'button', id: 'user-new', disabled: !manager, onclick: openCreate }, 'New user'))),
         table,
         manager ? null : h('p', { class: 'muted small' }, NEEDS_EVERY_CATALOG));
+    // Numbers the list's reads: a slower older read never draws over a
+    // newer one, nor into another page once this one is left.
+    const listReads = latest(main);
     await load();
 
     // The user drawer shown or loading ({name, ticket, last}), and the count
@@ -84,9 +88,10 @@ export async function render(main, rest) {
     if (rest[0] === 'detail' && rest[1]) await openDetail(rest[1]);
 
     async function load() {
+        const current = listReads();
         try {
             const { users } = await api.get('/users');
-            if (main.isConnected) table.redraw(users);
+            if (current()) table.redraw(users);
         } catch { /* toasted */ }
     }
 
@@ -284,9 +289,10 @@ async function renderUnassigned(main) {
         let users;
         let teams;
         try {
-            [rows, users, teams] = await Promise.all([api.get('/unassigned'), namesOf('users'), namesOf('teams')]);
+            [rows, users, teams] = await Promise.all([api.get('/unassigned'), namesOf('users'), rowsOf('teams')]);
         } catch { return; }
         if (!main.isConnected) return;
+        const teamPick = teamChoices(teams);
         const items = [
             ...rows.keys.map(key => assignRow(`key-${key.name}`,
                 [key.kind === 'oauth' ? 'Grant ' : 'Key ', h('code', {}, key.name), ` (actor ${key.actor})`,
@@ -300,7 +306,7 @@ async function renderUnassigned(main) {
                 users, user => api.put(`/oauth/codes/${enc(code.id)}/user`, { user }), `${code.name} now belongs to`, userLabel)),
             ...rows.catalogs.map(name => assignRow(`catalog-${name}`,
                 ['Catalog ', h('code', {}, name)],
-                teams, team => api.put(`/catalogs/${enc(name)}/owner`, { team }), `${name} is now owned by`, teamLabel)),
+                teamPick.names, team => api.put(`/catalogs/${enc(name)}/owner`, { team }), `${name} is now owned by`, teamPick.labelOf)),
         ];
         body.replaceChildren(items.length
             ? h('ul', { class: 'grant-list' }, items)

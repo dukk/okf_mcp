@@ -106,7 +106,7 @@ Create a concept in the changeset `changeset` names (open one with open_changese
 
 **Delete Concept** (destructive)
 
-Delete a concept and its listing in its folder's index.md, in the changeset `changeset` names (open one with open_changeset). Refused with StillLinked, listing each link (source, line), while any other document links to it, log.md and other index.md files included; move_concept or edit_document fixes them first. index.md files are never deleted. Write access.
+Delete a concept and its listing in its folder's index.md, in the changeset `changeset` names (open one with open_changeset). Links to it in log.md become plain text (the link text stays, the target goes), replayed at publish so concurrent log entries never conflict. Refused with StillLinked, listing each link (source, line), while any other document links to it, other index.md files included; move_concept or edit_document fixes them first. index.md files are never deleted. Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|

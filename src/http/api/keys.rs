@@ -67,6 +67,9 @@ pub(crate) struct KeyView {
     pub self_issued: bool,
     /// The user it belongs to (`None`: unassigned, from before users existed).
     pub user: Option<String>,
+    /// A grant's last token activity: when its newest token on record was
+    /// issued (`None` for a key, or a grant with none on record).
+    pub last_activity: Option<String>,
 }
 
 impl From<KeyRecord> for KeyView {
@@ -104,6 +107,7 @@ impl From<KeyRecord> for KeyView {
             // The API names users; their ids stay internal.
             user_id: _,
             self_issued,
+            last_activity,
         } = record;
         Self {
             id,
@@ -127,6 +131,7 @@ impl From<KeyRecord> for KeyView {
             expires_at: expires_at.map(format_timestamp),
             self_issued,
             user,
+            last_activity: last_activity.map(format_timestamp),
         }
     }
 }
@@ -1144,6 +1149,131 @@ mod tests {
             state(&listed, &replacement.id).is_null(),
             "the replacement stays live"
         );
+    }
+
+    /// The other three by-id changes (report flag, grant, ungrant) sent to a
+    /// legacy id (one derived from its name) while a newer live key shares
+    /// that name. Each handler maps its path id to the store separately, so
+    /// each is checked: only the legacy key changes, its same-name
+    /// replacement does not. (`POST .../revoke` is covered above.)
+    #[tokio::test]
+    async fn a_legacy_id_reaches_only_its_own_key_on_flag_grant_and_ungrant() {
+        let test = app().await;
+        let root = stored(&test, "root", Access::Admin, Grants::All).await;
+
+        // (legacy id and name, method, uri suffix, body, the field it changes,
+        // the legacy key's expected value afterwards).
+        type Case = (
+            &'static str,
+            &'static str,
+            &'static str,
+            Option<serde_json::Value>,
+            &'static str,
+            serde_json::Value,
+        );
+        let cases: [Case; 3] = [
+            (
+                "legacy-flag",
+                "PATCH",
+                "",
+                Some(json!({"maintenance_report": true})),
+                "maintenance_report",
+                json!(true),
+            ),
+            (
+                "legacy-grant",
+                "PUT",
+                "/catalogs/other",
+                None,
+                "catalogs",
+                json!(["main", "other"]),
+            ),
+            (
+                "legacy-ungrant",
+                "DELETE",
+                "/catalogs/main",
+                None,
+                "catalogs",
+                json!([]),
+            ),
+        ];
+
+        for (name, method, suffix, body, field, expected) in cases {
+            // A pre-0005 row (id == name), narrowed to the catalog `main`
+            // (the helper makes an every-catalog key, which grants refuse).
+            key_rows::insert_legacy_test_key(
+                test.app.pool(),
+                name,
+                Access::Write,
+                "terminal",
+                Utc::now(),
+            )
+            .await;
+            sqlx::query("UPDATE api_keys SET all_catalogs = false WHERE id = $1")
+                .bind(name)
+                .execute(test.app.pool())
+                .await
+                .expect("narrow the legacy key");
+            sqlx::query(
+                "INSERT INTO key_catalogs (key_id, catalog_id) \
+                 SELECT $1, id FROM catalogs WHERE name = 'main'",
+            )
+            .bind(name)
+            .execute(test.app.pool())
+            .await
+            .expect("grant the legacy key main");
+            // A newer live key with the same name and the same starting state.
+            let new = NewKey {
+                name,
+                access: Access::Write,
+                maintenance_report: false,
+                grants: Grants::Catalogs(&main_only()),
+                default_catalog: None,
+                actor: "web",
+                user: crate::db::TEST_USER,
+                self_issued: false,
+                expires_at: None,
+                levels: &[],
+            };
+            let replacement = key_rows::create_with_id(
+                test.app.pool(),
+                &new,
+                &crate::store::audit::AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("create the newer key");
+            test.app.poll().await.expect("poll the keys in");
+
+            let key_view = |listed: &serde_json::Value, id: &str| -> serde_json::Value {
+                listed["keys"]
+                    .as_array()
+                    .expect("a list")
+                    .iter()
+                    .find(|key| key["id"] == id)
+                    .cloned()
+                    .expect("the key is listed")
+            };
+            let (_, before) = send(&test, "GET", "/api/v1/keys", Some(&root.key), None).await;
+            let untouched = key_view(&before, &replacement.id);
+
+            let uri = format!("/api/v1/keys/{name}{suffix}");
+            let (status, answer) = send(&test, method, &uri, Some(&root.key), body).await;
+            assert_eq!(status.as_u16(), 200, "{method} {uri}: {answer}");
+            assert_eq!(answer["id"], name, "{method} {uri}");
+
+            let (_, after) = send(&test, "GET", "/api/v1/keys", Some(&root.key), None).await;
+            assert_eq!(
+                key_view(&after, name)[field],
+                expected,
+                "{method} {uri}: the legacy key changed"
+            );
+            assert_eq!(
+                key_view(&after, &replacement.id),
+                untouched,
+                "{method} {uri}: the same-name replacement is unchanged"
+            );
+        }
     }
 
     #[tokio::test]

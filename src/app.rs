@@ -33,7 +33,9 @@ use crate::store::oauth::{
     clients as oauth_clients, codes as sign_in_codes, tokens as oauth_tokens,
 };
 use crate::store::settings::{self, Settings};
-use crate::store::{catalogs, changesets, email_tokens, sign_in_events, unlocks, user_sessions};
+use crate::store::{
+    catalogs, changesets, email_tokens, keys, sign_in_events, unlocks, user_sessions,
+};
 use crate::telemetry::metrics::{Metrics, Outcome, RefreshResult};
 use crate::telemetry::subscriber::{split_event, LOCAL_ONLY};
 
@@ -979,7 +981,8 @@ impl App {
         }
     }
 
-    /// At most once per [`OAUTH_PRUNE_EVERY`], deletes expired OAuth tokens
+    /// At most once per [`OAUTH_PRUNE_EVERY`], revokes idle OAuth grants
+    /// ([`App::revoke_idle_grants`]), then deletes expired OAuth tokens
     /// and unredeemed codes kept [`OAUTH_RETENTION_DAYS`] past their expiry,
     /// registered clients no grant names after [`UNBOUND_CLIENT_HOURS`],
     /// sign-in events older than [`SIGN_IN_EVENT_RETENTION_DAYS`], emailed
@@ -1001,6 +1004,10 @@ impl App {
             *pruned = Some(now_instant);
         }
         let now = self.clock.now();
+        // Before the token prune, which may delete the tokens that date a
+        // grant's last activity (it then falls back to the grant's creation,
+        // which is older still).
+        self.revoke_idle_grants(now).await;
         let retained = now - TimeDelta::days(OAUTH_RETENTION_DAYS);
         log_pruned(
             "expired OAuth tokens",
@@ -1038,6 +1045,44 @@ impl App {
             "old mail jobs",
             crate::mail::queue::prune(&self.pool, now).await,
         );
+    }
+
+    /// Revokes the OAuth grants idle for `oauth.idle_grant_revoke_after`
+    /// that hold no live token ([`keys::revoke_idle_grants`]). Called from
+    /// [`App::prune_oauth`], so at most once an hour per replica; several
+    /// replicas running it at once revoke and audit each grant once. The
+    /// key cache learns of the revocations at the next pass.
+    ///
+    /// A failure is logged, not returned, and waits for the next hourly pass.
+    ///
+    /// # Arguments
+    /// * `now` - the pass's time (server clock).
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn revoke_idle_grants(&self, now: chrono::DateTime<chrono::Utc>) {
+        // The config check caps the period at 10 years, so both steps
+        // succeed; `and_then` chains the two `Option`s, and `None` skips
+        // the pass instead of panicking.
+        let Some(idle_before) = TimeDelta::from_std(self.config.oauth.idle_grant_revoke_after)
+            .ok()
+            .and_then(|period| now.checked_sub_signed(period))
+        else {
+            return;
+        };
+        match keys::revoke_idle_grants(&self.pool, idle_before, now).await {
+            Ok(revoked) if revoked.is_empty() => {}
+            Ok(revoked) => tracing::info!(
+                revoked = revoked.len(),
+                "revoked idle OAuth grants that held no live token"
+            ),
+            Err(error) => {
+                split_event!(
+                    error,
+                    { kind = error.kind(), },
+                    { %error, },
+                    "revoking idle OAuth grants failed; retrying in an hour"
+                );
+            }
+        }
     }
 
     /// At most once per [`AUDIT_PRUNE_EVERY`], deletes audit entries older
@@ -2255,6 +2300,77 @@ mod tests {
         stale_token(2).await;
         test.app.poll().await.unwrap();
         assert_eq!(count("oauth_tokens").await, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn poll_revokes_grants_idle_past_the_configured_period() {
+        use crate::store::keys::Access;
+        use crate::store::oauth::testing::{insert_client, insert_grant};
+        // 10 days instead of the default 30, so a grant last used 15 days
+        // ago is idle here and would not be by default.
+        let mut config = Config::default();
+        config.oauth.idle_grant_revoke_after = std::time::Duration::from_secs(10 * 24 * 60 * 60);
+        let test = app_with(&[("main", &[])], config).await;
+        let pool = test.app.pool().clone();
+        let now = Utc::now();
+        let client = insert_client(
+            &pool,
+            "https://client.example.com/client.json",
+            "Example",
+            now,
+        )
+        .await;
+        let created = now - TimeDelta::days(40);
+        let grant_used = |days: i64, byte: u8| {
+            let pool = pool.clone();
+            let client = client.clone();
+            async move {
+                let grant = insert_grant(&pool, &client, Access::Read, &["main"], created).await;
+                sqlx::query(
+                    "INSERT INTO oauth_tokens \
+                     (sha256, grant_id, kind, family_id, resource, created_at, expires_at) \
+                     VALUES ($1, $2, 'access', 'f', 'https://okf.example.com/mcp', $3, \
+                             $3 + interval '1 hour')",
+                )
+                .bind([byte; 32].as_slice())
+                .bind(&grant)
+                .bind(now - TimeDelta::days(days))
+                .execute(&pool)
+                .await
+                .unwrap();
+                grant
+            }
+        };
+        let idle = grant_used(15, 1).await;
+        let recent = grant_used(5, 2).await;
+        // Load both into the key cache first, as a running server has them.
+        test.app.reload_keys_if_changed(true).await;
+        assert!(test.app.keys().find_grant(&idle).is_some());
+
+        test.app.poll().await.unwrap();
+        // The key cache learns of it at the next pass.
+        test.app.poll().await.unwrap();
+
+        let revoked = |id: String| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, Option<chrono::DateTime<Utc>>>(
+                    "SELECT revoked_at FROM api_keys WHERE id = $1",
+                )
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .is_some()
+            }
+        };
+        assert!(revoked(idle.clone()).await);
+        assert!(!revoked(recent.clone()).await);
+        assert!(
+            test.app.keys().find_grant(&idle).is_none(),
+            "its tokens stop working"
+        );
+        assert!(test.app.keys().find_grant(&recent).is_some());
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -10,6 +10,7 @@ import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
 import { toast } from '../core/toast.js';
 import { drawerTicket } from '../core/drawer.js';
+import { latest } from '../core/latest.js';
 import { ago, count, when } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
 import { confirmDialog } from '../components/confirm.js';
@@ -59,18 +60,18 @@ export async function render(main) {
         table,
         manager ? null : h('p', { class: 'muted small' }, NEEDS_EVERY_CATALOG));
     // The team drawer shown or loading ({name, ticket, last}), and the
-    // count of its reads and of the list's (see openDetail and load).
+    // count of its reads (see openDetail).
     let shown = null;
     let reads = 0;
-    let lists = 0;
+    const listReads = latest(main);
     await load();
 
     // Reads the list again; a slower older read never draws over a newer one.
     async function load() {
-        const mine = ++lists;
+        const current = listReads();
         try {
             const { teams } = await api.get('/teams');
-            if (mine === lists && main.isConnected) table.redraw(teams);
+            if (current()) table.redraw(teams);
         } catch { /* toasted */ }
     }
 

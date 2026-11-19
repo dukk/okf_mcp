@@ -1198,7 +1198,13 @@ mod http_tests {
 
         assert_eq!(export.status, StatusCode::OK, "{}", export.text());
         assert_eq!(&export.body[..2], &[0x1f, 0x8b], "a gzip archive");
-        assert_eq!(import.status, StatusCode::FORBIDDEN, "import needs admin");
+        // Import needs `write` (issue #260): past the check, the empty body
+        // is read and refused as no archive.
+        assert_eq!(import.status, StatusCode::BAD_REQUEST, "{}", import.text());
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&import.body).expect("json")["error"],
+            "ImportRefused"
+        );
         assert_eq!(
             no_csrf.status,
             StatusCode::FORBIDDEN,

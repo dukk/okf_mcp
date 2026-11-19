@@ -8,15 +8,20 @@ import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
 import { toast } from '../core/toast.js';
 import { drawerTicket } from '../core/drawer.js';
+import { latest } from '../core/latest.js';
 import { ago, count } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
 import { confirmDialog } from '../components/confirm.js';
-import { namesOf, picker, assignControl } from '../components/picker.js';
+import { rowsOf, teamChoices, picker, assignControl } from '../components/picker.js';
 import { canAdministerPeople, freshAccount, refreshIdentity, refreshUnassigned } from '../core/shell.js';
 import { guard, once, recheck } from '../core/pending.js';
-import { named, teamLabel } from '../core/labels.js';
+import { named } from '../core/labels.js';
 
 export async function render(main) {
+    // Team name -> true when personal, from the last read of GET /teams
+    // (admins only; empty until then or when it failed), so the Owner column
+    // can say what kind of team owns a catalog.
+    const personalTeams = new Map();
     const admin = store.can('admin');
     const creator = admin && store.whoami.all_catalogs;
     const columns = [
@@ -33,7 +38,10 @@ export async function render(main) {
         { key: 'owner_team', label: 'Owner', sort: row => row.owner_team_label ?? '',
           render: row => h('span', { dataset: { test: `catalog-owner-${row.name}` },
                                      class: row.owner_team ? null : 'muted' },
-              row.owner_team_label ?? row.owner_team ?? 'unassigned') },
+              row.owner_team_label ?? row.owner_team ?? 'unassigned',
+              personalTeams.has(row.owner_team)
+                  ? [' ', pill(personalTeams.get(row.owner_team) ? 'personal team' : 'team')]
+                  : null) },
         { key: 'concepts', label: 'Concepts', sort: row => row.concepts, class: 'num' },
         { key: 'files', label: 'Files', sort: row => row.files, class: 'num' },
         { key: 'generation', label: 'Generation', sort: row => row.generation, class: 'num' },
@@ -42,8 +50,22 @@ export async function render(main) {
     ];
     const table = listTable(columns, [], { onRow: admin ? openEdit : openOwner, empty: 'This key reaches no catalog.' });
 
+    // Reads the list again; a slower older read never draws over a newer one.
+    const listReads = latest(main);
     async function load() {
-        try { table.redraw((await api.get('/catalogs')).catalogs); } catch { /* toasted */ }
+        const current = listReads();
+        // Admins read the teams too, for the Owner column's kind; a failed
+        // read only leaves the kinds out.
+        const kinds = admin
+            ? rowsOf('teams').then(rows => rows.map(row => [row.name, Boolean(row.personal_of)]), () => [])
+            : Promise.resolve([]);
+        try {
+            const [answer, teamKinds] = await Promise.all([api.get('/catalogs'), kinds]);
+            if (!current()) return;
+            personalTeams.clear();
+            for (const [name, personal] of teamKinds) personalTeams.set(name, personal);
+            table.redraw(answer.catalogs);
+        } catch { /* toasted */ }
     }
 
     // After a create or delete: the switcher is shell state and must follow
@@ -61,14 +83,14 @@ export async function render(main) {
     async function openCreate() {
         const ticket = drawerTicket(main);
         let teams;
-        try { teams = await namesOf('teams'); } catch { return; }
+        try { teams = teamChoices(await rowsOf('teams')); } catch { return; }
         if (!ticket.current()) return;
         const form = h('form', { id: 'catalog-create-form' },
             h('label', {}, 'Name',
                 h('input', { name: 'name', required: true, pattern: '[a-z0-9-]+', autocomplete: 'off',
                              placeholder: 'lowercase letters, digits and -' })),
             h('label', {}, 'Description', h('textarea', { name: 'description', rows: '3' })),
-            h('label', {}, 'Owner team', picker({ name: 'owner', required: true }, teams, null, teamLabel)),
+            h('label', {}, 'Owner team', picker({ name: 'owner', required: true }, teams.names, null, teams.labelOf)),
             h('button', { type: 'submit' }, 'Create catalog'));
         form.addEventListener('submit', async event => {
             event.preventDefault();
@@ -87,13 +109,13 @@ export async function render(main) {
     async function openEdit(row) {
         const ticket = drawerTicket(main);
         let teams;
-        try { teams = await namesOf('teams'); } catch { return; }
+        try { teams = teamChoices(await rowsOf('teams')); } catch { return; }
         if (!ticket.current()) return;
         const edit = detailsEditor(row, ticket);
         const owner = h('section', {},
             h('h3', {}, 'Owner'),
             assignControl({
-                names: teams, labelOf: teamLabel, current: row.owner_team, label: row.owner_team ? 'Change owner' : 'Assign',
+                names: teams.names, labelOf: teams.labelOf, current: row.owner_team, label: row.owner_team ? 'Change owner' : 'Assign',
                 allowed: creator, ids: { select: 'catalog-owner-select', button: 'catalog-owner-save' },
                 assign: async team => {
                     try {
