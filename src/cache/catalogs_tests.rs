@@ -280,7 +280,7 @@ async fn a_request_keeps_its_snapshot_while_the_entry_is_evicted() {
     // Two catalogs of one kilobyte each; the budget holds one.
     let text = note(1024);
     let files: &[(&str, &str)] = &[("a.md", &text)];
-    let budget = u64::from(weight(1024 * 3 / 2));
+    let budget = u64::from(weight(1024 * 3 / 2, 1));
     let (test, _registry) = app(&[("a", files), ("b", files)], budget).await;
     let ctx = context(&test, principal(&[], None), None);
 
@@ -547,10 +547,64 @@ async fn a_description_change_keeps_the_snapshot() {
 }
 
 #[test]
-fn the_weight_is_the_stored_size_times_the_factor_and_saturates() {
-    assert_eq!(weight(0), 0);
-    assert_eq!(weight(1000), 1000 * u32::try_from(WEIGHT_FACTOR).unwrap());
-    assert_eq!(weight(u64::MAX), u32::MAX);
+fn the_weight_charges_bytes_files_and_the_catalog_and_saturates() {
+    let fixed = u32::try_from(PER_CATALOG_BYTES).unwrap();
+    let per_file = u32::try_from(PER_FILE_BYTES).unwrap();
+    let factor = u32::try_from(WEIGHT_FACTOR).unwrap();
+
+    assert_eq!(weight(0, 0), fixed, "an empty catalog is not free");
+    assert_eq!(
+        weight(0, 5_000),
+        fixed + 5_000 * per_file,
+        "nor are empty files"
+    );
+    assert_eq!(weight(1000, 1), fixed + per_file + 1000 * factor);
+    assert_eq!(weight(u64::MAX, 0), u32::MAX);
+    assert_eq!(weight(0, u64::MAX), u32::MAX);
+}
+
+/// Catalogs of empty files are charged by their files: a budget of a few
+/// such catalogs keeps no more than it holds, however many are read.
+#[tokio::test(flavor = "multi_thread")]
+async fn catalogs_of_empty_files_are_charged_and_evicted() {
+    let empty: Vec<(String, String)> = (0..200)
+        .map(|index| (format!("notes/empty-{index:03}.md"), String::new()))
+        .collect();
+    let files: Vec<(&str, &str)> = empty
+        .iter()
+        .map(|(path, text)| (path.as_str(), text.as_str()))
+        .collect();
+    let names = ["e0", "e1", "e2", "e3", "e4", "e5"];
+    let catalogs: Vec<(&str, &[(&str, &str)])> =
+        names.iter().map(|name| (*name, files.as_slice())).collect();
+    // Room for two of them: each weighs about 200 KiB.
+    let each = u64::from(weight(0, 200));
+    let (test, registry) = app(&catalogs, each * 5 / 2).await;
+    let cache = test.app.catalog_cache();
+
+    let mut states = Vec::new();
+    for name in names {
+        let state = test.app.catalog(name).await.unwrap().unwrap();
+        assert_eq!(state.current().stored_bytes(), 0, "{name} holds no bytes");
+        states.push(state);
+    }
+    cache.settle().await;
+
+    let mut resident = 0;
+    for state in &states {
+        if cache.resident(state.id()).await.is_some() {
+            resident += 1;
+        }
+    }
+    assert!(
+        resident <= 2,
+        "{resident} of 6 kept within a two-catalog budget"
+    );
+    assert!(
+        sample(&registry, r#"okf_cache_bytes{cache="catalog"}"#) <= (each * 5 / 2) as f64,
+        "the byte gauge stays within the budget"
+    );
+    assert!(cache.cached() >= 1, "the budget still holds what fits");
 }
 
 #[test]

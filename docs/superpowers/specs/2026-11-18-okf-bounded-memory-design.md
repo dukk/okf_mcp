@@ -76,20 +76,25 @@ unchanged inside.
   measure on the real catalog and a synthetic large one, record the factor
   and the method in this spec). The cache's capacity is
   `catalog_cache_bytes`.
-  > **Corrected (issue #686, 2026-11-19).** The factor is **10**
-  > (`cache::catalogs::WEIGHT_FACTOR`; the weigher is
-  > `Loaded::stored_bytes * 10`, saturating at `u32::MAX`). Method
+  > **Corrected (issue #686, 2026-11-19).** The weight is
+  > `1024 + 1024 * files + 8 * stored_bytes`, saturating at `u32::MAX`
+  > (`cache::catalogs::{PER_CATALOG_BYTES, PER_FILE_BYTES, WEIGHT_FACTOR,
+  > weight}`). Content alone would charge nothing for an empty catalog or
+  > for many empty files, whose paths, revisions, commit times and map
+  > entries still take memory (review of PR #714). Method
   > (`tests/snapshot_weight.rs`, `--ignored`): a counting
-  > `#[global_allocator]` in its own test binary; synthetic catalogs of 500
-  > and 5,000 concepts (frontmatter, headings, prose, links to neighbours,
-  > about 850 bytes each) imported into Postgres; after a warm-up load of a
-  > small catalog, the bytes allocated minus freed across one
-  > `CatalogState::load` whose result is still held. Measured: 500
-  > documents, 3,870,753 B resident for 424,010 B stored (9.13); 5,000
-  > documents, 38,696,461 B for 4,285,010 B (9.03). The larger, 9.13, is
-  > rounded up to 10. No real catalog checkout was available to the run;
-  > the synthetic documents are prose-heavy, so a catalog of shorter, more
-  > linked documents may weigh somewhat more per byte.
+  > `#[global_allocator]` in its own test binary; catalogs imported into
+  > Postgres; after a warm-up load of a small catalog, the bytes allocated
+  > minus freed across one `CatalogState::load` whose result is still held.
+  > Measured: one empty document, 1,065 B; 5,000 empty documents at paths
+  > like `notes/topic-1/concept-00001.md`, 4,926,196 B (985 B per file, so
+  > about 80 B per catalog besides); 500 synthetic concepts (frontmatter,
+  > headings, prose, links, about 850 B each), 3,870,753 B for 424,010 B of
+  > content; 5,000 of them, 38,696,461 B for 4,285,010 B. With 985 B per
+  > file taken out, content costs 7.97 and 7.88 B per byte. Rounded up:
+  > 8 per byte, 1 KiB per file, and 1 KiB per catalog (generous, to include
+  > the cache entry's own bookkeeping). No real catalog checkout was
+  > available to the run.
 
 - **Loads are single-flight** (`try_get_with`): concurrent misses on one
   catalog build it once, through today's `CatalogState::load`.

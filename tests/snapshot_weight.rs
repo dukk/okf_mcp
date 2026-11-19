@@ -113,6 +113,42 @@ async fn seed(pool: &PgPool, name: &str, count: usize) {
     import(pool, name, files, &options).await.unwrap();
 }
 
+/// Creates catalog `name` holding `count` empty documents at paths shaped
+/// like real ones (`notes/topic-12/concept-12345.md`).
+async fn seed_empty(pool: &PgPool, name: &str, count: usize) {
+    let new = NewCatalog {
+        name,
+        display_name: &DisplayName::default(),
+        description: "",
+        owner_team: support::server::OWNER,
+    };
+    catalogs::create(pool, &new, &AuditActor::cli(), Utc::now())
+        .await
+        .unwrap();
+    let files: Files = (0..count)
+        .map(|index| {
+            let file = StoredFile {
+                content: Vec::new(),
+                executable: false,
+            };
+            (
+                format!("notes/topic-{}/concept-{index:05}.md", index % 50),
+                file,
+            )
+        })
+        .collect();
+    let options = ImportOptions {
+        replace: true,
+        scope: ImportScope::Everything,
+        expect_generation: None,
+        expect_catalog_id: None,
+        actor: "weight",
+        audit: &AuditActor::cli(),
+        now: Utc::now(),
+    };
+    import(pool, name, files, &options).await.unwrap();
+}
+
 /// Loads catalog `name` and returns `(resident bytes, stored bytes)`.
 async fn weigh(pool: &PgPool, name: &str) -> (i64, u64) {
     let row = catalogs::row_by_name(pool, name).await.unwrap().unwrap();
@@ -142,4 +178,17 @@ async fn measure_snapshot_overhead() {
         eprintln!("{name}: resident {resident} B, stored {stored} B, factor {factor:.2}");
         assert!(stored > 0 && resident > 0);
     }
+    // The fixed costs, which stored bytes do not see: a catalog of one
+    // empty document, and one of 5,000. Per file is the slope between them;
+    // per catalog is what one file leaves after it.
+    seed_empty(&db.pool, "one", 1).await;
+    seed_empty(&db.pool, "many", 5_000).await;
+    let (one, _) = weigh(&db.pool, "one").await;
+    let (many, _) = weigh(&db.pool, "many").await;
+    let per_file = (many - one) as f64 / 4_999.0;
+    let per_catalog = one as f64 - per_file;
+    eprintln!(
+        "empty: one {one} B, 5000 {many} B, per file {per_file:.0} B, per catalog {per_catalog:.0} B"
+    );
+    assert!(many > one);
 }

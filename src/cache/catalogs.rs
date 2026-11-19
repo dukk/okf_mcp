@@ -34,18 +34,32 @@ use std::time::Duration;
 use sqlx::PgPool;
 
 use crate::cache::{Bounded, CacheName, Limit};
-use crate::catalog::CatalogState;
+use crate::catalog::{CatalogState, Loaded};
 use crate::error::OkfError;
 use crate::keyed_lock::KeyedLocks;
 use crate::store::catalogs::CatalogRow;
 use crate::telemetry::metrics::Metrics;
 use crate::telemetry::subscriber::split_event;
 
-/// Resident bytes per stored byte: what one byte of a catalog's stored
-/// files costs once loaded (snapshot, workspace, revisions and lint's
-/// commit times). Measured by `tests/snapshot_weight.rs` (method and
-/// numbers in spec Decision 2) and rounded up.
-pub const WEIGHT_FACTOR: u64 = 10;
+/// Resident bytes per stored byte of content: what one byte of a catalog's
+/// stored files costs once loaded (the snapshot's parsed documents, the
+/// workspace copy and their text). Fitted, with [`PER_FILE_BYTES`], to the
+/// measurements of `tests/snapshot_weight.rs` (method and numbers in spec
+/// Decision 2) and rounded up.
+pub const WEIGHT_FACTOR: u64 = 8;
+
+/// The fixed cost of one file, whatever its size: its path (in the
+/// workspace, the snapshot and the revision map), its revision, its commit
+/// time and the map entries that hold them. Measured as about 985 bytes per
+/// empty document at paths like `notes/topic-1/concept-00001.md`; rounded
+/// up, so a catalog of many tiny or empty files is charged for them.
+pub const PER_FILE_BYTES: u64 = 1024;
+
+/// The fixed cost of one cached catalog, files aside: its state, its name,
+/// the empty snapshot's maps and the cache entry itself. Measured as under
+/// 100 bytes of state; rounded up generously to include the cache's own
+/// bookkeeping, so an empty catalog is never free.
+pub const PER_CATALOG_BYTES: u64 = 1024;
 
 /// How long a snapshot may stay cached at most. Not a freshness bound (the
 /// directory row is, see the module docs) nor a size bound (the budget is):
@@ -60,11 +74,13 @@ const BROKEN_ENTRIES: u64 = 10_000;
 /// fails the same way, so this is long; a new generation is a new key.
 const BROKEN_TTL: Duration = Duration::from_secs(60 * 60);
 
-/// The weight of a snapshot of `stored_bytes`, as moka takes it: the
+/// The weight of a snapshot, as moka takes it: [`PER_CATALOG_BYTES`], plus
+/// [`PER_FILE_BYTES`] per file, plus [`WEIGHT_FACTOR`] per stored byte. The
 /// estimate saturates at `u32::MAX` (4 GiB), above any one catalog's budget.
 ///
 /// # Arguments
-/// * `stored_bytes` - the stored files' total size.
+/// * `stored_bytes` - the stored files' total content size.
+/// * `files` - how many files the catalog holds.
 ///
 /// # Returns
 /// The estimated resident bytes.
@@ -75,8 +91,35 @@ const BROKEN_TTL: Duration = Duration::from_secs(60 * 60);
         reason = "the weigher: runs on every insert, arithmetic only"
     )
 )]
-pub fn weight(stored_bytes: u64) -> u32 {
-    u32::try_from(stored_bytes.saturating_mul(WEIGHT_FACTOR)).unwrap_or(u32::MAX)
+pub fn weight(stored_bytes: u64, files: u64) -> u32 {
+    let estimate = stored_bytes
+        .saturating_mul(WEIGHT_FACTOR)
+        .saturating_add(files.saturating_mul(PER_FILE_BYTES))
+        .saturating_add(PER_CATALOG_BYTES);
+    u32::try_from(estimate).unwrap_or(u32::MAX)
+}
+
+/// [`weight`] of a loaded snapshot.
+///
+/// # Arguments
+/// * `loaded` - the snapshot.
+///
+/// # Returns
+/// Its estimated resident bytes.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "the weigher: runs on every insert, arithmetic only"
+    )
+)]
+pub fn weight_of(loaded: &Loaded) -> u32 {
+    // `usize` to `u64` never loses anything on the 64-bit targets this
+    // builds for; `try_from` says so without a silent cast.
+    weight(
+        loaded.stored_bytes(),
+        u64::try_from(loaded.files()).unwrap_or(u64::MAX),
+    )
 }
 
 /// Whether a failed load or refresh is the stored data's fault, so the same
@@ -142,9 +185,7 @@ impl CatalogCache {
     #[tracing::instrument(level = "trace", skip_all)]
     pub fn new(pool: PgPool, budget_bytes: u64, metrics: Metrics) -> Self {
         let states = Bounded::new(CacheName::Catalog, Limit::Bytes(budget_bytes), SNAPSHOT_TTL)
-            .with_weigher(|_id: &i64, state: &Arc<CatalogState>| {
-                weight(state.current().stored_bytes())
-            })
+            .with_weigher(|_id: &i64, state: &Arc<CatalogState>| weight_of(&state.current()))
             .with_metrics(metrics);
         Self {
             pool,
