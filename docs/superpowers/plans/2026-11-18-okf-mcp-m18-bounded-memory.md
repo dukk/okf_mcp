@@ -1257,6 +1257,13 @@ async fn run(job: Housekeeping, context: Data<HousekeepingContext>) -> Result<()
 - [ ] **Step 3:** Every test that called `app.poll().await` to make a change visible now relies on `NOTIFY`: replace with a bounded wait helper `app.until_applied(|app| ..)` (lib) or `eventually` (integration). `grep -rn "\.poll()" src tests` must find nothing.
 - [ ] **Step 4:** Full gates; commit — `feat: remove the poll loop (M18 task 16)`.
 
+> **Corrected (issue #694, 2026-11-19).** As shipped:
+> - `settle` is deleted, not kept: every call site calls `app.bridge_to_m16()` directly (each marked `// M16 bridge (spec Decision 14)`, so Task 18's grep finds them). The writer's read-your-writes was already `invalidate::capturing` + `App::apply_own_writes` on every HTTP route (issue #686), and it covers the credential, user and label caches and the settings mark too, so nothing replaced the poll there.
+> - The `swept_generation` sweep is not replaced by another sweep: a lost message is bounded by each cache's TTL (`credential_ttl` for credentials, users, labels and settings; `catalog_ttl` for directory rows, and so for snapshots), as spec Decision 13 says. `src/app.rs`'s `a_change_no_message_described_is_read_after_the_ttls` proves it with raw SQL changes and no message.
+> - `poll_interval` is `Option<Duration>` (default unset); any value, zero included, parses, and `Config::deprecation_warnings` names it (`serve` logs it), as for `mail.worker`.
+> - There is no `app.until_applied` or `eventually` helper. Lib tests (no listener) use `invalidate::testing::applied(app, write)`, which collects the write's messages through `NOTIFY` (`messages_of`) and applies them with `App::apply`. Integration tests use `tests/support/server.rs`'s `applied(app, write)`, which runs the write under `invalidate::capturing` and calls `App::apply_own_writes` (deterministic; the server's listener applies the same messages later). A poll after creating a key, user or grant was dropped (they load on first use, and unknowns are never cached); a raw-SQL change, which sends no message, is followed by `App::apply_reconnect()`.
+> - The Grafana example's three poll panels went, and the refresh query left the announcements panel.
+
 ---
 
 ### Task 17: Docs

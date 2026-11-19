@@ -287,23 +287,25 @@ async fn server(aging: bool) -> TestServer {
             executable: true,
         },
     );
-    import(
-        &server.db.pool,
-        "pg",
-        data,
-        &ImportOptions {
-            replace: false,
-            scope: ImportScope::Everything,
-            expect_generation: None,
-            expect_catalog_id: None,
-            actor: "fixture",
-            audit: &okf_mcp::store::audit::AuditActor::cli(),
-            now: chrono::Utc::now() - chrono::Duration::days(1),
-        },
-    )
-    .await
-    .unwrap();
-    server.app.poll().await.unwrap();
+    crate::support::server::applied(&server.app, async {
+        import(
+            &server.db.pool,
+            "pg",
+            data,
+            &ImportOptions {
+                replace: false,
+                scope: ImportScope::Everything,
+                expect_generation: None,
+                expect_catalog_id: None,
+                actor: "fixture",
+                audit: &okf_mcp::store::audit::AuditActor::cli(),
+                now: chrono::Utc::now() - chrono::Duration::days(1),
+            },
+        )
+        .await
+        .unwrap();
+    })
+    .await;
     server
 }
 async fn canonical(server: &TestServer, key: &str, peer: &Client) -> Value {
@@ -570,23 +572,25 @@ async fn investigator_lost_response_replay_and_historical_superseded() {
             data.get_mut(path.trim_start_matches('/')).unwrap().content =
                 b"---\ntype: Note\ntitle: New Alpha\n---\nNew historical fixture revision.\n"
                     .to_vec();
-            import(
-                &server.db.pool,
-                "pg",
-                data,
-                &ImportOptions {
-                    replace: true,
-                    scope: ImportScope::Everything,
-                    expect_generation: None,
-                    expect_catalog_id: None,
-                    actor: "fixture",
-                    audit: &okf_mcp::store::audit::AuditActor::cli(),
-                    now: chrono::Utc::now(),
-                },
-            )
-            .await
-            .unwrap();
-            server.app.poll().await.unwrap();
+            crate::support::server::applied(&server.app, async {
+                import(
+                    &server.db.pool,
+                    "pg",
+                    data,
+                    &ImportOptions {
+                        replace: true,
+                        scope: ImportScope::Everything,
+                        expect_generation: None,
+                        expect_catalog_id: None,
+                        actor: "fixture",
+                        audit: &okf_mcp::store::audit::AuditActor::cli(),
+                        now: chrono::Utc::now(),
+                    },
+                )
+                .await
+                .unwrap();
+            })
+            .await;
         }
         let before = canonical(&server, &key, &observer).await;
         let interrupted = f.store.load().unwrap().unwrap();

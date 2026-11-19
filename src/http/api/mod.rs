@@ -6,7 +6,6 @@
 use std::sync::Arc;
 
 use crate::http::AppError;
-use crate::telemetry::subscriber::split_event;
 use axum::extract::{MatchedPath, Request};
 use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::middleware;
@@ -366,29 +365,4 @@ pub(crate) async fn reachable_page(
     app.directory()
         .reachable_page(principal, query.after.as_deref(), page_size(query.limit))
         .await
-}
-
-/// After an administrative change: polls, so this replica's key cache
-/// reflects it for the next request (until Task 16 of milestone 18 removes
-/// the poll; the catalog directory is updated from the request's own
-/// invalidations: `apply_own_writes`), and tells milestone 16 replicas to
-/// check `admin_generation` ([`App::bridge_to_m16`]). The change has
-/// committed, so a failed poll is logged, not returned: the poll loop
-/// retries it.
-///
-/// # Arguments
-/// * `app` - the application. An `&Arc<App>` argument coerces to `&App`
-///   automatically (deref coercion).
-#[tracing::instrument(level = "debug", skip_all)]
-pub(crate) async fn settle(app: &App) {
-    if let Err(error) = app.poll().await {
-        split_event!(
-            error,
-            { kind = error.kind(), },
-            { %error, },
-            "poll after an administrative change failed; the poll loop retries"
-        );
-    }
-    // M16 bridge (spec Decision 14): remove in the release after 0.23.
-    app.bridge_to_m16();
 }

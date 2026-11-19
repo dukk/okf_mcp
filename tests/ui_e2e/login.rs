@@ -195,20 +195,22 @@ async fn the_header_shows_labels_and_the_catalog_option_keeps_the_slug() {
     .await
     .expect("name alice");
     // alice's personal team owns it, so her ceiling reaches it.
-    catalogs::create(
-        pool,
-        &NewCatalog {
-            name: "notes",
-            display_name: &DisplayName::parse("Work Notes").expect("a display name"),
-            description: "",
-            owner_team: "alice",
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("create the catalog");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        catalogs::create(
+            pool,
+            &NewCatalog {
+                name: "notes",
+                display_name: &DisplayName::parse("Work Notes").expect("a display name"),
+                description: "",
+                owner_team: "alice",
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("create the catalog");
+    })
+    .await;
     drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
         ui.wait_text("#whoami", "Alice Example - write");
@@ -251,20 +253,22 @@ async fn a_failed_labels_read_keeps_the_console_open_and_clears_stale_labels() {
     .await
     .expect("name alice");
     // alice's personal team owns it, so her ceiling reaches it.
-    catalogs::create(
-        pool,
-        &NewCatalog {
-            name: "notes",
-            display_name: &DisplayName::parse("Work Notes").expect("a display name"),
-            description: "",
-            owner_team: "alice",
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("create the catalog");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        catalogs::create(
+            pool,
+            &NewCatalog {
+                name: "notes",
+                display_name: &DisplayName::parse("Work Notes").expect("a display name"),
+                description: "",
+                owner_team: "alice",
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("create the catalog");
+    })
+    .await;
     drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
         ui.wait_text("#catalog-select", "Work Notes");

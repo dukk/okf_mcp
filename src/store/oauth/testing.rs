@@ -48,8 +48,8 @@ pub(crate) async fn insert_client(
 }
 
 /// Stores a live OAuth grant for `client_id` and bumps the administrative
-/// generation, as redeeming a sign-in code will (Task 4), so the next
-/// `App::poll` loads it.
+/// generation, as redeeming a sign-in code does (Task 4); grants load on
+/// their first use.
 ///
 /// # Arguments
 /// * `pool` - the database.

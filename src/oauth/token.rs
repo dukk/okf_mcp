@@ -765,15 +765,17 @@ mod tests {
             .fetch_one(test.app.pool())
             .await
             .unwrap();
-        crate::store::keys::revoke_by_id(
-            test.app.pool(),
-            &grant,
-            &crate::store::audit::AuditActor::cli(),
-            test.app.clock().now(),
-        )
-        .await
-        .unwrap();
-        test.app.poll().await.unwrap();
+        crate::invalidate::testing::applied(&test.app, async {
+            crate::store::keys::revoke_by_id(
+                test.app.pool(),
+                &grant,
+                &crate::store::audit::AuditActor::cli(),
+                test.app.clock().now(),
+            )
+            .await
+            .unwrap();
+        })
+        .await;
 
         let (status, _, body) = token(&test, exchange(&code)).await;
 

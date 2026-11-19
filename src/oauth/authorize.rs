@@ -2138,15 +2138,17 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn consent_pages_name_the_product_and_show_the_contact() {
         let test = oauth_app().await;
-        for (key, value) in [
-            (SettingKey::ProductName, "Acme Notes"),
-            (SettingKey::SupportContact, "help@example.com"),
-        ] {
-            settings::set(test.app.pool(), key, value, &AuditActor::cli(), Utc::now())
-                .await
-                .unwrap();
-        }
-        test.app.poll().await.unwrap();
+        crate::invalidate::testing::applied(&test.app, async {
+            for (key, value) in [
+                (SettingKey::ProductName, "Acme Notes"),
+                (SettingKey::SupportContact, "help@example.com"),
+            ] {
+                settings::set(test.app.pool(), key, value, &AuditActor::cli(), Utc::now())
+                    .await
+                    .unwrap();
+            }
+        })
+        .await;
 
         let (_, _, unknown_client) = send(&test, "GET", "/oauth/authorize", None).await;
         let (_, _, malformed) = send(
@@ -2394,11 +2396,9 @@ mod tests {
                 .await
                 .unwrap();
         }
-        sqlx::query("UPDATE server_state SET admin_generation = admin_generation + 1")
-            .execute(pool)
-            .await
-            .unwrap();
-        test.app.poll().await.unwrap();
+        // A raw update sends no change message: a catch-up (what a
+        // reconnect does) makes the label cache read the labels again.
+        test.app.apply_reconnect().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2678,19 +2678,21 @@ mod tests {
             .expect("cached")
             .level("main");
 
-        ceiling::entitle(
-            test.app.pool(),
-            &NewEntitlement {
-                user: "alice",
-                catalog: "main",
-                access: Access::Read,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("lower");
-        test.app.poll().await.expect("reload");
+        crate::invalidate::testing::applied(&test.app, async {
+            ceiling::entitle(
+                test.app.pool(),
+                &NewEntitlement {
+                    user: "alice",
+                    catalog: "main",
+                    access: Access::Read,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("lower");
+        })
+        .await;
         let lowered = test
             .app
             .find_grant(&grant)
@@ -2698,16 +2700,18 @@ mod tests {
             .unwrap()
             .expect("cached")
             .level("main");
-        ceiling::unentitle(
-            test.app.pool(),
-            "alice",
-            "main",
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("remove");
-        test.app.poll().await.expect("reload");
+        crate::invalidate::testing::applied(&test.app, async {
+            ceiling::unentitle(
+                test.app.pool(),
+                "alice",
+                "main",
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("remove");
+        })
+        .await;
         let removed = test
             .app
             .find_grant(&grant)

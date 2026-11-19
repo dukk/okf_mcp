@@ -275,11 +275,8 @@ async fn a_person_signs_in_on_the_way_and_approves_from_their_ceiling() {
         .execute(pool)
         .await
         .expect("catalog display name");
-    sqlx::query("UPDATE server_state SET admin_generation = admin_generation + 1")
-        .execute(pool)
-        .await
-        .expect("bump");
-    journey.server.app.poll().await.expect("poll");
+    // Raw updates send no change message: catch up as a reconnect does.
+    journey.server.app.apply_reconnect().await;
     let authorize = journey.authorize(&[]);
     let landing = journey.landing.clone();
 

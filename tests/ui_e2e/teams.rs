@@ -238,7 +238,6 @@ async fn seed_unassigned(server: &TestServer) -> String {
     let statements = [
         "UPDATE sign_in_codes SET user_id = NULL WHERE name = 'tablet'",
         "UPDATE catalogs SET owner_team_id = NULL WHERE name = 'orphan'",
-        "UPDATE server_state SET admin_generation = admin_generation + 1",
     ];
     for statement in statements {
         sqlx::query(statement)
@@ -246,7 +245,8 @@ async fn seed_unassigned(server: &TestServer) -> String {
             .await
             .expect("clear a user or owner");
     }
-    server.app.poll().await.expect("poll");
+    // Raw updates send no change message: catch up as a reconnect does.
+    server.app.apply_reconnect().await;
     key_rows::list(pool)
         .await
         .expect("list keys")
@@ -406,16 +406,18 @@ async fn a_member_sees_the_notice_on_browse_with_a_link_to_export() {
     let reader = server
         .key("member-reader", Access::Read, &["main"], Some("main"))
         .await;
-    teams::suspend(
-        &server.db.pool,
-        OWNER,
-        Some("Paused for review."),
-        &okf_mcp::store::audit::AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("suspend the owner team");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        teams::suspend(
+            &server.db.pool,
+            OWNER,
+            Some("Paused for review."),
+            &okf_mcp::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("suspend the owner team");
+    })
+    .await;
     drive(server.base.clone(), move |ui| {
         ui.login(&reader);
         ui.open("/browse/main");
@@ -496,16 +498,18 @@ async fn a_suspension_write_runs_once_and_settles_in_a_reopened_drawer() {
 async fn a_refused_lift_keeps_its_reason_and_a_late_read_never_draws_over_a_newer_one() {
     let server = server().await;
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
-    teams::suspend(
-        &server.db.pool,
-        OWNER,
-        Some("Paused."),
-        &okf_mcp::store::audit::AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("suspend the owner team");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        teams::suspend(
+            &server.db.pool,
+            OWNER,
+            Some("Paused."),
+            &okf_mcp::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("suspend the owner team");
+    })
+    .await;
     let ran = drive(server.base.clone(), move |ui| {
         ui.login(&admin);
         ui.open("/teams");
@@ -652,15 +656,17 @@ async fn a_write_settling_for_one_team_never_cancels_opening_another() {
         display_name: &okf_mcp::labels::DisplayName::default(),
         owner: OWNER,
     };
-    teams::create(
-        &server.db.pool,
-        &family,
-        &okf_mcp::store::audit::AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("create a second team");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        teams::create(
+            &server.db.pool,
+            &family,
+            &okf_mcp::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("create a second team");
+    })
+    .await;
     let ran = drive(server.base.clone(), move |ui| {
         ui.login(&admin);
         ui.open("/teams");
@@ -719,10 +725,12 @@ async fn the_teams_table_and_drawer_show_labels_and_a_shared_team_is_renamed() {
         display_name: &okf_mcp::labels::DisplayName::parse("Acme").expect("a name"),
         owner: "alice",
     };
-    teams::create(&server.db.pool, &acme, &AuditActor::cli(), Utc::now())
-        .await
-        .expect("create acme");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        teams::create(&server.db.pool, &acme, &AuditActor::cli(), Utc::now())
+            .await
+            .expect("create acme");
+    })
+    .await;
     let ran = drive(server.base.clone(), move |ui| {
         ui.login(&admin);
         ui.open("/teams");
@@ -760,21 +768,23 @@ async fn pickers_tell_users_with_the_same_label_apart_and_keep_slugs_as_values()
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
     // Two users share the default label, a third is named like alice's suffixed
     // text, a fourth is plain; each is a candidate in the New team owner picker.
-    for (name, display) in [
-        ("alice", ""),
-        ("bob", ""),
-        ("carol", "Unnamed user (alice)"),
-        ("dave", "Dave Example"),
-    ] {
-        let user = NewUser {
-            name,
-            display_name: &okf_mcp::labels::DisplayName::parse(display).expect("a name"),
-        };
-        users::create(&server.db.pool, &user, &AuditActor::cli(), Utc::now())
-            .await
-            .expect("create a user");
-    }
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        for (name, display) in [
+            ("alice", ""),
+            ("bob", ""),
+            ("carol", "Unnamed user (alice)"),
+            ("dave", "Dave Example"),
+        ] {
+            let user = NewUser {
+                name,
+                display_name: &okf_mcp::labels::DisplayName::parse(display).expect("a name"),
+            };
+            users::create(&server.db.pool, &user, &AuditActor::cli(), Utc::now())
+                .await
+                .expect("create a user");
+        }
+    })
+    .await;
     drive(server.base.clone(), move |ui| {
         ui.login(&admin);
         ui.open("/teams");

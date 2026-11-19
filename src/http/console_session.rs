@@ -773,19 +773,21 @@ mod http_tests {
     async fn a_session_reaches_the_api_with_exactly_its_ceiling() {
         let test = login_app().await;
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
-        ceiling::entitle(
-            test.app.pool(),
-            &NewEntitlement {
-                user: "alice",
-                catalog: "main",
-                access: Access::Read,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("entitle");
-        test.app.poll().await.expect("poll");
+        crate::invalidate::testing::applied(&test.app, async {
+            ceiling::entitle(
+                test.app.pool(),
+                &NewEntitlement {
+                    user: "alice",
+                    catalog: "main",
+                    access: Access::Read,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("entitle");
+        })
+        .await;
         let mut browser = Browser::signed_in(&test, "alice@example.com", PASSWORD).await;
 
         let whoami = browser
@@ -892,19 +894,21 @@ mod http_tests {
     async fn an_admin_users_session_is_an_admin_on_every_catalog() {
         let test = login_app().await;
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
-        users::set_admin(
-            test.app.pool(),
-            "alice",
-            AdminChange {
-                on: true,
-                allow_last: false,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("set admin");
-        test.app.poll().await.expect("poll");
+        crate::invalidate::testing::applied(&test.app, async {
+            users::set_admin(
+                test.app.pool(),
+                "alice",
+                AdminChange {
+                    on: true,
+                    allow_last: false,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("set admin");
+        })
+        .await;
         let mut browser = Browser::signed_in(&test, "alice@example.com", PASSWORD).await;
 
         let whoami = browser
@@ -933,19 +937,21 @@ mod http_tests {
         // exists, so `set_admin` had no session to end.
         let test = login_app().await;
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
-        users::set_admin(
-            test.app.pool(),
-            "alice",
-            AdminChange {
-                on: true,
-                allow_last: false,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("set admin");
-        test.app.poll().await.expect("poll");
+        crate::invalidate::testing::applied(&test.app, async {
+            users::set_admin(
+                test.app.pool(),
+                "alice",
+                AdminChange {
+                    on: true,
+                    allow_last: false,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("set admin");
+        })
+        .await;
         let passwords::SignInOutcome::Ok(passwords::Verified { user: checked, .. }) =
             passwords::verify(test.app.pool(), "alice@example.com", PASSWORD, Utc::now())
                 .await
@@ -954,20 +960,21 @@ mod http_tests {
             panic!("the password was refused");
         };
         assert!(checked.is_admin, "admin when the password was checked");
-        users::set_admin(
-            test.app.pool(),
-            "alice",
-            AdminChange {
-                on: false,
-                allow_last: true,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("clear admin");
-        // What the API's `settle` and the poll loop do after a change.
-        test.app.poll().await.expect("poll");
+        crate::invalidate::testing::applied(&test.app, async {
+            users::set_admin(
+                test.app.pool(),
+                "alice",
+                AdminChange {
+                    on: false,
+                    allow_last: true,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("clear admin");
+        })
+        .await;
         let (_, session) = super::start_session(&test.app, &checked, None, "okf-test")
             .await
             .expect("start the session with the stale user");

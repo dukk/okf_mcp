@@ -175,7 +175,7 @@ pub enum CatalogCommand {
         owner: String,
     },
     /// Change an existing catalog's display name and/or description. A
-    /// running server shows the new text within one `poll_interval`.
+    /// running server shows the new text at once (its change feed).
     // At least one flag is required; both may be given.
     #[command(group(
         clap::ArgGroup::new("details")
@@ -217,8 +217,8 @@ pub enum CatalogCommand {
     /// Create the root index.md, log.md, folder indexes and listings that
     /// catalogs are missing, and publish them at once (each repaired
     /// catalog's log.md records it). Only adds: existing text is kept, and
-    /// a second run changes nothing. A running server shows the result
-    /// within one `poll_interval`.
+    /// a second run changes nothing. A running server shows the result at
+    /// once (its change feed).
     RepairIndexes {
         /// The catalogs to repair. With `--missing-only`, only those of them
         /// without a root index.md; with none named, every such catalog.
@@ -499,8 +499,8 @@ pub enum TeamCommand {
 pub enum SettingsCommand {
     /// List every setting with its value and where it comes from.
     List,
-    /// Override a setting (validated; a running server applies it within
-    /// one poll interval).
+    /// Override a setting (validated; a running server applies it at once,
+    /// through its change feed).
     Set {
         /// The setting, by its snake_case name.
         // `SettingKey` spells its clap values as stored (`max_keys_per_user`),
@@ -705,7 +705,8 @@ pub enum CodeCommand {
 pub enum GrantCommand {
     /// List OAuth grants, revoked ones included.
     List,
-    /// Revoke an OAuth grant: its tokens stop working within `poll_interval`.
+    /// Revoke an OAuth grant: its tokens stop working at once (the change
+    /// feed), or within `credential_ttl` should the message be lost.
     Revoke {
         /// The grant's id (from `oauth grant list`).
         id: String,

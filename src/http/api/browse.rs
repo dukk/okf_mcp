@@ -959,18 +959,21 @@ mod tests {
             .send(&test, "GET", "/api/v1/catalogs/main/export", Payload::Empty)
             .await
             .parts();
-        crate::store::users::set_admin(
-            test.app.pool(),
-            user,
-            AdminChange {
-                on: true,
-                allow_last: false,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("make the user an admin");
+        crate::invalidate::testing::applied(&test.app, async {
+            crate::store::users::set_admin(
+                test.app.pool(),
+                user,
+                AdminChange {
+                    on: true,
+                    allow_last: false,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("make the user an admin");
+        })
+        .await;
         let mut admin = Browser::session_for(&test, user).await;
         let (as_admin, answer) = admin.send(&test, "GET", uri, Payload::Empty).await.parts();
 
@@ -1060,7 +1063,7 @@ mod tests {
         }
     }
 
-    /// Imports `entries` into `catalog` as `actor`, replacing it, then polls.
+    /// Imports `entries` into `catalog` as `actor`, replacing it, and applies its change messages.
     async fn publish(
         test: &crate::mcp::testing::TestApp,
         catalog: &str,
@@ -1076,10 +1079,12 @@ mod tests {
             audit: &AuditActor::cli(),
             now: Utc::now(),
         };
-        import(test.app.pool(), catalog, files(entries), &options)
-            .await
-            .expect("import");
-        test.app.poll().await.expect("poll");
+        crate::invalidate::testing::applied(&test.app, async {
+            import(test.app.pool(), catalog, files(entries), &options)
+                .await
+                .expect("import");
+        })
+        .await;
     }
 
     /// `(path, revision, op, actor)` of each change in a recent-changes page.

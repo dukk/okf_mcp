@@ -29,7 +29,7 @@ async fn pg() -> TestApp {
 }
 
 /// Creates user `name` (an admin user if `admin`) with an every-catalog
-/// key at `access` defaulting to `pg`, polls it in, and returns the
+/// key at `access` defaulting to `pg`, and returns the
 /// context of a connection with that key.
 async fn user_context(test: &TestApp, name: &str, access: Access, admin: bool) -> ToolContext {
     let pool = test.app.pool();
@@ -67,7 +67,6 @@ async fn user_context(test: &TestApp, name: &str, access: Access, admin: bool) -
         .await
         .expect("create the key")
         .key;
-    test.app.poll().await.expect("poll the key in");
     context(test, cached_principal(test, &secret).await, None)
 }
 

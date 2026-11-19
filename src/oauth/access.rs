@@ -386,7 +386,7 @@ mod tests {
 
     const RESOURCE: &str = "https://okf.example.com/mcp";
 
-    /// An OAuth-on app with one grant on `main`, polled in.
+    /// An OAuth-on app with one grant on `main`.
     async fn with_grant() -> (TestApp, String) {
         let test = app_with(&[("main", &[])], oauth_config("https://okf.example.com")).await;
         let now = test.app.clock().now();
@@ -398,7 +398,6 @@ mod tests {
         )
         .await;
         let grant = insert_grant(test.app.pool(), &client, Access::Write, &["main"], now).await;
-        test.app.poll().await.unwrap();
         (test, grant)
     }
 
@@ -471,15 +470,17 @@ mod tests {
         let token = mint_access(&test.app, &grant, RESOURCE, TimeDelta::hours(1)).await;
         assert!(authenticate(&test.app, &token).await.unwrap().is_some());
 
-        key_rows::revoke_by_id(
-            test.app.pool(),
-            &grant,
-            &crate::store::audit::AuditActor::cli(),
-            test.app.clock().now(),
-        )
-        .await
-        .unwrap();
-        test.app.poll().await.unwrap();
+        crate::invalidate::testing::applied(&test.app, async {
+            key_rows::revoke_by_id(
+                test.app.pool(),
+                &grant,
+                &crate::store::audit::AuditActor::cli(),
+                test.app.clock().now(),
+            )
+            .await
+            .unwrap();
+        })
+        .await;
 
         assert!(authenticate(&test.app, &token).await.unwrap().is_none());
     }

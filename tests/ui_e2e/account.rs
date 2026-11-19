@@ -435,19 +435,21 @@ async fn a_member_unlinks_an_identity_and_sees_their_ceiling_and_sign_ins() {
         // An admin entitles alice to `other` mid-session: the page shows
         // the ceiling /me gives now, not the one she signed in with.
         runtime.block_on(async {
-            ceiling::entitle(
-                &journey_pool,
-                &NewEntitlement {
-                    user: "alice",
-                    catalog: "other",
-                    access: Access::Read,
-                },
-                &AuditActor::cli(),
-                Utc::now(),
-            )
-            .await
-            .expect("entitle alice to other");
-            app.poll().await.expect("poll");
+            crate::support::server::applied(&app, async {
+                ceiling::entitle(
+                    &journey_pool,
+                    &NewEntitlement {
+                        user: "alice",
+                        catalog: "other",
+                        access: Access::Read,
+                    },
+                    &AuditActor::cli(),
+                    Utc::now(),
+                )
+                .await
+                .expect("entitle alice to other");
+            })
+            .await;
         });
         ui.click("a[data-nav=my-keys]");
         ui.wait_visible("#my-keys-table");
@@ -620,16 +622,18 @@ async fn a_member_edits_their_display_name_and_an_over_long_one_is_refused() {
     let server = login_server().await;
     member(&server, Access::Write).await;
     let pool = &server.db.pool;
-    users::set_display_name(
-        pool,
-        "alice",
-        &DisplayName::parse("Alice Example").expect("a display name"),
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("name alice");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        users::set_display_name(
+            pool,
+            "alice",
+            &DisplayName::parse("Alice Example").expect("a display name"),
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("name alice");
+    })
+    .await;
     let too_long = "x".repeat(81);
     let ran = drive(console_base(&server), move |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
@@ -699,20 +703,22 @@ pub(crate) async fn acme_with_owner_and_member(server: &TestServer) {
     )
     .await
     .expect("add carol");
-    okf_mcp::store::catalogs::create(
-        pool,
-        &okf_mcp::store::catalogs::NewCatalog {
-            name: "acme-notes",
-            display_name: &DisplayName::default(),
-            description: "",
-            owner_team: "acme",
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("create acme's catalog");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        okf_mcp::store::catalogs::create(
+            pool,
+            &okf_mcp::store::catalogs::NewCatalog {
+                name: "acme-notes",
+                display_name: &DisplayName::default(),
+                description: "",
+                owner_team: "acme",
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("create acme's catalog");
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

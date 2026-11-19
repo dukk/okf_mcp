@@ -31,8 +31,9 @@
 //! admin. No answer or log line holds a session id, token or hash: a
 //! session is shown by its id prefix only.
 //!
-//! Every write bumps the administrative generation; the handlers poll after
-//! it, so the next request sees the change.
+//! Every write sends its change messages (`invalidate`); this replica applies
+//! them before the answer goes out (`invalidate::capturing`), so the next
+//! request sees the change, and the change feed carries them to the others.
 
 use std::sync::Arc;
 
@@ -49,9 +50,7 @@ use crate::error::OkfError;
 use crate::http::api::keys::{manages, manages_grants, parse_access, KeyView};
 use crate::http::api::me::{SessionList, SessionView, SignInList, SignInView, RECENT_SIGN_INS};
 use crate::http::api::oauth::SignInCodeView;
-use crate::http::api::{
-    require_admin, require_every_catalog, require_manager, require_reader, settle,
-};
+use crate::http::api::{require_admin, require_every_catalog, require_manager, require_reader};
 use crate::http::AppError;
 use crate::labels::directory::{Labels, Wanted};
 use crate::labels::{team_label, user_label, DisplayName};
@@ -598,7 +597,8 @@ async fn create_user(
         display_name: &display_name,
     };
     let created = users::create(app.pool(), &new, &actor, app.clock().now()).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok((StatusCode::CREATED, Json(created.into())))
 }
 
@@ -715,7 +715,8 @@ async fn set_admin(
         { user = %name, key = %principal.key_id, actor = %principal.actor, },
         "admin flag set"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(AdminChanged {
         name,
         previous,
@@ -747,7 +748,8 @@ async fn set_email(
         { user = %name, key = %principal.key_id, actor = %principal.actor, },
         "email set"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(users::find(app.pool(), &name).await?.into()))
 }
 
@@ -814,7 +816,8 @@ async fn entitle(
         { user = %name, key = %principal.key_id, actor = %principal.actor, },
         "entitlement set"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     let entitlements = entitlement_views(&app, &name).await?;
     Ok(Json(Entitlements { name, entitlements }))
 }
@@ -841,7 +844,8 @@ async fn unentitle(
         { user = %name, key = %principal.key_id, actor = %principal.actor, },
         "entitlement removed"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     let entitlements = entitlement_views(&app, &name).await?;
     Ok(Json(Entitlements { name, entitlements }))
 }
@@ -971,7 +975,8 @@ async fn delete_user(
         ..users::DeleteOptions::default()
     };
     users::delete(app.pool(), &name, options, &actor, app.clock().now()).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1015,7 +1020,8 @@ async fn create_team(
         owner: &body.owner,
     };
     let created = teams::create(app.pool(), &new, &actor, app.clock().now()).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok((
         StatusCode::CREATED,
         Json(TeamView::one(&app, created).await?),
@@ -1055,7 +1061,8 @@ async fn delete_team(
 ) -> Result<StatusCode, AppError> {
     require_manager(&principal)?;
     teams::delete(app.pool(), &name, &actor, app.clock().now()).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1082,7 +1089,8 @@ async fn set_member(
         role: body.role,
     };
     let change = teams::set_member(app.pool(), &membership, &actor, app.clock().now()).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(MembershipChanged {
         change: change_name(change),
         team: TeamView::one(&app, teams::find(app.pool(), &team).await?).await?,
@@ -1107,17 +1115,18 @@ async fn remove_member(
 ) -> Result<Json<TeamView>, AppError> {
     require_manager(&principal)?;
     teams::remove_member(app.pool(), &team, &user, &actor, app.clock().now()).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     let record = teams::find(app.pool(), &team).await?;
     Ok(Json(TeamView::one(&app, record).await?))
 }
 
 /// `PUT /teams/{name}/suspension`: suspends the team (or replaces its
 /// notice, keeping the first suspension time), or lifts its suspension.
-/// Polls before answering, so when that poll succeeds the next request is
-/// refused (or served again). A failed poll is logged, not returned (see
-/// `settle`): the committed change then takes effect at the poll loop's next
-/// successful pass.
+/// The write's own change messages are applied before the answer, so the
+/// next request on this replica is refused (or served again); the others
+/// follow through the change feed, or within `catalog_ttl` should a message
+/// be lost.
 ///
 /// # Returns
 /// The team as it now is.
@@ -1142,7 +1151,8 @@ async fn set_suspension(
     } else {
         teams::unsuspend(app.pool(), &name, &actor, now).await?
     };
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(TeamView::one(&app, team).await?))
 }
 
@@ -1155,8 +1165,8 @@ pub(crate) struct DisplayNameBody {
     pub display_name: String,
 }
 
-/// `PATCH /users/{name}`: sets the user's display name, then polls so the
-/// labels show it at once.
+/// `PATCH /users/{name}`: sets the user's display name; the labels show it
+/// at once.
 ///
 /// # Returns
 /// The user as it now is.
@@ -1177,12 +1187,13 @@ async fn update_user(
     require_manager(&principal)?;
     let display_name = DisplayName::parse(&body.display_name)?;
     users::set_display_name(app.pool(), &name, &display_name, &actor, app.clock().now()).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(users::find(app.pool(), &name).await?.into()))
 }
 
-/// `PATCH /teams/{name}`: sets a shared team's display name, then polls so
-/// the labels show it at once. A manager (an admin reaching every catalog,
+/// `PATCH /teams/{name}`: sets a shared team's display name; the labels show
+/// it at once. A manager (an admin reaching every catalog,
 /// or a provisioner) may rename any shared team; a console session may
 /// rename one it owns, which the store checks under its locks.
 ///
@@ -1218,7 +1229,8 @@ async fn update_team(
         owner,
     };
     teams::set_display_name(app.pool(), &change, &actor, app.clock().now()).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     let record = teams::find(app.pool(), &name).await?;
     Ok(Json(TeamView::one(&app, record).await?))
 }

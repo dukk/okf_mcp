@@ -1605,16 +1605,18 @@ mod tests {
     async fn turning_password_sign_in_off_hides_the_form_and_refuses_the_post() {
         let test = login_app().await;
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
-        settings::set(
-            test.app.pool(),
-            SettingKey::PasswordSignIn,
-            "false",
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("turn passwords off");
-        test.app.poll().await.expect("poll");
+        crate::invalidate::testing::applied(&test.app, async {
+            settings::set(
+                test.app.pool(),
+                SettingKey::PasswordSignIn,
+                "false",
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("turn passwords off");
+        })
+        .await;
         let mut browser = Browser::default();
 
         let page = browser.send(&test, "GET", "/signin", Payload::Empty).await;
@@ -2855,15 +2857,17 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn every_sign_in_page_names_the_product_and_shows_the_contact() {
         let test = login_app().await;
-        for (key, value) in [
-            (SettingKey::ProductName, "Acme Notes"),
-            (SettingKey::SupportContact, "https://example.com/help"),
-        ] {
-            settings::set(test.app.pool(), key, value, &AuditActor::cli(), Utc::now())
-                .await
-                .unwrap();
-        }
-        test.app.poll().await.unwrap();
+        crate::invalidate::testing::applied(&test.app, async {
+            for (key, value) in [
+                (SettingKey::ProductName, "Acme Notes"),
+                (SettingKey::SupportContact, "https://example.com/help"),
+            ] {
+                settings::set(test.app.pool(), key, value, &AuditActor::cli(), Utc::now())
+                    .await
+                    .unwrap();
+            }
+        })
+        .await;
 
         // The sign-in and forgot pages, a link page (an unknown link's
         // message page) and a refused form post's message page.

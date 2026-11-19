@@ -32,9 +32,6 @@ pub const DEFAULT_LISTEN: SocketAddr =
 /// wrong behind an ingress, where the config must name the public host.
 pub const DEFAULT_ALLOWED_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 
-/// How often the server looks for changes made outside it.
-pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(10);
-
 /// How long an MCP session may sit idle before it is closed.
 pub const DEFAULT_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 
@@ -82,7 +79,7 @@ pub const DEFAULT_ACCESS_TOKEN_TTL: Duration = Duration::from_secs(60 * 60);
 /// The default lifetime of an OAuth refresh token (restarted by each rotation).
 pub const DEFAULT_REFRESH_TOKEN_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
-/// The default idle period after which the poll loop revokes an OAuth grant
+/// The default idle period after which housekeeping revokes an OAuth grant
 /// that holds no live token.
 pub const DEFAULT_IDLE_GRANT_REVOKE_AFTER: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
@@ -119,7 +116,7 @@ pub struct OAuthConfig {
     #[serde(with = "humantime_serde")]
     pub refresh_token_ttl: Duration,
     /// How long an OAuth grant may go without a token being issued for it
-    /// before the poll loop revokes it (`"30d"`). A grant that still holds
+    /// before housekeeping revokes it (`"30d"`). A grant that still holds
     /// a live token is never revoked, whatever this says.
     #[serde(with = "humantime_serde")]
     pub idle_grant_revoke_after: Duration,
@@ -688,7 +685,7 @@ pub struct FeedbackConfig {
     /// Submissions one credential may make in any hour (default 10).
     #[serde(default = "default_feedback_max_per_hour")]
     pub max_per_hour: u32,
-    /// How long forwarded (`sent`) feedback is kept before the poll loop
+    /// How long forwarded (`sent`) feedback is kept before housekeeping
     /// deletes it (default `"30d"`, at least `"1d"`).
     #[serde(default = "default_feedback_retention", with = "humantime_serde")]
     pub retention: Duration,
@@ -918,13 +915,17 @@ pub struct Config {
     /// The catalog a key with no default of its own reads and writes (design
     /// "Catalog selection", step 4).
     pub default_catalog: Option<String>,
-    /// How often to look for imports, catalog and key changes made by the
-    /// subcommands (`"10s"`).
+    /// Deprecated and ignored (milestone 18, spec Decision 18): the server no
+    /// longer polls. Changes reach every replica through the change feed,
+    /// with `catalog_ttl` and `credential_ttl` as the backstop. The key
+    /// still parses (`"10s"`), so a configuration that has it keeps
+    /// starting; [`Config::deprecation_warnings`] names it.
     // `with = "humantime_serde"` parses the field through that module's
     // functions instead of `Duration`'s own serde impl (which wants
-    // `{secs, nanos}`).
+    // `{secs, nanos}`); it reads `Option<Duration>` too, a missing key
+    // being `None`.
     #[serde(with = "humantime_serde")]
-    pub poll_interval: Duration,
+    pub poll_interval: Option<Duration>,
     /// How long an MCP session may be idle before it is closed (`"2h"`).
     #[serde(with = "humantime_serde")]
     pub session_idle_timeout: Duration,
@@ -1026,7 +1027,7 @@ impl Default for Config {
             // `&str` into an owned `String`) without copying it a second time.
             allowed_hosts: Vec::from(DEFAULT_ALLOWED_HOSTS.map(String::from)),
             default_catalog: None,
-            poll_interval: DEFAULT_POLL_INTERVAL,
+            poll_interval: None,
             session_idle_timeout: DEFAULT_SESSION_IDLE_TIMEOUT,
             worker_shutdown_grace: DEFAULT_WORKER_SHUTDOWN_GRACE,
             time_server: None,
@@ -1132,6 +1133,9 @@ impl Config {
         if self.mail.worker.is_some() {
             warnings.push("mail.worker is deprecated and ignored: every serve runs the worker");
         }
+        if self.poll_interval.is_some() {
+            warnings.push("poll_interval is deprecated and ignored");
+        }
         if self.overlay_cache_size.is_some() {
             warnings.push("overlay_cache_size is deprecated and ignored; set overlay_cache_bytes");
         }
@@ -1144,8 +1148,7 @@ impl Config {
     /// `Ok(())`, or the problem in words.
     ///
     /// # Errors
-    /// A zero `poll_interval` (tokio's interval panics on zero) or
-    /// `session_idle_timeout`, an empty `allowed_hosts` (which rmcp reads as
+    /// A zero `session_idle_timeout`, an empty `allowed_hosts` (which rmcp reads as
     /// "accept any `Host`"), or a blank entry in it (which no `Host` matches,
     /// so every request would get 403 with no hint why), or a blank
     /// `time_server` or one with surrounding whitespace (which the lookup
@@ -1165,9 +1168,6 @@ impl Config {
         )
     )]
     pub fn validate(&self) -> Result<(), String> {
-        if self.poll_interval.is_zero() {
-            return Err("poll_interval must be more than zero".to_string());
-        }
         if self.session_idle_timeout.is_zero() {
             return Err("session_idle_timeout must be more than zero".to_string());
         }
@@ -1587,7 +1587,7 @@ mod tests {
         assert_eq!(config.listen.to_string(), "0.0.0.0:8080");
         assert_eq!(config.allowed_hosts, ["localhost", "127.0.0.1", "::1"]);
         assert_eq!(config.default_catalog, None);
-        assert_eq!(config.poll_interval, Duration::from_secs(10));
+        assert_eq!(config.poll_interval, None);
         assert_eq!(
             config.session_idle_timeout,
             Duration::from_secs(2 * 60 * 60)
@@ -1625,7 +1625,7 @@ mod tests {
         assert_eq!(config.listen.to_string(), "127.0.0.1:9000");
         assert_eq!(config.allowed_hosts, ["okf-mcp.example"]);
         assert_eq!(config.default_catalog.as_deref(), Some("pg"));
-        assert_eq!(config.poll_interval, Duration::from_secs(90));
+        assert_eq!(config.poll_interval, Some(Duration::from_secs(90)));
         assert_eq!(config.session_idle_timeout, Duration::from_secs(30 * 60));
         assert_eq!(config.time_server.as_deref(), Some("ntp.example"));
         assert_eq!(config.concept_outline_chars, 500);
@@ -1663,7 +1663,7 @@ mod tests {
     fn a_bad_value_names_the_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("okf.toml");
-        std::fs::write(&path, "poll_interval = \"soon\"\n").unwrap();
+        std::fs::write(&path, "session_idle_timeout = \"soon\"\n").unwrap();
 
         let error = Config::load(Some(&path)).unwrap_err();
 
@@ -1675,7 +1675,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("okf.toml");
         for (text, needle) in [
-            ("poll_interval = \"0s\"\n", "poll_interval"),
             ("session_idle_timeout = \"0s\"\n", "session_idle_timeout"),
             ("allowed_hosts = []\n", "allowed_hosts"),
             ("database_max_connections = 0\n", "database_max_connections"),
@@ -2010,6 +2009,23 @@ mod tests {
             config.deprecation_warnings(),
             ["mail.worker is deprecated and ignored: every serve runs the worker"]
         );
+    }
+
+    #[test]
+    fn poll_interval_parses_with_a_warning_and_is_ignored() {
+        // A zero interval too: nothing runs on it any more.
+        for text in ["poll_interval = \"10s\"\n", "poll_interval = \"0s\"\n"] {
+            let config = Config::from_toml(text).unwrap();
+
+            assert!(
+                config.validate().is_ok(),
+                "an old configuration still starts"
+            );
+            assert_eq!(
+                config.deprecation_warnings(),
+                ["poll_interval is deprecated and ignored"]
+            );
+        }
     }
 
     #[test]

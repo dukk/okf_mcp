@@ -1813,7 +1813,7 @@
     {
       "type": "row",
       "id": 28,
-      "title": "Catalogs and polling",
+      "title": "Catalogs and change propagation",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -1824,98 +1824,9 @@
       "panels": []
     },
     {
-      "type": "heatmap",
-      "title": "Poll pass duration",
-      "description": "How long each poll pass took.",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "refId": "A",
-          "expr": "sum by (le) (increase(okf_poll_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval]))",
-          "legendFormat": "{{le}}",
-          "range": true,
-          "instant": false,
-          "format": "heatmap",
-          "interval": ""
-        }
-      ],
-      "maxDataPoints": 120,
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "scaleDistribution": {
-              "type": "linear"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "calculate": false,
-        "cellGap": 1,
-        "cellValues": {
-          "unit": "short",
-          "decimals": 0
-        },
-        "color": {
-          "mode": "scheme",
-          "scheme": "Greens",
-          "scale": "exponential",
-          "exponent": 0.5,
-          "steps": 64,
-          "reverse": false,
-          "fill": "dark-orange"
-        },
-        "exemplars": {
-          "color": "rgba(255,0,255,0.7)"
-        },
-        "filterValues": {
-          "le": 1e-09
-        },
-        "legend": {
-          "show": true
-        },
-        "rowsFrame": {
-          "layout": "auto",
-          "value": "Count"
-        },
-        "showValue": "never",
-        "tooltip": {
-          "mode": "single",
-          "yHistogram": true,
-          "showColorScale": true
-        },
-        "yAxis": {
-          "axisPlacement": "left",
-          "unit": "s",
-          "reverse": false,
-          "decimals": 0
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 79
-      },
-      "id": 29,
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      }
-    },
-    {
       "type": "timeseries",
-      "title": "Poll pass quantiles",
-      "description": "p50, p95 and p99 poll pass duration.",
+      "title": "Catalog announcements by result",
+      "description": "Catalog generation announcements received from other replicas (with [redis]), by result.",
       "targets": [
         {
           "datasource": {
@@ -1923,163 +1834,6 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "refId": "A",
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(okf_poll_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p50",
-          "range": true,
-          "instant": false
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(okf_poll_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p95",
-          "range": true,
-          "instant": false
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "refId": "C",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(okf_poll_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p99",
-          "range": true,
-          "instant": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "mean",
-            "max",
-            "lastNotNull"
-          ],
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 79
-      },
-      "id": 30,
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Poll passes by outcome",
-      "description": "Poll passes per interval, by outcome.",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "refId": "A",
-          "expr": "sum by (outcome) (increase(okf_poll_duration_seconds_count{job=~\"$job\"}[$__rate_interval]))",
-          "legendFormat": "{{outcome}}",
-          "range": true,
-          "instant": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "bars",
-            "lineWidth": 1,
-            "fillOpacity": 60,
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "mean",
-            "max",
-            "lastNotNull"
-          ],
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 87
-      },
-      "id": 31,
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Catalog refreshes and announcements by result",
-      "description": "Each catalog's turn in a poll pass, by result; and catalog announcements received from other replicas (with [redis]), by result.",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "refId": "A",
-          "expr": "sum by (catalog, result) (increase(okf_catalog_refreshes_total{job=~\"$job\",catalog=~\"$catalog\"}[$__rate_interval]))",
-          "legendFormat": "{{catalog}} {{result}}",
-          "range": true,
-          "instant": false
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "refId": "B",
           "expr": "sum by (result) (increase(okf_catalog_announcements_total{job=~\"$job\"}[$__rate_interval]))",
           "legendFormat": "announcement {{result}}",
           "range": true,
@@ -2122,8 +1876,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 87
+        "x": 0,
+        "y": 79
       },
       "id": 32,
       "datasource": {
@@ -2182,10 +1936,10 @@
         }
       },
       "gridPos": {
-        "h": 6,
-        "w": 24,
-        "x": 0,
-        "y": 95
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 79
       },
       "id": 33,
       "datasource": {
@@ -2247,7 +2001,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 101
+        "y": 87
       },
       "id": 36,
       "datasource": {
@@ -2264,7 +2018,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 109
+        "y": 95
       },
       "panels": []
     },
@@ -2322,7 +2076,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 110
+        "y": 96
       },
       "id": 38,
       "datasource": {
@@ -2384,7 +2138,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 110
+        "y": 96
       },
       "id": 39,
       "datasource": {
@@ -2446,7 +2200,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 110
+        "y": 96
       },
       "id": 40,
       "datasource": {
@@ -2463,7 +2217,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 118
+        "y": 104
       },
       "panels": []
     },
@@ -2521,7 +2275,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 119
+        "y": 105
       },
       "id": 42,
       "datasource": {
@@ -2583,7 +2337,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 119
+        "y": 105
       },
       "id": 43,
       "datasource": {
@@ -2600,7 +2354,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 127
+        "y": 113
       },
       "panels": []
     },
@@ -2685,7 +2439,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 128
+        "y": 114
       },
       "id": 45,
       "datasource": {
@@ -2769,7 +2523,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 128
+        "y": 114
       },
       "id": 46,
       "datasource": {
@@ -2831,7 +2585,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 136
+        "y": 122
       },
       "id": 47,
       "datasource": {
@@ -2893,7 +2647,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 136
+        "y": 122
       },
       "id": 48,
       "datasource": {
@@ -2910,7 +2664,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 144
+        "y": 130
       },
       "panels": []
     },
@@ -2968,7 +2722,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 145
+        "y": 131
       },
       "id": 50,
       "datasource": {
@@ -3030,7 +2784,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 145
+        "y": 131
       },
       "id": 51,
       "datasource": {
@@ -3092,7 +2846,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 145
+        "y": 131
       },
       "id": 52,
       "datasource": {
@@ -3154,7 +2908,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 153
+        "y": 139
       },
       "id": 53,
       "datasource": {
@@ -3216,7 +2970,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 153
+        "y": 139
       },
       "id": 54,
       "datasource": {
@@ -3233,7 +2987,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 161
+        "y": 147
       },
       "panels": []
     },
@@ -3291,7 +3045,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 162
+        "y": 148
       },
       "id": 56,
       "datasource": {
@@ -3353,7 +3107,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 162
+        "y": 148
       },
       "id": 57,
       "datasource": {
@@ -3415,7 +3169,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 170
+        "y": 156
       },
       "id": 58,
       "datasource": {
@@ -3477,7 +3231,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 170
+        "y": 156
       },
       "id": 59,
       "datasource": {
@@ -3566,7 +3320,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 178
+        "y": 164
       },
       "id": 60,
       "datasource": {
@@ -3650,7 +3404,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 178
+        "y": 164
       },
       "id": 61,
       "datasource": {
@@ -3667,7 +3421,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 186
+        "y": 172
       },
       "panels": []
     },
@@ -3752,7 +3506,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 187
+        "y": 173
       },
       "id": 63,
       "datasource": {
@@ -3836,7 +3590,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 187
+        "y": 173
       },
       "id": 64,
       "datasource": {
@@ -3909,7 +3663,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 195
+        "y": 181
       },
       "id": 65,
       "datasource": {
@@ -3971,7 +3725,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 195
+        "y": 181
       },
       "id": 66,
       "datasource": {
@@ -3988,7 +3742,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 203
+        "y": 189
       },
       "panels": []
     },
@@ -4073,7 +3827,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 204
+        "y": 190
       },
       "id": 68,
       "datasource": {
@@ -4135,7 +3889,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 204
+        "y": 190
       },
       "id": 69,
       "datasource": {
@@ -4197,7 +3951,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 212
+        "y": 198
       },
       "id": 70,
       "datasource": {

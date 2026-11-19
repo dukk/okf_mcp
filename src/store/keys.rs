@@ -1254,8 +1254,9 @@ async fn set_maintenance_report_with(
     Ok(id)
 }
 
-/// Revokes a key: it authenticates nothing from then on (M4 notices within
-/// `poll_interval`), and bumps the administrative generation.
+/// Revokes a key: it authenticates nothing from then on (every replica drops
+/// it on the change feed's `credential` message, or within `credential_ttl`
+/// should the message be lost), and bumps the administrative generation.
 ///
 /// # Arguments
 /// * `pool` - the database.
@@ -1355,7 +1356,7 @@ async fn record_revocation(
     Ok(())
 }
 
-/// The audit label of the poll loop's idle-grant revocations: entries show
+/// The audit label of housekeeping's idle-grant revocations: entries show
 /// the actor as `system:idle-grant-revocation`.
 pub const IDLE_REVOCATION_ACTOR: &str = "idle-grant-revocation";
 

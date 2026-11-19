@@ -2118,13 +2118,10 @@ mod tests {
                 .execute(test.app.pool())
                 .await
                 .expect("display name");
-            // The signed-in user comes from the key cache, which reloads on
-            // a bump of the generation, as any real label change does.
-            sqlx::query("UPDATE server_state SET admin_generation = admin_generation + 1")
-                .execute(test.app.pool())
-                .await
-                .expect("bump");
-            test.app.poll().await.expect("poll");
+            // The signed-in user comes from the user cache; a raw update
+            // sends no change message, so a catch-up (what a reconnect
+            // does) makes it read the user again.
+            test.app.apply_reconnect().await;
 
             let start = browser
                 .send(
@@ -2464,7 +2461,8 @@ mod tests {
     }
 
     // Two replicas (M16 Task 10): two `App`s over one database and one
-    // Redis, `poll_interval = 1h`, so what passes was carried by Redis.
+    // Redis, and no change-feed listener (a lib test), so what passes was
+    // carried by Redis.
 
     /// Two replicas with `login_config` over `redis`, both knowing alice.
     async fn replicas(redis: crate::db::redis_support::TestRedis) -> Replicas {
@@ -2485,7 +2483,6 @@ mod tests {
     /// Alice with a password, known to both replicas' key caches.
     async fn alice_on_both(pair: &Replicas) -> UserAuth {
         let alice = user_with_password(&pair.a, "alice", "alice@example.com", Some(PASSWORD)).await;
-        pair.b.poll().await.expect("poll the second replica");
         alice
     }
 
@@ -2558,7 +2555,6 @@ mod tests {
     ) {
         let pair = replicas(redis).await;
         let (alice, mut soft) = alice_with_passkey(&pair.a, None).await;
-        pair.b.poll().await.expect("poll the second replica");
         let mut browser = Browser::default();
 
         let signed = assertion_on(
@@ -2590,7 +2586,6 @@ mod tests {
     ) {
         let pair = replicas(redis).await;
         let (alice, mut soft) = alice_with_passkey(&pair.a, None).await;
-        pair.b.poll().await.expect("poll the second replica");
         let mut browser = Browser::default();
         let signed = assertion_on(
             &pair.a.app,
@@ -2639,7 +2634,6 @@ mod tests {
         finish_on: &Arc<App>,
     ) {
         let alice = user_with_password(test, "alice", "alice@example.com", Some(PASSWORD)).await;
-        finish_on.poll().await.expect("poll the finishing app");
         let mut one = Browser::signed_in(test, "alice@example.com", PASSWORD).await;
         let mut two = Browser::signed_in(test, "alice@example.com", PASSWORD).await;
         let (mut soft_one, mut soft_two) = (SoftPasskey::new(true), SoftPasskey::new(true));
@@ -2817,7 +2811,6 @@ mod tests {
     ) {
         let alice = user_with_password(test, "alice", "alice@example.com", None).await;
         let bob = user_with_password(test, "bob", "bob@example.com", None).await;
-        finish_on.poll().await.expect("poll the finishing app");
         let mut soft = SoftPasskey::new(true);
         let old_link = setup_token(test, &alice).await;
         let mut browser = Browser::default();
