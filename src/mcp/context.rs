@@ -10,7 +10,7 @@ use axum::http::request::Parts;
 use chrono::{DateTime, Utc};
 
 use crate::app::App;
-use crate::auth::{Admission, CatalogScope, Principal};
+use crate::auth::{Admission, CatalogScope, Principal, Reach};
 use crate::catalog::{CatalogState, Loaded};
 use crate::error::OkfError;
 use crate::http::requester::Requester;
@@ -386,12 +386,24 @@ impl ToolContext {
             .chain(sources.server_default)
             .collect();
         let mut rows = HashMap::new();
-        for name in names {
-            if rows.contains_key(name) || !self.principal.reaches(name) {
+        for name in &names {
+            if rows.contains_key(*name) || !self.principal.reaches(name) {
                 continue;
             }
             if let Some(row) = self.app.directory().resolve(name).await? {
                 rows.insert(name.to_string(), row);
+            }
+        }
+        // With no source naming a catalog, `resolve` falls back to the only
+        // catalog the key is granted (issue #663), which needs to know which
+        // of the granted names exist. One query for the grant set (the names
+        // the key was given, not a scan of the directory), and only then.
+        if names.is_empty() {
+            if let Reach::Catalogs(levels) = &self.principal.reach {
+                let granted: Vec<String> = levels.keys().cloned().collect();
+                for row in self.app.directory().resolve_many(&granted).await? {
+                    rows.insert(row.name.clone(), row);
+                }
             }
         }
         Ok(rows)
