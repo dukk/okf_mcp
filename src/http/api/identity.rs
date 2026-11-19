@@ -44,6 +44,11 @@ pub(crate) struct WhoAmI {
     /// One page of the loaded catalogs it reaches, sorted (M18 spec
     /// Decision 7: `?after=&limit=`, as `GET /catalogs`).
     pub catalogs: Vec<String>,
+    /// Its level on each catalog of this page (`read`, `write` or
+    /// `admin`): for a console session, its ceiling's level there, which
+    /// differs per catalog (issue #736: the console reads levels here, a
+    /// page at a time, instead of a whole ceiling from `GET /session`).
+    pub levels: BTreeMap<String, &'static str>,
     /// The `after` of the next page of `catalogs`; absent on the last page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
@@ -78,8 +83,6 @@ pub(crate) struct SessionView {
     pub admin: bool,
     /// The token every write must send as `X-OKF-CSRF`.
     pub csrf: String,
-    /// The user's ceiling: catalog name to `read` or `write`.
-    pub ceiling: BTreeMap<String, &'static str>,
     /// When the session ends regardless of activity.
     pub expires_at: String,
 }
@@ -99,7 +102,6 @@ impl std::fmt::Debug for SessionView {
             .field("user", &self.user)
             .field("admin", &self.admin)
             .field("csrf", &"<redacted>")
-            .field("ceiling", &self.ceiling)
             .field("expires_at", &self.expires_at)
             .finish_non_exhaustive()
     }
@@ -187,6 +189,13 @@ async fn whoami(
     // loaded: every catalog the key reaches is named, whether or not this
     // replica holds it in its cache (M18 Task 8).
     let catalogs = page.items.iter().map(|row| row.name.clone()).collect();
+    // Each row's level, resolved per catalog as every check does (a
+    // ceiling's from the row and the user's gates); bounded by the page.
+    let levels = page
+        .items
+        .iter()
+        .filter_map(|row| Some((row.name.clone(), principal.level_at(row)?.as_str())))
+        .collect();
     // `match` on a reference: `client_name` binds a `&Option<String>`.
     let (kind, client_name) = match &principal.kind {
         CredentialKind::ApiKey => ("key", None),
@@ -213,6 +222,7 @@ async fn whoami(
         maintenance_report: principal.maintenance_report,
         all_catalogs: matches!(principal.reach, Reach::All),
         catalogs,
+        levels,
         next: page.next,
         default_catalog: principal.default_catalog.clone(),
         kind,
@@ -245,9 +255,11 @@ fn console(
     }
 }
 
-/// `GET /session`: the signed-in user, their ceiling and the CSRF token.
-/// The admin flag and the ceiling are the principal's, which the middleware
-/// built from the key cache for this request.
+/// `GET /session`: the signed-in user, the admin flag and the CSRF token.
+/// The admin flag is the principal's, which the middleware built from the
+/// user cache for this request. It holds no ceiling (issue #736): the
+/// levels are on `GET /whoami`'s pages, and `GET /me/ceiling` pages the
+/// ceiling.
 ///
 /// # Errors
 /// 403 for a key or grant; 401 once the user is gone; 500 on a lookup failure.
@@ -264,19 +276,11 @@ async fn session(
             reason: "this session's user no longer exists".to_string(),
         })?;
     let admin = principal.access == Access::Admin;
-    // A non-admin's ceiling is exactly what it reaches; an admin reaches
-    // everything, so its own ceiling is shown for information. Read now,
-    // whole, for this page only: no access check reads it (issue #728).
-    let ceiling = ceiling::ceiling_of(app.pool(), &user.name).await?;
     Ok(Json(SessionView {
         user: user.name,
         email: user.email,
         admin,
         csrf: session.csrf,
-        ceiling: ceiling
-            .into_iter()
-            .map(|(catalog, access)| (catalog, access.as_str()))
-            .collect(),
         expires_at: format_timestamp(session.expires_at),
     }))
 }
@@ -449,7 +453,6 @@ mod tests {
             email: Some("alice@example.com".to_string()),
             admin: false,
             csrf: "csrf-token-secret".to_string(),
-            ceiling: std::collections::BTreeMap::new(),
             expires_at: "2026-01-01T00:00:00Z".to_string(),
         };
 

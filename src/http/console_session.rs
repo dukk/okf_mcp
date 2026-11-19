@@ -818,12 +818,15 @@ mod http_tests {
         assert_eq!(whoami["access"], "read");
         assert_eq!(whoami["all_catalogs"], false);
         assert_eq!(whoami["catalogs"], serde_json::json!(["main"]));
+        // Issue #736: the level on each listed catalog, resolved per catalog.
+        assert_eq!(whoami["levels"], serde_json::json!({ "main": "read" }));
         assert_eq!(whoami["teams"], serde_json::json!(["alice"]));
         let session = session.json();
         assert_eq!(session["user"], "alice");
         assert_eq!(session["email"], "alice@example.com");
         assert_eq!(session["admin"], false);
-        assert_eq!(session["ceiling"], serde_json::json!({ "main": "read" }));
+        // Issue #736: no ceiling (whoami's `levels` and /me/ceiling page it).
+        assert!(session.get("ceiling").is_none(), "{session}");
         assert!(session["csrf"]
             .as_str()
             .is_some_and(|csrf| csrf.len() >= 43));

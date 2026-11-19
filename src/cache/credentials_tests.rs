@@ -839,46 +839,12 @@ async fn the_per_catalog_ceiling_answers_what_the_whole_ceiling_did() {
     }
 }
 
-/// Sums the `rows_returned` of every `sqlx::query` event: how many rows the
-/// database sent back to the code under test.
-#[derive(Clone, Default)]
-struct RowsReturned {
-    rows: Arc<std::sync::atomic::AtomicU64>,
-    statements: Arc<std::sync::atomic::AtomicU64>,
-}
-
-impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for RowsReturned {
-    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
-        struct Rows(u64);
-        impl tracing::field::Visit for Rows {
-            fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
-                if field.name() == "rows_returned" {
-                    self.0 = value;
-                }
-            }
-            fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
-        }
-        if event.metadata().target() != "sqlx::query" {
-            return;
-        }
-        let mut rows = Rows(0);
-        event.record(&mut rows);
-        let relaxed = std::sync::atomic::Ordering::Relaxed;
-        self.rows.fetch_add(rows.0, relaxed);
-        self.statements.fetch_add(1, relaxed);
-    }
-}
-
 /// Issue #728: a user whose team owns 50,000 catalogs authenticates with a
 /// load whose queries return a handful of rows (none per catalog), and the
 /// cached entry stays small; the session still reaches those catalogs, one
 /// at a time, and lists them a page at a time.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_user_whose_team_owns_many_catalogs_loads_a_small_entry() {
-    use tracing_subscriber::layer::SubscriberExt;
-    // `with_filter` is a method of the `Layer` trait.
-    use tracing_subscriber::Layer as _;
-
     const OWNED: i64 = 50_000;
     let db = test_db().await;
     let pool = &db.pool;
@@ -897,28 +863,15 @@ async fn a_user_whose_team_owns_many_catalogs_loads_a_small_entry() {
     sqlx::query("ANALYZE catalogs").execute(pool).await.unwrap();
     let id = user_id(pool, "alice").await;
     let caches = credentials(pool);
-    let counter = RowsReturned::default();
-    let subscriber = tracing_subscriber::registry().with(
-        counter.clone().with_filter(
-            tracing_subscriber::filter::Targets::new()
-                .with_target("sqlx::query", tracing::Level::TRACE),
-        ),
-    );
-
     // Act: the first authentication of her session loads her entry.
-    let session = {
-        // Only this thread's events: the loads below run on it.
-        let _guard = tracing::subscriber::set_default(subscriber);
+    let (session, rows, statements) = crate::db::rows_returned::counting(async {
         timeout(BOUND, caches.session_principal(&id, &view()))
             .await
             .expect("the load")
             .unwrap()
             .expect("alice")
-    };
-
-    let relaxed = std::sync::atomic::Ordering::Relaxed;
-    let rows = counter.rows.load(relaxed);
-    let statements = counter.statements.load(relaxed);
+    })
+    .await;
     assert!(statements > 0, "the load's statements are counted");
     assert!(
         rows < 20,

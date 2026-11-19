@@ -1,14 +1,15 @@
 // My keys: the API keys that belong to the signed-in person. New key picks
-// catalogs and read or write for each, all within the account's ceiling,
+// catalogs and read or write for each, all within the account's ceiling
+// (found a page at a time with a Find box, components/ceiling.js: never
+// the whole ceiling, issue #736; ticks stay across finds),
 // and an expiry no longer than the longest allowed; the secret is shown
 // once. Each key's drawer renames or revokes it. Keys an admin made for
 // this user are listed too, uncapped. The server enforces the ceiling, the
 // key limit and the lifetime limit (422, naming the limit); this page only
 // offers what fits. Each drawer keeps the drawerTicket it was asked for, as
 // on the API keys page.
-import { h, pill, fact } from '../core/dom.js';
+import { h, pill, fact, fill } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
-import { store } from '../core/store.js';
 import { catalogLabel } from '../core/labels.js';
 import { toast } from '../core/toast.js';
 import { drawerTicket } from '../core/drawer.js';
@@ -18,6 +19,8 @@ import { listTable } from '../components/list-table.js';
 import { confirmDialog } from '../components/confirm.js';
 import { showOnce } from '../components/secret.js';
 import { levelsCell } from '../components/levels.js';
+import { ceilingPager } from '../components/ceiling.js';
+import { guard, once } from '../core/pending.js';
 
 const LEVELS = ['read', 'write'];
 const STATE_KIND = { active: 'ok', expired: 'muted', revoked: 'error' };
@@ -39,10 +42,15 @@ function keyState(key) {
     return 'active';
 }
 
+// The account's ceiling on the catalogs of its live self-issued keys, as
+// the last GET /me/keys gave it ({catalog: level}): what the cap notes
+// compare with.
+let keysCeiling = {};
+
 const COLUMNS = [
     { key: 'name', label: 'Name', sort: key => key.name,
       render: key => h('span', { class: 'key-name', dataset: { test: `my-key-${key.name}` } }, key.name) },
-    { key: 'catalogs', label: 'Catalogs', render: key => levelsCell(key, store.session?.ceiling) },
+    { key: 'catalogs', label: 'Catalogs', render: key => levelsCell(key, keysCeiling) },
     { key: 'default_catalog', label: 'Default', render: row => (row.default_catalog ? catalogLabel(row.default_catalog) : '-') },
     { key: 'created_at', label: 'Created', sort: key => key.created_at, render: key => when(key.created_at) },
     { key: 'expires_at', label: 'Expires', sort: key => key.expires_at ?? '9999',
@@ -74,13 +82,15 @@ export async function render(main) {
 
     async function load() {
         let keys;
+        let ceiling;
         try {
-            // freshAccount() also makes the session's ceiling the one /me
-            // gives now: the table's and drawer's cap notes, the New key form
-            // and `store.can` all read it.
-            [account, { keys }] = await Promise.all([freshAccount(), api.get('/me/keys')]);
+            // /me/keys' `ceiling` is the account's ceiling on these keys'
+            // catalogs now, for the cap notes; /me's `ceiling_access` says
+            // whether the ceiling reaches anything.
+            [account, { keys, ceiling }] = await Promise.all([freshAccount(), api.get('/me/keys')]);
         } catch { return; /* toasted */ }
         if (!main.isConnected) return;
+        keysCeiling = ceiling ?? {};
         table.redraw(keys);
         // What `max_keys_per_user` counts: live self-issued keys.
         const live = keys.filter(key => key.self_issued && keyState(key) === 'active').length;
@@ -92,8 +102,8 @@ export async function render(main) {
 }
 
 // Why New key is unavailable, or '' when it is not.
-function createBlocker({ ceiling, limits }, live) {
-    if (!ceiling.length) {
+function createBlocker({ ceiling_access: ceilingAccess, limits }, live) {
+    if (ceilingAccess === null) {
         return 'Your account reaches no catalog yet, so a key could reach nothing. Ask an admin for access.';
     }
     if (live >= limits.max_keys_per_user) {
@@ -132,40 +142,77 @@ function expiresAt(choice) {
     return entry ? new Date(Date.now() + entry[2] * 1000).toISOString() : null;
 }
 
-// The create form, in the drawer: one row per ceiling catalog, each a
-// checkbox and a level select offering no more than the ceiling.
+// The create form, in the drawer: the ceiling a page at a time (a Find box
+// and Load more), one row per catalog, each a checkbox and a level select
+// offering no more than the ceiling. What is ticked is kept in `chosen`
+// (catalog to level), not in the rows, so it stays across finds and pages;
+// the Default catalog offers the chosen ones. The create is one pending
+// write (core/pending.js).
 function newKey(main, account, reload) {
     if (!account) return;
     const ticket = drawerTicket(main);
-    const rows = account.ceiling.map(({ catalog, access }) =>
-        h('div', { class: 'inline-form', dataset: { test: `my-key-catalog-${catalog}` } },
-            h('label', {},
-                h('input', { type: 'checkbox', name: 'catalog', value: catalog }), ' ',
-                h('span', {}, catalogLabel(catalog))),
-            h('select', { name: `level-${catalog}`, 'aria-label': `Access to ${catalogLabel(catalog)}` },
-                levelsUpTo(access).map(level => h('option', { value: level }, level)))));
+    const chosen = new Map();
+    const rows = h('div', { id: 'my-key-catalogs' });
+    const summary = h('p', { id: 'my-key-chosen', class: 'muted small' });
+    const defaultSelect = h('select', { name: 'default_catalog', id: 'my-key-default' });
+
+    // The chosen catalogs, in words, and the Default options: kept when
+    // still chosen.
+    function showChosen() {
+        const names = [...chosen.keys()].sort();
+        summary.textContent = names.length
+            ? `Chosen: ${names.map(name => `${catalogLabel(name)} (${chosen.get(name)})`).join(', ')}`
+            : 'No catalog chosen yet.';
+        const current = defaultSelect.value;
+        defaultSelect.replaceChildren(h('option', { value: '' }, 'None'),
+            ...names.map(name => h('option', { value: name }, catalogLabel(name))));
+        defaultSelect.value = chosen.has(current) ? current : '';
+    }
+
+    function row({ catalog, access }) {
+        const box = h('input', { type: 'checkbox', name: 'catalog', value: catalog, checked: chosen.has(catalog) });
+        const level = h('select', { name: `level-${catalog}`, 'aria-label': `Access to ${catalogLabel(catalog)}` },
+            levelsUpTo(access).map(option => h('option', { value: option }, option)));
+        // A level chosen earlier, if this page still allows it.
+        if (chosen.has(catalog) && levelsUpTo(access).includes(chosen.get(catalog))) level.value = chosen.get(catalog);
+        const update = () => {
+            if (box.checked) chosen.set(catalog, level.value);
+            else chosen.delete(catalog);
+            showChosen();
+        };
+        box.addEventListener('change', update);
+        level.addEventListener('change', () => { if (box.checked) update(); });
+        return h('div', { class: 'inline-form', dataset: { test: `my-key-catalog-${catalog}` } },
+            h('label', {}, box, ' ', h('span', {}, catalogLabel(catalog))), level);
+    }
+
+    const pager = ceilingPager({ id: 'my-key-ceiling', draw: (entries, prefix) => {
+        fill(rows, entries.length
+            ? entries.map(row)
+            : h('p', { class: 'muted' }, prefix ? `No catalog of yours starts with ${prefix}.` : 'Your account reaches no catalog yet.'));
+    } });
+    const key = 'my-key:create';
+    const submit = guard(h('button', { type: 'submit', id: 'my-key-create' }, 'Create key'), key);
     const form = h('form', { id: 'my-key-form' },
         h('label', {}, 'Name',
             h('input', { name: 'name', required: true, autocomplete: 'off', placeholder: 'letters, digits, . _ -' })),
-        h('fieldset', {}, h('legend', {}, 'Catalogs, each read or write within your ceiling'), rows),
-        h('label', {}, 'Default catalog',
-            h('select', { name: 'default_catalog' },
-                h('option', { value: '' }, 'None'),
-                account.ceiling.map(({ catalog }) => h('option', { value: catalog }, catalogLabel(catalog))))),
+        h('fieldset', {}, h('legend', {}, 'Catalogs, each read or write within your ceiling'),
+            h('label', { class: 'small' }, 'Find ', pager.find), rows, pager.footer, summary),
+        h('label', {}, 'Default catalog', defaultSelect),
         h('label', {}, 'Expires', h('select', { name: 'expires_in' }, expiryOptions(account.limits))),
-        h('button', { type: 'submit' }, 'Create key'));
-    form.addEventListener('submit', async event => {
+        submit);
+    showChosen();
+    form.addEventListener('submit', event => {
         event.preventDefault();
+        once(key, () => create());
+    });
+
+    async function create() {
         const data = new FormData(form);
-        const catalogs = data.getAll('catalog').map(String)
-            .map(catalog => ({ catalog, access: String(data.get(`level-${catalog}`) ?? 'read') }));
-        const defaultCatalog = String(data.get('default_catalog') ?? '') || null;
+        const catalogs = [...chosen].map(([catalog, access]) => ({ catalog, access }));
+        const defaultCatalog = defaultSelect.value || null;
         if (!catalogs.length) {
             toast('Choose at least one catalog.', 'error');
-            return;
-        }
-        if (defaultCatalog && !catalogs.some(entry => entry.catalog === defaultCatalog)) {
-            toast('The default catalog must be one of the chosen catalogs.', 'error');
             return;
         }
         let created;
@@ -187,8 +234,9 @@ function newKey(main, account, reload) {
             secret: created.secret,
         });
         if (main.isConnected) await reload();
-    });
+    }
     ticket.open('New key', 'The secret is shown once, right after creation.', form);
+    pager.start();
 }
 
 // One key's drawer: its facts, then Rename and Revoke while it is active.
@@ -200,7 +248,7 @@ function showKey(main, key, reload, ticket = drawerTicket(main)) {
     const facts = h('dl', { class: 'facts' },
         fact('Id', h('code', {}, key.id)),
         fact('Actor', h('code', {}, key.actor)),
-        fact('Catalogs', levelsCell(key, store.session?.ceiling)),
+        fact('Catalogs', levelsCell(key, keysCeiling)),
         fact('Default', key.default_catalog ? catalogLabel(key.default_catalog) : '-'),
         fact('Made by', key.self_issued ? 'you' : 'an admin (not capped by your ceiling)'),
         fact('Created', when(key.created_at)),

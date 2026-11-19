@@ -340,6 +340,8 @@ async fn a_member_creates_a_key_within_the_ceiling_and_sees_its_secret_once() {
         ui.wait_text("#my-keys-note", "0 of 20");
         ui.click("#my-key-new");
         ui.wait_visible("#my-key-form");
+        // The picker reads the ceiling a page at a time (issue #736).
+        ui.wait_visible("#my-key-form input[name=catalog][value=main]");
         // Only the ceiling's catalogs are offered.
         assert_eq!(
             ui.eval(
@@ -494,6 +496,7 @@ async fn a_ceiling_lowered_during_the_session_shows_on_my_keys_without_a_reload(
         ui.click("#drawer-close");
         // The New key form offers no more than read now.
         ui.click("#my-key-new");
+        ui.wait_visible("#my-key-form select[name=level-main]");
         assert_eq!(
             ui.eval(
                 "() => [...document.querySelectorAll('#my-key-form select[name=level-main] option')] \
@@ -768,4 +771,74 @@ async fn a_member_revokes_an_oauth_grant() {
         .find(|record| record.id == grant)
         .expect("the grant");
     assert!(record.revoked_at.is_some());
+}
+
+/// Gives `count` catalogs (`c00001`...) to alice's personal team by SQL,
+/// each at the default `member_access` (write): a ceiling larger than one
+/// page of the console's pickers (issue #736).
+pub(crate) async fn seed_alices_catalogs(server: &TestServer, count: i64) {
+    sqlx::query(
+        "INSERT INTO catalogs (name, description, created_at, owner_team_id) \
+         SELECT 'c' || lpad(n::text, 5, '0'), '', now(), \
+                (SELECT id FROM teams WHERE name = 'alice') \
+         FROM generate_series(1, $1) AS n",
+    )
+    .bind(count)
+    .execute(&server.db.pool)
+    .await
+    .expect("seed alice's catalogs");
+}
+
+/// Issue #736: New key's picker reads the ceiling a page at a time with a
+/// Find box; a catalog ticked under one Find stays chosen under another,
+/// and the key is created with both, at their levels, and the default.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_picks_key_catalogs_across_finds() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    seed_alices_catalogs(&server, 150).await;
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.open("/my-keys");
+        ui.wait_text("#my-keys-note", "0 of 20");
+        ui.click("#my-key-new");
+        // A page, not the whole ceiling: Load more continues it.
+        ui.wait_visible("#my-key-form input[name=catalog][value=c00001]");
+        ui.wait_visible("#my-key-ceiling-more");
+        assert!(!ui.present("#my-key-form input[name=catalog][value=main]"));
+        ui.fill("#my-key-form input[name=name]", "picked");
+        ui.fill("#my-key-ceiling-find", "c0014");
+        ui.wait_visible("#my-key-form input[name=catalog][value=c00140]");
+        ui.click("#my-key-form input[name=catalog][value=c00140]");
+        ui.select("#my-key-form select[name=level-c00140]", "write");
+        ui.fill("#my-key-ceiling-find", "ma");
+        ui.wait_visible("#my-key-form input[name=catalog][value=main]");
+        assert!(!ui.present("#my-key-form input[name=catalog][value=c00140]"));
+        ui.click("#my-key-form input[name=catalog][value=main]");
+        ui.wait_text("#my-key-chosen", "(write)");
+        ui.wait_text("#my-key-chosen", "(read)");
+        // Back under the first Find, the earlier tick is still shown.
+        ui.fill("#my-key-ceiling-find", "c0014");
+        ui.wait_visible("#my-key-form input[name=catalog][value=c00140]:checked");
+        ui.select("#my-key-default", "c00140");
+        ui.click("#my-key-form button[type=submit]");
+        ui.wait_visible("#my-key-secret");
+        ui.click("#my-key-secret-done");
+        ui.wait_text("[data-test=my-key-picked]", "picked");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let key = key_named(&server, "picked").await.expect("the key exists");
+    assert_eq!(
+        key.catalog_access,
+        [
+            ("c00140".to_string(), Access::Write),
+            ("main".to_string(), Access::Read),
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert_eq!(key.default_catalog.as_deref(), Some("c00140"));
 }

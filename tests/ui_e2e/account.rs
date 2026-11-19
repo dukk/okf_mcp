@@ -771,3 +771,56 @@ async fn a_member_who_is_not_an_owner_sees_the_team_but_no_editor() {
     let team = teams::find(&server.db.pool, "acme").await.expect("acme");
     assert_eq!(team.display_name, "Acme", "nothing was sent");
 }
+
+/// The ceiling table's rows, in order.
+fn ceiling_rows(ui: &Ui) -> Vec<String> {
+    serde_json::from_value(ui.eval(
+        "() => [...document.querySelectorAll('#ceiling-table [data-test^=ceiling-]')] \
+         .map(cell => cell.dataset.test.slice('ceiling-'.length))",
+        json!(null),
+    ))
+    .expect("names")
+}
+
+/// Issue #736: the Account page shows the ceiling a page at a time with
+/// Load more and a Find box. Its committed cursor survives an overtaken
+/// and a failed read (lessons.md): a Find answered late is dropped, a newer
+/// one that fails keeps the rows drawn and their Load more, marked
+/// possibly out of date, and Load more then appends the next page once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_ceiling_is_paged_with_a_find_box() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    crate::self_service::seed_alices_catalogs(&server, 150).await;
+    drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.open("/account");
+        ui.wait_visible("[data-test=ceiling-c00001]");
+        ui.wait_visible("#ceiling-more");
+        assert_eq!(ceiling_rows(ui).len(), 100, "one page");
+        // A Find answered late, overtaken by a newer one that fails.
+        ui.hold_answer("GET", "prefix=c001", || ui.fill("#ceiling-find", "c001"));
+        ui.fail_next("GET", "prefix=c0012", 503, "try again");
+        ui.fill("#ceiling-find", "c0012");
+        ui.wait_visible("#ceiling-stale");
+        ui.release_held();
+        let rows = ceiling_rows(ui);
+        assert_eq!(rows.len(), 100, "the committed page stays: {rows:?}");
+        assert_eq!(rows[0], "c00001");
+        ui.wait_visible("#ceiling-more");
+        ui.click("#ceiling-more");
+        ui.wait_visible("[data-test=ceiling-main]");
+        let rows = ceiling_rows(ui);
+        let unique: std::collections::BTreeSet<&String> = rows.iter().collect();
+        assert_eq!(rows.len(), 151, "appended once: {rows:?}");
+        assert_eq!(unique.len(), 151);
+        assert!(!ui.page.is_visible("#ceiling-more").expect("visible"));
+        // A Find that answers narrows the list.
+        ui.fill("#ceiling-find", "c0012");
+        ui.wait_text_gone("#ceiling-table", "c00001");
+        assert_eq!(ceiling_rows(ui).len(), 10);
+        ui.fill("#ceiling-find", "zz");
+        ui.wait_text("#ceiling-table", "No catalog of yours starts with zz");
+    })
+    .await;
+}
