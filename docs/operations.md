@@ -54,12 +54,15 @@ changesets and the routes in detail.
   Keys are bearer tokens (`Authorization: Bearer <key>`). Only `/healthz` is
   open, and it names no catalog, host or secret.
 - **The command line** (`okf-mcp catalog`, `key`, `import`, `export`,
-  `migrate`) talks to the database directly, not to the server. The running
-  server notices catalogs, imports and key changes within `poll_interval`.
-  With `[redis]` the command line announces key changes, imports and
-  `catalog repair-indexes`, so the serving replicas normally pick those up
-  well within a second (best effort; `poll_interval` remains the bound); a
-  new or deleted catalog still shows within `poll_interval`.
+  `migrate`) talks to the database directly, not to the server. Each write
+  sends a change message (Postgres `NOTIFY`) from its own transaction, so
+  every running replica normally sees a new, changed, imported or deleted
+  catalog within a fraction of a second. If a message is missed while the
+  listener stays connected, a replica rereads a catalog's row after
+  `catalog_ttl` at the latest (10 seconds by default); after a reconnect it
+  rereads every row on next use. Key changes are also polled, within
+  `poll_interval`, and with `[redis]` the command line announces key changes,
+  imports and `catalog repair-indexes` too (best effort).
 
 ## 2. The image
 
@@ -103,7 +106,7 @@ unknown keys are ignored, so one file serves every version.
 | `allowed_hosts` | `["localhost", "127.0.0.1", "::1"]` | The `Host` names (optionally `host:port`) that `/mcp` accepts: rmcp's DNS-rebinding check. Behind an ingress, the public host name |
 | `default_catalog` | none | The catalog a key with no default of its own reads and writes |
 | `session_idle_timeout` | `"2h"` | An idle MCP session is closed after this; an open changeset with no change within it is `idle` in `list_changesets` |
-| `poll_interval` | `"10s"` | How often the server looks for catalog, import and key changes made by the subcommands |
+| `poll_interval` | `"10s"` | How often the server reloads its key cache and settings if an administrative change moved them. Catalogs are not polled: see `catalog_ttl` |
 | `maintenance_review_intervals` | `{}` (30 days per catalog) | Per-catalog review durations, e.g. `{ pg = "30d" }`; each must be at least one day |
 | `max_import_bytes` | `"64MiB"` | The largest uncompressed import (`MiB` is binary, `MB` decimal, or a number of bytes). The import route caps the request body at this plus 0.1% and 64 KiB of gzip slack |
 | `time_server` | none | The NTP server for the clock check (`host`, `host:port` or an address). Without it there is no check |
@@ -129,8 +132,9 @@ unknown keys are ignored, so one file serves every version.
 | `mail.provider` | `"log"` | `"smtp"`, `"postmark"`, `"ses"` or `"log"`. **`log` is for development only:** it writes each whole message, setup and reset links included, to the log at `info`, and delivers nothing |
 | `mail.from` | `"okf <okf@localhost>"` | The From address, such as `"okf <okf@example.com>"`; it must parse as one mailbox. Set it for `smtp`, `postmark` and `ses` (for `ses`, an identity verified in SES) |
 | `mail.worker` | none | Deprecated and ignored: every `serve` runs the mail worker, and logs a warning if the key is present. The workers share one pool of up to 3 connections per process, on top of `database_max_connections` |
+| `catalog_cache_bytes` | `"1GiB"` | The most memory this process's catalog snapshots may take, estimated from their stored size (`"512MiB"`, or a number of bytes). Catalogs load on first use, not at start-up; past the budget the least recently used one is dropped and loaded again when next read. A catalog larger than the whole budget is served but not kept |
 | `catalog_directory_entries` | `100000` | The most catalog rows the catalog directory keeps in memory, by name. It answers "does this catalog exist, and who owns it" without loading content |
-| `catalog_ttl` | `"10s"` | How long the directory serves a catalog row before reading it again. A change drops the row at once; this covers a change message that is lost. A name that does not exist is remembered for 5 seconds regardless |
+| `catalog_ttl` | `"10s"` | How long the directory serves a catalog row before reading it again, and so the longest a replica serves an older snapshot of a catalog whose change message it missed (each use refreshes the snapshot to its row). A change drops the row at once; this covers a change message that is lost while the listener stays connected (a reconnect marks every row stale). A name that does not exist is remembered for 5 seconds regardless |
 | `credential_cache_entries` | `100000` | The most API keys and OAuth grants each credential cache keeps in memory (one by key hash, one by grant id). A key or grant is read from the database the first time it is used; an unknown one is never cached |
 | `user_cache_entries` | `100000` | The most users the user cache keeps in memory: each one's admin flag, ceiling, teams, entitlements and live unlocks, read on first use |
 | `credential_ttl` | `"10s"` | How long a cached key, grant or user is served before it is read again. A change (a revocation, a team or admin change) drops it on every replica at once; this bounds how long one survives a change message that is lost |
@@ -481,13 +485,15 @@ session id: the keys and values that refer to one hold its hash.
   read-your-writes: the write's answer does not wait for the announcement or
   for any other replica's refresh, so a client whose next request lands on
   another replica can still read the old text for a moment (normally well
-  under a second), and the poll loop bounds the lag at `poll_interval` when an
-  announcement is lost. A replica that already reached the
-  generation (its own publish, or its poll) does nothing; one that has not
-  loaded the catalog (created since its last poll) or has deleted it leaves it
-  to the poll loop, so an announcement never loads a catalog. Refreshes of one
-  catalog from an announcement, the poll loop and a local publish wait for one
-  another and build each generation once; a snapshot never moves back. A
+  under a second). The same write also sends a change message through
+  Postgres, which reaches every replica without Redis; if both are lost, the
+  replica rereads the catalog's row after `catalog_ttl` at the latest and
+  refreshes the snapshot on its next use. A replica that already reached the
+  generation (its own publish) does nothing; one that has not cached the
+  catalog, or has deleted it, does nothing either, so an announcement never
+  loads a catalog (catalogs load on first use). Refreshes of one catalog from
+  an announcement, a change message, a request and a local publish wait for
+  one another and build each generation once; a snapshot never moves back. A
   replica's `pending_changes`, and its reads through a changeset, do give a
   guarantee for the changeset's own entries: they refresh first when an entry
   was made on a newer revision than the replica's snapshot holds, so a
@@ -523,10 +529,12 @@ back to memory, because that would split the state between replicas.
   at most `poll_interval` of key-revocation delay once Redis is back, and
   during it each replica still polls Postgres.
 - **Catalog announcements** fail the same way: a failed publish is counted and
-  logged, and each replica's catalog subscriber checks every loaded catalog
-  when it (re)subscribes, with the same reconnect and backoff. A lost
-  announcement costs at most `poll_interval` before that replica's reads show
-  the write; even a delivered one is applied asynchronously.
+  logged. When a replica's catalog subscriber (re)subscribes, with the same
+  reconnect and backoff, it marks every cached catalog row stale, so each
+  catalog is checked against the database on its next use (nothing is
+  reloaded at once). A lost announcement is normally covered by the Postgres
+  change message, and at worst costs `catalog_ttl` before that replica's reads
+  show the write; even a delivered one is applied asynchronously.
 - **The access-token cache** skips the cache on a Redis error: the lookup goes
   to Postgres and caches nothing.
 - **An entry Redis lost** (evicted, or Redis restarted without persistence)
@@ -587,9 +595,10 @@ two). What `[redis]` does not share:
   section), but not before the write's answer returns: a client's next read
   on another replica may still see the old text. There is no read-your-writes
   guarantee across replicas. A lost announcement (Redis down, or the
-  subscriber reconnecting) waits for that replica's poll, within
-  `poll_interval` (10 seconds by default). A catalog created or deleted on
-  one replica also shows on the others at their next poll. Within a
+  subscriber reconnecting) is covered by the Postgres change message the same
+  write sends; if that is missed too, by the catalog row's lifetime,
+  `catalog_ttl` (10 seconds by default). A catalog created or deleted on one
+  replica shows on the others the same way. Within a
   changeset, `pending_changes` and reads through it refresh a replica that is
   behind the changeset's own entries.
 - **Rate limits** (per address, per email, OIDC starts, OAuth) are counted per
@@ -862,8 +871,9 @@ The objects for backups (`ObjectStore`, `ScheduledBackup`) are in section 9.
 - **Several replicas:** with `[redis]`, use the variant below. The Service
   needs no session affinity, and the Ingress needs no sticky annotation.
 - **Startup probe:** TCP on 8080, for up to 5 minutes (60 x 5 s). The server
-  opens its port only after it has run the migrations and loaded every
-  catalog's snapshot.
+  opens its port only after it has run the migrations and loaded its keys and
+  settings; catalogs load on first use, so start-up does not grow with their
+  number.
 - **Readiness probe:** `GET /healthz`, which answers 503 while the database
   does not answer within 2 seconds, so the pod leaves the Service during a
   database outage. The clock check never changes it.
@@ -1167,9 +1177,8 @@ the `okf.catalog` span attribute and the `catalog` metric label.
 
 Metric labels come from closed sets only: route templates, registered tool
 names (anything else is `other`), catalog names, and fixed outcome, method,
-rule, reason and status words. Only the gauges that enumerate loaded catalogs
-(`okf_catalog_concepts`, `okf_catalog_generation`) drop
-a deleted catalog's series at the next collection. The counters and histograms
+rule, reason and status words. No gauge has a series per catalog. The counters
+and histograms
 (`okf_catalog_refreshes_total`, `okf_publish_duration_seconds`, the tool and
 archive series) keep the series they recorded for that catalog until the
 process restarts, so a catalog created and deleted under many names leaves
@@ -1198,9 +1207,9 @@ label names (`http.route` is `http_route`), durations are in seconds, and a
 counter ends in `_total`. A histogram is three series (`_bucket`, `_sum`,
 `_count`) with buckets from 1 ms to 60 s. Every family except
 `okf_build_info`, `okf_telemetry_export_failures_total`, `okf_mail_queue_depth`,
-`okf_changesets_open` and the gauges that read loaded state
-(`okf_catalog_concepts`, `okf_catalog_generation`, `db_client_connection_count`)
-has no series until its first event, so a scrape of an idle server lists
+`okf_changesets_open` and the gauges that read live state
+(`db_client_connection_count`, and `okf_cache_entries` and `okf_cache_bytes`
+while their cache exists) has no series until its first event, so a scrape of an idle server lists
 fewer families than this table. Over OTLP the names are
 the dotted originals.
 
@@ -1208,7 +1217,7 @@ the dotted originals.
 |---|---|---|---|
 | `http_server_request_duration_seconds` | histogram | `http_request_method`, `http_route`, `http_response_status_code` | Every HTTP request on the main port |
 | `http_server_active_requests` | gauge | `http_request_method`, `http_route` | Requests being served |
-| `okf_mcp_tool_duration_seconds` | histogram | `tool`, `catalog`, `outcome` | MCP tool calls. `tool` is a registered tool or `other`; `catalog` is a loaded catalog or `none`; `outcome` is `ok` or `error` |
+| `okf_mcp_tool_duration_seconds` | histogram | `tool`, `catalog`, `outcome` | MCP tool calls. `tool` is a registered tool or `other`; `catalog` is an existing catalog or `none`; `outcome` is `ok` or `error` |
 | `okf_mcp_sessions_active` | gauge | none | Open MCP sessions |
 | `okf_publish_duration_seconds` | histogram | `catalog`, `outcome` | A publish, from the first lock to the refreshed snapshot |
 | `okf_publish_lock_wait_seconds` | histogram | `catalog` | Time a publish waited for the catalog's locks |
@@ -1217,8 +1226,6 @@ the dotted originals.
 | `okf_poll_duration_seconds` | histogram | `outcome` | One pass of the poll loop |
 | `okf_catalog_refreshes_total` | counter | `catalog`, `result` | Each catalog's turn in a pass: `unchanged`, `reloaded`, `loaded` or `failed` |
 | `okf_catalog_announcements_total` | counter | `result` | Catalog announcements handled, counting also each catalog found behind in the catch-up after a (re)subscribe: `applied` (rebuilt), `current` (already there), `unknown` (not loaded here, or deleted) or `failed`. Only with `[redis]` |
-| `okf_catalog_concepts` | gauge | `catalog` | Concepts in the current snapshot |
-| `okf_catalog_generation` | gauge | `catalog` | The snapshot's generation |
 | `okf_invalidations_queued_total` | counter | `kind` | Change-feed messages queued by this replica's write transactions; Postgres delivers one only if its transaction commits, so a rollback leaves this ahead of `received` (`catalog`, `catalog_meta`, `credential`, `user`, `team`, `settings`) |
 | `okf_invalidations_received_total` | counter | `kind` | Change-feed messages received and applied |
 | `okf_invalidations_unreadable_total` | counter | | Change-feed payloads this build could not read (each reloads the caches) |
@@ -1251,10 +1258,10 @@ on its own task), so find a call by its tool span, not by the request's trace.
 | Span | Attributes |
 |---|---|
 | `<METHOD> <route>`, such as `POST /signin` (server). No span for an unmatched route | `http.request.method` (`_OTHER` for an unknown method), `http.route`, `http.response.status_code`, `enduser.id`, `okf.key.id`. The status is `Error` for a 5xx only. The caller's `traceparent`, if any, is a link |
-| `mcp <tool>` (server): one per tool call; `other` for an unregistered name | `okf.tool`, `okf.catalog` (a loaded catalog, else `none`), `okf.outcome` (`ok` or `error`), `okf.error.kind` on failure, `enduser.id`, `okf.key.id` |
+| `mcp <tool>` (server): one per tool call; `other` for an unregistered name | `okf.tool`, `okf.catalog` (an existing catalog, else `none`), `okf.outcome` (`ok` or `error`), `okf.error.kind` on failure, `enduser.id`, `okf.key.id` |
 | `okf.publish`, with children `okf.publish.lock`, `okf.publish.lint` and `okf.publish.write` | `okf.catalog`, `okf.changeset.entries` |
 | `okf.poll`, with children `okf.catalog.refresh` (one per catalog) and `okf.keycache.reload` | `okf.catalog` and `okf.refresh.result` on the refresh |
-| `okf.catalog.announcement`: a root per catalog announcement handled (or catalog caught up after a resubscribe) | `okf.catalog` (a loaded catalog only), `okf.announcement.result` (as `okf_catalog_announcements_total`'s `result`) |
+| `okf.catalog.announcement`: a root per catalog announcement handled | `okf.catalog` (a catalog cached on this replica only), `okf.announcement.result` (as `okf_catalog_announcements_total`'s `result`) |
 | `okf.clock.check` | `okf.outcome`, `okf.clock.offset` (seconds) |
 | `okf.archive.export` and `okf.archive.import` | `okf.catalog` (only for a catalog that exists), `okf.archive.size` (bytes, on success), `okf.outcome` |
 | `okf.mail.job` | `okf.mail.template`, `okf.mail.provider`, `okf.outcome`. Never the address |
@@ -1318,9 +1325,9 @@ which of them it skipped (those with a root `index.md`, or misspelled). Listings
 without a title or description get `TODO` placeholders; the output names
 each one. A changeset someone left open on an affected index replays its
 bookkeeping onto the repaired text or conflicts at publish, as after any
-publish. The running server shows the result within `poll_interval`; with
-`[redis]` its announcement normally reaches every replica much sooner (best
-effort).
+publish. The command's change message reaches every running replica at once
+(at worst within `catalog_ttl`); with `[redis]` it also announces the change
+(best effort).
 
 An agent with write access can do the same for one catalog through a
 changeset, to review before publishing: `open_changeset`, `repair_indexes`,
@@ -1420,9 +1427,9 @@ git -C ~/notes archive --format=tar.gz HEAD |
 ```
 
 The server picks up a catalog created, updated or imported from the command
-line within `poll_interval` (`/healthz`'s `catalogs` counts it once it is
-loaded; a description change does not rebuild the catalog's snapshot); an
-import through the HTTP route is visible at once.
+line as soon as the change message reaches it (each catalog loads on its
+first read; a description change does not rebuild the catalog's snapshot);
+an import through the HTTP route is visible at once.
 
 `okf-mcp export` inside the pod must write under `/tmp` (or to `-`, stdout),
 the only writable path:
@@ -3257,7 +3264,7 @@ key and acts only on the signed-in user's own rows. Every endpoint also takes a 
 
 | Method and path | Key | Does |
 |---|---|---|
-| `GET /api/v1/whoami` | any | The calling credential: `key_id`, `name`, `actor`, `access`, `maintenance_report`, `all_catalogs`, `catalogs` (one page of the loaded catalogs it reaches, sorted; see [Catalog listings are paginated](#catalog-listings-are-paginated)) with `next`, `default_catalog`, `kind` (`key`, `oauth` or `session`), `client_name` (a grant's client), `user` (the user it belongs to, `null` when unassigned), `teams` (that user's teams, sorted) and `user_admin` (whether that user is an admin user, `false` without one; the console offers Unlock only when it is true). A session's `key_id` is `session:<user>`, its `name` `null` and its `actor` the user's name. Never a key, token or hash |
+| `GET /api/v1/whoami` | any | The calling credential: `key_id`, `name`, `actor`, `access`, `maintenance_report`, `all_catalogs`, `catalogs` (one page of the catalogs it reaches, sorted; see [Catalog listings are paginated](#catalog-listings-are-paginated)) with `next`, `default_catalog`, `kind` (`key`, `oauth` or `session`), `client_name` (a grant's client), `user` (the user it belongs to, `null` when unassigned), `teams` (that user's teams, sorted) and `user_admin` (whether that user is an admin user, `false` without one; the console offers Unlock only when it is true). A session's `key_id` is `session:<user>`, its `name` `null` and its `actor` the user's name. Never a key, token or hash |
 | `GET /api/v1/session` | console session | `{user, email, admin, csrf, ceiling, expires_at}`: the signed-in user's name, email and admin flag, the CSRF token writes must send as `X-OKF-CSRF`, the ceiling (`{catalog: "read"\|"write"}`) and when the session ends at the latest. 401 without a usable session (a dead cookie is cleared); a bearer credential gets 403 |
 | `DELETE /api/v1/session` | console session | Signs out: deletes the session and clears the cookie; 204. Needs `X-OKF-CSRF` (403 without); a bearer credential gets 403 |
 
@@ -4132,12 +4139,14 @@ fails: [Redis](#redis)) and the rest 400.
 `GET /healthz` needs no key:
 
 ```json
-{"database": "ok", "catalogs": 2, "clock": {"ok": true, "checked_at": "2026-11-03T12:00:00Z", "offset_ms": 3, "stratum": 2}, "redis": "ok"}
+{"database": "ok", "cached_catalogs": 2, "clock": {"ok": true, "checked_at": "2026-11-03T12:00:00Z", "offset_ms": 3, "stratum": 2}, "redis": "ok"}
 ```
 
 - **Status:** 200 when the database answers `SELECT 1` within 2 seconds;
   otherwise 503 with `"database": "unreachable"`. Nothing else changes it.
-- **`catalogs`:** how many catalogs are loaded (a count, never names).
+- **`cached_catalogs`:** how many catalogs this replica holds in its catalog
+  cache now (a count, never names). Catalogs load on first use, so it starts
+  at 0 and moves with traffic; it is not the number of catalogs that exist.
 - **`redis`:** `"ok"` when Redis answers `PING` within 2 seconds, `"unavailable"`
   when it fails or is late, and `null` without `[redis]`. **It never changes
   the status code.** A Redis outage would otherwise mark every replica unready

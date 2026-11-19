@@ -18,8 +18,9 @@ use crate::keyed_lock::KeyedLocks;
 use crate::okf::analysis::lint::{lint, CommitTimes, LintReport};
 use crate::okf::snapshot::Snapshot;
 use crate::okf::workspace::{MemWorkspace, StoredFile};
+use crate::store::catalogs::CatalogRow;
+use crate::store::documents;
 use crate::store::documents::DocumentRow;
-use crate::store::{catalogs, documents};
 
 /// The catalog's current generation, or `None` if the row is gone.
 const GENERATION: &str = "SELECT generation FROM catalogs WHERE id = $1";
@@ -37,6 +38,9 @@ pub struct Loaded {
     workspace: MemWorkspace,
     // Each live path's current revision: a new changeset entry's base.
     revisions: HashMap<String, i32>,
+    // The stored files' total size in bytes: what the catalog cache weighs
+    // a snapshot by (M18 spec Decision 2).
+    stored_bytes: u64,
 }
 
 impl Loaded {
@@ -101,6 +105,19 @@ impl Loaded {
         self.last_change
     }
 
+    /// The total size of the stored files this was built from, in bytes:
+    /// the base of the catalog cache's weight estimate (M18 spec Decision 2).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn stored_bytes(&self) -> u64 {
+        self.stored_bytes
+    }
+
     /// The published files, as the snapshot was built from them.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
@@ -156,15 +173,10 @@ impl Loaded {
 pub struct CatalogState {
     id: i64,
     name: String,
-    // Not part of the snapshot: `catalog update` changes it without a
-    // publish, and the poll loop copies it in from the catalog row
-    // ([`CatalogState::set_description`]). `Arc<str>` is a shared, immutable
-    // string, so a reader takes a pointer copy, not a copy of the text.
-    description: RwLock<Arc<str>>,
-    // The owning team's name, outside the snapshot for the same reason
-    // (`catalogs::set_owner`, [`CatalogState::set_owner_team`]); `None` for a
-    // catalog from before migration 0009 not yet assigned.
-    owner_team: RwLock<Option<Arc<str>>>,
+    // The description and owner are not held here: they change without a
+    // publish, so readers take them from the catalog's directory row
+    // (`CatalogRow`, M18 spec Decision 6).
+    //
     // `RwLock<Arc<_>>`: the lock is held only to clone or replace the `Arc`
     // (a pointer copy plus a reference count), never while a snapshot is read
     // or built. It is `std`'s lock, not tokio's: it is never held across an
@@ -181,26 +193,23 @@ impl CatalogState {
     ///
     /// # Arguments
     /// * `pool` - the database.
-    /// * `name` - the catalog's name.
+    /// * `row` - the catalog's directory row; the load reads by its
+    ///   `catalogs.id`, so a catalog deleted and created again under the
+    ///   name since the row was read is not loaded in its place.
     ///
     /// # Returns
     /// The state, holding the snapshot of the catalog's live documents.
     ///
     /// # Errors
-    /// [`OkfError::CatalogNotSelected`] if there is no such catalog;
+    /// [`OkfError::CatalogNotSelected`] if that catalog no longer exists;
     /// [`OkfError::InvalidPath`] or another workspace error if the stored
     /// rows cannot form a workspace; [`OkfError::Database`].
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn load(pool: &PgPool, name: &str) -> Result<Self, OkfError> {
-        let catalog = catalogs::find(pool, name).await?;
-        let loaded = build(pool, catalog.id, &catalog.name).await?;
+    pub async fn load(pool: &PgPool, row: &CatalogRow) -> Result<Self, OkfError> {
+        let loaded = build(pool, row.id, &row.name).await?;
         Ok(Self {
-            id: catalog.id,
-            name: catalog.name,
-            description: RwLock::new(Arc::from(catalog.description)),
-            // `Option::map(Arc::from)` turns `Some(String)` into
-            // `Some(Arc<str>)`, leaving `None` alone.
-            owner_team: RwLock::new(catalog.owner_team.map(Arc::from)),
+            id: row.id,
+            name: row.name.clone(),
             current: RwLock::new(Arc::new(loaded)),
         })
     }
@@ -227,65 +236,6 @@ impl CatalogState {
     )]
     pub fn name(&self) -> &str {
         &self.name
-    }
-
-    /// The catalog's description (`catalog create` or `catalog update`
-    /// `--description`), as of the last load or poll.
-    ///
-    /// # Returns
-    /// A shared handle to the text (cheap to clone; derefs to `&str`).
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    pub fn description(&self) -> Arc<str> {
-        Arc::clone(&self.description.read().expect("description lock poisoned"))
-    }
-
-    /// Replaces the description held in memory, leaving the snapshot alone.
-    /// The poll loop calls it with each catalog row's description.
-    ///
-    /// # Arguments
-    /// * `description` - the catalog row's description.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn set_description(&self, description: &str) {
-        // The read lock first: on almost every pass nothing changed, and
-        // then no write lock (and no allocation) is taken.
-        if *self.description() == *description {
-            return;
-        }
-        *self.description.write().expect("description lock poisoned") = Arc::from(description);
-    }
-
-    /// The name of the team that owns the catalog, as of the last load or
-    /// poll.
-    ///
-    /// # Returns
-    /// A shared handle to the name (cheap to clone; derefs to `&str`), or
-    /// `None` for a catalog not yet assigned an owner.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn owner_team(&self) -> Option<Arc<str>> {
-        // `.clone()` on an `Option<Arc<str>>` copies the pointer and bumps
-        // the reference count; the name itself is not copied.
-        self.owner_team.read().expect("owner lock poisoned").clone()
-    }
-
-    /// Replaces the owner held in memory, leaving the snapshot alone. The
-    /// poll loop calls it with each catalog row's owner.
-    ///
-    /// # Arguments
-    /// * `owner_team` - the catalog row's owner.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn set_owner_team(&self, owner_team: Option<&str>) {
-        // As in `set_description`: compare under the read lock first, so an
-        // unchanged owner takes no write lock and allocates nothing.
-        if self.owner_team().as_deref() == owner_team {
-            return;
-        }
-        *self.owner_team.write().expect("owner lock poisoned") = owner_team.map(Arc::from);
     }
 
     /// The current loaded state. Cheap: it clones an `Arc` (bumps a
@@ -368,7 +318,7 @@ impl CatalogState {
     }
 
     /// [`CatalogState::refresh`] on the caller's connection, for a caller
-    /// that holds the catalog's advisory lock ([`catalogs::lock`]) in its
+    /// that holds the catalog's advisory lock ([`crate::store::catalogs::lock`]) in its
     /// transaction, so no import or publish can change the catalog while
     /// this reads it: a publish refreshing a stale snapshot needs no second
     /// pooled connection.
@@ -508,6 +458,12 @@ async fn assemble(generation: i64, rows: Vec<DocumentRow>) -> Result<Loaded, Okf
         .iter()
         .map(|row| (row.path.clone(), row.revision))
         .collect();
+    // `usize` to `u64` never loses anything on the 64-bit targets this
+    // builds for; `try_from` says so without a silent cast.
+    let stored_bytes = rows
+        .iter()
+        .map(|row| u64::try_from(row.content.len()).unwrap_or(u64::MAX))
+        .fold(0_u64, u64::saturating_add);
     // `max()` over an empty iterator is `None`, so an empty catalog has no
     // last change.
     let last_change = rows.iter().map(|row| row.updated_at).max();
@@ -540,6 +496,7 @@ async fn assemble(generation: i64, rows: Vec<DocumentRow>) -> Result<Loaded, Okf
         last_change,
         workspace,
         revisions,
+        stored_bytes,
     })
 }
 
@@ -564,6 +521,14 @@ mod tests {
                 (path.to_string(), file)
             })
             .collect()
+    }
+
+    /// The directory row of catalog `name`, as the catalog cache passes it.
+    async fn row(pool: &PgPool, name: &str) -> CatalogRow {
+        catalogs::row_by_name(pool, name)
+            .await
+            .unwrap()
+            .expect("the catalog exists")
     }
 
     async fn import_into(pool: &PgPool, entries: &[(&str, &[u8])], replace: bool) {
@@ -602,7 +567,9 @@ mod tests {
         ];
         import_into(&db.pool, entries, false).await;
 
-        let state = CatalogState::load(&db.pool, "pg").await.unwrap();
+        let state = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
+            .await
+            .unwrap();
 
         let loaded = state.current();
         assert_eq!((state.name(), loaded.generation()), ("pg", 1));
@@ -612,7 +579,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn load_records_the_description_file_count_and_last_change() {
+    async fn load_records_the_file_count_size_and_last_change() {
         let db = test_db().await;
         let rebuilds = KeyedLocks::new();
         let created = Utc.with_ymd_and_hms(2026, 11, 1, 12, 0, 0).unwrap();
@@ -629,9 +596,9 @@ mod tests {
         )
         .await
         .unwrap();
-        let empty = CatalogState::load(&db.pool, "pg").await.unwrap();
-        assert_eq!(&*empty.description(), "pgrace's world");
-        assert_eq!(empty.owner_team().as_deref(), Some(crate::db::TEST_TEAM));
+        let empty = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
+            .await
+            .unwrap();
         // A new catalog holds its starter files (index.md and log.md).
         assert_eq!(empty.current().files(), crate::okf::ops::STARTER_FILE_COUNT);
         assert_eq!(empty.current().last_change(), Some(created));
@@ -652,6 +619,8 @@ mod tests {
 
         let loaded = empty.current();
         assert_eq!(loaded.files(), 2);
+        // `# A\n` and `b\n`: the stored bytes the cache weighs by.
+        assert_eq!(loaded.stored_bytes(), 6);
         assert_eq!(loaded.last_change(), Some(imported));
     }
 
@@ -677,7 +646,10 @@ mod tests {
         import_into(&db.pool, first, false).await;
         import_into(&db.pool, second, true).await;
 
-        let loaded = CatalogState::load(&db.pool, "pg").await.unwrap().current();
+        let loaded = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
+            .await
+            .unwrap()
+            .current();
 
         assert_eq!(loaded.workspace().read_to_string("a.md").unwrap(), "# A2\n");
         assert!(loaded.workspace().is_file("logo.png"));
@@ -687,10 +659,33 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn load_refuses_an_unknown_catalog() {
+    async fn load_refuses_a_row_whose_catalog_was_deleted() {
         let db = test_db().await;
+        catalogs::create(
+            &db.pool,
+            &crate::store::catalogs::NewCatalog {
+                name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            },
+            &crate::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        let stale = row(&db.pool, "pg").await;
+        catalogs::delete(
+            &db.pool,
+            "pg",
+            false,
+            &crate::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
 
-        let result = CatalogState::load(&db.pool, "nope").await;
+        let result = CatalogState::load(&db.pool, &stale).await;
 
         assert!(matches!(result, Err(OkfError::CatalogNotSelected { .. })));
     }
@@ -713,7 +708,9 @@ mod tests {
         .await
         .unwrap();
         import_into(&db.pool, &[("a.md", b"# Old\n")], false).await;
-        let state = CatalogState::load(&db.pool, "pg").await.unwrap();
+        let state = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
+            .await
+            .unwrap();
         let before = state.current();
 
         assert!(
@@ -748,7 +745,9 @@ mod tests {
         )
         .await
         .unwrap();
-        let state = CatalogState::load(&db.pool, "pg").await.unwrap();
+        let state = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
+            .await
+            .unwrap();
         import_into(&db.pool, &[("a.md", b"# New\n")], false).await;
 
         // `tokio::join!` runs both futures at once on this task.
@@ -789,8 +788,14 @@ mod tests {
         )
         .await
         .unwrap();
-        let first = CatalogState::load(&db.pool, "pg").await.unwrap();
-        let second = Arc::new(CatalogState::load(&db.pool, "pg").await.unwrap());
+        let first = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
+            .await
+            .unwrap();
+        let second = Arc::new(
+            CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
+                .await
+                .unwrap(),
+        );
         import_into(&db.pool, &[("a.md", b"# New\n")], false).await;
         // Held as `first`'s rebuild would hold it.
         let held = rebuilds.lock(first.id()).await;
@@ -832,7 +837,9 @@ mod tests {
         )
         .await
         .unwrap();
-        let state = CatalogState::load(&db.pool, "pg").await.unwrap();
+        let state = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
+            .await
+            .unwrap();
         catalogs::delete(
             &db.pool,
             "pg",
@@ -917,7 +924,9 @@ mod tests {
             ("earlier.md", earlier.as_bytes()),
         ]);
         import(&db.pool, "pg", entries, &options).await.unwrap();
-        let state = CatalogState::load(&db.pool, "pg").await.unwrap();
+        let state = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
+            .await
+            .unwrap();
 
         let report = state.current().lint(imported + TimeDelta::minutes(30));
 

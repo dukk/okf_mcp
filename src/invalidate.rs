@@ -25,6 +25,44 @@ use crate::telemetry::subscriber::split_event;
 /// The `LISTEN` channel.
 pub const CHANNEL: &str = "okf_invalidate";
 
+// The invalidations one request's writes queued, while the request runs
+// inside [`capturing`]: so the replica that made a write can apply it to
+// its own caches before answering, without waiting for its listener
+// (read-your-writes on the writing replica). `task_local!` is a value per
+// async task, like a Python `contextvars.ContextVar`; `RefCell` lets the
+// owning task push to it through a shared reference (never held across
+// an `.await`).
+tokio::task_local! {
+    static WRITTEN: std::cell::RefCell<Vec<Invalidation>>;
+}
+
+/// Runs `request` and collects every invalidation its writes queued
+/// ([`invalidate`] inside it). A write that rolled back is collected too:
+/// the caller only drops cache entries with them, which is never wrong,
+/// only a reread.
+///
+/// # Arguments
+/// * `request` - the work to run (an HTTP handler's future).
+///
+/// # Returns
+/// Its output, and the invalidations, in the order they were queued.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "wraps every HTTP request, an unmatched path included, which must make no span"
+    )
+)]
+pub async fn capturing<F: std::future::Future>(request: F) -> (F::Output, Vec<Invalidation>) {
+    WRITTEN
+        .scope(std::cell::RefCell::new(Vec::new()), async {
+            let output = request.await;
+            let written = WRITTEN.with(|written| written.take());
+            (output, written)
+        })
+        .await
+}
+
 /// The payload version this build writes and reads.
 const VERSION: u8 = 1;
 
@@ -279,6 +317,11 @@ pub async fn invalidate(
             .await?;
         metrics.invalidation_queued(invalidation.kind());
     }
+    // Outside a `capturing` request (the command line, a job) there is
+    // nothing to collect into: `try_with` then does nothing.
+    WRITTEN
+        .try_with(|written| written.borrow_mut().extend_from_slice(invalidations))
+        .ok();
     Ok(())
 }
 

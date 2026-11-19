@@ -594,7 +594,7 @@ mod tests {
             Config::default(),
         )
         .await;
-        let base = test.app.catalog("pg").unwrap().current();
+        let base = test.app.catalog("pg").await.unwrap().unwrap().current();
         let changeset = changeset(7, 3);
         let entries = vec![
             entry("a.md", Some("# New\n")),
@@ -628,7 +628,7 @@ mod tests {
             principal_as("writer", Access::Write, &[], Some("pg")),
             None,
         );
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         let pool = test.app.pool();
         let overlays = test.app.overlays();
         let rebuilds = test.app.rebuild_locks();
@@ -696,7 +696,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_clashing_entry_names_the_pending_changeset() {
         let test = app_with(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
-        let base = test.app.catalog("pg").unwrap().current();
+        let base = test.app.catalog("pg").await.unwrap().unwrap().current();
 
         let result =
             build_overlay(base, &changeset(9, 1), vec![entry("a.md/b.md", Some("x"))]).await;
@@ -716,7 +716,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn the_cache_drops_idle_and_stale_entries_and_keeps_the_newer_build() {
         let test = app_with(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
-        let base = test.app.catalog("pg").unwrap().current();
+        let base = test.app.catalog("pg").await.unwrap().unwrap().current();
         let generation = base.generation();
         let build = |id, version| {
             let base = Arc::clone(&base);
@@ -758,7 +758,7 @@ mod tests {
     async fn past_its_capacity_the_cache_drops_the_least_recently_used() {
         // Arrange: three changesets' overlays, a cache that holds two.
         let test = app_with(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
-        let base = test.app.catalog("pg").unwrap().current();
+        let base = test.app.catalog("pg").await.unwrap().unwrap().current();
         let generation = base.generation();
         let mut built = Vec::with_capacity(3);
         for id in 1..=3 {
@@ -807,7 +807,7 @@ mod tests {
             .map(|_| {
                 let (app, row) = (Arc::clone(&test.app), Arc::clone(&row));
                 tokio::spawn(async move {
-                    let state = app.catalog("pg").unwrap();
+                    let state = app.catalog("pg").await.unwrap().unwrap();
                     app.overlays()
                         .get(app.pool(), app.rebuild_locks(), &state, &row)
                         .await
@@ -852,6 +852,8 @@ mod tests {
             at: Utc::now(),
         };
         let row = Arc::new(pending_entry(&test, &handle, &edit).await);
+        // Loaded before the pool is full: a catalog loads on demand.
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         let pool = test.app.pool();
         let mut tx = pool.begin().await.unwrap();
         let size = pool.options().get_max_connections();
@@ -860,9 +862,8 @@ mod tests {
             held.push(pool.acquire().await.unwrap());
         }
         let read = {
-            let (app, row) = (Arc::clone(&test.app), Arc::clone(&row));
+            let (app, row, state) = (Arc::clone(&test.app), Arc::clone(&row), Arc::clone(&state));
             tokio::spawn(async move {
-                let state = app.catalog("pg").unwrap();
                 app.overlays()
                     .get(app.pool(), app.rebuild_locks(), &state, &row)
                     .await
@@ -876,7 +877,6 @@ mod tests {
 
         // Act: well inside sqlx's 30 s acquire timeout, which a write
         // waiting on the read's build lock would run the read into.
-        let state = test.app.catalog("pg").unwrap();
         let written = tokio::time::timeout(
             Duration::from_secs(10),
             test.app.overlays().get_in(&mut tx, &state, &row),
@@ -897,7 +897,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_pending_md_that_is_not_utf8_names_the_changeset() {
         let test = app_with(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
-        let base = test.app.catalog("pg").unwrap().current();
+        let base = test.app.catalog("pg").await.unwrap().unwrap().current();
         let garbled = EntryRow {
             path: "bad.md".to_string(),
             base_revision: None,

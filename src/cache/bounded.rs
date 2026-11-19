@@ -699,6 +699,20 @@ where
         }
     }
 
+    /// How many entries the cache holds, as moka counts them (it settles
+    /// its bookkeeping lazily, so a just-inserted entry may count a moment
+    /// later).
+    ///
+    /// # Returns
+    /// The entry count.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "reads one counter")
+    )]
+    pub fn entry_count(&self) -> u64 {
+        self.cache.entry_count()
+    }
+
     /// Keys with a load in flight: the size of the epoch map.
     #[cfg(test)]
     pub fn tracked_epochs(&self) -> usize {

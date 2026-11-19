@@ -194,8 +194,10 @@ impl IntoResponse for AppError {
 struct Health {
     /// `"ok"` or `"unreachable"`.
     database: &'static str,
-    /// How many catalogs are loaded (no names: the route needs no key).
-    catalogs: usize,
+    /// How many catalogs this replica holds in its catalog cache now (no
+    /// names: the route needs no key). Catalogs load on first use, so this
+    /// is not how many exist.
+    cached_catalogs: u64,
     /// The last clock check (design "Time"); `null` without a `time_server`
     /// or before the first check. It never changes the status.
     clock: Option<ClockStatus>,
@@ -226,7 +228,7 @@ async fn healthz(State(app): State<Arc<App>>) -> Response {
     let (reachable, redis) = tokio::join!(database, redis_health(&app));
     let health = Health {
         database: if reachable { "ok" } else { "unreachable" },
-        catalogs: app.catalogs().len(),
+        cached_catalogs: app.catalog_cache().cached(),
         clock: app.clock_status(),
         redis,
     };
@@ -419,6 +421,16 @@ pub fn router(app: Arc<App>, shutdown: &CancellationToken) -> Router {
         // routes (`keyed`) take only a bearer credential.
         .nest("/api/v1", api::routes(&app))
         .merge(keyed)
+        // Every route's own writes reach this replica's caches before it
+        // answers (read-your-writes on the writing replica, M18 Task 8): the
+        // API, the archive routes, the console's sign-in and account forms,
+        // the OAuth pages and MCP. In process only; a write made on a task
+        // the handler spawned is not collected, and the change feed
+        // delivers it a moment later.
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&app),
+            api::apply_own_writes,
+        ))
         // One `info` line per response (status, latency) in a span naming the
         // method and the matched route. The span records no headers, so a
         // bearer key never reaches the log; no query, so neither does an
@@ -1419,7 +1431,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
             json_body(response).await,
-            serde_json::json!({"database": "unreachable", "catalogs": 1, "clock": null, "redis": null})
+            serde_json::json!({"database": "unreachable", "cached_catalogs": 0, "clock": null, "redis": null})
         );
     }
 

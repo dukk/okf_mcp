@@ -3,6 +3,7 @@
 //! loads, per-key invalidation epochs and stale marking.
 
 pub mod bounded;
+pub mod catalogs;
 pub mod credentials;
 pub mod directory;
 pub mod labels;

@@ -213,6 +213,9 @@ async fn a_read_of_a_catalog_deleted_or_replaced_before_it_is_written_keeps_its_
     .unwrap();
     drop(hold);
     settle_access(&test).await;
+    // The replacement's messages, as the listener applies them: the
+    // directory reads `main` again, and the key cache reloads.
+    test.app.catch_up_catalogs().await;
     test.app.poll().await.unwrap();
     // A read of the replacement is another entry, in its own scope.
     let (status, _) = send(
@@ -330,20 +333,27 @@ async fn a_read_of_an_old_catalog_map_under_newer_gates_is_refused_not_misrecord
     let test = app().await;
     let staff = staff_root(&test).await;
     let original = catalog_id(&test, "main").await;
+    // `main` is cached (its row and its snapshot) before it is replaced.
+    test.app.catalog("main").await.unwrap().expect("main");
     replace_main_for_acme(&test).await;
-    // The replacement's change message reaches the directory while this
-    // call's catalog map still holds the old `main`.
-    tell_directory(&test, "main").await;
+    // This call resolves the old `main` (its row and snapshot are cached)
+    // before the replacement's change message reaches the directory.
     let ctx = crate::mcp::testing::context(
         &test,
         crate::mcp::testing::cached_principal(&test, &staff).await,
         None,
     );
-    assert_eq!(ctx.catalogs()["main"].id(), original, "the old map");
+    ctx.state("main").await.unwrap();
+    tell_directory(&test, "main").await;
+    assert_eq!(
+        ctx.state("main").await.unwrap().id(),
+        original,
+        "the old map"
+    );
 
     // `one` checks the incarnation (PR #442 review, round 2), and `admit`
     // on the map's state refuses it the same way.
-    let state = std::sync::Arc::clone(&ctx.catalogs()["main"]);
+    let state = ctx.state("main").await.unwrap();
     let selected = ctx.one(Some("main")).await.map(drop);
     let refused = ctx.admit(&state, audit::AccessKind::Read).await;
     assert!(
@@ -474,8 +484,10 @@ async fn a_search_refused_after_one_catalog_passes_queues_no_read() {
     use crate::mcp::search::{run, SearchParams};
     let test = app().await;
     let staff = staff_root(&test).await;
-    // `other` is replaced and only the key cache reloaded: `main` passes
-    // its check, `other` (still the old map's) cannot.
+    // `other` is replaced after this call resolved it: `main` passes its
+    // check, `other` (the call still holds the old one) cannot.
+    let ctx = on_main_and_other(&test, &staff).await;
+    ctx.state("other").await.unwrap();
     let cli = AuditActor::cli();
     catalogs::delete(test.app.pool(), "other", true, &cli, Utc::now())
         .await
@@ -490,7 +502,6 @@ async fn a_search_refused_after_one_catalog_passes_queues_no_read() {
         .await
         .unwrap();
     tell_directory(&test, "other").await;
-    let ctx = on_main_and_other(&test, &staff).await;
 
     let refused = run(
         &ctx,
@@ -916,22 +927,28 @@ async fn an_unlocked_read_of_an_old_catalog_map_is_refused_not_left_out() {
     let reader = staff_key(&test, "staff-reader", Access::Read, false).await;
     require_unlock(&test).await;
     let original = catalog_id(&test, "main").await;
+    // `main` is cached (its row and its snapshot) before it is replaced.
+    test.app.catalog("main").await.unwrap().expect("main");
     replace_main_for_acme(&test).await;
     let id = create_unlock(&test, "main").await;
-    // The replacement's change message reaches the directory (and the
-    // unlock of the replacement the user cache) while this call's catalog
-    // map still holds the old `main`.
-    tell_directory(&test, "main").await;
+    // This call resolves the old `main` (its row and snapshot are cached)
+    // before the replacement's change message reaches the directory.
     let ctx = crate::mcp::testing::context(
         &test,
         crate::mcp::testing::cached_principal(&test, &reader).await,
         None,
     );
-    assert_eq!(ctx.catalogs()["main"].id(), original, "the old map");
+    ctx.state("main").await.unwrap();
+    tell_directory(&test, "main").await;
+    assert_eq!(
+        ctx.state("main").await.unwrap().id(),
+        original,
+        "the old map"
+    );
 
     // `one` checks the incarnation (PR #442 review, round 2), and `admit`
     // on the map's state refuses it the same way.
-    let state = std::sync::Arc::clone(&ctx.catalogs()["main"]);
+    let state = ctx.state("main").await.unwrap();
     let selected = ctx.one(Some("main")).await.map(drop);
     let refused = ctx.admit(&state, audit::AccessKind::Read).await;
     assert!(
@@ -1127,6 +1144,9 @@ async fn old_unlock_against_a_new_map(
     .await
     .unwrap();
     drop(conn);
+    // The replacement's messages, as the listener applies them: the
+    // directory reads `main` again, and the key cache reloads.
+    test.app.catch_up_catalogs().await;
     test.app.poll().await.unwrap();
     (old_principal, replacement, opened.handle)
 }
@@ -1136,7 +1156,11 @@ async fn an_old_unlocked_principal_opens_no_changeset_in_the_replacement() {
     let test = app().await;
     let (old_principal, replacement, _) = old_unlock_against_a_new_map(&test).await;
     let ctx = crate::mcp::testing::context(&test, old_principal, None);
-    assert_eq!(ctx.catalogs()["main"].id(), replacement, "the new map");
+    assert_eq!(
+        ctx.state("main").await.unwrap().id(),
+        replacement,
+        "the new map"
+    );
 
     let refused = open_main(&ctx).await;
     let opened: i64 = sqlx::query_scalar(
@@ -1193,7 +1217,7 @@ async fn an_old_unlocked_principal_reads_none_of_the_replacements_contents() {
     let one = ctx.one(Some("main")).await.map(drop);
     // `view` on the new map's state, as a tool that resolved it otherwise
     // would: refused by the gates that know it, not read unrecorded.
-    let state = std::sync::Arc::clone(&ctx.catalogs()["main"]);
+    let state = ctx.state("main").await.unwrap();
     let viewed = ctx.view(&state, None).await.map(drop);
     let read = crate::mcp::documents::read_document(
         &ctx,

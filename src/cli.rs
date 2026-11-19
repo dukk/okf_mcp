@@ -3280,11 +3280,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut config = Config::default();
         config.redis = Some(crate::shared::testing::config(&server));
-        let holds = |text: &str| {
-            b.catalog("pg")
+        // Whether `app` serves `pg` with an `index.md` ending in `text`.
+        async fn holds(app: &App, text: &str) -> bool {
+            app.catalog("pg")
+                .await
+                .unwrap()
                 .and_then(|state| state.current().workspace().stored("index.md"))
                 .is_some_and(|file| file.content.ends_with(text.as_bytes()))
-        };
+        }
         let mut reached = Vec::new();
 
         for text in ["First.\n", "Imported.\n"] {
@@ -3315,7 +3318,7 @@ mod tests {
             .await
             .unwrap();
             let refreshed = tokio::time::timeout(WAIT, async {
-                while !holds(text) {
+                while !holds(&b, text).await {
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }
             })

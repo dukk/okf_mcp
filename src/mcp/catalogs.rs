@@ -100,12 +100,13 @@ pub struct CatalogList {
 /// fails is reported in `selection_error` rather than failing the call,
 /// since this is the tool to diagnose it with. A suspended catalog is
 /// listed with `suspended` set, and the selection leaves it out of a
-/// connection's list ([`crate::selection::resolve`]). A catalog this
-/// replica has not loaded is left out of its page.
+/// connection's list ([`crate::selection::resolve`]). A catalog whose
+/// stored data does not build is left out of its page.
 ///
 /// # Errors
 /// [`OkfError::InvalidPath`] for a malformed `after`;
-/// [`OkfError::Database`] if the catalog directory cannot be read.
+/// [`OkfError::Database`] if the catalog directory cannot be read or a
+/// listed catalog cannot be loaded.
 #[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn list(ctx: &ToolContext, after: Option<&str>) -> Result<CatalogList, OkfError> {
     let page = ctx
@@ -113,25 +114,26 @@ pub(crate) async fn list(ctx: &ToolContext, after: Option<&str>) -> Result<Catal
         .directory()
         .offered_page(ctx.principal(), ctx.connection(), after, DEFAULT_PAGE)
         .await?;
-    let catalogs = page
-        .items
-        .iter()
-        .filter_map(|row| {
-            let state = ctx.app().loaded_catalog(row)?;
-            let loaded = state.current();
-            Some(CatalogInfo {
-                name: row.name.clone(),
-                display_name: row.display_name.clone(),
-                label: catalog_label(&row.display_name, &row.description),
-                description: row.description.clone(),
-                files: loaded.files(),
-                last_change: loaded.last_change().map(format_timestamp),
-                // Listed only after reach (the page), so a credential that
-                // does not reach a catalog never learns it is suspended.
-                suspended: ctx.principal().suspension(row).map(SuspensionInfo::from),
-            })
-        })
-        .collect();
+    let mut catalogs = Vec::with_capacity(page.items.len());
+    for row in &page.items {
+        // A listing's snapshot fields; a catalog whose data does not build
+        // is left out of its page.
+        let Some(state) = ctx.app().listed_state(row).await? else {
+            continue;
+        };
+        let loaded = state.current();
+        catalogs.push(CatalogInfo {
+            name: row.name.clone(),
+            display_name: row.display_name.clone(),
+            label: catalog_label(&row.display_name, &row.description),
+            description: row.description.clone(),
+            files: loaded.files(),
+            last_change: loaded.last_change().map(format_timestamp),
+            // Listed only after reach (the page), so a credential that
+            // does not reach a catalog never learns it is suspended.
+            suspended: ctx.principal().suspension(row).map(SuspensionInfo::from),
+        });
+    }
     // The selection's names only, not its contents: nothing is admitted.
     let (selection, write_target, selection_error) = match ctx.select(None).await {
         Ok(selection) => {

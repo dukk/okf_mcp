@@ -927,7 +927,7 @@ impl From<CatalogRowColumns> for CatalogRow {
     }
 }
 
-// The directory's SELECT, shared by the three queries below. The owner,
+// The directory's SELECT, shared by the four queries below. The owner,
 // suspension, maintenance and audit-team columns are what every access
 // check reads about the catalog it acts on (M18 spec Decision 9).
 macro_rules! select_catalog_rows {
@@ -974,6 +974,32 @@ pub async fn row_by_name<'e>(
     .bind(name)
     .fetch_optional(executor)
     .await?;
+    Ok(row.map(CatalogRow::from))
+}
+
+/// The row of the catalog with this `catalogs.id`, with its access facts:
+/// for a caller that holds an id (a changeset's catalog), so it reaches that
+/// incarnation and never another catalog created since under the name.
+///
+/// # Arguments
+/// * `executor` - a pool, connection or transaction.
+/// * `id` - the catalog's id.
+///
+/// # Returns
+/// Its row, or `None` if there is no catalog with that id (it was deleted).
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.row_by_id"))]
+pub async fn row_by_id<'e>(
+    executor: impl PgExecutor<'e>,
+    id: i64,
+) -> Result<Option<CatalogRow>, OkfError> {
+    let row =
+        sqlx::query_as::<_, CatalogRowColumns>(concat!(select_catalog_rows!(), " WHERE c.id = $1"))
+            .bind(id)
+            .fetch_optional(executor)
+            .await?;
     Ok(row.map(CatalogRow::from))
 }
 
