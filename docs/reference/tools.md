@@ -174,7 +174,7 @@ A document's revisions, newest first: revision, op (create, update, delete, impo
 
 **Add Index Entry** (staged)
 
-List a concept in its folder's index.md as `* [Title](name.md) - summary`, in the changeset `changeset` names (open one with open_changeset); nothing happens if it is already linked. Replayed at publish onto an index.md that changed meanwhile, unless a free edit of that index.md follows. Write access.
+List a concept in its folder's index.md as `* [Title](name.md) - summary`, in the changeset `changeset` names (open one with open_changeset); nothing happens if it is already linked (a name with a space, `)`, `#` or `:` is written percent-encoded, e.g. `a%20b.md`; an older raw bullet for it counts as linked, with a note). Replayed at publish onto an index.md that changed meanwhile, unless a free edit of that index.md follows. Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
