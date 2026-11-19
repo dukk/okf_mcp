@@ -666,7 +666,7 @@ pub(crate) async fn discard(
         }
     }
     tx.commit().await?;
-    app.overlays().forget(changeset.id);
+    app.overlays().forget(changeset.id).await;
     Ok(discarded)
 }
 

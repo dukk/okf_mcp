@@ -341,7 +341,7 @@ async fn publish_locked(
             "refresh after publish failed; the next use retries"
         );
     }
-    app.overlays().forget(locked.id);
+    app.overlays().forget(locked.id).await;
     Ok(PublishReport {
         published: true,
         revisions,
