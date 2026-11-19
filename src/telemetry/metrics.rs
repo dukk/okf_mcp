@@ -228,7 +228,7 @@ struct Instruments {
     catalog_refreshes: Counter<u64>,
     catalog_announcements: Counter<u64>,
     // Task 1 of milestone 18: the change feed.
-    invalidations_sent: Counter<u64>,
+    invalidations_queued: Counter<u64>,
     invalidations_received: Counter<u64>,
     invalidations_unreadable: Counter<u64>,
     invalidation_lag: Histogram<f64>,
@@ -289,7 +289,7 @@ impl Metrics {
         "okf_poll_duration_seconds",
         "okf_catalog_refreshes_total",
         "okf_catalog_announcements_total",
-        "okf_invalidations_sent_total",
+        "okf_invalidations_queued_total",
         "okf_invalidations_received_total",
         "okf_invalidations_unreadable_total",
         "okf_invalidations_lag_seconds",
@@ -355,9 +355,9 @@ impl Metrics {
                         "Catalog generation announcements received from Redis, by result.",
                     )
                     .build(),
-                invalidations_sent: meter
-                    .u64_counter("okf.invalidations.sent")
-                    .with_description("Change-feed messages sent, by kind.")
+                invalidations_queued: meter
+                    .u64_counter("okf.invalidations.queued")
+                    .with_description("Change-feed messages queued in a transaction, by kind; a rollback discards them.")
                     .build(),
                 invalidations_received: meter
                     .u64_counter("okf.invalidations.received")
@@ -522,14 +522,16 @@ impl Metrics {
             .add(1, &[KeyValue::new("result", result.as_str())]);
     }
 
-    /// Counts one change-feed message sent.
+    /// Counts one change-feed message queued in a transaction. The message is
+    /// delivered only if that transaction commits, so a rollback leaves this
+    /// counter ahead of `received`.
     ///
     /// # Arguments
     /// * `kind` - the invalidation's kind (a fixed set, never an id).
     #[tracing::instrument(level = "trace", skip_all)]
-    pub fn invalidation_sent(&self, kind: &'static str) {
+    pub fn invalidation_queued(&self, kind: &'static str) {
         self.inner
-            .invalidations_sent
+            .invalidations_queued
             .add(1, &[KeyValue::new("kind", kind)]);
     }
 
@@ -1249,7 +1251,7 @@ mod tests {
         metrics.poll(Outcome::Ok, elapsed);
         metrics.catalog_refresh("notes", RefreshResult::Reloaded);
         metrics.catalog_announcement(AnnouncementResult::Applied);
-        metrics.invalidation_sent("settings");
+        metrics.invalidation_queued("settings");
         metrics.invalidation_received("settings", Duration::from_millis(5));
         metrics.invalidation_unreadable();
         metrics.keycache_reload(Outcome::Ok);

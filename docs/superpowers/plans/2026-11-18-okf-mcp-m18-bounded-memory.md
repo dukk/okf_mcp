@@ -378,7 +378,7 @@ pub async fn invalidate(conn: &mut PgConnection, invalidations: &[Invalidation])
             .bind(invalidation.to_payload(now))
             .execute(&mut *conn)
             .await?;
-        Metrics::global().invalidation_sent(invalidation.kind());
+        Metrics::global().invalidation_queued(invalidation.kind());
     }
     Ok(())
 }
@@ -463,7 +463,9 @@ pub async fn apply_reconnect(&self) {
 
 `refresh_catalog_by_id` finds the loaded state by id and calls `refresh`; a catalog not loaded is left to the poll (until Task 8). `CatalogMeta` reloading keys is enough today: description and owner are copied in by the poll, which still runs.
 
-- [ ] **Step 4: Metrics** (`src/telemetry/metrics.rs`; Prometheus names `okf_invalidations_sent_total`, `okf_invalidations_received_total`, `okf_invalidations_unreadable_total`, `okf_invalidations_lag_seconds`): `okf.invalidations.sent{kind}` and `okf.invalidations.received{kind}` (counters), `okf.invalidations.unreadable` (counter), `okf.invalidations.lag` (seconds histogram, send to apply; a negative lag from clock skew records 0). Add the new families to `Metrics::FAMILIES`.
+> **Corrected (issue #679, 2026-11-19).** The counter is `okf.invalidations.queued` (Prometheus `okf_invalidations_queued_total`), not `sent`: `invalidate` counts inside the transaction, before the commit decides delivery, so "sent" would count rolled-back messages.
+
+- [ ] **Step 4: Metrics** (`src/telemetry/metrics.rs`; Prometheus names `okf_invalidations_queued_total`, `okf_invalidations_received_total`, `okf_invalidations_unreadable_total`, `okf_invalidations_lag_seconds`): `okf.invalidations.queued{kind}` and `okf.invalidations.received{kind}` (counters), `okf.invalidations.unreadable` (counter), `okf.invalidations.lag` (seconds histogram, send to apply; a negative lag from clock skew records 0). Add the new families to `Metrics::FAMILIES`.
 
 - [ ] **Step 5: Spawn the listener** in `serve` (`src/http/mod.rs`, next to the M16 subscriber at `:660`), and await it in the shutdown sequence like the others. It holds its connection for the life of the process, so it gets its own one-connection pool (`PgPoolOptions::new().max_connections(1)`, same URL and options as the main pool) and `PgListener::connect_with(&listener_pool)`. sqlx's `connect_with` keeps a connection from the pool it is given, so using the main pool would take one request slot away for good. The pool also gives the listener its reconnects. `docs/operations.md`'s per-replica count grows by one in Task 17 (spec Decision 17).
 

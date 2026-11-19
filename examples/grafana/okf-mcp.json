@@ -3536,8 +3536,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Change feed messages by kind",
-      "description": "Messages sent and received per interval, by kind.",
+      "title": "Change feed messages queued and received by kind",
+      "description": "Messages queued by writes and messages received per interval, by kind. A rolled-back write is queued but never received.",
       "targets": [
         {
           "datasource": {
@@ -3545,8 +3545,8 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "refId": "A",
-          "expr": "sum by (kind) (increase(okf_invalidations_sent_total{job=~\"$job\"}[$__rate_interval]))",
-          "legendFormat": "sent {{kind}}",
+          "expr": "sum by (kind) (increase(okf_invalidations_queued_total{job=~\"$job\"}[$__rate_interval]))",
+          "legendFormat": "queued {{kind}}",
           "range": true,
           "instant": false
         },

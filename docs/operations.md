@@ -1195,7 +1195,7 @@ the dotted originals.
 | `okf_catalog_announcements_total` | counter | `result` | Catalog announcements handled, counting also each catalog found behind in the catch-up after a (re)subscribe: `applied` (rebuilt), `current` (already there), `unknown` (not loaded here, or deleted) or `failed`. Only with `[redis]` |
 | `okf_catalog_concepts` | gauge | `catalog` | Concepts in the current snapshot |
 | `okf_catalog_generation` | gauge | `catalog` | The snapshot's generation |
-| `okf_invalidations_sent_total` | counter | `kind` | Change-feed messages sent by this replica's writes (`catalog`, `catalog_meta`, `credential`, `user`, `team`, `settings`) |
+| `okf_invalidations_queued_total` | counter | `kind` | Change-feed messages queued by this replica's write transactions; Postgres delivers one only if its transaction commits, so a rollback leaves this ahead of `received` (`catalog`, `catalog_meta`, `credential`, `user`, `team`, `settings`) |
 | `okf_invalidations_received_total` | counter | `kind` | Change-feed messages received and applied |
 | `okf_invalidations_unreadable_total` | counter | | Change-feed payloads this build could not read (each reloads the caches) |
 | `okf_invalidations_lag_seconds` | histogram | | Time from a message's send to its application on this replica |

@@ -4,7 +4,7 @@
 - `src/invalidate.rs`: the `Invalidation` enum (`catalog`, `catalog_meta`, `credential`, `user`, `team`, `settings`), its versioned JSON payload (ids and generations only), `invalidate(conn, &[..])` (bumps `admin_generation` once and sends one `pg_notify('okf_invalidate', ..)` per item in the caller's transaction, so a rollback sends nothing), and the `listen` task that applies each message.
 - `App::apply` and `App::apply_reconnect`: a `catalog` message refreshes that catalog if loaded; every other kind reloads the key cache and settings; a lost connection or an unreadable payload reloads the keys and catches every catalog up.
 - `src/backoff.rs`: the doubling reconnect delay, extracted from the Redis subscriber and used by both.
-- Metrics `okf.invalidations.sent`, `.received`, `.unreadable` and `.lag`.
+- Metrics `okf.invalidations.queued` (counted when queued in the transaction; a rollback discards the message but not the count), `.received`, `.unreadable` and `.lag`.
 - `serve` spawns the listener on its own one-connection pool and awaits it at shutdown.
 
 ## Changed

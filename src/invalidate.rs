@@ -177,7 +177,8 @@ impl Message {
     }
 }
 
-/// Records `invalidations` in the caller's transaction: bumps
+/// Records `invalidations` in the caller's transaction (counted as
+/// `okf.invalidations.queued`, since only the commit delivers them): bumps
 /// `admin_generation` once and sends one `NOTIFY` per invalidation, which
 /// Postgres delivers at commit and drops on rollback.
 ///
@@ -205,7 +206,7 @@ pub async fn invalidate(
             .bind(invalidation.to_payload(now))
             .execute(&mut *conn)
             .await?;
-        metrics.invalidation_sent(invalidation.kind());
+        metrics.invalidation_queued(invalidation.kind());
     }
     Ok(())
 }
@@ -235,6 +236,8 @@ async fn connect(pool: &PgPool) -> Result<PgListener, OkfError> {
 /// `app`. A lost connection (`try_recv` returns `Ok(None)`, already
 /// reconnected) marks every cache stale, since messages sent meanwhile are
 /// lost (spec Decision 12). A connect failure backs off from 1 s to 30 s.
+/// Applying a message or catching up races `shutdown` as well, so a
+/// blocked database cannot hold the shutdown.
 ///
 /// # Arguments
 /// * `app` - the replica's shared state.
@@ -299,7 +302,15 @@ async fn listen_signalling(
             }
         };
         // A fresh connection: anything sent while we had none is lost.
-        app.apply_reconnect().await;
+        // Applying can wait on locks and reads, so it races shutdown too:
+        // a blocked apply must not keep the process from stopping.
+        if shutdown
+            .run_until_cancelled(app.apply_reconnect())
+            .await
+            .is_none()
+        {
+            return;
+        }
         signal();
         backoff.reset();
         loop {
@@ -307,14 +318,21 @@ async fn listen_signalling(
                 () = shutdown.cancelled() => return,
                 received = listener.try_recv() => match received {
                     Ok(Some(notification)) => {
-                        // `None`: unreadable, so `apply_payload` caught up.
-                        if apply_payload(&app, notification.payload()).await.is_none() {
-                            signal();
+                        match shutdown
+                            .run_until_cancelled(apply_payload(&app, notification.payload()))
+                            .await
+                        {
+                            None => return,
+                            // `Some(None)`: unreadable, so `apply_payload` caught up.
+                            Some(None) => signal(),
+                            Some(Some(_lag)) => {}
                         }
                     }
                     // Lost and already re-established by sqlx.
                     Ok(None) => {
-                        app.apply_reconnect().await;
+                        if shutdown.run_until_cancelled(app.apply_reconnect()).await.is_none() {
+                            return;
+                        }
                         signal();
                     }
                     // A failure sqlx could not repair: connect again.
@@ -686,5 +704,35 @@ mod tests {
             .unwrap()
             .expect("a readable payload");
         assert!(lag >= Duration::from_millis(400), "{lag:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_blocked_apply_does_not_hold_up_the_listener_stopping() {
+        let running = Running::start().await;
+
+        // Block the generation read every apply starts with, then send a
+        // message so the listener is stuck inside its apply.
+        let mut blocker = running.db.pool.begin().await.unwrap();
+        sqlx::query("LOCK TABLE server_state IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *blocker)
+            .await
+            .unwrap();
+        sqlx::query("SELECT pg_notify($1, $2)")
+            .bind(CHANNEL)
+            .bind(Invalidation::Settings.to_payload(Utc::now().timestamp_millis()))
+            .execute(&running.db.pool)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(!running.task.is_finished(), "the listener keeps running");
+
+        // Cancel while the blocker is still held: the listener must leave
+        // its blocked apply and exit.
+        running.shutdown.cancel();
+        timeout(Duration::from_secs(5), running.task)
+            .await
+            .expect("the listener exited although its apply was blocked")
+            .unwrap();
+        blocker.rollback().await.unwrap();
     }
 }
