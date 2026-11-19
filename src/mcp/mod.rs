@@ -9,6 +9,7 @@ pub(crate) mod catalogs;
 pub(crate) mod annotations;
 pub(crate) mod changesets;
 pub(crate) mod documents;
+pub(crate) mod feedback;
 // `pub` (not `pub(crate)`): the context's helpers, like `ToolResult`,
 // `tool_error` and `reply` below, are used by later tool modules, and a
 // public item is never flagged as dead code meanwhile.
@@ -66,6 +67,12 @@ pub const INSTRUCTIONS: &str = "Open Knowledge Format catalogs: concepts (markdo
     reads take it too to see its drafts, and `list_changesets` finds a lost one. Nothing is \
     visible to others until `publish`.";
 
+/// The line [`INSTRUCTIONS`] gains when `[feedback]` is set and
+/// `send_feedback` is offered (issue #674).
+pub const FEEDBACK_INSTRUCTIONS: &str = "To tell Telekin's team about something confusing, \
+    broken, missing or good, call `send_feedback` (it goes through a third-party form service; \
+    ask the user before including catalog content or personal details).";
+
 /// The public tool reference (`docs/reference/tools.md`), generated from the tool list by a test.
 /// Each tool's description ends with a link to its heading here (the tool's name is the anchor).
 pub const TOOL_REFERENCE_URL: &str =
@@ -75,6 +82,8 @@ pub const TOOL_REFERENCE_URL: &str =
 pub struct OkfServer {
     app: Arc<App>,
     tool_router: ToolRouter<OkfServer>,
+    // `INSTRUCTIONS`, plus `FEEDBACK_INSTRUCTIONS` when the tool is offered.
+    instructions: String,
     // Held for the session's life: `okf.mcp.sessions.active` counts it open
     // until the handler is dropped.
     _session: SessionGuard,
@@ -87,13 +96,22 @@ impl OkfServer {
     /// * `app` - the shared state.
     ///
     /// # Returns
-    /// The handler, with every tool registered.
+    /// The handler, with every tool registered, except `send_feedback`
+    /// without `[feedback]`: then it is neither listed nor callable.
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn new(app: Arc<App>) -> Self {
+        let mut tool_router = Self::tools();
+        let instructions = if app.config().feedback.is_some() {
+            format!("{INSTRUCTIONS} {FEEDBACK_INSTRUCTIONS}")
+        } else {
+            tool_router.remove_route(feedback::TOOL);
+            INSTRUCTIONS.to_string()
+        };
         Self {
             _session: app.metrics().mcp_session(),
             app,
-            tool_router: Self::tools(),
+            tool_router,
+            instructions,
         }
     }
 
@@ -134,7 +152,8 @@ impl OkfServer {
             + Self::publish_router()
             + Self::changes_router()
             + Self::restructure_router()
-            + Self::maintenance_router();
+            + Self::maintenance_router()
+            + Self::feedback_router();
         // Point every description at the tool's heading in the public reference. `map` holds
         // each tool as `{ call, attr }`; `attr` is the `Tool` that `tools/list` sends.
         for (name, route) in router.map.iter_mut() {
@@ -254,7 +273,7 @@ impl ServerHandler for OkfServer {
                 env!("CARGO_PKG_NAME"),
                 env!("CARGO_PKG_VERSION"),
             ))
-            .with_instructions(INSTRUCTIONS)
+            .with_instructions(self.instructions.clone())
     }
 }
 
