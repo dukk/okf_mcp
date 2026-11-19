@@ -172,7 +172,11 @@ impl OkfServer {
                        works on it. Returns up to 100 catalogs, by name; when `next` is set, \
                        call again with it as `after` for the rest. Also this connection's \
                        selection: the catalogs a call without a `catalog` argument reads, and \
-                       the default write target.",
+                       the default write target. It comes from the X-OKF-Catalogs header or \
+                       `?catalogs=`, else the key's or the server's default catalog, else the \
+                       only catalog the key reaches (a key granted every catalog has no such \
+                       fallback). When the selection is empty, `selection_error` says why: \
+                       pass `catalog`.",
         annotations(
             title = "List Catalogs",
             read_only_hint = true,
@@ -253,6 +257,96 @@ mod tests {
         assert_eq!(names, ["work"]);
         assert!(mistyped.selection.is_empty());
         assert!(mistyped.selection_error.unwrap().contains("\"home\""));
+    }
+
+    /// Issue #663: a key granted exactly one catalog, with no other source,
+    /// selects it, so bare reads and `open_changeset` work against it; a key
+    /// granted two is still refused, with the client's fix first.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_key_s_only_catalog_is_the_selection_when_nothing_else_names_one() {
+        use crate::mcp::documents::{
+            get_concept, read_document, GetConceptParams, ReadDocumentParams,
+        };
+        use crate::mcp::search::{run, SearchParams};
+        use crate::mcp::testing::{open, principal_as, store_key};
+        use crate::store::keys::Access;
+
+        let test = app_with(
+            &[
+                (
+                    "pg",
+                    &[("router.md", "# Router\n"), ("index.md", "# Index\n")],
+                ),
+                ("work", &[("router.md", "# Router\n")]),
+            ],
+            Config::default(),
+        )
+        .await;
+        store_key(&test, "only-pg").await;
+        let only = context(
+            &test,
+            principal_as("only-pg", Access::Write, &["pg"], None),
+            None,
+        );
+        let both = context(&test, principal(&["pg", "work"], None), None);
+        let search = SearchParams {
+            query: "router".to_string(),
+            catalogs: None,
+            concept_type: None,
+            tags: Vec::new(),
+            status: None,
+            limit: None,
+            changeset: None,
+        };
+
+        let listed = list(&only, None).await.unwrap();
+        let hits = run(&only, search.clone()).await.unwrap();
+        let concept = get_concept(
+            &only,
+            GetConceptParams {
+                path: "router".to_string(),
+                catalog: None,
+                links: false,
+                raw: false,
+                section: None,
+                full: false,
+                changeset: None,
+            },
+        )
+        .await
+        .unwrap();
+        let document = read_document(
+            &only,
+            ReadDocumentParams {
+                path: None,
+                catalog: None,
+                changeset: None,
+            },
+        )
+        .await
+        .unwrap();
+        let handle = open(&only).await;
+        let refused = run(&both, search).await.unwrap_err();
+        let unselected = list(&both, None).await.unwrap();
+
+        assert_eq!(listed.selection, ["pg"]);
+        assert_eq!(listed.write_target.as_deref(), Some("pg"));
+        assert_eq!(listed.selection_error, None);
+        let catalogs: Vec<&str> = hits
+            .hits
+            .iter()
+            .map(|hit| hit.hit.catalog.as_str())
+            .collect();
+        assert_eq!(catalogs, ["pg"]);
+        assert_eq!(concept.catalog, "pg");
+        assert_eq!(document.catalog, "pg");
+        assert!(!handle.is_empty());
+        assert_eq!(refused.kind(), "Refused");
+        assert!(unselected.selection.is_empty());
+        assert!(unselected
+            .selection_error
+            .unwrap()
+            .starts_with("no catalog selected: pass `catalog` (see `list_catalogs`)"));
     }
 
     #[tokio::test(flavor = "multi_thread")]

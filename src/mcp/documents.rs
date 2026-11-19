@@ -29,7 +29,7 @@ pub struct GetConceptParams {
     /// The concept: `/infra/time-server.md`, `infra/time-server` or
     /// `/infra/time-server`.
     pub path: String,
-    /// The catalog id (the `name` from `list_catalogs`; default: the first selected catalog that has it).
+    /// The catalog id (the `name` from `list_catalogs`; default: the first selected catalog that has it; when `list_catalogs` shows an empty selection, pass `catalog`).
     pub catalog: Option<String>,
     /// Also return its resolved outbound links and its backlinks.
     // `#[serde(default)]` makes the field optional: absent means `false`.
@@ -136,7 +136,7 @@ pub struct ReadDocumentParams {
     /// An `index.md` (any folder's), `log.md` or `AGENTS.md`; default
     /// `/index.md`. Use `get_concept` for concepts.
     pub path: Option<String>,
-    /// The catalog id (the `name` from `list_catalogs`; default: the first selected catalog that has it).
+    /// The catalog id (the `name` from `list_catalogs`; default: the first selected catalog that has it; when `list_catalogs` shows an empty selection, pass `catalog`).
     pub catalog: Option<String>,
     /// Read through this changeset's drafts (its handle); its catalog must be one this call reads.
     pub changeset: Option<String>,

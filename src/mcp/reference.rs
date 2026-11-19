@@ -32,8 +32,10 @@ How a session usually goes:
 - `search` for a concept, then `get_concept` to read it.
 - A concept path looks like `/infra/time-server.md`; the leading slash and the `.md` are
   optional.
-- Without `catalog`, a tool uses the catalogs your connection can see (`list_catalogs` names
-  them).
+- Without `catalog`, a tool uses your connection's selection: the catalogs the connection or
+  the key's default names, else the only catalog the key reaches (`list_catalogs` shows it). A
+  key granted every catalog has no such fallback. When `list_catalogs` shows an empty
+  selection, pass `catalog`.
 - To write, call `open_changeset` first and pass the handle it returns as `changeset` to every
   edit, `publish`, `discard`, `revert` and `pending_changes`. Reads take it too, to see the
   drafts. Nothing is visible to others until `publish`.
