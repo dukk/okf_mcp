@@ -38,12 +38,23 @@ use crate::telemetry::metrics::Metrics;
 /// How long a name with no catalog is remembered (spec Decision 6).
 pub const ABSENT_TTL: Duration = Duration::from_secs(5);
 
+/// What one shared read found, with the invalidation counter it started
+/// under. Every caller that shares the read (single flight) judges the
+/// answer by that counter, not by one it read itself later: a follower that
+/// joined after a create was applied would otherwise take an overtaken
+/// "no such catalog" for a current one.
+#[derive(Debug, Clone)]
+struct Loaded {
+    row: Option<Arc<CatalogRow>>,
+    seen: u64,
+}
+
 /// Catalog rows by name, with absent names remembered briefly.
 pub struct CatalogDirectory {
     pool: PgPool,
     // `None` is a name with no catalog. It is dropped from here at once (see
     // `remember_absent`) and kept in `absent` instead, for the shorter time.
-    rows: Bounded<String, Option<Arc<CatalogRow>>>,
+    rows: Bounded<String, Loaded>,
     // Names known to have no catalog. Not reported as `okf.cache.*`: its
     // requests are the row cache's misses, already counted there.
     absent: Bounded<String, ()>,
@@ -141,14 +152,28 @@ impl CatalogDirectory {
         if self.absent.peek(&key).await.is_some() {
             return Ok(None);
         }
-        // Read before the load starts: a create that lands after this moves
-        // the counter, and the "no such catalog" below is then not kept.
-        let seen = self.meta_changes.load(Ordering::SeqCst);
-        let row = self.rows.get_or_load(key.clone(), load).await?;
-        if row.is_none() {
-            self.remember_absent(key, seen).await;
+        let loaded = self
+            .rows
+            .get_or_load(key.clone(), || self.read(load))
+            .await?;
+        if loaded.row.is_none() {
+            self.remember_absent(key, loaded.seen).await;
         }
-        Ok(row)
+        Ok(loaded.row)
+    }
+
+    /// One read of the database, stamped with the counter as it was before
+    /// the read started: a create that lands after moves the counter, so
+    /// every caller sharing this result sees the answer was overtaken.
+    #[tracing::instrument(level = "trace", skip_all)]
+    async fn read<F, Fut>(&self, load: F) -> Result<Loaded, OkfError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Option<Arc<CatalogRow>>, OkfError>>,
+    {
+        let seen = self.meta_changes.load(Ordering::SeqCst);
+        let row = load().await?;
+        Ok(Loaded { row, seen })
     }
 
     /// Remembers that `key` has no catalog, unless a `CatalogMeta` message
@@ -196,10 +221,10 @@ impl CatalogDirectory {
                 continue;
             }
             match self.rows.peek_fresh(name).await {
-                Some(Some(row)) => found.push(row),
+                Some(Loaded { row: Some(row), .. }) => found.push(row),
                 // Cached as no catalog (only ever briefly) is not trusted
                 // here: the query below is the authority for a bulk read.
-                Some(None) | None => missing.push(name.clone()),
+                Some(Loaded { row: None, .. }) | None => missing.push(name.clone()),
             }
         }
         if !missing.is_empty() {
@@ -233,7 +258,8 @@ impl CatalogDirectory {
                 // The scan is bounded by the cache's size.
                 self.rows
                     .invalidate_where(|_, row| {
-                        row.as_ref()
+                        row.row
+                            .as_ref()
                             .is_some_and(|row| row.id == *id && row.generation < *generation)
                     })
                     .await;
@@ -421,6 +447,64 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn a_reader_that_joins_an_overtaken_read_does_not_remember_its_absence() {
+        let db = test_db().await;
+        let directory = Arc::new(directory(&db.pool));
+        // A: the leader of a shared read that will find nothing. It parks
+        // after it has stamped the counter, and runs no cleanup of its own
+        // (it is a bare cache call), so only B's judgement is under test.
+        let (release, released) = oneshot::channel::<()>();
+        let (reading, started) = oneshot::channel::<()>();
+        let leader = {
+            let directory = Arc::clone(&directory);
+            tokio::spawn(async move {
+                directory
+                    .rows
+                    .get_or_load("x".to_owned(), || {
+                        directory.read(|| async {
+                            reading.send(()).unwrap();
+                            released.await.unwrap();
+                            Ok(None)
+                        })
+                    })
+                    .await
+            })
+        };
+        timeout(BOUND, started)
+            .await
+            .expect("the read started")
+            .unwrap();
+        // The create commits and its message is applied in full.
+        let id = seed(&db.pool, "x").await;
+        directory
+            .apply(&Invalidation::CatalogMeta {
+                id,
+                name: "x".to_owned(),
+            })
+            .await;
+        // B starts now, after the apply, and joins A's read in flight.
+        let follower = {
+            let directory = Arc::clone(&directory);
+            tokio::spawn(async move { directory.resolve("x").await })
+        };
+        // B has reached the shared read once the cache counts it as a waiter;
+        // there is no signal for that, so give it a moment to join.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        release.send(()).unwrap();
+        timeout(BOUND, leader)
+            .await
+            .expect("A finished")
+            .unwrap()
+            .unwrap();
+        let answered = timeout(BOUND, follower).await.expect("B finished").unwrap();
+        assert!(answered.unwrap().is_none(), "B shared the old answer");
+
+        // The old answer was not remembered: the next resolve finds it.
+        assert!(directory.absent.peek(&"x".to_owned()).await.is_none());
+        assert!(directory.resolve("x").await.unwrap().is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_catalog_meta_invalidation_drops_the_row() {
         let db = test_db().await;
         let id = seed(&db.pool, "pg").await;
@@ -496,7 +580,7 @@ mod tests {
 
         // The caller got what it read, but the older row was not kept.
         assert_eq!(served.unwrap().unwrap().generation, 8);
-        assert_eq!(directory.rows.peek(&"pg".to_owned()).await, None);
+        assert!(directory.rows.peek(&"pg".to_owned()).await.is_none());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -524,7 +608,7 @@ mod tests {
             })
             .await;
 
-        assert_eq!(directory.rows.peek(&"a".to_owned()).await, None);
+        assert!(directory.rows.peek(&"a".to_owned()).await.is_none());
         assert!(directory.rows.peek(&"b".to_owned()).await.is_some());
         assert!(directory.rows.peek(&"c".to_owned()).await.is_some());
     }
@@ -570,7 +654,7 @@ mod tests {
             .collect();
         assert_eq!(seen, [("a", "first"), ("b", "second"), ("c", "first")]);
         // A bulk read fills nothing: `c` is still not cached.
-        assert_eq!(directory.rows.peek(&"c".to_owned()).await, None);
+        assert!(directory.rows.peek(&"c".to_owned()).await.is_none());
     }
 
     #[tokio::test(flavor = "multi_thread")]

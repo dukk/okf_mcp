@@ -4,7 +4,7 @@
 
 - `src/cache/directory.rs`: `CatalogDirectory`, catalog rows by name with their access facts (owner, suspension, maintenance opt-out, audit team id).
   - `resolve(name)`: one read however many callers ask together, then served for `catalog_ttl`.
-  - Absent names are remembered for 5 s in a second `Bounded<String, ()>` (the row cache's `check` cannot expire a fresh entry). A `CatalogMeta` message drops both entries of its name; a lookup that read "no such catalog" before a create is not remembered (a counter checked after the insert).
+  - Absent names are remembered for 5 s in a second `Bounded<String, ()>` (the row cache's `check` cannot expire a fresh entry). A `CatalogMeta` message drops both entries of its name; a lookup that read "no such catalog" before a create is not remembered (a counter read before the shared read starts and carried with its result, so followers that join an overtaken read judge it by the same counter).
   - `resolve_many(names)`: cached rows plus one query for the rest; the rows read are not cached, so a listing cannot push request entries out.
   - `apply` and `mark_all_stale` for the change feed.
 - `store::catalogs::{CatalogRow, SuspendedRow, row_by_name, rows_by_names, page}`.
