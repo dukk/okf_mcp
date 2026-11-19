@@ -33,6 +33,13 @@ provisioner keys, a stored audit log readable by team owners, and
 unlock-before-access for operator staff (`docs/operations.md`, "Users and
 teams"; design:
 `docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`).
+Milestone 18 bounded the server's memory: catalog snapshots, catalog rows,
+keys, users, labels and overlays live in caches with a byte or entry budget
+(`docs/operations.md`, "Caches and change propagation"), replicas learn of
+changes through a Postgres change feed instead of polling, listings are
+paged, and start-up no longer grows with the number of catalogs (measured
+with a million catalogs and a million users in
+`changelog/2026-11-19T14-34-24Z-m18-milestone.md`).
 
 Deployed (every route but `/healthz` needs a bearer key) from the image `ghcr.io/hypotheosis/okf-mcp`, with its database
 backed up continuously and a restore drill done.

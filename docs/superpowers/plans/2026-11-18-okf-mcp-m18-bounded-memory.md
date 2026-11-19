@@ -1303,6 +1303,15 @@ async fn run(job: Housekeeping, context: Data<HousekeepingContext>) -> Result<()
 - [ ] **Step 3:** README feature list; the milestone changelog; a follow-up issue "Remove the M16 bridge and deprecated settings" listing every `M16 bridge` comment.
 - [ ] **Step 4:** Commit — `docs: milestone 18 changelog and scale results (M18 task 18)`.
 
+> **Corrected (issue #696, 2026-11-19).** As shipped (read `tests/scale.rs` and the milestone changelog `changelog/2026-11-19T14-34-24Z-m18-milestone.md`):
+> - The test seeds with `INSERT ... SELECT ... generate_series`, gives the million catalogs to a team nobody is in, and runs best in release mode: `gate.sh narrow --release --test scale -- --ignored --nocapture`. A user in a team that owns a million catalogs loads a million-entry ceiling (about 820 ms for the first `authenticate`; issue #728), which would have measured the ceiling, not the caches.
+> - The cache gauge names are `okf_cache_bytes{cache="catalog"}`, `okf_cache_entries{cache="catalog"}` and `okf_cache_entries{cache="credential"}`; the weight is 1 KiB per catalog, 1 KiB per file and 8 per stored byte, so the budget for 1,000 tiny catalogs is `weight(len, 1) * 1000`. `App::load` is `load_with_metrics` here, so the gauges can be read.
+> - The listing bound is split. The first `GET /api/v1/catalogs` of a default page (100 catalogs) loads 100 snapshots one after another and takes about 90 ms; the plan's 50 ms holds for the page once loaded (measured 1.5 ms). The test asserts 200 ms cold and 50 ms warm. Loading the page's snapshots concurrently would bring the cold figure down; it is not done here.
+> - Credential entries are asserted at or under `credential_cache_entries` (set to 5,000 for the run, below the 10,000 keys read).
+> - The smoke test needs no Redis: the change feed carries it.
+> - The bridge follow-up is issue #727.
+> - Maintainer accepted the revised bound on 2026-11-19. Loading a page's snapshots concurrently is #732.
+
 ## Self-review
 
 - **Spec coverage.**
