@@ -11,7 +11,7 @@
 //! Messages are not stored: one sent while an instance is not subscribed is
 //! lost. So each subscriber catches up once after every (re)subscribe, and
 //! the poll loop stays as the backstop. Both subscribers share one loop
-//! ([`run`]): the same reconnect, backoff and grace, with a [`Handler`]
+//! (`run`): the same reconnect, backoff and grace, with a `Handler`
 //! saying what a message and a resubscribe do.
 
 use std::sync::Arc;
