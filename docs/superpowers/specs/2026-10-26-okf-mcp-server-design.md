@@ -238,6 +238,14 @@ recomputed from the content on every write, so they can never disagree with it.
 
 ### In-memory snapshot
 
+> **Superseded in part (milestone 18, issue #695).** A catalog's snapshot is no
+> longer built for every catalog at start-up and held for the life of the process.
+> Snapshots live in a bounded, weighted cache (`catalog_cache_bytes`), load on first
+> use, and are checked against the catalog directory row on every use; overlays have
+> a byte budget (`overlay_cache_bytes`). Read
+> `docs/superpowers/specs/2026-11-18-okf-bounded-memory-design.md` (decisions 2 to 6)
+> for what ships; the description below is the shape of a snapshot, which is unchanged.
+
 Each catalog holds an `RwLock<Arc<Snapshot>>` built from its `documents` rows. A
 snapshot holds every document's parsed frontmatter, body, headings and anchors, the
 link graph (outbound and inbound), the search fields, the secret findings and, built
