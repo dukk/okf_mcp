@@ -9,9 +9,9 @@ use serde_json::json;
 use sqlx::{PgConnection, PgPool};
 
 use crate::error::OkfError;
+use crate::invalidate::{invalidate, Invalidation};
 use crate::labels::DisplayName;
 use crate::store::audit::{self, Action, AuditActor, Entry, People, RowLock, Target};
-use crate::invalidate::{invalidate, Invalidation};
 use crate::store::catalogs::{is_unique_violation, is_valid_name};
 use crate::store::changesets::{self, ChangesetState};
 use crate::store::user_sessions;

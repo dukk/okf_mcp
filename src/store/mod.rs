@@ -13,6 +13,8 @@ pub mod gates;
 pub mod history;
 pub mod identities;
 pub mod import;
+#[cfg(test)]
+mod invalidation_tests;
 pub mod keys;
 pub mod maintenance;
 pub mod oauth;

@@ -27,13 +27,13 @@ use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
+use crate::invalidate::{invalidate, Invalidation};
 use crate::labels::catalog_label;
 use crate::mail::queue;
 use crate::mail::templates::Template;
 use crate::store::audit::{
     self, AccessKind, Action, AuditActor, Entry, FixedPerson, People, RowLock, Target,
 };
-use crate::invalidate::{invalidate, Invalidation};
 use crate::store::catalogs::{self, is_valid_name};
 
 /// `unlock_max_hours` with no override.

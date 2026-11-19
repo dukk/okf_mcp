@@ -7,8 +7,8 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgPool};
 
 use crate::error::OkfError;
-use crate::store::audit::{self, Action, AuditActor, Entry, Target};
 use crate::invalidate::{invalidate, Invalidation};
+use crate::store::audit::{self, Action, AuditActor, Entry, Target};
 use crate::store::catalogs::{self, is_unique_violation};
 use crate::store::users;
 

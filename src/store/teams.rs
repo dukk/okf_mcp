@@ -11,9 +11,9 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgPool};
 
 use crate::error::OkfError;
+use crate::invalidate::{invalidate, Invalidation};
 use crate::labels::DisplayName;
 use crate::store::audit::{self, Action, AuditActor, Entry, People, RowLock, Target};
-use crate::invalidate::{invalidate, Invalidation};
 use crate::store::catalogs::is_valid_name;
 use crate::store::users;
 

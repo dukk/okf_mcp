@@ -317,9 +317,10 @@ pub async fn set_owner(
     .bind(&team_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (catalog_id, previous_id, previous) = previous.ok_or_else(|| OkfError::CatalogNotSelected {
-        catalog: name.to_string(),
-    })?;
+    let (catalog_id, previous_id, previous) =
+        previous.ok_or_else(|| OkfError::CatalogNotSelected {
+            catalog: name.to_string(),
+        })?;
     if previous_id.as_deref() == Some(team_id.as_str()) {
         // Dropping `tx` rolls back the `UPDATE`, which wrote the same value.
         return Ok(previous);

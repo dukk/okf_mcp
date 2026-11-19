@@ -12,9 +12,9 @@ use chrono::{DateTime, TimeDelta, Utc};
 use sqlx::PgPool;
 
 use crate::error::OkfError;
+use crate::invalidate::{invalidate, Invalidation};
 use crate::keys::{self, SIGN_IN_CODE_PREFIX};
 use crate::store::audit::{self, Action, AuditActor, Entry, Target};
-use crate::invalidate::{invalidate, Invalidation};
 use crate::store::keys::{is_valid_name, resolve_grants, Access, Grants};
 use crate::store::oauth::clients::{ClientKind, ClientRecord};
 use crate::store::users;

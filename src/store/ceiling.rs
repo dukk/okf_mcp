@@ -12,8 +12,8 @@ use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::auth::{Principal, Reach};
 use crate::error::OkfError;
-use crate::store::audit::{self, Action, AuditActor, Entry, People, RowLock};
 use crate::invalidate::{invalidate, Invalidation};
+use crate::store::audit::{self, Action, AuditActor, Entry, People, RowLock};
 use crate::store::catalogs::{self, CatalogEvent};
 use crate::store::keys::Access;
 use crate::store::users;
@@ -327,8 +327,7 @@ pub async fn set_member_access(
     .bind(access.as_str())
     .fetch_optional(&mut *tx)
     .await?;
-    let (catalog_id, previous, owner_team_id) =
-        previous.ok_or_else(|| unknown_catalog(catalog))?;
+    let (catalog_id, previous, owner_team_id) = previous.ok_or_else(|| unknown_catalog(catalog))?;
     let previous =
         MemberAccess::parse(&previous).expect("the schema checks catalogs.member_access");
     if previous != access {

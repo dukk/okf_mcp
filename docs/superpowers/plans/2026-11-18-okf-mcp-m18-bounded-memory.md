@@ -141,7 +141,7 @@
 | `src/cache/credentials.rs` | 11 (create), 12 |
 | `src/cache/labels.rs` | 12 (create) |
 | `src/housekeeping.rs` | 15 (create) |
-| `src/store/catalogs.rs` | 2 (`bump_admin_generation` becomes private to `invalidate`; Task 1 left it `pub(crate)` because the 37 callers remain), 5 (`row_by_name`, `rows_by_names`, `page`) |
+| `src/store/catalogs.rs` | 2 (`bump_admin_generation` moves into `src/invalidate.rs` as a private function; Task 1 left it `pub(crate)` because the 37 callers remain), 5 (`row_by_name`, `rows_by_names`, `page`) |
 | `src/store/{keys,users,teams,ceiling,settings,unlocks,import,repair,publish}.rs`, `src/store/oauth/{codes,grants}.rs` | 2 |
 | `src/store/{users,keys,teams}.rs`, `src/store/oauth/{codes,grants}.rs`, `src/store/gates.rs`, `src/store/audit.rs` | 3 |
 | `migrations/0023_audit_backfill.sql` | 3 |
@@ -516,13 +516,22 @@ Spec Decision 10's table. After this task every change reaches every replica wit
 
 Where a function bumps conditionally (`unentitle`, `set_member_access`, `set_maintenance_report_with`, `set_email`, `unsuspend`), it invalidates under the same condition. `bump_admin_generation` becomes `pub(crate)` used only by `invalidate`; grep must show no other caller.
 
+> **Corrected (issue #680, 2026-11-19).** As built:
+> - `bump_admin_generation` moved into `src/invalidate.rs` as a private function; the test-only callers (`src/http/api/{access_tests,changesets}.rs`, `src/mcp/changesets.rs`, `src/store/oauth/testing.rs`, `src/store/settings.rs`) call `invalidate` with a fitting kind.
+> - **A list of only `Catalog` invalidations does not bump `admin_generation`** (`invalidate`'s doc comment). Publish, import and repair never bumped it; the poll loop sees them through `catalogs.generation`. Bumping would make every publish take the one `server_state` row lock until commit (serializing all publishes, and adding a lock to publish's order) and make every replica's poll reload the whole key cache after each publish. Spec Decision 10's "admin_generation is a counter of administrative changes" still holds; Decision 14's bridge is unaffected, since old replicas see publishes by catalog generation.
+> - `keys::revoke_if_idle` already bumped (through `record_revocation`, which every revocation shares), so the "new" in the table is wrong: `record_revocation` now invalidates the credential, covering `revoke_with` and `revoke_if_idle` at once.
+> - `keys::set_user` is reached through `assign_user_by_id` and `assign_user_target`.
+> - `unlocks::end` invalidates `User` only while the unlock still names a user (`unlocks.user_id` is `ON DELETE SET NULL`); an unlock of a deleted user reaches nobody, and that path no longer bumps.
+> - `users::delete` reads the user's `team_members.team_id`s (no lock: a membership added concurrently waits on the user row it holds) before the cascade; it invalidates the user, each key and grant, then each team, in id order.
+> - `catalogs::create` names its owner team by id (`teams::id_of`); `set_owner`, `delete` and `ceiling::set_member_access` read the owner's `teams.id` in their existing `UPDATE`/`SELECT ... FOR UPDATE` (`RETURNING`), adding no lock. `teams::suspend`/`unsuspend` read the owned catalogs with a plain `SELECT` after the team's lock (`suspension_invalidations`).
+> - Every `invalidate` call sits exactly where its `bump_admin_generation` was, so each writer's lock order is unchanged. `Invalidation::credential`, `user` and `team` are small constructors from `&str`.
+
 - [ ] **Step 2: Write the coverage tests.** One test per row, in the store module's tests, through a shared helper:
 
 ```rust
 /// Listens on the change feed, runs `write`, and returns every message
 /// delivered within 2 s of its commit (empty if it rolled back).
-pub(crate) async fn invalidations_of<F, Fut>(pool: &PgPool, write: F) -> Vec<Invalidation>
-where F: FnOnce() -> Fut, Fut: Future<Output = ()>
+pub(crate) async fn invalidations_of(pool: &PgPool, write: impl Future<Output = ()>) -> Vec<Invalidation>
 ```
 
 (in `src/invalidate.rs` under `#[cfg(test)]`). Example:
@@ -532,7 +541,7 @@ where F: FnOnce() -> Fut, Fut: Future<Output = ()>
 async fn revoking_a_key_invalidates_that_credential() {
     let db = TestDb::start_migrated().await;
     let key = create_test_key(&db.pool).await;
-    let got = invalidations_of(&db.pool, || async {
+    let got = invalidations_of(&db.pool, async {
         keys::revoke_by_id(&db.pool, &key.id, &actor()).await.unwrap();
     }).await;
     assert_eq!(got, [Invalidation::Credential { key_id: key.id.clone() }]);
@@ -541,12 +550,16 @@ async fn revoking_a_key_invalidates_that_credential() {
 
 Plus `a_refused_write_sends_nothing` for one representative failing write (e.g. revoking an unknown key) asserting an empty list.
 
+> **Corrected (issue #680, 2026-11-19).** `invalidations_of` lives in `crate::invalidate::testing` and takes the write as a future (an `async { .. }` block), not a closure returning one: a closure's `async` block cannot borrow the test's locals past the closure call. It waits for an end marker it sends after the write (Postgres delivers notifications in commit order), not for a fixed 2 s. The per-function tests are in one module, `src/store/invalidation_tests.rs` (`gate.sh narrow --lib store::invalidation_tests`), with shared fixtures; the publish test is `mcp::changesets::publish_tests::a_publish_invalidates_its_catalog_at_the_new_generation` (publishing needs an `App`).
+
 - [ ] **Step 3: Run each new test** (`gate.sh narrow invalidations_of` won't match; run per module, e.g. `gate.sh narrow store::keys::tests::`) — expected FAIL before Step 1's edits, PASS after.
 
 - [ ] **Step 4: Two-replica tests** (`tests/multi_replica.rs`). `serve_app` gains `catalog_ttl` / `credential_ttl` forced to 1 h (the fields arrive in Tasks 8 and 11; until then only `poll_interval = 1h`, already set). New tests, each ending in `eventually(..)` on B:
   - `a_publish_on_one_replica_is_served_on_the_other`: open a changeset and publish on A via MCP; B's `get_concept` returns the new text.
   - `a_key_revoked_through_the_store_is_refused_on_the_other_replica`: revoke with `keys::revoke_by_id` on the pool, as the CLI does (no `settle`, no Redis announcement): B refuses the key. This is the case the M16 design could not cover without the poll.
   - `a_killed_listener_connection_reloads_on_reconnect`: `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE query LIKE 'LISTEN%'` for B's listener, revoke a key on A, assert B refuses it.
+
+> **Corrected (issue #680, 2026-11-19).** `serve_app` needed no change: `catalog_ttl` and `credential_ttl` do not exist yet, and `poll_interval` is already one hour for every `start_shared`/`sibling` replica. A publish through MCP on A also announces over Redis, so it cannot show that `NOTIFY` carried it (and `a_publish_on_one_replica_propagates_to_the_other_promptly`, issue #659, already covers it); the catalog test is `a_catalog_imported_through_the_store_is_served_on_both_replicas`, an import on the pool as `okf-mcp import` does. The revocation in the killed-listener test is made through the store as well (an API revoke would announce over Redis), and the test ends every `okf_invalidate` `LISTEN` backend of the database, both replicas'.
 
 - [ ] **Step 5: Full gates; commit** — `feat: every administrative write and publish sends invalidations (M18 task 2)`.
 

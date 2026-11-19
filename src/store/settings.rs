@@ -54,8 +54,8 @@ use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::config::{check_auth_duration, AuthConfig, MAX_KEYS_PER_USER_LIMIT};
 use crate::error::OkfError;
-use crate::store::audit::{self, Action, AuditActor, Entry, Target, Via};
 use crate::invalidate::{invalidate, Invalidation};
+use crate::store::audit::{self, Action, AuditActor, Entry, Target, Via};
 use crate::store::unlocks;
 use crate::telemetry::subscriber::split_event;
 

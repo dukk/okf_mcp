@@ -489,7 +489,7 @@ pub(crate) mod testing {
 
     /// Listens on the change feed, runs `write`, and returns every message
     /// its transactions committed, in order (empty if it rolled back).
-    /// After `write` returns, it sends an end marker in a transaction of
+    /// After `write` finishes, it sends an end marker in a transaction of
     /// its own: Postgres delivers notifications in commit order, so every
     /// message the write committed arrives before it, and nothing waits a
     /// fixed time.
@@ -497,7 +497,9 @@ pub(crate) mod testing {
     /// # Arguments
     /// * `pool` - the test database (each test has its own, so no other
     ///   test's messages arrive).
-    /// * `write` - the write; it runs after the listener is subscribed.
+    /// * `write` - the write, an `async { .. }` block. A Rust future does
+    ///   nothing until it is awaited, so it runs only once the listener is
+    ///   subscribed.
     ///
     /// # Returns
     /// The invalidations delivered, in commit order.
@@ -505,16 +507,13 @@ pub(crate) mod testing {
     /// # Panics
     /// When the end marker does not arrive within 30 s, or on a payload
     /// that does not parse.
-    pub(crate) async fn invalidations_of<F, Fut>(pool: &PgPool, write: F) -> Vec<Invalidation>
-    where
-        // `F` is a closure that returns a future (an async block), so the
-        // write runs only once the listener is subscribed.
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = ()>,
-    {
+    pub(crate) async fn invalidations_of(
+        pool: &PgPool,
+        write: impl Future<Output = ()>,
+    ) -> Vec<Invalidation> {
         let mut listener = PgListener::connect_with(pool).await.expect("listener");
         listener.listen(CHANNEL).await.expect("LISTEN");
-        write().await;
+        write.await;
         sqlx::query("SELECT pg_notify($1, $2)")
             .bind(CHANNEL)
             .bind(END)
@@ -687,7 +686,7 @@ mod tests {
             id: 7,
             generation: 3,
         };
-        let got = testing::invalidations_of(&db.pool, || async {
+        let got = testing::invalidations_of(&db.pool, async {
             let mut tx = db.pool.begin().await.unwrap();
             timeout(WAIT, invalidate(&mut tx, std::slice::from_ref(&catalog)))
                 .await
@@ -758,18 +757,18 @@ mod tests {
                 .unwrap_or_else(|_| panic!("timed out waiting for {what}"));
         }
 
-        /// Revokes the key in the store, which bumps `admin_generation`
-        /// but sends nothing.
+        /// Revokes the key and bumps `admin_generation` but sends nothing,
+        /// as a writer from before the change feed would: only a catch-up
+        /// can remove the key then. (The store's `keys::revoke` now sends a
+        /// `credential` message, which the listener could apply first.)
         async fn revoke_silently(&self) {
-            use crate::store::keys as key_rows;
-            key_rows::revoke(
-                &self.db.pool,
-                "reader",
-                &crate::store::audit::AuditActor::cli(),
-                Utc::now(),
-            )
-            .await
-            .unwrap();
+            let mut tx = self.db.pool.begin().await.unwrap();
+            sqlx::query("UPDATE api_keys SET revoked_at = now() WHERE id = 'reader'")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            bump_admin_generation(&mut tx).await.unwrap();
+            tx.commit().await.unwrap();
             assert!(self.app.keys().find(&self.key).is_some());
         }
 
