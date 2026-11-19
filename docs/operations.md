@@ -327,7 +327,7 @@ reads the same file as the server, with no extra flags.
   mail queue). All three are trusted extensions, so the database's owner can
   create them (Postgres 13 or later). The pool opens up to
   `database_max_connections` (16 by default) connections, and the mail
-  worker's own pool up to 4 more; keep the database's `max_connections`
+  workers' pool up to 3 more (the feedback worker, if on, has its own 3); keep the database's `max_connections`
   above that sum times the number of replicas.
 - **Two schemas.** okf's tables are in `public`; the mail queue is apalis'
   `apalis` schema, which `migrate` sets up after okf's migrations, with its
@@ -590,9 +590,10 @@ two). What `[redis]` does not share:
   replicas (#357). The shared Redis handle is the place to fix that.
 - **The mail worker** runs on every replica, with no per-pod setting.
   apalis takes each job with `FOR UPDATE SKIP LOCKED`, so two replicas never
-  send the same mail at once. Each process opens up to 3 worker connections
-  (one pool shared by every background worker), so N replicas add `3 * N`
-  to Postgres's `max_connections`, beside the request pools. A replica that
+  send the same mail at once. Each process opens up to 3 connections for
+  the mail worker's pool (housekeeping will share it), so N replicas add
+  `3 * N` to Postgres's `max_connections`, beside the request pools, plus
+  `3 * N` more with the feedback worker on (its pool is its own). A replica that
   dies loses its mail in hand to another replica after about one minute (a
   heartbeat every 10 seconds, six missed); the mail shows as `sending` and
   cannot be deleted until then. Delivery is at least once: a replica killed
