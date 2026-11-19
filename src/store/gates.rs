@@ -15,9 +15,10 @@ use crate::config::AuthConfig;
 use crate::error::OkfError;
 use crate::store::{settings, unlocks};
 
-/// Loads the gates. Creates the audit rows the maps need first
-/// (`ensure_audit_rows`), so every live credential, user and owner team
-/// has an audit id to record an access with; then reads every map in one
+/// Loads the gates. Writes nothing: every user, team and live credential
+/// already has the audit row its access is recorded with, made in the
+/// transaction that created it (or by `migrations/0023_audit_backfill.sql`
+/// for older ones; M18 spec Decision 20). Reads every map in one
 /// read-only `REPEATABLE READ` transaction, so memberships, entitlements,
 /// admins, unlocks, the `require_unlock` setting and catalog scopes
 /// describe one moment: never a catalog's replacement (or new owner)
@@ -56,7 +57,6 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
-    ensure_audit_rows(pool).await?;
     let mut tx = pool.begin().await?;
     // Must be the transaction's first statement; the snapshot is taken by
     // the first query after it, and every later one reads the same.
@@ -135,66 +135,6 @@ where
     Ok(gates)
 }
 
-/// Creates the audit rows the cache's maps need and do not have yet: the
-/// credential row of every live key and grant, the person of every user and
-/// the team row of every catalog's owner. Users and teams get theirs in the
-/// transaction that creates them (migration `0014_audit_row_locks.sql`), and
-/// every recorded key change makes its key's, so after the first load this
-/// finds only keys and grants from before the audit log. One statement per
-/// missing row, outside any transaction, so each locks one user at most
-/// (`audit_credential` and `audit_person` hold the owner `FOR KEY SHARE`)
-/// and none can deadlock with a deletion; they create nothing for a user
-/// deleted meanwhile.
-///
-/// # Arguments
-/// * `pool` - the database.
-///
-/// # Errors
-/// [`OkfError::Database`].
-#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "gates.ensure_audit_rows"))]
-async fn ensure_audit_rows(pool: &PgPool) -> Result<(), OkfError> {
-    // A credential's label is its `actor`, which it keeps for life, as
-    // `audit::record` passes it.
-    let credentials: Vec<(String, String)> = sqlx::query_as(
-        "SELECT k.id, k.actor FROM api_keys k WHERE k.revoked_at IS NULL \
-           AND NOT EXISTS (SELECT 1 FROM audit_credentials a WHERE a.credential_id = k.id)",
-    )
-    .fetch_all(pool)
-    .await?;
-    for (id, label) in credentials {
-        sqlx::query("SELECT audit_credential($1, NULL, $2)")
-            .bind(id)
-            .bind(label)
-            .execute(pool)
-            .await?;
-    }
-    let users: Vec<String> = sqlx::query_scalar(
-        "SELECT u.id FROM users u \
-         WHERE NOT EXISTS (SELECT 1 FROM audit_people p WHERE p.user_id = u.id)",
-    )
-    .fetch_all(pool)
-    .await?;
-    for user_id in users {
-        sqlx::query("SELECT audit_person($1)")
-            .bind(user_id)
-            .execute(pool)
-            .await?;
-    }
-    let teams: Vec<String> = sqlx::query_scalar(
-        "SELECT DISTINCT c.owner_team_id FROM catalogs c WHERE c.owner_team_id IS NOT NULL \
-           AND NOT EXISTS (SELECT 1 FROM audit_teams a WHERE a.team_id = c.owner_team_id)",
-    )
-    .fetch_all(pool)
-    .await?;
-    for team_id in teams {
-        sqlx::query("SELECT audit_team_ref($1)")
-            .bind(team_id)
-            .execute(pool)
-            .await?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,10 +142,130 @@ mod tests {
 
     use crate::db::{test_db, TEST_USER};
 
+    /// The row counts of the three audit tables a load used to write.
+    async fn audit_row_counts(pool: &PgPool) -> (i64, i64, i64) {
+        sqlx::query_as(
+            "SELECT (SELECT count(*) FROM audit_people), (SELECT count(*) FROM audit_teams), \
+                    (SELECT count(*) FROM audit_credentials)",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_key_from_before_the_audit_log_gets_its_credential_id_at_load() {
+    async fn every_new_user_key_grant_and_team_has_its_audit_row() {
+        use crate::labels::DisplayName;
+        use crate::store::audit::{testing::credential_row, AuditActor};
+        use crate::store::keys::{self, Access, Grants, NewKey, NewProvisioner};
+        use crate::store::teams::{self, NewTeam};
+        use crate::store::users::{self, NewUser};
         let db = test_db().await;
-        // A row inserted directly, as a pre-M14 key: no audit row yet.
+        let (cli, now) = (AuditActor::cli(), Utc::now());
+        let unset = DisplayName::default();
+
+        users::create(
+            &db.pool,
+            &NewUser {
+                name: "bob",
+                display_name: &unset,
+            },
+            &cli,
+            now,
+        )
+        .await
+        .unwrap();
+        let team = NewTeam {
+            name: "family",
+            display_name: &unset,
+            owner: "bob",
+        };
+        teams::create(&db.pool, &team, &cli, now).await.unwrap();
+        let key = |name, self_issued| NewKey {
+            name,
+            access: Access::Read,
+            maintenance_report: false,
+            grants: Grants::All,
+            default_catalog: None,
+            actor: "laptop",
+            user: "bob",
+            self_issued,
+            expires_at: None,
+            levels: &[],
+        };
+        let plain = keys::create_with_id(&db.pool, &key("plain", false), &cli, now)
+            .await
+            .unwrap();
+        // A self-issued key may not reach every catalog: give it one.
+        crate::store::catalogs::create(
+            &db.pool,
+            &crate::store::catalogs::NewCatalog {
+                name: "main",
+                display_name: &unset,
+                description: "",
+                owner_team: "family",
+            },
+            &cli,
+            now,
+        )
+        .await
+        .unwrap();
+        let main = ["main".to_string()];
+        let own = NewKey {
+            grants: Grants::Catalogs(&main),
+            ..key("own", true)
+        };
+        let own = keys::create_self_issued(&db.pool, &own, 5, &cli, now)
+            .await
+            .unwrap();
+        let provisioner = NewProvisioner {
+            name: "ci",
+            actor: "laptop",
+            user: "bob",
+        };
+        let provisioner = keys::create_provisioner(&db.pool, &provisioner, &cli, now)
+            .await
+            .unwrap();
+
+        // Every row exists before any `gates::load`, which writes none.
+        let (people, teams_with_row): (Vec<String>, Vec<String>) = (
+            sqlx::query_scalar(
+                "SELECT u.name FROM users u JOIN audit_people p ON p.user_id = u.id \
+                 ORDER BY u.name",
+            )
+            .fetch_all(&db.pool)
+            .await
+            .unwrap(),
+            sqlx::query_scalar(
+                "SELECT t.name FROM teams t JOIN audit_teams a ON a.team_id = t.id \
+                 ORDER BY t.name",
+            )
+            .fetch_all(&db.pool)
+            .await
+            .unwrap(),
+        );
+        assert_eq!(people, ["bob", TEST_USER]);
+        assert_eq!(teams_with_row, ["bob", "family", TEST_USER]);
+        let bob: String = sqlx::query_scalar("SELECT id FROM users WHERE name = 'bob'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        // Labelled with its actor, as `audit::record` labels it when it acts.
+        for id in [&plain.id, &own.id, &provisioner.id] {
+            assert_eq!(
+                credential_row(&db.pool, id).await,
+                Some((Some("laptop".to_string()), Some(bob.clone()))),
+                "{id}"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn gates_load_writes_nothing() {
+        let db = test_db().await;
+        // A row inserted directly, as a key from before the audit log that
+        // the backfill migration did not see: the load no longer makes its
+        // audit row (M18 spec Decision 20), so it has no credential id.
         sqlx::query(
             "INSERT INTO api_keys (id, name, sha256, access, all_catalogs, actor, created_at, \
                  user_id) \
@@ -216,23 +276,18 @@ mod tests {
         .execute(&db.pool)
         .await
         .unwrap();
+        let before = audit_row_counts(&db.pool).await;
 
         let gates = load(&db.pool, Utc::now()).await.unwrap();
 
-        let (id, label): (i64, Option<String>) = sqlx::query_as(
-            "SELECT id, label FROM audit_credentials WHERE credential_id = 'legacy'",
-        )
-        .fetch_one(&db.pool)
-        .await
-        .unwrap();
-        assert_eq!(gates.credentials.get("legacy"), Some(&id));
-        assert_eq!(label.as_deref(), Some("laptop"));
+        assert_eq!(audit_row_counts(&db.pool).await, before);
+        assert!(!gates.credentials.contains_key("legacy"));
         let me: String = sqlx::query_scalar("SELECT id FROM users WHERE name = $1")
             .bind(TEST_USER)
             .fetch_one(&db.pool)
             .await
             .unwrap();
-        assert!(gates.people.contains_key(&me));
+        assert!(gates.people.contains_key(&me), "made by `users::create`");
         assert!(!gates.members.contains_key(&me), "no catalog yet");
     }
 

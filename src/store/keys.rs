@@ -458,6 +458,7 @@ pub async fn create_provisioner(
     .fetch_one(&mut *tx)
     .await;
     let id = live_name_or(inserted, new.name, new.actor)?;
+    audit::credential_created(&mut tx, &id, new.actor).await?;
     audit::record(
         &mut tx,
         audit,
@@ -561,7 +562,8 @@ async fn lock_new_key(
     .0)
 }
 
-/// Records creation after inserting the key and its grants, before commit.
+/// Creates the key's audit row ([`audit::credential_created`]), then records
+/// its creation, after inserting the key and its grants, before commit.
 #[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "keys.record_created"))]
 async fn record_created(
     conn: &mut PgConnection,
@@ -570,6 +572,7 @@ async fn record_created(
     actor: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<(), OkfError> {
+    audit::credential_created(conn, id, new.actor).await?;
     let teams = audit::key_teams(conn, id).await?;
     let (user_id, count): (Option<String>, i64) = sqlx::query_as(
         "SELECT user_id, (SELECT count(*) FROM key_catalogs WHERE key_id = $1) FROM api_keys WHERE id = $1"
