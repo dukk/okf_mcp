@@ -634,7 +634,12 @@ impl ToolContext {
                 let overlay = self
                     .app
                     .overlays()
-                    .get(self.app.pool(), state, &pinned.row)
+                    .get(
+                        self.app.pool(),
+                        self.app.rebuild_locks(),
+                        state,
+                        &pinned.row,
+                    )
                     .await?;
                 Ok(View::Pending(overlay))
             }
