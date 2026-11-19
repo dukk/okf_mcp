@@ -30,7 +30,7 @@ const MAX_LIMIT: u32 = 200;
 pub struct HistoryParams {
     /// The document: `/infra/time-server.md`, `infra/time-server`, `/log.md`.
     pub path: String,
-    /// The catalog id (the `name` from `list_catalogs`; default: the first selected catalog with any revision of it).
+    /// The catalog id (the `name` from `list_catalogs`; default: the first selected catalog with any revision of it; when `list_catalogs` shows an empty selection, pass `catalog`).
     pub catalog: Option<String>,
     /// At most this many revisions (default 20, at most 200; 0 counts as 1).
     pub limit: Option<u32>,

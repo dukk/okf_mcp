@@ -6,8 +6,12 @@
 //! scope: when it is set, a call sees only those catalogs, whatever else
 //! the key reaches. A call's argument narrows it and never escapes it.
 //! Without a connection list, the argument, else the key's default
-//! catalog, else the server's `default_catalog`, is the selection. Every
-//! name must exist and be reachable by the key: a list never grants.
+//! catalog, else the server's `default_catalog`, is the selection. When
+//! none of those names a catalog and the key reaches exactly one catalog
+//! that exists, that one is the selection (issue #663); a key granted every
+//! catalog ([`Reach::All`]) never falls back, so an admin-reach key does not
+//! pick a catalog silently. Every name must exist and be reachable by the
+//! key: a list never grants.
 //!
 //! A closed catalog is refused when named and left out of a connection's
 //! list: one whose owner team is suspended (milestone 13; admins are
@@ -20,7 +24,7 @@
 use axum::http::request::Parts;
 use chrono::{DateTime, Utc};
 
-use crate::auth::Principal;
+use crate::auth::{Principal, Reach};
 use crate::error::OkfError;
 use crate::store::keys::Access;
 
@@ -260,6 +264,47 @@ fn without_closed(
     }
 }
 
+/// Why a call has no selection: the fix a client can make itself first,
+/// then the operator's options.
+const NOTHING_SELECTED: &str = "no catalog selected: pass `catalog` (see `list_catalogs`); \
+     or set the X-OKF-Catalogs header or `?catalogs=` on the MCP URL, or give the key a \
+     default catalog";
+
+/// The only catalog `principal` reaches that exists, for a call that no
+/// source names a catalog for (issue #663).
+///
+/// Only a key granted catalogs by name ([`Reach::Catalogs`]) falls back: a
+/// key granted every catalog ([`Reach::All`], an admin's or operator's
+/// reach) gets `None` even when one catalog exists, because a key of that
+/// reach selecting a catalog it was never pointed at would be a surprise,
+/// and a second catalog created later would change what its bare calls
+/// read. The count is of reachable catalogs that exist, not of open ones:
+/// a closed catalog still counts, so suspending one of two catalogs never
+/// makes the other the selection, and a sole closed catalog is refused
+/// the way a key default is (the caller checks it).
+///
+/// # Arguments
+/// * `principal` - the calling key.
+/// * `exists` - whether a catalog of that name is loaded.
+///
+/// # Returns
+/// The catalog's name, or `None` for zero or several, or for [`Reach::All`].
+#[tracing::instrument(level = "trace", skip_all)]
+fn only_reachable<'a>(principal: &'a Principal, exists: &impl Fn(&str) -> bool) -> Option<&'a str> {
+    let Reach::Catalogs(levels) = &principal.reach else {
+        return None;
+    };
+    // The map's keys are the names the key reaches; `filter` keeps those
+    // loaded, lazily, so at most two are looked at.
+    let mut reachable = levels
+        .keys()
+        .map(String::as_str)
+        .filter(|name| exists(name));
+    let first = reachable.next()?;
+    // `is_none().then_some(..)`: `Some(first)` only when there is no second.
+    reachable.next().is_none().then_some(first)
+}
+
 /// Resolves a call's catalogs.
 ///
 /// A connection list is checked whole, even when the argument names a
@@ -273,13 +318,17 @@ fn without_closed(
 ///
 /// # Returns
 /// The selection: the argument if set, else the connection's list, else
-/// the key's default, else the server's; without duplicates.
+/// the key's default, else the server's, else the only catalog the key
+/// reaches (`only_reachable`: never for [`Reach::All`]); without
+/// duplicates.
 ///
 /// # Errors
 /// [`OkfError::CatalogNotSelected`] naming the first catalog that does not
 /// exist, that the key does not reach, or (in the argument) that the
-/// connection's list leaves out; [`OkfError::Refused`] if no source names a
-/// catalog; then, for a named or default catalog that is closed to the
+/// connection's list leaves out; [`OkfError::Refused`]
+/// (`NOTHING_SELECTED`) if no source names a catalog and the key does not
+/// reach exactly one; then, for a named, default or only catalog that is
+/// closed to the
 /// key, its refusal: [`OkfError::Suspended`] (for a credential below admin)
 /// when its owner team is suspended, [`OkfError::UnlockRequired`] when the
 /// key needs an unlock it does not have, [`OkfError::MaintenanceOff`] for
@@ -327,11 +376,15 @@ pub fn resolve(
     {
         Some(name) => checked([name], available)
             .and_then(|selection| refuse_closed(principal, selection, sources.now)),
-        None => Err(OkfError::Refused {
-            reason: "no catalog selected: pass `catalog`, set the X-OKF-Catalogs header \
-                     or `?catalogs=` on the MCP URL, or give the key a default catalog"
-                .to_string(),
-        }),
+        // The fallback names a catalog the key reaches and that exists, and
+        // is refused when closed exactly as a key default is.
+        None => match only_reachable(principal, &exists) {
+            Some(name) => checked([name], available)
+                .and_then(|selection| refuse_closed(principal, selection, sources.now)),
+            None => Err(OkfError::Refused {
+                reason: NOTHING_SELECTED.to_string(),
+            }),
+        },
     }
 }
 
@@ -593,6 +646,149 @@ mod tests {
         assert!(matches!(error, OkfError::Refused { .. }));
         assert!(error.to_string().contains("X-OKF-Catalogs"));
         assert!(error.to_string().contains("?catalogs="));
+    }
+
+    /// Sources that name no catalog: no argument, connection or defaults.
+    fn unset() -> Sources<'static> {
+        Sources {
+            argument: None,
+            connection: None,
+            server_default: None,
+            now: Utc::now(),
+        }
+    }
+
+    /// Issue #663: with nothing selected, a key granted exactly one catalog
+    /// that exists gets that one, as its read set and write target. A
+    /// granted name that is not loaded does not count.
+    #[test]
+    fn with_nothing_selected_the_only_reachable_catalog_is_the_selection() {
+        for reach in [&["pg"][..], &["pg", "gone"][..]] {
+            let key = principal(reach, None);
+
+            let selection = resolve(&key, unset(), exists).unwrap();
+
+            assert_eq!(selection.catalogs(), ["pg"], "{reach:?}");
+            assert_eq!(selection.write_target(), "pg", "{reach:?}");
+        }
+    }
+
+    /// The fallback comes last: every other source still wins over it, and
+    /// a bad one still fails rather than falling back.
+    #[test]
+    fn the_only_catalog_fallback_never_overrides_another_source() {
+        let key = principal(&["pg"], None);
+        let argument = names(&["work"]);
+        let connection = names(&["work"]);
+        let defaulted = principal(&["pg"], Some("work"));
+
+        for (source, sources, key) in [
+            (
+                "argument",
+                Sources {
+                    argument: Some(&argument),
+                    ..unset()
+                },
+                &key,
+            ),
+            (
+                "connection",
+                Sources {
+                    connection: Some(&connection),
+                    ..unset()
+                },
+                &key,
+            ),
+            (
+                "server default",
+                Sources {
+                    server_default: Some("work"),
+                    ..unset()
+                },
+                &key,
+            ),
+            ("key default", unset(), &defaulted),
+        ] {
+            let refused = select(key, sources);
+            assert!(
+                matches!(&refused, Err(OkfError::CatalogNotSelected { catalog }) if catalog == "work"),
+                "{source}: an unreachable name is refused, not replaced by `pg`: {refused:?}"
+            );
+        }
+    }
+
+    /// A sole catalog that is closed is refused as a key default is: by
+    /// suspension (below admin) or a missing unlock. An admin's sole
+    /// suspended catalog is selected, as a named one is.
+    #[test]
+    fn a_closed_only_catalog_is_refused_like_a_default() {
+        use crate::auth::AccessGates;
+
+        let suspended = principal_with(&["pg"], None, &["pg"]);
+        let admin = Principal {
+            access: Access::Admin,
+            ..principal_with(&["pg"], None, &["pg"])
+        };
+        let locked = Principal {
+            user_id: Some("u-staff".to_string()),
+            gates: std::sync::Arc::new(AccessGates {
+                admins: ["u-staff".to_string()].into(),
+                require_unlock: true,
+                ..AccessGates::default()
+            }),
+            ..principal(&["pg"], None)
+        };
+        let locked_default = Principal {
+            default_catalog: Some("pg".to_string()),
+            ..locked.clone()
+        };
+
+        assert_eq!(suspended_name(resolve(&suspended, unset(), exists)), "pg");
+        assert_eq!(select(&admin, unset()).unwrap(), ["pg"]);
+        assert_eq!(
+            select(&locked, unset()).unwrap_err().kind(),
+            select(&locked_default, unset()).unwrap_err().kind(),
+            "the fallback refuses as the key default does"
+        );
+        assert_eq!(
+            select(&locked, unset()).unwrap_err().kind(),
+            "UnlockRequired"
+        );
+    }
+
+    /// Several reachable catalogs keep the refusal, even when all but one
+    /// are closed: closing a catalog never moves a key's selection.
+    #[test]
+    fn several_reachable_catalogs_are_still_refused() {
+        for key in [
+            principal(&["pg", "work"], None),
+            principal_with(&["pg", "work"], None, &["work"]),
+        ] {
+            let error = select(&key, unset()).unwrap_err();
+
+            assert!(matches!(error, OkfError::Refused { .. }), "{error:?}");
+            assert!(
+                error
+                    .to_string()
+                    .starts_with("no catalog selected: pass `catalog` (see `list_catalogs`)"),
+                "the client's own fix comes first: {error}"
+            );
+        }
+    }
+
+    /// A key granted every catalog never falls back, even when only one
+    /// catalog exists (the decision documented on [`only_reachable`]).
+    #[test]
+    fn a_key_reaching_every_catalog_does_not_fall_back() {
+        let key = principal(&[], None);
+        assert_eq!(key.reach, Reach::All);
+
+        let refused = resolve(&key, unset(), |name| name == "pg");
+
+        assert!(
+            matches!(refused, Err(OkfError::Refused { .. })),
+            "{refused:?}"
+        );
     }
 
     fn parts(uri: &str, header: Option<&str>) -> Parts {
