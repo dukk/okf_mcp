@@ -176,7 +176,7 @@ A document's revisions, newest first: revision, op (create, update, delete, impo
 
 **Add Index Entry** (staged)
 
-List a concept in its folder's index.md as `* [Title](name.md) - summary`, in the changeset `changeset` names (open one with open_changeset); nothing happens if it is already linked (a name with a space, `)`, `#` or `:` is written percent-encoded, e.g. `a%20b.md`; an older raw bullet for it counts as linked, with a note). Replayed at publish onto an index.md that changed meanwhile, unless a free edit of that index.md follows. Write access.
+List a concept in its folder's index.md as `* [Title](name.md) - summary`, in the changeset `changeset` names (open one with open_changeset); nothing happens if it is already linked (a name with a space, `)`, `#` or `:` is written percent-encoded, e.g. `a%20b.md`; an older raw bullet for it counts as linked, with a note; repair_indexes rewrites it). Replayed at publish onto an index.md that changed meanwhile, unless a free edit of that index.md follows. Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -485,7 +485,7 @@ Remove the entry with `id` from a concept's `sources`, deleting the key when non
 
 **Repair Indexes** (staged)
 
-Create whatever bookkeeping the catalog is missing, in the changeset `changeset` names (open one with open_changeset): the root index.md and log.md, an index.md for every folder holding concepts, each folder's listing in its parent's # Sections, and each concept's listing in its folder's index.md (its title and description; TODO placeholders where they are missing, each named in `notes`). Existing text, listings and summaries are kept, except an old raw (unencoded) concept listing whose link never resolves, such as `[A](a b.md)`: its destination is percent-encoded in place, or the bullet removed beside a working one, and `notes` quotes each. A second run changes nothing. A file or folder no markdown link can list (a `]` in a folder name) is not listed; `notes` names it. Review the result with pending_changes before publishing. Write access.
+Create whatever bookkeeping the catalog is missing, in the changeset `changeset` names (open one with open_changeset): the root index.md and log.md, an index.md for every folder holding concepts, each folder's listing in its parent's # Sections, and each concept's listing in its folder's index.md (its title and description; TODO placeholders where they are missing, each named in `notes`). Existing text, listings and summaries are kept, except an old raw (unencoded) concept or folder listing whose link never resolves, such as `[A](a b.md)` or `[My docs](my docs/)`: its destination is percent-encoded in place, or the bullet removed beside a working one, and `notes` quotes each. A second run changes nothing. A file or folder no markdown link can list (a `]` in a folder name) is not listed; `notes` names it. Review the result with pending_changes before publishing. Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|

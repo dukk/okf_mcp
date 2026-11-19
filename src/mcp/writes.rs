@@ -915,7 +915,7 @@ impl OkfServer {
         title = "Add Index Entry",
         description = "List a concept in its folder's index.md as `* \
                        [Title](name.md) - summary`, in the changeset `changeset` names (open one \
-                       with open_changeset); nothing happens if it is already linked (a name with a space, `)`, `#` or `:` is written percent-encoded, e.g. `a%20b.md`; an older raw bullet for it counts as linked, with a note). Replayed at \
+                       with open_changeset); nothing happens if it is already linked (a name with a space, `)`, `#` or `:` is written percent-encoded, e.g. `a%20b.md`; an older raw bullet for it counts as linked, with a note; repair_indexes rewrites it). Replayed at \
                        publish onto an index.md that changed meanwhile, unless a free edit of \
                        that index.md follows. Write access.",
         annotations(
@@ -944,8 +944,9 @@ impl OkfServer {
                        listing in its parent's # Sections, and each concept's listing in its \
                        folder's index.md (its title and description; TODO placeholders where \
                        they are missing, each named in `notes`). Existing text, listings and \
-                       summaries are kept, except an old raw (unencoded) concept listing whose \
-                       link never resolves, such as `[A](a b.md)`: its destination is \
+                       summaries are kept, except an old raw (unencoded) concept or folder \
+                       listing whose link never resolves, such as `[A](a b.md)` or \
+                       `[My docs](my docs/)`: its destination is \
                        percent-encoded in place, or the bullet removed beside a working one, \
                        and `notes` quotes each. A second run changes nothing. A file or folder \
                        no markdown link can list (a `]` in a folder name) is not listed; \
@@ -1949,6 +1950,66 @@ mod repair_tests {
         assert_eq!(
             published_text(&test, "d/index.md").await.unwrap(),
             "# D\n\nCurated words.\n\n# Concepts\n\n* [Odd](a%20b.md) - An odd one.\n"
+        );
+        let again_handle = open(&first).await;
+        let again = repair(&first, &again_handle).await.unwrap();
+        assert!(again.touched.is_empty(), "{again:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_staged_raw_folder_listing_rewrite_replays_onto_an_index_changed_meanwhile() {
+        // Issue #731: the raw `# Sections` bullet of a folder is rewritten in
+        // the changeset; another writer edits the parent index and publishes
+        // first, and publish redoes the rewrite onto their text, with no
+        // second listing of the folder.
+        let raw_root = "# Root\n\nAbout it.\n\n# Sections\n\n* [My docs](my docs/) - Mine.\n";
+        let note = "---\ntype: Note\ntitle: C\ndescription: c\n---\n";
+        let test = app_with(
+            &[(
+                "pg",
+                &[
+                    ("index.md", raw_root),
+                    ("log.md", "# Log\n"),
+                    ("my docs/index.md", "# My docs\n\n* [C](c.md) - c\n"),
+                    ("my docs/c.md", note),
+                ],
+            )],
+            Config::default(),
+        )
+        .await;
+        let first = writer(&test, "writer-a", "pg").await;
+        let second = writer(&test, "writer-b", "pg").await;
+        let first_handle = open(&first).await;
+        let second_handle = open(&second).await;
+
+        let report = repair(&first, &first_handle).await.unwrap();
+        assert_eq!(report.touched, ["/index.md"], "{report:?}");
+        assert!(
+            report.notes.iter().any(|note| note
+                == "rewrote the raw listing of /my docs/ in /index.md: \
+                    * [My docs](my docs/) - Mine. -> * [My docs](my%20docs/) - Mine."),
+            "{report:?}"
+        );
+        edit_document(
+            &second,
+            EditDocumentParams {
+                path: "/index.md".to_string(),
+                old_str: "About it.".to_string(),
+                new_str: "Curated words.".to_string(),
+                replace_all: false,
+                changeset: second_handle.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        publish_as(&second, &second_handle).await.unwrap();
+
+        let published = publish_as(&first, &first_handle).await.unwrap();
+
+        assert!(published.report.published, "{published:?}");
+        assert_eq!(
+            published_text(&test, "index.md").unwrap(),
+            "# Root\n\nCurated words.\n\n# Sections\n\n* [My docs](my%20docs/) - Mine.\n"
         );
         let again_handle = open(&first).await;
         let again = repair(&first, &again_handle).await.unwrap();
