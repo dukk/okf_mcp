@@ -340,7 +340,7 @@ a `LintFailed` error and `a.md` in `lint`'s result, on purpose.
 | `sprawl` | How large each concept is and how it is organized, worst first, or one concept with `path` |
 | `links_report` | Broken and missing links, orphans and unlinked mentions of other concepts (`mentions`, default true) |
 | `lint` | The catalog's findings (errors and warnings) on the published catalog, or with `changeset` on that changeset's drafts applied to it |
-| `pending_changes` | The changeset `changeset` names: each changed path, its base and current revision, whether it is stale or replayable, and a unified diff |
+| `pending_changes` | The changeset `changeset` names: each changed path, its base and current revision, whether it is stale or replayable, and a unified diff (of the replayed text for a stale replayable entry, or the reason its replay would fail) |
 | `list_changesets` | The open changesets the key may use, empty ones included: its own, or with an `admin` key every key's in the catalogs it reaches. Each row has the handle, catalog, key name and immutable id, actor, creation and last-change times, `/`-prefixed paths, and `idle` (no change within `session_idle_timeout`) |
 
 `get_concept`, `read_document` and `history` without `catalog` answer from

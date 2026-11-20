@@ -2280,6 +2280,65 @@ mod folder_summary_tests {
         assert!(entry(&test, &a, "index.md").await.replay.is_some());
     }
 
+    /// `pending_changes` names the replay error publish would refuse with,
+    /// in place of a diff of the stored text (issue #787).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pending_changes_shows_a_summary_whose_listing_is_gone_as_a_replay_error() {
+        use crate::mcp::changesets::{pending_changes, PendingParams};
+        let root = concat!(
+            "# Catalog\n\nAbout.\n\n# Sections\n\n* [Infra](infra/) - Systems.\n",
+            "* [Learning](learning/) - TODO: describe this folder\n",
+        );
+        let test = pg_with(root, &[("learning/index.md", "# Learning\n")]).await;
+        let first = writer(&test, "writer-a", "pg").await;
+        let second = writer(&test, "writer-b", "pg").await;
+        let (a, b) = (open(&first).await, open(&second).await);
+        index(&first, describe("/learning/", "What we learn.", &a))
+            .await
+            .unwrap();
+        edit_document(
+            &second,
+            EditDocumentParams {
+                path: "/index.md".to_string(),
+                old_str: "* [Learning](learning/) - TODO: describe this folder\n".to_string(),
+                new_str: String::new(),
+                replace_all: false,
+                changeset: b.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        publish_as(&second, &b).await.unwrap();
+
+        let params = PendingParams {
+            changeset: a.clone(),
+        };
+        let pending = pending_changes(&first, params).await.unwrap();
+
+        let file = &pending.files[0];
+        assert_eq!(
+            (
+                file.path.as_str(),
+                file.stale,
+                file.replayable,
+                file.replayed
+            ),
+            ("/index.md", true, true, false)
+        );
+        let reason = file.replay_error.as_deref().unwrap();
+        assert!(
+            reason.contains("index.md no longer lists /learning/"),
+            "{reason}"
+        );
+        assert_eq!(
+            file.diff,
+            format!("Publish cannot replay this entry onto the published text: {reason}\n")
+        );
+        // Publish refuses with the same reason.
+        let error = publish_as(&first, &a).await.unwrap_err();
+        assert_eq!(error.to_string(), reason);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_free_edit_after_index_on_a_folder_is_stale_checked() {
         let test = pg(&[]).await;
