@@ -216,7 +216,10 @@ async fn a_concept_shows_its_body_follows_links_and_lists_backlinks() {
             "() => document.querySelector('#screen-concept').textContent",
             json!(null),
         );
-        assert!(!drawn.as_str().unwrap_or("").contains("null"), "stray text: {drawn}");
+        assert!(
+            !drawn.as_str().unwrap_or("").contains("null"),
+            "stray text: {drawn}"
+        );
         // render.rs's console link becomes a reader route, at the section.
         let href = ui.eval(
             "() => document.querySelector('#body a').getAttribute('href')",
