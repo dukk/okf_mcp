@@ -1187,7 +1187,8 @@ async fn check_own_deletion(
 /// Lock order: every admin row in id order, then the user with every other
 /// user its entries resolve (the actor, its credential's owner, the people
 /// of its open changesets' personal owner teams), in id order
-/// ([`audit::lock_people`], as [`set_admin`]), then its personal team, then
+/// ([`audit::lock_people`], as [`set_admin`]), then (for [`delete_own`]
+/// only) the asking session's row `FOR SHARE`, then its personal team, then
 /// its shared teams in id order, then its keys and grants in id order, then
 /// their open changesets in id order. A key or code being created for the
 /// user holds the user `FOR KEY SHARE` (`id_of`); the deletion waits for it
