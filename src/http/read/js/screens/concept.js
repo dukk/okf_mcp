@@ -60,7 +60,8 @@ export async function render(view, ctx) {
         h('h1', { id: 'concept-title' }, concept.title ?? path),
         outline(catalog, path, concept.outline),
         body);
-    if (concept.body_html) {
+    // Shortened means no body at all (null); an empty concept's body is "".
+    if (concept.body_html != null) {
         body.append(renderBody(concept.body_html));
         scrollTo(section);
     } else {
@@ -69,6 +70,10 @@ export async function render(view, ctx) {
             button.disabled = true;
             try {
                 const full = await read(`${conceptUrl}?full=true`);
+                // The user may have left while it loaded: a late answer must
+                // not touch the shared banner or a newer screen. (A refusal
+                // below still acts: ctx.fail's effects hold whichever screen shows.)
+                if (!ctx.live()) return;
                 ctx.freshness(full);
                 body.replaceChildren(renderBody(full.data.body_html));
                 scrollTo(section);
