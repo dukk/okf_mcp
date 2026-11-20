@@ -385,6 +385,54 @@ mod tests {
         assert_eq!(all.hits.len(), 5);
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_catalog_whose_overlay_fails_is_skipped_and_the_others_answer() {
+        let router = concept("Router", "d1", "Family diary");
+        let switch = concept("Switch", "d1", "Family diary");
+        let test = app_with(
+            &[
+                ("pg", &[("router.md", &router)]),
+                ("work", &[("switch.md", &switch)]),
+            ],
+            Config::default(),
+        )
+        .await;
+        store_key(&test, "writer").await;
+        let ctx = context(
+            &test,
+            principal_as("writer", Access::Write, &[], None),
+            Some(&["pg", "work"]),
+        );
+        // The write target is `pg`, the first selected catalog.
+        let handle = open(&ctx).await;
+        // `router.md` is a published file, so a pending `router.md/x.md`
+        // cannot be applied over it.
+        let clash = PendingEdit {
+            path: "router.md/x.md",
+            text: Some("# X\n"),
+            at: Utc::now(),
+        };
+        pending_entry(&test, &handle, &clash).await;
+        let mut through = params(Some("d1"), None);
+        through.changeset = Some(handle.clone());
+
+        let found = run(&ctx, through).await.unwrap();
+
+        assert_eq!(
+            paths(&found),
+            [("work".to_string(), "switch.md".to_string())]
+        );
+        assert!(!found.truncated);
+        assert_eq!(found.skipped.len(), 1);
+        assert_eq!(found.skipped[0].catalog, "pg");
+        assert_eq!(found.skipped[0].error["error"], "InvalidPath");
+        let message = found.skipped[0].error["message"].as_str().unwrap();
+        assert!(
+            message.contains(&format!("pending changeset {handle}")),
+            "{message}"
+        );
+    }
+
     #[test]
     fn the_tool_is_read_only_short_and_the_cap_is_200() {
         let listed = OkfServer::tools()
