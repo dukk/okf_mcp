@@ -149,6 +149,85 @@ impl Ui {
         self.wait_text("#whoami", " - ");
     }
 
+    /// Navigates to the reader at `#<route>` (route like "/v/main/a.md";
+    /// "" for its home).
+    pub fn open_reader(&self, route: &str) {
+        self.page
+            .goto(
+                &format!("{}/read/#{route}", self.base),
+                GotoOptions::default(),
+            )
+            .expect("navigate to the reader");
+    }
+
+    /// Opens the reader at `#<route>` signed out, signs in on the page it
+    /// sends the browser to, and waits until the reader is back and shown.
+    pub fn sign_in_reader(&self, route: &str, email: &str, password: &str) {
+        self.open_reader(route);
+        self.wait_visible("#signin-email");
+        self.fill("#signin-email", email);
+        self.fill("#signin-password", password);
+        self.click("#signin-submit");
+        self.wait_visible("#reader");
+    }
+
+    /// Waits until the reader's service worker controls the page.
+    pub fn wait_worker(&self) {
+        self.poll("the reader's service worker", || {
+            self.eval(
+                "() => navigator.serviceWorker.controller !== null",
+                serde_json::json!(null),
+            ) == serde_json::json!(true)
+        });
+    }
+
+    /// Cuts the page and every service worker off the network (DevTools
+    /// network emulation on each target) while the returned value lives;
+    /// dropping it closes the connection, which ends the emulation.
+    ///
+    /// # Panics
+    /// If Chromium refuses a DevTools call.
+    pub fn go_offline(&self) -> DevTools {
+        let mut devtools = DevTools::connect(&self.browser);
+        let targets = devtools.call(None, "Target.getTargets", serde_json::json!({}));
+        let ids: Vec<String> = targets["targetInfos"]
+            .as_array()
+            .expect("targets")
+            .iter()
+            .filter(|target| target["type"] == "page" || target["type"] == "service_worker")
+            .filter_map(|target| target["targetId"].as_str().map(str::to_string))
+            .collect();
+        for id in ids {
+            let attached = devtools.call(
+                None,
+                "Target.attachToTarget",
+                serde_json::json!({ "targetId": id, "flatten": true }),
+            );
+            let session = attached["sessionId"]
+                .as_str()
+                .expect("a DevTools session")
+                .to_string();
+            devtools.call(Some(&session), "Network.enable", serde_json::json!({}));
+            devtools.call(
+                Some(&session),
+                "Network.emulateNetworkConditions",
+                serde_json::json!({
+                    "offline": true,
+                    "latency": 0,
+                    "downloadThroughput": -1,
+                    "uploadThroughput": -1,
+                }),
+            );
+        }
+        devtools
+    }
+
+    /// Reloads the current page and waits for the reader to show again.
+    pub fn reload_reader(&self) {
+        self.page.reload(GotoOptions::default()).expect("reload");
+        self.wait_visible("#reader");
+    }
+
     fn poll(&self, what: &str, mut done: impl FnMut() -> bool) {
         let deadline = Instant::now() + WAIT;
         while Instant::now() < deadline {

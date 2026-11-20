@@ -43,7 +43,7 @@
 | `src/http/read/js/listing.js` | `folderListing`: one folder's subfolders, index and concepts from the tree. |
 | `tests/read_worker/*.test.mjs`, `storage.mjs`, `page.mjs`, `esm-hooks.mjs` | Node tests (`just test-worker`) of the worker and of the page modules without a DOM (api, cache, route, listing), with a shared in-memory Cache Storage. |
 | `src/http/read/js/screens/{home,catalogs,tree,search,concept,document,me}.js` | One screen each. |
-| `tests/ui_e2e/harness.rs` (modify) | `open_reader`, `sign_in_reader`, `wait_worker`, `go_offline`. |
+| `tests/ui_e2e/harness.rs` (modify) | `open_reader`, `sign_in_reader`, `wait_worker`, `go_offline`, `reload_reader`. |
 | `tests/ui_e2e/read.rs` (create), `tests/ui_e2e/main.rs` (modify) | The reader's browser journeys. |
 | `docs/reference/reader.md` (create), `README.md` (modify) | How to install and what works offline. |
 | `changelog/<timestamp>-mobile-reader.md` (create) | The change, per the project's changelog rule. |
@@ -1879,7 +1879,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 6: Boot, sign-in, account and sign-out
 
 **Files:**
-- Create: `src/http/read/js/main.js`, `src/http/read/js/screens/me.js`, and minimal `home.js`, `catalogs.js`, `tree.js`, `search.js`, `concept.js` (completed in Tasks 7 to 9)
+- Create: `src/http/read/js/main.js`, `src/http/read/js/screens/me.js`, and minimal `home.js`, `catalogs.js`, `tree.js`, `search.js`, `concept.js`, `document.js` (completed in Tasks 7 to 9)
 - Modify: `tests/ui_e2e/harness.rs`, `tests/ui_e2e/main.rs`
 - Create: `tests/ui_e2e/read.rs`
 
@@ -1976,7 +1976,6 @@ use okf_mcp::config::Config;
 use okf_mcp::store::audit::AuditActor;
 use okf_mcp::store::ceiling::{self, NewEntitlement};
 use okf_mcp::store::keys::Access;
-use okf_mcp::store::user_sessions;
 use serde_json::json;
 
 use crate::harness::drive;
@@ -2057,6 +2056,19 @@ async fn signing_in_returns_to_the_route_and_signing_out_wipes_the_caches() {
 }
 ```
 
+> **Corrected (issue #813, 2026-11-20).** The listing above is the starting point; the shipped
+> `tests/ui_e2e/read.rs` differs, so read it before appending. `use okf_mcp::store::user_sessions;`
+> is not imported (nothing in Task 6 uses it, and an unused import fails `lint`): Task 11, its first
+> user, adds it. The import is `use crate::harness::{drive, Ui};`. The journey first has the worker
+> cache alpha (`signed_in_with_a_copy`: `read-content` and `read-owner` must be non-empty), so it
+> fails when sign-out stops wiping (with nothing cached, the empty-cache check passed either way);
+> it also checks that sign-in returned to `#/me` and that the server ended the session
+> (`GET /api/v1/session` answers 401). A second journey,
+> `signing_out_without_a_connection_still_deletes_the_offline_copies`, signs out under `go_offline`:
+> the copies go, `#sign-out-failed` shows, the button is usable again, and once back online a
+> reload still shows the account (the session was kept). It is the first user of `go_offline` and
+> `reload_reader`, which would otherwise be dead code in this task.
+
 - [ ] **Step 3: Run it to see it fail**
 
 Run: `scripts/test-pg.sh run cargo test --test ui_e2e read:: -- --test-threads=2`
@@ -2065,10 +2077,12 @@ Expected: FAIL, timed out waiting for `#signin-email` (no `main.js` yet).
 - [ ] **Step 4: Write `src/http/read/js/main.js`**
 
 ```js
-// The reader's boot and router (reader design). It checks the session,
-// makes the caches this user's, registers the worker, then renders the
-// screen the hash names. Every ReadError a screen throws comes back here,
-// to fail(), the one place that decides what a refusal does.
+// The reader's boot and router (reader design). It registers the worker
+// and waits for it to control the page, checks the session, then renders
+// the screen the hash names. (Which account the cached copies belong to is
+// the worker's decision, sw.js `admit`.) Every ReadError a screen throws
+// comes back here, to effects() and draw(), the one place that decides
+// what a refusal does.
 import { $, h, clear } from '/ui/js/core/dom.js';
 import { ago } from '/ui/js/core/format.js';
 import { read, ReadError, KIND } from './api.js';
@@ -3196,6 +3210,9 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Files:**
 - Modify: `tests/ui_e2e/read.rs`
+
+> **Corrected (issue #813, 2026-11-20).** Task 6 does not import `user_sessions`; add
+> `use okf_mcp::store::user_sessions;` to `tests/ui_e2e/read.rs` with these journeys.
 
 - [ ] **Step 1: Write the journeys**
 

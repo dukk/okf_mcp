@@ -32,6 +32,7 @@ mod maintenance;
 #[allow(dead_code)]
 #[path = "../../src/oidc/testing.rs"]
 mod oidc_mock;
+mod read;
 mod recent;
 mod self_service;
 mod settings;
