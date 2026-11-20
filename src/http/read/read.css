@@ -1,0 +1,118 @@
+/* The mobile reader's own look, on Pico CSS 2 (/ui/vendor/pico.min.css).
+ * Independent of the console's styles.css: only Pico is shared. Tokens on
+ * :root, light by default, dark from the system setting. Body markup is
+ * what src/render.rs writes into body_html. */
+:root {
+    --read-bg: #f7f7f4;
+    --read-surface: #ffffff;
+    --read-text: #1d2327;
+    --read-muted: #5b6770;
+    --read-border: #dfe3e0;
+    --read-accent: #2f6f5e;
+    --read-accent-text: #ffffff;
+    --read-error: #b3261e;
+    --read-measure: 40rem;
+    --read-touch: 2.75rem;
+    --read-gap: 1rem;
+    --read-radius: .6rem;
+    --read-tab-height: 3.5rem;
+
+    --pico-font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --pico-font-size: 106.25%;
+    --pico-line-height: 1.55;
+    --pico-background-color: var(--read-bg);
+    --pico-color: var(--read-text);
+    --pico-muted-color: var(--read-muted);
+    --pico-muted-border-color: var(--read-border);
+    --pico-primary: var(--read-accent);
+    --pico-primary-background: var(--read-accent);
+    --pico-primary-inverse: var(--read-accent-text);
+    --pico-border-radius: var(--read-radius);
+    --pico-spacing: var(--read-gap);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --read-bg: #11161a;
+        --read-surface: #1a2126;
+        --read-text: #e6e9e7;
+        --read-muted: #9aa6ad;
+        --read-border: #2c363c;
+        --read-accent: #6cc2a8;
+        --read-accent-text: #0d1a16;
+        --read-error: #f2b8b5;
+    }
+}
+
+body {
+    background: var(--read-bg);
+    color: var(--read-text);
+    min-height: 100vh;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right)
+        calc(var(--read-tab-height) + env(safe-area-inset-bottom)) env(safe-area-inset-left);
+}
+
+.bar {
+    position: sticky; top: 0; z-index: 2;
+    display: flex; align-items: center;
+    min-height: var(--read-touch);
+    padding: .25rem var(--read-gap);
+    background: var(--read-bg);
+    border-bottom: 1px solid var(--read-border);
+}
+.bar-catalog { font-weight: 600; text-decoration: none; color: var(--read-text); }
+
+.banner {
+    margin: 0; padding: .5rem var(--read-gap);
+    background: var(--read-surface); color: var(--read-muted);
+    border-bottom: 1px solid var(--read-border); font-size: .9rem;
+}
+
+.reader { max-width: var(--read-measure); margin: 0 auto; padding: var(--read-gap); }
+.reader h1 { font-size: 1.6rem; margin-bottom: .5rem; }
+.reader h2 { font-size: 1.15rem; margin-top: 1.5rem; }
+
+.tabs {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 2;
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    height: calc(var(--read-tab-height) + env(safe-area-inset-bottom));
+    padding-bottom: env(safe-area-inset-bottom);
+    background: var(--read-surface); border-top: 1px solid var(--read-border);
+}
+.tabs a {
+    display: flex; align-items: center; justify-content: center;
+    min-height: var(--read-touch); text-decoration: none;
+    color: var(--read-muted); font-size: .9rem;
+}
+.tabs a[aria-current="page"] { color: var(--read-accent); font-weight: 600; }
+
+.list { list-style: none; padding: 0; margin: 0; }
+.list li { list-style: none; border-bottom: 1px solid var(--read-border); padding: 0; margin: 0; }
+.list a, .list button.row {
+    display: block; width: 100%; min-height: var(--read-touch);
+    padding: .65rem 0; text-align: left; text-decoration: none;
+    color: var(--read-text); background: none; border: 0; border-radius: 0;
+}
+.list .meta { display: block; color: var(--read-muted); font-size: .85rem; }
+.folder::before { content: "/ "; color: var(--read-muted); }
+
+.crumbs ol { display: flex; flex-wrap: wrap; gap: .25rem; padding: 0; margin: 0 0 .5rem; font-size: .85rem; }
+.crumbs li { list-style: none; color: var(--read-muted); }
+.crumbs li + li::before { content: "/ "; }
+
+.notice { padding: var(--read-gap); background: var(--read-surface); border: 1px solid var(--read-border); border-radius: var(--read-radius); }
+.hint { font-size: .9rem; color: var(--read-muted); }
+
+details.outline { margin: .5rem 0 1rem; }
+details.outline li { list-style: none; }
+details.outline .level-3 { padding-left: 1rem; }
+details.outline .level-4 { padding-left: 2rem; }
+
+.markdown { overflow-wrap: anywhere; }
+.markdown pre { background: var(--read-surface); padding: .75rem; border-radius: var(--read-radius); overflow-x: auto; font-size: .85rem; }
+.markdown code { font-size: .9em; }
+.markdown table { display: block; overflow-x: auto; width: auto; font-size: .9rem; }
+.markdown img { max-width: 100%; height: auto; }
+.markdown blockquote { border-left: 3px solid var(--read-border); padding-left: var(--read-gap); color: var(--read-muted); }
+.markdown a[title="Not in this catalog"] { color: var(--read-error); text-decoration: line-through; }
+.markdown [data-slug] { scroll-margin-top: calc(var(--read-touch) + .5rem); }
