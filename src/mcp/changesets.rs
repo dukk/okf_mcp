@@ -2397,6 +2397,7 @@ mod changes_tests {
             body: "# New\n".to_string(),
             index_summary: None,
             index_section: None,
+            folder_summary: None,
             by: None,
             changeset: handle.to_string(),
         };
@@ -3034,7 +3035,7 @@ mod restructure_publish_tests {
     async fn moved(session: &Session, old: &str, new: &str) -> WriteReport {
         let (old, new) = (old.to_string(), new.to_string());
         apply(&session.ctx, &session.handle, None, move |ws, _| {
-            ops::move_concept(ws, &old, &new)
+            ops::move_concept(ws, &old, &new, None)
         })
         .await
         .unwrap()
@@ -3073,6 +3074,7 @@ mod restructure_publish_tests {
                 description: Some("The part."),
                 stub: None,
                 sources: &[],
+                folder_summary: None,
             };
             ops::split_concept(ws, op, &split)
         })
@@ -3090,6 +3092,7 @@ mod restructure_publish_tests {
             // `bool::then`: `Some(..)` when true, like `x if cond else None`.
             index_summary: listed.then(|| "q".to_string()),
             index_section: None,
+            folder_summary: None,
             by: None,
             changeset: session.handle.clone(),
         };

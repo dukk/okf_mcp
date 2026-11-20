@@ -25,10 +25,10 @@
 use crate::error::OkfError;
 use crate::okf::doc::Doc;
 use crate::okf::markdown::{encode_link_path, find_links, resolve_link};
-use crate::okf::ops::log_index::collapse_whitespace;
+use crate::okf::ops::log_index::{check_new_folder, collapse_whitespace};
 use crate::okf::ops::relink::{rewrite_links, Moved, Redirect};
 use crate::okf::ops::replay::{insert_index_bullet_text, unlist_text, ReplayOp};
-use crate::okf::ops::{ensure_index, OpOutcome};
+use crate::okf::ops::{ensure_folder_index, OpOutcome};
 use crate::okf::paths::{basename, dirname, join, new_concept_path, resolve_concept};
 use crate::okf::pystr::py_truthy_str;
 use crate::okf::workspace::{MemWorkspace, Workspace};
@@ -39,6 +39,9 @@ use crate::okf::workspace::{MemWorkspace, Workspace};
 /// * `workspace` - the catalog (the write path's scratch copy of an overlay).
 /// * `old` - the concept, `/dir/x.md`, `dir/x` or `/dir/x`.
 /// * `new` - its new path, with or without `.md` and a leading `/`.
+/// * `folder_summary` - the summary of the new folder's listing in its
+///   parent's index, instead of the TODO placeholder (issue #668); refused
+///   when the new folder exists or is the root.
 ///
 /// # Returns
 /// The outcome: touched paths in `okf.py`'s order (the old path, now
@@ -51,6 +54,7 @@ use crate::okf::workspace::{MemWorkspace, Workspace};
 /// - As [`new_concept_path`] for `new` (outside the catalog, reserved,
 ///   machinery, taken).
 /// - As [`MemWorkspace::check_placement`] for `new` (below a file).
+/// - [`OkfError::Refused`] for a `folder_summary` whose folder exists.
 /// - [`OkfError::FrontmatterParse`] for an unlisted concept whose
 ///   frontmatter does not parse.
 /// - The workspace's read or write error.
@@ -58,12 +62,20 @@ use crate::okf::workspace::{MemWorkspace, Workspace};
 /// The path checks come before anything is written. Run the op on a
 /// scratch copy, as the write path does, and drop the copy on error.
 #[tracing::instrument(level = "debug", skip_all)]
-pub fn move_concept(workspace: &MemWorkspace, old: &str, new: &str) -> Result<OpOutcome, OkfError> {
+pub fn move_concept(
+    workspace: &MemWorkspace,
+    old: &str,
+    new: &str,
+    folder_summary: Option<&str>,
+) -> Result<OpOutcome, OkfError> {
     let old = resolve_concept(workspace, old)?;
     let (new, note) = new_concept_path(workspace, new)?;
     // `new_concept_path` does not check placement: refuse a target below a
     // file here, naming it, before `ensure_index` writes anything.
     workspace.check_placement(&new)?;
+    if folder_summary.is_some() {
+        check_new_folder(workspace, dirname(&new))?;
+    }
     let mut outcome = OpOutcome::default();
     // `Option` is iterable (zero or one item), so `extend` adds the note if any.
     outcome
@@ -72,7 +84,7 @@ pub fn move_concept(workspace: &MemWorkspace, old: &str, new: &str) -> Result<Op
     let (old_dir, new_dir) = (dirname(&old), dirname(&new));
     outcome.touch(&old);
     outcome.touch(&new);
-    ensure_index(workspace, new_dir, &mut outcome)?;
+    ensure_folder_index(workspace, new_dir, folder_summary, &mut outcome)?;
 
     // The old folder's listing travels with the concept, summary included.
     let old_index = join(old_dir, "index.md");
@@ -193,6 +205,7 @@ fn frontmatter_bullet(workspace: &dyn Workspace, new: &str) -> Result<String, Ok
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::okf::ops::log_index::FOLDER_NOTE;
     use crate::okf::ops::replay::replay;
     use std::collections::BTreeMap;
 
@@ -228,7 +241,7 @@ mod tests {
     fn a_move_within_a_folder_relinks_its_listing_and_every_link() {
         let workspace = MemWorkspace::from_files(FILES);
 
-        let outcome = move_concept(&workspace, "infra/time.md", "infra/clock.md").unwrap();
+        let outcome = move_concept(&workspace, "infra/time.md", "infra/clock.md", None).unwrap();
 
         assert_eq!(outcome.message, "moved /infra/time.md -> /infra/clock.md");
         assert_eq!(
@@ -272,7 +285,7 @@ mod tests {
     fn a_move_to_a_name_with_a_space_writes_an_encoded_listing() {
         let workspace = MemWorkspace::from_files(FILES);
 
-        move_concept(&workspace, "infra/time.md", "infra/wall clock.md").unwrap();
+        move_concept(&workspace, "infra/time.md", "infra/wall clock.md", None).unwrap();
 
         assert_eq!(
             text(&workspace, "infra/index.md"),
@@ -294,7 +307,7 @@ mod tests {
             for new in [format!("infra/{name}"), format!("other/{name}")] {
                 let workspace = MemWorkspace::from_files(FILES);
 
-                move_concept(&workspace, "infra/time.md", &new).unwrap();
+                move_concept(&workspace, "infra/time.md", &new, None).unwrap();
 
                 let linked = |file: &str| {
                     let body = text(&workspace, file);
@@ -316,7 +329,7 @@ mod tests {
     fn a_move_to_a_new_folder_carries_its_listing() {
         let workspace = MemWorkspace::from_files(FILES);
 
-        let outcome = move_concept(&workspace, "/infra/ntp", "ops/net/ntp.md").unwrap();
+        let outcome = move_concept(&workspace, "/infra/ntp", "ops/net/ntp.md", None).unwrap();
 
         assert_eq!(outcome.message, "moved /infra/ntp.md -> /ops/net/ntp.md");
         assert_eq!(
@@ -334,8 +347,8 @@ mod tests {
         assert_eq!(
             outcome.notes,
             [
-                "created /ops/index.md; replace its TODO lines (and the parent's listing)",
-                "created /ops/net/index.md; replace its TODO lines (and the parent's listing)"
+                format!("created /ops/index.md{FOLDER_NOTE}"),
+                format!("created /ops/net/index.md{FOLDER_NOTE}")
             ]
         );
         assert_eq!(
@@ -381,7 +394,8 @@ mod tests {
     fn an_unlisted_concept_is_listed_from_its_frontmatter() {
         let workspace = MemWorkspace::from_files(FILES);
 
-        let outcome = move_concept(&workspace, "infra/unlisted.md", "people/Unlisted.md").unwrap();
+        let outcome =
+            move_concept(&workspace, "infra/unlisted.md", "people/Unlisted.md", None).unwrap();
 
         assert_eq!(
             outcome.touched,
@@ -403,7 +417,7 @@ mod tests {
         let workspace = MemWorkspace::from_files(FILES);
         let original: BTreeMap<&str, &str> = FILES.into_iter().collect();
 
-        let outcome = move_concept(&workspace, "infra/ntp.md", "ops/net/ntp.md").unwrap();
+        let outcome = move_concept(&workspace, "infra/ntp.md", "ops/net/ntp.md", None).unwrap();
 
         assert_eq!(outcome.replay.len(), 4, "{:?}", outcome.replay.keys());
         for (path, ops) in &outcome.replay {
@@ -418,9 +432,10 @@ mod tests {
     fn a_taken_reserved_or_missing_path_is_refused_before_anything_is_written() {
         let workspace = MemWorkspace::from_files(FILES);
 
-        let taken = move_concept(&workspace, "infra/time.md", "infra/ntp.md").unwrap_err();
-        let reserved = move_concept(&workspace, "infra/time.md", "infra/index.md").unwrap_err();
-        let missing = move_concept(&workspace, "infra/none.md", "infra/x.md").unwrap_err();
+        let taken = move_concept(&workspace, "infra/time.md", "infra/ntp.md", None).unwrap_err();
+        let reserved =
+            move_concept(&workspace, "infra/time.md", "infra/index.md", None).unwrap_err();
+        let missing = move_concept(&workspace, "infra/none.md", "infra/x.md", None).unwrap_err();
 
         assert_eq!(taken.to_string(), "infra/ntp.md: already exists");
         assert_eq!(
@@ -436,7 +451,8 @@ mod tests {
     fn a_target_below_a_file_is_refused_with_its_own_path() {
         let workspace = MemWorkspace::from_files(FILES);
 
-        let below = move_concept(&workspace, "infra/time.md", "infra/ntp.md/x.md").unwrap_err();
+        let below =
+            move_concept(&workspace, "infra/time.md", "infra/ntp.md/x.md", None).unwrap_err();
 
         assert_eq!(
             below.to_string(),
@@ -452,7 +468,8 @@ mod tests {
         files.push(("infra/broken.md", "---\ntitle: [unclosed\n---\nBody.\n"));
         let workspace = MemWorkspace::from_files(files);
 
-        let refused = move_concept(&workspace, "infra/broken.md", "people/broken.md").unwrap_err();
+        let refused =
+            move_concept(&workspace, "infra/broken.md", "people/broken.md", None).unwrap_err();
 
         assert!(
             matches!(refused, OkfError::FrontmatterParse { .. }),
@@ -465,11 +482,50 @@ mod tests {
         let files = FILES.into_iter().filter(|(path, _)| *path != "index.md");
         let workspace = MemWorkspace::from_files(files);
 
-        let refused = move_concept(&workspace, "infra/time.md", "time.md").unwrap_err();
+        let refused = move_concept(&workspace, "infra/time.md", "time.md", None).unwrap_err();
 
         assert!(
             matches!(refused, OkfError::NotFound { ref path } if path == "index.md"),
             "{refused:?}"
         );
+    }
+
+    #[test]
+    fn a_move_to_a_new_folder_describes_it_with_folder_summary() {
+        let workspace = MemWorkspace::from_files(FILES);
+
+        let outcome =
+            move_concept(&workspace, "/infra/ntp", "ops/ntp.md", Some("Operations.")).unwrap();
+
+        assert_eq!(
+            text(&workspace, "index.md"),
+            "# Root\n\n# Sections\n\n* [Infra](infra/) - systems\n* [Ops](ops/) - Operations.\n"
+        );
+        assert_eq!(
+            outcome.replay["index.md"],
+            [ReplayOp::ListBullet {
+                target: "ops/index.md".to_string(),
+                bullet: "* [Ops](ops/) - Operations.".to_string(),
+                section: Some("Sections".to_string()),
+                create_section: true,
+            }]
+        );
+        assert!(outcome
+            .notes
+            .contains(&"created /ops/index.md; replace its TODO line".to_string()));
+    }
+
+    #[test]
+    fn a_move_refuses_a_folder_summary_for_an_existing_folder_before_writing() {
+        let workspace = MemWorkspace::from_files(FILES);
+
+        let error = move_concept(&workspace, "/infra/ntp", "people/ntp.md", Some("x")).unwrap_err();
+
+        assert!(
+            matches!(&error, OkfError::Refused { reason } if reason.contains("/people/ exists")),
+            "{error:?}"
+        );
+        assert!(workspace.is_file("infra/ntp.md"));
+        assert_eq!(text(&workspace, "infra/index.md"), INFRA_INDEX);
     }
 }
