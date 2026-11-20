@@ -1715,15 +1715,27 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
-        // The worker's connections, by name: its LISTEN among them.
-        let (worker_connections, listening): (i64, i64) = sqlx::query_as(
-            "SELECT count(*), count(*) FILTER (WHERE query ILIKE 'LISTEN%') \
-             FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1",
-        )
-        .bind(crate::mail::queue::WORKER_APPLICATION_NAME)
-        .fetch_one(&db.pool)
-        .await
-        .unwrap();
+        // The worker's connections, by name: its LISTEN among them. A single
+        // `pg_stat_activity` snapshot raced the worker's connection setup under
+        // load (issue #751), so poll until the LISTEN shows, under a timeout.
+        let snapshot = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                let (connections, listening): (i64, i64) = sqlx::query_as(
+                    "SELECT count(*), count(*) FILTER (WHERE query ILIKE 'LISTEN%') \
+                     FROM pg_stat_activity \
+                     WHERE datname = current_database() AND application_name = $1",
+                )
+                .bind(crate::mail::queue::WORKER_APPLICATION_NAME)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+                if listening >= 1 {
+                    return (connections, listening);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        })
+        .await;
         let health = reqwest::Client::new()
             .get(&healthz)
             .timeout(std::time::Duration::from_secs(10))
@@ -1734,6 +1746,8 @@ mod tests {
         let stopped = tokio::time::timeout(std::time::Duration::from_secs(20), served).await;
 
         assert_eq!(status, "Done", "the worker serve started sent it");
+        let (worker_connections, listening) = snapshot
+            .expect("the worker's LISTEN connection never appeared in pg_stat_activity in 30 s");
         assert_eq!(
             listening, 1,
             "the worker listens ({worker_connections} connections)"
