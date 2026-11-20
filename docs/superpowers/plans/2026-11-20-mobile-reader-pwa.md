@@ -842,6 +842,14 @@ self.READ_CACHES = Object.freeze({
 > that fails, it disowns and keeps nothing. Before, a failed record write left the old account's
 > record naming the new account's copies, which a restarted worker then served to the old account.
 > The worker is covered by `tests/read_worker/sw.test.mjs` (`just test-worker`, run by `just test`).
+>
+> **Corrected (issue #810, 2026-11-20, second review).** Offline answers go through `ownedCopy`:
+> a cached copy is served only when an account owns the copies (`currentOwner`, decided in turn
+> with takeovers, reading `read-owner` on first use) and the copy's own `X-OKF-Account` is that
+> owner's, checked again after the read (as is any mark since the request started). With no owner (no record, a wipe, a failed takeover),
+> nothing is served and `read-content` and `read-meta` are deleted (best effort); a copy for
+> another account is deleted. Only a checked copy is renewed. Task 5's `offlineDocuments` is
+> corrected to match.
 
 ```js
 // The reader's service worker (reader design, "Caching"). Its scope is
@@ -992,14 +1000,11 @@ async function networkFirst(request, cacheName, capped) {
     try {
         response = await fetch(request);
     } catch (failure) {
-        const held = epoch;
-        const cached = await caches.open(cacheName)
-            .then(cache => cachedCopy(cache, request))
-            .catch(() => null);
+        const cached = await ownedCopy(cacheName, request, startedAt);
         if (!cached) throw failure;
         // Re-put so the copy counts as recently viewed; a renewal, never trimmed.
         if (capped) {
-            await upkeep(() => store(cacheName, cached.key, cached.response.clone(), { startedAt, held, capped: false }));
+            await upkeep(() => store(cacheName, cached.key, cached.response.clone(), { startedAt, held: cached.held, capped: false }));
         }
         return stamped(cached.response, 'X-Read-Offline', '1');
     }
@@ -1031,19 +1036,67 @@ async function loadOwner() {
 // never kept, so a late answer for the old account cannot take the copies
 // back.
 function admit(tag, startedAt) {
-    const decision = ownerQueue.then(async () => {
+    return inTurn(async () => {
         if (!tag) return null;
-        if (owner === undefined) {
-            const stored = await loadOwner();
-            // A wipe may have disowned the copies while the record was read.
-            if (owner === undefined) owner = stored;
-        }
+        await knowOwner();
         if (owner.tag === tag) return epoch;
         if (startedAt <= owner.since) return null;
         return takeOver(tag);
     });
+}
+
+// Runs `decide` after every ownership decision before it, and resolves to
+// its result (null if it throws).
+function inTurn(decide) {
+    const decision = ownerQueue.then(decide);
     ownerQueue = decision.catch(() => null);
     return ownerQueue;
+}
+
+// Reads the owner record on first use.
+async function knowOwner() {
+    if (owner !== undefined) return;
+    const stored = await loadOwner();
+    // A wipe may have disowned the copies while the record was read.
+    if (owner === undefined) owner = stored;
+}
+
+// The current owner, { tag, held } (`held`: the epoch it holds), decided in
+// turn with takeovers, so a takeover in progress finishes first. Null when
+// no account owns the copies (no record, a wipe, or a failed takeover):
+// then whatever read-content and read-meta still hold belongs to nobody,
+// and is deleted (best effort).
+function currentOwner() {
+    return inTurn(async () => {
+        await knowOwner();
+        if (owner.tag) return { tag: owner.tag, held: epoch };
+        await Promise.all([READ_CACHES.content, READ_CACHES.meta]
+            .map(name => caches.delete(name).catch(() => false)));
+        return null;
+    });
+}
+
+// The cached answer to `request` in `cacheName` (or its other form, see
+// `cachedCopy`), served only when it belongs to the current owner: its own
+// X-OKF-Account must be the owner's, and once the copy is read the owner
+// must still be the same and the page must not have invalidated it since
+// `startedAt`. Returns { key, response, held } or null. A copy made for
+// another account is deleted (best effort).
+async function ownedCopy(cacheName, request, startedAt) {
+    const current = await currentOwner();
+    if (!current) return null;
+    const cached = await caches.open(cacheName)
+        .then(cache => cachedCopy(cache, request))
+        .catch(() => null);
+    if (!cached) return null;
+    if (cached.response.headers.get('X-OKF-Account') !== current.tag) {
+        // Only while the owner it was checked against still owns the copies.
+        if (epoch === current.held) await upkeep(() => caches.open(cacheName).then(cache => cache.delete(cached.key)));
+        return null;
+    }
+    if (epoch !== current.held || owner?.tag !== current.tag) return null;
+    if (invalidatedSince(cached.key.url ?? cached.key, startedAt)) return null;
+    return { ...cached, held: current.held };
 }
 
 // Makes `tag` the owner. The epoch is bumped first, so the old owner's
@@ -1418,6 +1471,11 @@ export async function signOut(csrf) {
 
 - [ ] **Step 2: Write `src/http/read/js/cache.js`**
 
+> **Corrected (issue #810, 2026-11-20).** `offlineDocuments` lists only copies whose `X-OKF-Account`
+> is the tag in `read-owner`, and nothing without a record, matching the worker's `ownedCopy`, which
+> serves an offline copy only to its recorded owner. A failed takeover can leave the old account's
+> copies behind with no record, and the list must not show their titles.
+
 ```js
 // The page's side of the reader's caches (reader design, "Caching"). The
 // page and the worker share CacheStorage, so wiping and evicting happen
@@ -1498,9 +1556,14 @@ export async function evictDocument(catalog, kind, path) {
 }
 
 // The concepts and documents of `catalog` readable offline, newest first,
-// one per path: [{ path, title, cachedAt }].
+// one per path: [{ path, title, cachedAt }]. Only the recorded owner's
+// copies count, as in the worker (sw.js, `ownedCopy`): with no owner
+// record, nothing is readable offline.
 export function offlineDocuments(catalog) {
     return storage(async () => {
+        const record = await (await caches.open(owner)).match('/read/__owner');
+        const tag = record ? (await record.json().catch(() => null))?.tag : null;
+        if (typeof tag !== 'string') return [];
         const cache = await caches.open(content);
         const keys = await cache.keys();
         const prefix = `/api/v1/catalogs/${enc(catalog)}/`;
@@ -1509,6 +1572,7 @@ export function offlineDocuments(catalog) {
         for (const key of keys.reverse()) {
             if (!new URL(key.url).pathname.startsWith(prefix)) continue;
             const response = await cache.match(key);
+            if (response?.headers.get('X-OKF-Account') !== tag) continue;
             const body = await response.json().catch(() => null);
             if (!body?.path || seen.has(body.path)) continue;
             seen.set(body.path, { path: body.path, title: body.title ?? null, cachedAt: response.headers.get('X-Read-Cached-At') });

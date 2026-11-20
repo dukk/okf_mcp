@@ -188,7 +188,12 @@ their copies, while the new account's keep theirs) and records the new
 owner in `read-owner`; another account's answer to a request that started
 before the current owner took over is never kept. So signing in as someone
 else in another tab, with a reader tab left open, never mixes two accounts'
-copies. Sign-out wipes everything before calling `DELETE /api/v1/session`.
+copies. Offline, a cached copy is served only to the account that owns the
+copies: its own `X-OKF-Account` must be the owner's. With no owner (no
+record, a wipe, or a takeover that could not delete the old copies),
+nothing is served and the leftover copies are deleted, and the page's
+"Available offline" list shows only the recorded owner's copies.
+Sign-out wipes everything before calling `DELETE /api/v1/session`.
 
 The shell is installed only when it is entirely one build's:
 `/read/shell.json` lists each file with the SHA-256 of the bytes this build

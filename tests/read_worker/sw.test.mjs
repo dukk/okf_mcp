@@ -163,6 +163,13 @@ function startWorker(storage, { route = () => undefined } = {}) {
                 ports: [{ postMessage: resolve }],
             }));
         },
+        /** Sends any message; resolves to the replies posted on its port. */
+        async send(data) {
+            const replies = [];
+            listeners.message({ data, ports: [{ postMessage: reply => replies.push(reply) }] });
+            await new Promise(resolve => setImmediate(resolve));
+            return replies;
+        },
         install() {
             let done;
             listeners.install({ waitUntil: promise => { done = promise; } });
@@ -240,6 +247,8 @@ test('a mark that arrives during the write still drops the copy', async () => {
 test('the worker answers a mark on its port and ignores other messages', async () => {
     const worker = startWorker(new Storage());
     assert.equal(await worker.mark('*'), 'ok');
+    assert.deepEqual(await worker.send({ type: 'other', scope: '*' }), []);
+    assert.deepEqual(await worker.send({ type: 'invalidate', scope: 7 }), []);
 });
 
 for (const refused of ['open', 'put']) {
@@ -256,6 +265,75 @@ for (const refused of ['open', 'put']) {
         const restarted = startWorker(storage);
         restarted.goOffline();
         await assert.rejects(restarted.get(concept('secret')));
+    });
+}
+
+test('after a takeover whose content delete fails, the old owner\'s copy is never served offline', async () => {
+    const storage = new Storage();
+    const first = startWorker(storage);
+    await readAll(first, [concept('private')], 'A');
+    storage.refuse = (op, name) => op === 'delete' && name === 'read-content';
+    await readAll(first, [concept('other')], 'B');
+    first.goOffline();
+    await assert.rejects(first.get(concept('private')), 'not served by the worker whose takeover failed');
+    const restarted = startWorker(storage);
+    restarted.goOffline();
+    await assert.rejects(restarted.get(concept('private')), 'not served after a restart');
+    storage.refuse = () => false;
+    await assert.rejects(restarted.get(concept('private')));
+    assert.deepEqual(storage.paths('read-content'), [], 'unowned copies are deleted once storage allows');
+});
+
+test('offline, a copy the page evicts while it is being read is not served', async () => {
+    const storage = new Storage();
+    const worker = startWorker(storage);
+    await readAll(worker, [concept('alpha')], 'A');
+    worker.goOffline();
+    const content = storage.caches.get('read-content');
+    const match = content.match.bind(content);
+    content.match = async key => {
+        const found = await match(key);
+        await worker.mark('main');
+        return found;
+    };
+    await assert.rejects(worker.get(concept('alpha')));
+});
+
+test('with the owner record gone but the copies left, a restarted worker serves none of them', async () => {
+    const storage = new Storage();
+    await readAll(startWorker(storage), [concept('alpha'), '/api/v1/catalogs'], 'A');
+    storage.caches.delete('read-owner');
+    const restarted = startWorker(storage);
+    restarted.goOffline();
+    await assert.rejects(restarted.get(concept('alpha')));
+    await assert.rejects(restarted.get('/api/v1/catalogs'));
+    assert.deepEqual(storage.paths('read-content'), []);
+    assert.deepEqual(storage.paths('read-meta'), []);
+});
+
+test('an owner\'s own copies are still served offline after a restart', async () => {
+    const storage = new Storage();
+    await readAll(startWorker(storage), [concept('alpha'), '/api/v1/catalogs'], 'A');
+    const restarted = startWorker(storage);
+    restarted.goOffline();
+    assert.equal((await restarted.get(concept('alpha'))).headers.get('X-Read-Offline'), '1');
+    assert.equal((await restarted.get('/api/v1/catalogs')).headers.get('X-Read-Offline'), '1');
+    assert.deepEqual(storage.paths('read-content'), [concept('alpha')]);
+});
+
+for (const [what, stored, asked] of [
+    ['the same form', concept('beta'), concept('beta')],
+    ['the other form', `${concept('beta')}?full=true`, concept('beta')],
+]) {
+    test(`a copy made for another account is not served offline through ${what}, and is deleted`, async () => {
+        const storage = new Storage();
+        const worker = startWorker(storage);
+        await readAll(worker, [concept('alpha')], 'A');
+        const content = await storage.api().open('read-content');
+        await content.put(stored, new Response(WHOLE, { headers: { 'X-OKF-Account': 'B' } }));
+        worker.goOffline();
+        await assert.rejects(worker.get(asked));
+        assert.deepEqual(storage.paths('read-content'), [concept('alpha')]);
     });
 }
 

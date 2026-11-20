@@ -146,14 +146,11 @@ async function networkFirst(request, cacheName, capped) {
     try {
         response = await fetch(request);
     } catch (failure) {
-        const held = epoch;
-        const cached = await caches.open(cacheName)
-            .then(cache => cachedCopy(cache, request))
-            .catch(() => null);
+        const cached = await ownedCopy(cacheName, request, startedAt);
         if (!cached) throw failure;
         // Re-put so the copy counts as recently viewed; a renewal, never trimmed.
         if (capped) {
-            await upkeep(() => store(cacheName, cached.key, cached.response.clone(), { startedAt, held, capped: false }));
+            await upkeep(() => store(cacheName, cached.key, cached.response.clone(), { startedAt, held: cached.held, capped: false }));
         }
         return stamped(cached.response, 'X-Read-Offline', '1');
     }
@@ -185,19 +182,67 @@ async function loadOwner() {
 // never kept, so a late answer for the old account cannot take the copies
 // back.
 function admit(tag, startedAt) {
-    const decision = ownerQueue.then(async () => {
+    return inTurn(async () => {
         if (!tag) return null;
-        if (owner === undefined) {
-            const stored = await loadOwner();
-            // A wipe may have disowned the copies while the record was read.
-            if (owner === undefined) owner = stored;
-        }
+        await knowOwner();
         if (owner.tag === tag) return epoch;
         if (startedAt <= owner.since) return null;
         return takeOver(tag);
     });
+}
+
+// Runs `decide` after every ownership decision before it, and resolves to
+// its result (null if it throws).
+function inTurn(decide) {
+    const decision = ownerQueue.then(decide);
     ownerQueue = decision.catch(() => null);
     return ownerQueue;
+}
+
+// Reads the owner record on first use.
+async function knowOwner() {
+    if (owner !== undefined) return;
+    const stored = await loadOwner();
+    // A wipe may have disowned the copies while the record was read.
+    if (owner === undefined) owner = stored;
+}
+
+// The current owner, { tag, held } (`held`: the epoch it holds), decided in
+// turn with takeovers, so a takeover in progress finishes first. Null when
+// no account owns the copies (no record, a wipe, or a failed takeover):
+// then whatever read-content and read-meta still hold belongs to nobody,
+// and is deleted (best effort).
+function currentOwner() {
+    return inTurn(async () => {
+        await knowOwner();
+        if (owner.tag) return { tag: owner.tag, held: epoch };
+        await Promise.all([READ_CACHES.content, READ_CACHES.meta]
+            .map(name => caches.delete(name).catch(() => false)));
+        return null;
+    });
+}
+
+// The cached answer to `request` in `cacheName` (or its other form, see
+// `cachedCopy`), served only when it belongs to the current owner: its own
+// X-OKF-Account must be the owner's, and once the copy is read the owner
+// must still be the same and the page must not have invalidated it since
+// `startedAt`. Returns { key, response, held } or null. A copy made for
+// another account is deleted (best effort).
+async function ownedCopy(cacheName, request, startedAt) {
+    const current = await currentOwner();
+    if (!current) return null;
+    const cached = await caches.open(cacheName)
+        .then(cache => cachedCopy(cache, request))
+        .catch(() => null);
+    if (!cached) return null;
+    if (cached.response.headers.get('X-OKF-Account') !== current.tag) {
+        // Only while the owner it was checked against still owns the copies.
+        if (epoch === current.held) await upkeep(() => caches.open(cacheName).then(cache => cache.delete(cached.key)));
+        return null;
+    }
+    if (epoch !== current.held || owner?.tag !== current.tag) return null;
+    if (invalidatedSince(cached.key.url ?? cached.key, startedAt)) return null;
+    return { ...cached, held: current.held };
 }
 
 // Makes `tag` the owner. The epoch is bumped first, so the old owner's
