@@ -214,15 +214,25 @@ where
     for Touched { path, file } in files {
         // `remove` takes the entry out of the map (no copy).
         let previous = existing.remove(&path);
+        // The revision in the snapshot this write's overlay is built on, read
+        // under the changeset's row lock. The snapshot never runs ahead of
+        // the database, so a publish that commits after it leaves this base
+        // behind the published revision, and publish reports a Conflict.
         let published = overlay.base().revision(&path);
         let replay = outcome.replay.get(&path);
-        match new_entry(previous.as_ref(), published, replay, path, file) {
+        // A rebased path (a revert) starts again on `published`: its earlier
+        // entry no longer decides the base or the replay (issue #788).
+        let kept = previous
+            .as_ref()
+            .filter(|_| !outcome.rebased.contains(&path));
+        match new_entry(kept, published, replay, path, file) {
             Ok(entry) => {
                 changesets::upsert_entry(&mut tx, changeset_row.id, &entry, now).await?;
                 paths.push(format!("/{}", entry.path));
             }
             // Nothing published and nothing left: drop the changeset's own
-            // entry for it (a file it created, then removed), if any.
+            // entry for it (a file it created, then removed, or one deleted
+            // since that a revert sent back to absent), if any.
             Err(path) if previous.is_some() => {
                 let paths = [path];
                 changesets::remove_entries(&mut tx, changeset_row.id, Some(&paths), now).await?;
@@ -272,7 +282,9 @@ where
 /// either deletes it or reports a conflict.
 ///
 /// # Arguments
-/// * `previous` - the path's entry before this edit, if any.
+/// * `previous` - the path's entry before this edit, if any; `None` too for
+///   a path the edit rebased ([`OpOutcome::rebased`]), which starts again
+///   on `published`.
 /// * `published` - the path's published revision now, if any.
 /// * `new_ops` - this edit's replay operations for the path, if any.
 /// * `path` - the normalized path.
@@ -433,7 +445,7 @@ mod tests {
     use crate::okf::workspace::Workspace;
     use crate::store::catalogs::tests::{until_a_lock_is_awaited, AWAITED_LOCKS};
     use crate::store::import::{import, ImportOptions, ImportScope};
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::time::Duration;
 
     const NOTE: &str = "---\ntype: Note\ntitle: A\ndescription: A note.\n---\n# A\n";
@@ -453,6 +465,7 @@ mod tests {
             replay: BTreeMap::new(),
             message: "test".to_string(),
             notes: Vec::new(),
+            rebased: BTreeSet::new(),
         }
     }
 

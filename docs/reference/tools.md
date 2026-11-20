@@ -510,7 +510,7 @@ Replace a concept's body, keeping its frontmatter byte for byte, in the changese
 
 **Revert Document** (staged)
 
-Add a document's content at an earlier revision (from `history`), or its deletion for a `delete` revision, to the changeset `changeset` names, for review and publish like any other edit. Every write rule applies, so machinery cannot be reverted. Reverting a file this changeset created to a `delete` revision drops it from the changeset. Write access.
+Add a document's content at an earlier revision (from `history`), or its deletion for a `delete` revision, to the changeset `changeset` names, for review and publish like any other edit. Every write rule applies, so machinery cannot be reverted. The revert is based on the revision published now, even if this changeset edited the document before, so publish conflicts only if the document is published again after it. Reverting a file this changeset created to a `delete` revision drops it from the changeset. Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
