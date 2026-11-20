@@ -9,6 +9,7 @@
 //! was read at sign-in: the flag can change between the password check and
 //! the session's first request.
 
+use std::fmt::Write as _;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,6 +20,7 @@ use axum::http::{header, Extensions, HeaderMap, HeaderValue, Method};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
+use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use crate::app::App;
@@ -38,6 +40,53 @@ pub const COOKIE: &str = "okf_session";
 /// The header a cookie-authenticated write must carry, equal to the
 /// session's CSRF token.
 pub const CSRF_HEADER: &str = "x-okf-csrf";
+
+/// The header that names, opaquely, the account an `/api/v1` answer was
+/// made for (a user for a session, the key for a bearer credential), so the
+/// mobile reader's worker never files one account's answers under another's.
+pub const ACCOUNT_HEADER: &str = "x-okf-account";
+
+/// Whose answer an `/api/v1` response is, for [`account_tag`]. A user id
+/// and a key id live in different namespaces, so each variant hashes under
+/// its own prefix and a key named like a user's id never shares its tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Account<'a> {
+    /// A console session's user, by user id.
+    User(&'a str),
+    /// A bearer credential (API key or OAuth grant), by key id.
+    Key(&'a str),
+}
+
+/// An opaque, stable tag for `account`: 16 hex digits of SHA-256 of a
+/// prefixed id, so the header names no user and no key, and carries no
+/// secret (an id is never a credential).
+///
+/// # Arguments
+/// * `account` - the session's user or the bearer credential's key.
+///
+/// # Returns
+/// The header value.
+#[tracing::instrument(level = "trace", skip_all)]
+pub(crate) fn account_tag(account: Account<'_>) -> HeaderValue {
+    // `match` on the enum is exhaustive: a new kind of account must pick
+    // its own prefix.
+    let prefixed = match account {
+        Account::User(id) => format!("okf-account:user:{id}"),
+        Account::Key(id) => format!("okf-account:key:{id}"),
+    };
+    let digest = Sha256::digest(prefixed.as_bytes());
+    // The first 8 bytes as 16 lowercase hex digits, appended to one
+    // preallocated `String` (Python: `hexdigest()[:16]`).
+    let hex = digest
+        .iter()
+        .take(8)
+        .fold(String::with_capacity(16), |mut hex, byte| {
+            // `write!` into a `String` cannot fail; `let _` drops the `Ok`.
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        });
+    HeaderValue::from_str(&hex).expect("hex digits are a valid header value")
+}
 
 /// A cookie's `SameSite` attribute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -394,7 +443,9 @@ fn unauthorized_clearing(app: &App) -> Response {
 /// axum middleware for `/api/v1`: a bearer credential, else a session
 /// cookie (with [`CSRF_HEADER`] on anything but GET, HEAD and OPTIONS).
 /// Inserts the `Arc<Principal>` and, for a cookie, the [`ConsoleSession`]
-/// into the request's extensions.
+/// into the request's extensions. Every answer the route gives carries
+/// [`ACCOUNT_HEADER`] (`account_tag`); the refusals this middleware gives
+/// itself (401, 403, 500) do not.
 ///
 /// # Arguments
 /// * `app` - the shared state (the layer's state).
@@ -402,7 +453,7 @@ fn unauthorized_clearing(app: &App) -> Response {
 /// * `next` - the rest of the stack.
 ///
 /// # Returns
-/// The route's response; 401 with the challenge (clearing a dead cookie);
+/// The route's response, with [`ACCOUNT_HEADER`]; 401 with the challenge (clearing a dead cookie);
 /// 403 for a cookie write without the CSRF token; 500 if a lookup fails.
 // Used as `axum::middleware::from_fn_with_state(app, require_principal)`;
 // axum fills each argument from the request (the extractor pattern).
@@ -428,9 +479,13 @@ pub async fn require_principal(
                 "authenticated"
             );
             crate::auth::record_on_request_span(request.extensions(), &principal);
+            // Taken before `principal` moves into the extensions.
+            let tag = account_tag(Account::Key(&principal.key_id));
             request.extensions_mut().insert(principal);
             insert_client_ip(&app, &mut request);
-            return next.run(request).await;
+            let mut response = next.run(request).await;
+            response.headers_mut().insert(ACCOUNT_HEADER, tag);
+            return response;
         }
         Some(Ok(None)) => return unauthorized(&app),
         // `AppError` logs it and answers 500 without detail.
@@ -466,6 +521,8 @@ pub async fn require_principal(
         "authenticated by a console session"
     );
     crate::auth::record_on_request_span(request.extensions(), &principal);
+    // The session's user is the account this answer is for.
+    let tag = account_tag(Account::User(&row.user_id));
     request.extensions_mut().insert(Arc::new(principal));
     request.extensions_mut().insert(ConsoleSession {
         id,
@@ -473,7 +530,9 @@ pub async fn require_principal(
         expires_at: row.expires_at,
     });
     insert_client_ip(&app, &mut request);
-    next.run(request).await
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(ACCOUNT_HEADER, tag);
+    response
 }
 
 /// Starts a console session: a new random id (never the one the browser
@@ -751,6 +810,21 @@ mod tests {
         assert!(!printed.contains("csrf-token-secret"), "{printed}");
         assert!(printed.contains("<redacted>"), "{printed}");
     }
+
+    #[test]
+    fn account_tags_are_stable_opaque_and_distinct() {
+        let alice = account_tag(Account::User("user-alice"));
+        assert_eq!(alice, account_tag(Account::User("user-alice")));
+        assert_ne!(alice, account_tag(Account::User("user-bob")));
+        // A key named like a user's id is still another account.
+        assert_ne!(alice, account_tag(Account::Key("user-alice")));
+        let text = alice.to_str().expect("ascii");
+        assert_eq!(text.len(), 16);
+        assert!(text
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()));
+        assert!(!text.contains("alice"));
+    }
 }
 
 #[cfg(test)]
@@ -758,7 +832,7 @@ mod http_tests {
     use axum::http::StatusCode;
     use chrono::Utc;
 
-    use super::COOKIE;
+    use super::{account_tag, Account, ACCOUNT_HEADER, COOKIE};
     use crate::http::api::testing::{
         keys, login_app, user_with_password, Browser, Payload, PASSWORD,
     };
@@ -1098,6 +1172,56 @@ mod http_tests {
             StatusCode::UNAUTHORIZED,
             "a bad key is not rescued by the cookie"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn api_answers_name_their_account_and_refusals_do_not() {
+        let test = login_app().await;
+        let keys = keys(&test).await;
+        let alice = user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
+        let mut browser = Browser::signed_in(&test, "alice@example.com", PASSWORD).await;
+
+        let by_session = browser
+            .send(&test, "GET", "/api/v1/session", Payload::Empty)
+            .await;
+        let csrf = browser.csrf.take();
+        let forbidden = browser
+            .send(&test, "DELETE", "/api/v1/session", Payload::Empty)
+            .await;
+        browser.csrf = csrf;
+        browser.bearer = Some(keys.read.clone());
+        let by_key = browser
+            .send(&test, "GET", "/api/v1/whoami", Payload::Empty)
+            .await;
+        browser.bearer = Some("okf_not-a-real-key".to_string());
+        let refused = browser
+            .send(&test, "GET", "/api/v1/whoami", Payload::Empty)
+            .await;
+
+        assert_eq!(by_session.status, StatusCode::OK);
+        assert_eq!(
+            by_session.headers.get(ACCOUNT_HEADER),
+            Some(&account_tag(Account::User(&alice.id))),
+            "a session's answer names its user"
+        );
+        assert_eq!(by_key.status, StatusCode::OK);
+        let key_id = by_key.json()["key_id"]
+            .as_str()
+            .expect("whoami names its key")
+            .to_string();
+        assert_eq!(
+            by_key.headers.get(ACCOUNT_HEADER),
+            Some(&account_tag(Account::Key(&key_id))),
+            "a key's answer names the key"
+        );
+        assert_ne!(
+            by_key.headers.get(ACCOUNT_HEADER),
+            by_session.headers.get(ACCOUNT_HEADER)
+        );
+        assert_eq!(forbidden.status, StatusCode::FORBIDDEN);
+        assert_eq!(forbidden.headers.get(ACCOUNT_HEADER), None);
+        assert_eq!(refused.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(refused.headers.get(ACCOUNT_HEADER), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]
