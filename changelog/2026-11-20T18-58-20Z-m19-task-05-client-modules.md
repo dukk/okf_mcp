@@ -35,6 +35,9 @@
   to a request that started before the deletion. Its successor is now
   marked first. An uncontrolled page (a hard reload) also marks the active
   worker other reader tabs use.
+- `just test-worker` needs Node 18.19+ (or 20.6+), for `register` in
+  `node:module`, and skips with a message on an older Node, as it does
+  without one. The README's Testing section says so.
 - `READ_CACHES.ownerKey` names the owner record's key once, for the page and
   `sw.js`.
 - The in-memory Cache Storage fake moved from `sw.test.mjs` to
