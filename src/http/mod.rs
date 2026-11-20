@@ -12,6 +12,7 @@ pub mod limits;
 pub mod oidc;
 pub(crate) mod pages;
 pub mod passkeys;
+mod read;
 pub mod requester;
 pub mod sessions;
 pub mod signin;
@@ -431,6 +432,7 @@ pub fn router(app: Arc<App>, shutdown: &CancellationToken) -> Router {
         get(brand).layer(middleware::map_response(ui::security_headers)),
     );
     open.merge(ui::routes())
+        .merge(read::routes())
         .merge(brand)
         .merge(signin::routes(&app))
         // The API applies `require_principal` (a bearer credential or a
