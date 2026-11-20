@@ -526,19 +526,25 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_address_falls_through_to_the_next() {
-        // A port nobody listens on: the kernel answers the request with ICMP
-        // port unreachable, which the connected socket reports as an error.
-        let closed = UdpSocket::bind("127.0.0.1:0")
-            .await
-            .unwrap()
-            .local_addr()
-            .unwrap();
+        // The first address is a live fake server that answers "unsynchronized"
+        // (stratum 16), so it fails with `BadReply`. Each fake server holds its
+        // socket until it has answered the one request, so the failure never
+        // depends on a free port staying free (a dropped, "closed" port can be
+        // re-bound by a parallel test, which then swallows the request and
+        // hangs the query).
+        let failing = fake_server(Some((at(5040), at(5060))), 16).await;
         let server = fake_server(Some((at(5040), at(5060))), 1).await;
-        let clock = StepClock::new([at(0), at(0), at(100)]);
+        // Two clock reads per address: when it is sent and when it answers.
+        let clock = StepClock::new([at(0), at(0), at(0), at(100)]);
 
-        let reading = ask_each("time.example", [closed, server], &clock)
-            .await
-            .unwrap();
+        // Bounded, so a regression fails fast instead of hanging the run.
+        let reading = tokio::time::timeout(
+            Duration::from_secs(30),
+            ask_each("time.example", [failing, server], &clock),
+        )
+        .await
+        .expect("ask_each did not finish within 30 s: the failing address hung")
+        .unwrap();
 
         assert_eq!(reading.offset, TimeDelta::seconds(5));
     }
