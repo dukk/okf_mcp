@@ -280,3 +280,61 @@ async fn the_feedback_form_sends_once_and_shows_success_and_errors() {
         ]
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_held_send_locks_the_fields_so_no_unsent_edit_is_lost() {
+    let server = feedback_server().await;
+    member(&server, Access::Read).await;
+    // Whether each field is disabled, and whether the message can take the
+    // focus (a person can only type into a focused field).
+    const LOCKED: &str = "() => { \
+        const fields = ['feedback-message', 'feedback-kind', 'feedback-rating'] \
+            .map(id => document.getElementById(id)); \
+        fields[0].focus(); \
+        return [...fields.map(field => field.disabled), \
+            document.activeElement === fields[0]]; }";
+
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        wait_settled(ui);
+        ui.wait_visible("#feedback-open");
+        ui.click("#feedback-open");
+        ui.wait_visible("#feedback-form");
+        ui.fill("#feedback-message", "First note");
+
+        ui.hold_next("POST", "/api/v1/feedback");
+        ui.click("#feedback-send");
+        // While the send is held, nothing can be edited (`once` disables
+        // the guarded fields before its request starts).
+        assert_eq!(
+            ui.eval(LOCKED, json!(null)),
+            json!([true, true, true, false])
+        );
+        assert_eq!(ui.held_matches(), 1);
+        ui.release_held();
+
+        // Settled: the sent text is cleared, and the fields are usable again.
+        ui.wait_visible("#feedback-status[data-state=ok]");
+        assert_eq!(
+            ui.eval(LOCKED, json!(null)),
+            json!([false, false, false, true])
+        );
+        assert_eq!(
+            ui.eval(
+                "() => document.getElementById('feedback-message').value",
+                json!(null)
+            ),
+            json!("")
+        );
+        ui.assert_no_console_errors();
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let sent: Vec<String> = sqlx::query_scalar("SELECT message FROM feedback")
+        .fetch_all(&server.db.pool)
+        .await
+        .expect("read the feedback");
+    assert_eq!(sent, ["First note"]);
+}

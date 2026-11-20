@@ -18,8 +18,13 @@
 - `GET /ui/brand.json` gains `feedback_form` (`{disclosure, max_message_chars, kinds}`, or
   `null` without `[feedback]`). The console's "Send feedback" button opens the form in the
   drawer. The button is disabled while a send runs, even in a reopened drawer, and the form
-  shows the result: a confirmation, or the refusal's reason with the text kept.
+  shows the result: a confirmation, or the refusal's reason with the text kept. The message,
+  kind and rating fields are disabled while a send runs too, so an edit can never be typed
+  during a send and then cleared by its success.
 - Migration `0029_feedback_from_console.sql` lets `feedback.credential_kind` be `session`.
+  It adds the wider CHECK `NOT VALID`, so the ALTER TABLE never scans existing feedback
+  under its ACCESS EXCLUSIVE lock. `0030_feedback_validate_credential_kind.sql` validates
+  it in its own transaction, under a lock that lets reads and writes continue.
 
 ## Changed
 

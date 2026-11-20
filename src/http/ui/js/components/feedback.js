@@ -10,22 +10,24 @@ import { guard, once } from '../core/pending.js';
 import { toast } from '../core/toast.js';
 
 // The one feedback write: a reopened drawer draws its Send button disabled
-// while an earlier send is still running.
+// while an earlier send is still running. The fields are guarded too, so
+// nothing can be typed while a send runs: its success clears them, and an
+// edit made meanwhile was never sent.
 const SEND = 'feedback:send';
 
 // Opens the form. `form` is brand.json's `feedback_form`
 // ({disclosure, max_message_chars, kinds}).
 export function openFeedback(form) {
     const ticket = drawerTicket(document.getElementById('main'));
-    const message = h('textarea', {
+    const message = guard(h('textarea', {
         id: 'feedback-message', name: 'message', rows: 6, required: true,
         maxlength: form.max_message_chars,
-    });
-    const kind = h('select', { id: 'feedback-kind', name: 'kind' },
-        form.kinds.map(name => h('option', { value: name, selected: name === 'other' }, name)));
-    const rating = h('select', { id: 'feedback-rating', name: 'rating' },
+    }), SEND);
+    const kind = guard(h('select', { id: 'feedback-kind', name: 'kind' },
+        form.kinds.map(name => h('option', { value: name, selected: name === 'other' }, name))), SEND);
+    const rating = guard(h('select', { id: 'feedback-rating', name: 'rating' },
         h('option', { value: '' }, 'No rating'),
-        [1, 2, 3, 4, 5].map(n => h('option', { value: String(n) }, String(n))));
+        [1, 2, 3, 4, 5].map(n => h('option', { value: String(n) }, String(n)))), SEND);
     const status = h('p', { id: 'feedback-status', role: 'status', hidden: true });
     const send = guard(h('button', { type: 'submit', id: 'feedback-send' }, 'Send feedback'), SEND);
     const show = (text, kind) => {
