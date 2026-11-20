@@ -3,7 +3,7 @@
 //! across replicas and survives a restart; without it each limiter is
 //! today's in-memory one, unchanged.
 //!
-//! - One Lua script ([`TAKE`]) refills, takes and renews a bucket in one
+//! - One Lua script (`TAKE`) refills, takes and renews a bucket in one
 //!   atomic step on Redis's own clock, so two replicas racing for the last
 //!   token let one through, and no replica's clock can refill a bucket early.
 //! - Every bucket has a TTL: the time it takes to refill from empty, renewed
