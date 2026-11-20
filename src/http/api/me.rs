@@ -1,7 +1,8 @@
 //! `/api/v1/me/...` (spec "Self-service"): what a signed-in person does for
 //! themselves. They manage their own keys and OAuth grants, change their
 //! password, manage their passkeys and linked identities, and see their
-//! sessions, recent sign-ins, teams and ceiling.
+//! sessions, recent sign-ins, teams and ceiling, and delete their own
+//! account after re-authenticating (`DELETE /me`, issue #355).
 //!
 //! Access:
 //! - every route but `GET /me` needs a console session
@@ -21,7 +22,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, put};
 use axum::{Extension, Json, Router};
 use chrono::{DateTime, TimeDelta, Utc};
@@ -34,11 +36,12 @@ use crate::clock::format_timestamp;
 use crate::error::OkfError;
 use crate::http::api::keys::{parse_access, CreatedKeyView, KeyView};
 use crate::http::api::people::DisplayNameBody;
-use crate::http::console_session::ConsoleSession;
-use crate::http::passkeys::passkey_name;
+use crate::http::console_session::{append_all, clear_cookie, ConsoleSession};
+use crate::http::passkeys::{self as passkeys_http, passkey_name};
 use crate::http::signin::notify_method_added;
 use crate::http::AppError;
 use crate::labels::{team_label, user_label, DisplayName};
+use crate::store::audit::AuditActor;
 use crate::store::ceiling::{self, Ceiling};
 use crate::store::keys::{
     self as key_rows, Access, CatalogGrant, Grants, KeyKind, KeyRecord, NewKey,
@@ -46,6 +49,7 @@ use crate::store::keys::{
 use crate::store::passwords::{self, NewPassword, SessionChange, SignInOutcome};
 use crate::store::{identities, passkeys, sign_in_events, teams, user_sessions, users};
 use crate::telemetry::subscriber::split_event;
+use webauthn_rs::prelude::PublicKeyCredential;
 
 /// How many recent sign-ins `GET /me/sign-ins` and the admin's
 /// `GET /users/{name}/sign-ins` show.
@@ -520,6 +524,36 @@ impl std::fmt::Debug for PasswordBody {
     }
 }
 
+/// `DELETE /me`'s body: exactly one way to confirm it is the person.
+// `Debug` by hand: the password may not reach a log line.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeleteAccountBody {
+    /// The current password.
+    #[serde(default)]
+    password: Option<String>,
+    /// The browser's answer to `POST /me/passkeys/confirm/start`.
+    #[serde(default)]
+    passkey: Option<PublicKeyCredential>,
+}
+
+impl std::fmt::Debug for DeleteAccountBody {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display/Debug impl: runs while the subscriber formats an event"
+        )
+    )]
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DeleteAccountBody")
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("passkey", &self.passkey.as_ref().map(|_| "<assertion>"))
+            .finish()
+    }
+}
+
 /// This area's routes.
 #[cfg_attr(
     dylint_lib = "hyp_tracing",
@@ -530,7 +564,10 @@ impl std::fmt::Debug for PasswordBody {
 )]
 pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new()
-        .route("/me", get(account).patch(update_account))
+        .route(
+            "/me",
+            get(account).patch(update_account).delete(delete_account),
+        )
         .route("/me/ceiling", get(own_ceiling))
         .route("/me/keys", get(list_keys).post(create_key))
         .route("/me/keys/{id}", patch(rename_key).delete(revoke_key))
@@ -1251,6 +1288,105 @@ async fn store_password_change(
     notify_method_added(app, &mut tx, account, "a new password").await?;
     tx.commit().await?;
     Ok(ended)
+}
+
+/// What `DELETE /me`'s re-authentication proved, owned until the deletion
+/// borrows it as a [`users::Proof`].
+enum Proved {
+    /// The stored hash the typed password matched.
+    Password(passwords::PasswordStamp),
+    /// The raw credential id of the passkey that answered.
+    Passkey(Vec<u8>),
+}
+
+/// `DELETE /me`: deletes the signed-in person's own account (issue #355),
+/// after they re-authenticate in the same request: the current password
+/// (`{"password"}`, checked with the sign-in lockout), or an assertion
+/// from one of their passkeys (`{"passkey"}`, answering
+/// `POST /me/passkeys/confirm/start`). The deletion is `users::delete_own`:
+/// keys, grants, sign-in codes, sessions, passkeys, linked identities,
+/// entitlements, memberships and the personal team go in one transaction
+/// under the user's row lock, recorded as `user.deleted` with the person
+/// as the actor. It is refused, with the reason, while the personal team
+/// owns a catalog, while the user is a shared team's last owner, and for
+/// the last admin user; the account is never disabled instead.
+///
+/// # Returns
+/// 204, clearing the session (and passkey ceremony) cookies.
+///
+/// # Errors
+/// 400 for a body with neither or both proofs; 403 for a bearer caller, a
+/// wrong password, a locked account, a passkey that does not verify,
+/// another session's ceremony, or a password or passkey changed meanwhile
+/// (never 401, which the console reads as "signed out"); 401 once this
+/// session has ended; 404 for a passkey while passkeys are off; 409 for a
+/// refusal of the deletion rules; 410 for an expired passkey ceremony.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn delete_account(
+    State(app): State<Arc<App>>,
+    Extension(principal): Extension<Arc<Principal>>,
+    session: Option<Extension<ConsoleSession>>,
+    actor: AuditActor,
+    headers: HeaderMap,
+    Json(body): Json<DeleteAccountBody>,
+) -> Result<Response, AppError> {
+    let (user, session) = session_and_user(&principal, session)?;
+    let now = app.clock().now();
+    let mut answer = clear_cookie(&app);
+    // Each arm proves it is the person; what it proved is checked again
+    // under the user's row lock by `delete_own`.
+    let proved = match (body.password, body.passkey) {
+        (Some(password), None) => {
+            match passwords::verify_user(app.pool(), user.id, &password, now).await? {
+                SignInOutcome::Ok(verified) => Proved::Password(verified.stamp),
+                SignInOutcome::Failed => {
+                    return Err(OkfError::Forbidden {
+                        reason: "the password is incorrect".to_string(),
+                    }
+                    .into())
+                }
+                SignInOutcome::Locked => {
+                    return Err(OkfError::Forbidden {
+                        reason: "too many wrong passwords; try again in a few minutes".to_string(),
+                    }
+                    .into())
+                }
+            }
+        }
+        (None, Some(assertion)) => {
+            let (credential_id, clear) =
+                passkeys_http::confirm(&app, &headers, &session, user.id, &assertion).await?;
+            append_all(&mut answer, &clear);
+            Proved::Passkey(credential_id)
+        }
+        _ => {
+            return Err(OkfError::InvalidPath {
+                path: "body".to_string(),
+                reason: "confirm with either your password or a passkey".to_string(),
+            }
+            .into())
+        }
+    };
+    let proof = match &proved {
+        Proved::Password(stamp) => users::Proof::Password(stamp),
+        Proved::Passkey(credential_id) => users::Proof::Passkey(credential_id),
+    };
+    let own = users::OwnDeletion {
+        user_id: user.id,
+        name: user.name,
+        session_id: &session.id,
+        proof,
+    };
+    let deleted = users::delete_own(app.pool(), &own, &actor, now).await?;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
+    split_event!(
+        info,
+        { keys = deleted.keys, codes = deleted.codes, discarded = deleted.discarded, },
+        { user = %user.name, },
+        "account deleted from the account page"
+    );
+    Ok((StatusCode::NO_CONTENT, answer).into_response())
 }
 
 /// `GET /me/passkeys`: the user's passkeys.
@@ -3062,5 +3198,196 @@ mod tests {
         assert_eq!(statuses, [204, 409], "exactly one removal passes");
         let (passkeys, identities) = methods_of(&test, &id).await;
         assert_eq!(passkeys + identities, 1, "one way to sign in remains");
+    }
+
+    /// `DELETE /api/v1/me` with this body.
+    async fn delete_me(test: &TestApp, browser: &mut Browser, body: serde_json::Value) -> Reply {
+        browser
+            .send(test, "DELETE", "/api/v1/me", Payload::Json(body))
+            .await
+    }
+
+    /// Creates `name` with `name@example.com` and [`PASSWORD`], signed in.
+    async fn with_password(test: &TestApp, name: &str) -> (String, Browser) {
+        let email = format!("{name}@example.com");
+        let user =
+            crate::http::api::testing::user_with_password(test, name, &email, Some(PASSWORD)).await;
+        (user.id, Browser::signed_in(test, &email, PASSWORD).await)
+    }
+
+    /// A password the deletion tests sign in with.
+    const PASSWORD: &str = "violet-lantern-orbit-42";
+
+    #[tokio::test]
+    async fn a_session_deletes_its_account_with_the_current_password_and_is_signed_out() {
+        // Arrange
+        let test = app().await;
+        let (id, mut browser) = with_password(&test, "alice").await;
+
+        // Act
+        let deleted = delete_me(&test, &mut browser, json!({"password": PASSWORD})).await;
+        let after = browser
+            .send(&test, "GET", "/api/v1/me", Payload::Empty)
+            .await;
+
+        // Assert: 204 clearing the session cookie; the user and every
+        // session of theirs are gone, so the next request is signed out.
+        assert_eq!(deleted.status, StatusCode::NO_CONTENT, "{}", deleted.text());
+        let cleared = deleted
+            .set_cookie(COOKIE)
+            .expect("the session cookie is cleared");
+        assert!(cleared.contains("Max-Age=0"), "{cleared}");
+        assert_eq!(after.status, StatusCode::UNAUTHORIZED, "{}", after.text());
+        let left: i64 = sqlx::query_scalar(
+            "SELECT (SELECT count(*) FROM users WHERE id = $1) \
+                  + (SELECT count(*) FROM user_sessions WHERE user_id = $1)",
+        )
+        .bind(&id)
+        .fetch_one(test.app.pool())
+        .await
+        .expect("count what is left");
+        assert_eq!(left, 0);
+        let entries: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM audit_entries \
+             WHERE action = 'user.deleted' AND actor_person_id = target_person_id",
+        )
+        .fetch_one(test.app.pool())
+        .await
+        .expect("count the entries");
+        assert_eq!(entries, 1, "recorded with the person as the actor");
+    }
+
+    #[tokio::test]
+    async fn a_deletion_without_valid_reauthentication_keeps_the_account() {
+        let test = app().await;
+        let (id, mut browser) = with_password(&test, "alice").await;
+        let keys = keys(&test).await;
+
+        let wrong = delete_me(&test, &mut browser, json!({"password": "not the password"})).await;
+        let none = delete_me(&test, &mut browser, json!({})).await;
+        let both = delete_me(
+            &test,
+            &mut browser,
+            json!({"password": PASSWORD, "passkey": null}),
+        )
+        .await;
+        let (bearer, answer) = send(
+            &test,
+            "DELETE",
+            "/api/v1/me",
+            Some(&keys.admin),
+            Some(json!({"password": PASSWORD})),
+        )
+        .await;
+        let mut stranger = Browser::default();
+        let anonymous = delete_me(&test, &mut stranger, json!({"password": PASSWORD})).await;
+
+        // A wrong password is a 403 (never a 401, which would sign the
+        // console out), with its reason.
+        assert_eq!(wrong.status, StatusCode::FORBIDDEN, "{}", wrong.text());
+        assert!(
+            wrong.text().contains("the password is incorrect"),
+            "{}",
+            wrong.text()
+        );
+        assert_eq!(none.status, StatusCode::BAD_REQUEST, "{}", none.text());
+        // `"passkey": null` is no passkey, so this is a password alone.
+        assert_eq!(both.status, StatusCode::NO_CONTENT, "{}", both.text());
+        assert_eq!(bearer.as_u16(), 403, "{answer}");
+        assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+        // The 403 and 400 left the account; only the last request deleted it.
+        let gone: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE id = $1")
+            .bind(&id)
+            .fetch_one(test.app.pool())
+            .await
+            .expect("count");
+        assert_eq!(gone, 0);
+    }
+
+    #[tokio::test]
+    async fn a_wrong_password_keeps_everything_and_counts_toward_the_lock() {
+        let test = app().await;
+        let (id, mut browser) = with_password(&test, "alice").await;
+
+        let wrong = delete_me(&test, &mut browser, json!({"password": "not the password"})).await;
+        let still = browser
+            .send(&test, "GET", "/api/v1/me", Payload::Empty)
+            .await;
+
+        assert_eq!(wrong.status, StatusCode::FORBIDDEN);
+        assert_eq!(still.status, StatusCode::OK, "still signed in");
+        let failed: i32 = sqlx::query_scalar("SELECT failed_sign_ins FROM users WHERE id = $1")
+            .bind(&id)
+            .fetch_one(test.app.pool())
+            .await
+            .expect("read the counter");
+        assert_eq!(failed, 1, "the sign-in lockout counts it");
+    }
+
+    #[tokio::test]
+    async fn the_last_admin_user_is_refused_with_the_reason() {
+        let test = app().await;
+        let (id, _) = with_password(&test, "alice").await;
+        users::set_admin(
+            test.app.pool(),
+            "alice",
+            AdminChange {
+                on: true,
+                allow_last: true,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("make alice the only admin");
+        // Setting the flag ended her sessions: she signs in again.
+        let mut browser = Browser::signed_in(&test, "alice@example.com", PASSWORD).await;
+
+        let refused = delete_me(&test, &mut browser, json!({"password": PASSWORD})).await;
+
+        assert_eq!(refused.status, StatusCode::CONFLICT, "{}", refused.text());
+        assert_eq!(refused.json()["error"], "Refused");
+        assert!(
+            refused.text().contains("it is the last admin user"),
+            "{}",
+            refused.text()
+        );
+        let kept: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE id = $1")
+            .bind(&id)
+            .fetch_one(test.app.pool())
+            .await
+            .expect("count");
+        assert_eq!(kept, 1);
+    }
+
+    #[tokio::test]
+    async fn a_personal_team_that_owns_a_catalog_refuses_the_deletion() {
+        let test = app().await;
+        let (id, mut browser) = with_password(&test, "alice").await;
+        sqlx::query(
+            "UPDATE catalogs SET owner_team_id = (SELECT id FROM teams WHERE name = 'alice') \
+             WHERE name = 'main'",
+        )
+        .execute(test.app.pool())
+        .await
+        .expect("give alice's team main");
+
+        let refused = delete_me(&test, &mut browser, json!({"password": PASSWORD})).await;
+
+        assert_eq!(refused.status, StatusCode::CONFLICT, "{}", refused.text());
+        assert!(
+            refused.json()["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("owns catalog(s) \"main\""),
+            "{}",
+            refused.text()
+        );
+        let kept: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE id = $1")
+            .bind(&id)
+            .fetch_one(test.app.pool())
+            .await
+            .expect("count");
+        assert_eq!(kept, 1);
     }
 }

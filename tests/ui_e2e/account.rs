@@ -824,3 +824,127 @@ async fn the_ceiling_is_paged_with_a_find_box() {
     })
     .await;
 }
+
+/// How many users called `alice` exist.
+async fn alices(pool: &sqlx::PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM users WHERE name = 'alice'")
+        .fetch_one(pool)
+        .await
+        .expect("count alice")
+}
+
+/// Whether the element `selector` names is disabled.
+fn disabled(ui: &Ui, selector: &str) -> bool {
+    ui.eval(
+        "(selector) => document.querySelector(selector)?.disabled === true",
+        json!(selector),
+    ) == json!(true)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_deletes_their_account_with_their_password_and_is_signed_out() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.open("/account");
+        ui.wait_visible("#account-delete-password");
+        ui.fill("#account-delete-password", PASSWORD);
+        // The deletion is held, so the page is seen while it runs.
+        ui.hold_next("DELETE", "/api/v1/me");
+        ui.click("#account-delete");
+        ui.wait_visible("#confirm-typed");
+        ui.fill("#confirm-typed", "alice");
+        ui.click("#confirm-ok");
+        // While it runs the button is disabled, so a second click sends
+        // nothing.
+        ui.wait_visible("#account-delete");
+        assert!(disabled(&ui, "#account-delete"), "disabled while it runs");
+        assert!(ui.click_twice("#account-delete"), "still disabled");
+        ui.release_held();
+        assert_eq!(ui.held_matches(), 1, "one deletion was sent");
+        ui.wait_visible("#login");
+        ui.wait_visible("#login-error");
+        ui.wait_text("#login-error", "Your account was deleted");
+        // The session cookie went with the account.
+        assert_eq!(ui.eval(SESSION_STATUS, json!(null)), json!(401));
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    assert_eq!(alices(&server.db.pool).await, 0, "the account is gone");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_refused_deletion_shows_the_reason_and_keeps_the_page() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    let pool = server.db.pool.clone();
+    // alice's personal team owns `main`: the deletion rules refuse.
+    sqlx::query(
+        "UPDATE catalogs SET owner_team_id = (SELECT id FROM teams WHERE name = 'alice') \
+         WHERE name = 'main'",
+    )
+    .execute(&pool)
+    .await
+    .expect("give alice's team main");
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.open("/account");
+        ui.wait_visible("#account-delete-password");
+        ui.fill("#account-delete-password", PASSWORD);
+        ui.click("#account-delete");
+        ui.wait_visible("#confirm-typed");
+        ui.fill("#confirm-typed", "alice");
+        ui.click("#confirm-ok");
+        // The 409's reason, on the page (not only a toast), and the page and
+        // its controls stay.
+        ui.wait_visible("#account-delete-reason");
+        ui.wait_text("#account-delete-reason", "owns catalog(s) \"main\"");
+        ui.wait_visible("#account-delete");
+        assert!(!disabled(&ui, "#account-delete"), "usable again");
+        assert!(!ui.page.is_visible("#login").expect("visible"));
+        assert_eq!(ui.eval(SESSION_STATUS, json!(null)), json!(200));
+        // A wrong password replaces the reason with its own.
+        ui.fill("#account-delete-password", "not the password at all");
+        ui.click("#account-delete");
+        ui.wait_visible("#confirm-typed");
+        ui.fill("#confirm-typed", "alice");
+        ui.click("#confirm-ok");
+        ui.wait_text("#account-delete-reason", "the password is incorrect");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    assert_eq!(alices(&pool).await, 1, "the account stays");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_confirms_with_a_passkey_and_deletes_their_account() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        let _authenticator = ui.virtual_authenticator();
+        ui.open("/account");
+        ui.wait_text("#passkey-list", "No passkeys yet");
+        ui.fill("#passkey-name", "laptop");
+        ui.click("#passkey-add");
+        ui.wait_visible("[data-test=passkey-laptop]");
+        // The passkey just added confirms the deletion.
+        ui.wait_visible("#account-delete-passkey");
+        ui.click("#account-delete-passkey");
+        ui.wait_visible("#confirm-typed");
+        ui.fill("#confirm-typed", "alice");
+        ui.click("#confirm-ok");
+        ui.wait_visible("#login");
+        ui.wait_text("#login-error", "Your account was deleted");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    assert_eq!(alices(&server.db.pool).await, 0, "the account is gone");
+}

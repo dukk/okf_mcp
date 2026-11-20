@@ -104,15 +104,16 @@ async function endCookieSession() {
 
 // Forgets the credential once the server has no session left for it, and
 // shows the card at the console's root. The Sign out button calls it, and
-// so does the Account page after signing this browser's session out.
-function signedOut() {
+// so does the Account page after signing this browser's session out, or
+// deleting the account (with `message` for the card).
+function signedOut(message) {
     store.key = null;
     store.whoami = null;
     forgetLabels();
     store.csrf = null;
     store.session = null;
     history.replaceState(null, '', '/ui/');
-    showLogin();
+    showLogin(message);
 }
 setSignedOutHandler(signedOut);
 

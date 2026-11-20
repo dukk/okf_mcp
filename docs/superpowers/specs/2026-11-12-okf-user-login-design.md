@@ -13,7 +13,7 @@ Today a user (M11) is only a label on a credential. The console is signed in to 
 - **Team owners managing their catalogs' access.** Only admins set a catalog's member access for now. The permission check is one function, so team owners can be added later without a schema change.
 - **OIDC providers configured in the database.** Providers live in the config file.
 - **Multi-factor authentication beyond passkeys.**
-- **Self-service account deletion.**
+- **Self-service account deletion.** (Delivered later by issue #355: see "Future work" item 4.)
 - **Capping admin-issued credentials.** Keys and grants an admin issues keep their explicit grants, as today.
 
 ## Decisions
@@ -442,6 +442,7 @@ Every admin action has a CLI command, a REST route and a console control under *
 2. **OIDC providers configured in the database**, with encrypted client secrets.
 3. **Multi-factor authentication** for password sign-in (TOTP or passkey as a second factor).
 4. **Self-service account deletion**, once credential history no longer blocks deletion (#297).
+   > **Delivered (issue #355).** #297 was closed by real deletion (milestone 14), not disabling, so the Account page's "Delete your account" deletes: `DELETE /api/v1/me` re-authenticates with the current password or a fresh passkey assertion (`POST /api/v1/me/passkeys/confirm/start`), then runs `users::delete_own`, the admin deletion (`users::delete`) with the API's refusals (the last admin user, a personal team owning a catalog, the only owner of a shared team) and, under the user's row lock, checks that the session and the proof still hold. A refusal is shown on the page; the account is never disabled instead. See `docs/operations.md`, "Deleting your own account".
 5. **Move the existing background loops onto apalis**: token, code and session cleanup, and sign-in event pruning.
 
 ## What shipped differently
