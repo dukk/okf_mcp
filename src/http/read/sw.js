@@ -15,7 +15,7 @@ const META = [
     /^\/api\/v1\/catalogs\/[^/]+\/links\//,
 ];
 const CATALOG = /^\/api\/v1\/catalogs\/([^/]+)\//;
-const OWNER_KEY = '/read/__owner';
+const OWNER_KEY = READ_CACHES.ownerKey;
 
 // The worker's own clock for ordering requests against marks and owner
 // changes. It is monotonic (a wall-clock change cannot reorder them) and

@@ -19,8 +19,9 @@ lint:
 test: test-worker
     scripts/test-pg.sh run cargo test
 
-# The mobile reader's service worker (src/http/read/sw.js) in a Node vm with
-# fake Cache Storage and fetch: Node's built-in test runner, no npm packages.
+# The mobile reader's service worker (src/http/read/sw.js) in a Node vm, and
+# its page modules without a DOM (src/http/read/js/), with fake Cache Storage,
+# fetch and service workers: Node's built-in test runner, no npm packages.
 # Skips with a message when `node` is not installed.
 test-worker:
     #!/usr/bin/env bash

@@ -41,6 +41,7 @@
 | `src/http/read/js/main.js` | Boot, session, worker registration, screen dispatch, freshness banner, failure handling, tabs. |
 | `src/http/read/js/parts.js` | Shared view parts: `searchForm`, `crumbs`, `renderBody`, `message`. |
 | `src/http/read/js/listing.js` | `folderListing`: one folder's subfolders, index and concepts from the tree. |
+| `tests/read_worker/*.test.mjs`, `storage.mjs`, `page.mjs`, `esm-hooks.mjs` | Node tests (`just test-worker`) of the worker and of the page modules without a DOM (api, cache, route, listing), with a shared in-memory Cache Storage. |
 | `src/http/read/js/screens/{home,catalogs,tree,search,concept,document,me}.js` | One screen each. |
 | `tests/ui_e2e/harness.rs` (modify) | `open_reader`, `sign_in_reader`, `wait_worker`, `go_offline`. |
 | `tests/ui_e2e/read.rs` (create), `tests/ui_e2e/main.rs` (modify) | The reader's browser journeys. |
@@ -817,9 +818,15 @@ self.READ_CACHES = Object.freeze({
     content: 'read-content',
     meta: 'read-meta',
     owner: 'read-owner',
+    // The one entry of `owner`: { tag }, the account whose copies are cached.
+    ownerKey: '/read/__owner',
     contentCap: 200,
 });
 ```
+
+> **Corrected (issue #812, 2026-11-20).** `ownerKey` was added so the page (`cache.js`,
+> `offlineDocuments`) and the worker name the owner record's key once; `sw.js`'s `OWNER_KEY` is now
+> `READ_CACHES.ownerKey`. The value is unchanged.
 
 - [ ] **Step 4: Write `src/http/read/sw.js`**
 
@@ -870,7 +877,7 @@ const META = [
     /^\/api\/v1\/catalogs\/[^/]+\/links\//,
 ];
 const CATALOG = /^\/api\/v1\/catalogs\/([^/]+)\//;
-const OWNER_KEY = '/read/__owner';
+const OWNER_KEY = READ_CACHES.ownerKey;
 
 // The worker's own clock for ordering requests against marks and owner
 // changes. It is monotonic (a wall-clock change cannot reorder them) and
@@ -1386,6 +1393,17 @@ These are plain modules with no screen yet. They are exercised by the browser jo
 
 **Files:**
 - Create: `src/http/read/js/api.js`, `cache.js`, `route.js`, `listing.js`, `parts.js`
+- Create: `tests/read_worker/api.test.mjs`, `cache.test.mjs`, `route.test.mjs`, `page.mjs`, `esm-hooks.mjs`, `storage.mjs`
+- Modify: `src/http/read/js/names.js` (`ownerKey`), `src/http/read/sw.js` (`OWNER_KEY`), `tests/read_worker/sw.test.mjs` (its Cache Storage fake moved to `storage.mjs`)
+
+> **Corrected (issue #812, 2026-11-20).** The modules without a DOM are tested in Node
+> (`just test-worker`): `route.test.mjs` covers `route.js` and `listing.js`, `api.test.mjs` covers
+> `classify` (every row of the design's error table), `read`, `readAll` and `signOut` with a fake
+> `fetch`, and `cache.test.mjs` covers `cache.js` with the in-memory Cache Storage (`storage.mjs`,
+> shared with `sw.test.mjs`) and a fake `navigator.serviceWorker`. `page.mjs` loads the page
+> modules as ES modules through a load hook (`esm-hooks.mjs`), since the repository has no
+> `package.json`. `parts.js` needs a DOM (`h()` from `/ui/js/core/dom.js`), so it is left to the
+> browser journeys from Task 6 on.
 
 - [ ] **Step 1: Write `src/http/read/js/api.js`**
 
@@ -1461,6 +1479,7 @@ export async function readAll(path, field) {
     while (cursor !== null) {
         const page = await read(`${path}${path.includes('?') ? '&' : '?'}after=${enc(cursor)}`);
         items.push(...(page.data[field] ?? []));
+        // A cursor that does not move would never end: stop at it.
         const next = page.data.next ?? null;
         cursor = next === cursor ? null : next;
     }
@@ -1485,6 +1504,20 @@ export async function signOut(csrf) {
 > is the tag in `read-owner`, and nothing without a record, matching the worker's `ownedCopy`, which
 > serves an offline copy only to its recorded owner. A failed takeover can leave the old account's
 > copies behind with no record, and the list must not show their titles.
+>
+> **Corrected (issue #812, 2026-11-20).** The listing below is `cache.js` as shipped. `mark` no
+> longer posts once to `navigator.serviceWorker.controller`: it posts to every worker that may be
+> answering reads, the controller and the registration's active worker (`getRegistration()`), waits
+> for each to reply or for `MARK_WAIT_MS`, then looks the workers up again and marks any new one,
+> until none is new; only then does the deletion run. This closes the race from #810 where a new
+> build takes over as the page posts: the old worker, made redundant, may never answer, the page's
+> wait lapses, and the new worker, which holds no mark, could store a 2xx for a request that started before the
+> deletion. The successor is marked first now. It also marks the active worker of an uncontrolled
+> page (a hard reload), which other reader tabs share. What remains: a worker that is redundant
+> but still answering a request the browser let outlive it (sw.js, the comment above `marks`)
+> cannot be reached by any message, and the page still deletes after the wait, so revocation never
+> blocks on a worker. `offlineDocuments` reads the copies in parallel and keys the owner record by
+> `READ_CACHES.ownerKey`; the stray comment above `evict` is gone.
 
 ```js
 // The page's side of the reader's caches (reader design, "Caching"). The
@@ -1492,10 +1525,10 @@ export async function signOut(csrf) {
 // here, where the answers are classified; the worker only fills them.
 import { enc, encPath } from './api.js';
 
-// The owner record (read-owner) is kept by the worker (sw.js, `admit`);
-// the page only deletes it with the rest.
-const { content, meta, owner } = self.READ_CACHES;
-// How long to wait for the worker to confirm a mark before deleting anyway.
+// The owner record (read-owner, under `ownerKey`) is kept by the worker
+// (sw.js, `takeOver`); the page only reads it and deletes it with the rest.
+const { content, meta, owner, ownerKey } = self.READ_CACHES;
+// How long to wait for a worker to confirm a mark before deleting anyway.
 const MARK_WAIT_MS = 1000;
 // Without Cache Storage (an unusual private mode) the reader works online
 // and keeps nothing.
@@ -1509,24 +1542,59 @@ async function storage(work, fallback = undefined) {
     try {
         return await work();
     } catch (error) {
-        console.warn('reader cache unavailable:', error.name);
+        console.warn('reader cache unavailable:', error?.name);
         return fallback;
     }
 }
 
-// Tells the worker that `scope` ('*', an encoded catalog, or a document's
-// API path) is invalid from now on, and waits for it to confirm, so the mark is in place before the
-// deletion it announces (see sw.js). With no worker controlling the page,
-// no answer of the worker's can be on its way, so there is nothing to mark.
-function mark(scope) {
-    const worker = navigator.serviceWorker?.controller;
-    if (!worker) return Promise.resolve();
+// The workers that may be answering reads: the one controlling this page,
+// and the registration's active worker. They differ while a new build takes
+// over (it activates, then claims the page, and the page learns of its new
+// controller a moment later), and when this page is not controlled but
+// another reader tab is. Missing in an insecure context.
+async function workers() {
+    const container = navigator.serviceWorker;
+    if (!container) return [];
+    const registration = await container.getRegistration().catch(() => undefined);
+    return [...new Set([container.controller, registration?.active].filter(Boolean))];
+}
+
+// Posts the mark for `scope` to `worker` and resolves on its reply, or after
+// MARK_WAIT_MS without one (a worker made redundant may never answer).
+function post(worker, scope) {
     return new Promise(resolve => {
         const channel = new MessageChannel();
-        const timer = setTimeout(resolve, MARK_WAIT_MS);
-        channel.port1.onmessage = () => { clearTimeout(timer); resolve(); };
-        worker.postMessage({ type: 'invalidate', scope }, [channel.port2]);
+        const done = () => {
+            clearTimeout(timer);
+            channel.port1.close();
+            resolve();
+        };
+        const timer = setTimeout(done, MARK_WAIT_MS);
+        channel.port1.onmessage = done;
+        try {
+            worker.postMessage({ type: 'invalidate', scope }, [channel.port2]);
+        } catch {
+            done();
+        }
     });
+}
+
+// Tells the workers that `scope` ('*', an encoded catalog, or a document's
+// API path, as sw.js matches them) is invalid from now on, and waits for
+// them to confirm, so the mark is in place before the deletion it announces
+// (see sw.js). With no worker, no answer of a worker's can be on its way,
+// so there is nothing to mark. A worker that took over meanwhile is marked
+// too: after each round the workers are looked up again, until none is new,
+// so a mark the old controller never answered still reaches its successor
+// before anything is deleted.
+async function mark(scope) {
+    const marked = new Set();
+    for (;;) {
+        const fresh = (await workers()).filter(worker => !marked.has(worker));
+        if (fresh.length === 0) return;
+        for (const worker of fresh) marked.add(worker);
+        await Promise.all(fresh.map(worker => post(worker, scope)));
+    }
 }
 
 // Deletes every cached catalog read and the record of whose they were.
@@ -1536,16 +1604,13 @@ export async function wipe() {
     await storage(() => Promise.all([content, meta, owner].map(name => caches.delete(name))));
 }
 
-// Makes the caches `user`'s: wipes them when they were someone else's.
 // Deletes the entries of `cacheNames` whose URL path `matches`.
 function evict(cacheNames, matches) {
-    return storage(async () => {
-        await Promise.all(cacheNames.map(async name => {
-            const cache = await caches.open(name);
-            const keys = await cache.keys();
-            await Promise.all(keys.filter(key => matches(new URL(key.url).pathname)).map(key => cache.delete(key)));
-        }));
-    });
+    return storage(() => Promise.all(cacheNames.map(async name => {
+        const cache = await caches.open(name);
+        const keys = await cache.keys();
+        await Promise.all(keys.filter(key => matches(new URL(key.url).pathname)).map(key => cache.delete(key)));
+    })));
 }
 
 // Deletes everything cached for `catalog`, and keeps answers already on
@@ -1571,21 +1636,22 @@ export async function evictDocument(catalog, kind, path) {
 // record, nothing is readable offline.
 export function offlineDocuments(catalog) {
     return storage(async () => {
-        const record = await (await caches.open(owner)).match('/read/__owner');
+        const record = await (await caches.open(owner)).match(ownerKey);
         const tag = record ? (await record.json().catch(() => null))?.tag : null;
         if (typeof tag !== 'string') return [];
         const cache = await caches.open(content);
-        const keys = await cache.keys();
         const prefix = `/api/v1/catalogs/${enc(catalog)}/`;
-        const seen = new Map();
-        // Newest last in the cache, so walk backwards and keep the first of each path.
-        for (const key of keys.reverse()) {
-            if (!new URL(key.url).pathname.startsWith(prefix)) continue;
+        // Newest last in the cache, so reverse and keep the first of each path.
+        const keys = (await cache.keys()).filter(key => new URL(key.url).pathname.startsWith(prefix)).reverse();
+        const copies = await Promise.all(keys.map(async key => {
             const response = await cache.match(key);
-            if (response?.headers.get('X-OKF-Account') !== tag) continue;
+            if (response?.headers.get('X-OKF-Account') !== tag) return null;
             const body = await response.json().catch(() => null);
-            if (!body?.path || seen.has(body.path)) continue;
-            seen.set(body.path, { path: body.path, title: body.title ?? null, cachedAt: response.headers.get('X-Read-Cached-At') });
+            return body?.path ? { path: body.path, title: body.title ?? null, cachedAt: response.headers.get('X-Read-Cached-At') } : null;
+        }));
+        const seen = new Map();
+        for (const copy of copies) {
+            if (copy && !seen.has(copy.path)) seen.set(copy.path, copy);
         }
         return [...seen.values()];
     }, []);

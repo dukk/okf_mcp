@@ -7,5 +7,7 @@ self.READ_CACHES = Object.freeze({
     content: 'read-content',
     meta: 'read-meta',
     owner: 'read-owner',
+    // The one entry of `owner`: { tag }, the account whose copies are cached.
+    ownerKey: '/read/__owner',
     contentCap: 200,
 });
