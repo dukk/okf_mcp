@@ -2692,6 +2692,15 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 > `#/v/main/systems/beta.md/settings`. The outline's links (`hrefs.concept(catalog, path,
 > heading.slug)`) and `ctx.route.section` need no change.
 
+> **Corrected (issue #815, 2026-11-20).** Shipped: the "Show the whole concept" handler returns
+> before `ctx.freshness` and any DOM change when `!ctx.live()` (refusals still go through
+> `ctx.fail`), and a shortened concept is `body_html == null`, not falsy (an empty concept
+> renders `""` with no button). Task 8's commit does not touch `route.js`. Task 8 also lands the
+> journeys for that button: `the_whole_concept_replaces_the_outline_notice`, `an_empty_concept_has_no_show_whole_button`,
+> `the_whole_concept_is_not_available_offline_and_can_be_retried`, `a_late_whole_concept_does_not_touch_a_newer_screen`
+> and `show_the_whole_concept_after_losing_the_grant_evicts_the_catalog`. Task 11 (#818) must not
+> add that last one again.
+
 - [ ] **Step 1: Write the failing journey**
 
 ```rust
@@ -2869,7 +2878,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/http/read/js/screens/concept.js src/http/read/js/screens/document.js src/http/read/js/route.js tests/ui_e2e/read.rs
+git add src/http/read/js/screens/concept.js src/http/read/js/screens/document.js tests/ui_e2e/read.rs
 git commit -m "feat(read): concept view with outline, reader links and backlinks
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -3550,6 +3559,10 @@ The harness's `fail_next` answers with `{ error: 'test', message }`, and this jo
 ```
 
 Two more journeys, for refusals that arrive after the screen that asked has gone, and for a read a button makes:
+
+> **Superseded (issue #815, 2026-11-20).** The journey `show_the_whole_concept_after_losing_the_grant_evicts_the_catalog` in the block
+> below already landed in Task 8 (PR #842, `tests/ui_e2e/read.rs`) with the rest of the
+> "Show the whole concept" journeys. Do not add it again here; drop it from this step.
 
 ```rust
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -49,6 +49,7 @@ fn main_files() -> okf_mcp::archive::Files {
             "systems/alpha.md",
             "---\ntype: system\ntitle: Alpha\n---\n# Alpha\n\nSee [Beta settings](beta.md#settings).\n\nThe word marmalade.\n",
         ),
+        ("systems/empty.md", "---\ntype: system\ntitle: Empty\n---\n"),
         (
             "systems/beta.md",
             "---\ntype: system\ntitle: Beta\n---\n# Beta\n\nIntro.\n\n## Settings\n\nTwo settings.\n",
@@ -62,6 +63,15 @@ fn main_files() -> okf_mcp::archive::Files {
 /// # Returns
 /// The running server and the reader's user id.
 async fn server() -> (TestServer, String) {
+    server_with_outline_limit(Config::default().concept_outline_chars).await
+}
+
+/// [`server`] with `concept_outline_chars` set, so a longer concept comes
+/// back as its outline only.
+///
+/// # Arguments
+/// * `outline_chars` - the longest body the server renders without `full`.
+async fn server_with_outline_limit(outline_chars: usize) -> (TestServer, String) {
     let server = TestServer::start_with(
         vec![
             ("main", main_files()),
@@ -77,6 +87,7 @@ async fn server() -> (TestServer, String) {
         // the session cookie belongs to the host the browser uses.
         |base| Config {
             public_url: Some(base.to_string()),
+            concept_outline_chars: outline_chars,
             ..Config::default()
         },
     )
@@ -224,6 +235,176 @@ async fn the_picker_and_the_tree_lead_from_a_catalog_to_its_concepts() {
         ui.wait_text("#concepts", "Alpha");
         ui.wait_text("#concepts", "Beta");
         ui.wait_text(".crumbs", "Contents");
+    })
+    .await;
+}
+
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_concept_shows_its_body_follows_links_and_lists_backlinks() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/main/systems/alpha.md", EMAIL, PASSWORD);
+        ui.wait_text("#concept-title", "Alpha");
+        ui.wait_text("#body", "marmalade");
+        ui.wait_text(".crumbs", "systems");
+        // Alpha has no sub-headings, so no outline: nothing draws in its place.
+        let drawn = ui.eval(
+            "() => document.querySelector('#screen-concept').textContent",
+            json!(null),
+        );
+        assert!(
+            !drawn.as_str().unwrap_or("").contains("null"),
+            "stray text: {drawn}"
+        );
+        // render.rs's console link becomes a reader route, at the section.
+        let href = ui.eval(
+            "() => document.querySelector('#body a').getAttribute('href')",
+            json!(null),
+        );
+        assert_eq!(href, json!("#/v/main/systems/beta.md?s=settings"));
+        ui.click("#body a");
+        ui.wait_text("#concept-title", "Beta");
+        ui.wait_text("#outline", "Settings");
+        // Beta is linked from alpha and from the systems index.
+        ui.wait_text("#backlinks", "Alpha");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_log_opens_as_a_document() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/d/main/log.md", EMAIL, PASSWORD);
+        ui.wait_text("#document-title", "log.md");
+        ui.wait_text("#body", "Log");
+        assert!(!ui.present("#concept-gone") && !ui.present("#failed"));
+    })
+    .await;
+}
+
+/// Beta's body is over 20 characters: with this limit only its outline
+/// comes back, with a button for the whole concept.
+const SHORT_OUTLINE: usize = 20;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_whole_concept_replaces_the_outline_notice() {
+    let (server, _) = server_with_outline_limit(SHORT_OUTLINE).await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/main/systems/beta.md", EMAIL, PASSWORD);
+        ui.wait_visible("#show-full");
+        assert!(!ui.present("#body"));
+        ui.click("#show-full");
+        ui.wait_text("#body", "Two settings");
+        assert!(!ui.present("#shortened") && !ui.present("#show-full"));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_empty_concept_has_no_show_whole_button() {
+    let (server, _) = server_with_outline_limit(SHORT_OUTLINE).await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/main/systems/empty.md", EMAIL, PASSWORD);
+        ui.wait_text("#concept-title", "Empty");
+        ui.wait_visible("#body");
+        assert!(!ui.present("#show-full") && !ui.present("#shortened"));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_whole_concept_is_not_available_offline_and_can_be_retried() {
+    let (server, _) = server_with_outline_limit(SHORT_OUTLINE).await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        // Only the outline is cached: the whole body was never read.
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.wait_visible("#show-full");
+        let offline = ui.go_offline();
+        ui.click("#show-full");
+        ui.wait_visible("#full-failed");
+        assert!(ui.page.is_enabled("#show-full").expect("enabled"));
+        drop(offline);
+        ui.click("#show-full");
+        ui.wait_text("#body", "Two settings");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn show_the_whole_concept_after_losing_the_grant_evicts_the_catalog() {
+    let (server, _) = server_with_outline_limit(SHORT_OUTLINE).await;
+    let runtime = tokio::runtime::Handle::current();
+    let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.wait_visible("#show-full");
+        runtime.block_on(crate::support::server::applied(&app, async {
+            ceiling::unentitle(&pool, "reader", "main", &AuditActor::cli(), Utc::now())
+                .await
+                .expect("unentitle");
+        }));
+        ui.click("#show-full");
+        // The refusal went through ctx.fail: the catalog is evicted and the
+        // reader goes to the picker, naming the catalog that is gone.
+        ui.wait_visible("#screen-catalogs");
+        assert_eq!(
+            ui.eval("() => location.hash", json!(null)),
+            json!("#/c?gone=main")
+        );
+        // The picker says so, rather than choosing the one catalog left.
+        ui.wait_visible("#catalog-gone");
+        let counts = ui.eval(
+            "async () => (await (await caches.open('read-content')).keys()) \
+             .filter(k => new URL(k.url).pathname.includes('/catalogs/main/')).length",
+            json!(null),
+        );
+        assert_eq!(counts, json!(0));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_late_whole_concept_does_not_touch_a_newer_screen() {
+    let (server, _) = server_with_outline_limit(SHORT_OUTLINE).await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.wait_visible("#show-full");
+        // The whole read answers late, as the worker's cached copy would
+        // (the offline header): held in the page until released.
+        ui.eval(
+            "() => { const real = window.fetch; window.lateRelease = null; \
+             window.fetch = (input, init) => { \
+               if (!String(input).endsWith('?full=true')) return real(input, init); \
+               return new Promise(resolve => { window.lateRelease = async () => { \
+                 const answer = await real(input, init); \
+                 resolve(new Response(await answer.text(), { status: 200, headers: { \
+                   'Content-Type': 'application/json', 'X-Read-Offline': '1', \
+                   'X-Read-Cached-At': new Date().toISOString() } })); }; }); }; }",
+            json!(null),
+        );
+        ui.click("#show-full");
+        // Leave for another screen, then let the answer through.
+        ui.open_reader("/me");
+        ui.wait_visible("#account-user");
+        ui.eval("() => window.lateRelease()", json!(null));
+        std::thread::sleep(Duration::from_millis(800));
+        assert_eq!(
+            ui.eval(
+                "() => document.querySelector('#offline-banner').hidden",
+                json!(null)
+            ),
+            json!(true),
+            "the late answer marked the new screen offline"
+        );
+        assert!(ui.present("#account-user") && !ui.present("#body"));
     })
     .await;
 }
