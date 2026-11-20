@@ -22,6 +22,7 @@ mod changesets;
 mod consent;
 mod harness;
 mod health;
+mod help;
 mod keys;
 mod login;
 mod maintenance;

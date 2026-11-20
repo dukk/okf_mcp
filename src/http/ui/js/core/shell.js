@@ -6,6 +6,7 @@ import { $, h } from './dom.js';
 import { store } from './store.js';
 import { api } from './api.js';
 import { catalogLabel, setLabels } from './labels.js';
+import { openFeedback } from '../components/feedback.js';
 
 export async function refreshIdentity() {
     // Signed in with an account, the session (admin flag, CSRF token) is
@@ -39,6 +40,9 @@ export async function refreshIdentity() {
     const select = $('#catalog-select');
     select.replaceChildren(...me.catalogs.map(name => h('option', { value: name }, catalogLabel(name))));
     select.value = store.catalog ?? '';
+    // The feedback form needs an account's session: drawn again now the
+    // credential is known.
+    drawHelp();
 }
 
 // Whether an element marked data-need="<need>" shows: "session" for the
@@ -118,10 +122,43 @@ export async function refreshUnassigned() {
 }
 
 let brandTicket = 0;
+// The newest /ui/brand.json answer, for drawHelp().
+let brand = null;
+
+// The sidebar's help entries, from the last brand.json answer: the
+// "Documentation" link (Settings: docs_url), shown to everyone, and one
+// feedback entry. The in-console form (#feedback-open, brand.json's
+// `feedback_form`, there with a `[feedback]` table) needs an account's
+// session, so for someone signed in that way it wins over the external
+// "Send feedback" link (Settings: feedback_url); otherwise the link shows
+// when set. With neither, no feedback entry shows. The server validated
+// the URLs (https only); they are set as properties, never built into HTML.
+function drawHelp() {
+    const docs = document.getElementById('docs-link');
+    const link = document.getElementById('feedback-link');
+    const open = document.getElementById('feedback-open');
+    const url = value => (typeof value === 'string' && value ? value : null);
+    const docsUrl = url(brand?.docs_url);
+    if (docsUrl) docs.href = docsUrl; else docs.removeAttribute('href');
+    docs.hidden = !docsUrl;
+    const form = store.session && brand?.feedback_form ? brand.feedback_form : null;
+    open.hidden = !form;
+    const feedbackUrl = form ? null : url(brand?.feedback_url);
+    if (feedbackUrl) link.href = feedbackUrl; else link.removeAttribute('href');
+    link.hidden = !feedbackUrl;
+    // For the browser tests: the entries above now follow a brand.json
+    // answer (until then every one is hidden, as index.html draws them).
+    if (brand) document.getElementById('app').dataset.brandLoaded = 'true';
+}
+
+// The feedback button opens the form drawn from the brand it was shown for.
+document.getElementById('feedback-open')?.addEventListener('click', () => {
+    if (brand?.feedback_form) openFeedback(brand.feedback_form);
+});
 
 // The operator's product name (Settings: product_name) on the login card, in
-// the sidebar and in the tab title, and the "Send feedback" link (Settings:
-// feedback_url) in the sidebar footer, from the public /ui/brand.json. Called at
+// the sidebar and in the tab title, and the help entries (drawHelp) in the
+// sidebar, from the public /ui/brand.json. Called at
 // boot (before anyone signs in) and after the setting is saved or reset.
 // textContent only. Only the newest call writes: a boot read answering late
 // never draws over a newer save's. On any failure the page keeps what it
@@ -129,24 +166,15 @@ let brandTicket = 0;
 // another name before the first answer.
 export async function applyBrand() {
     const mine = ++brandTicket;
-    let brand = null;
+    let answer = null;
     try {
         const response = await fetch('/ui/brand.json', { cache: 'no-store' });
-        if (response.ok) brand = await response.json();
+        if (response.ok) answer = await response.json();
     } catch { /* keep the current name */ }
-    if (mine !== brandTicket || !brand) return;
-    // The server validated the URL (https only); set it as a property, never
-    // build HTML from it. Hidden when unset, also after a reset.
-    const feedback = document.getElementById('feedback-link');
-    if (feedback) {
-        if (typeof brand.feedback_url === 'string' && brand.feedback_url) {
-            feedback.href = brand.feedback_url;
-            feedback.hidden = false;
-        } else {
-            feedback.removeAttribute('href');
-            feedback.hidden = true;
-        }
-    }
+    if (mine !== brandTicket || !answer) return;
+    brand = answer;
+    // Hidden when unset, also after a reset.
+    drawHelp();
     if (!brand.product_name) return;
     document.title = `${brand.product_name} console`;
     for (const el of document.querySelectorAll('.brand')) el.textContent = brand.product_name;

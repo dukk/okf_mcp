@@ -14,10 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::CredentialKind;
 use crate::error::OkfError;
-use crate::mail::feedback::{
-    self, FeedbackKind, FeedbackOrigin, NewFeedback, MAX_CLIENT_CHARS, MAX_MESSAGE_CHARS,
-    MAX_TOOL_BYTES,
-};
+use crate::mail::feedback::{self, Draft, FeedbackOrigin, Sender, MAX_CLIENT_CHARS};
 use crate::mcp::context::ToolContext;
 use crate::mcp::{reply, OkfServer};
 
@@ -39,9 +36,12 @@ const PRODUCT: &str = "this server";
 /// public tool reference shows it so); a session's tool list names the
 /// product instead ([`description`]). A test checks the third-party
 /// disclosure and the "ask the user first" guidance are in it.
-pub(crate) const DESCRIPTION: &str = "Send feedback about using this server (something \
-    confusing, broken, missing or good) to this server's team. The feedback goes to this \
-    server's team through a third-party form service (Forminit). Ask the user before including catalog \
+pub(crate) const DESCRIPTION: &str = concat!(
+    "Send feedback about using this server (something confusing, broken, missing or good) to \
+     this server's team. ",
+    // The same disclosure the console's feedback form shows.
+    feedback::third_party_disclosure!(),
+    " Ask the user before including catalog \
     content, personal details or anything the user hasn't agreed to share. When the user asks \
     you to send feedback, send the user's own words and set `from` to `user`; when you report \
     your own experience, set `from` to `agent`. What is sent: message, kind, from, tool, \
@@ -49,7 +49,8 @@ pub(crate) const DESCRIPTION: &str = "Send feedback about using this server (som
     the feedback's id and your user name as the sender's userId. No email, display name, key name, token or \
     catalog content is sent unless it is in the message. A message is at most 4,000 characters, \
     and each credential may send a limited number per hour (10 by default). Returns the \
-    feedback's id at once; delivery happens in the background.";
+    feedback's id at once; delivery happens in the background."
+);
 
 /// The tool's description for a session: [`DESCRIPTION`] naming the
 /// product.
@@ -95,12 +96,6 @@ pub struct FeedbackSent {
     pub id: String,
 }
 
-/// A refused argument.
-#[tracing::instrument(level = "trace", skip_all)]
-fn refused(reason: String) -> OkfError {
-    OkfError::Refused { reason }
-}
-
 /// The MCP client's name, safe to store and forward: control characters
 /// dropped, cut to [`MAX_CLIENT_CHARS`], [`UNKNOWN_CLIENT`] when empty.
 ///
@@ -125,7 +120,9 @@ pub(crate) fn client_name(name: Option<&str>) -> String {
     }
 }
 
-/// Checks the arguments, then stores the feedback and queues it.
+/// Checks the arguments, then stores the feedback and queues it, through
+/// [`feedback::check_and_submit`] (which the console's
+/// `POST /api/v1/feedback` calls too). `from` defaults to `agent`.
 ///
 /// # Arguments
 /// * `ctx` - the call's context (its principal and app).
@@ -136,76 +133,15 @@ pub(crate) fn client_name(name: Option<&str>) -> String {
 /// `{sent: true, id}`.
 ///
 /// # Errors
-/// [`OkfError::Refused`] when feedback is not configured, for a blank
-/// message, an unknown `kind` or `from`, a malformed `tool`, a `rating`
-/// outside 1-5, or a NUL in the text; [`OkfError::LimitExceeded`] for a
-/// message over 4,000 characters (`limit: "feedback_message"`) or past the
-/// credential's hourly limit (`limit: "feedback_rate"`); as
-/// [`feedback::submit`].
+/// [`OkfError::Forbidden`] for a console session (which never reaches the
+/// MCP route); otherwise as [`feedback::check_and_submit`], whose
+/// rate limit counts this credential.
 #[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn send(
     ctx: &ToolContext,
     client: Option<&str>,
     params: &SendFeedbackParams,
 ) -> Result<FeedbackSent, OkfError> {
-    let app = ctx.app();
-    let Some(config) = app.config().feedback.as_ref() else {
-        return Err(refused(
-            "feedback is not configured on this server".to_string(),
-        ));
-    };
-    let message = params.message.trim();
-    if message.is_empty() {
-        return Err(refused("message is empty".to_string()));
-    }
-    // Postgres refuses NUL in text, which would surface as a database error.
-    if message.contains('\0') {
-        return Err(refused(
-            "message must not contain NUL characters".to_string(),
-        ));
-    }
-    let length = message.chars().count();
-    if length > MAX_MESSAGE_CHARS {
-        return Err(OkfError::LimitExceeded {
-            limit: "feedback_message",
-            reason: format!(
-                "message is {length} characters; the most is {MAX_MESSAGE_CHARS}. \
-                 Shorten it or split it into several messages"
-            ),
-        });
-    }
-    let kind = match params.kind.as_deref() {
-        None => FeedbackKind::Other,
-        Some(name) => FeedbackKind::parse(name).ok_or_else(|| {
-            refused(format!(
-                "kind must be one of {}",
-                FeedbackKind::NAMES.join(", ")
-            ))
-        })?,
-    };
-    let origin = match params.from.as_deref() {
-        None => FeedbackOrigin::Agent,
-        Some(name) => FeedbackOrigin::parse(name)
-            .ok_or_else(|| refused("from must be user or agent".to_string()))?,
-    };
-    let tool = params.tool.as_deref().map(str::trim);
-    if tool.is_some_and(|tool| {
-        tool.is_empty()
-            || tool.len() > MAX_TOOL_BYTES
-            || !tool
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
-    }) {
-        return Err(refused(format!(
-            "tool must be a tool's name: 1 to {MAX_TOOL_BYTES} letters, digits, _ and -"
-        )));
-    }
-    let rating = match params.rating {
-        None => None,
-        // `i16::try_from` cannot fail inside 1..=5; `ok()` keeps it total.
-        Some(rating @ 1..=5) => i16::try_from(rating).ok(),
-        Some(_) => return Err(refused("rating must be 1 to 5".to_string())),
-    };
     let principal = ctx.principal();
     let credential_kind = match principal.kind {
         CredentialKind::ApiKey => "api_key",
@@ -218,18 +154,21 @@ pub(crate) async fn send(
         }
     };
     let client = client_name(client);
-    let new = NewFeedback {
+    let sender = Sender {
         credential: &principal.key_id,
         user_slug: principal.user.as_deref().unwrap_or(UNASSIGNED_USER),
-        message,
-        kind,
-        origin,
-        tool,
-        rating,
         client: &client,
         credential_kind,
     };
-    let id = feedback::submit(app.pool(), &new, config.max_per_hour, app.clock().now()).await?;
+    let draft = Draft {
+        message: &params.message,
+        kind: params.kind.as_deref(),
+        from: params.from.as_deref(),
+        default_origin: FeedbackOrigin::Agent,
+        tool: params.tool.as_deref(),
+        rating: params.rating,
+    };
+    let id = feedback::check_and_submit(ctx.app(), &sender, &draft).await?;
     Ok(FeedbackSent { sent: true, id })
 }
 
@@ -277,6 +216,7 @@ mod tests {
     use crate::config::AuthConfig;
     use crate::config::{Config, FeedbackConfig};
     use crate::mail::feedback::tests::{config_on, mock_forminit, API_KEY, FORM};
+    use crate::mail::feedback::MAX_MESSAGE_CHARS;
     use crate::mcp::testing::{app_with, context, principal, McpProbe, TestApp};
     use crate::mcp::{feedback_instructions, OkfServer, INSTRUCTIONS, TOOL_REFERENCE_URL};
     use crate::store::keys::{self, Access, Grants, NewKey};

@@ -192,6 +192,12 @@ pub struct AuthConfig {
     /// The default `https://` URL of the console's "Send feedback" link;
     /// `None` shows no link.
     pub feedback_url: Option<String>,
+    /// The default `https://` URL of the console's "Documentation" link;
+    /// `None` shows no link.
+    pub docs_url: Option<String>,
+    /// The default `https://` URL a first password setup redirects to (a
+    /// getting-started guide); `None` goes to the console.
+    pub onboarding_url: Option<String>,
     /// The name the MCP server reports in `initialize` (`serverInfo.name`;
     /// [`DEFAULT_MCP_SERVER_NAME`] when unset). Config-only: it is an
     /// identifier, not display text (`serverInfo.title` is the product
@@ -282,6 +288,8 @@ impl Default for AuthConfig {
             product_name: settings::DEFAULT_PRODUCT_NAME.to_string(),
             support_contact: None,
             feedback_url: None,
+            docs_url: None,
+            onboarding_url: None,
             mcp_server_name: DEFAULT_MCP_SERVER_NAME.to_string(),
         }
     }
@@ -353,7 +361,8 @@ impl AuthConfig {
     /// overrides it. The product name is trimmed, as a stored one is.
     ///
     /// # Returns
-    /// The default product name, support contact and feedback URL.
+    /// The default product name, support contact, feedback URL and
+    /// documentation URL.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -366,6 +375,7 @@ impl AuthConfig {
             product_name: self.product_name.trim().to_string(),
             support_contact: self.support_contact.clone(),
             feedback_url: self.feedback_url.clone(),
+            docs_url: self.docs_url.clone(),
         }
     }
 }
@@ -2050,7 +2060,9 @@ mod tests {
         let text = "[auth]\n\
                     product_name = \" Acme Notes \"\n\
                     support_contact = \"help@example.com\"\n\
-                    feedback_url = \"https://example.com/feedback\"\n";
+                    feedback_url = \"https://example.com/feedback\"\n\
+                    docs_url = \"https://docs.example.com\"\n\
+                    onboarding_url = \"https://docs.example.com/start/\"\n";
 
         let config = Config::from_toml(text).unwrap();
 
@@ -2061,7 +2073,13 @@ mod tests {
                 product_name: "Acme Notes".to_string(),
                 support_contact: Some("help@example.com".to_string()),
                 feedback_url: Some("https://example.com/feedback".to_string()),
+                docs_url: Some("https://docs.example.com".to_string()),
             }
+        );
+        // Not part of the brand: only the setup redirect reads it.
+        assert_eq!(
+            config.auth.onboarding_url.as_deref(),
+            Some("https://docs.example.com/start/")
         );
         assert_eq!(
             Config::from_toml("").unwrap().auth.default_brand(),
@@ -2103,6 +2121,8 @@ mod tests {
             "[auth]\nproduct_name = \"Acme\\u0007\"\n",
             "[auth]\nsupport_contact = \"http://example.com\"\n",
             "[auth]\nfeedback_url = \"help@example.com\"\n",
+            "[auth]\ndocs_url = \"http://docs.example.com\"\n",
+            "[auth]\nonboarding_url = \"/ui/\"\n",
         ];
 
         for text in refused {
