@@ -14,9 +14,22 @@ lint:
     RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 
 # One Postgres server for the whole run (scripts/test-pg.sh); set
-# TEST_PG_URL to reuse one already running.
-test:
+# TEST_PG_URL to reuse one already running. Runs the reader worker's tests
+# first.
+test: test-worker
     scripts/test-pg.sh run cargo test
+
+# The mobile reader's service worker (src/http/read/sw.js) in a Node vm with
+# fake Cache Storage and fetch: Node's built-in test runner, no npm packages.
+# Skips with a message when `node` is not installed.
+test-worker:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v node >/dev/null 2>&1; then
+        echo "test-worker: skipped, node is not installed (the reader worker's tests need Node 18 or later)"
+        exit 0
+    fi
+    node --test tests/read_worker/*.test.mjs
 
 # Browser end-to-end tests of the web console (needs Docker and Chromium;
 # RUSTWRIGHT_CHROMIUM names the binary if it is not on PATH).
