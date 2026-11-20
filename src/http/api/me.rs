@@ -1312,7 +1312,8 @@ enum Proved {
 /// the last admin user; the account is never disabled instead.
 ///
 /// # Returns
-/// 204, clearing the session (and passkey ceremony) cookies.
+/// 204, clearing the session and passkey ceremony cookies, whichever
+/// proof was used.
 ///
 /// # Errors
 /// 400 for a body with neither or both proofs; 403 for a bearer caller, a
@@ -1332,7 +1333,10 @@ async fn delete_account(
 ) -> Result<Response, AppError> {
     let (user, session) = session_and_user(&principal, session)?;
     let now = app.clock().now();
+    // Both cookies go on every successful deletion: the session, and any
+    // passkey ceremony this browser started, whichever proof was used.
     let mut answer = clear_cookie(&app);
+    append_all(&mut answer, &passkeys_http::clear_ceremony_cookie(&app));
     // Each arm proves it is the person; what it proved is checked again
     // under the user's row lock by `delete_own`.
     let proved = match (body.password, body.passkey) {
@@ -1354,9 +1358,8 @@ async fn delete_account(
             }
         }
         (None, Some(assertion)) => {
-            let (credential_id, clear) =
+            let credential_id =
                 passkeys_http::confirm(&app, &headers, &session, user.id, &assertion).await?;
-            append_all(&mut answer, &clear);
             Proved::Passkey(credential_id)
         }
         _ => {
@@ -1597,6 +1600,7 @@ mod tests {
         allow, app, fail_on, keys, send, wait_for_lock_waiters, Browser, Payload, Reply,
     };
     use crate::http::console_session::COOKIE;
+    use crate::http::passkeys::CEREMONY_COOKIE;
     use crate::mail::queue as mail_queue;
     use crate::mcp::testing::TestApp;
     use crate::store::audit::AuditActor;
@@ -3223,6 +3227,9 @@ mod tests {
         // Arrange
         let test = app().await;
         let (id, mut browser) = with_password(&test, "alice").await;
+        // A passkey ceremony this browser started and left (Confirm with a
+        // passkey, then the password instead).
+        browser.add_cookie(CEREMONY_COOKIE, "left-over-ceremony");
 
         // Act
         let deleted = delete_me(&test, &mut browser, json!({"password": PASSWORD})).await;
@@ -3237,6 +3244,12 @@ mod tests {
             .set_cookie(COOKIE)
             .expect("the session cookie is cleared");
         assert!(cleared.contains("Max-Age=0"), "{cleared}");
+        let ceremony = deleted
+            .set_cookie(CEREMONY_COOKIE)
+            .expect("the ceremony cookie is cleared too");
+        assert!(ceremony.contains("Max-Age=0"), "{ceremony}");
+        assert_eq!(browser.cookie(CEREMONY_COOKIE), None);
+        assert_eq!(browser.cookie(COOKIE), None);
         assert_eq!(after.status, StatusCode::UNAUTHORIZED, "{}", after.text());
         let left: i64 = sqlx::query_scalar(
             "SELECT (SELECT count(*) FROM users WHERE id = $1) \

@@ -524,6 +524,20 @@ async fn take_ceremony(
         .take(id, now)
         .await?
         .ok_or_else(expired)?;
+    Ok((ceremony, clear_ceremony_cookie(app)))
+}
+
+/// The `Set-Cookie` header that removes the ceremony cookie: sent when a
+/// ceremony is taken, and by every successful account deletion
+/// (`DELETE /api/v1/me`), whichever way it re-authenticated.
+///
+/// # Arguments
+/// * `app` - the shared state (for `Secure`).
+///
+/// # Returns
+/// The header.
+#[tracing::instrument(level = "trace", skip_all)]
+pub(crate) fn clear_ceremony_cookie(app: &App) -> HeaderMap {
     let mut clear = HeaderMap::new();
     clear.insert(
         header::SET_COOKIE,
@@ -535,7 +549,7 @@ async fn take_ceremony(
             secure_cookies(app),
         ),
     );
-    Ok((ceremony, clear))
+    clear
 }
 
 /// Starts a registration for `user`: the challenge (asking for a
@@ -1145,8 +1159,8 @@ fn confirming(
 /// * `credential` - the browser's assertion.
 ///
 /// # Returns
-/// The asserted passkey's raw credential id, and the header that clears
-/// the ceremony cookie.
+/// The asserted passkey's raw credential id. (The caller clears the
+/// ceremony cookie when it answers, [`clear_ceremony_cookie`].)
 ///
 /// # Errors
 /// [`OkfError::NotFound`] with passkeys off; [`OkfError::Gone`] for a
@@ -1161,9 +1175,9 @@ pub(crate) async fn confirm(
     session: &ConsoleSession,
     user_id: &str,
     credential: &PublicKeyCredential,
-) -> Result<(Vec<u8>, HeaderMap), OkfError> {
+) -> Result<Vec<u8>, OkfError> {
     let passkeys = enabled(app)?;
-    let (ceremony, clear) = take_ceremony(app, passkeys, headers, Instant::now()).await?;
+    let (ceremony, _clear) = take_ceremony(app, passkeys, headers, Instant::now()).await?;
     let Ceremony::Confirm {
         state,
         user_id: owner,
@@ -1200,7 +1214,7 @@ pub(crate) async fn confirm(
                 reason: CONFIRM_FAILED.to_string(),
             }
         })?;
-    Ok((result.cred_id().as_slice().to_vec(), clear))
+    Ok(result.cred_id().as_slice().to_vec())
 }
 
 /// Stores a session's passkey, ends the other sessions unless kept and
