@@ -18,9 +18,8 @@ function deleteOffline(view, ctx) {
 
 export async function render(view, ctx) {
     const session = ctx.state.session;
-    view.append(h('h1', {}, 'Account'));
     if (!session) {
-        view.append(message('Account details and sign-out need a connection.', null, 'account-offline'), deleteOffline(view, ctx));
+        view.append(h('h1', {}, 'Account'), message('Account details and sign-out need a connection.', null, 'account-offline'), deleteOffline(view, ctx));
         return;
     }
     const button = h('button', { type: 'button', id: 'sign-out' }, 'Sign out');
