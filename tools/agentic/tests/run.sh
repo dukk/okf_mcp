@@ -550,14 +550,35 @@ test_watchdog_ignores_a_sleep_and_a_cat_on_a_file() {
     new_fixtures; fake_pids=(); trap 'kill "${fake_pids[@]}" 2>/dev/null' EXIT
     (cd "$work/wt" && exec sleep 20) >/dev/null 2>&1 &
     fake_pids+=("$!")
-    # A cat whose stdin is a regular file: fd 0 is not a pipe or socket.
-    (cd "$work/wt" && exec cat < /dev/null) >/dev/null 2>&1 &
-    fake_pids+=("$!")
+    # A cat whose stdin is a regular file: fd 0 is not a pipe or socket. It must
+    # still be alive during the scan, or the test proves nothing (a cat on an
+    # empty file exits at once). A 1 MiB file and a stdout pipe nobody reads
+    # keep it blocked in a write, and a SIGSTOP holds it in state T.
+    head -c 1048576 /dev/zero >"$work/regular-input"
+    (cd "$work/wt" && exec cat < "$work/regular-input" > >(sleep 20)) >/dev/null 2>&1 &
+    local file_cat=$!
+    fake_pids+=("$file_cat")
+    # Stop it only once it has exec'd cat: until then it is the subshell.
+    local tries=0 state=
+    while [ "$(cat "/proc/$file_cat/comm" 2>/dev/null)" != cat ] && [ "$tries" -lt 50 ]; do
+        tries=$((tries + 1)); sleep 0.1
+    done
+    kill -STOP "$file_cat"
+    tries=0
+    while [ "$tries" -lt 50 ]; do
+        state=$(awk '/^State:/ {print $2}' "/proc/$file_cat/status" 2>/dev/null)
+        [ "$state" = T ] && break
+        tries=$((tries + 1)); sleep 0.1
+    done
+    [ "$state" = T ] || die "the cat on a file is not alive and stopped (state: ${state:-gone})"
+    [ "$(readlink "/proc/$file_cat/fd/0")" = "$work/regular-input" ] || die "fd 0 is not the regular file"
     # tail -f is a follower, not a stuck reader.
     idle_reader tail -f /dev/stdin
     sleep 1.2
     idle_watchdog AGENTIC_WATCHDOG_IDLE=0
     want_rc 0
+    kill -0 "$file_cat" 2>/dev/null || die "the cat on a file exited before the scan"
+    kill -CONT "$file_cat"; kill "$file_cat"; wait "$file_cat" 2>/dev/null || true
 }
 
 test_watchdog_ignores_an_idle_reader_outside_a_checkout() {
