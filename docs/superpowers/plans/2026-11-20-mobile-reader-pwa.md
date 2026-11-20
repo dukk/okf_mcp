@@ -1459,9 +1459,18 @@ export async function read(path) {
     } catch {
         throw new ReadError(KIND.UNAVAILABLE, 'Not available offline.');
     }
-    const body = await response.json().catch(() => null);
     if (!response.ok) {
+        // A refusal's body is optional: without one, its status still decides.
+        const body = await response.json().catch(() => null);
         throw new ReadError(classify(response.status, body), body?.message ?? `HTTP ${response.status}`, body);
+    }
+    // A 2xx whose body cannot be read (the connection dropped after the
+    // headers, or it is not JSON) is a failed read, never empty data.
+    let body;
+    try {
+        body = await response.json();
+    } catch {
+        throw new ReadError(KIND.FAILED, 'The answer could not be read.');
     }
     return {
         data: body,
@@ -1497,6 +1506,11 @@ export async function signOut(csrf) {
     }
 }
 ```
+
+> **Corrected (issue #812, 2026-11-20, review).** The listing above is `api.js` as shipped. `read`
+> now throws a `ReadError` of kind `failed` for a 2xx whose body cannot be read (malformed JSON, or
+> a connection that drops after the headers) instead of answering `{ data: null }`, which made
+> `readAll` throw a bare `TypeError`. Only a refusal keeps the optional body.
 
 - [ ] **Step 2: Write `src/http/read/js/cache.js`**
 
@@ -1666,9 +1680,11 @@ export function offlineDocuments(catalog) {
 //   #/c[?gone=<catalog>]                  catalog picker
 //   #/t/<catalog>[/<folder>...]           a folder of the tree
 //   #/s/<catalog>[?q=<query>]             search
-//   #/v/<catalog>/<path>.md[/<section>]   a concept, optionally at a heading
+//   #/v/<catalog>/<path>.md[?s=<section>] a concept, optionally at a heading
 //   #/d/<catalog>/<path>                  a log.md or AGENTS.md (read as a document)
 //   #/me                                  account
+// A concept's path is every segment after the catalog (a folder may be
+// named 'x.md'), so its section travels as a parameter, never a segment.
 const dec = decodeURIComponent;
 const enc = encodeURIComponent;
 
@@ -1685,9 +1701,9 @@ export function parse(hash) {
         case 't': return { screen: 'tree', catalog, folder: rest.join('/') };
         case 's': return { screen: 'search', catalog, query: params.get('q') ?? '' };
         case 'v': {
-            const end = rest.findIndex(segment => segment.endsWith('.md'));
-            if (end < 0) return { screen: 'tree', catalog, folder: rest.join('/') };
-            return { screen: 'concept', catalog, path: rest.slice(0, end + 1).join('/'), section: rest[end + 1] ?? null };
+            const path = rest.join('/');
+            if (!path.endsWith('.md')) return { screen: 'tree', catalog, folder: path };
+            return { screen: 'concept', catalog, path, section: params.get('s') || null };
         }
         case 'd': return { screen: 'document', catalog, path: rest.join('/') };
         case 'me': return { screen: 'me' };
@@ -1701,7 +1717,7 @@ export const hrefs = Object.freeze({
     tree: (catalog, folder = '') => `#/t/${[catalog, ...segments(folder)].map(enc).join('/')}`,
     search: (catalog, query = '') => `#/s/${enc(catalog)}${query ? `?q=${enc(query)}` : ''}`,
     concept: (catalog, path, section = null) =>
-        `#/v/${[catalog, ...segments(path), ...(section ? [section] : [])].map(enc).join('/')}`,
+        `#/v/${[catalog, ...segments(path)].map(enc).join('/')}${section ? `?s=${enc(section)}` : ''}`,
     document: (catalog, path) => `#/d/${[catalog, ...segments(path)].map(enc).join('/')}`,
     me: () => '#/me',
 });
@@ -1729,14 +1745,34 @@ export function hrefFor(catalog, path, section = null) {
 
 // A link src/render.rs wrote ('#/browse/<catalog>/<path>[/<section>]', the
 // console's route) as the reader's route, or null for any other link.
+// render.rs links only to a path ending in '.md', plus at most one section
+// segment, so the document ends at the LAST segment ending in '.md' (a
+// folder before it may be named 'x.md'), and what follows is the section.
+// A heading's slug (src/okf/markdown.rs, `slugify`) keeps only letters,
+// digits, '_' and '-', so a section that reaches a heading never ends in
+// '.md'. Only a link whose #fragment ends in '.md', which reaches no
+// heading anyway, is read as a longer path.
 export function fromBrowse(href) {
     if (!href.startsWith('#/browse/')) return null;
     const [catalog, ...rest] = href.slice('#/browse/'.length).split('/').map(dec);
-    const end = rest.findIndex(segment => segment.endsWith('.md'));
+    const end = rest.findLastIndex(segment => segment.endsWith('.md'));
     if (end < 0) return hrefs.tree(catalog, rest.join('/'));
-    return hrefFor(catalog, rest.slice(0, end + 1).join('/'), rest[end + 1] ?? null);
+    return hrefFor(catalog, rest.slice(0, end + 1).join('/'), rest.slice(end + 1).join('/') || null);
 }
 ```
+
+> **Corrected (issue #812, 2026-11-20, review).** The listing above is `route.js` as shipped. A
+> folder may be named `x.md`, so a concept route's path is now every segment after the catalog,
+> and its section is a parameter: `#/v/<catalog>/<path>.md?s=<slug>` (it was a last segment,
+> `#/v/<catalog>/<path>.md/<slug>`, and the path ended at the first `.md` segment, so
+> `archive.md/topic.md` opened `archive.md`). `hrefs.concept` and `hrefFor` keep their signatures
+> and `parse` its result, so callers change nothing; only hard-coded section routes do (Task 8's
+> `#/v/main/systems/beta.md?s=settings`, Task 10's `/v/main/systems/alpha.md?s=alpha`).
+> `fromBrowse` reads render.rs's console links (`#/browse/<catalog>/<path>[/<slug>]`, whose
+> format cannot tell a folder from a section) by ending the document at the last segment ending
+> in `.md`: render.rs links only to `.md` paths, and a heading slug (`slugify`) has no `.`
+> (`okf::markdown::tests::slugify_output_has_no_dot`). The console's own `browse.js` still ends a
+> path at the first `.md` segment; issue #829 tracks that and render.rs's format.
 
 - [ ] **Step 4: Write `src/http/read/js/listing.js`**
 
@@ -2475,6 +2511,11 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify (replace): `src/http/read/js/screens/concept.js`
 - Modify: `tests/ui_e2e/read.rs`
 
+> **Corrected (issue #812, 2026-11-20).** A section travels as `?s=<slug>` (Task 5, `route.js`):
+> the rewritten link below is `#/v/main/systems/beta.md?s=settings`, no longer
+> `#/v/main/systems/beta.md/settings`. The outline's links (`hrefs.concept(catalog, path,
+> heading.slug)`) and `ctx.route.section` need no change.
+
 - [ ] **Step 1: Write the failing journey**
 
 ```rust
@@ -2491,7 +2532,7 @@ async fn a_concept_shows_its_body_follows_links_and_lists_backlinks() {
             "() => document.querySelector('#body a').getAttribute('href')",
             json!(null),
         );
-        assert_eq!(href, json!("#/v/main/systems/beta.md/settings"));
+        assert_eq!(href, json!("#/v/main/systems/beta.md?s=settings"));
         ui.click("#body a");
         ui.wait_text("#concept-title", "Beta");
         ui.wait_text("#outline", "Settings");
@@ -3049,7 +3090,8 @@ async fn offline_a_concept_opens_from_either_its_short_or_its_full_copy() {
         ui.open_reader("/v/main/systems/beta.md");
         ui.wait_text("#body", "Two settings");
         // Alpha opened only through a section link: cached with ?full=true.
-        ui.open_reader("/v/main/systems/alpha.md/alpha");
+        // (A section is `?s=<slug>`, Task 5's route.js; corrected for issue #812, 2026-11-20.)
+        ui.open_reader("/v/main/systems/alpha.md?s=alpha");
         ui.wait_text("#body", "marmalade");
         let offline = ui.go_offline();
         // Beta's outline link asks for ?full=true: the plain copy answers.

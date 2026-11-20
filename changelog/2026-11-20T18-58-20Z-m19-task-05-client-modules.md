@@ -38,6 +38,15 @@
 - `just test-worker` needs Node 18.19+ (or 20.6+), for `register` in
   `node:module`, and skips with a message on an older Node, as it does
   without one. The README's Testing section says so.
+- A concept route carries its section as a parameter,
+  `#/v/<catalog>/<path>.md?s=<slug>`, and its path is every segment, so a
+  folder named `x.md` is a folder (review). `fromBrowse` ends a console
+  link's document at its last `.md` segment: render.rs links only to `.md`
+  paths and a heading slug has no `.` (a new property test,
+  `slugify_output_has_no_dot`). The console's own first-`.md` rule is #829.
+- `read` turns a 2xx whose body cannot be read (malformed JSON, a dropped
+  connection) into a `failed` ReadError instead of answering null data
+  (review).
 - `READ_CACHES.ownerKey` names the owner record's key once, for the page and
   `sw.js`.
 - The in-memory Cache Storage fake moved from `sw.test.mjs` to

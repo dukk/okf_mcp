@@ -952,4 +952,15 @@ mod tests {
         assert!(!slug.contains(' '));
         assert!(!slug.chars().any(|c| c.is_ascii_uppercase()));
     }
+
+    /// The mobile reader relies on this (src/http/read/js/route.js,
+    /// `fromBrowse`): a heading slug has no '.', so it never ends in `.md`
+    /// and cannot be mistaken for the last segment of a document's path.
+    #[hegel::test]
+    fn slugify_output_has_no_dot(tc: hegel::TestCase) {
+        use hegel::generators;
+        let text: String = tc.draw(generators::text());
+        assert!(!slugify(&text).contains('.'));
+        assert!(!slugify(&format!("{text}.md")).contains('.'));
+    }
 }

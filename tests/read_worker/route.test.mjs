@@ -19,13 +19,29 @@ test('parse reads every screen', () => {
     assert.deepEqual(parse('#/s/main'), { screen: 'search', catalog: 'main', query: '' });
     assert.deepEqual(parse('#/s/main?q=a%26b%3Fc'), { screen: 'search', catalog: 'main', query: 'a&b?c' });
     assert.deepEqual(parse('#/v/main/a/b.md'), { screen: 'concept', catalog: 'main', path: 'a/b.md', section: null });
-    assert.deepEqual(parse('#/v/main/a/b.md/caf%C3%A9'), { screen: 'concept', catalog: 'main', path: 'a/b.md', section: 'café' });
+    assert.deepEqual(parse('#/v/main/a/b.md?s=caf%C3%A9'), { screen: 'concept', catalog: 'main', path: 'a/b.md', section: 'café' });
+    assert.deepEqual(parse('#/v/main/a/b.md?s='), { screen: 'concept', catalog: 'main', path: 'a/b.md', section: null });
     assert.deepEqual(parse('#/d/main/a/log.md'), { screen: 'document', catalog: 'main', path: 'a/log.md' });
     assert.deepEqual(parse('#/me'), { screen: 'me' });
 });
 
-test('a concept route without a .md segment reads as its folder', () => {
+test('a concept route not ending in .md reads as its folder', () => {
     assert.deepEqual(parse('#/v/main/a/b'), { screen: 'tree', catalog: 'main', folder: 'a/b' });
+    assert.deepEqual(parse('#/v/main/a.md/b'), { screen: 'tree', catalog: 'main', folder: 'a.md/b' });
+});
+
+test('a concept route\'s path is every segment, folders named x.md included', () => {
+    assert.deepEqual(parse('#/v/main/archive.md/topic.md'),
+        { screen: 'concept', catalog: 'main', path: 'archive.md/topic.md', section: null });
+    assert.deepEqual(parse('#/v/main/archive.md/topic.md?s=notes'),
+        { screen: 'concept', catalog: 'main', path: 'archive.md/topic.md', section: 'notes' });
+    for (const [path, section] of [['archive.md/topic.md', null], ['archive.md/topic.md', 'notes'],
+        ['a.md/b.md/c.md', 'x.md'], ['archive.md/topic.md', 'a/b?c=d&e']]) {
+        assert.deepEqual(parse(hrefs.concept('main', path, section)),
+            { screen: 'concept', catalog: 'main', path, section });
+        assert.deepEqual(parse(hrefFor('main', path, section)),
+            { screen: 'concept', catalog: 'main', path, section });
+    }
 });
 
 test('every href parses back to the route it names, whatever the characters', () => {
@@ -48,7 +64,8 @@ test('every href parses back to the route it names, whatever the characters', ()
 
 test('hrefs encode every segment and drop empty ones', () => {
     assert.equal(hrefs.tree('main', '/a//b/'), '#/t/main/a/b');
-    assert.equal(hrefs.concept('main', '/a b/c.md', 'x y'), '#/v/main/a%20b/c.md/x%20y');
+    assert.equal(hrefs.concept('main', '/a b/c.md', 'x y'), '#/v/main/a%20b/c.md?s=x%20y');
+    assert.equal(hrefs.concept('main', '/a b/c.md'), '#/v/main/a%20b/c.md');
     assert.equal(hrefs.search('main', 'a b'), '#/s/main?q=a%20b');
     assert.equal(hrefs.catalogs('a&b'), '#/c?gone=a%26b');
 });
@@ -60,7 +77,9 @@ test('hrefFor opens an index as its folder, a log or AGENTS.md as a document, th
     assert.equal(hrefFor('main', '/systems/log.md'), '#/d/main/systems/log.md');
     assert.equal(hrefFor('main', 'AGENTS.md'), '#/d/main/AGENTS.md');
     assert.equal(hrefFor('main', '/systems/alpha.md'), '#/v/main/systems/alpha.md');
-    assert.equal(hrefFor('main', '/systems/alpha.md', 'notes'), '#/v/main/systems/alpha.md/notes');
+    assert.equal(hrefFor('main', '/systems/alpha.md', 'notes'), '#/v/main/systems/alpha.md?s=notes');
+    // A folder named like a concept is a folder like any other.
+    assert.equal(hrefFor('main', '/archive.md/index.md'), '#/t/main/archive.md');
     // Only the exact names count.
     assert.equal(hrefFor('main', '/systems/my-index.md'), '#/v/main/systems/my-index.md');
     assert.equal(hrefFor('main', '/systems/Log.md'), '#/v/main/systems/Log.md');
@@ -68,13 +87,32 @@ test('hrefFor opens an index as its folder, a log or AGENTS.md as a document, th
 
 test('fromBrowse turns the console\'s browse links into reader routes', () => {
     assert.equal(fromBrowse('#/browse/main/systems/beta.md'), '#/v/main/systems/beta.md');
-    assert.equal(fromBrowse('#/browse/main/systems/beta.md/config'), '#/v/main/systems/beta.md/config');
-    assert.equal(fromBrowse('#/browse/main/systems/alpha.md/caf%C3%A9'), '#/v/main/systems/alpha.md/caf%C3%A9');
+    assert.equal(fromBrowse('#/browse/main/systems/beta.md/config'), '#/v/main/systems/beta.md?s=config');
+    assert.equal(fromBrowse('#/browse/main/systems/alpha.md/caf%C3%A9'), '#/v/main/systems/alpha.md?s=caf%C3%A9');
     assert.equal(fromBrowse('#/browse/main/a%20b/c.md'), '#/v/main/a%20b/c.md');
     assert.equal(fromBrowse('#/browse/main/index.md'), '#/t/main');
     assert.equal(fromBrowse('#/browse/main/systems/index.md'), '#/t/main/systems');
     assert.equal(fromBrowse('#/browse/main/systems/log.md'), '#/d/main/systems/log.md');
     assert.equal(fromBrowse('#/browse/main/systems'), '#/t/main/systems');
+});
+
+test('fromBrowse ends the document at the last .md segment, so folders may be named x.md', () => {
+    assert.equal(fromBrowse('#/browse/main/archive.md/topic.md'), '#/v/main/archive.md/topic.md');
+    assert.equal(fromBrowse('#/browse/main/archive.md/topic.md/notes'), '#/v/main/archive.md/topic.md?s=notes');
+    assert.equal(fromBrowse('#/browse/main/archive.md/index.md'), '#/t/main/archive.md');
+    assert.equal(fromBrowse('#/browse/main/a.md/b.md/log.md'), '#/d/main/a.md/b.md/log.md');
+    assert.deepEqual(parse(fromBrowse('#/browse/main/archive.md/topic.md/notes')),
+        { screen: 'concept', catalog: 'main', path: 'archive.md/topic.md', section: 'notes' });
+});
+
+test('a heading slug never ends in .md, so fromBrowse reads every slug as a section', () => {
+    // The characters src/okf/markdown.rs `slugify` keeps: letters, digits, '_', '-'.
+    for (const slug of ['notes', 'caf\u00e9', 'v12-release_notes', 'md', '-md', 'a-md']) {
+        const route = parse(fromBrowse(`#/browse/main/archive.md/topic.md/${encodeURIComponent(slug)}`));
+        assert.deepEqual([route.path, route.section], ['archive.md/topic.md', slug]);
+    }
+    // Only a #fragment ending in '.md' (which reaches no heading) reads as a longer path.
+    assert.equal(parse(fromBrowse('#/browse/main/topic.md/notes.md')).path, 'topic.md/notes.md');
 });
 
 test('fromBrowse leaves every other link alone', () => {

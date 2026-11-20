@@ -3,9 +3,11 @@
 //   #/c[?gone=<catalog>]                  catalog picker
 //   #/t/<catalog>[/<folder>...]           a folder of the tree
 //   #/s/<catalog>[?q=<query>]             search
-//   #/v/<catalog>/<path>.md[/<section>]   a concept, optionally at a heading
+//   #/v/<catalog>/<path>.md[?s=<section>] a concept, optionally at a heading
 //   #/d/<catalog>/<path>                  a log.md or AGENTS.md (read as a document)
 //   #/me                                  account
+// A concept's path is every segment after the catalog (a folder may be
+// named 'x.md'), so its section travels as a parameter, never a segment.
 const dec = decodeURIComponent;
 const enc = encodeURIComponent;
 
@@ -22,9 +24,9 @@ export function parse(hash) {
         case 't': return { screen: 'tree', catalog, folder: rest.join('/') };
         case 's': return { screen: 'search', catalog, query: params.get('q') ?? '' };
         case 'v': {
-            const end = rest.findIndex(segment => segment.endsWith('.md'));
-            if (end < 0) return { screen: 'tree', catalog, folder: rest.join('/') };
-            return { screen: 'concept', catalog, path: rest.slice(0, end + 1).join('/'), section: rest[end + 1] ?? null };
+            const path = rest.join('/');
+            if (!path.endsWith('.md')) return { screen: 'tree', catalog, folder: path };
+            return { screen: 'concept', catalog, path, section: params.get('s') || null };
         }
         case 'd': return { screen: 'document', catalog, path: rest.join('/') };
         case 'me': return { screen: 'me' };
@@ -38,7 +40,7 @@ export const hrefs = Object.freeze({
     tree: (catalog, folder = '') => `#/t/${[catalog, ...segments(folder)].map(enc).join('/')}`,
     search: (catalog, query = '') => `#/s/${enc(catalog)}${query ? `?q=${enc(query)}` : ''}`,
     concept: (catalog, path, section = null) =>
-        `#/v/${[catalog, ...segments(path), ...(section ? [section] : [])].map(enc).join('/')}`,
+        `#/v/${[catalog, ...segments(path)].map(enc).join('/')}${section ? `?s=${enc(section)}` : ''}`,
     document: (catalog, path) => `#/d/${[catalog, ...segments(path)].map(enc).join('/')}`,
     me: () => '#/me',
 });
@@ -66,10 +68,17 @@ export function hrefFor(catalog, path, section = null) {
 
 // A link src/render.rs wrote ('#/browse/<catalog>/<path>[/<section>]', the
 // console's route) as the reader's route, or null for any other link.
+// render.rs links only to a path ending in '.md', plus at most one section
+// segment, so the document ends at the LAST segment ending in '.md' (a
+// folder before it may be named 'x.md'), and what follows is the section.
+// A heading's slug (src/okf/markdown.rs, `slugify`) keeps only letters,
+// digits, '_' and '-', so a section that reaches a heading never ends in
+// '.md'. Only a link whose #fragment ends in '.md', which reaches no
+// heading anyway, is read as a longer path.
 export function fromBrowse(href) {
     if (!href.startsWith('#/browse/')) return null;
     const [catalog, ...rest] = href.slice('#/browse/'.length).split('/').map(dec);
-    const end = rest.findIndex(segment => segment.endsWith('.md'));
+    const end = rest.findLastIndex(segment => segment.endsWith('.md'));
     if (end < 0) return hrefs.tree(catalog, rest.join('/'));
-    return hrefFor(catalog, rest.slice(0, end + 1).join('/'), rest[end + 1] ?? null);
+    return hrefFor(catalog, rest.slice(0, end + 1).join('/'), rest.slice(end + 1).join('/') || null);
 }
