@@ -675,6 +675,14 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 - [ ] **Step 6: Tag every `/api/v1` answer with its account**
 
+> **Corrected (issue #809, 2026-11-20).** `account_tag` takes an `Account`
+> (`Account::User(&row.user_id)` for a session, `Account::Key(&principal.key_id)`
+> for a bearer credential) and hashes `okf-account:user:<id>` or
+> `okf-account:key:<id>`, so a key whose id happens to equal a user's id never
+> shares that user's tag. The code below is the shipped form. The header on
+> real answers, and its absence from the middleware's own 401 and 403, is
+> checked by `console_session::http_tests::api_answers_name_their_account_and_refusals_do_not`.
+
 The reader shares the console's cookie, so another tab can sign in as someone else while a reader tab stays open. Its service worker must know whose answer each response is, so it never files one account's answers under another's. In `src/http/console_session.rs`, add after the `CSRF_HEADER` constant:
 
 ```rust
@@ -683,17 +691,24 @@ The reader shares the console's cookie, so another tab can sign in as someone el
 /// mobile reader's worker never files one account's answers under another's.
 pub const ACCOUNT_HEADER: &str = "x-okf-account";
 
-/// An opaque, stable tag for the account `id`: 16 hex digits of SHA-256 of
-/// a prefixed id, so the header names no user and no key.
-///
-/// # Arguments
-/// * `id` - a user's id, or a key's id.
-///
-/// # Returns
-/// The header value.
+/// Whose answer an `/api/v1` response is, for [`account_tag`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Account<'a> {
+    /// A console session's user, by user id.
+    User(&'a str),
+    /// A bearer credential (API key or OAuth grant), by key id.
+    Key(&'a str),
+}
+
+/// An opaque, stable tag for `account`: 16 hex digits of SHA-256 of a
+/// prefixed id, so the header names no user and no key.
 #[tracing::instrument(level = "trace", skip_all)]
-pub(crate) fn account_tag(id: &str) -> HeaderValue {
-    let digest = Sha256::digest(format!("okf-account:{id}").as_bytes());
+pub(crate) fn account_tag(account: Account<'_>) -> HeaderValue {
+    let prefixed = match account {
+        Account::User(id) => format!("okf-account:user:{id}"),
+        Account::Key(id) => format!("okf-account:key:{id}"),
+    };
+    let digest = Sha256::digest(prefixed.as_bytes());
     let hex = digest.iter().take(8).fold(String::with_capacity(16), |mut hex, byte| {
         // `write!` into a String cannot fail; `let _` drops the Ok.
         let _ = write!(hex, "{byte:02x}");
@@ -706,7 +721,7 @@ pub(crate) fn account_tag(id: &str) -> HeaderValue {
 with `use std::fmt::Write as _;` and `use sha2::{Digest, Sha256};` among the imports. In `require_principal`, the bearer branch's `return next.run(request).await;` becomes:
 
 ```rust
-            let tag = account_tag(&principal.key_id);
+            let tag = account_tag(Account::Key(&principal.key_id));
             let mut response = next.run(request).await;
             response.headers_mut().insert(ACCOUNT_HEADER, tag);
             return response;
@@ -716,20 +731,21 @@ with `use std::fmt::Write as _;` and `use sha2::{Digest, Sha256};` among the imp
 
 ```rust
     let mut response = next.run(request).await;
-    response.headers_mut().insert(ACCOUNT_HEADER, account_tag(&row.user_id));
+    response.headers_mut().insert(ACCOUNT_HEADER, account_tag(Account::User(&row.user_id)));
     response
 ```
 
-(`row.user_id` is still in scope; if the borrow checker objects because `row` was partly moved into `ConsoleSession`, take `let tag = account_tag(&row.user_id);` before that insert.)
+(shipped: `let tag = account_tag(Account::User(&row.user_id));` is taken before the `ConsoleSession` insert, and the insert after `next.run` uses `tag`.)
 
 Add to the module's tests:
 
 ```rust
     #[test]
     fn account_tags_are_stable_opaque_and_distinct() {
-        let alice = account_tag("user-alice");
-        assert_eq!(alice, account_tag("user-alice"));
-        assert_ne!(alice, account_tag("user-bob"));
+        let alice = account_tag(Account::User("user-alice"));
+        assert_eq!(alice, account_tag(Account::User("user-alice")));
+        assert_ne!(alice, account_tag(Account::User("user-bob")));
+        assert_ne!(alice, account_tag(Account::Key("user-alice")));
         let text = alice.to_str().expect("ascii");
         assert_eq!(text.len(), 16);
         assert!(text.bytes().all(|byte| byte.is_ascii_hexdigit()));
@@ -740,7 +756,7 @@ Add to the module's tests:
 - [ ] **Step 7: Run it and commit**
 
 Run: `cargo test --lib http::console_session::tests::account_tags`
-Expected: PASS. (The header on real answers is checked by the two-account journey in Task 11.)
+Expected: PASS. (The header on real answers is checked by `http_tests::api_answers_name_their_account_and_refusals_do_not` here, and by the two-account journey in Task 11.)
 
 ```bash
 git add src/http/console_session.rs
