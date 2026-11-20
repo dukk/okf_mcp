@@ -28,7 +28,9 @@ use crate::app::App;
 use crate::config::Config;
 use crate::error::OkfError;
 use crate::shared::ephemeral::{Ephemeral, Keyspace};
+use crate::shared::limits::GlobalLimit;
 use crate::shared::Redis;
+use crate::telemetry::metrics::Limiter;
 
 /// Where the Protected Resource Metadata is served (RFC 9728), also with
 /// the resource's path appended (`.../mcp`).
@@ -87,12 +89,13 @@ pub struct OAuth {
     pub codes: Ephemeral<state::AuthorizationCode>,
     /// The Client ID Metadata Document fetcher.
     pub cimd: clients::CimdFetcher,
-    /// `POST /oauth/register`'s limit.
-    pub register_limit: ratelimit::TokenBucket,
-    /// `POST /oauth/token`'s (and `/oauth/revoke`'s) limit.
-    pub token_limit: ratelimit::TokenBucket,
-    /// `POST /oauth/authorize`'s limit.
-    pub consent_limit: ratelimit::TokenBucket,
+    /// `POST /oauth/register`'s limit: in Redis with `[redis]`, shared by
+    /// every replica (issue #357), else this process's bucket.
+    pub register_limit: GlobalLimit,
+    /// `POST /oauth/token`'s (and `/oauth/revoke`'s) limit, likewise.
+    pub token_limit: GlobalLimit,
+    /// `POST /oauth/authorize`'s limit, likewise.
+    pub consent_limit: GlobalLimit,
 }
 
 impl OAuth {
@@ -164,9 +167,19 @@ impl OAuth {
                 state::MAX_AUTHORIZATION_CODES,
             ),
             cimd: clients::CimdFetcher::new(allow_private, allow_http)?,
-            register_limit: ratelimit::TokenBucket::new(REGISTER_BURST, REGISTER_PER_SEC),
-            token_limit: ratelimit::TokenBucket::new(TOKEN_BURST, TOKEN_PER_SEC),
-            consent_limit: ratelimit::TokenBucket::new(CONSENT_BURST, CONSENT_PER_SEC),
+            register_limit: GlobalLimit::new(
+                Limiter::OauthRegister,
+                REGISTER_BURST,
+                REGISTER_PER_SEC,
+                redis,
+            ),
+            token_limit: GlobalLimit::new(Limiter::OauthToken, TOKEN_BURST, TOKEN_PER_SEC, redis),
+            consent_limit: GlobalLimit::new(
+                Limiter::OauthConsent,
+                CONSENT_BURST,
+                CONSENT_PER_SEC,
+                redis,
+            ),
         }))
     }
 }

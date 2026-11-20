@@ -323,6 +323,7 @@ impl App {
             config.catalog_cache_bytes.as_u64(),
             metrics.clone(),
         );
+        let sign_in_limits = SignInLimits::new(redis.as_ref());
         let app = Arc::new(Self {
             pool,
             config,
@@ -357,7 +358,7 @@ impl App {
             m16_announcements: std::sync::atomic::AtomicUsize::new(0),
             clock_status: RwLock::new(None),
             oauth,
-            sign_in_limits: SignInLimits::new(),
+            sign_in_limits,
             mailer,
             forminit,
             passkeys,

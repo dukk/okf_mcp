@@ -65,6 +65,8 @@ What breaks with N replicas is the state held in one process's memory:
 
 The last two are not part of this milestone.
 
+> **Corrected (issue #357, 2026-11-20).** The rate-limit buckets are now shared through Redis with `[redis]` (`src/shared/limits.rs`); the table's row describes the server without it.
+
 ## Non-goals
 
 - **A shared catalog snapshot**, or pub/sub invalidation of snapshots. Each

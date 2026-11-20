@@ -89,6 +89,8 @@ These settle the points where the spec and the code disagree. The spec is correc
    - `oneshot` tests have no `ConnectInfo`; the extractor treats that as "no IP".
 8. **Rate limits.**
    - Per-IP and per-email limits use a new keyed limiter, `http::limits::KeyedLimiter`, built on `oauth::expiring::ExpiringMap` and in memory per process, as M10's are.
+
+     > **Corrected (issue #357, 2026-11-20).** With `[redis]` these limits, the OIDC link allowance and M10's OAuth buckets are kept in Redis and shared by every replica: `SignInLimits` holds `shared::limits::KeyedLimit`s and `OAuth` holds `shared::limits::GlobalLimit`s, each wrapping the in-memory limiter, which still decides alone without `[redis]` and decides when a Redis call fails. Read `src/shared/limits.rs`.
    - Account lockout is durable, in the database: `users.failed_sign_ins` and `users.locked_until`.
 9. **Naming, so nothing collides with MCP sessions** (`session_idle_timeout`, `src/http/sessions.rs`):
    - modules `store::user_sessions` and `http::console_session`;

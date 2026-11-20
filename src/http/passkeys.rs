@@ -380,7 +380,7 @@ fn too_many() -> Response {
 /// # Returns
 /// The refusal to send, if any.
 #[tracing::instrument(level = "trace", skip_all)]
-fn screen(app: &App, parts: &Parts, limited: bool) -> Option<Response> {
+async fn screen(app: &App, parts: &Parts, limited: bool) -> Option<Response> {
     if cross_site(&parts.headers) {
         let error = OkfError::Forbidden {
             reason: CROSS_SITE.to_string(),
@@ -392,7 +392,8 @@ fn screen(app: &App, parts: &Parts, limited: bool) -> Option<Response> {
         || app
             .sign_in_limits()
             .sign_in_per_ip
-            .try_take(&ip_key(ip), Instant::now());
+            .try_take(&ip_key(ip), Instant::now())
+            .await;
     if !admitted {
         app.metrics().rate_limited(Limiter::SignInPerIp);
     }
@@ -662,7 +663,7 @@ async fn setup_start(
     Json(body): Json<SetupStart>,
 ) -> Result<Response, AppError> {
     let passkeys = enabled(&app)?;
-    if let Some(refusal) = screen(&app, &parts, true) {
+    if let Some(refusal) = screen(&app, &parts, true).await {
         return Ok(refusal);
     }
     let name = passkey_name(&body.name)?;
@@ -704,7 +705,7 @@ async fn setup_finish(
     Json(body): Json<SetupFinish>,
 ) -> Result<Response, AppError> {
     let passkeys = enabled(&app)?;
-    if let Some(refusal) = screen(&app, &parts, false) {
+    if let Some(refusal) = screen(&app, &parts, false).await {
         return Ok(refusal);
     }
     let Registered {
@@ -812,7 +813,7 @@ async fn sign_in_start(
     Json(body): Json<SignInStart>,
 ) -> Result<Response, AppError> {
     let passkeys = enabled(&app)?;
-    if let Some(refusal) = screen(&app, &parts, true) {
+    if let Some(refusal) = screen(&app, &parts, true).await {
         return Ok(refusal);
     }
     let (mut challenge, state) = passkeys
@@ -929,7 +930,7 @@ async fn sign_in_finish(
     Json(credential): Json<PublicKeyCredential>,
 ) -> Result<Response, AppError> {
     let passkeys = enabled(&app)?;
-    if let Some(refusal) = screen(&app, &parts, true) {
+    if let Some(refusal) = screen(&app, &parts, true).await {
         return Ok(refusal);
     }
     let (ceremony, mut headers) =
@@ -2650,7 +2651,7 @@ mod tests {
         alice
     }
 
-    /// Every key under the test's prefix with its value (all are strings).
+    /// Every key under the test's prefix with its value as text.
     async fn redis_contents(app: &App) -> Vec<(String, String)> {
         let redis = app.redis().expect("redis is on");
         let mut connection = redis.connection();
@@ -2663,11 +2664,8 @@ mod tests {
             .expect("list the keys");
         let mut contents = Vec::with_capacity(names.len());
         for name in names {
-            let value: String = redis::cmd("GET")
-                .arg(&name)
-                .query_async(&mut connection)
-                .await
-                .expect("read a key");
+            // A rate-limit bucket is a hash; the rest are strings.
+            let value = crate::shared::testing::value_text(redis, &name).await;
             contents.push((name, value));
         }
         contents

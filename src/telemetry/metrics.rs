@@ -73,6 +73,9 @@ pub enum RedisOp {
     Subscribe,
     /// Reading or bumping a counter.
     Counter,
+    /// Taking from a shared rate-limit bucket (the request then falls back
+    /// to the replica's own bucket).
+    Limit,
     /// A stored value that would not decode.
     Decode,
 }
@@ -93,6 +96,7 @@ impl RedisOp {
             Self::Publish => "publish",
             Self::Subscribe => "subscribe",
             Self::Counter => "counter",
+            Self::Limit => "limit",
             Self::Decode => "decode",
         }
     }

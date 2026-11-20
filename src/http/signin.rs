@@ -366,6 +366,7 @@ async fn sign_in_post(
         .sign_in_limits()
         .sign_in_per_ip
         .try_take(&ip_key(ip), Instant::now())
+        .await
     {
         app.metrics().rate_limited(Limiter::SignInPerIp);
         let mut view = sign_in_view(&app, return_to);
@@ -736,7 +737,7 @@ async fn forgot_post(
     let now = Instant::now();
     let limits = app.sign_in_limits();
     let ip = client_ip(&parts, &app.config().auth);
-    if !limits.forgot_per_ip.try_take(&ip_key(ip), now) {
+    if !limits.forgot_per_ip.try_take(&ip_key(ip), now).await {
         app.metrics().rate_limited(Limiter::ForgotPerIp);
         return message_page(
             StatusCode::TOO_MANY_REQUESTS,
@@ -755,7 +756,7 @@ async fn forgot_post(
         // map holds short keys. Past the per-email limit the answer is the
         // same, so it never says whether the address is known. The work
         // runs after the answer for the same reason: its duration would.
-        if limits.forgot_per_email.try_take(&email, now) {
+        if limits.forgot_per_email.try_take(&email, now).await {
             let app = Arc::clone(&app);
             tokio::spawn(async move {
                 if let Err(error) = send_reset(&app, &email).await {
@@ -1562,6 +1563,44 @@ mod tests {
         let series = "okf_ratelimit_rejections_total{limiter=\"sign_in_per_ip\"}";
         assert_eq!(sample_of(&before, series), None, "{before}");
         assert_eq!(sample_of(&after, series), Some(1.0), "{after}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn with_redis_two_replicas_share_one_per_address_budget() {
+        tokio::time::timeout(std::time::Duration::from_secs(180), async {
+            let (first, second, _redis) =
+                crate::mcp::testing::replica_pair(&[], crate::http::api::testing::login_config())
+                    .await;
+            let mut browser = Browser::default();
+            let form = || {
+                Payload::Form(vec![
+                    ("email", "nobody@example.com".to_string()),
+                    ("password", "whatever-password".to_string()),
+                ])
+            };
+            // 30 attempts from one address, alternating between replicas.
+            for attempt in 0..30 {
+                let app = if attempt % 2 == 0 {
+                    &first.app
+                } else {
+                    &second
+                };
+                let reply = browser.send_to(app, "POST", "/signin", form()).await;
+                assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "attempt {attempt}");
+            }
+
+            let on_first = browser.send_to(&first.app, "POST", "/signin", form()).await;
+            let on_second = browser.send_to(&second, "POST", "/signin", form()).await;
+
+            assert_eq!(on_first.status, StatusCode::TOO_MANY_REQUESTS);
+            assert_eq!(
+                on_second.status,
+                StatusCode::TOO_MANY_REQUESTS,
+                "the budget is one across replicas, not one each"
+            );
+        })
+        .await
+        .expect("the shared sign-in limit test within 180 s");
     }
 
     #[tokio::test(flavor = "multi_thread")]

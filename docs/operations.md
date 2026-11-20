@@ -29,14 +29,14 @@ changesets and the routes in detail.
   | OIDC sign-in and link flows | The callback lands elsewhere and the flow is unknown |
   | Passkey registration and sign-in ceremonies | Finishing on another replica fails |
   | The OAuth access-token cache | A token revoked on one replica still works on another until it expires |
-  | Rate-limit buckets | Counted per replica (#357); not fixed by `[redis]` |
+  | Rate-limit buckets | Counted per replica, so each replica allows the whole budget (with `[redis]` they are shared) |
 
   The credential, user, settings and catalog caches are not in the table: since
   milestone 18 they follow Postgres change messages on every replica, with or
   without Redis.
 
 - **With `[redis]`, several replicas work.** Redis holds the first four rows'
-  short-lived state, and two caches also learn of changes on every
+  short-lived state and the rate-limit buckets, and two caches also learn of changes on every
   replica promptly through Redis: the catalog snapshots (best-effort pub/sub
   announcements of each catalog's new generation) and the access-token cache
   (a revocation counter). Credentials, users, settings and catalog rows learn
@@ -464,13 +464,17 @@ session id: the keys and values that refer to one hold its hash.
 | `{p}oidc:link:<hash of the console session id>` | Which flow that console session has in progress | 10 minutes, renewed on use |
 | `{p}passkey:ceremony:h(cookie)` | A passkey registration or sign-in ceremony | 5 minutes, fixed |
 | `{p}passkey:session:<hash of the console session id>` | Which ceremony that console session has in progress | 5 minutes, renewed on use |
+| `{p}ratelimit:<limiter>:h(id)` | A rate limit's token bucket: the tokens left and when they were counted. `<limiter>` is the `limiter` label of `okf_ratelimit_rejections_total`; `id` is the address key, the normalized email or the user id, or `global` for the OAuth limits | The time an empty bucket takes to refill (15 minutes for sign-in, an hour for the reset limits, 10 minutes for link starts, 60, 30 and 20 seconds for OAuth registration, token and consent), renewed on every request |
 | channel `{p}admin-generation` | The M16 bridge: `notified` from milestone 18 servers and the command line, a generation number or an empty message from milestone 16 binaries | Not stored |
 | channel `{p}catalog-generation` | Announcements that a catalog's snapshot is out of date: `<catalog id> <generation>` | Not stored |
 
 - **Values** are JSON with a version. A value of another version, or one that
   does not decode, counts as absent and is counted as a `decode` error. After
   a rolling upgrade that changes a value's shape, a flow in progress starts
-  again; nothing is misread.
+  again; nothing is misread. A rate-limit bucket is the exception: a Redis
+  hash of two numbers (`t`, the tokens left, and `at`, Redis's clock in
+  milliseconds when they were counted), read and written only by the
+  limit's Lua script.
 - **Redis is a secret store.** Values hold what a flow needs for at most ten
   minutes: PKCE verifiers, nonces, CSRF tokens and passkey ceremony state. It
   has the same trust as Postgres: password-protected, on a private network,
@@ -534,6 +538,7 @@ back to memory, because that would split the state between replicas.
 | The token endpoint | 503 `server_error` (body "internal error"). If Redis fails after a code was marked used, the token family is revoked and the client starts again |
 | An OIDC start or callback, or a link | 503 ("Sign-in is unavailable right now; try again shortly." on the callback). The flow cookie is kept, so a reload once Redis answers can finish the flow |
 | A passkey step | 503 |
+| A rate limit | Decided by the replica's own in-memory bucket, as without `[redis]`: the same budget, counted per replica until Redis answers again (fails open, never unlimited) |
 | `GET /healthz` | Still 200: `"redis": "unavailable"` (section 7) |
 | A catalog read or write | Unaffected: Postgres alone serves them |
 
@@ -555,9 +560,22 @@ back to memory, because that would split the state between replicas.
   show the write; even a delivered one is applied asynchronously.
 - **The access-token cache** skips the cache on a Redis error: the lookup goes
   to Postgres and caches nothing.
+- **Rate limits fail open to the replica's own bucket.** Each limiter keeps an
+  in-memory bucket per key as well, asked only when its Redis call fails. A
+  request during an outage is limited as it was before limits were shared:
+  each replica allows the configured budget, so the effective limit is that
+  budget times the number of replicas, never unlimited. Failing closed would
+  turn a Redis outage into refusing every password sign-in, reset request and
+  OAuth token refresh, which need only Postgres; the durable account lockout
+  (10 wrong passwords, Postgres) still holds. Each failure is counted as
+  `limit` and logged at `warn` with the limiter's name. A call to an
+  unreachable Redis waits up to the 2-second command timeout first, once per
+  limit the request checks (a reset request checks two, so up to 4 seconds).
 - **An entry Redis lost** (evicted, or Redis restarted without persistence)
   fails closed too: a 404 for a session, an unknown code, an expired flow. The
-  person starts again.
+  person starts again. A lost rate-limit bucket starts full again: an idle
+  one is dropped only once it has refilled anyway, but one evicted early, or
+  lost in a restart, grants up to one budget sooner than it would have.
 - **Counting.** Every failure is counted in `okf_redis_errors_total` by
   `operation` (the metric reference lists them) and logged with the operation
   and the error's kind. The error text stays in the local log only; no URL,
@@ -574,7 +592,9 @@ anonymous entries are bounded by the per-address start limits times the number
 of replicas, and by Redis's own `maxmemory`: the in-memory caps on flows,
 ceremonies, codes and pending authorizations apply without `[redis]` only. Each person or
 console session holds at most one link flow and one passkey ceremony: starting
-another replaces the first.
+another replaces the first. A rate-limit bucket is a few hundred bytes, one per
+address, email or user that made a limited request within its window; the
+in-memory cap of 100,000 keys per limiter applies without `[redis]` only.
 
 ### Eviction
 
@@ -619,9 +639,11 @@ two). What `[redis]` does not share:
   replica shows on the others the same way. Within a
   changeset, `pending_changes` and reads through it refresh a replica that is
   behind the changeset's own entries.
-- **Rate limits** (per address, per email, OIDC starts, OAuth) are counted per
-  replica, so the effective limit is the configured limit times the number of
-  replicas (#357). The shared Redis handle is the place to fix that.
+- **Rate limits** (per address, per email, OIDC link starts, OAuth) are
+  shared: every replica takes from the same bucket in Redis, so the configured
+  limit holds however many replicas run, and a restart does not reset it.
+  Only while Redis fails does each replica count on its own (the Redis
+  section, "When Redis fails").
 - **The mail worker** runs on every replica, with no per-pod setting.
   apalis takes each job with `FOR UPDATE SKIP LOCKED`, so two replicas never
   send the same mail at once. Each process opens up to 3 connections for
@@ -1317,7 +1339,7 @@ the dotted originals.
 | `okf_cache_entries` | gauge | `cache` | Entries a bounded cache holds now |
 | `okf_cache_bytes` | gauge | `cache` | Estimated bytes held, for the caches limited by bytes (`catalog` and `overlay`) |
 | `okf_keycache_reloads_total` | counter | `outcome` | Settings and label reloads (named for the key cache they used to include; keys and users load on demand since milestone 18) |
-| `okf_redis_errors_total` | counter | `operation` | Failed Redis calls. `operation` is `connect`, `get`, `set`, `take`, `update`, `remove`, `index`, `admit`, `bind`, `publish`, `subscribe`, `counter` or `decode` (a stored value that would not decode). A failed or late `/healthz` `PING` counts as `get`. Only with `[redis]` |
+| `okf_redis_errors_total` | counter | `operation` | Failed Redis calls. `operation` is `connect`, `get`, `set`, `take`, `update`, `remove`, `index`, `admit`, `bind`, `publish`, `subscribe`, `counter`, `limit` (a shared rate-limit bucket; the request was decided by the replica's own bucket instead) or `decode` (a stored value that would not decode). A failed or late `/healthz` `PING` counts as `get`. Only with `[redis]` |
 | `okf_auth_attempts_total` | counter | `method`, `outcome` | Sign-in attempts. `method` is `password`, `passkey`, `oidc` or `setup`; `outcome` is `ok`, `failed` or `locked` |
 | `okf_oauth_tokens_issued_total` | counter | `grant` | Token pairs issued: `authorization_code` or `refresh_token` |
 | `okf_ratelimit_rejections_total` | counter | `limiter` | Requests a limiter refused: `sign_in_per_ip`, `forgot_per_email`, `forgot_per_ip`, `link_starts`, `oauth_register`, `oauth_token` or `oauth_consent` |
@@ -1351,7 +1373,7 @@ on its own task), so find a call by its tool span, not by the request's trace.
 | `okf.archive.export` and `okf.archive.import` | `okf.catalog` (only for a catalog that exists), `okf.archive.size` (bytes, on success), `okf.outcome` |
 | `okf.mail.job` | `okf.mail.template`, `okf.mail.provider`, `okf.outcome`. Never the address |
 | `okf.oauth.token` | `okf.oauth.grant` |
-| Redis calls: `connect` and `subscribe` (at `info`), then `publish`, `admits`, `bind`, `release`, `load_state`, `store_state`, `delete_state`, `run_counter` and the stored-state operations (at `debug`, off by default) | `db.system.name` (`redis`), `db.operation.name` (the same set as `okf_redis_errors_total`'s `operation`, except `decode`, which is a metric label only). Never a key name, a session or flow id, a value or the URL |
+| Redis calls: `connect` and `subscribe` (at `info`), then `publish`, `admits`, `bind`, `release`, `load_state`, `store_state`, `delete_state`, `run_counter`, the rate limits' `take` (operation `limit`) and the stored-state operations (at `debug`, off by default) | `db.system.name` (`redis`), `db.operation.name` (the same set as `okf_redis_errors_total`'s `operation`, except `decode`, which is a metric label only). Never a key name, a session or flow id, a value or the URL |
 | Everything else (store, handlers) | Function spans at `debug` and `trace`, off by default; they carry safe ids only |
 
 An event logged inside a span is exported as a log record carrying the span's
@@ -2292,9 +2314,10 @@ to it with "Sign in with your account", carrying the page you were on.
 - **Per-address limit.** Each client address may try 30 times per 15
   minutes (a token bucket: a burst of 30, refilled over 15 minutes), shared
   by password sign-in, passkey sign-in and OIDC starts; past it, 429. IPv6
-  addresses count by their `/64`. The limit is in memory, per process
-  (sharing it across replicas is #357: with several replicas each counts its
-  own).
+  addresses count by their `/64`. Without `[redis]` the limit is in memory,
+  per process, and a restart resets it; with `[redis]` it is kept in Redis,
+  so every replica counts against one budget (falling back to each
+  replica's own count only while Redis fails).
   Behind an ingress, set `auth.trusted_proxy_header`, or every request seems
   to come from the ingress and all of them share one limit.
 - **Other sites' forms are refused.** Every sign-in, forgot, setup and reset
@@ -4292,7 +4315,7 @@ console" ([OAuth sign-in codes](#oauth-sign-in-codes)).
 - **Rate limits and caps.** Registration (a burst of 10, then one every 6
   seconds), the token and revoke endpoints (60, then 2 a second, shared) and
   the consent form (20, then 1 a second) are limited globally, not per
-  address. Over the limit, the JSON endpoints answer 429 `slow_down` and the
+  address; with `[redis]` each is one bucket shared by every replica. Over the limit, the JSON endpoints answer 429 `slow_down` and the
   consent form a 429 page. Registration is also refused (429 `slow_down`)
   while 500 registered clients have no grant. At most 10,000 consent pages
   and 10,000 unexchanged authorization codes are held in memory; past that a

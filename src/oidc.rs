@@ -25,10 +25,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{Config, OidcProviderConfig};
 use crate::error::OkfError;
-use crate::http::limits::KeyedLimiter;
 use crate::keys;
 use crate::shared::ephemeral::{Ephemeral, Index, IndexSpace, Keyspace, Swap};
+use crate::shared::limits::KeyedLimit;
 use crate::shared::Redis;
+use crate::telemetry::metrics::Limiter;
 use crate::telemetry::subscriber::split_event;
 
 /// A client configured from a discovery document: an authorization
@@ -295,8 +296,8 @@ pub struct OidcProviders {
     /// link flow replaces (and removes) the session's previous one.
     link_flows: Index,
     /// Link starts by user id: a burst of [`LINK_STARTS_PER_USER`], refilled
-    /// one per minute.
-    link_starts: KeyedLimiter,
+    /// one per minute; in Redis with `[redis]`, shared by every instance.
+    link_starts: KeyedLimit,
 }
 
 // Hand-written: the providers hold client secrets, and the flows theirs.
@@ -395,7 +396,13 @@ impl OidcProviders {
             providers,
             flows: Ephemeral::new(redis, Keyspace::OidcFlow, FLOW_TTL, MAX_FLOWS),
             link_flows: Index::new(redis, IndexSpace::OidcLink, FLOW_TTL, MAX_FLOWS),
-            link_starts: KeyedLimiter::new(LINK_STARTS_PER_USER, FLOW_TTL, MAX_LINKING_USERS),
+            link_starts: KeyedLimit::new(
+                Limiter::LinkStarts,
+                LINK_STARTS_PER_USER,
+                FLOW_TTL,
+                MAX_LINKING_USERS,
+                redis,
+            ),
         }))
     }
 
@@ -466,8 +473,8 @@ impl OidcProviders {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    pub fn may_start_link(&self, user_id: &str, now: Instant) -> bool {
-        self.link_starts.try_take(user_id, now)
+    pub async fn may_start_link(&self, user_id: &str, now: Instant) -> bool {
+        self.link_starts.try_take(user_id, now).await
     }
 
     /// Every provider's id and label, by id.
@@ -889,16 +896,29 @@ mod tests {
         // A fixed starting instant; later ones are offsets from it, so the
         // test controls time exactly.
         let start = Instant::now();
+        // `&providers`: the closures below copy this reference into each
+        // future they return, instead of moving the providers.
+        let providers = &providers;
         let take = |at: Instant| providers.may_start_link("user-1", at);
+        // How many of `count` starts at `at` are allowed.
+        let starts = |at: Instant, count: u32| async move {
+            let mut allowed = 0;
+            for _ in 0..count {
+                if providers.may_start_link("user-1", at).await {
+                    allowed += 1;
+                }
+            }
+            allowed
+        };
 
-        let burst = (0..LINK_STARTS_PER_USER).filter(|_| take(start)).count();
-        let eleventh = take(start);
+        let burst = starts(start, LINK_STARTS_PER_USER).await;
+        let eleventh = take(start).await;
         let after_a_minute = start + Duration::from_secs(61);
-        let one_more = take(after_a_minute);
-        let not_two = take(after_a_minute);
+        let one_more = take(after_a_minute).await;
+        let not_two = take(after_a_minute).await;
         let refilled = after_a_minute + FLOW_TTL;
-        let again = (0..LINK_STARTS_PER_USER).filter(|_| take(refilled)).count();
-        let past_the_burst = take(refilled);
+        let again = starts(refilled, LINK_STARTS_PER_USER).await;
+        let past_the_burst = take(refilled).await;
 
         assert_eq!(burst, 10);
         assert!(!eleventh, "the eleventh start in a burst is refused");
@@ -906,7 +926,10 @@ mod tests {
         assert!(!not_two, "and only one");
         assert_eq!(again, 10, "a full refill allows a whole burst again");
         assert!(!past_the_burst);
-        assert!(providers.may_start_link("user-2", start), "users are apart");
+        assert!(
+            providers.may_start_link("user-2", start).await,
+            "users are apart"
+        );
     }
 
     #[test]
