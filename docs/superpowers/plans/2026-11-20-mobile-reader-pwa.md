@@ -2557,12 +2557,13 @@ async fn the_picker_and_the_tree_lead_from_a_catalog_to_its_concepts() {
         // The root folder: its index's body, then its folders.
         ui.wait_text("#body", "Main");
         ui.wait_text("#folders", "systems");
+        // The root's log.md is not a concept: the root lists none.
+        assert_eq!(ui.text("#concepts"), "", "logs are not listed");
         ui.click("#folders a");
         // systems/: its index body, and its two concepts by title.
         ui.wait_text("#body", "Systems");
         ui.wait_text("#concepts", "Alpha");
         ui.wait_text("#concepts", "Beta");
-        assert!(!ui.text("#concepts").contains("log"), "logs are not listed");
         ui.wait_text(".crumbs", "Contents");
     })
     .await;
@@ -2662,7 +2663,7 @@ export async function render(view, ctx) {
 Run: `scripts/test-pg.sh run cargo test --test ui_e2e read:: -- --test-threads=2`
 Expected: PASS (all four `read::` journeys: the three of Task 6 and this one).
 
-> **Corrected (issue #814).** The journey is appended after the three shipped
+> **Corrected (issue #814, 2026-11-20).** The journey is appended after the three shipped
 > Task 6 journeys (`tests/ui_e2e/read.rs` imports `crate::harness::{drive, Ui}`
 > and defines `server()`, `EMAIL` and `PASSWORD`; read it before appending).
 > `tree.js` also checks `ctx.live()` after the index read's `catch`, since the

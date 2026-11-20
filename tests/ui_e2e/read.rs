@@ -216,12 +216,13 @@ async fn the_picker_and_the_tree_lead_from_a_catalog_to_its_concepts() {
         // The root folder: its index's body, then its folders.
         ui.wait_text("#body", "Main");
         ui.wait_text("#folders", "systems");
+        // The root's log.md is not a concept: the root lists none.
+        assert_eq!(ui.text("#concepts"), "", "logs are not listed");
         ui.click("#folders a");
         // systems/: its index body, and its two concepts by title.
         ui.wait_text("#body", "Systems");
         ui.wait_text("#concepts", "Alpha");
         ui.wait_text("#concepts", "Beta");
-        assert!(!ui.text("#concepts").contains("log"), "logs are not listed");
         ui.wait_text(".crumbs", "Contents");
     })
     .await;
