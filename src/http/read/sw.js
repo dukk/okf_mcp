@@ -200,29 +200,31 @@ function admit(tag, startedAt) {
     return ownerQueue;
 }
 
-// Makes `tag` the owner: bumps the epoch first (so the old owner's copies
-// still on their way drop themselves), deletes the old owner's copies, and
-// only then records the new owner, so the record never names an account
-// whose copies are not entirely its own. Returns the new epoch, or null
-// when the copies could not be deleted or a wipe came meanwhile.
+// Makes `tag` the owner. The epoch is bumped first, so the old owner's
+// copies still on their way drop themselves. Then the old owner's copies and
+// its record go, and only then is the new owner recorded; `tag`'s answers
+// are kept only once that record is written. So the durable record never
+// names an account other than the one whose copies are cached: at worst
+// there is no record, and a restarted worker then treats the next answer as
+// a new owner and wipes. Returns the new epoch, or null (keep nothing) when
+// the old state could not be deleted, the record could not be written, or a
+// wipe came meanwhile.
 async function takeOver(tag) {
     owner = { tag, since: now() };
     epoch += 1;
     const mine = epoch;
     try {
-        await Promise.all([READ_CACHES.content, READ_CACHES.meta].map(name => caches.delete(name)));
+        await Promise.all([READ_CACHES.content, READ_CACHES.meta, READ_CACHES.owner]
+            .map(name => caches.delete(name)));
+        if (epoch !== mine) return null;
+        const record = await caches.open(READ_CACHES.owner);
+        await record.put(OWNER_KEY, new Response(JSON.stringify({ tag })));
     } catch {
-        // The old copies may still be there: nobody owns them, and the next
-        // answer tries again.
+        // Whatever is left belongs to nobody, and this answer is not kept;
+        // the next request tries again.
         if (epoch === mine) disown();
         return null;
     }
-    if (epoch !== mine) return null;
-    // Best effort: without the record, a restarted worker treats the next
-    // answer as a new owner and wipes, which loses copies but never mixes them.
-    await caches.open(READ_CACHES.owner)
-        .then(cache => cache.put(OWNER_KEY, new Response(JSON.stringify({ tag }))))
-        .catch(() => {});
     return epoch === mine ? mine : null;
 }
 

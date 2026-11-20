@@ -18,8 +18,12 @@
   answer to a request that started at or before a matching mark, and checks
   again after writing.
 - Account ownership keyed on `X-OKF-Account`. The first answer for a new
-  account wipes the old copies and records the new owner in `read-owner`.
-  An answer for another account, to a request from before the takeover, is
+  account deletes the old copies and the old `read-owner` record, then
+  records the new owner. The new account's answers are kept only once that
+  record is written; if any step fails, nothing is kept for it. So the
+  record never names an account other than the one whose copies are cached,
+  and a restarted worker cannot serve one account's copies to another. An
+  answer for another account, to a request from before the takeover, is
   never kept. An answer without the header is never cached.
 - Offline, a concept request is answered by its other form: a full copy
   answers a plain request, and a plain copy answers a full request when it
@@ -29,6 +33,17 @@
 - Tests: `the_worker_is_revalidated_and_carries_the_shell_version` and
   `the_console_does_not_serve_the_reader_worker`. The shell-listing test now
   also checks the served worker's and `names.js`'s hashes.
+- `tests/read_worker/sw.test.mjs`: 17 tests that run the worker itself in a
+  `node:vm` context, with an in-memory Cache Storage and a fetch the test
+  answers. They use Node's built-in test runner and no npm packages. They
+  cover parallel first-visit answers, a takeover with a late answer for the
+  old account, slow answers after each kind of mark (or during the write),
+  a failed owner-record write followed by a restart, refused storage, the
+  short/full fallback, the cap, navigation, and install refusing a wrong
+  version or hash.
+- `just test-worker` runs them. Without `node`, it prints a skip line and
+  passes. `just test` runs it first, so `tools/agentic/gate.sh test` runs it
+  too. Documented in the README's Testing section.
 
 ## Changed
 - The plan's worker is corrected (dated note in Task 3), and so is the
@@ -43,12 +58,11 @@
   - Marks and takeover times use the monotonic `performance.now()`.
 
 ## Notes
-- Cache writes are best effort. When Cache Storage refuses to open, match
-  or delete, the worker passes the network's answers through and keeps
-  nothing.
+- Cache writes are best effort, and the page always gets the network's
+  answer. When Cache Storage refuses to open, write or delete, the worker
+  keeps nothing. When it refuses to read, the worker answers from the
+  network.
 - Copies are kept only once `X-OKF-Account` is served (M19.02).
 - No browser journey can run the worker yet: the page code arrives in
-  Tasks 5 and 6, and the journeys in Tasks 10 and 11. So far it has been
-  syntax-checked with `node --check`. It was also run, outside the
-  repository, against fake Cache Storage and fetch to check the
-  interleavings.
+  Tasks 5 and 6, and the journeys in Tasks 10 and 11. Until then,
+  `tests/read_worker` runs it against fakes.

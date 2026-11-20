@@ -155,8 +155,11 @@ not store an answer to a request that started at or before a matching mark,
 and checks again after writing (deleting the entry if a mark appeared
 meanwhile), so a slow `2xx` can never put back what a `401` or a lost grant
 removed. A request on its way keeps the worker alive, so its marks last as
-long as they matter. Recording the cache owner is best effort: on a full
-disk the caches are wiped and the reader boots anyway. Without Cache Storage
+long as they matter. A takeover deletes the old copies and the old owner
+record before it writes the new record, and keeps the new account's answers
+only once that write succeeds, so the record never names an account other
+than the one whose copies are cached. On a full disk the caches are wiped,
+nothing is kept, and the reader boots anyway. Without Cache Storage
 at all, or when it refuses to open or read (denied by browser settings),
 the reader works online and keeps nothing: the worker passes answers
 through without copies, and the page's cache calls log and return empty
