@@ -243,7 +243,8 @@ pub fn build(
 /// capture what it writes.
 ///
 /// It keeps a handle on each provider until the process exits
-/// ([`KEPT_TRACERS`]), so dropping the subscriber never drops a provider.
+/// (`KEPT_TRACERS`, `KEPT_LOGGERS`), so dropping the subscriber never drops a
+/// provider.
 ///
 /// # Arguments
 /// * `settings`, `tracer`, `logger` - as for [`build`].
