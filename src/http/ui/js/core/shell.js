@@ -125,7 +125,8 @@ let brandTicket = 0;
 // boot (before anyone signs in) and after the setting is saved or reset.
 // textContent only. Only the newest call writes: a boot read answering late
 // never draws over a newer save's. On any failure the page keeps what it
-// shows (index.html's "okf" until the first answer).
+// shows; index.html names no product, so a deployment's brand never flashes
+// another name before the first answer.
 export async function applyBrand() {
     const mine = ++brandTicket;
     let brand = null;

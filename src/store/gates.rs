@@ -335,6 +335,7 @@ mod tests {
         let policy = UnlockPolicy {
             max_hours: 4,
             notify_owners: false,
+            brand_defaults: crate::store::settings::Brand::default(),
         };
         let unlock = |catalog| NewUnlock {
             catalog,

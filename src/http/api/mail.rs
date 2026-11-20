@@ -117,7 +117,14 @@ async fn send_test(
     Json(body): Json<TestMail>,
 ) -> Result<(StatusCode, Json<TestMail>), AppError> {
     require_every_catalog(&principal)?;
-    queue::enqueue(app.pool(), &body.to, &Template::Test, app.clock().now()).await?;
+    queue::enqueue(
+        app.pool(),
+        &body.to,
+        &Template::Test,
+        app.clock().now(),
+        &app.config().auth.default_brand(),
+    )
+    .await?;
     // The address is not logged.
     split_event!(
         info,
@@ -222,6 +229,7 @@ mod tests {
             "ops@example.com",
             &Template::Test,
             Utc::now(),
+            &test.app.config().auth.default_brand(),
         )
         .await
         .expect("queue one");
@@ -393,6 +401,7 @@ mod tests {
             "ops@example.com",
             &Template::Test,
             Utc::now(),
+            &test.app.config().auth.default_brand(),
         )
         .await
         .expect("queue one");

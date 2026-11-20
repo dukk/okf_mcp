@@ -8,7 +8,7 @@ use okf_mcp::config::AuthConfig;
 use okf_mcp::mail::queue;
 use okf_mcp::mail::Template;
 use okf_mcp::store::keys::Access;
-use okf_mcp::store::settings::{self, SettingKey};
+use okf_mcp::store::settings::{self, Brand, SettingKey};
 use rustwright::GotoOptions;
 use serde_json::json;
 
@@ -43,7 +43,7 @@ const RETRY_ELSEWHERE: &str = "async (id) => (await fetch(`/api/v1/mail/queue/${
 /// If a database call fails or the mail is not listed.
 async fn failed_mail(server: &TestServer, to: &str) -> String {
     let pool = &server.db.pool;
-    queue::enqueue(pool, to, &Template::Test, Utc::now())
+    queue::enqueue(pool, to, &Template::Test, Utc::now(), &Brand::default())
         .await
         .expect("queue a mail");
     sqlx::query(

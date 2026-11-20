@@ -1699,6 +1699,7 @@ mod tests {
             "alice@example.com",
             &crate::mail::Template::Test,
             chrono::Utc::now(),
+            &crate::store::settings::Brand::default(),
         )
         .await
         .unwrap();

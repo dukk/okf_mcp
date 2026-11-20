@@ -55,6 +55,7 @@ pub(super) async fn unlock(
             let policy = UnlockPolicy {
                 max_hours: settings.unlock_max_hours,
                 notify_owners: settings.unlock_notify_owners,
+                brand_defaults: defaults.default_brand(),
             };
             let new = NewUnlock {
                 catalog: &catalog,

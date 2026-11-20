@@ -134,8 +134,12 @@ impl Passkeys {
             );
             return Ok(None);
         };
+        // The name a browser or password manager shows ("Save a passkey for
+        // ..."): the config's product name. A WebAuthn relying party is fixed
+        // at start-up, so a `product_name` setting saved later is not used.
+        let rp_name = config.auth.default_brand().product_name;
         let webauthn = WebauthnBuilder::new(rp_id, &origin)
-            .and_then(|builder| builder.rp_name("okf").build())
+            .and_then(|builder| builder.rp_name(&rp_name).build())
             .map_err(|e| error(format!("WebAuthn refuses {public_url:?}: {e}")))?;
         Ok(Some(Self {
             webauthn,

@@ -2616,9 +2616,36 @@ FROM feedback WHERE status <> 'sent' ORDER BY created_at;
 
 Policy and branding settings live in the database, so the Settings page
 changes them without a restart; the config file's `[auth]` table gives each
-policy setting's default. The three branding settings,
-`audit_retention_days` and the three unlock settings have no config key:
-their defaults are `okf`, `none`, `none`, `400`, `false`, `4` and `true`.
+policy and branding setting's default. `audit_retention_days` and the three
+unlock settings have no config key: their defaults are `400`, `false`, `4`
+and `true`.
+
+A deployment that rebrands the server sets the branding in `[auth]`, so a
+fresh database shows it with no Settings change (`support_contact` and
+`feedback_url` are left out for none):
+
+```toml
+[auth]
+product_name = "Acme Notes"
+support_contact = "help@example.com"
+feedback_url = "https://example.com/feedback"
+mcp_server_name = "acme-notes"
+```
+
+MCP clients see the product name as the server's display title
+(`serverInfo.title` in `initialize`), and in `send_feedback`'s description
+and the instructions line that offers it, as it stands when each session
+starts. `mcp_server_name` (config-only, default `okf_mcp`) is the
+identifier the server reports as `serverInfo.name`: 1 to 64 ASCII letters,
+digits, `-`, `_` and `.`. Changing it breaks no client: clients key a server,
+and prefix its tool names, by the name the person gave it when adding it,
+not by `serverInfo.name`.
+
+The file's values are checked as `settings set` checks them, and a bad one
+stops the server at start-up, naming the key. The passkey prompt a browser
+or password manager shows ("Save a passkey for ...") names the config
+file's `product_name`, never a value saved in Settings: WebAuthn fixes that
+name when the server starts.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -2629,7 +2656,7 @@ their defaults are `okf`, `none`, `none`, `400`, `false`, `4` and `true`.
 | `console_session_absolute` | `7d` | Console session absolute timeout |
 | `setup_link_ttl` | `24h` | Setup link lifetime |
 | `reset_link_ttl` | `1h` | Password reset link lifetime |
-| `product_name` | `okf` | The product name people see: in every email (subjects and text), the console (sidebar, login card and tab title) and the sign-in, forgot, setup, reset and OAuth consent pages. 1 to 60 characters with no control characters; surrounding spaces are trimmed |
+| `product_name` | `okf` | The product name people see: in every email (subjects and text), the console (sidebar, login card and tab title), the sign-in, forgot, setup, reset and OAuth consent pages and (from the config file only) the passkey prompt. 1 to 60 characters with no control characters; surrounding spaces are trimmed |
 | `support_contact` | `none` | An email address or an `https://` URL (with a host). When set, every email ends with "Questions? Contact ..." and the server pages show the same line (a URL as a link); `none` shows no line |
 | `feedback_url` | `none` | An `https://` URL (with a host, at most 500 characters, no whitespace or control characters; an email address is refused). When set, the console's sidebar footer shows a "Send feedback" link to it, opening in a new tab; `none` shows no link. Nothing else changes when it is unset |
 | `audit_retention_days` | `400` | How many days [audit log](#audit-log) entries are kept, `30` to `3650`. A daily pass deletes older ones |

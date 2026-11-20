@@ -83,7 +83,14 @@ pub async fn send_setup(
         // The label, never the slug: the template field keeps its name.
         user: user_label(&issued.user.display_name, issued.user.email.as_deref()),
     };
-    queue::enqueue_in(&mut tx, &issued.to, &template, now).await?;
+    queue::enqueue_in(
+        &mut tx,
+        &issued.to,
+        &template,
+        now,
+        &config.auth.default_brand(),
+    )
+    .await?;
     let entry = users::user_entry(Action::UserInvited, &issued.user.id, json!({}));
     audit::record(&mut tx, actor, &entry, now).await?;
     tx.commit().await?;

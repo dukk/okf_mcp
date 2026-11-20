@@ -35,6 +35,7 @@ use crate::store::audit::{
     self, AccessKind, Action, AuditActor, Entry, FixedPerson, People, RowLock, Target,
 };
 use crate::store::catalogs::{self, is_valid_name};
+use crate::store::settings::Brand;
 
 /// `unlock_max_hours` with no override.
 pub const DEFAULT_MAX_HOURS: u32 = 4;
@@ -165,12 +166,27 @@ pub struct NewUnlock<'a> {
 }
 
 /// The settings an unlock follows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnlockPolicy {
     /// `unlock_max_hours`.
     pub max_hours: u32,
     /// `unlock_notify_owners`.
     pub notify_owners: bool,
+    /// The config's branding (`AuthConfig::default_brand`), which the
+    /// owners' email takes where no setting overrides it.
+    pub brand_defaults: Brand,
+}
+
+/// What the owners' email says and when it is queued.
+struct OwnerNotice<'a> {
+    /// The unlock's category.
+    category: Category,
+    /// When the unlock ends.
+    expires_at: DateTime<Utc>,
+    /// The server clock: the start of the mail's retry window.
+    now: DateTime<Utc>,
+    /// The config's branding defaults.
+    brand_defaults: &'a Brand,
 }
 
 /// A stored unlock.
@@ -505,7 +521,13 @@ pub async fn create(
     )
     .await?;
     if policy.notify_owners {
-        notify_owners(&mut tx, catalog.id, new, expires_at, now).await?;
+        let notice = OwnerNotice {
+            category: new.category,
+            expires_at,
+            now,
+            brand_defaults: &policy.brand_defaults,
+        };
+        notify_owners(&mut tx, catalog.id, &notice).await?;
     }
     invalidate(&mut tx, &[Invalidation::user(&user_id)]).await?;
     // Read before the commit: nothing that can fail runs after it.
@@ -554,9 +576,7 @@ async fn require_staff(conn: &mut PgConnection, actor: &AuditActor) -> Result<()
 async fn notify_owners(
     conn: &mut PgConnection,
     catalog_id: i64,
-    new: &NewUnlock<'_>,
-    expires_at: DateTime<Utc>,
-    now: DateTime<Utc>,
+    notice: &OwnerNotice<'_>,
 ) -> Result<(), OkfError> {
     let owners: Vec<String> = sqlx::query_scalar(
         "SELECT u.email::text FROM catalogs c \
@@ -575,11 +595,18 @@ async fn notify_owners(
             .await?;
     let template = Template::Unlocked {
         catalog: catalog_label(&display_name, &description),
-        category: new.category.label().to_string(),
-        until: format_timestamp(expires_at),
+        category: notice.category.label().to_string(),
+        until: format_timestamp(notice.expires_at),
     };
     for owner in &owners {
-        queue::enqueue_in(&mut *conn, owner, &template, now).await?;
+        queue::enqueue_in(
+            &mut *conn,
+            owner,
+            &template,
+            notice.now,
+            notice.brand_defaults,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -844,6 +871,7 @@ mod tests {
         UnlockPolicy {
             max_hours: 4,
             notify_owners: true,
+            brand_defaults: crate::store::settings::Brand::default(),
         }
     }
 

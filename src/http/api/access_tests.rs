@@ -628,6 +628,7 @@ async fn create_unlock(test: &TestApp, catalog: &str) -> i64 {
     let policy = UnlockPolicy {
         max_hours: 4,
         notify_owners: false,
+        brand_defaults: crate::store::settings::Brand::default(),
     };
     let created = unlocks::create(
         test.app.pool(),
