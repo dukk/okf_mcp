@@ -155,8 +155,11 @@ not store an answer to a request that started at or before a matching mark,
 and checks again after writing (deleting the entry if a mark appeared
 meanwhile), so a slow `2xx` can never put back what a `401` or a lost grant
 removed. A request on its way keeps the worker alive, so its marks last as
-long as they matter. Recording the cache owner is best effort: on a full
-disk the caches are wiped and the reader boots anyway. Without Cache Storage
+long as they matter. A takeover deletes the old copies and the old owner
+record before it writes the new record, and keeps the new account's answers
+only once that write succeeds, so the record never names an account other
+than the one whose copies are cached. On a full disk the caches are wiped,
+nothing is kept, and the reader boots anyway. Without Cache Storage
 at all, or when it refuses to open or read (denied by browser settings),
 the reader works online and keeps nothing: the worker passes answers
 through without copies, and the page's cache calls log and return empty
@@ -179,12 +182,18 @@ lets the fetch fail.
 Caches are tied to one account, decided by the worker, which every reader
 tab shares. Every `/api/v1` answer carries `X-OKF-Account`, an opaque tag
 (16 hex digits of SHA-256 of a prefixed user or key id). The first answer
-for a new account wipes `read-content` and `read-meta` (with a `*` mark, so
-answers still on their way for the old account drop their copies) and
-records the new owner in `read-owner`; an answer to a request that started
+for a new account wipes `read-content` and `read-meta` (after starting a new
+ownership epoch, so answers still on their way for the old account drop
+their copies, while the new account's keep theirs) and records the new
+owner in `read-owner`; another account's answer to a request that started
 before the current owner took over is never kept. So signing in as someone
 else in another tab, with a reader tab left open, never mixes two accounts'
-copies. Sign-out wipes everything before calling `DELETE /api/v1/session`.
+copies. Offline, a cached copy is served only to the account that owns the
+copies: its own `X-OKF-Account` must be the owner's. With no owner (no
+record, a wipe, or a takeover that could not delete the old copies),
+nothing is served and the leftover copies are deleted, and the page's
+"Available offline" list shows only the recorded owner's copies.
+Sign-out wipes everything before calling `DELETE /api/v1/session`.
 
 The shell is installed only when it is entirely one build's:
 `/read/shell.json` lists each file with the SHA-256 of the bytes this build

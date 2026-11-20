@@ -281,6 +281,25 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn the_worker_is_revalidated_and_carries_the_shell_version() {
+        let response = get("/read/sw.js").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["cache-control"], "no-cache");
+        assert_eq!(
+            response.headers()["content-type"],
+            "text/javascript; charset=utf-8"
+        );
+        let source = text(response).await;
+        assert!(source.contains(SHELL_VERSION.as_str()));
+        assert!(!source.contains("__SHELL_VERSION__"));
+    }
+
+    #[tokio::test]
+    async fn the_console_does_not_serve_the_reader_worker() {
+        assert_eq!(get("/ui/sw.js").await.status(), StatusCode::NOT_FOUND);
+    }
+
     #[test]
     fn the_shell_version_changes_when_only_a_shared_file_does() {
         let old: [(&str, &[u8]); 2] = [("index.html", b"page"), ("/ui/js/core/dom.js", b"old")];
