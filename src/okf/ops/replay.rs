@@ -1791,4 +1791,56 @@ mod tests {
         );
         assert_eq!(back, ops);
     }
+
+    /// A catalog whose reads work but whose `list_markdown` fails, to reach
+    /// `belongs_to_longer_raw`'s fallback (issue #734).
+    #[derive(Debug, Default)]
+    struct FailingListing(MemWorkspace);
+
+    impl Workspace for FailingListing {
+        fn read_to_string(&self, path: &str) -> Result<String, OkfError> {
+            self.0.read_to_string(path)
+        }
+        fn write_atomic(&self, path: &str, contents: &str) -> Result<(), OkfError> {
+            self.0.write_atomic(path, contents)
+        }
+        fn is_file(&self, path: &str) -> bool {
+            self.0.is_file(path)
+        }
+        fn is_dir(&self, path: &str) -> bool {
+            self.0.is_dir(path)
+        }
+        fn list_markdown(&self) -> Result<Vec<String>, OkfError> {
+            Err(OkfError::Io {
+                path: String::new(),
+                source: std::io::Error::other("listing unavailable"),
+            })
+        }
+        fn list_files(&self) -> Result<Vec<String>, OkfError> {
+            self.0.list_files()
+        }
+    }
+
+    #[test]
+    fn a_failed_catalog_listing_leaves_a_raw_bullet_unassigned() {
+        // Issue #734: with the catalog unlistable, the raw bullet might
+        // belong to a longer document, so no target takes it.
+        let bullet = "* [Short](a b.md) - summary";
+        let working = MemWorkspace::default();
+        let failing = FailingListing::default();
+        for ws in [&working as &dyn Workspace, &failing] {
+            ws.write_atomic("d/a b.md", "---\ntype: Note\n---\n")
+                .unwrap();
+        }
+        // The same call finds the bullet when the catalog lists fine, so the
+        // `None` below is the fallback and nothing else.
+        assert!(first_raw_listing(&working, bullet, "d/index.md", "d/a b.md").is_some());
+        assert!(first_raw_listing(&failing, bullet, "d/index.md", "d/a b.md").is_none());
+        assert!(!lists_raw_target(
+            &failing,
+            bullet,
+            "d/index.md",
+            "d/a b.md"
+        ));
+    }
 }
