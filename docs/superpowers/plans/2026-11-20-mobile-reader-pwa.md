@@ -553,7 +553,7 @@ In `src/http/mod.rs`, add `mod read;` beside `mod ui;` (line 18), and change `op
 
 - [ ] **Step 10: Run the tests to see them pass**
 
-Run: `scripts/test-pg.sh run cargo test --lib http::read http::ui`
+Run: `scripts/test-pg.sh run cargo test --lib http::read` and then `scripts/test-pg.sh run cargo test --lib http::ui` (cargo takes one test filter per run).
 Expected: PASS, every test in both modules.
 
 - [ ] **Step 11: Gates and commit**
@@ -718,8 +718,9 @@ self.addEventListener('install', event => {
     })());
 });
 
-// Invalidation marks, in memory: the page sends one ('*' for a wipe, else
-// an encoded catalog) and waits for the reply before it deletes anything.
+// Invalidation marks, in memory: the page sends one ('*' for a wipe, an
+// encoded catalog for a lost grant, or one document's API path for a
+// deleted document) and waits for the reply before it deletes anything.
 // The worker then refuses to store an answer to a request that started at
 // or before a matching mark, so a slow 2xx cannot put back what a 401 or a
 // lost grant removed. Memory needs no storage quota, and a request still on
@@ -790,11 +791,13 @@ async function networkFirst(request, cacheName, capped) {
 
 const CATALOG = /^\/api\/v1\/catalogs\/([^/]+)\//;
 
-// Whether the page wiped everything, or evicted `url`'s catalog, at or
-// after `startedAt`.
+// Whether the page wiped everything, or evicted `url`'s catalog or the
+// document itself (any form of it: the mark is its path, without query),
+// at or after `startedAt`.
 function invalidatedSince(url, startedAt) {
-    const catalog = CATALOG.exec(new URL(url).pathname)?.[1];
-    return [marks.get('*'), catalog ? marks.get(catalog) : undefined]
+    const path = new URL(url, self.location.origin).pathname;
+    const catalog = CATALOG.exec(path)?.[1];
+    return [marks.get('*'), catalog ? marks.get(catalog) : undefined, marks.get(path)]
         .some(at => at !== undefined && at >= startedAt);
 }
 
@@ -1140,8 +1143,8 @@ const MARK_WAIT_MS = 1000;
 // and keeps nothing, so every function here does nothing.
 const CACHING = 'caches' in self;
 
-// Tells the worker that `scope` ('*' or an encoded catalog) is invalid from
-// now on, and waits for it to confirm, so the mark is in place before the
+// Tells the worker that `scope` ('*', an encoded catalog, or a document's
+// API path) is invalid from now on, and waits for it to confirm, so the mark is in place before the
 // deletion it announces (see sw.js). With no worker controlling the page,
 // no answer of the worker's can be on its way, so there is nothing to mark.
 function mark(scope) {
@@ -1198,11 +1201,13 @@ export async function evictCatalog(catalog) {
     await evict([content, meta], path => path.startsWith(prefix));
 }
 
-// Deletes the cached copies (short and full) of one document: `kind` is
-// 'concepts' or 'documents', as in its API URL.
-export function evictDocument(catalog, kind, path) {
+// Deletes the cached copies (short and full) of one document, and keeps
+// answers already on their way from putting it back: `kind` is 'concepts'
+// or 'documents', as in its API URL.
+export async function evictDocument(catalog, kind, path) {
     const exact = `/api/v1/catalogs/${enc(catalog)}/${kind}/${encPath(path)}`;
-    return evict([content], url => url === exact);
+    await mark(exact);
+    await evict([content], url => url === exact);
 }
 
 // The concepts and documents of `catalog` readable offline, newest first,
@@ -2883,6 +2888,80 @@ async fn an_outline_link_in_a_long_concept_keeps_the_whole_body() {
             "() => { const heading = document.querySelector('[data-slug=\"settings\"]'); \
              return !!heading && heading.getBoundingClientRect().top < innerHeight; }",
         );
+    })
+    .await;
+}
+```
+
+Two more, for a slow success that answers after its document was deleted and evicted, one per kind of document:
+
+```rust
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_slow_success_cannot_put_back_a_deleted_concept() {
+    let (server, _) = server().await;
+    let runtime = tokio::runtime::Handle::current();
+    let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        // Alpha's 200 waits in the worker; the page learns when it arrives.
+        let mut paused = ui.pause_worker_responses("*/concepts/systems/alpha.md*");
+        ui.hold_answer_later("GET", "/concepts/systems/alpha.md");
+        ui.open_reader("/v/main/systems/alpha.md");
+        let old = paused.next_paused();
+        let mut without_alpha = main_files();
+        without_alpha.remove("systems/alpha.md");
+        runtime.block_on(publish(&pool, &app, "main", without_alpha));
+        // A second read of alpha gets the 404, and the page evicts alpha.
+        ui.open_reader("/me");
+        ui.open_reader("/v/main/systems/alpha.md");
+        let fresh = paused.next_paused();
+        paused.release(&fresh);
+        ui.wait_visible("#concept-gone");
+        // Now the old 200 reaches the worker.
+        paused.release(&old);
+        ui.poll_eval("() => window.heldFetched === true");
+        let cached = ui.eval(
+            "async () => (await (await caches.open('read-content')).keys()) \
+             .some(k => new URL(k.url).pathname.endsWith('/concepts/systems/alpha.md'))",
+            json!(null),
+        );
+        assert_eq!(cached, json!(false));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_slow_success_cannot_put_back_a_deleted_folder_index() {
+    let (server, _) = server().await;
+    let runtime = tokio::runtime::Handle::current();
+    let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        let mut paused = ui.pause_worker_responses("*/documents/systems/index.md*");
+        ui.hold_answer_later("GET", "/documents/systems/index.md");
+        ui.open_reader("/t/main/systems");
+        let old = paused.next_paused();
+        let mut without_index = main_files();
+        without_index.remove("systems/index.md");
+        runtime.block_on(publish(&pool, &app, "main", without_index));
+        // A fresh tree no longer lists the index, so the folder screen would
+        // not read it again: make the eviction tree.js makes on its 404
+        // (journey `a_folder_whose_index_is_deleted_meanwhile...`) directly.
+        ui.eval(
+            "async () => { await (await import('/read/js/cache.js')) \
+             .evictDocument('main', 'documents', '/systems/index.md'); return true; }",
+            json!(null),
+        );
+        paused.release(&old);
+        ui.poll_eval("() => window.heldFetched === true");
+        let cached = ui.eval(
+            "async () => (await (await caches.open('read-content')).keys()) \
+             .some(k => new URL(k.url).pathname.endsWith('/documents/systems/index.md'))",
+            json!(null),
+        );
+        assert_eq!(cached, json!(false));
     })
     .await;
 }

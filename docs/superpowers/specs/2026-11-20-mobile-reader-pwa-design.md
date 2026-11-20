@@ -138,7 +138,8 @@ Three caches:
 
 Invalidation marks live in the worker's memory, not in storage, so a full
 disk never blocks a deletion. Before a wipe the page sends the worker an
-"all" mark, and before evicting a catalog that catalog's mark, and waits
+"all" mark, before evicting a catalog that catalog's mark, and before
+evicting one document (a `404`) that document's API path, and waits
 (up to a second) for the worker to confirm before deleting. The worker does
 not store an answer to a request that started at or before a matching mark,
 and checks again after writing (deleting the entry if a mark appeared
@@ -240,6 +241,8 @@ Browser journeys (`tests/ui_e2e/read.rs`, rustwright headless Chromium):
     its offline copies and signs out.
 8k. Offline, a concept opened plainly answers its outline links, and one
     opened through a section link answers a plain open.
+8l. A success held in the worker until after its concept (or folder index)
+    was deleted and evicted does not put it back.
 9. Sign-out wipes the caches.
 10. A new shell version replaces the old shell cache on activate.
 
