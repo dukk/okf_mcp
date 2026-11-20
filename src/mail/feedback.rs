@@ -1,7 +1,7 @@
 //! Feedback delivery (issue #674): the `send_feedback` tool's submissions,
 //! and the console's (`POST /api/v1/feedback`, issue #793), both checked by
-//! [`check_and_submit`] and stored in the `feedback` table and forwarded to the operator's Forminit
-//! form by a worker on the same apalis-postgres queue machinery as mail
+//! `check_and_submit`, stored in the `feedback` table and forwarded to the
+//! operator's Forminit form by a worker on the same apalis-postgres queue machinery as mail
 //! ([`super::queue`]), in a queue of its own ([`QUEUE`]).
 //!
 //! The life of a submission:
