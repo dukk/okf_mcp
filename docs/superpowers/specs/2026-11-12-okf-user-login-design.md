@@ -476,6 +476,9 @@ changelogs (`changelog/*-m12-task-*`) give the reasons.
 - **Limits** (Decision 8): per-address and per-email limits are in memory,
   per process, as M10's are; account lockout is durable
   (`users.failed_sign_ins`, `users.locked_until`).
+  > **Corrected (issue #357, 2026-11-20).** With `[redis]` the limits are
+  > kept in Redis and shared by every replica; a failed Redis call falls back
+  > to the in-memory limiter (`src/shared/limits.rs`).
 - **Setting names** (Decision 9): `console_session_idle` and
   `console_session_absolute`, not `session_idle` and `session_absolute`,
   which would read as MCP's `session_idle_timeout`.

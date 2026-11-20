@@ -241,6 +241,7 @@ async fn start(
         .sign_in_limits()
         .sign_in_per_ip
         .try_take(&ip_key(ip), Instant::now())
+        .await
     {
         app.metrics().rate_limited(Limiter::SignInPerIp);
         return message_page(StatusCode::TOO_MANY_REQUESTS, TITLE, TOO_MANY, &brand);
@@ -646,7 +647,7 @@ async fn link(
     }
     // A signed-in user is not limited by address, so their own allowance
     // keeps them from filling the flow map every sign-in shares.
-    if !oidc.may_start_link(&user_id, Instant::now()) {
+    if !oidc.may_start_link(&user_id, Instant::now()).await {
         app.metrics().rate_limited(Limiter::LinkStarts);
         let body = serde_json::json!({
             "error": "TooManyRequests",
@@ -1790,6 +1791,40 @@ mod tests {
         let test = oidc_app(&idp, "OKF_TEST_OIDC_SECRET_OWN_MEMORY").await;
         let app = Arc::clone(&test.app);
         a_link_flow_finishes_only_in_the_session_that_started_it(&test, &app, &app, &idp).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn link_starts_are_one_allowance_across_replicas_with_redis() {
+        tokio::time::timeout(Duration::from_secs(120), async {
+            let idp = idp::start().await;
+            let (a, b, _redis) = oidc_pair(
+                &idp,
+                "OKF_TEST_OIDC_SECRET_SHARED_LINKS",
+                TestRedis::start().await,
+            )
+            .await;
+            let (one, two) = (
+                a.app.oidc().expect("oidc on the first replica"),
+                b.oidc().expect("oidc on the second replica"),
+            );
+            let now = std::time::Instant::now();
+            let mut allowed = 0;
+            for n in 0..LINK_STARTS_PER_USER {
+                let replica = if n % 2 == 0 { one } else { two };
+                if replica.may_start_link("user-1", now).await {
+                    allowed += 1;
+                }
+            }
+
+            assert_eq!(allowed, LINK_STARTS_PER_USER);
+            assert!(!one.may_start_link("user-1", now).await);
+            assert!(
+                !two.may_start_link("user-1", now).await,
+                "the second replica counts the first one's starts"
+            );
+        })
+        .await
+        .expect("the shared link allowance test within 120 s");
     }
 
     async fn a_redis_outage_fails_closed_and_keeps_the_flow_cookie(redis: TestRedis) {

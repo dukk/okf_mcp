@@ -1010,7 +1010,7 @@ async fn register(State(app): State<Arc<App>>, body: Bytes) -> Result<Response, 
     let Some(oauth) = app.oauth().filter(|oauth| oauth.settings.dcr_enabled) else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
-    if !oauth.register_limit.try_take(Instant::now()) {
+    if !oauth.register_limit.try_take(Instant::now()).await {
         app.metrics().rate_limited(Limiter::OauthRegister);
         return Err(OAuthError::SlowDown);
     }

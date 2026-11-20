@@ -962,7 +962,7 @@ async fn consent_post(
         return consent::error_page(StatusCode::FORBIDDEN, CROSS_SITE, &brand);
     }
     let now = Instant::now();
-    if !oauth.consent_limit.try_take(now) {
+    if !oauth.consent_limit.try_take(now).await {
         app.metrics().rate_limited(Limiter::OauthConsent);
         return consent::error_page(
             StatusCode::TOO_MANY_REQUESTS,
@@ -2242,7 +2242,7 @@ mod tests {
         // Drain the bucket at an instant a minute ahead: the handler's own
         // (earlier) instants then refill nothing, so the test is exact.
         let later = Instant::now() + Duration::from_secs(60);
-        while oauth.consent_limit.try_take(later) {}
+        while oauth.consent_limit.try_take(later).await {}
         let (status, headers, page) = post(
             &test,
             &[("pending", &pending), ("csrf", &csrf), ("action", "deny")],

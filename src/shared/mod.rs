@@ -4,6 +4,7 @@
 
 pub mod announce;
 pub mod ephemeral;
+pub mod limits;
 pub mod sessions;
 
 use std::fmt::Write as _;

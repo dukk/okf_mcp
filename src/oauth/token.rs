@@ -314,7 +314,7 @@ async fn issue_token(
     let oauth = app
         .oauth()
         .ok_or_else(|| OAuthError::InvalidRequest("OAuth is off".to_string()))?;
-    if !oauth.token_limit.try_take(Instant::now()) {
+    if !oauth.token_limit.try_take(Instant::now()).await {
         app.metrics().rate_limited(Limiter::OauthToken);
         return Err(OAuthError::SlowDown);
     }
@@ -532,7 +532,7 @@ async fn revoke(
     let oauth = app
         .oauth()
         .ok_or_else(|| OAuthError::InvalidRequest("OAuth is off".to_string()))?;
-    if !oauth.token_limit.try_take(Instant::now()) {
+    if !oauth.token_limit.try_take(Instant::now()).await {
         app.metrics().rate_limited(Limiter::OauthToken);
         return Err(OAuthError::SlowDown);
     }
@@ -876,7 +876,7 @@ mod tests {
     async fn an_exhausted_token_bucket_counts_as_the_oauth_token_limiter() {
         let (test, registry) = oauth_app_with_metrics().await;
         let oauth = test.app.oauth().expect("OAuth is on");
-        while oauth.token_limit.try_take(std::time::Instant::now()) {}
+        while oauth.token_limit.try_take(std::time::Instant::now()).await {}
 
         let (status, _, body) = token(&test, exchange("okfac_unused")).await;
 
