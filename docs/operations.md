@@ -150,7 +150,7 @@ unknown keys are ignored, so one file serves every version.
 | `mail.smtp.host`, `mail.smtp.port`, `mail.smtp.starttls`, `mail.smtp.username`, `mail.smtp.password_env` | none, `587`, `true`, none, none | The SMTP relay. `starttls = true` requires STARTTLS; `false` is TLS from the first byte (port 465); there is no plain-text mode. `username` and `password_env` (the environment variable holding the password) go together |
 | `mail.postmark.token_env`, `mail.postmark.message_stream` | none, `"outbound"` | Postmark's server token (by environment variable) and message stream |
 | `mail.ses.region` | none | The AWS region SES sends in. Unset, the AWS SDK's own resolution decides (`AWS_REGION`, then the profile, then instance metadata). The `[mail.ses]` table is optional; there is no credential key ([Mail](#mail)) |
-| `feedback.forminit_form_id` | none | The `[feedback]` table turns on the `send_feedback` tool (the [Feedback](#feedback) section); without it the tool is not offered and nothing is sent anywhere. The id of the Forminit form feedback is posted to, `https://forminit.com/f/<forminit_form_id>`: 1 to 64 of `A-Z`, `a-z`, `0-9`, `-` and `_`. Not a secret. Unknown keys in this table are an error |
+| `feedback.forminit_form_id` | none | The `[feedback]` table turns on the `send_feedback` tool and the console's feedback form (the [Feedback](#feedback) section); without it neither is offered and nothing is sent anywhere. The id of the Forminit form feedback is posted to, `https://forminit.com/f/<forminit_form_id>`: 1 to 64 of `A-Z`, `a-z`, `0-9`, `-` and `_`. Not a secret. Unknown keys in this table are an error |
 | `feedback.api_key_env` | none | The environment variable holding the form's API key, sent as `X-API-KEY`. Optional, but without a key Forminit takes one submission per 5 seconds from the server's address (5 per second with one), and a protected form needs it |
 | `feedback.worker` | `true` | Run the feedback worker in `serve`. With several replicas, turn it on for one only. Its own pool opens up to 3 connections, on top of `database_max_connections` |
 | `feedback.max_per_hour` | `10` | Submissions one credential (API key or OAuth grant) may make in any hour, 1 to 1000. Counted in Postgres, so it holds across replicas |
@@ -2620,9 +2620,23 @@ usually means an unverified identity or a sandbox recipient.
 
 With a `[feedback]` table, the `send_feedback` tool lets an agent, or a user
 through their agent, send the operator feedback about using the server:
-something confusing, broken, missing or good. It is posted to a
+something confusing, broken, missing or good, and the console's "Send
+feedback" button lets someone signed in with an account send it from a
+form. It is posted to a
 [Forminit](https://forminit.com) form. Without the table the tool is not in
-`tools/list`, the server instructions do not mention it, and nothing is sent.
+`tools/list`, the server instructions do not mention it, the console draws
+no form (`POST /api/v1/feedback` answers 404), and nothing is sent.
+
+The console's form shows the same third-party disclosure as the tool's
+description ("The feedback goes to <product>'s team through a third-party
+form service (Forminit)."), what is sent, and asks the person to leave out
+anything they don't want to share. It posts to `POST /api/v1/feedback`
+(console session and `X-OKF-CSRF` only), which checks and queues the
+submission exactly as the tool does: the same limits, the same queue, with
+`from` always `user`, no `tool`, `client` `web console` and
+`credential_kind` `session`. Its hourly limit counts each user's console
+submissions together, whichever session sent them. The Forminit key never
+reaches the browser.
 
 ```toml
 [feedback]
@@ -2636,7 +2650,8 @@ api_key_env = "OKF_MCP_FORMINIT_API_KEY"  # optional: the variable holding the X
 What a submission holds, and nothing else: text blocks `message`, `kind`
 (`bug`, `confusing`, `missing`, `praise` or `other`), `from` (`user` or
 `agent`), `tool` (when given), `server_version`, `client` (the MCP client's
-name from `initialize`), `credential_kind` (`api_key` or `oauth`) and
+name from `initialize`, or `web console`), `credential_kind` (`api_key`,
+`oauth`, or `session` for the console) and
 `feedback_id` (the feedback's own random id, the one the tool returns); a
 `rating` block (1 to 5) when given; and a `sender` block whose `userId` is
 the credential's user slug (`unassigned` for a legacy key no user owns).
@@ -2687,16 +2702,24 @@ unlock settings have no config key: their defaults are `400`, `false`, `4`
 and `true`.
 
 A deployment that rebrands the server sets the branding in `[auth]`, so a
-fresh database shows it with no Settings change (`support_contact` and
-`feedback_url` are left out for none):
+fresh database shows it with no Settings change (`support_contact`,
+`feedback_url`, `docs_url` and `onboarding_url` are left out for none):
 
 ```toml
 [auth]
 product_name = "Acme Notes"
 support_contact = "help@example.com"
 feedback_url = "https://example.com/feedback"
+docs_url = "https://docs.example.com"
+onboarding_url = "https://docs.example.com/start/first-15-minutes/"
 mcp_server_name = "acme-notes"
 ```
+
+`docs_url` and `onboarding_url` are separate settings, both off by default:
+the documentation link names a site, while the onboarding redirect names
+one page on it, and a server whose documentation has no getting-started
+page (or another operator's) can show the link without sending new users
+to a page that is not there.
 
 MCP clients see the product name as the server's display title
 (`serverInfo.title` in `initialize`), and in `send_feedback`'s description
@@ -2724,7 +2747,9 @@ name when the server starts.
 | `reset_link_ttl` | `1h` | Password reset link lifetime |
 | `product_name` | `okf` | The product name people see: in every email (subjects and text), the console (sidebar, login card and tab title), the sign-in, forgot, setup, reset and OAuth consent pages and (from the config file only) the passkey prompt. 1 to 60 characters with no control characters; surrounding spaces are trimmed |
 | `support_contact` | `none` | An email address or an `https://` URL (with a host). When set, every email ends with "Questions? Contact ..." and the server pages show the same line (a URL as a link); `none` shows no line |
-| `feedback_url` | `none` | An `https://` URL (with a host, at most 500 characters, no whitespace or control characters; an email address is refused). When set, the console's sidebar footer shows a "Send feedback" link to it, opening in a new tab; `none` shows no link. Nothing else changes when it is unset |
+| `feedback_url` | `none` | An `https://` URL (with a host, at most 500 characters, no whitespace or control characters; an email address is refused). When set, the console's sidebar footer shows a "Send feedback" link to it, opening in a new tab; `none` shows no link. With a `[feedback]` table, someone signed in with an account sees the in-console feedback form instead ([Feedback](#feedback)), never both; a key still sees this link. Nothing else changes when it is unset |
+| `docs_url` | `none` | An `https://` URL, checked as `feedback_url` is. When set, the console's sidebar shows a "Documentation" link to it on every page, for everyone signed in (by key or account, admin or not), opening in a new tab; `none` shows no link |
+| `onboarding_url` | `none` | An `https://` URL, checked as `feedback_url` is: where a successful first password setup (`POST /account/setup`) sends the person, still signed in, instead of the console. A setup that continues an OAuth authorization (`return_to=/oauth/authorize?...`) resumes it instead; sign-in, password reset and a passkey setup are unchanged. `none` goes to the console as before |
 | `audit_retention_days` | `400` | How many days [audit log](#audit-log) entries are kept, `30` to `3650`. A daily pass deletes older ones |
 | `require_unlock` | `false` | Whether operator credentials (admin keys, admin users' sessions) need an unlock, with a reason and a time limit, before they open a customer catalog's contents |
 | `unlock_max_hours` | `4` | The longest an unlock lasts, in hours, `1` to `72`; a longer one is refused (422, `limit: "unlock_max_hours"`) |
@@ -2737,13 +2762,15 @@ okf-mcp settings reset max_key_lifetime    # back to the config file's default
 okf-mcp settings set product_name "Acme Notes"
 okf-mcp settings set support_contact https://example.com/help
 okf-mcp settings set feedback_url https://example.com/feedback
+okf-mcp settings set docs_url https://docs.example.com
+okf-mcp settings set onboarding_url https://docs.example.com/start/first-15-minutes/
 okf-mcp settings set audit_retention_days 730
 ```
 
 A value is checked as its config key is: `true`/`false` (or `on`/`off`), a
 whole number, or a duration like `12h` above zero and at most ten years
-(`none` for `max_key_lifetime`); `product_name`, `support_contact` and `feedback_url` as in
-the table. A bad one is refused, naming the key: 422
+(`none` for `max_key_lifetime`); `product_name`, `support_contact`,
+`feedback_url`, `docs_url` and `onboarding_url` as in the table. A bad one is refused, naming the key: 422
 over REST, a non-zero exit on the command line, and an unknown key is clap's
 list of the keys. Each change records who made it (`cli:<os user>` for the
 command line, the admin's actor over REST and in the console), writes an
@@ -3375,11 +3402,11 @@ the same port as `/mcp`:
 | `GET /ui`, `GET /ui/` | none | `/ui` redirects (308) to `/ui/`, which serves the console's shell |
 | `GET /ui/*` | none | The console's static files, embedded in the binary at build time; an unknown file is 404 |
 | `GET /ui/manifest.json` | none | `{"pages": [...]}`: the console pages this build has |
-| `GET /ui/brand.json` | none | `{"product_name", "support_contact", "feedback_url"}` (`null` when unset): the [branding settings](#settings), which the console shows before anyone signs in |
+| `GET /ui/brand.json` | none | `{"product_name", "support_contact", "feedback_url", "docs_url", "feedback_form"}`: the [branding settings](#settings) (`null` when unset), which the console shows before anyone signs in, and `feedback_form`, `{"disclosure", "max_message_chars", "kinds"}` with a `[feedback]` table, else `null` (never the form id or the API key). `onboarding_url` is not in it |
 | `/api/v1/*` | bearer key or console session | The JSON API; each endpoint checks the level it needs |
 | `GET /signin`, `POST /signin` | none | The sign-in page and its password form ([Signing in and self-service](#signing-in-and-self-service)). Without `public_url` the page offers only the pasted key and the POST is 404; with `password_sign_in` off the POST is 404 |
 | `GET /signin/forgot`, `POST /signin/forgot` | none | Ask for a reset link; only with `public_url` set |
-| `GET /account/setup`, `POST /account/setup` | setup link (`?token=`) | Choose a password (or, with the page's script, register a passkey); signs in |
+| `GET /account/setup`, `POST /account/setup` | setup link (`?token=`) | Choose a password (or, with the page's script, register a passkey); signs in, then redirects (303) to `onboarding_url` when it is set and the setup does not continue an OAuth authorization, else to `return_to` |
 | `GET /account/reset`, `POST /account/reset` | reset link (`?token=`) | Set a new password; signs every session out |
 | `POST /auth/passkey/signin/start`, `POST /auth/passkey/signin/finish` | none | Passkey sign-in (discoverable credentials); only while passkeys are on. The finish answers `{redirect}` with the session cookie, or 401 |
 | `POST /auth/passkey/setup/start`, `POST /auth/passkey/setup/finish` | setup link (in the body) | Register a passkey from the setup page, use the link and sign in; 422 for a credential that does not verify |
@@ -3618,6 +3645,7 @@ does. Limits are in [Signing in and self-service](#signing-in-and-self-service).
 | `GET /api/v1/me/sessions` | console session | `{sessions}`, most recently used first: `id_prefix` (12 hex characters, never the id), `created_at`, `last_seen_at`, `ip`, `user_agent`, `current` (this browser's) |
 | `DELETE /api/v1/me/sessions/{id_prefix}` | console session | Signs one session out, this browser's included; 204. 404 for a malformed prefix or one none of the user's sessions has; 409 for one several share (none is ended) |
 | `GET /api/v1/me/sign-ins` | console session | `{sign_ins}`, newest first (at most 50): `method`, `outcome`, `ip`, `at` |
+| `POST /api/v1/feedback` | console session | The console's feedback form ([Feedback](#feedback)). Body `{message, kind, rating}` (`kind` defaults to `other`, `rating` 1 to 5 or absent; `from`, `tool` or any other field is a 422). 201 `{sent: true, id}`. 404 without a `[feedback]` table; 403 for a key or token; 409 (`Refused`) for a blank message, a NUL, an unknown kind or a rating outside 1 to 5; 422 for a message over 4,000 characters (`limit: "feedback_message"`) or past `max_per_hour` for this user (`limit: "feedback_rate"`) |
 
 ### Settings and mail API
 

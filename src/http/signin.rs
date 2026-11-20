@@ -950,8 +950,40 @@ struct NewPasswordForm {
     return_to: Option<String>,
 }
 
-/// `POST /account/setup`: sets the password and signs in. The link is used
-/// only once the password passes, so a weak one can be retried.
+/// Where a successful first password setup sends the browser: an OAuth
+/// authorization it was continuing (`/oauth/authorize?...`) always resumes;
+/// otherwise the `onboarding_url` setting (a getting-started guide) when one
+/// is set, else the console path it would have gone to anyway. The
+/// onboarding URL is the operator's own setting, checked as `https://` when
+/// stored, so `safe_return_to` stays limited to this origin's paths.
+///
+/// # Arguments
+/// * `return_to` - the form's destination, already through `safe_return_to`.
+/// * `onboarding_url` - the effective `onboarding_url` setting.
+///
+/// # Returns
+/// The `Location` to redirect to.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: chooses one of its arguments, no I/O"
+    )
+)]
+fn after_setup<'a>(return_to: &'a str, onboarding_url: Option<&'a str>) -> &'a str {
+    match onboarding_url {
+        Some(url) if !return_to.starts_with(OAUTH_CONTINUATION) => url,
+        _ => return_to,
+    }
+}
+
+/// The start of a `return_to` that continues an OAuth authorization (the
+/// one non-console destination `safe_return_to` keeps).
+const OAUTH_CONTINUATION: &str = "/oauth/authorize?";
+
+/// `POST /account/setup`: sets the password and signs in, then redirects
+/// as [`after_setup`] says. The link is used only once the password passes,
+/// so a weak one can be retried.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn setup_post(
     State(app): State<Arc<App>>,
@@ -1001,7 +1033,9 @@ async fn setup_post(
     // `unwrap_or_default`: a setup link always starts a session; an empty
     // header map would only mean no cookie to send.
     let cookie = used.cookie.unwrap_or_default();
-    (cookie, Redirect::to(&return_to)).into_response()
+    let settings = app.settings();
+    let destination = after_setup(&return_to, settings.onboarding_url.as_deref());
+    (cookie, Redirect::to(destination)).into_response()
 }
 
 /// Uses an emailed link and stores the new password it was for, in one
@@ -1802,6 +1836,197 @@ mod tests {
                 StatusCode::SEE_OTHER,
             ]
         );
+    }
+
+    /// The getting-started guide the onboarding tests configure.
+    const ONBOARDING: &str = "https://docs.example.com/start/first-15-minutes/";
+
+    /// [`login_app`] with `[auth] onboarding_url` set to [`ONBOARDING`].
+    async fn onboarding_app() -> TestApp {
+        let mut config = crate::http::api::testing::login_config();
+        config.auth.onboarding_url = Some(ONBOARDING.to_string());
+        app_with(&[("main", MAIN)], config).await
+    }
+
+    /// A fresh setup link for `user_id`.
+    async fn setup_token(test: &TestApp, user_id: &str) -> String {
+        email_tokens::issue(
+            test.app.pool(),
+            user_id,
+            Purpose::Setup,
+            Duration::from_secs(3600),
+            Utc::now(),
+        )
+        .await
+        .expect("issue a setup token")
+    }
+
+    /// The setup form for `token`, with `password` twice and, if given,
+    /// `return_to`.
+    fn setup_form(token: &str, password: &str, return_to: Option<&str>) -> Payload {
+        let mut fields = vec![
+            ("token", token.to_string()),
+            ("password", password.to_string()),
+            ("confirm", password.to_string()),
+        ];
+        if let Some(return_to) = return_to {
+            fields.push(("return_to", return_to.to_string()));
+        }
+        Payload::Form(fields)
+    }
+
+    #[test]
+    fn after_setup_prefers_the_guide_but_keeps_an_oauth_continuation() {
+        let oauth = "/oauth/authorize?client_id=x&state=y";
+
+        assert_eq!(after_setup("/ui/", Some(ONBOARDING)), ONBOARDING);
+        assert_eq!(after_setup("/ui/#/keys", Some(ONBOARDING)), ONBOARDING);
+        assert_eq!(after_setup(oauth, Some(ONBOARDING)), oauth);
+        assert_eq!(after_setup("/ui/", None), "/ui/");
+        assert_eq!(after_setup(oauth, None), oauth);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_first_setup_redirects_to_the_onboarding_guide_and_still_signs_in() {
+        let test = onboarding_app().await;
+        let alice = user_with_password(&test, "alice", "alice@example.com", None).await;
+        let token = setup_token(&test, &alice.id).await;
+        let mut browser = Browser::default();
+
+        let done = browser
+            .send(
+                &test,
+                "POST",
+                "/account/setup",
+                setup_form(&token, PASSWORD, None),
+            )
+            .await;
+        let session = browser
+            .send(&test, "GET", "/api/v1/session", Payload::Empty)
+            .await;
+
+        assert_eq!(done.status, StatusCode::SEE_OTHER);
+        assert_eq!(done.location(), ONBOARDING);
+        assert!(done.set_cookie(COOKIE).is_some(), "{:?}", done.headers);
+        assert_eq!(session.status, StatusCode::OK);
+        assert_eq!(session.json()["user"], "alice");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_setup_continuing_an_oauth_authorization_skips_the_guide() {
+        let test = onboarding_app().await;
+        let alice = user_with_password(&test, "alice", "alice@example.com", None).await;
+        let token = setup_token(&test, &alice.id).await;
+        let authorize = "/oauth/authorize?client_id=x&state=y";
+
+        let done = Browser::default()
+            .send(
+                &test,
+                "POST",
+                "/account/setup",
+                setup_form(&token, PASSWORD, Some(authorize)),
+            )
+            .await;
+
+        assert_eq!(done.status, StatusCode::SEE_OTHER);
+        assert_eq!(done.location(), authorize);
+        assert!(done.set_cookie(COOKIE).is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_hostile_return_to_on_setup_still_never_leaves_for_it() {
+        let test = onboarding_app().await;
+        let plain = login_app().await;
+        for (app, expected) in [(&test, ONBOARDING), (&plain, "/ui/")] {
+            let hostile_values = ["https://evil.example/", "//evil.example", "/\\evil.example"];
+            for (n, hostile) in hostile_values.into_iter().enumerate() {
+                let name = format!("alice{n}");
+                let email = format!("alice{n}@example.com");
+                let user = user_with_password(app, &name, &email, None).await;
+                let token = setup_token(app, &user.id).await;
+                let done = Browser::default()
+                    .send(
+                        app,
+                        "POST",
+                        "/account/setup",
+                        setup_form(&token, PASSWORD, Some(hostile)),
+                    )
+                    .await;
+                assert_eq!(done.location(), expected, "{hostile}");
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_setup_does_not_redirect_to_the_guide() {
+        let test = onboarding_app().await;
+        let alice = user_with_password(&test, "alice", "alice@example.com", None).await;
+        let token = setup_token(&test, &alice.id).await;
+
+        let weak = Browser::default()
+            .send(
+                &test,
+                "POST",
+                "/account/setup",
+                setup_form(&token, "short", None),
+            )
+            .await;
+        let unknown = Browser::default()
+            .send(
+                &test,
+                "POST",
+                "/account/setup",
+                setup_form("not-a-token", PASSWORD, None),
+            )
+            .await;
+
+        assert_eq!(weak.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(unknown.status, StatusCode::GONE);
+        for reply in [&weak, &unknown] {
+            assert_eq!(reply.location(), "");
+            assert_eq!(reply.set_cookie(COOKIE), None);
+            assert!(!reply.text().contains(ONBOARDING));
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sign_in_and_reset_ignore_the_onboarding_guide() {
+        let test = onboarding_app().await;
+        let alice = user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
+        let reset = email_tokens::issue(
+            test.app.pool(),
+            &alice.id,
+            Purpose::Reset,
+            Duration::from_secs(3600),
+            Utc::now(),
+        )
+        .await
+        .expect("issue a reset token");
+
+        let signed_in = post_sign_in(
+            &mut Browser::default(),
+            &test,
+            "alice@example.com",
+            PASSWORD,
+        )
+        .await;
+        let changed = Browser::default()
+            .send(
+                &test,
+                "POST",
+                "/account/reset",
+                Payload::Form(vec![
+                    ("token", reset),
+                    ("password", "amber-quarry-signal-77".to_string()),
+                    ("confirm", "amber-quarry-signal-77".to_string()),
+                ]),
+            )
+            .await;
+
+        assert_eq!(signed_in.status, StatusCode::SEE_OTHER);
+        assert_eq!(signed_in.location(), "/ui/");
+        assert_eq!(changed.status, StatusCode::SEE_OTHER);
+        assert_eq!(changed.location(), "/signin?notice=reset");
     }
 
     #[tokio::test(flavor = "multi_thread")]

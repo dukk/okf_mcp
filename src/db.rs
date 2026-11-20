@@ -620,6 +620,70 @@ mod tests {
         assert_eq!(cleaned, "a b");
     }
 
+    /// Whether `feedback_credential_kind_check` is validated, and its text.
+    async fn credential_kind_check(pool: &PgPool) -> (bool, String) {
+        sqlx::query_as(
+            "SELECT convalidated, pg_get_constraintdef(oid) FROM pg_constraint \
+             WHERE conname = 'feedback_credential_kind_check'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// Inserts one feedback row with this `credential_kind`.
+    async fn insert_feedback(pool: &PgPool, id: &str, kind: &str) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO feedback (id, credential, user_slug, message, kind, origin, \
+                 server_version, client, credential_kind, created_at) \
+             VALUES ($1, 'k', 'alice', 'hi', 'bug', 'user', '0', 'probe', $2, now())",
+        )
+        .bind(id)
+        .bind(kind)
+        .execute(pool)
+        .await
+        .map(|_| ())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn migrations_0029_and_0030_widen_the_credential_kind_check_and_validate_it() {
+        // Arrange: a database at 0028 holding feedback from both MCP kinds.
+        let db = pg_support::TestDb::start().await;
+        MIGRATOR.run_to(28, &db.pool).await.unwrap();
+        insert_feedback(&db.pool, "a", "api_key").await.unwrap();
+        insert_feedback(&db.pool, "b", "oauth").await.unwrap();
+
+        // Act and assert: 0029 adds the wider check without scanning the
+        // old rows (not yet validated), but checks new ones at once.
+        MIGRATOR.run_to(29, &db.pool).await.unwrap();
+        let (validated, definition) = credential_kind_check(&db.pool).await;
+        assert!(
+            !validated,
+            "0029 must not validate under its exclusive lock"
+        );
+        assert!(definition.contains("'session'"), "{definition}");
+        insert_feedback(&db.pool, "c", "session").await.unwrap();
+        assert!(insert_feedback(&db.pool, "d", "bogus").await.is_err());
+
+        // 0030, and the server's own migrate, leave it validated.
+        migrate(&db.pool).await.unwrap();
+        assert!(credential_kind_check(&db.pool).await.0, "0030 validates it");
+        assert!(insert_feedback(&db.pool, "e", "bogus").await.is_err());
+        let kept: i64 = sqlx::query_scalar("SELECT count(*) FROM feedback")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(kept, 3);
+
+        // A fresh database ends in the same state.
+        let fresh = pg_support::TestDb::start().await;
+        migrate(&fresh.pool).await.unwrap();
+        assert_eq!(
+            credential_kind_check(&fresh.pool).await,
+            credential_kind_check(&db.pool).await
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn migration_0010_constraints_hold() {
         let db = test_db().await;

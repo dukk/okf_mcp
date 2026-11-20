@@ -13,15 +13,18 @@
 //! | `product_name` | JSON string | 1 to 60 characters, no control characters (trimmed) |
 //! | `support_contact` | JSON string or `null` | an email address, an `https://` URL, or `none` |
 //! | `feedback_url` | JSON string or `null` | an `https://` URL, or `none` |
+//! | `docs_url` | JSON string or `null` | an `https://` URL, or `none` |
+//! | `onboarding_url` | JSON string or `null` | an `https://` URL, or `none` |
 //! | `audit_retention_days` | JSON number | `30` to `3650` |
 //! | `require_unlock` | JSON boolean | `true`, `false`, `on`, `off` |
 //! | `unlock_max_hours` | JSON number | `1` to `72` |
 //! | `unlock_notify_owners` | JSON boolean | `true`, `false`, `on`, `off` |
 //!
-//! The three branding settings (`product_name`, `support_contact`,
-//! `feedback_url`) take their defaults from `[auth]` like the policy keys,
-//! falling back to [`DEFAULT_PRODUCT_NAME`], no contact and no feedback
-//! link; the config file is checked as [`set`] checks a value
+//! The branding settings (`product_name`, `support_contact`,
+//! `feedback_url`, `docs_url`, `onboarding_url`) take their defaults from
+//! `[auth]` like the policy keys, falling back to [`DEFAULT_PRODUCT_NAME`],
+//! no contact, no feedback link, no documentation link and no onboarding
+//! redirect; the config file is checked as [`set`] checks a value
 //! (`check_branding_defaults`). `audit_retention_days` has no config key
 //! (default [`audit::DEFAULT_RETENTION_DAYS`]), since the audit log's
 //! append-only trigger reads it from the same row
@@ -72,9 +75,11 @@ pub const MAX_PRODUCT_NAME_CHARS: usize = 60;
 /// address is held to `users::check_email`'s 254).
 const MAX_SUPPORT_URL_CHARS: usize = 500;
 
-/// What people see the server as: the three branding settings. Serialized
-/// as `GET /ui/brand.json` answers it (`support_contact` and `feedback_url`
-/// are `null` when unset).
+/// What people see the server as: the branding settings people see on
+/// every page. Serialized as `GET /ui/brand.json` answers it
+/// (`support_contact`, `feedback_url` and `docs_url` are `null` when
+/// unset). `onboarding_url` is not here: only the setup page's redirect
+/// reads it ([`Settings::onboarding_url`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Brand {
     /// The product name.
@@ -83,6 +88,8 @@ pub struct Brand {
     pub support_contact: Option<String>,
     /// The `https://` URL the console's "Send feedback" link opens, if set.
     pub feedback_url: Option<String>,
+    /// The `https://` URL the console's "Documentation" link opens, if set.
+    pub docs_url: Option<String>,
 }
 
 // `Default` by hand: a derived one would make the product name empty.
@@ -99,6 +106,7 @@ impl Default for Brand {
             product_name: DEFAULT_PRODUCT_NAME.to_string(),
             support_contact: None,
             feedback_url: None,
+            docs_url: None,
         }
     }
 }
@@ -129,6 +137,12 @@ pub struct Settings {
     /// An `https://` URL the console's "Send feedback" link opens; `None`
     /// shows no link.
     pub feedback_url: Option<String>,
+    /// An `https://` URL the console's "Documentation" link opens; `None`
+    /// shows no link.
+    pub docs_url: Option<String>,
+    /// An `https://` URL a successful first password setup redirects to
+    /// (a getting-started guide); `None` goes to the console as before.
+    pub onboarding_url: Option<String>,
     /// How many days audit entries are kept before the daily prune deletes
     /// them ([`audit::DEFAULT_RETENTION_DAYS`] by default).
     pub audit_retention_days: u32,
@@ -163,6 +177,7 @@ impl Settings {
             product_name,
             support_contact,
             feedback_url,
+            docs_url,
         } = defaults.default_brand();
         Self {
             password_sign_in: defaults.password_sign_in,
@@ -176,6 +191,8 @@ impl Settings {
             product_name,
             support_contact,
             feedback_url,
+            docs_url,
+            onboarding_url: defaults.onboarding_url.clone(),
             // Runtime settings only, with no `[auth]` key (spec "My calls").
             audit_retention_days: audit::DEFAULT_RETENTION_DAYS,
             require_unlock: false,
@@ -187,7 +204,8 @@ impl Settings {
     /// The branding settings.
     ///
     /// # Returns
-    /// A copy of the product name, support contact and feedback URL.
+    /// A copy of the product name, support contact, feedback URL and
+    /// documentation URL.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -200,6 +218,7 @@ impl Settings {
             product_name: self.product_name.clone(),
             support_contact: self.support_contact.clone(),
             feedback_url: self.feedback_url.clone(),
+            docs_url: self.docs_url.clone(),
         }
     }
 }
@@ -238,6 +257,12 @@ pub enum SettingKey {
     /// `feedback_url`.
     #[value(name = "feedback_url")]
     FeedbackUrl,
+    /// `docs_url`.
+    #[value(name = "docs_url")]
+    DocsUrl,
+    /// `onboarding_url`.
+    #[value(name = "onboarding_url")]
+    OnboardingUrl,
     /// `audit_retention_days`.
     #[value(name = "audit_retention_days")]
     AuditRetentionDays,
@@ -254,7 +279,7 @@ pub enum SettingKey {
 
 impl SettingKey {
     /// Every key, in the order `settings list` shows them.
-    pub const ALL: [SettingKey; 14] = [
+    pub const ALL: [SettingKey; 16] = [
         SettingKey::PasswordSignIn,
         SettingKey::MaxKeysPerUser,
         SettingKey::MaxKeyLifetime,
@@ -269,6 +294,8 @@ impl SettingKey {
         SettingKey::UnlockMaxHours,
         SettingKey::UnlockNotifyOwners,
         SettingKey::FeedbackUrl,
+        SettingKey::DocsUrl,
+        SettingKey::OnboardingUrl,
     ];
 
     /// The stored name.
@@ -294,6 +321,8 @@ impl SettingKey {
             SettingKey::ProductName => "product_name",
             SettingKey::SupportContact => "support_contact",
             SettingKey::FeedbackUrl => "feedback_url",
+            SettingKey::DocsUrl => "docs_url",
+            SettingKey::OnboardingUrl => "onboarding_url",
             SettingKey::AuditRetentionDays => "audit_retention_days",
             SettingKey::RequireUnlock => "require_unlock",
             SettingKey::UnlockMaxHours => "unlock_max_hours",
@@ -371,8 +400,8 @@ fn duration(key: SettingKey, text: &str) -> Result<Duration, String> {
 /// `Ok(())`, or the refusal, naming the key.
 ///
 /// # Errors
-/// A `product_name`, `support_contact` or `feedback_url` its setting
-/// refuses.
+/// A `product_name`, `support_contact`, `feedback_url`, `docs_url` or
+/// `onboarding_url` its setting refuses.
 #[cfg_attr(
     dylint_lib = "hyp_tracing",
     allow(
@@ -385,8 +414,14 @@ pub(crate) fn check_branding_defaults(defaults: &AuthConfig) -> Result<(), Strin
     if let Some(contact) = defaults.support_contact.as_deref() {
         check_support_contact(contact)?;
     }
-    if let Some(url) = defaults.feedback_url.as_deref() {
-        check_feedback_url(url)?;
+    for (key, url) in [
+        (SettingKey::FeedbackUrl, &defaults.feedback_url),
+        (SettingKey::DocsUrl, &defaults.docs_url),
+        (SettingKey::OnboardingUrl, &defaults.onboarding_url),
+    ] {
+        if let Some(url) = url.as_deref() {
+            check_url_setting(key, url)?;
+        }
     }
     Ok(())
 }
@@ -447,15 +482,16 @@ fn check_support_contact(text: &str) -> Result<(), String> {
     crate::store::users::check_email(text).map_err(|_| refuse())
 }
 
-/// A feedback URL: an `https://` URL only (see [`is_https_url`]); an email
-/// address is refused.
+/// A link setting (`feedback_url`, `docs_url`, `onboarding_url`): an
+/// `https://` URL only (see [`is_https_url`]); an email address is refused.
 #[tracing::instrument(level = "trace", skip_all)]
-fn check_feedback_url(text: &str) -> Result<(), String> {
+fn check_url_setting(key: SettingKey, text: &str) -> Result<(), String> {
     if is_https_url(text) {
         Ok(())
     } else {
         Err(format!(
-            "feedback_url takes an https:// URL or none, not {text:?}"
+            "{} takes an https:// URL or none, not {text:?}",
+            key.as_str()
         ))
     }
 }
@@ -516,9 +552,13 @@ fn parse_value(key: SettingKey, text: &str) -> Result<Value, String> {
         SettingKey::SupportContact => {
             check_support_contact(text).map(|()| Value::String(text.to_string()))
         }
-        SettingKey::FeedbackUrl if text == "none" => Ok(Value::Null),
-        SettingKey::FeedbackUrl => {
-            check_feedback_url(text).map(|()| Value::String(text.to_string()))
+        SettingKey::FeedbackUrl | SettingKey::DocsUrl | SettingKey::OnboardingUrl
+            if text == "none" =>
+        {
+            Ok(Value::Null)
+        }
+        SettingKey::FeedbackUrl | SettingKey::DocsUrl | SettingKey::OnboardingUrl => {
+            check_url_setting(key, text).map(|()| Value::String(text.to_string()))
         }
         // A JSON number, which the append-only trigger reads too; the range
         // is `apply`'s.
@@ -562,6 +602,19 @@ fn apply(settings: &mut Settings, key: SettingKey, value: &Value) -> Result<(), 
             .as_str()
             .ok_or_else(|| format!("{} must be a duration string", key.as_str()))?;
         duration(key, text)
+    };
+    // And the three link keys: `null` for none.
+    let as_url = |value: &Value| -> Result<Option<String>, String> {
+        match value {
+            Value::Null => Ok(None),
+            other => {
+                let text = other
+                    .as_str()
+                    .ok_or_else(|| format!("{} must be a string or null", key.as_str()))?;
+                check_url_setting(key, text)?;
+                Ok(Some(text.to_string()))
+            }
+        }
     };
     // And the three boolean keys.
     let as_bool = |value: &Value| -> Result<bool, String> {
@@ -621,18 +674,9 @@ fn apply(settings: &mut Settings, key: SettingKey, value: &Value) -> Result<(), 
                 }
             };
         }
-        SettingKey::FeedbackUrl => {
-            settings.feedback_url = match value {
-                Value::Null => None,
-                other => {
-                    let text = other
-                        .as_str()
-                        .ok_or_else(|| "feedback_url must be a string or null".to_string())?;
-                    check_feedback_url(text)?;
-                    Some(text.to_string())
-                }
-            };
-        }
+        SettingKey::FeedbackUrl => settings.feedback_url = as_url(value)?,
+        SettingKey::DocsUrl => settings.docs_url = as_url(value)?,
+        SettingKey::OnboardingUrl => settings.onboarding_url = as_url(value)?,
         SettingKey::AuditRetentionDays => {
             // `RangeInclusive::contains`: `MIN..=MAX` includes both ends.
             settings.audit_retention_days = value
@@ -668,6 +712,14 @@ fn display(settings: &Settings, key: SettingKey) -> String {
             .unwrap_or_else(|| "none".to_string()),
         SettingKey::FeedbackUrl => settings
             .feedback_url
+            .clone()
+            .unwrap_or_else(|| "none".to_string()),
+        SettingKey::DocsUrl => settings
+            .docs_url
+            .clone()
+            .unwrap_or_else(|| "none".to_string()),
+        SettingKey::OnboardingUrl => settings
+            .onboarding_url
             .clone()
             .unwrap_or_else(|| "none".to_string()),
         SettingKey::AuditRetentionDays => settings.audit_retention_days.to_string(),
@@ -731,7 +783,7 @@ fn apply_rows(settings: &mut Settings, rows: &[StoredSetting]) {
 ///   what a key with no stored row takes.
 ///
 /// # Returns
-/// The product name, support contact and feedback URL.
+/// The product name, support contact, feedback URL and documentation URL.
 ///
 /// # Errors
 /// [`OkfError::Database`].
@@ -739,16 +791,17 @@ fn apply_rows(settings: &mut Settings, rows: &[StoredSetting]) {
 pub async fn brand_in(conn: &mut PgConnection, defaults: &Brand) -> Result<Brand, OkfError> {
     let rows = sqlx::query_as::<_, StoredSetting>(
         "SELECT key, value, updated_at, updated_by FROM server_settings \
-         WHERE key IN ('product_name', 'support_contact', 'feedback_url')",
+         WHERE key IN ('product_name', 'support_contact', 'feedback_url', 'docs_url')",
     )
     .fetch_all(&mut *conn)
     .await?;
-    // Only the three branding rows were read, so the policy fields keep
+    // Only the brand's rows were read, so the policy fields keep
     // their built-in defaults and are dropped by `brand()`.
     let mut settings = Settings {
         product_name: defaults.product_name.clone(),
         support_contact: defaults.support_contact.clone(),
         feedback_url: defaults.feedback_url.clone(),
+        docs_url: defaults.docs_url.clone(),
         ..Settings::from_config(&AuthConfig::default())
     };
     apply_rows(&mut settings, &rows);
@@ -808,8 +861,9 @@ fn updated_by(actor: &AuditActor) -> String {
 /// An entry's details for a setting's value: the stored JSON, except for
 /// `support_contact`, which can be an email address and is never written
 /// into an entry (spec "People in entries"). Every key is listed, so a new
-/// setting must decide which arm it takes. `feedback_url` is an
-/// `https://` URL, never a person, so it is recorded. The unlock settings are policy
+/// setting must decide which arm it takes. `feedback_url`, `docs_url` and
+/// `onboarding_url` are `https://` URLs, never a person, so they are
+/// recorded. The unlock settings are policy
 /// (a flag and a number of hours), never a person, so they are recorded.
 #[tracing::instrument(level = "trace", skip_all)]
 fn audited_value(key: SettingKey, value: &Value) -> Option<&Value> {
@@ -824,6 +878,8 @@ fn audited_value(key: SettingKey, value: &Value) -> Option<&Value> {
         | SettingKey::ResetLinkTtl
         | SettingKey::ProductName
         | SettingKey::FeedbackUrl
+        | SettingKey::DocsUrl
+        | SettingKey::OnboardingUrl
         | SettingKey::AuditRetentionDays
         | SettingKey::RequireUnlock
         | SettingKey::UnlockMaxHours
@@ -1376,6 +1432,7 @@ mod tests {
                 product_name: "Acme Notes".to_string(),
                 support_contact: Some("https://example.com/help".to_string()),
                 feedback_url: None,
+                docs_url: None,
             }
         );
         let mut conn = db.pool.acquire().await.unwrap();
@@ -1436,6 +1493,8 @@ mod tests {
             product_name: "  Acme Notes ".to_string(),
             support_contact: Some("help@example.com".to_string()),
             feedback_url: Some("https://example.com/feedback".to_string()),
+            docs_url: Some("https://docs.example.com".to_string()),
+            onboarding_url: Some("https://docs.example.com/start/".to_string()),
             ..AuthConfig::default()
         }
     }
@@ -1450,7 +1509,12 @@ mod tests {
                 product_name: "Acme Notes".to_string(),
                 support_contact: Some("help@example.com".to_string()),
                 feedback_url: Some("https://example.com/feedback".to_string()),
+                docs_url: Some("https://docs.example.com".to_string()),
             }
+        );
+        assert_eq!(
+            settings.onboarding_url.as_deref(),
+            Some("https://docs.example.com/start/")
         );
     }
 
@@ -1473,6 +1537,14 @@ mod tests {
             },
             AuthConfig {
                 feedback_url: Some("help@example.com".to_string()),
+                ..AuthConfig::default()
+            },
+            AuthConfig {
+                docs_url: Some("http://docs.example.com".to_string()),
+                ..AuthConfig::default()
+            },
+            AuthConfig {
+                onboarding_url: Some("docs.example.com".to_string()),
                 ..AuthConfig::default()
             },
         ];
@@ -1975,6 +2047,78 @@ mod tests {
 
         set_text("none".to_string()).await.unwrap();
         assert_eq!(load(&db.pool, &defaults).await.unwrap().feedback_url, None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn docs_and_onboarding_urls_are_validated_stored_and_cleared_by_none() {
+        let db = test_db().await;
+        let defaults = AuthConfig::default();
+        let settings = Settings::from_config(&defaults);
+        assert_eq!(display(&settings, SettingKey::DocsUrl), "none");
+        assert_eq!(display(&settings, SettingKey::OnboardingUrl), "none");
+
+        for key in [SettingKey::DocsUrl, SettingKey::OnboardingUrl] {
+            for value in [
+                "http://docs.example.com",
+                "/ui/",
+                "//docs.example.com",
+                "javascript:alert(1)",
+                "https://",
+                "https://docs.example.com/a b",
+            ] {
+                let result = set(&db.pool, key, value, &by("cli"), now()).await;
+                assert!(
+                    matches!(
+                        &result,
+                        Err(OkfError::LimitExceeded { limit: "setting", reason })
+                            if reason.starts_with(key.as_str())
+                    ),
+                    "{key:?} {value:?}: {result:?}"
+                );
+            }
+        }
+        set(
+            &db.pool,
+            SettingKey::DocsUrl,
+            "https://docs.example.com",
+            &by("cli"),
+            now(),
+        )
+        .await
+        .unwrap();
+        set(
+            &db.pool,
+            SettingKey::OnboardingUrl,
+            "https://docs.example.com/start/",
+            &by("cli"),
+            now(),
+        )
+        .await
+        .unwrap();
+        let loaded = load(&db.pool, &defaults).await.unwrap();
+        assert_eq!(
+            loaded.brand().docs_url.as_deref(),
+            Some("https://docs.example.com")
+        );
+        assert_eq!(
+            loaded.onboarding_url.as_deref(),
+            Some("https://docs.example.com/start/")
+        );
+        // A queued mail's brand reads the documentation URL too.
+        let mut conn = db.pool.acquire().await.unwrap();
+        assert_eq!(
+            brand_in(&mut conn, &defaults.default_brand())
+                .await
+                .unwrap(),
+            loaded.brand()
+        );
+        drop(conn);
+
+        for key in [SettingKey::DocsUrl, SettingKey::OnboardingUrl] {
+            set(&db.pool, key, "none", &by("cli"), now()).await.unwrap();
+        }
+        let cleared = load(&db.pool, &defaults).await.unwrap();
+        assert_eq!((cleared.docs_url, cleared.onboarding_url), (None, None));
     }
 
     #[tokio::test(flavor = "multi_thread")]
