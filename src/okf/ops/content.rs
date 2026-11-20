@@ -147,7 +147,7 @@ fn checked_key(key: &str) -> Result<(), OkfError> {
 /// folder index (or, when `ensure_index` will create it, the text it will
 /// have) is checked for `index_section` first, and a missing folder index
 /// needs a root `index.md` to be listed under. Only a read or write failure
-/// past that point leaves files written; as for [`ensure_index`], run the
+/// past that point leaves files written; as for [`ensure_folder_index`], run the
 /// op on a scratch copy, as the write path does, and drop the copy on
 /// error.
 #[tracing::instrument(level = "debug", skip_all)]

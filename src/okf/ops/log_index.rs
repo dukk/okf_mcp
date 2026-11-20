@@ -235,7 +235,7 @@ fn concept_bullet(listing: &Listing<'_>) -> String {
 
 /// Port of `cmd_index`: lists a concept in its folder's `index.md`. A
 /// folder reference instead sets that folder's listing summary in its
-/// parent's index (issue #668, see [`describe_folder`]); `okf.py` has no
+/// parent's index (issue #668, see `describe_folder`); `okf.py` has no
 /// such form.
 ///
 /// # Arguments
@@ -255,7 +255,7 @@ fn concept_bullet(listing: &Listing<'_>) -> String {
 /// As [`crate::okf::ops::stamp`] when loading the concept;
 /// [`OkfError::Refused`] without a title, without a folder `index.md`, or
 /// for a missing `section` heading; for a folder, a `section` or `title`,
-/// and [`describe_folder`]'s errors.
+/// and `describe_folder`'s errors.
 #[tracing::instrument(level = "debug", skip_all)]
 pub fn index(
     workspace: &dyn Workspace,
@@ -335,7 +335,7 @@ fn folder_reference(reference: &str) -> Option<Result<String, OkfError>> {
     Some(Ok(folder))
 }
 
-/// `index` on a folder: [`describe_folder`], refusing the concept-only
+/// `index` on a folder: `describe_folder`, refusing the concept-only
 /// arguments.
 #[tracing::instrument(level = "trace", skip_all)]
 fn index_folder(

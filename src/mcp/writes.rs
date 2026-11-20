@@ -2281,7 +2281,7 @@ mod folder_summary_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_free_edit_after_a_folder_summary_is_stale_checked() {
+    async fn a_free_edit_after_index_on_a_folder_is_stale_checked() {
         let test = pg(&[]).await;
         let first = writer(&test, "writer-a", "pg").await;
         let second = writer(&test, "writer-b", "pg").await;
