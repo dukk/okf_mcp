@@ -400,6 +400,64 @@ fn raw_names(index: &str, target: &str) -> Vec<String> {
     raws
 }
 
+/// [`raw_names`] that really are raw: encoding would change them, and they
+/// hold no `%XX` escape (rule 1 of [`lists_raw_target`]).
+#[tracing::instrument(level = "trace", skip_all)]
+fn unencoded_raw_names(index: &str, target: &str) -> Vec<String> {
+    raw_names(index, target)
+        .into_iter()
+        .filter(|raw| encode_link_path(raw) != raw.as_str())
+        .filter(|raw| py_unquote(raw) == raw.as_str())
+        .collect()
+}
+
+/// Does the bullet's destination, which starts at `start` in `line` and
+/// matched `raw` (a raw name of `target`), match a strictly longer raw name
+/// of another existing document, ending at `)` or `#` as written (issue
+/// #734)? A `#` or `)` ends the shorter match inside the longer name
+/// (`a b.md` inside `a b.md#extra.md`), so the bullet could be either
+/// document's: the longest name wins and the shorter target leaves the
+/// bullet alone. This is the conservative choice for the shorter target
+/// (it never rewrites or counts the bullet); the longer target's own pass
+/// still rewrites it, in whichever order the targets are processed. The
+/// check runs only on a match, so the catalog is listed rarely. A failed
+/// listing counts as ambiguous: leaving a bullet is always safe.
+///
+/// # Arguments
+/// * `workspace` - lists the existing documents.
+/// * `line` - the bullet.
+/// * `start` - the byte offset of its destination in `line`.
+/// * `index` - the index holding it.
+/// * `target` - the target being matched.
+/// * `raw` - the raw name of `target` that matched.
+///
+/// # Returns
+/// `true` when another document's longer raw name matches the bullet.
+#[tracing::instrument(level = "trace", skip_all)]
+fn belongs_to_longer_raw(
+    workspace: &dyn Workspace,
+    line: &str,
+    start: usize,
+    index: &str,
+    target: &str,
+    raw: &str,
+) -> bool {
+    let Ok(documents) = workspace.list_markdown() else {
+        return true;
+    };
+    let destination = &line[start..];
+    documents
+        .iter()
+        .filter(|other| other.as_str() != target)
+        .flat_map(|other| unencoded_raw_names(index, other))
+        .filter(|longer| longer.len() > raw.len())
+        .any(|longer| {
+            destination
+                .strip_prefix(longer.as_str())
+                .is_some_and(|rest| rest.starts_with(')') || rest.starts_with('#'))
+        })
+}
+
 /// The first bullet of `text` that [`lists_raw_target`] counts as a raw
 /// listing of `target`, by exactly its rules 0-3, and the line it would be
 /// rewritten to.
@@ -416,11 +474,7 @@ pub(crate) fn first_raw_listing(
     index: &str,
     target: &str,
 ) -> Option<RawListing> {
-    let raws: Vec<String> = raw_names(index, target)
-        .into_iter()
-        .filter(|raw| encode_link_path(raw) != raw.as_str())
-        .filter(|raw| py_unquote(raw) == raw.as_str())
-        .collect();
+    let raws = unencoded_raw_names(index, target);
     // Lines in order, so the first raw bullet is the one found (a replay
     // of the rewrite takes the first line equal to it, the same line).
     text.split('\n')
@@ -439,7 +493,13 @@ pub(crate) fn first_raw_listing(
                         resolve_link(workspace, &link.target, index)
                             .is_none_or(|r| !workspace.exists(&r.path))
                     });
-                (ends && broken).then(|| RawListing {
+                // Issue #734: another existing document's raw name may extend
+                // this one (`a b.md` and `a b.md#extra.md`), and then the
+                // bullet is that document's listing, not this target's.
+                (ends
+                    && broken
+                    && !belongs_to_longer_raw(workspace, line, start, index, target, raw))
+                .then(|| RawListing {
                     line: line.to_string(),
                     fixed: format!("{}{}{rest}", &line[..start], encode_link_path(raw)),
                 })
