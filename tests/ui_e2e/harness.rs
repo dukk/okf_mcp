@@ -172,6 +172,22 @@ impl Ui {
         });
     }
 
+    /// Waits until the checkbox `selector` is ticked.
+    ///
+    /// # Arguments
+    /// * `selector` - the checkbox to watch.
+    ///
+    /// # Panics
+    /// When it is still unticked after [`WAIT`].
+    pub fn wait_checked(&self, selector: &str) {
+        self.poll(&format!("{selector} ticked"), || {
+            self.eval(
+                "(selector) => document.querySelector(selector)?.checked === true",
+                serde_json::json!(selector),
+            ) == serde_json::json!(true)
+        });
+    }
+
     /// Waits until `selector`'s text contains `contains`, and returns the text.
     pub fn wait_text(&self, selector: &str, contains: &str) -> String {
         let mut last = String::new();

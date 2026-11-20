@@ -112,6 +112,18 @@ async fn oidc_server(idp_server: &MockIdp) -> TestServer {
     .await
 }
 
+/// Waits until the Account page has drawn every section (its view carries
+/// `data-loaded=true`, set once all six reads have settled).
+///
+/// # Arguments
+/// * `ui` - the browser the journey drives.
+///
+/// # Panics
+/// When the page is not fully drawn within the harness's wait.
+fn wait_loaded(ui: &Ui) {
+    ui.wait_visible("#main .view[data-loaded=true]");
+}
+
 /// The `data-test` of the Sign out button on the session row whose text
 /// contains `agent`, in `#session-table`.
 fn revoke_button_of(ui: &Ui, agent: &str) -> String {
@@ -508,6 +520,37 @@ async fn a_bad_credential_at_finish_shows_the_reason_and_keeps_the_session() {
     assert!(stored.is_empty());
 }
 
+/// The Account page's loaded marker comes only after the slowest section
+/// has drawn (issue #373): a journey that waits for it never clicks a
+/// control that is about to move.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_account_page_marks_itself_loaded_after_its_slowest_section() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    let id = alices_id(&server.db.pool).await;
+    another_session(&server.db.pool, &id, "phone browser").await;
+    drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        // The session list is held back; every other section draws.
+        ui.hold_next("GET", "/me/sessions");
+        ui.open("/account");
+        ui.wait_text("#passkey-list", "No passkeys yet");
+        ui.wait_visible("#sign-in-table");
+        ui.wait_text("#identity-list", "No linked accounts");
+        assert!(
+            !ui.present("#main .view[data-loaded=true]"),
+            "the page is not loaded while the session list is still unread"
+        );
+        assert!(!ui.present("#session-table"));
+        ui.release_held();
+        wait_loaded(ui);
+        // The marker came with the list.
+        assert!(ui.present("#session-table"));
+        ui.wait_text("#session-table", "phone browser");
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_member_links_an_identity_and_keeps_their_other_sessions() {
     let provider = idp::start().await;
@@ -520,12 +563,23 @@ async fn a_member_links_an_identity_and_keeps_their_other_sessions() {
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
         ui.open("/account");
+        // Every section has drawn before anything is clicked: each one moves
+        // the controls below it, and the phone's row proves the second
+        // session existed when the page first read the list (issue #373).
+        wait_loaded(ui);
+        ui.wait_text("#session-table", "phone browser");
         ui.wait_text("[data-test=identity-link-example]", "Link Example ID");
         ui.click("#identity-keep-sessions");
+        // The link's request reads the box when it is sent: a click that
+        // did not tick it would end the phone's session, and the journey
+        // would only notice at the end, as a missing row.
+        ui.wait_checked("#identity-keep-sessions");
         ui.click("[data-test=identity-link-example]");
         // Off to the provider, which signs in at once and sends the browser
         // to the callback, which links and comes back to the Account page.
         ui.wait_text("[data-test=identity-example]", "alice@id.example.com");
+        // The new page: wait for all of it, then the list it drew.
+        wait_loaded(ui);
         assert_eq!(
             ui.eval("() => location.pathname + location.hash", json!(null)),
             json!("/ui/#/account")
