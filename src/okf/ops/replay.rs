@@ -418,8 +418,10 @@ fn unencoded_raw_names(index: &str, target: &str) -> Vec<String> {
 /// (`a b.md` inside `a b.md#extra.md`), so the bullet could be either
 /// document's: the longest name wins and the shorter target leaves the
 /// bullet alone. This is the conservative choice for the shorter target
-/// (it never rewrites or counts the bullet); the longer target's own pass
-/// still rewrites it, in whichever order the targets are processed. The
+/// (it never rewrites or counts the bullet). For two concepts of one folder
+/// the longer one's own pass still rewrites it, in whichever order the
+/// targets are processed; for a folder index against a concept of that
+/// folder no pass reads the parent's bullet, so it stays as written. The
 /// check runs only on a match, so the catalog is listed rarely. A failed
 /// listing counts as ambiguous: leaving a bullet is always safe.
 ///
