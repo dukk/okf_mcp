@@ -60,7 +60,8 @@ old_reviews() {
 
 # good_pr <head>: a PR whose every merge check passes for <head>.
 good_pr() {
-    printf '{"headRefOid":"%s","mergeStateStatus":"CLEAN"}\n' "$1" >"$fx/pr-view.json"
+    printf '{"headRefOid":"%s","mergeStateStatus":"CLEAN","baseRefName":"main"}\n' "$1" \
+        >"$fx/pr-view.json"
     printf '[{"user":{"login":"%s"},"commit_id":"%s"}]\n' "$bot" "$1" \
         >"$fx/api/pulls_7_reviews.1.json"
     printf '[{"id":1,"in_reply_to_id":null,"user":{"login":"%s"}},
@@ -142,7 +143,7 @@ test_merge_refuses_unreplied_thread() {
 
 test_merge_refuses_unclean_state() {
     new_fixtures; good_pr "$head_a"
-    printf '{"headRefOid":"%s","mergeStateStatus":"BEHIND"}\n' "$head_a" >"$fx/pr-view.json"
+    printf '{"headRefOid":"%s","mergeStateStatus":"BEHIND","baseRefName":"main"}\n' "$head_a" >"$fx/pr-view.json"
     run_merge
     want_rc 1; want_out "mergeStateStatus=BEHIND"; want_not_merged
 }
@@ -237,7 +238,7 @@ test_merge_at_cap_refuses_unreplied_thread() {
 
 test_merge_at_cap_refuses_unclean_state() {
     new_fixtures; good_pr "$head_a"; old_reviews 3
-    printf '{"headRefOid":"%s","mergeStateStatus":"BLOCKED"}\n' "$head_a" >"$fx/pr-view.json"
+    printf '{"headRefOid":"%s","mergeStateStatus":"BLOCKED","baseRefName":"main"}\n' "$head_a" >"$fx/pr-view.json"
     run_merge
     want_rc 1; want_out "mergeStateStatus=BLOCKED"; want_not_merged
 }
@@ -249,6 +250,66 @@ test_merge_merges_when_all_checks_pass() {
     [ "$(cat "$fx/merged")" = "$head_a" ] || die "merged the wrong head"
     grep -qF -- "pr merge 7 -R owner/repo --merge --match-head-commit $head_a" "$fx/calls.log" \
         || die "merge not pinned to the head"
+}
+
+# base_pr <head> <base> [<merge commit>]: good_pr, but with a PR base other than main.
+base_pr() {
+    good_pr "$1"
+    jq -n --arg h "$1" --arg b "$2" --arg m "${3:-}" \
+        '{headRefOid: $h, mergeStateStatus: "CLEAN", baseRefName: $b}
+         + (if $m == "" then {} else {mergeCommit: {oid: $m}} end)' >"$fx/pr-view.json"
+}
+
+test_merge_reports_the_base_and_merge_commit() {
+    new_fixtures; base_pr "$head_a" milestone/9-x ccccccc3333333333333333333333333333333333
+    run_merge
+    want_rc 0; want_out "MERGED PR 7 -> milestone/9-x ccccccc"; want_no_out "-> main"
+}
+
+test_merge_falls_back_to_the_base_tip() {
+    new_fixtures; base_pr "$head_a" milestone/9-x
+    # Put the base on origin one commit ahead of main, so its tip is not main's.
+    git_quiet -C "$repo" branch -f ms main
+    git_quiet -C "$repo" worktree add -q --detach "$work/ms" ms
+    git_quiet -C "$work/ms" commit -q --allow-empty -m ms
+    git_quiet -C "$work/ms" push -q origin HEAD:refs/heads/milestone/9-x
+    tip=$(git -C "$work/ms" rev-parse --short HEAD)
+    git -C "$repo" worktree remove --force "$work/ms"
+    git -C "$repo" branch -D ms -q
+    run_merge
+    want_rc 0; want_out "MERGED PR 7 -> milestone/9-x $tip"
+}
+
+test_merge_refuses_without_a_base_branch() {
+    new_fixtures; good_pr "$head_a"
+    # A PR with no baseRefName at all, then one whose baseRefName is null.
+    printf '{"headRefOid":"%s","mergeStateStatus":"CLEAN"}\n' "$head_a" >"$fx/pr-view.json"
+    run_merge
+    want_rc 1; want_out "REFUSE: could not read the base branch of PR 7"; want_not_merged
+    printf '{"headRefOid":"%s","mergeStateStatus":"CLEAN","baseRefName":null}\n' "$head_a" \
+        >"$fx/pr-view.json"
+    run_merge
+    want_rc 1; want_out "REFUSE: could not read the base branch of PR 7"; want_not_merged
+}
+
+test_merge_keeps_the_sha_when_origin_is_unavailable() {
+    new_fixtures; base_pr "$head_a" milestone/9-x ccccccc3333333333333333333333333333333333
+    # The merge has happened; a fetch that fails must not hide it. Put origin
+    # back however the test ends (the repository is shared by every test).
+    trap 'git -C "$repo" remote set-url origin "$work/origin.git"' EXIT
+    git -C "$repo" remote set-url origin "$work/no-such-origin.git"
+    run_merge
+    want_rc 0; want_out "MERGED PR 7 -> milestone/9-x ccccccc"
+    want_out "warning: could not fetch origin afterwards"
+    [ "$(cat "$fx/merged")" = "$head_a" ] || die "merged the wrong head"
+}
+
+test_merge_warns_when_no_merge_commit_can_be_found() {
+    # No mergeCommit from gh, and origin has no such base branch.
+    new_fixtures; base_pr "$head_a" milestone/absent
+    run_merge
+    want_rc 0
+    want_out "MERGED PR 7 -> milestone/absent; warning: could not find the merge commit"
 }
 
 # --- watch-review.sh ---
