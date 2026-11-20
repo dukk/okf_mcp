@@ -29,3 +29,9 @@
   No seam in `tree.js`: `esm-hooks.mjs` maps the imports of a module
   loaded with the `?doubles` query to `tests/read_worker/tree-doubles/`
   (a fake `h`, `read`, `evictDocument` and view parts).
+- `tests/read_worker/catalogs.test.mjs` (second review) runs
+  `screens/catalogs.js` the same way, with a fake `location`: the single
+  catalog chosen once and home replaced; the picker staying when a catalog
+  is already chosen or one was just lost; no catalogs; each button choosing
+  its own catalog and opening home; and an answer arriving after the screen
+  was left drawing, choosing and navigating nothing.

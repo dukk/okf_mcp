@@ -4,7 +4,7 @@
 // warning). This hook loads them as ES modules; page.mjs registers it.
 //
 // It also maps the imports of a screen loaded with the `?doubles` query
-// (tree.js, tree.test.mjs) to the test doubles in tree-doubles/, so the
+// (tree.js, catalogs.js and their tests) to the test doubles in tree-doubles/, so the
 // screen runs in Node with a fake DOM and controlled reads, with no change
 // to the screen itself.
 const PAGE = new URL('../../src/http/read/js/', import.meta.url).href;
@@ -18,7 +18,7 @@ const DOUBLED = new Map([
 
 export async function resolve(specifier, context, nextResolve) {
     const parent = context.parentURL ?? '';
-    if (parent.startsWith(`${PAGE}screens/tree.js`) && parent.endsWith('?doubles') && DOUBLED.has(specifier)) {
+    if (parent.startsWith(`${PAGE}screens/`) && parent.endsWith('?doubles') && DOUBLED.has(specifier)) {
         return { url: `${DOUBLES}${DOUBLED.get(specifier)}`, shortCircuit: true };
     }
     return nextResolve(specifier, context);

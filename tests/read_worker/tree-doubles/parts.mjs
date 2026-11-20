@@ -6,3 +6,7 @@ export function crumbs(catalog, folder) {
 export function renderBody(html) {
     return { tag: 'article', attrs: { id: 'body' }, children: [], html };
 }
+
+export function message(text, action = null, id = 'notice') {
+    return { tag: 'div', attrs: { id }, children: [text, action].filter(Boolean) };
+}
