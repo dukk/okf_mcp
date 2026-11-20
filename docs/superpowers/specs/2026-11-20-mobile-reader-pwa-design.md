@@ -33,17 +33,21 @@ sign-in (the reader is cookie-only).
 
 ### Serving
 
-- The reader's files live under `src/http/ui/read/`, so `build.rs` already
-  embeds them in the `ASSETS` table that `src/http/ui.rs` serves.
-- `src/http/ui.rs` adds routes `/read` (permanent redirect to `/read/`),
-  `/read/` (serves `read/index.html`) and `/read/{*path}` (serves
-  `read/<path>`), behind the same `security_headers` layer and CSP. The
-  console's `/ui/{*path}` route must not serve `read/...` files (they are
-  reachable only under `/read/`), and the reader's route serves only the
-  `read/` prefix.
-- `/read/sw.js` is served with `Cache-Control: no-cache`, so a deploy reaches
-  installed apps on their next launch. Its location makes its scope exactly
-  `/read/`; it never controls a console page.
+- The reader's files live under `src/http/read/`, a sibling of the
+  console's `src/http/ui/`. `build.rs` embeds each tree into its own table
+  (`ASSETS` for the console, `READ_ASSETS` for the reader) with one shared
+  function, so neither route can serve the other's files. It also writes
+  `READ_SHELL_VERSION`, a hash of the reader's files.
+- A new module `src/http/read.rs` serves `/read` (permanent redirect to
+  `/read/`), `/read/` (`index.html`), `/read/shell.json` (the version and the
+  files to precache) and `/read/{*path}`, behind the console's
+  `security_headers` layer and CSP. `src/http/ui.rs`'s `asset()` takes the
+  table to serve from, so both modules share it.
+- `/read/sw.js` is served with `Cache-Control: no-cache` and with
+  `__SHELL_VERSION__` replaced by `READ_SHELL_VERSION`, so any change to the
+  reader's files changes the worker's bytes and installed apps update on
+  their next launch. Its location makes its scope exactly `/read/`; it never
+  controls a console page.
 - `content_type()` gains `png` (`image/png`) and `webmanifest`
   (`application/manifest+json`).
 - `is_safe_return_to` in `src/http/pages.rs` also accepts paths starting
@@ -53,7 +57,7 @@ sign-in (the reader is cookie-only).
   `connect-src 'self'`) already permits a same-origin service worker and
   manifest; it is not loosened.
 
-### Files under `src/http/ui/read/`
+### Files under `src/http/read/`
 
 - `index.html`: viewport with `viewport-fit=cover`, `<link rel="manifest">`,
   `apple-touch-icon`, `apple-mobile-web-app-capable` and status-bar meta,
@@ -67,19 +71,23 @@ sign-in (the reader is cookie-only).
 - `read.css`: the reader's own tokens on `:root` (overriding `--pico-*`
   variables for type scale, spacing, colours, radius, plus reader tokens for
   measure, touch-target size and safe-area padding), light and dark sets by
-  `prefers-color-scheme`, phone-first layout, and rules for the classes
-  `src/render.rs` emits in `body_html`. That class list is the one contract
-  shared with the console's stylesheet: a new class in `render.rs` may need a
-  rule in both.
+  `prefers-color-scheme`, phone-first layout, and rules for the HTML
+  `src/render.rs` emits in `body_html` (plain markdown elements, and broken
+  links marked by `title="Not in this catalog"`). That markup is the one
+  contract shared with the console's stylesheet.
 - `sw.js`: the service worker (caching, below).
 - `js/main.js`: hash router and screen dispatch; registers `sw.js`.
 - `js/api.js`: read-only client (below).
-- `js/cache.js`: page-side messages to the worker (wipe all, evict catalog,
-  evict concept, list offline concepts).
+- `js/names.js`: a classic script setting `self.READ_CACHES` (the cache
+  names), loaded by `index.html` and by `sw.js` through `importScripts`, so
+  the names are written once.
+- `js/cache.js`: page-side cache work through `window.caches` (the page and
+  the worker share CacheStorage): wipe all, evict a catalog, evict a concept,
+  list offline concepts, and the owner check.
 - `js/screens/*.js`: one module per screen.
 
-The reader imports `../../js/core/dom.js` (`h()`, `clear()`) and
-`../../js/core/format.js` from the console. It does not import the console's
+The reader imports `/ui/js/core/dom.js` (`h()`, `clear()`) and
+`/ui/js/core/format.js` (`ago()`) from the console; neither imports anything. It does not import the console's
 `api.js` (bearer keys, toasts, unlock dialog), `router.js` or
 `components/tree.js` (which depends on the console router).
 
@@ -104,35 +112,38 @@ sanitised server-side by `render.rs`.
 
 Three caches:
 
-1. `read-shell-<version>`: precached on `install` (`index.html`, `read.css`,
-   JS modules, icons, manifest, `/ui/vendor/pico.min.css`, the imported
-   console core modules). Cache-first. `<version>` is the crate version,
-   written into `sw.js` when the server serves it (a placeholder substituted
-   by `src/http/ui.rs`), so each release replaces the shell. `activate`
-   deletes every `read-shell-*` cache except the current one and calls
-   `clients.claim()`.
+1. `read-shell-<version>`: precached on `install` from `/read/shell.json`
+   (every file under `src/http/read/` plus `/ui/vendor/pico.min.css`,
+   `/ui/js/core/dom.js` and `/ui/js/core/format.js`). Cache-first; a
+   navigation under `/read/` is answered with the cached `index.html`.
+   `activate` deletes every `read-shell-*` cache except the current one and
+   calls `clients.claim()`.
 2. `read-content`: concept GETs (`/api/v1/catalogs/{c}/concepts/{path}`,
-   keyed on the full URL including `?full=true`). Stale-while-revalidate:
-   online, the cached copy is answered at once and a fresh fetch updates the
-   cache, and the page re-renders if the fresh body differs (the worker posts
-   a message); offline, the cached copy is answered. Capped at 200 entries,
-   evicting the least recently viewed (the worker keeps a small IndexedDB
-   index of URL to last-viewed time).
+   keyed on the full URL including `?full=true`). Network-first, cache
+   fallback. (Brainstorming said stale-while-revalidate; network-first is
+   used instead because answering from cache before the server has spoken
+   would show a revoked session cached content while online, and it keeps
+   one answer per request.) Capped at 200 entries, least recently viewed
+   evicted first: every answer, fresh or cached, is re-put so it moves to the
+   end of the cache's insertion order, and the oldest keys are deleted while
+   more than 200 remain. No IndexedDB.
 3. `read-meta`: the catalog list, trees, recent changes and backlinks.
    Network-first, cache fallback.
+4. `read-owner`: one entry naming the user the caches belong to.
 
 Never cached: search, `/api/v1/session`, `/api/v1/me`, every non-GET request, everything outside
 `GET /api/v1` and the shell.
 
-Every answer the worker serves from `read-content` or `read-meta` carries
-`X-Read-Cache: hit; at=<RFC 3339 time cached>`. The worker never builds an
-error page; it passes the network's answer through, answers from cache, or
+Only `2xx` answers are cached; the worker stores each with an
+`X-Read-Cached-At` header (RFC 3339). An answer served from cache because the
+network failed also carries `X-Read-Offline: 1`. The worker never builds an
+error page: it passes the network's answer through, answers from cache, or
 lets the fetch fail.
 
-Caches are tied to the signed-in user: the page tells the worker the user's
-name after `GET /api/v1/session` succeeds, and the worker wipes `read-content` and
-`read-meta` when it changes. Sign-out tells the worker to wipe both before
-calling `DELETE /api/v1/session`.
+Caches are tied to the signed-in user: after `GET /api/v1/session` succeeds,
+the page compares the user with `read-owner` and wipes `read-content` and
+`read-meta` when it differs, then records the user. Sign-out wipes both
+before calling `DELETE /api/v1/session`.
 
 ## Error handling
 
@@ -140,10 +151,10 @@ calling `DELETE /api/v1/session`.
 
 | Answer | Action |
 |---|---|
-| `2xx` | Render. If `X-Read-Cache` is present and the network was unreachable, show "Offline, synced <ago>". |
+| `2xx` | Render. With `X-Read-Offline`, show "Offline, synced <ago of X-Read-Cached-At>". |
 | `401` | Wipe `read-content` and `read-meta`; navigate to `/signin?return_to=/read/` plus the current hash. |
-| `403` with body `error` `Forbidden`, or `404` on a catalog route | Evict that catalog's entries in both caches and the remembered catalog; go to the picker with a short note. |
-| `404` on a concept | Evict that concept's entries; show "This concept no longer exists" and a link to its parent folder. |
+| `403` with body `error` `Forbidden`, or `404` with `CatalogNotSelected` or `UnknownName` (a catalog no longer reachable) | Evict that catalog's entries in both caches and the remembered catalog; go to the picker with a short note. |
+| `404` with `NotFound` on a concept | Evict that concept's entries; show "This concept no longer exists" and a link to its parent folder. |
 | `403` with body `error` `UnlockRequired` or `Suspended` | Keep the caches; show the server's message; for `UnlockRequired`, link to the console (`/ui/`) to unlock. |
 | Network failure with no cached copy | "Not available offline" with a link to the Available Offline list. |
 
@@ -153,9 +164,12 @@ Rust unit tests (`src/http/ui.rs`, `src/http/pages.rs`):
 
 - `/read/`, `/read/sw.js`, `/read/manifest.webmanifest` and an icon are
   served with the right content types and the security headers.
-- `/read/sw.js` carries `Cache-Control: no-cache` and the crate version.
-- `/ui/read/...` does not serve reader files; `/read/` does not serve console
-  files.
+- `/read/sw.js` carries `Cache-Control: no-cache` and `READ_SHELL_VERSION`,
+  with no `__SHELL_VERSION__` left.
+- `/ui/sw.js` does not serve the reader's worker; `/read/styles.css` does not
+  serve the console's stylesheet.
+- `/read/shell.json` lists every reader file and the shared console files,
+  each of which exists.
 - `safe_return_to` accepts `/read/...` and still rejects `//host`,
   backslashes and other prefixes.
 
@@ -166,8 +180,9 @@ Browser journeys (`tests/ui_e2e/read.rs`, rustwright headless Chromium):
 3. Search renders results; offline, search says it needs a connection.
 4. View three concepts, go offline, reload: all three render with the synced
    note; an unviewed concept shows "Not available offline".
-5. With a lowered cap (test hook), the least recently viewed concept is
-   evicted.
+5. After viewing 201 concepts, the least recently viewed one is no longer
+   cached and a re-viewed early one still is (no test hook: the journey
+   fetches through the worker).
 6. Revoke the session server-side: the next online request wipes the caches
    and goes to sign-in; offline afterwards shows nothing cached.
 7. Remove the grant to catalog X: X's entries are evicted, catalog Y's
