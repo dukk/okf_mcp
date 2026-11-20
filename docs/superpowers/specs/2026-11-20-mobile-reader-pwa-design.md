@@ -103,7 +103,7 @@ The reader imports `/ui/js/core/dom.js` (`h()`, `clear()`) and
 | `#/t/{catalog}/{folder}` | Tree: one folder's `index.md` rendered first (when it has one), then its subfolders and concepts. Logs and machinery files are not listed. | `GET /api/v1/catalogs/{c}/tree`, `GET .../documents/{folder}/index.md` |
 | `#/s/{catalog}?q=` | Search results: title, path, snippet | `GET /api/v1/search?q=&catalogs={c}&limit=50` |
 | `#/v/{catalog}/{path}` | Concept: title, breadcrumbs (tree folders), collapsible outline, `body_html`, a "Show the rest" action when the body is shortened (refetches with `?full=true`), and a "Linked from" list | `GET /api/v1/catalogs/{c}/concepts/{path}`, `GET .../links/{path}` |
-| `#/me` | Signed-in user and sign-out | `GET /api/v1/session` (user, `csrf`, `expires_at`; the `csrf` token is kept in memory only), `DELETE /api/v1/session` with the `X-OKF-CSRF` header |
+| `#/me` | Signed-in user, sign-out, and "Delete offline copies" (local, works offline) | `GET /api/v1/session` (user, `csrf`, `expires_at`; the `csrf` token is kept in memory only), `DELETE /api/v1/session` with the `X-OKF-CSRF` header |
 
 Concept links in `body_html` are written by `src/render.rs` as
 `#/browse/{catalog}/{path segments}[/{section slug}]`. The reader rewrites
@@ -139,7 +139,8 @@ Three caches:
 Never cached: search, `/api/v1/session`, `/api/v1/me`, every non-GET request, everything outside
 `GET /api/v1` and the shell.
 
-Only `2xx` answers are cached; the worker stores each with an
+Cache writes are best effort: a refused write (QuotaExceededError) is
+logged and the answer is still returned. Only `2xx` answers are cached; the worker stores each with an
 `X-Read-Cached-At` header (RFC 3339). An answer served from cache because the
 network failed also carries `X-Read-Offline: 1`. The worker never builds an
 error page: it passes the network's answer through, answers from cache, or
@@ -156,7 +157,11 @@ before calling `DELETE /api/v1/session`.
 one handler that every read goes through (a screen's first render and later
 reads such as "Show the whole concept"). The cache and session side effects
 (wipe, evict, sign-in) always happen, even when the answer arrives after the
-user has left the screen that asked; only the drawing is skipped then.
+user has left the screen that asked; only the drawing is skipped then. The
+catalog a refusal applies to is the one the screen asked about, fixed when
+the screen starts, never the current choice when the answer arrives. When
+one screen makes several reads (a concept and its links), all of them
+settle and every refusal is acted on; the most serious one draws.
 
 | Answer | Action |
 |---|---|
@@ -202,6 +207,12 @@ Browser journeys (`tests/ui_e2e/read.rs`, rustwright headless Chromium):
 8a. A lost grant answered after navigating to another screen still evicts
     that catalog, and the new screen stays.
 8b. "Show the whole concept" after the grant is lost evicts the catalog.
+8c. A late lost-grant answer for Home's catalog A, after switching to B,
+    evicts A and keeps B chosen and cached.
+8d. A concept 404 followed by a delayed 401 for its links still wipes and
+    signs out.
+8e. Offline, the account screen deletes the offline copies.
+8f. With storage full, a concept still renders from the network.
 9. Sign-out wipes the caches.
 10. A new shell version replaces the old shell cache on activate.
 

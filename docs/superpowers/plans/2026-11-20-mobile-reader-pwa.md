@@ -752,7 +752,9 @@ async function fromShell(key, request) {
 
 // The network's answer, remembered when it is a 2xx; without a network,
 // the remembered copy marked X-Read-Offline. `capped` caches keep only the
-// newest READ_CACHES.contentCap entries.
+// newest READ_CACHES.contentCap entries. Remembering is best effort: a
+// failed write (a full disk, QuotaExceededError) never costs the page the
+// answer it already has.
 async function networkFirst(request, cacheName, capped) {
     const cache = await caches.open(cacheName);
     let response;
@@ -761,14 +763,26 @@ async function networkFirst(request, cacheName, capped) {
     } catch (failure) {
         const cached = await cache.match(request);
         if (!cached) throw failure;
-        if (capped) await renew(cache, request, cached.clone());
+        if (capped) await upkeep(() => renew(cache, request, cached.clone()));
         return stamped(cached, 'X-Read-Offline', '1');
     }
     if (response.ok) {
-        await renew(cache, request, stamped(response.clone(), 'X-Read-Cached-At', new Date().toISOString()));
-        if (capped) await trim(cache);
+        const copy = stamped(response.clone(), 'X-Read-Cached-At', new Date().toISOString());
+        await upkeep(async () => {
+            await renew(cache, request, copy);
+            if (capped) await trim(cache);
+        });
     }
     return response;
+}
+
+// Runs one cache write, logging rather than throwing when it fails.
+async function upkeep(write) {
+    try {
+        await write();
+    } catch (error) {
+        console.warn('reader cache write failed:', error.name);
+    }
 }
 
 // Stores `response` for `request` as the cache's newest entry. A cache keeps
@@ -1556,7 +1570,7 @@ async function fail(view, route, error, live) {
             await signIn();
             return;
         case KIND.CATALOG_GONE: {
-            const catalog = route.catalog ?? state.catalog;
+            const catalog = route.catalog;
             if (catalog) await evictCatalog(catalog);
             if (catalog === state.catalog) choose(null);
             if (live()) location.hash = hrefs.catalogs(catalog);
@@ -1585,22 +1599,41 @@ async function fail(view, route, error, live) {
     }
 }
 
+// The kinds from most to least serious: when several reads of one screen
+// are refused, every refusal's side effects happen, and the most serious
+// one alone draws.
+const SEVERITY = [KIND.SIGNED_OUT, KIND.CATALOG_GONE, KIND.CONCEPT_GONE, KIND.LOCKED, KIND.FAILED, KIND.UNAVAILABLE];
+
+async function failAll(view, route, errors, live) {
+    const ordered = [...errors].sort((a, b) => SEVERITY.indexOf(a.kind) - SEVERITY.indexOf(b.kind));
+    for (const [at, error] of ordered.entries()) {
+        await fail(view, route, error, at === 0 ? live : () => false);
+    }
+}
+
 async function show() {
-    const route = parse(location.hash);
+    const parsed = parse(location.hash);
     const mine = ++generation;
-    if ((route.catalog ?? null) !== null && route.catalog !== state.catalog) choose(route.catalog);
+    if ((parsed.catalog ?? null) !== null && parsed.catalog !== state.catalog) choose(parsed.catalog);
+    // The catalog this screen reads, fixed now: a refusal that answers after
+    // the user switched catalogs must act on the one that was asked about.
+    const route = { ...parsed, catalog: parsed.catalog ?? state.catalog };
     tabs();
     $('#offline-banner').hidden = true;
-    if (NEEDS_CATALOG.has(route.screen) && !state.catalog) {
+    if (NEEDS_CATALOG.has(route.screen) && !route.catalog) {
         location.replace(hrefs.catalogs());
         return;
     }
     const view = h('section', { class: 'screen', id: `screen-${route.screen}` });
     clear($('#reader')).append(view);
     const live = () => mine === generation;
-    // `fail` is for reads a screen makes later (a button's), so they get the
-    // same handling as the first render's.
-    const ctx = { state, route, choose, freshness, live, fail: error => fail(view, route, error, live) };
+    // `fail` and `failAll` are also for reads a screen makes later (a
+    // button's), so they get the same handling as the first render's.
+    const ctx = {
+        state, route, choose, freshness, live,
+        fail: error => fail(view, route, error, live),
+        failAll: errors => failAll(view, route, errors, live),
+    };
     try {
         await SCREENS[route.screen].render(view, ctx);
     } catch (error) {
@@ -1640,19 +1673,30 @@ boot();
 - [ ] **Step 5: Write `src/http/read/js/screens/me.js`**
 
 ```js
-// Account: who is signed in, until when, and sign-out (which deletes every
-// offline copy first, even if the server cannot be reached).
+// Account: who is signed in, until when, sign-out (which deletes every
+// offline copy first, even if the server cannot be reached), and a local
+// "Delete offline copies" that works with no connection at all.
 import { h } from '/ui/js/core/dom.js';
 import { when } from '/ui/js/core/format.js';
 import { signOut, ReadError } from '../api.js';
 import { wipe } from '../cache.js';
 import { message } from '../parts.js';
 
+function deleteOffline(view) {
+    const button = h('button', { type: 'button', class: 'secondary', id: 'delete-offline' }, 'Delete offline copies');
+    button.addEventListener('click', async () => {
+        button.disabled = true;
+        await wipe();
+        view.append(message('Offline copies are deleted from this device.', null, 'offline-deleted'));
+    });
+    return button;
+}
+
 export async function render(view, ctx) {
     const session = ctx.state.session;
     view.append(h('h1', {}, 'Account'));
     if (!session) {
-        view.append(message('Account details need a connection.', null, 'account-offline'));
+        view.append(message('Account details and sign-out need a connection.', null, 'account-offline'), deleteOffline(view));
         return;
     }
     const button = h('button', { type: 'button', id: 'sign-out' }, 'Sign out');
@@ -1674,7 +1718,8 @@ export async function render(view, ctx) {
         h('p', {}, 'Signed in as ', h('strong', { id: 'account-user' }, session.user)),
         session.email ? h('p', { class: 'hint' }, session.email) : null,
         h('p', { class: 'hint' }, `This session ends by ${when(session.expires_at)}.`),
-        button);
+        button,
+        deleteOffline(view));
 }
 ```
 
@@ -1920,7 +1965,17 @@ export async function render(view, ctx) {
     const { catalog, path, section } = ctx.route;
     const base = `/catalogs/${enc(catalog)}`;
     const conceptUrl = `${base}/concepts/${encPath(path)}`;
-    const [result, links] = await Promise.all([read(conceptUrl), backlinks(base, path)]);
+    // Both reads settle before anything is decided, so a refusal of either
+    // (say a 404 for the concept and a late 401 for its links) is acted on.
+    const settled = await Promise.allSettled([read(conceptUrl), backlinks(base, path)]);
+    const refused = settled.filter(outcome => outcome.status === 'rejected').map(outcome => outcome.reason);
+    const unexpected = refused.find(reason => !(reason instanceof ReadError));
+    if (unexpected) throw unexpected;
+    if (refused.length) {
+        await ctx.failAll(refused);
+        return;
+    }
+    const [result, links] = settled.map(outcome => outcome.value);
     if (!ctx.live()) return;
     ctx.freshness(result);
     ctx.freshness(links);
@@ -2058,7 +2113,7 @@ async function offlineList(view, catalog) {
 }
 
 export async function render(view, ctx) {
-    const catalog = ctx.state.catalog;
+    const catalog = ctx.route.catalog;
     view.append(installHint(), searchForm(catalog));
     let result;
     try {
@@ -2230,6 +2285,73 @@ async fn a_new_worker_drops_shell_caches_of_other_versions() {
     .await;
 }
 ```
+
+```rust
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn offline_copies_can_be_deleted_without_a_connection() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        let offline = ui.go_offline();
+        ui.open_reader("/me");
+        ui.reload_reader();
+        ui.wait_visible("#account-offline");
+        ui.click("#delete-offline");
+        ui.wait_visible("#offline-deleted");
+        let counts = ui.eval(CACHE_COUNTS, json!(null));
+        assert!(counts.get("read-content").is_none(), "{counts}");
+        drop(offline);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_full_cache_still_shows_what_the_server_sent() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        // No room left: every cache write from now on fails.
+        let full = ui.limit_storage();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        drop(full);
+    })
+    .await;
+}
+```
+
+Add to `impl Ui` in `tests/ui_e2e/harness.rs`:
+
+```rust
+    /// Sets this origin's storage quota to what it uses now (DevTools'
+    /// `Storage.overrideQuotaForOrigin`), so every further cache write is
+    /// refused with QuotaExceededError while the returned value lives.
+    pub fn limit_storage(&self) -> DevTools {
+        let used = self
+            .eval("async () => (await navigator.storage.estimate()).usage", serde_json::json!(null))
+            .as_f64()
+            .expect("storage usage");
+        let mut devtools = DevTools::connect(&self.browser);
+        let attached = devtools.call(
+            None,
+            "Target.attachToTarget",
+            serde_json::json!({ "targetId": self.page.target_id(), "flatten": true }),
+        );
+        let session = attached["sessionId"].as_str().expect("a session").to_string();
+        devtools.call(
+            Some(&session),
+            "Storage.overrideQuotaForOrigin",
+            serde_json::json!({ "origin": self.base, "quotaSize": used }),
+        );
+        devtools
+    }
+```
+
+If this Chromium does not refuse writes under the override (the concept then renders either way, so the journey proves nothing), check by evaluating a `caches.open('x').then(c => c.put('/x', new Response('y'.repeat(1e6))))` in the page under the override; it must reject.
 
 - [ ] **Step 2: Run them**
 
@@ -2429,7 +2551,78 @@ async fn show_the_whole_concept_after_losing_the_grant_evicts_the_catalog() {
 }
 ```
 
-Add the polling helper both use to `impl Ui` in `tests/ui_e2e/harness.rs`:
+And three more for refusals that the screen that asked no longer shows, or that a second read of one screen brings:
+
+```rust
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_late_refusal_from_home_evicts_the_catalog_it_asked_about() {
+    let (server, _) = server().await;
+    let runtime = tokio::runtime::Handle::current();
+    let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        ui.open_reader("/v/other/notes.md");
+        ui.wait_text("#concept-title", "Notes");
+        // Home for main, whose recent changes wait in the page.
+        ui.open_reader("/c");
+        ui.hold_next("GET", "/catalogs/main/recent-changes?limit=20");
+        ui.click("[data-catalog=main]");
+        ui.wait_visible("#screen-home");
+        // Switch to other, then lose main, then let main's answer through.
+        ui.open_reader("/c");
+        ui.click("[data-catalog=other]");
+        ui.wait_visible("#recent");
+        runtime.block_on(crate::support::server::applied(&app, async {
+            ceiling::unentitle(&pool, "reader", "main", &AuditActor::cli(), Utc::now())
+                .await
+                .expect("unentitle");
+        }));
+        ui.release_held();
+        ui.poll_eval(
+            "async () => (await (await caches.open('read-content')).keys()) \
+             .every(k => !new URL(k.url).pathname.includes('/catalogs/main/'))",
+        );
+        let kept = ui.eval(
+            "async () => ({ other: (await (await caches.open('read-content')).keys()) \
+             .some(k => new URL(k.url).pathname.includes('/catalogs/other/')), \
+             chosen: localStorage.getItem('okf.read.catalog') })",
+            json!(null),
+        );
+        assert_eq!(kept, json!({ "other": true, "chosen": "other" }));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_late_401_after_an_ordinary_refusal_still_signs_out() {
+    let (server, user_id) = server().await;
+    let runtime = tokio::runtime::Handle::current();
+    let pool = server.db.pool.clone();
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        // A concept that is not there (404 at once) whose links read waits.
+        ui.hold_next("GET", "/links/systems/missing.md");
+        ui.open_reader("/v/main/systems/missing.md");
+        ui.wait_visible("#screen-concept");
+        runtime.block_on(async {
+            user_sessions::revoke_all(&pool, &user_id, None).await.expect("revoke");
+        });
+        ui.release_held();
+        ui.wait_visible("#signin-email");
+        let counts = ui.eval(CACHE_COUNTS, json!(null));
+        assert!(counts.get("read-content").is_none(), "{counts}");
+    })
+    .await;
+}
+```
+
+Add the polling helper these use to `impl Ui` in `tests/ui_e2e/harness.rs`:
 
 ```rust
     /// Waits until the JS function `function` (no argument) returns `true`.
