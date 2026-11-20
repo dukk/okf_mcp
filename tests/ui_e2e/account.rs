@@ -948,3 +948,64 @@ async fn a_member_confirms_with_a_passkey_and_deletes_their_account() {
     }
     assert_eq!(alices(&server.db.pool).await, 0, "the account is gone");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn no_deletion_control_shows_before_the_account_read_answers() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    let id = alices_id(&server.db.pool).await;
+    alices_passkey(&server.db.pool, &id, "laptop").await;
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        // The account read is held; the passkey list answers first.
+        ui.hold_next("GET", "/api/v1/me");
+        ui.open("/account");
+        ui.wait_visible("[data-test=passkey-laptop]");
+        assert!(
+            !ui.present("#account-delete-passkey"),
+            "no passkey control before the account id is known"
+        );
+        assert!(!ui.present("#account-delete"), "no password control either");
+        ui.wait_visible("#account-delete-loading");
+        // Once it answers, both controls are drawn, and the confirmation
+        // still wants the account id typed.
+        ui.release_held();
+        ui.wait_visible("#account-delete-passkey");
+        ui.wait_visible("#account-delete");
+        ui.click("#account-delete-passkey");
+        ui.wait_visible("#confirm-typed");
+        assert!(disabled(ui, "#confirm-ok"), "the id must be typed first");
+        ui.click("#confirm-cancel");
+        ui.wait_hidden("#confirm-typed");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    assert_eq!(alices(&server.db.pool).await, 1, "nothing was deleted");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_account_read_draws_no_deletion_control() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    let id = alices_id(&server.db.pool).await;
+    alices_passkey(&server.db.pool, &id, "laptop").await;
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.fail_next("GET", "/api/v1/me", 503, "the account could not be read");
+        ui.open("/account");
+        ui.wait_visible("[data-test=passkey-laptop]");
+        assert!(
+            !ui.present("#account-delete-passkey"),
+            "no passkey control without the account id"
+        );
+        assert!(!ui.present("#account-delete"));
+        ui.wait_visible("#account-delete-loading");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    assert_eq!(alices(&server.db.pool).await, 1, "nothing was deleted");
+}

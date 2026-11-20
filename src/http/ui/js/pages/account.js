@@ -362,11 +362,14 @@ export async function render(main) {
     // The delete section: a password box when the account has a password,
     // a passkey button when it has a passkey, else a note saying how to get
     // either. Both controls share one pending key, so a second click (or a
-    // redraw while the request runs) never sends a second deletion.
+    // redraw while the request runs) never sends a second deletion. No
+    // control is drawn until the account read has answered: the typed
+    // confirmation needs its id, whichever read answers first.
     function drawDelete() {
         if (!main.isConnected) return;
-        if (deleteAccount === null && deletePasskeys === null) {
-            fill(removal.body, h('p', { class: 'muted small' }, 'Loading...'));
+        if (deleteAccount === null) {
+            fill(removal.body, h('p', { class: 'muted small', id: 'account-delete-loading' },
+                'Loading your account... Deleting it needs your account ID, so this waits for it.'));
             return;
         }
         const key = 'account:delete';
@@ -414,11 +417,15 @@ export async function render(main) {
     // its controls, with the reason shown; a 401 means this session ended
     // (the 401 handler shows the sign-in card); a deletion signs out.
     async function removeAccount(key, proof) {
+        // The typed confirmation is never skipped: without the account id
+        // there is nothing to type, so there is no deletion.
+        const id = deleteAccount?.user;
+        if (!id) return;
         const ok = await confirmDialog({
             title: 'Delete your account?',
             message: 'This cannot be undone. You are signed out everywhere, and your keys and grants stop working.',
             action: 'Delete my account',
-            typed: deleteAccount?.user ?? null,
+            typed: id,
         });
         if (!ok) return;
         await once(key, async () => {
