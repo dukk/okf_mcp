@@ -117,8 +117,11 @@ longer, the reader runs online without offline copies.
 
 Concept links in `body_html` are written by `src/render.rs` as
 `#/browse/{catalog}/{path segments}[/{section slug}]`. The reader rewrites
-them to `#/v/{catalog}/{path}[/{slug}]`, or to the folder's tree route for a
-link to an `index.md`. External links get `target="_blank" rel="noopener"`. `body_html`
+them to `#/v/{catalog}/{path}[?s={slug}]`, or to the folder's tree route for a
+link to an `index.md`. (Corrected for issue #812, 2026-11-20: a folder may be
+named `x.md`, so the reader's route carries the section as a parameter, and
+reads a console link's document as ending at its last `.md` segment, since a
+heading slug has no `.`.) External links get `target="_blank" rel="noopener"`. `body_html`
 is inserted with `innerHTML` exactly as the console does: it is produced and
 sanitised server-side by `render.rs`.
 

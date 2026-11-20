@@ -730,7 +730,7 @@ The report structs derive `serde::Serialize`; their JSON has the keys of
         cargo test --release --test smoke -- --ignored --nocapture   # timings
     UPDATE_GOLDEN=1 cargo test --test parity -- --ignored regenerate_goldens
     just test-ui                                 # the web console's browser journeys
-    just test-worker                             # the mobile reader's service worker (Node)
+    just test-worker                             # the mobile reader's worker and page modules (Node)
 
 The database tests need Docker. Each test gets a throwaway database of its
 own, dropped when it is done, on the server `TEST_PG_URL` names (a
@@ -767,12 +767,13 @@ too, and find Chromium through `RUSTWRIGHT_CHROMIUM`, `CHROME`, `CHROMIUM`,
 the Playwright cache or `PATH`; without one, each journey prints a skip line
 and passes.
 
-The reader's service worker tests (`tests/read_worker`, run by
-`just test-worker` and first in `just test`) load `src/http/read/sw.js` into
-a `node:vm` context with an in-memory Cache Storage and a fetch the test
-answers, and run under Node's built-in test runner (Node 18 or later, no npm
-packages). Without `node` on `PATH`, the recipe prints a skip line and
-passes.
+The reader's Node tests (`tests/read_worker`, run by `just test-worker` and
+first in `just test`) load `src/http/read/sw.js` into a `node:vm` context
+with an in-memory Cache Storage and a fetch the test answers, and test the
+page modules in `src/http/read/js/` that need no DOM against the same fakes.
+They run under Node's built-in test runner (Node 18.19+ or 20.6+, no npm
+packages). Without `node` on `PATH`, or with an older one, the recipe prints
+a skip line and passes.
 
 Before a push, also run `cargo fmt --check`,
 `cargo clippy --all-targets -- -D warnings` and

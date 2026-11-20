@@ -19,14 +19,23 @@ lint:
 test: test-worker
     scripts/test-pg.sh run cargo test
 
-# The mobile reader's service worker (src/http/read/sw.js) in a Node vm with
-# fake Cache Storage and fetch: Node's built-in test runner, no npm packages.
-# Skips with a message when `node` is not installed.
+# The mobile reader's service worker (src/http/read/sw.js) in a Node vm, and
+# its page modules without a DOM (src/http/read/js/), with fake Cache Storage,
+# fetch and service workers: Node's built-in test runner, no npm packages.
+# Needs Node 18.19+ (or 20.6+), for `register` in node:module (the page
+# modules' loader, tests/read_worker/page.mjs). Skips with a message when
+# `node` is not installed or is older.
 test-worker:
     #!/usr/bin/env bash
     set -euo pipefail
     if ! command -v node >/dev/null 2>&1; then
-        echo "test-worker: skipped, node is not installed (the reader worker's tests need Node 18 or later)"
+        echo "test-worker: skipped, node is not installed (the reader's tests need Node 18.19+ or 20.6+)"
+        exit 0
+    fi
+    # Node 19 and 20.0-20.5 lack `register` too.
+    if ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number);
+        process.exit((major === 18 && minor >= 19) || (major === 20 && minor >= 6) || major >= 21 ? 0 : 1)'; then
+        echo "test-worker: skipped, node $(node --version) is too old (the reader's tests need Node 18.19+ or 20.6+)"
         exit 0
     fi
     node --test tests/read_worker/*.test.mjs
