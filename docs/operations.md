@@ -2372,7 +2372,8 @@ again that it is them, in the same request:
 
 An account with neither a password nor a passkey (only a linked OIDC
 account) cannot confirm, and the page says to set a password or add a
-passkey first. A key or OAuth token is refused (403): only a console session
+passkey first. The page draws no deletion control until it has read the
+account, since the confirmation asks you to type its ID. A key or OAuth token is refused (403): only a console session
 may delete its account.
 
 The deletion is the same one an admin's `DELETE /api/v1/users/{name}` runs
@@ -2388,7 +2389,8 @@ the actor (the log then names them `deleted user #N`, as for any deleted
 user). The refusals are the deletion rules': the last admin user, a
 personal team that owns a catalog, and the only owner of a shared team are
 refused with a 409 whose reason the page shows; nothing is deleted or
-disabled. A deletion clears the session cookie and the console shows the
+disabled. A deletion clears the session cookie (and any passkey ceremony
+cookie), and the console shows the
 sign-in card with "Your account was deleted."
 
 ### Setting up an account, and resetting a password
@@ -3575,7 +3577,7 @@ does. Limits are in [Signing in and self-service](#signing-in-and-self-service).
 | `GET /api/v1/me/ceiling` | console session, or a key that belongs to a user | `?prefix=&after=&limit=`: one page of the user's ceiling, `{ceiling: [{catalog, access}], next}`, by catalog name in byte order; `prefix` (trimmed, lowercased) keeps the names that start with it, and one no name can start with finds nothing; `next` is present when more follow (send it back as `after`); `limit` is 100 by default, at most 1000. Each page is one bounded read: no request reads the whole ceiling. 400 for a malformed `after`, 404 for a key without a user |
 | `GET /api/v1/me/keys` | console session | `{keys, ceiling}`: the user's keys, revoked and expired ones included, as `GET /api/v1/keys` shows them (with `catalog_access`, `expires_at`, `self_issued`), and the ceiling on the catalogs its live self-issued keys name (`{catalog: "read"\|"write"}`; a catalog left out is outside it) |
 | `POST /api/v1/me/keys` | console session | Body `{name, catalogs: [{catalog, access}], default_catalog, actor, expires_at}` (`actor` defaults to `name`; `expires_at` RFC 3339, and absent means the lifetime limit, or none). Answers `{key, secret}`, the secret once. 400 for no catalogs, a repeated catalog, an unknown level, or a malformed or past expiry; 409 for a bad or taken name or a default that is not one of `catalogs`; 422 above the ceiling (`admin` included), past the key limit or the lifetime limit (`limit` is `ceiling`, `max_keys_per_user` or `max_key_lifetime`), or for an unknown field such as `all`, `user` or `maintenance_report` |
-| `DELETE /api/v1/me` | console session | Deletes your own account ([Deleting your own account](#deleting-your-own-account)). Body `{password}` or `{passkey}` (the browser's answer to `POST /api/v1/me/passkeys/confirm/start`), exactly one. 204, clearing the session cookie. 400 for neither or both; 403 for a key or token, a wrong password, a locked account, a passkey that does not verify, another session's ceremony, or a password or passkey changed meanwhile (never 401, which the console reads as signed out); 401 once this session has ended; 404 for a passkey while passkeys are off; 409 for a refusal of the deletion rules (the last admin user, a personal team owning a catalog, the only owner of a shared team); 410 for an expired or used passkey ceremony |
+| `DELETE /api/v1/me` | console session | Deletes your own account ([Deleting your own account](#deleting-your-own-account)). Body `{password}` or `{passkey}` (the browser's answer to `POST /api/v1/me/passkeys/confirm/start`), exactly one. 204, clearing the session cookie and any `okf_passkey` ceremony cookie, whichever proof was used. 400 for neither or both; 403 for a key or token, a wrong password, a locked account, a passkey that does not verify, another session's ceremony, or a password or passkey changed meanwhile (never 401, which the console reads as signed out); 401 once this session has ended; 404 for a passkey while passkeys are off; 409 for a refusal of the deletion rules (the last admin user, a personal team owning a catalog, the only owner of a shared team); 410 for an expired or used passkey ceremony |
 | `PATCH /api/v1/me/keys/{id}` | console session | Body `{name}`. Renames a live key; answers its view. 409 for a bad or taken name or a revoked key |
 | `DELETE /api/v1/me/keys/{id}` | console session | Revokes it (the row stays, revoked); answers its view. 409 if already revoked |
 | `GET /api/v1/me/grants` | console session | `{grants, ceiling}`: the user's OAuth grants, revoked ones included, as key views (`client_name`, `catalog_access`, `self_issued`, `revoked_at`, ...), and the ceiling on the catalogs its live self-issued grants name, as for `/me/keys` |
