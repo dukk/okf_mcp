@@ -214,10 +214,12 @@ where
     for Touched { path, file } in files {
         // `remove` takes the entry out of the map (no copy).
         let previous = existing.remove(&path);
-        // The revision in the snapshot this write's overlay is built on, read
-        // under the changeset's row lock. The snapshot never runs ahead of
-        // the database, so a publish that commits after it leaves this base
-        // behind the published revision, and publish reports a Conflict.
+        // The revision in the in-memory snapshot this write's overlay is
+        // built on. A snapshot is only ever swapped in from committed state,
+        // so it never runs ahead of the database: a publish that commits
+        // after it was taken leaves this base behind the published revision,
+        // and publish reports a Conflict. (The row lock orders writers of
+        // this changeset; it does not hold off other changesets' publishes.)
         let published = overlay.base().revision(&path);
         let replay = outcome.replay.get(&path);
         // A rebased path (a revert) starts again on `published`: its earlier

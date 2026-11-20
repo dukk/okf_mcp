@@ -2404,7 +2404,10 @@ mod publish_tests {
         import(test.app.pool(), "pg", incoming, &options)
             .await
             .unwrap();
-        // The import wrote revision 3; this server's snapshot still has 2.
+        // The import wrote revision 3; this server's snapshot still has 2
+        // (an import refreshes nothing, and the cached catalog directory row
+        // still names the old generation, so no read here refreshes it).
+        // The assertion on `seen` checks that premise.
         let seen = published_revision(&test, "a.md").await;
 
         revert_in(&ours, &handle, "/a.md", 1).await;

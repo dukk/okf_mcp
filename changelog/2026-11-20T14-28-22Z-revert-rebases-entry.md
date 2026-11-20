@@ -7,6 +7,6 @@
 - The `revert` tool description says what its base is.
 
 ## Notes
-- The base is the path's revision in the snapshot the write's overlay is built on, read inside the write's transaction under the changeset row lock. That snapshot never runs ahead of the database, so a publish that commits after it (or that this replica has not loaded yet) leaves the base behind the published revision, and publish reports a Conflict rather than writing over it.
+- The base is the path's revision in the in-memory snapshot the write's overlay is built on. A snapshot is only ever swapped in from committed state, so it never runs ahead of the database, so a publish that commits after it (or that this replica has not loaded yet) leaves the base behind the published revision, and publish reports a Conflict rather than writing over it.
 - A revert is a free edit: it has no replay, and edits after it (a `log`) do not make the entry replayable. A publish of the path after the revert therefore conflicts, and the changeset has to revert again. Replaying a whole-file choice onto newer text would silently drop the revert.
 - A revert of a path with no entry behaves as before.
