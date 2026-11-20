@@ -1287,6 +1287,38 @@ mod tests {
     }
 
     #[test]
+    fn a_longer_name_with_an_escape_still_keeps_its_bullet_from_the_shorter_target() {
+        // `a b.md#%41.md` is no raw name of its own document (rule 2), yet
+        // its bullet must not be taken for `a b.md`'s.
+        let bullet = "* [Long](a b.md#%41.md) - long";
+        let ws = two_name_ws(&[("a b.md", "Short"), ("a b.md#%41.md", "Long")], bullet);
+        let text = ws.read_to_string("d/index.md").unwrap();
+        assert!(first_raw_listing(&ws, &text, "d/index.md", "d/a b.md").is_none());
+        repair_indexes(&ws).unwrap();
+        assert!(
+            !ws.read_to_string("d/index.md")
+                .unwrap()
+                .contains("(a%20b.md#%41.md)"),
+            "redirected to the shorter concept"
+        );
+    }
+
+    #[test]
+    fn adding_the_short_concept_is_not_suppressed_by_the_long_raw_bullet() {
+        let ws = two_name_ws(
+            &[("a b.md", "Short"), ("a b.md#extra.md", "Long")],
+            "* [Long](a b.md#extra.md) - long summary",
+        );
+        index(&ws, &ctx(), "d/a b.md", "short", None, None).unwrap();
+        let text = ws.read_to_string("d/index.md").unwrap();
+        assert!(
+            text.contains("* [Long](a b.md#extra.md) - long summary"),
+            "{text}"
+        );
+        assert!(text.contains("(a%20b.md)"), "{text}");
+    }
+
+    #[test]
     fn a_raw_bullet_for_a_longer_name_is_still_rewritten_when_it_is_alone() {
         // No longer document exists: `a b.md#extra.md` is the short
         // concept's bullet with a fragment, and it is rewritten as before.
@@ -1300,25 +1332,30 @@ mod tests {
 
     #[test]
     fn a_raw_folder_bullet_for_a_longer_concept_name_is_left_alone() {
-        // The folder pass shares the code: `a b/index.md#x.md` is a concept
-        // of the folder `a b`, whose own listing `a b/index.md` ends at `#`.
-        let ws = folder_ws(&["a b"], "* [Long](a b/index.md#x.md) - long");
-        ws.write_atomic(
-            "d/a b/index.md#x.md",
-            "---\ntype: Note\ntitle: Long\ndescription: long.\n---\n",
-        )
-        .unwrap();
-        let text = ws.read_to_string("d/index.md").unwrap();
+        // The folder pass shares the code: `a b/index.md#x.md` (or `)x.md`)
+        // is a concept of the folder `a b`, whose own listing
+        // `a b/index.md` ends at `#` (or `)`). The folder target skips the
+        // bullet; no pass rewrites it (the concept's pass reads only its
+        // own folder's index), so it stays as written, never misdirected (the folder is listed anew).
+        for long in ["index.md#x.md", "index.md)x.md"] {
+            let bullet = format!("* [Long](a b/{long}) - long");
+            let ws = folder_ws(&["a b"], &bullet);
+            ws.write_atomic(
+                &format!("d/a b/{long}"),
+                "---\ntype: Note\ntitle: Long\ndescription: long.\n---\n",
+            )
+            .unwrap();
+            let before = ws.read_to_string("d/index.md").unwrap();
 
-        assert!(first_raw_listing(&ws, &text, "d/index.md", "d/a b/index.md").is_none());
-        assert!(first_raw_listing(&ws, &text, "d/index.md", "d/a b/index.md#x.md").is_some());
-        repair_indexes(&ws).unwrap();
-        assert!(
-            !ws.read_to_string("d/index.md")
-                .unwrap()
-                .contains("(a%20b/index.md#x.md)"),
-            "redirected to the folder"
-        );
+            assert!(first_raw_listing(&ws, &before, "d/index.md", "d/a b/index.md").is_none());
+            repair_indexes(&ws).unwrap();
+            // The long bullet is byte for byte as written; the folder, not
+            // listed by it, gets its own encoded listing appended.
+            let after = ws.read_to_string("d/index.md").unwrap();
+            assert!(after.contains(&format!("{bullet}\n")), "{long}: {after}");
+            assert!(after.contains("(a%20b/)"), "{long}: {after}");
+            assert!(!after.contains("a%20b/index.md"), "{long}: {after}");
+        }
     }
 
     #[test]

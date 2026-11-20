@@ -449,7 +449,10 @@ fn belongs_to_longer_raw(
     documents
         .iter()
         .filter(|other| other.as_str() != target)
-        .flat_map(|other| unencoded_raw_names(index, other))
+        // Every name another document could be written as, with no rule-2
+        // (`%XX`) filter: a bullet that holds an escape is not raw for its
+        // own document, but it still shows the destination is not ours.
+        .flat_map(|other| raw_names(index, other))
         .filter(|longer| longer.len() > raw.len())
         .any(|longer| {
             destination
