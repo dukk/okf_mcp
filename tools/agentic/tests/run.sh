@@ -60,7 +60,8 @@ old_reviews() {
 
 # good_pr <head>: a PR whose every merge check passes for <head>.
 good_pr() {
-    printf '{"headRefOid":"%s","mergeStateStatus":"CLEAN"}\n' "$1" >"$fx/pr-view.json"
+    printf '{"headRefOid":"%s","mergeStateStatus":"CLEAN","baseRefName":"main"}\n' "$1" \
+        >"$fx/pr-view.json"
     printf '[{"user":{"login":"%s"},"commit_id":"%s"}]\n' "$bot" "$1" \
         >"$fx/api/pulls_7_reviews.1.json"
     printf '[{"id":1,"in_reply_to_id":null,"user":{"login":"%s"}},
@@ -142,7 +143,7 @@ test_merge_refuses_unreplied_thread() {
 
 test_merge_refuses_unclean_state() {
     new_fixtures; good_pr "$head_a"
-    printf '{"headRefOid":"%s","mergeStateStatus":"BEHIND"}\n' "$head_a" >"$fx/pr-view.json"
+    printf '{"headRefOid":"%s","mergeStateStatus":"BEHIND","baseRefName":"main"}\n' "$head_a" >"$fx/pr-view.json"
     run_merge
     want_rc 1; want_out "mergeStateStatus=BEHIND"; want_not_merged
 }
@@ -237,7 +238,7 @@ test_merge_at_cap_refuses_unreplied_thread() {
 
 test_merge_at_cap_refuses_unclean_state() {
     new_fixtures; good_pr "$head_a"; old_reviews 3
-    printf '{"headRefOid":"%s","mergeStateStatus":"BLOCKED"}\n' "$head_a" >"$fx/pr-view.json"
+    printf '{"headRefOid":"%s","mergeStateStatus":"BLOCKED","baseRefName":"main"}\n' "$head_a" >"$fx/pr-view.json"
     run_merge
     want_rc 1; want_out "mergeStateStatus=BLOCKED"; want_not_merged
 }
@@ -249,6 +250,34 @@ test_merge_merges_when_all_checks_pass() {
     [ "$(cat "$fx/merged")" = "$head_a" ] || die "merged the wrong head"
     grep -qF -- "pr merge 7 -R owner/repo --merge --match-head-commit $head_a" "$fx/calls.log" \
         || die "merge not pinned to the head"
+}
+
+# base_pr <head> <base> [<merge commit>]: good_pr, but with a PR base other than main.
+base_pr() {
+    good_pr "$1"
+    jq -n --arg h "$1" --arg b "$2" --arg m "${3:-}" \
+        '{headRefOid: $h, mergeStateStatus: "CLEAN", baseRefName: $b}
+         + (if $m == "" then {} else {mergeCommit: {oid: $m}} end)' >"$fx/pr-view.json"
+}
+
+test_merge_reports_the_base_and_merge_commit() {
+    new_fixtures; base_pr "$head_a" milestone/9-x ccccccc3333333333333333333333333333333333
+    run_merge
+    want_rc 0; want_out "MERGED PR 7 -> milestone/9-x ccccccc"; want_no_out "-> main"
+}
+
+test_merge_falls_back_to_the_base_tip() {
+    new_fixtures; base_pr "$head_a" milestone/9-x
+    # Put the base on origin one commit ahead of main, so its tip is not main's.
+    git_quiet -C "$repo" branch -f ms main
+    git_quiet -C "$repo" worktree add -q --detach "$work/ms" ms
+    git_quiet -C "$work/ms" commit -q --allow-empty -m ms
+    git_quiet -C "$work/ms" push -q origin HEAD:refs/heads/milestone/9-x
+    tip=$(git -C "$work/ms" rev-parse --short HEAD)
+    git -C "$repo" worktree remove --force "$work/ms"
+    git -C "$repo" branch -D ms -q
+    run_merge
+    want_rc 0; want_out "MERGED PR 7 -> milestone/9-x $tip"
 }
 
 # --- watch-review.sh ---
