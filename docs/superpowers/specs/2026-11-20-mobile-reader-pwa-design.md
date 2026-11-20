@@ -157,7 +157,10 @@ meanwhile), so a slow `2xx` can never put back what a `401` or a lost grant
 removed. A request on its way keeps the worker alive, so its marks last as
 long as they matter. Recording the cache owner is best effort: on a full
 disk the caches are wiped and the reader boots anyway. Without Cache Storage
-at all, the reader works online and keeps nothing.
+at all, or when it refuses to open or read (denied by browser settings),
+the reader works online and keeps nothing: the worker passes answers
+through without copies, and the page's cache calls log and return empty
+instead of throwing, so boot, reads and deletion never fail on storage.
 
 Offline, a concept request is also answered by its other cached form: a
 `?full=true` copy answers a plain request, and a plain copy answers
@@ -260,6 +263,8 @@ Browser journeys (`tests/ui_e2e/read.rs`, rustwright headless Chromium):
 8n. A `log.md` in recent changes links to the document view, which renders.
 8o. A concept read answered `401` while its links read is still held wipes
     and signs out without waiting for the links read.
+8p. With every Cache Storage call rejected (page and worker), the reader
+    boots, reads concepts and recent changes online, and deletion works.
 9. Sign-out wipes the caches.
 10. A new shell version replaces the old shell cache on activate.
 

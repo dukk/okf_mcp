@@ -762,7 +762,8 @@ self.addEventListener('fetch', event => {
 
 // The shell's copy of `key`, else the network's answer to `request`.
 async function fromShell(key, request) {
-    return (await caches.match(key, { cacheName: SHELL })) ?? fetch(request);
+    const cached = await caches.match(key, { cacheName: SHELL }).catch(() => undefined);
+    return cached ?? fetch(request);
 }
 
 // The network's answer, remembered when it is a 2xx; without a network,
@@ -771,18 +772,20 @@ async function fromShell(key, request) {
 // failed write (a full disk, QuotaExceededError) never costs the page the
 // answer it already has.
 async function networkFirst(request, cacheName, capped) {
-    const cache = await caches.open(cacheName);
+    // Storage that refuses to open (denied by browser settings) means no
+    // copies, never a lost answer: the network's answer still goes through.
+    const cache = await caches.open(cacheName).catch(() => null);
     const startedAt = Date.now();
     let response;
     try {
         response = await fetch(request);
     } catch (failure) {
-        const cached = await cachedCopy(cache, request);
+        const cached = cache ? await cachedCopy(cache, request).catch(() => null) : null;
         if (!cached) throw failure;
         if (capped) await upkeep(() => remember(cache, cached.key, cached.response.clone(), startedAt, false));
         return stamped(cached.response, 'X-Read-Offline', '1');
     }
-    if (response.ok) {
+    if (response.ok && cache) {
         const copy = stamped(response.clone(), 'X-Read-Cached-At', new Date().toISOString());
         await upkeep(() => remember(cache, request, copy, startedAt, capped));
     }
@@ -1140,8 +1143,21 @@ const OWNER_KEY = '/read/__owner';
 // How long to wait for the worker to confirm a mark before deleting anyway.
 const MARK_WAIT_MS = 1000;
 // Without Cache Storage (an unusual private mode) the reader works online
-// and keeps nothing, so every function here does nothing.
+// and keeps nothing.
 const CACHING = 'caches' in self;
+
+// Runs `work` against Cache Storage. When storage is missing or refuses
+// (denied by browser settings, a full disk), it logs and returns `fallback`
+// instead of throwing, so boot, reads and deletion never fail on it.
+async function storage(work, fallback = undefined) {
+    if (!CACHING) return fallback;
+    try {
+        return await work();
+    } catch (error) {
+        console.warn('reader cache unavailable:', error.name);
+        return fallback;
+    }
+}
 
 // Tells the worker that `scope` ('*', an encoded catalog, or a document's
 // API path) is invalid from now on, and waits for it to confirm, so the mark is in place before the
@@ -1161,36 +1177,34 @@ function mark(scope) {
 // Deletes every cached catalog read and the record of whose they were.
 // Deleting needs no free storage, so this works on a full disk too.
 export async function wipe() {
-    if (!CACHING) return;
     await mark('*');
-    await Promise.all([content, meta, owner].map(name => caches.delete(name)));
+    await storage(() => Promise.all([content, meta, owner].map(name => caches.delete(name))));
 }
 
 // Makes the caches `user`'s: wipes them when they were someone else's.
 // Recording the owner is best effort: on a full disk the caches are wiped
 // (they may be someone else's) and the reader boots anyway; the next read's
-// own cache write fails the same way, so nothing unowned is kept.
-export async function claimFor(user) {
-    if (!CACHING) return;
-    const store = await caches.open(owner);
-    const recorded = await store.match(OWNER_KEY);
-    if (recorded && (await recorded.text()) === user) return;
-    await wipe();
-    try {
+// own cache write fails the same way, so nothing unowned is kept. When
+// storage refuses even to open, there is nothing to claim.
+export function claimFor(user) {
+    return storage(async () => {
+        const store = await caches.open(owner);
+        const recorded = await store.match(OWNER_KEY);
+        if (recorded && (await recorded.text()) === user) return;
+        await wipe();
         await (await caches.open(owner)).put(OWNER_KEY, new Response(user));
-    } catch (error) {
-        console.warn('reader cache write failed:', error.name);
-    }
+    });
 }
 
 // Deletes the entries of `cacheNames` whose URL path `matches`.
-async function evict(cacheNames, matches) {
-    if (!CACHING) return;
-    await Promise.all(cacheNames.map(async name => {
-        const cache = await caches.open(name);
-        const keys = await cache.keys();
-        await Promise.all(keys.filter(key => matches(new URL(key.url).pathname)).map(key => cache.delete(key)));
-    }));
+function evict(cacheNames, matches) {
+    return storage(async () => {
+        await Promise.all(cacheNames.map(async name => {
+            const cache = await caches.open(name);
+            const keys = await cache.keys();
+            await Promise.all(keys.filter(key => matches(new URL(key.url).pathname)).map(key => cache.delete(key)));
+        }));
+    });
 }
 
 // Deletes everything cached for `catalog`, and keeps answers already on
@@ -1212,21 +1226,22 @@ export async function evictDocument(catalog, kind, path) {
 
 // The concepts and documents of `catalog` readable offline, newest first,
 // one per path: [{ path, title, cachedAt }].
-export async function offlineDocuments(catalog) {
-    if (!CACHING) return [];
-    const cache = await caches.open(content);
-    const keys = await cache.keys();
-    const prefix = `/api/v1/catalogs/${enc(catalog)}/`;
-    const seen = new Map();
-    // Newest last in the cache, so walk backwards and keep the first of each path.
-    for (const key of keys.reverse()) {
-        if (!new URL(key.url).pathname.startsWith(prefix)) continue;
-        const response = await cache.match(key);
-        const body = await response.json().catch(() => null);
-        if (!body?.path || seen.has(body.path)) continue;
-        seen.set(body.path, { path: body.path, title: body.title ?? null, cachedAt: response.headers.get('X-Read-Cached-At') });
-    }
-    return [...seen.values()];
+export function offlineDocuments(catalog) {
+    return storage(async () => {
+        const cache = await caches.open(content);
+        const keys = await cache.keys();
+        const prefix = `/api/v1/catalogs/${enc(catalog)}/`;
+        const seen = new Map();
+        // Newest last in the cache, so walk backwards and keep the first of each path.
+        for (const key of keys.reverse()) {
+            if (!new URL(key.url).pathname.startsWith(prefix)) continue;
+            const response = await cache.match(key);
+            const body = await response.json().catch(() => null);
+            if (!body?.path || seen.has(body.path)) continue;
+            seen.set(body.path, { path: body.path, title: body.title ?? null, cachedAt: response.headers.get('X-Read-Cached-At') });
+        }
+        return [...seen.values()];
+    }, []);
 }
 ```
 
@@ -2638,6 +2653,71 @@ async fn offline_a_concept_opens_from_either_its_short_or_its_full_copy() {
     .await;
 }
 ```
+
+And one where storage refuses even to open (browser settings can deny it):
+
+```rust
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn with_cache_storage_denied_the_reader_still_reads_online() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        let denied = ui.deny_cache_storage();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.reload_reader();
+        ui.wait_text("#body", "marmalade");
+        ui.open_reader("/");
+        ui.wait_visible("#recent");
+        ui.open_reader("/me");
+        ui.click("#delete-offline");
+        ui.wait_visible("#offline-deleted");
+        drop(denied);
+    })
+    .await;
+}
+```
+
+Add to `impl Ui` in `tests/ui_e2e/harness.rs`:
+
+```rust
+    /// Makes every Cache Storage call reject with SecurityError, in the
+    /// page (now and on every later load) and in the reader's service
+    /// worker, while the returned value lives.
+    pub fn deny_cache_storage(&self) -> DevTools {
+        const DENY: &str = "for (const name of ['open', 'match', 'keys', 'delete', 'has']) { \
+            CacheStorage.prototype[name] = function () { \
+                return Promise.reject(new DOMException('denied', 'SecurityError')); }; }";
+        let mut devtools = DevTools::connect(&self.browser);
+        let targets = devtools.call(None, "Target.getTargets", serde_json::json!({}));
+        let infos: Vec<(String, String)> = targets["targetInfos"]
+            .as_array()
+            .expect("targets")
+            .iter()
+            .filter_map(|target| Some((target["type"].as_str()?.to_string(), target["targetId"].as_str()?.to_string())))
+            .filter(|(kind, _)| kind == "page" || kind == "service_worker")
+            .collect();
+        for (kind, id) in infos {
+            let attached = devtools.call(
+                None,
+                "Target.attachToTarget",
+                serde_json::json!({ "targetId": id, "flatten": true }),
+            );
+            let session = attached["sessionId"].as_str().expect("a session").to_string();
+            if kind == "page" {
+                devtools.call(
+                    Some(&session),
+                    "Page.addScriptToEvaluateOnNewDocument",
+                    serde_json::json!({ "source": DENY }),
+                );
+            }
+            devtools.call(Some(&session), "Runtime.evaluate", serde_json::json!({ "expression": DENY }));
+        }
+        devtools
+    }
+```
+
+(The worker can be stopped when idle and restarted without the override; the journey runs well inside that window. If it proves flaky, call `deny_cache_storage` again right before the reload.)
 
 If this Chromium does not refuse writes under the override (the concept then renders either way, so the journey proves nothing), check by evaluating a `caches.open('x').then(c => c.put('/x', new Response('y'.repeat(1e6))))` in the page under the override; it must reject.
 
