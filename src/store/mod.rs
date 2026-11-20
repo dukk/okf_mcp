@@ -22,6 +22,7 @@ pub mod passkeys;
 pub mod passwords;
 pub mod publish;
 pub mod repair;
+pub mod server_keys;
 pub mod settings;
 pub mod sign_in_events;
 pub mod sign_in_methods;
