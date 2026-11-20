@@ -1705,15 +1705,19 @@ mod tests {
         let flow = browser.cookie(FLOW_COOKIE).expect("a flow").to_string();
 
         let keys = redis_keys(&a.app, &redis.prefix).await;
-        assert_eq!(keys.len(), 2, "a flow and its session's pointer: {keys:?}");
-        let connection = &mut a.app.redis().expect("redis").connection();
+        assert_eq!(
+            keys.len(),
+            3,
+            "a flow, its session's pointer and the user's link-start bucket: {keys:?}"
+        );
+        assert_eq!(
+            in_space(&keys, &redis.prefix, "ratelimit:link_starts"),
+            1,
+            "{keys:?}"
+        );
+        let shared = a.app.redis().expect("redis");
         for key in &keys {
-            let value: Vec<u8> = redis::cmd("GET")
-                .arg(key)
-                .query_async(connection)
-                .await
-                .expect("read a value");
-            let value = String::from_utf8_lossy(&value);
+            let value = crate::shared::testing::value_text(shared, key).await;
             for secret in [session.as_str(), flow.as_str()] {
                 assert!(!key.contains(secret), "{key}");
                 assert!(!value.contains(secret), "{key} holds a raw id");

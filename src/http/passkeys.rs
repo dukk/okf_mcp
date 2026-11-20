@@ -2651,7 +2651,7 @@ mod tests {
         alice
     }
 
-    /// Every key under the test's prefix with its value (all are strings).
+    /// Every key under the test's prefix with its value as text.
     async fn redis_contents(app: &App) -> Vec<(String, String)> {
         let redis = app.redis().expect("redis is on");
         let mut connection = redis.connection();
@@ -2664,11 +2664,8 @@ mod tests {
             .expect("list the keys");
         let mut contents = Vec::with_capacity(names.len());
         for name in names {
-            let value: String = redis::cmd("GET")
-                .arg(&name)
-                .query_async(&mut connection)
-                .await
-                .expect("read a key");
+            // A rate-limit bucket is a hash; the rest are strings.
+            let value = crate::shared::testing::value_text(redis, &name).await;
             contents.push((name, value));
         }
         contents

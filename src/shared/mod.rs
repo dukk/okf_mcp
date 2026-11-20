@@ -514,6 +514,31 @@ pub(crate) mod testing {
         (shutdown, task)
     }
 
+    /// The value at `key` as text, whatever its type: a string as stored, a
+    /// hash (a rate-limit bucket) as its fields and values joined by spaces.
+    pub(crate) async fn value_text(redis: &Redis, key: &str) -> String {
+        let mut connection = redis.connection();
+        let kind: String = redis::cmd("TYPE")
+            .arg(key)
+            .query_async(&mut connection)
+            .await
+            .expect("TYPE");
+        if kind == "hash" {
+            let fields: Vec<String> = redis::cmd("HGETALL")
+                .arg(key)
+                .query_async(&mut connection)
+                .await
+                .expect("HGETALL");
+            return fields.join(" ");
+        }
+        let value: Vec<u8> = redis::cmd("GET")
+            .arg(key)
+            .query_async(&mut connection)
+            .await
+            .expect("GET");
+        String::from_utf8_lossy(&value).into_owned()
+    }
+
     /// The value of `okf_redis_errors_total{operation="<op>"}` in a scrape.
     pub(crate) fn error_count(rendered: &str, op: &str) -> u64 {
         let series = format!("okf_redis_errors_total{{operation=\"{op}\"}}");
