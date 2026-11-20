@@ -2,9 +2,11 @@
 //! reach, and the server's clock. It needs no catalog and works for any
 //! credential, `read` included.
 //!
-//! It shows nothing `list_changesets` does not: no key id, key name, token
-//! or grant id. The user and actor are the ones that tool and `history`
-//! already name, with their labels from the label directory.
+//! It shows the credential's own kind, access, reach and default catalog,
+//! plus the user and their label, and no key id, key name, token or grant
+//! id (`list_changesets` shows the key id and name; this does not). The
+//! actor is the one that tool and `history` already name, with its label
+//! from the label directory.
 
 use axum::http::request::Parts;
 use rmcp::handler::server::tool::Extension;
