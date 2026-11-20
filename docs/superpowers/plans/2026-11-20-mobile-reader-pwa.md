@@ -35,7 +35,7 @@
 | `src/http/read/sw.js` | The service worker. |
 | `src/http/read/js/names.js` | Cache names and the cap, shared by page and worker (classic script). |
 | `src/http/read/js/api.js` | Read-only client: `read`, `readAll`, `signOut`, `classify`, `KIND`, `ReadError`, `enc`, `encPath`. |
-| `src/http/read/js/cache.js` | Page-side cache upkeep: `wipe`, `claimFor`, `evictCatalog`, `evictConcept`, `offlineDocuments`. |
+| `src/http/read/js/cache.js` | Page-side cache upkeep: `wipe`, `claimFor`, `evictCatalog`, `evictDocument`, `offlineDocuments`, and the invalidation marks. |
 | `src/http/read/js/route.js` | Hash routes: `parse`, `hrefs`, `hrefFor`, `fromBrowse`, `parentOf`. |
 | `src/http/read/js/main.js` | Boot, session, worker registration, screen dispatch, freshness banner, failure handling, tabs. |
 | `src/http/read/js/parts.js` | Shared view parts: `searchForm`, `crumbs`, `renderBody`, `message`. |
@@ -686,6 +686,14 @@ self.READ_CACHES = Object.freeze({
     content: 'read-content',
     meta: 'read-meta',
     owner: 'read-owner',
+    // Invalidation marks (milliseconds since the epoch), never wiped: the
+    // page writes one before it wipes or evicts, and the worker refuses to
+    // store an answer to a request that started before the mark, so a slow
+    // 2xx cannot put back what a 401 or a lost grant took away.
+    guard: 'read-guard',
+    guardAll: '/read/__guard/all',
+    // `catalog` as it appears, encoded, in the API URL.
+    guardCatalog: catalog => `/read/__guard/catalog/${catalog}`,
     contentCap: 200,
 });
 ```
@@ -757,23 +765,52 @@ async function fromShell(key, request) {
 // answer it already has.
 async function networkFirst(request, cacheName, capped) {
     const cache = await caches.open(cacheName);
+    const startedAt = Date.now();
     let response;
     try {
         response = await fetch(request);
     } catch (failure) {
         const cached = await cache.match(request);
         if (!cached) throw failure;
-        if (capped) await upkeep(() => renew(cache, request, cached.clone()));
+        if (capped) await upkeep(() => remember(cache, request, cached.clone(), startedAt, false));
         return stamped(cached, 'X-Read-Offline', '1');
     }
     if (response.ok) {
         const copy = stamped(response.clone(), 'X-Read-Cached-At', new Date().toISOString());
-        await upkeep(async () => {
-            await renew(cache, request, copy);
-            if (capped) await trim(cache);
-        });
+        await upkeep(() => remember(cache, request, copy, startedAt, capped));
     }
     return response;
+}
+
+const CATALOG = /^\/api\/v1\/catalogs\/([^/]+)\//;
+
+// Whether the page wiped everything, or evicted `url`'s catalog, at or
+// after `startedAt`.
+async function invalidatedSince(url, startedAt) {
+    const guard = await caches.open(READ_CACHES.guard);
+    const catalog = CATALOG.exec(new URL(url).pathname)?.[1];
+    const marks = await Promise.all([
+        guard.match(READ_CACHES.guardAll),
+        catalog ? guard.match(READ_CACHES.guardCatalog(catalog)) : null,
+    ]);
+    for (const mark of marks) {
+        if (mark && Number(await mark.text()) >= startedAt) return true;
+    }
+    return false;
+}
+
+// Stores `response` unless the page invalidated it since `startedAt`. The
+// check runs again after the write: the page sets its mark before it
+// deletes, so an eviction that began meanwhile either finds this entry and
+// deletes it, or set its mark before this second check, which deletes it.
+async function remember(cache, request, response, startedAt, capped) {
+    if (await invalidatedSince(request.url, startedAt)) return;
+    await renew(cache, request, response);
+    if (await invalidatedSince(request.url, startedAt)) {
+        await cache.delete(request);
+        return;
+    }
+    if (capped) await trim(cache);
 }
 
 // Runs one cache write, logging rather than throwing when it fails.
@@ -1075,11 +1112,18 @@ export async function signOut(csrf) {
 // here, where the answers are classified; the worker only fills them.
 import { enc, encPath } from './api.js';
 
-const { content, meta, owner } = self.READ_CACHES;
+const { content, meta, owner, guard, guardAll, guardCatalog } = self.READ_CACHES;
 const OWNER_KEY = '/read/__owner';
+
+// Records that what `key` covers is invalid from now on (see names.js). It
+// is written before the deletion it announces, never after.
+async function mark(key) {
+    await (await caches.open(guard)).put(key, new Response(String(Date.now())));
+}
 
 // Deletes every cached catalog read and the record of whose they were.
 export async function wipe() {
+    await mark(guardAll);
     await Promise.all([content, meta, owner].map(name => caches.delete(name)));
 }
 
@@ -1101,15 +1145,18 @@ async function evict(cacheNames, matches) {
     }));
 }
 
-// Deletes everything cached for `catalog`.
-export function evictCatalog(catalog) {
+// Deletes everything cached for `catalog`, and keeps answers already on
+// their way from putting it back.
+export async function evictCatalog(catalog) {
+    await mark(guardCatalog(enc(catalog)));
     const prefix = `/api/v1/catalogs/${enc(catalog)}/`;
-    return evict([content, meta], path => path.startsWith(prefix));
+    await evict([content, meta], path => path.startsWith(prefix));
 }
 
-// Deletes the cached copies (short and full) of one concept.
-export function evictConcept(catalog, path) {
-    const exact = `/api/v1/catalogs/${enc(catalog)}/concepts/${encPath(path)}`;
+// Deletes the cached copies (short and full) of one document: `kind` is
+// 'concepts' or 'documents', as in its API URL.
+export function evictDocument(catalog, kind, path) {
+    const exact = `/api/v1/catalogs/${enc(catalog)}/${kind}/${encPath(path)}`;
     return evict([content], url => url === exact);
 }
 
@@ -1499,7 +1546,7 @@ Expected: FAIL, timed out waiting for `#signin-email` (no `main.js` yet).
 import { $, h, clear } from '/ui/js/core/dom.js';
 import { ago } from '/ui/js/core/format.js';
 import { read, ReadError, KIND } from './api.js';
-import { claimFor, wipe, evictCatalog, evictConcept } from './cache.js';
+import { claimFor, wipe, evictCatalog, evictDocument } from './cache.js';
 import { parse, hrefs, parentOf } from './route.js';
 import { message } from './parts.js';
 import * as home from './screens/home.js';
@@ -1577,7 +1624,7 @@ async function fail(view, route, error, live) {
             return;
         }
         case KIND.CONCEPT_GONE:
-            await evictConcept(route.catalog, route.path);
+            await evictDocument(route.catalog, 'concepts', route.path);
             if (!live()) return;
             clear(view).append(message('This concept no longer exists.',
                 h('a', { href: hrefs.tree(route.catalog, parentOf(route.path)), id: 'gone-folder' }, 'Open its folder'), 'concept-gone'));
@@ -1842,6 +1889,7 @@ import { h } from '/ui/js/core/dom.js';
 import { read, enc, encPath, KIND } from '../api.js';
 import { hrefs } from '../route.js';
 import { folderListing } from '../listing.js';
+import { evictDocument } from '../cache.js';
 import { crumbs, renderBody } from '../parts.js';
 
 export async function render(view, ctx) {
@@ -1859,8 +1907,10 @@ export async function render(view, ctx) {
             ctx.freshness(overview);
             view.append(renderBody(overview.data.body_html));
         } catch (error) {
-            // Not cached and offline: the lists below still work.
-            if (error.kind !== KIND.UNAVAILABLE) throw error;
+            // Offline without a copy, or deleted since the tree was read:
+            // the lists below still work. A deleted index's copy goes.
+            if (error.kind === KIND.CONCEPT_GONE) await evictDocument(catalog, 'documents', listing.index.path);
+            else if (error.kind !== KIND.UNAVAILABLE) throw error;
         }
     }
     if (listing.folders.length) {
@@ -1965,9 +2015,14 @@ export async function render(view, ctx) {
     const { catalog, path, section } = ctx.route;
     const base = `/catalogs/${enc(catalog)}`;
     const conceptUrl = `${base}/concepts/${encPath(path)}`;
+    // A section route asks for the whole body, as the console does: over
+    // concept_outline_chars the short answer has no body, so the heading to
+    // scroll to would be missing (every navigation renders afresh, an
+    // outline tap after "Show the whole concept" included).
+    const firstUrl = section ? `${conceptUrl}?full=true` : conceptUrl;
     // Both reads settle before anything is decided, so a refusal of either
     // (say a 404 for the concept and a late 401 for its links) is acted on.
-    const settled = await Promise.allSettled([read(conceptUrl), backlinks(base, path)]);
+    const settled = await Promise.allSettled([read(firstUrl), backlinks(base, path)]);
     const refused = settled.filter(outcome => outcome.status === 'rejected').map(outcome => outcome.reason);
     const unexpected = refused.find(reason => !(reason instanceof ReadError));
     if (unexpected) throw unexpected;
@@ -2621,6 +2676,223 @@ async fn a_late_401_after_an_ordinary_refusal_still_signs_out() {
     .await;
 }
 ```
+
+Three more: a slow successful answer must not undo an eviction, a folder whose index is deleted between the two reads still lists its contents, and a long concept's outline links reach their heading.
+
+```rust
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_slow_success_cannot_put_back_an_evicted_catalog() {
+    let (server, _) = server().await;
+    let runtime = tokio::runtime::Handle::current();
+    let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        // Beta's 200 is held in the worker after the server answered it,
+        // and the page learns when the worker has finished with it.
+        let mut paused = ui.pause_worker_responses("*/concepts/systems/beta.md");
+        ui.hold_answer_later("GET", "/concepts/systems/beta.md");
+        ui.open_reader("/v/main/systems/beta.md");
+        let request = paused.next_paused();
+        // The grant goes, and a tree read makes the page evict main.
+        runtime.block_on(crate::support::server::applied(&app, async {
+            ceiling::unentitle(&pool, "reader", "main", &AuditActor::cli(), Utc::now())
+                .await
+                .expect("unentitle");
+        }));
+        ui.open_reader("/t/main");
+        ui.wait_visible("#catalog-gone");
+        // Now the old 200 reaches the worker.
+        paused.release(&request);
+        ui.poll_eval("() => window.heldFetched === true");
+        let main_entries = ui.eval(
+            "async () => (await (await caches.open('read-content')).keys()) \
+             .filter(k => new URL(k.url).pathname.includes('/catalogs/main/')).length",
+            json!(null),
+        );
+        assert_eq!(main_entries, json!(0));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_folder_whose_index_is_deleted_meanwhile_still_lists_its_concepts() {
+    let (server, _) = server().await;
+    let runtime = tokio::runtime::Handle::current();
+    let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/t/main/systems");
+        ui.wait_text("#body", "Systems");
+        // Again: the tree is read, the index read waits, the index goes.
+        ui.hold_next("GET", "/documents/systems/index.md");
+        ui.open_reader("/t/main");
+        ui.wait_visible("#folders");
+        ui.open_reader("/t/main/systems");
+        ui.wait_visible("#screen-tree");
+        let mut without_index = main_files();
+        without_index.remove("systems/index.md");
+        runtime.block_on(publish(&pool, &app, "main", without_index));
+        ui.release_held();
+        ui.wait_text("#concepts", "Alpha");
+        assert!(!ui.present("#body"), "no index body");
+        assert!(!ui.present("#concept-gone"), "not treated as a missing concept");
+        let cached = ui.eval(
+            "async () => (await (await caches.open('read-content')).keys()) \
+             .some(k => new URL(k.url).pathname.endsWith('/documents/systems/index.md'))",
+            json!(null),
+        );
+        assert_eq!(cached, json!(false));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_outline_link_in_a_long_concept_keeps_the_whole_body() {
+    let server = TestServer::start_with(vec![("main", main_files())], |base| Config {
+        public_url: Some(base.to_string()),
+        concept_outline_chars: 20,
+        ..Config::default()
+    })
+    .await;
+    server.user_with_password("reader", EMAIL, PASSWORD).await;
+    crate::support::server::applied(&server.app, async {
+        ceiling::entitle(
+            &server.db.pool,
+            &NewEntitlement { user: "reader", catalog: "main", access: Access::Read },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("entitle");
+    })
+    .await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/main/systems/beta.md", EMAIL, PASSWORD);
+        ui.click("#show-full");
+        ui.wait_text("#body", "Two settings");
+        ui.click("#outline summary");
+        ui.click("#outline a");
+        ui.wait_text("#body", "Two settings");
+        ui.poll_eval(
+            "() => { const heading = document.querySelector('[data-slug=\"settings\"]'); \
+             return !!heading && heading.getBoundingClientRect().top < innerHeight; }",
+        );
+    })
+    .await;
+}
+```
+
+The folder journey needs this helper in `tests/ui_e2e/read.rs` (as `tests/ui_e2e/recent.rs` imports):
+
+```rust
+/// Imports `entries` over everything `catalog` holds and applies the change
+/// messages, as a publish would.
+async fn publish(
+    pool: &sqlx::PgPool,
+    app: &std::sync::Arc<okf_mcp::app::App>,
+    catalog: &str,
+    entries: okf_mcp::archive::Files,
+) {
+    let options = okf_mcp::store::import::ImportOptions {
+        replace: true,
+        scope: okf_mcp::store::import::ImportScope::Everything,
+        expect_generation: None,
+        expect_catalog_id: None,
+        actor: "editor",
+        audit: &AuditActor::cli(),
+        now: Utc::now(),
+    };
+    crate::support::server::applied(app, async {
+        okf_mcp::store::import::import(pool, catalog, entries, &options)
+            .await
+            .expect("import");
+    })
+    .await;
+}
+```
+
+(`Files` is a map from path to bytes; if its `remove` takes a different key type, rebuild the file list without `systems/index.md` instead.)
+
+The slow-success journey needs a DevTools helper in `tests/ui_e2e/harness.rs` that pauses the worker's responses after the server has answered them (the `Fetch` domain at the `Response` stage, on the `service_worker` target):
+
+```rust
+/// Responses paused in the reader's service worker (see
+/// [`Ui::pause_worker_responses`]); dropping it ends the pausing.
+pub struct PausedResponses {
+    devtools: DevTools,
+    session: String,
+}
+
+impl PausedResponses {
+    /// Waits for the next paused response and returns its request id.
+    pub fn next_paused(&mut self) -> String {
+        let deadline = Instant::now() + WAIT;
+        let params = self.devtools.event("Fetch.requestPaused", deadline, |_| true);
+        params["requestId"].as_str().expect("a request id").to_string()
+    }
+
+    /// Lets the paused response `request` through to the worker.
+    pub fn release(&mut self, request: &str) {
+        self.devtools.call(
+            Some(&self.session),
+            "Fetch.continueResponse",
+            serde_json::json!({ "requestId": request }),
+        );
+    }
+}
+```
+
+and in `impl Ui`:
+
+```rust
+    /// Pauses every response the reader's service worker gets for a URL
+    /// matching `pattern` (DevTools wildcards), after the server answered.
+    pub fn pause_worker_responses(&self, pattern: &str) -> PausedResponses {
+        let mut devtools = DevTools::connect(&self.browser);
+        let targets = devtools.call(None, "Target.getTargets", serde_json::json!({}));
+        let worker = targets["targetInfos"]
+            .as_array()
+            .expect("targets")
+            .iter()
+            .find(|target| target["type"] == "service_worker")
+            .and_then(|target| target["targetId"].as_str())
+            .expect("the reader's service worker")
+            .to_string();
+        let attached = devtools.call(
+            None,
+            "Target.attachToTarget",
+            serde_json::json!({ "targetId": worker, "flatten": true }),
+        );
+        let session = attached["sessionId"].as_str().expect("a session").to_string();
+        devtools.call(
+            Some(&session),
+            "Fetch.enable",
+            serde_json::json!({ "patterns": [{ "urlPattern": pattern, "requestStage": "Response" }] }),
+        );
+        PausedResponses { devtools, session }
+    }
+```
+
+and, also in `impl Ui`, a variant of `hold_answer` that does not wait for the answer (`hold_answer` polls for it, which would never end while the worker holds it):
+
+```rust
+    /// Sends the page's next `method` request to a path ending in `suffix`
+    /// at once and holds only its answer in the page; `window.heldFetched`
+    /// turns true when the answer arrives (see [`HOLD_NEXT`]). Unlike
+    /// [`Ui::hold_answer`], it returns at once.
+    pub fn hold_answer_later(&self, method: &str, suffix: &str) {
+        self.eval(
+            HOLD_NEXT,
+            serde_json::json!({ "method": method, "suffix": suffix, "early": true }),
+        );
+    }
+```
+
+`window.heldFetched` turning true is the journey's signal that the worker has finished with the old 200: the worker answers the page only after its cache write (or refusal to write).
 
 Add the polling helper these use to `impl Ui` in `tests/ui_e2e/harness.rs`:
 

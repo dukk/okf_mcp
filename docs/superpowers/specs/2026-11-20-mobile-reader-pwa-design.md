@@ -102,7 +102,7 @@ The reader imports `/ui/js/core/dom.js` (`h()`, `clear()`) and
 | `#/c` | Catalog picker; skipped when the user reaches one catalog. The last choice is remembered in `localStorage` (wrapped in try/catch). | `GET /api/v1/catalogs` |
 | `#/t/{catalog}/{folder}` | Tree: one folder's `index.md` rendered first (when it has one), then its subfolders and concepts. Logs and machinery files are not listed. | `GET /api/v1/catalogs/{c}/tree`, `GET .../documents/{folder}/index.md` |
 | `#/s/{catalog}?q=` | Search results: title, path, snippet | `GET /api/v1/search?q=&catalogs={c}&limit=50` |
-| `#/v/{catalog}/{path}` | Concept: title, breadcrumbs (tree folders), collapsible outline, `body_html`, a "Show the rest" action when the body is shortened (refetches with `?full=true`), and a "Linked from" list | `GET /api/v1/catalogs/{c}/concepts/{path}`, `GET .../links/{path}` |
+| `#/v/{catalog}/{path}` | Concept: title, breadcrumbs (tree folders), collapsible outline, `body_html`, a "Show the rest" action when the body is shortened (refetches with `?full=true`), and a "Linked from" list. A route with a section always asks for `?full=true`, as the console does, so outline links in a long concept reach their heading. | `GET /api/v1/catalogs/{c}/concepts/{path}`, `GET .../links/{path}` |
 | `#/me` | Signed-in user, sign-out, and "Delete offline copies" (local, works offline) | `GET /api/v1/session` (user, `csrf`, `expires_at`; the `csrf` token is kept in memory only), `DELETE /api/v1/session` with the `X-OKF-CSRF` header |
 
 Concept links in `body_html` are written by `src/render.rs` as
@@ -135,6 +135,12 @@ Three caches:
 3. `read-meta`: the catalog list, trees, recent changes and backlinks.
    Network-first, cache fallback.
 4. `read-owner`: one entry naming the user the caches belong to.
+5. `read-guard`: invalidation marks, never wiped. Before a wipe the page
+   writes an "all" mark, and before evicting a catalog it writes that
+   catalog's mark (the time, in milliseconds). The worker does not store an
+   answer to a request that started at or before a matching mark, and checks
+   again after writing (deleting the entry if a mark appeared meanwhile), so
+   a slow `2xx` can never put back what a `401` or a lost grant removed.
 
 Never cached: search, `/api/v1/session`, `/api/v1/me`, every non-GET request, everything outside
 `GET /api/v1` and the shell.
@@ -169,6 +175,7 @@ settle and every refusal is acted on; the most serious one draws.
 | `401` | Wipe `read-content` and `read-meta`; navigate to `/signin?return_to=/read/` plus the current hash. |
 | `403` with body `error` `Forbidden`, or `404` with `CatalogNotSelected` or `UnknownName` (a catalog no longer reachable) | Evict that catalog's entries in both caches and the remembered catalog; go to the picker with a short note. |
 | `404` with `NotFound` on a concept | Evict that concept's entries; show "This concept no longer exists" and a link to its parent folder. |
+| `404` with `NotFound` on a folder's `index.md` | Evict that document's entry and show the folder's lists without it. |
 | `403` with body `error` `UnlockRequired` or `Suspended` | Keep the caches; show the server's message; for `UnlockRequired`, link to the console (`/ui/`) to unlock. |
 | Network failure with no cached copy | "Not available offline" with a link to the Available Offline list. |
 
@@ -213,6 +220,12 @@ Browser journeys (`tests/ui_e2e/read.rs`, rustwright headless Chromium):
     signs out.
 8e. Offline, the account screen deletes the offline copies.
 8f. With storage full, a concept still renders from the network.
+8g. A successful answer held in the worker until after a lost-grant
+    eviction does not put the catalog back.
+8h. A folder whose `index.md` is deleted between the tree read and the index
+    read still lists its folders and concepts, and the index's copy goes.
+8i. In a long concept, expanding the body and following an outline link
+    keeps the whole body and reaches the heading.
 9. Sign-out wipes the caches.
 10. A new shell version replaces the old shell cache on activate.
 
