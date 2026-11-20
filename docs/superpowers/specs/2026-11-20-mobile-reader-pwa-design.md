@@ -97,14 +97,15 @@ The reader imports `/ui/js/core/dom.js` (`h()`, `clear()`) and
 |---|---|---|
 | `#/` | Home: search box and recent changes for the current catalog; offline, the "Available offline" list instead | `GET /api/v1/catalogs/{c}/recent-changes` |
 | `#/c` | Catalog picker; skipped when the user reaches one catalog. The last choice is remembered in `localStorage` (wrapped in try/catch). | `GET /api/v1/catalogs` |
-| `#/t/{catalog}/{folder}` | Tree: drill-down list of one folder's subfolders and documents, index first | `GET /api/v1/catalogs/{c}/tree` |
+| `#/t/{catalog}/{folder}` | Tree: one folder's `index.md` rendered first (when it has one), then its subfolders and concepts. Logs and machinery files are not listed. | `GET /api/v1/catalogs/{c}/tree`, `GET .../documents/{folder}/index.md` |
 | `#/s/{catalog}?q=` | Search results: title, path, snippet | `GET /api/v1/search?q=&catalogs={c}&limit=50` |
 | `#/v/{catalog}/{path}` | Concept: title, breadcrumbs (tree folders), collapsible outline, `body_html`, a "Show the rest" action when the body is shortened (refetches with `?full=true`), and a "Linked from" list | `GET /api/v1/catalogs/{c}/concepts/{path}`, `GET .../links/{path}` |
 | `#/me` | Signed-in user and sign-out | `GET /api/v1/session` (user, `csrf`, `expires_at`; the `csrf` token is kept in memory only), `DELETE /api/v1/session` with the `X-OKF-CSRF` header |
 
 Concept links in `body_html` are written by `src/render.rs` as
-`#/browse/{catalog}/{path}[#{slug}]`. The concept screen rewrites that prefix
-to `#/v/`. External links get `target="_blank" rel="noopener"`. `body_html`
+`#/browse/{catalog}/{path segments}[/{section slug}]`. The reader rewrites
+them to `#/v/{catalog}/{path}[/{slug}]`, or to the folder's tree route for a
+link to an `index.md`. External links get `target="_blank" rel="noopener"`. `body_html`
 is inserted with `innerHTML` exactly as the console does: it is produced and
 sanitised server-side by `render.rs`.
 
@@ -118,8 +119,9 @@ Three caches:
    navigation under `/read/` is answered with the cached `index.html`.
    `activate` deletes every `read-shell-*` cache except the current one and
    calls `clients.claim()`.
-2. `read-content`: concept GETs (`/api/v1/catalogs/{c}/concepts/{path}`,
-   keyed on the full URL including `?full=true`). Network-first, cache
+2. `read-content`: concept and document GETs
+   (`/api/v1/catalogs/{c}/concepts/{path}` and `.../documents/{path}`, keyed
+   on the full URL including `?full=true`). Network-first, cache
    fallback. (Brainstorming said stale-while-revalidate; network-first is
    used instead because answering from cache before the server has spoken
    would show a revoked session cached content while online, and it keeps
