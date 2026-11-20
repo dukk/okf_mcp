@@ -1,6 +1,6 @@
 // A concept: breadcrumbs, title, outline, body (or, when the server
 // shortened it, a button for the whole body) and what links to it.
-import { h } from '/ui/js/core/dom.js';
+import { h, fill } from '/ui/js/core/dom.js';
 import { read, enc, encPath, KIND, ReadError } from '../api.js';
 import { hrefs, hrefFor } from '../route.js';
 import { crumbs, renderBody, message } from '../parts.js';
@@ -54,7 +54,8 @@ export async function render(view, ctx) {
     ctx.freshness(links);
     const concept = result.data;
     const body = h('div', { id: 'body-slot' });
-    view.append(
+    // fill, not append: the outline is null for a concept with no sub-headings.
+    fill(view,
         crumbs(catalog, path, false),
         h('h1', { id: 'concept-title' }, concept.title ?? path),
         outline(catalog, path, concept.outline),
