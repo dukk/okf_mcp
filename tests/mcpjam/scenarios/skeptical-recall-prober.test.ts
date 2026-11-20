@@ -80,11 +80,18 @@ describe(SCENARIOS.sourceAttribution.goal, () => {
         expect(concept.body).not.toContain(sourceId);
     });
 
-    // Issue #761: search never looks at `sources`, so "which notes cite this
-    // source?" means reading every concept. `test.fails` passes while that is
-    // true and goes red once #761 lands: then make it a plain `test`.
-    test.fails("search by source id finds the concepts citing it (#761)", async () => {
-        expect(await session().searchUnder(paths.folder, sourceId)).toEqual([path]);
+    // Issue #761: `cited_by` answers "which notes cite this source?" without
+    // reading every concept; `search` never looks at `sources`.
+    test("cited_by finds the concepts citing a source id, in any case", async () => {
+        for (const id of [sourceId, sourceId.toUpperCase()]) {
+            const found = await session().call<{
+                hits: { path: string; sources: { id: string }[] }[];
+                truncated: boolean;
+            }>("cited_by", { source_id: id, catalogs: [session().catalog] });
+            expect(found.hits.map((hit) => hit.path)).toEqual([path]);
+            expect(found.hits[0].sources.map((entry) => entry.id)).toEqual([sourceId]);
+            expect(found.truncated).toBe(false);
+        }
     });
 });
 
