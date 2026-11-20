@@ -450,6 +450,13 @@ export async function render(main) {
     }
 
     await Promise.all([drawAccount(), ceilingPage.start(), drawPasskeys(), drawIdentities(), drawSessions(), drawSignIns()]);
+    // Every section has now drawn (each draw settles on its own, a failed
+    // read included). The sections load in any order and each one moves the
+    // controls below it, so a browser journey waits for this marker
+    // (`.view[data-loaded=true]`) before it clicks, instead of for the one
+    // control it wants: that control can appear while the rest of the page
+    // is still arriving (issue #373).
+    if (main.isConnected) main.dataset.loaded = 'true';
 }
 
 // A refusal's reason as the server gave it, without the "forbidden: "
