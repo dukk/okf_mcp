@@ -137,6 +137,7 @@ function startWorker(storage, { route = () => undefined } = {}) {
     return {
         held,
         goOffline() { online = false; },
+        goOnline() { online = true; },
         /** Dispatches a GET as a controlled page would; returns respondWith's promise (or undefined). */
         get(path, { mode = 'cors' } = {}) {
             const request = new Request(new URL(path, ORIGIN));
@@ -297,6 +298,34 @@ test('offline, a copy the page evicts while it is being read is not served', asy
         return found;
     };
     await assert.rejects(worker.get(concept('alpha')));
+});
+
+test('offline, a copy wiped while it is being renewed is not served', async () => {
+    const storage = new Storage();
+    const worker = startWorker(storage);
+    await readAll(worker, [concept('alpha')], 'A');
+    worker.goOffline();
+    storage.beforePut = async () => { await worker.mark('*'); };
+    await assert.rejects(worker.get(concept('alpha')));
+    assert.deepEqual(storage.paths('read-content'), []);
+});
+
+test('offline, a copy whose owner changes while it is being renewed is not served', async () => {
+    const storage = new Storage();
+    const worker = startWorker(storage);
+    await readAll(worker, [concept('alpha')], 'A');
+    worker.goOffline();
+    let tookOver = false;
+    storage.beforePut = async (name, url) => {
+        if (tookOver || !url.endsWith('/alpha.md')) return;
+        tookOver = true;
+        worker.goOnline();
+        await readAll(worker, [concept('beta')], 'B');
+        worker.goOffline();
+    };
+    await assert.rejects(worker.get(concept('alpha')));
+    assert.equal(await storage.ownerTag(), 'B');
+    assert.deepEqual(storage.paths('read-content'), [concept('beta')]);
 });
 
 test('with the owner record gone but the copies left, a restarted worker serves none of them', async () => {

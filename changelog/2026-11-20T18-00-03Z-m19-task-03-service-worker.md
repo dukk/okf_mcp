@@ -26,7 +26,8 @@
   takeover, is never kept. An answer without the header is never cached.
 - Offline, a copy is served only to the owner. Its own `X-OKF-Account` must
   be the current owner's, decided in turn with takeovers and checked again
-  after the read, as is any mark since the request started. With no owner (no record, a wipe, or a takeover that could
+  after the read and again after the renewal, as is any mark since the
+  request started. With no owner (no record, a wipe, or a takeover that could
   not delete the old copies), nothing is served from `read-content` or
   `read-meta`, and they are deleted (best effort). A copy for another
   account is deleted. Only a checked copy is renewed.
@@ -38,14 +39,15 @@
 - Tests: `the_worker_is_revalidated_and_carries_the_shell_version` and
   `the_console_does_not_serve_the_reader_worker`. The shell-listing test now
   also checks the served worker's and `names.js`'s hashes.
-- `tests/read_worker/sw.test.mjs`: 23 tests that run the worker itself in a
+- `tests/read_worker/sw.test.mjs`: 25 tests that run the worker itself in a
   `node:vm` context, with an in-memory Cache Storage and a fetch the test
   answers. They use Node's built-in test runner and no npm packages. They
   cover parallel first-visit answers, a takeover with a late answer for the
   old account, slow answers after each kind of mark (or during the write),
   a failed owner-record write followed by a restart, offline copies after a
   failed takeover or with the record gone (before and after a restart),
-  copies for another account, a copy evicted while it is read, an owner's
+  copies for another account, a copy evicted while it is read or wiped or
+  taken over while it is renewed, an owner's
   copies after a restart, refused
   storage, the
   short/full fallback, the cap, navigation, and install refusing a wrong

@@ -151,6 +151,9 @@ async function networkFirst(request, cacheName, capped) {
         // Re-put so the copy counts as recently viewed; a renewal, never trimmed.
         if (capped) {
             await upkeep(() => store(cacheName, cached.key, cached.response.clone(), { startedAt, held: cached.held, capped: false }));
+            // A wipe, an eviction or a takeover during the renewal: the copy
+            // is no longer the owner's to read (`store` already dropped it).
+            if (!stillOwned(cached, startedAt)) throw failure;
         }
         return stamped(cached.response, 'X-Read-Offline', '1');
     }
@@ -240,9 +243,15 @@ async function ownedCopy(cacheName, request, startedAt) {
         if (epoch === current.held) await upkeep(() => caches.open(cacheName).then(cache => cache.delete(cached.key)));
         return null;
     }
-    if (epoch !== current.held || owner?.tag !== current.tag) return null;
-    if (invalidatedSince(cached.key.url ?? cached.key, startedAt)) return null;
-    return { ...cached, held: current.held };
+    const owned = { ...cached, tag: current.tag, held: current.held };
+    return stillOwned(owned, startedAt) ? owned : null;
+}
+
+// Whether `copy` ({ key, tag, held }) still belongs to the owner it was
+// checked against, and the page has not invalidated it since `startedAt`.
+function stillOwned(copy, startedAt) {
+    return epoch === copy.held && owner?.tag === copy.tag
+        && !invalidatedSince(copy.key.url ?? copy.key, startedAt);
 }
 
 // Makes `tag` the owner. The epoch is bumped first, so the old owner's

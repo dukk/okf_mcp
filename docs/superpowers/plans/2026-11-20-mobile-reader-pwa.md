@@ -846,7 +846,8 @@ self.READ_CACHES = Object.freeze({
 > **Corrected (issue #810, 2026-11-20, second review).** Offline answers go through `ownedCopy`:
 > a cached copy is served only when an account owns the copies (`currentOwner`, decided in turn
 > with takeovers, reading `read-owner` on first use) and the copy's own `X-OKF-Account` is that
-> owner's, checked again after the read (as is any mark since the request started). With no owner (no record, a wipe, a failed takeover),
+> owner's, checked again after the read and after the renewal (`stillOwned`: the epoch, the owner
+> and any mark since the request started). With no owner (no record, a wipe, a failed takeover),
 > nothing is served and `read-content` and `read-meta` are deleted (best effort); a copy for
 > another account is deleted. Only a checked copy is renewed. Task 5's `offlineDocuments` is
 > corrected to match.
@@ -1005,6 +1006,9 @@ async function networkFirst(request, cacheName, capped) {
         // Re-put so the copy counts as recently viewed; a renewal, never trimmed.
         if (capped) {
             await upkeep(() => store(cacheName, cached.key, cached.response.clone(), { startedAt, held: cached.held, capped: false }));
+            // A wipe, an eviction or a takeover during the renewal: the copy
+            // is no longer the owner's to read (`store` already dropped it).
+            if (!stillOwned(cached, startedAt)) throw failure;
         }
         return stamped(cached.response, 'X-Read-Offline', '1');
     }
@@ -1094,9 +1098,15 @@ async function ownedCopy(cacheName, request, startedAt) {
         if (epoch === current.held) await upkeep(() => caches.open(cacheName).then(cache => cache.delete(cached.key)));
         return null;
     }
-    if (epoch !== current.held || owner?.tag !== current.tag) return null;
-    if (invalidatedSince(cached.key.url ?? cached.key, startedAt)) return null;
-    return { ...cached, held: current.held };
+    const owned = { ...cached, tag: current.tag, held: current.held };
+    return stillOwned(owned, startedAt) ? owned : null;
+}
+
+// Whether `copy` ({ key, tag, held }) still belongs to the owner it was
+// checked against, and the page has not invalidated it since `startedAt`.
+function stillOwned(copy, startedAt) {
+    return epoch === copy.held && owner?.tag === copy.tag
+        && !invalidatedSince(copy.key.url ?? copy.key, startedAt);
 }
 
 // Makes `tag` the owner. The epoch is bumped first, so the old owner's
