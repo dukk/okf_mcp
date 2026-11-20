@@ -36,16 +36,19 @@ sign-in (the reader is cookie-only).
 - The reader's files live under `src/http/read/`, a sibling of the
   console's `src/http/ui/`. `build.rs` embeds each tree into its own table
   (`ASSETS` for the console, `READ_ASSETS` for the reader) with one shared
-  function, so neither route can serve the other's files. It also writes
-  `READ_SHELL_VERSION`, a hash of the reader's files.
+  function, so neither route can serve the other's files.
+- The shell version is a hash of every file the worker precaches: the
+  reader's own and the shared console files (`/ui/vendor/pico.min.css`,
+  `/ui/js/core/dom.js`, `/ui/js/core/format.js`), computed once in
+  `src/http/read.rs`. A change to any of them changes the version.
 - A new module `src/http/read.rs` serves `/read` (permanent redirect to
   `/read/`), `/read/` (`index.html`), `/read/shell.json` (the version and the
   files to precache) and `/read/{*path}`, behind the console's
   `security_headers` layer and CSP. `src/http/ui.rs`'s `asset()` takes the
   table to serve from, so both modules share it.
 - `/read/sw.js` is served with `Cache-Control: no-cache` and with
-  `__SHELL_VERSION__` replaced by `READ_SHELL_VERSION`, so any change to the
-  reader's files changes the worker's bytes and installed apps update on
+  `__SHELL_VERSION__` replaced by the shell version, so any change to a
+  precached file changes the worker's bytes and installed apps update on
   their next launch. Its location makes its scope exactly `/read/`; it never
   controls a console page.
 - `content_type()` gains `png` (`image/png`) and `webmanifest`
@@ -149,7 +152,11 @@ before calling `DELETE /api/v1/session`.
 
 ## Error handling
 
-`js/api.js` classifies every answer; only the page decides what to do:
+`js/api.js` classifies every answer; only the page decides what to do, in
+one handler that every read goes through (a screen's first render and later
+reads such as "Show the whole concept"). The cache and session side effects
+(wipe, evict, sign-in) always happen, even when the answer arrives after the
+user has left the screen that asked; only the drawing is skipped then.
 
 | Answer | Action |
 |---|---|
@@ -166,8 +173,10 @@ Rust unit tests (`src/http/ui.rs`, `src/http/pages.rs`):
 
 - `/read/`, `/read/sw.js`, `/read/manifest.webmanifest` and an icon are
   served with the right content types and the security headers.
-- `/read/sw.js` carries `Cache-Control: no-cache` and `READ_SHELL_VERSION`,
+- `/read/sw.js` carries `Cache-Control: no-cache` and the shell version,
   with no `__SHELL_VERSION__` left.
+- The shell version changes when only a shared console file changes, and
+  the served version covers the shared files.
 - `/ui/sw.js` does not serve the reader's worker; `/read/styles.css` does not
   serve the console's stylesheet.
 - `/read/shell.json` lists every reader file and the shared console files,
@@ -190,6 +199,9 @@ Browser journeys (`tests/ui_e2e/read.rs`, rustwright headless Chromium):
 7. Remove the grant to catalog X: X's entries are evicted, catalog Y's
    survive.
 8. `UnlockRequired`: caches survive; the unlock link points into the console.
+8a. A lost grant answered after navigating to another screen still evicts
+    that catalog, and the new screen stays.
+8b. "Show the whole concept" after the grant is lost evicts the catalog.
 9. Sign-out wipes the caches.
 10. A new shell version replaces the old shell cache on activate.
 
