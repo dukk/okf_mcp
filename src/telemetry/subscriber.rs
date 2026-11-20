@@ -6,6 +6,8 @@
 //! is ANDed with a fixed cap (`stderr_cap`, `otlp_cap`) that the
 //! configuration cannot lift.
 
+use std::sync::{Mutex, PoisonError};
+
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_sdk::logs::SdkLoggerProvider;
@@ -240,6 +242,9 @@ pub fn build(
 /// [`build`] with the stderr layer's writer as a parameter, so tests can
 /// capture what it writes.
 ///
+/// It keeps a handle on each provider until the process exits
+/// ([`KEPT_TRACERS`]), so dropping the subscriber never drops a provider.
+///
 /// # Arguments
 /// * `settings`, `tracer`, `logger` - as for [`build`].
 /// * `writer` - where the text or JSON lines go (`std::io::stderr` in
@@ -261,6 +266,7 @@ pub fn build_with_writer<W>(
 where
     W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
 {
+    keep_for_the_process(tracer, logger);
     let slot = DispatchSlot::default();
     // A filter's type names the subscriber it is added to, so each arm builds
     // its own. `FilterExt::and` combines two filters: an event passes when both pass.
@@ -315,6 +321,56 @@ where
         .with(json)
         .with(spans)
         .with(logs)
+}
+
+/// Every provider a subscriber has been built on, kept until the process
+/// exits, so that no subscriber ever drops the last handle on a provider.
+///
+/// Dropping a provider's last handle runs its `Drop`, and with
+/// `internal-logs` on (as here) that emits a `tracing` event, already shut
+/// down or not (`LoggerProvider.Drop.AlreadyShutdown`,
+/// `TracerProvider.Drop.AlreadyShutdown`). When the subscriber holding that
+/// handle is dropped inside `tracing_core`'s dispatcher registry lock (its
+/// interest rebuild upgrades each registered subscriber's weak handle for a
+/// moment, and the upgraded one can be the last), the event's first
+/// callsite registration takes the same lock again and deadlocks every
+/// thread that registers a callsite or a subscriber (issue #738). A provider
+/// that is never dropped emits no such event.
+///
+/// In production this changes nothing: the only subscriber built on a
+/// provider is the global default, which is never dropped, so it already
+/// held its providers for the life of the process. The cost is one clone per
+/// subscriber built: one in production, one per capture in tests.
+static KEPT_TRACERS: Mutex<Vec<SdkTracerProvider>> = Mutex::new(Vec::new());
+/// The log providers, as for [`KEPT_TRACERS`].
+static KEPT_LOGGERS: Mutex<Vec<SdkLoggerProvider>> = Mutex::new(Vec::new());
+
+/// Adds `tracer` and `logger` to [`KEPT_TRACERS`] and [`KEPT_LOGGERS`].
+///
+/// # Arguments
+/// * `tracer`, `logger` - the providers a subscriber is about to be built on.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+    )
+)]
+fn keep_for_the_process(tracer: Option<&SdkTracerProvider>, logger: Option<&SdkLoggerProvider>) {
+    // A panic while the lock was held cannot leave a `Vec` half-pushed, so a
+    // poisoned lock's contents are still good: take them.
+    if let Some(tracer) = tracer {
+        KEPT_TRACERS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(tracer.clone());
+    }
+    if let Some(logger) = logger {
+        KEPT_LOGGERS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(logger.clone());
+    }
 }
 
 /// The subscriber used while the configuration is being read and telemetry
@@ -650,8 +706,10 @@ pub(crate) mod capture {
 
         /// Uninstalls the subscriber, flushes, and returns what it saw.
         pub(crate) fn finish(self) -> Observed {
-            // The dispatcher goes first: dropping a provider inside the
-            // dispatcher's lock has deadlocked other projects' tests.
+            // The dispatcher goes first, so the spans and records it saw
+            // are all in the exporters before they are read. (The providers
+            // themselves are never dropped: `build_with_writer` keeps them
+            // for the process, issue #738.)
             drop(self.guard);
             self.tracer.force_flush().expect("flush spans");
             self.logger.force_flush().expect("flush logs");
@@ -678,6 +736,11 @@ pub(crate) mod capture {
             };
             let _ = self.tracer.shutdown();
             let _ = self.logger.shutdown();
+            // The providers live on (see `build_with_writer`), and their
+            // processors hold the exporters: empty them, so a kept provider
+            // holds no test's spans or records.
+            self.span_exporter.reset();
+            self.log_exporter.reset();
             observed
         }
     }
@@ -992,5 +1055,148 @@ mod tests {
         assert!(text.contains("fallback-info-line"), "{text}");
         assert!(!text.contains("fallback-debug-line"), "{text}");
         assert!(!text.contains("fallback-dependency-info"), "{text}");
+    }
+
+    /// Issue #738: dropping a subscriber never drops the last handle on its
+    /// providers (whose `Drop` emits an event, which deadlocks when the
+    /// subscriber is dropped inside the dispatcher registry's lock). Each
+    /// provider here has a processor that notes being dropped, which happens
+    /// only when the provider itself is.
+    #[test]
+    fn dropping_a_subscriber_never_drops_its_providers() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use opentelemetry_sdk::error::OTelSdkResult;
+
+        #[derive(Debug)]
+        struct NotesDrop(Arc<AtomicBool>);
+
+        impl Drop for NotesDrop {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        impl opentelemetry_sdk::trace::SpanProcessor for NotesDrop {
+            fn on_start(&self, _: &mut opentelemetry_sdk::trace::Span, _: &opentelemetry::Context) {
+            }
+            fn on_end(&self, _: opentelemetry_sdk::trace::SpanData) {}
+            fn force_flush(&self) -> OTelSdkResult {
+                Ok(())
+            }
+            fn shutdown_with_timeout(&self, _: Duration) -> OTelSdkResult {
+                Ok(())
+            }
+        }
+
+        impl opentelemetry_sdk::logs::LogProcessor for NotesDrop {
+            fn emit(
+                &self,
+                _: &mut opentelemetry_sdk::logs::SdkLogRecord,
+                _: &opentelemetry::InstrumentationScope,
+            ) {
+            }
+            fn force_flush(&self) -> OTelSdkResult {
+                Ok(())
+            }
+        }
+
+        let tracer_dropped = Arc::new(AtomicBool::new(false));
+        let logger_dropped = Arc::new(AtomicBool::new(false));
+        let tracer = SdkTracerProvider::builder()
+            .with_span_processor(NotesDrop(Arc::clone(&tracer_dropped)))
+            .build();
+        let logger = SdkLoggerProvider::builder()
+            .with_log_processor(NotesDrop(Arc::clone(&logger_dropped)))
+            .build();
+        let settings = LayerSettings {
+            format: LogFormat::Text,
+            stderr: parse_filter("off").expect("filter"),
+            traces: parse_filter("info").expect("filter"),
+            logs: parse_filter("info").expect("filter"),
+        };
+        let subscriber =
+            build_with_writer(settings, Some(&tracer), Some(&logger), Capture::default());
+        // The test's own handles go first, as when a capture is dropped
+        // without `finish`: the subscriber is then the last holder in sight.
+        drop(tracer);
+        drop(logger);
+        drop(subscriber);
+        assert!(
+            !tracer_dropped.load(Ordering::SeqCst),
+            "dropping the subscriber dropped its tracer provider"
+        );
+        assert!(
+            !logger_dropped.load(Ordering::SeqCst),
+            "dropping the subscriber dropped its logger provider"
+        );
+    }
+
+    /// Issue #738: captures made and dropped on many threads at once, some
+    /// dropped without `finish` (so the subscriber holds the last handle on
+    /// its providers), while other threads install plain scoped subscribers
+    /// and rebuild the interest cache, all finish. A deadlock in
+    /// `tracing_core`'s dispatcher registry would hang every thread that
+    /// touches it, the rest of the test binary included, so on a timeout
+    /// this aborts the process (a failure the gate reports) instead of
+    /// panicking into a binary that then hangs until the gate's timeout.
+    #[test]
+    fn captures_made_and_dropped_on_many_threads_do_not_deadlock() {
+        use std::io::Write as _;
+        use std::sync::mpsc::{self, RecvTimeoutError};
+        use std::sync::{Arc, Barrier};
+        use std::time::{Duration, Instant};
+
+        use super::capture::Observer;
+
+        const THREADS: usize = 16;
+        const ROUNDS: usize = 30;
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let (done, finished) = mpsc::channel();
+        for thread in 0..THREADS {
+            let barrier = Arc::clone(&barrier);
+            let done = done.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                for round in 0..ROUNDS {
+                    match (thread + round) % 3 {
+                        0 => drop(Observer::start("off", "trace", "trace", LogFormat::Text)),
+                        1 => {
+                            let observer =
+                                Observer::start("off", "trace", "trace", LogFormat::Text);
+                            tracing::info!(target: "okf_mcp::test", "inside a capture");
+                            let _ = observer.finish();
+                        }
+                        _ => {
+                            let _guard =
+                                tracing::subscriber::set_default(tracing_subscriber::registry());
+                            tracing::callsite::rebuild_interest_cache();
+                        }
+                    }
+                }
+                let _ = done.send(());
+            });
+        }
+        drop(done);
+        let deadline = Instant::now() + Duration::from_secs(120);
+        for _ in 0..THREADS {
+            match finished.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(()) => {}
+                Err(RecvTimeoutError::Timeout) => {
+                    // Straight to the process's stderr: the test harness
+                    // captures `eprintln!` and would lose it in the abort.
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "captures_made_and_dropped_on_many_threads_do_not_deadlock: \
+                         a thread did not finish within 120 s; the dispatcher \
+                         registry is deadlocked (issue #738). Aborting."
+                    );
+                    std::process::abort();
+                }
+                Err(RecvTimeoutError::Disconnected) => panic!("a capture thread panicked"),
+            }
+        }
     }
 }
