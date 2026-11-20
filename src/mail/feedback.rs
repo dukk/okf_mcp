@@ -1,5 +1,6 @@
 //! Feedback delivery (issue #674): the `send_feedback` tool's submissions,
-//! stored in the `feedback` table and forwarded to the operator's Forminit
+//! and the console's (`POST /api/v1/feedback`, issue #793), both checked by
+//! [`check_and_submit`] and stored in the `feedback` table and forwarded to the operator's Forminit
 //! form by a worker on the same apalis-postgres queue machinery as mail
 //! ([`super::queue`]), in a queue of its own ([`QUEUE`]).
 //!
@@ -228,7 +229,7 @@ pub struct NewFeedback<'a> {
     pub rating: Option<i16>,
     /// The MCP client's name from `initialize`.
     pub client: &'a str,
-    /// `api_key` or `oauth`.
+    /// `api_key`, `oauth` or `session` (the console).
     pub credential_kind: &'static str,
 }
 
@@ -317,6 +318,204 @@ pub async fn submit(
     tx.commit().await?;
     tracing::info!(feedback = %id, "feedback queued");
     Ok(id)
+}
+
+/// The third-party disclosure every feedback entry point shows: the
+/// `send_feedback` tool's description and the console's feedback form
+/// (`console_disclosure`). A macro, not a `const`, so the tool's description
+/// can still be one `const` built with `concat!` (which takes only
+/// literals). "this server" is replaced with the product name where one is
+/// shown.
+macro_rules! third_party_disclosure {
+    () => {
+        "The feedback goes to this server's team through a third-party form service (Forminit)."
+    };
+}
+// Lets other modules of this crate name the macro by path
+// (`crate::mail::feedback::third_party_disclosure!`).
+pub(crate) use third_party_disclosure;
+
+/// The words of [`third_party_disclosure!`] that name the product.
+const THIS_SERVER: &str = "this server";
+
+/// What the console's feedback form says before anyone sends: the
+/// third-party disclosure, naming the product, and what is sent with the
+/// message. Served in `GET /ui/brand.json` (`feedback_form.disclosure`), so
+/// the form shows exactly this text.
+///
+/// # Arguments
+/// * `product_name` - the effective `product_name` setting.
+///
+/// # Returns
+/// The disclosure, "The feedback goes to Acme Notes's team through a
+/// third-party form service (Forminit). ...".
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
+    )
+)]
+pub(crate) fn console_disclosure(product_name: &str) -> String {
+    format!(
+        "{} What is sent: your message, the kind and rating you choose, your user name, the \
+         server version and the feedback's id. Leave out anything you don't want to share.",
+        third_party_disclosure!().replace(THIS_SERVER, product_name)
+    )
+}
+
+/// Who sends a submission, as the caller's credential says. Built by each
+/// entry point (the `send_feedback` tool, `POST /api/v1/feedback`) and
+/// passed to [`check_and_submit`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Sender<'a> {
+    /// What the rate limit counts: an MCP credential's key id, or
+    /// `user:<users.id>` for the console ([`console_credential`]).
+    pub credential: &'a str,
+    /// The user slug forwarded as the sender's `userId`.
+    pub user_slug: &'a str,
+    /// The client name forwarded as `client` (already cleaned).
+    pub client: &'a str,
+    /// `api_key`, `oauth` or `session`.
+    pub credential_kind: &'static str,
+}
+
+/// A submission's fields as the caller gave them, before any check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Draft<'a> {
+    /// The feedback text (trimmed here).
+    pub message: &'a str,
+    /// The kind's name; `None` is `other`.
+    pub kind: Option<&'a str>,
+    /// `user` or `agent`; `None` is `default_origin`.
+    pub from: Option<&'a str>,
+    /// Who it is from when `from` is `None`.
+    pub default_origin: FeedbackOrigin,
+    /// The tool it is about, if any.
+    pub tool: Option<&'a str>,
+    /// A rating, if any (checked to be 1-5).
+    pub rating: Option<i64>,
+}
+
+/// The rate limit's `credential` for console submissions from `user_id`:
+/// one count per user, whichever session sent them. `user:` keeps it apart
+/// from every key id (hexadecimal, no colon).
+///
+/// # Arguments
+/// * `user_id` - the signed-in user's `users.id`.
+///
+/// # Returns
+/// `user:<user_id>`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
+    )
+)]
+pub(crate) fn console_credential(user_id: &str) -> String {
+    format!("user:{user_id}")
+}
+
+/// A refused argument.
+#[tracing::instrument(level = "trace", skip_all)]
+fn refused(reason: String) -> OkfError {
+    OkfError::Refused { reason }
+}
+
+/// Checks a submission and queues it: the one path both the
+/// `send_feedback` tool and the console's `POST /api/v1/feedback` take, so
+/// both refuse and limit exactly alike.
+///
+/// # Arguments
+/// * `app` - the shared state (its `[feedback]` config, pool and clock).
+/// * `sender` - who sends it.
+/// * `draft` - what was sent.
+///
+/// # Returns
+/// The feedback's id.
+///
+/// # Errors
+/// [`OkfError::Refused`] when feedback is not configured, for a blank
+/// message, an unknown `kind` or `from`, a malformed `tool`, a `rating`
+/// outside 1-5, or a NUL in the text; [`OkfError::LimitExceeded`] for a
+/// message over 4,000 characters (`limit: "feedback_message"`) or past the
+/// sender's hourly limit (`limit: "feedback_rate"`); as [`submit`].
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) async fn check_and_submit(
+    app: &App,
+    sender: &Sender<'_>,
+    draft: &Draft<'_>,
+) -> Result<String, OkfError> {
+    let Some(config) = app.config().feedback.as_ref() else {
+        return Err(refused(
+            "feedback is not configured on this server".to_string(),
+        ));
+    };
+    let message = draft.message.trim();
+    if message.is_empty() {
+        return Err(refused("message is empty".to_string()));
+    }
+    // Postgres refuses NUL in text, which would surface as a database error.
+    if message.contains('\0') {
+        return Err(refused(
+            "message must not contain NUL characters".to_string(),
+        ));
+    }
+    let length = message.chars().count();
+    if length > MAX_MESSAGE_CHARS {
+        return Err(OkfError::LimitExceeded {
+            limit: "feedback_message",
+            reason: format!(
+                "message is {length} characters; the most is {MAX_MESSAGE_CHARS}. \
+                 Shorten it or split it into several messages"
+            ),
+        });
+    }
+    let kind = match draft.kind {
+        None => FeedbackKind::Other,
+        Some(name) => FeedbackKind::parse(name).ok_or_else(|| {
+            refused(format!(
+                "kind must be one of {}",
+                FeedbackKind::NAMES.join(", ")
+            ))
+        })?,
+    };
+    let origin = match draft.from {
+        None => draft.default_origin,
+        Some(name) => FeedbackOrigin::parse(name)
+            .ok_or_else(|| refused("from must be user or agent".to_string()))?,
+    };
+    let tool = draft.tool.map(str::trim);
+    if tool.is_some_and(|tool| {
+        tool.is_empty()
+            || tool.len() > MAX_TOOL_BYTES
+            || !tool
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    }) {
+        return Err(refused(format!(
+            "tool must be a tool's name: 1 to {MAX_TOOL_BYTES} letters, digits, _ and -"
+        )));
+    }
+    let rating = match draft.rating {
+        None => None,
+        // `i16::try_from` cannot fail inside 1..=5; `ok()` keeps it total.
+        Some(rating @ 1..=5) => i16::try_from(rating).ok(),
+        Some(_) => return Err(refused("rating must be 1 to 5".to_string())),
+    };
+    let new = NewFeedback {
+        credential: sender.credential,
+        user_slug: sender.user_slug,
+        message,
+        kind,
+        origin,
+        tool,
+        rating,
+        client: sender.client,
+        credential_kind: sender.credential_kind,
+    };
+    submit(app.pool(), &new, config.max_per_hour, app.clock().now()).await
 }
 
 /// The error for a queue operation apalis refused.

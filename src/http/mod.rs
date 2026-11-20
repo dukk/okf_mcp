@@ -271,11 +271,27 @@ async fn redis_health(app: &App) -> Option<&'static str> {
     }
 }
 
-/// `GET /ui/brand.json`: the product name, support contact and feedback URL
-/// (`{"product_name": ..., "support_contact": ... or null, "feedback_url":
-/// ... or null}`), for the console shell before anyone signs in. Public: the
-/// sign-in page shows the first two anyway, and the feedback URL is a link
-/// the operator wants people to open.
+/// `GET /ui/brand.json`'s body: the branding settings, flattened into the
+/// top level, and the feedback form.
+#[derive(Debug, serde::Serialize)]
+struct ConsoleBrand {
+    /// `product_name`, `support_contact`, `feedback_url` and `docs_url`.
+    // `flatten`: the brand's fields sit beside `feedback_form`, not under
+    // a `brand` key.
+    #[serde(flatten)]
+    brand: crate::store::settings::Brand,
+    /// The in-console feedback form, `null` without `[feedback]`.
+    feedback_form: Option<api::feedback::FeedbackForm>,
+}
+
+/// `GET /ui/brand.json`: the product name, support contact, feedback URL and
+/// documentation URL (`{"product_name": ..., "support_contact": ... or null,
+/// "feedback_url": ... or null, "docs_url": ... or null}`), plus
+/// `feedback_form` (`{"disclosure", "max_message_chars", "kinds"}`, or
+/// `null` without a `[feedback]` table), for the console shell before
+/// anyone signs in. Public: the sign-in page shows the first two anyway,
+/// the URLs are links the operator wants people to open, and the form
+/// holds no secret (the Forminit key never leaves the server).
 /// `no-cache`, so a changed setting shows on the next load.
 ///
 /// # Arguments
@@ -285,9 +301,13 @@ async fn redis_health(app: &App) -> Option<&'static str> {
 /// The branding settings as JSON.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn brand(State(app): State<Arc<App>>) -> Response {
+    let body = ConsoleBrand {
+        brand: app.settings().brand(),
+        feedback_form: api::feedback::form(&app),
+    };
     (
         [(axum::http::header::CACHE_CONTROL, "no-cache")],
-        Json(app.settings().brand()),
+        Json(body),
     )
         .into_response()
 }
@@ -1431,6 +1451,25 @@ mod tests {
             )
             .await
             .unwrap();
+            settings::set(
+                test.app.pool(),
+                SettingKey::DocsUrl,
+                "https://docs.example.com",
+                &AuditActor::cli(),
+                chrono::Utc::now(),
+            )
+            .await
+            .unwrap();
+            // Not in the brand: only the setup redirect reads it.
+            settings::set(
+                test.app.pool(),
+                SettingKey::OnboardingUrl,
+                "https://docs.example.com/start/",
+                &AuditActor::cli(),
+                chrono::Utc::now(),
+            )
+            .await
+            .unwrap();
         })
         .await;
         let (_, _, after) = get_brand().await;
@@ -1446,7 +1485,9 @@ mod tests {
             serde_json::json!({
                 "product_name": "okf",
                 "support_contact": null,
-                "feedback_url": null
+                "feedback_url": null,
+                "docs_url": null,
+                "feedback_form": null
             })
         );
         assert_eq!(
@@ -1454,9 +1495,49 @@ mod tests {
             serde_json::json!({
                 "product_name": "Acme Notes",
                 "support_contact": "help@example.com",
-                "feedback_url": "https://example.com/feedback"
+                "feedback_url": "https://example.com/feedback",
+                "docs_url": "https://docs.example.com",
+                "feedback_form": null
             })
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn brand_json_offers_the_feedback_form_only_with_feedback_configured() {
+        use crate::config::{AuthConfig, FeedbackConfig};
+        let config = Config {
+            auth: AuthConfig {
+                product_name: "Acme Notes".to_string(),
+                ..AuthConfig::default()
+            },
+            feedback: Some(FeedbackConfig::for_form("form-placeholder_1")),
+            ..Config::default()
+        };
+        let test = app_with(&[("pg", &[])], config).await;
+
+        let response = router(Arc::clone(&test.app), &CancellationToken::new())
+            .oneshot(Request::get("/ui/brand.json").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let body = json_body(response).await;
+
+        assert_eq!(
+            body["feedback_form"],
+            serde_json::json!({
+                "disclosure": "The feedback goes to Acme Notes's team through a third-party \
+                               form service (Forminit). What is sent: your message, the kind \
+                               and rating you choose, your user name, the server version and \
+                               the feedback's id. Leave out anything you don't want to share.",
+                "max_message_chars": 4000,
+                "kinds": ["bug", "confusing", "missing", "praise", "other"]
+            })
+        );
+        // Nothing about the form's delivery: no form id, no endpoint, no
+        // key's variable name.
+        let text = body.to_string();
+        for secret in ["form-placeholder_1", "forminit.com", "FORMINIT"] {
+            assert!(!text.contains(secret), "{text}");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

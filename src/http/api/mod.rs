@@ -31,6 +31,7 @@ mod audit;
 mod browse;
 mod catalogs;
 mod changesets;
+pub(crate) mod feedback;
 mod health;
 mod identity;
 mod keys;
@@ -87,6 +88,7 @@ pub(crate) fn routes(app: &Arc<App>) -> Router<Arc<App>> {
         .merge(settings::routes())
         .merge(mail::routes())
         .merge(me::routes())
+        .merge(feedback::routes())
         .merge(audit::routes())
         .merge(unlocks::routes())
         .merge(crate::http::passkeys::api_routes())
