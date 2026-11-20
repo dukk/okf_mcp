@@ -2145,9 +2145,14 @@ async function forget() {
     await wipe();
 }
 
-// Leaves the account for the sign-in page at `url`, deleting the
-// remembered catalog once more on the way out.
-function leaveFor(url) {
+// Leaves the account for the sign-in page at `url`, deleting the offline
+// copies and the remembered catalog once more on the way out: a read the
+// worker admitted while the sign-out's DELETE was pending (the session
+// still held then) may have cached a copy, and owned it, after the first
+// wipe. Once the server has ended the session no later read is admitted,
+// and this wipe's mark drops any answer still on its way.
+async function leaveFor(url) {
+    await wipe();
     remember(null);
     location.assign(url);
 }
@@ -2155,7 +2160,7 @@ function leaveFor(url) {
 async function signIn() {
     leaving = true;
     await forget();
-    leaveFor(signInUrl());
+    await leaveFor(signInUrl());
 }
 
 // Signs out (the account screen's button): deletes the offline copies and
@@ -2167,7 +2172,7 @@ async function endSession(csrf) {
     await forget();
     try {
         if (await signOut(csrf)) {
-            leaveFor(`/signin?return_to=${encodeURIComponent('/read/')}`);
+            await leaveFor(`/signin?return_to=${encodeURIComponent('/read/')}`);
             return true;
         }
     } catch (error) {
@@ -2326,8 +2331,14 @@ boot();
 > catalog for the page only and never remembers it, so a catalog opened while the wipe or the
 > `DELETE` is pending does not outlive the account; `leaveFor` deletes the remembered catalog once
 > more right before the redirect. A failed sign-out clears `leaving`. The journey
-> `a_catalog_opened_while_signing_out_is_not_remembered` holds the `DELETE` (`hold_next`), opens
+> `a_catalog_opened_while_signing_out_is_not_remembered` (since renamed, see below) holds the `DELETE` (`hold_next`), opens
 > `#/t/main`, releases it, and checks `okf.read.catalog` is null before and after the redirect.
+
+> **Corrected (issue #813, 2026-11-20, third review).** `leaveFor` wipes again (mark, then delete)
+> before it redirects: a read the worker admitted while the `DELETE` was pending (the session still
+> held) could otherwise own and refill `read-content` after the first wipe and survive sign-out. The
+> journey above, renamed `reads_and_catalogs_while_signing_out_do_not_outlive_it`, also reads alpha
+> while the `DELETE` is held and checks that no offline copy is left after the redirect.
 
 `src/http/read/js/refusals.js`:
 

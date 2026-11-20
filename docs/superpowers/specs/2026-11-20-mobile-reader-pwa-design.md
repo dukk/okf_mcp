@@ -198,7 +198,9 @@ copies: its own `X-OKF-Account` must be the owner's. With no owner (no
 record, a wipe, or a takeover that could not delete the old copies),
 nothing is served and the leftover copies are deleted, and the page's
 "Available offline" list shows only the recorded owner's copies.
-Sign-out wipes everything before calling `DELETE /api/v1/session`.
+Sign-out wipes everything before calling `DELETE /api/v1/session`, and
+again once the server confirms it, so a read admitted while the `DELETE`
+was pending leaves nothing behind.
 Sign-out, "Delete offline copies" and a `401` also forget the remembered
 catalog, so the next person to sign in on the device never sees the last
 one's catalog name. While a sign-out (or a 401's way to sign-in) is under

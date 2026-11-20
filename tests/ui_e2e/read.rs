@@ -154,7 +154,7 @@ async fn signing_in_returns_to_the_route_and_signing_out_wipes_the_caches() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_catalog_opened_while_signing_out_is_not_remembered() {
+async fn reads_and_catalogs_while_signing_out_do_not_outlive_it() {
     let (server, _) = server().await;
     drive(server.base.clone(), move |ui| {
         signed_in_with_a_copy(ui);
@@ -166,6 +166,9 @@ async fn a_catalog_opened_while_signing_out_is_not_remembered() {
             assert!(Instant::now() < deadline, "sign-out never sent its DELETE");
             std::thread::sleep(Duration::from_millis(50));
         }
+        // A read while the DELETE is held is still the account's, so the
+        // worker caches it again after the first wipe.
+        assert_eq!(ui.eval(READ_ALPHA, json!(null)), json!(200));
         // Opening a catalog meanwhile shows it, but does not remember it.
         ui.eval("() => { location.hash = '#/t/main'; }", json!(null));
         ui.wait_visible("#screen-tree");
@@ -175,6 +178,8 @@ async fn a_catalog_opened_while_signing_out_is_not_remembered() {
         ui.eval("() => window.releaseHeld()", json!(null));
         ui.wait_visible("#signin-email");
         assert_eq!(ui.eval(REMEMBERED_CATALOG, json!(null)), json!(null));
+        // Sign-out wiped again once the server confirmed it.
+        assert_no_offline_copies(ui);
         assert_eq!(ui.eval(SESSION_STATUS, json!(null)), json!(401));
     })
     .await;

@@ -65,9 +65,14 @@ async function forget() {
     await wipe();
 }
 
-// Leaves the account for the sign-in page at `url`, deleting the
-// remembered catalog once more on the way out.
-function leaveFor(url) {
+// Leaves the account for the sign-in page at `url`, deleting the offline
+// copies and the remembered catalog once more on the way out: a read the
+// worker admitted while the sign-out's DELETE was pending (the session
+// still held then) may have cached a copy, and owned it, after the first
+// wipe. Once the server has ended the session no later read is admitted,
+// and this wipe's mark drops any answer still on its way.
+async function leaveFor(url) {
+    await wipe();
     remember(null);
     location.assign(url);
 }
@@ -75,7 +80,7 @@ function leaveFor(url) {
 async function signIn() {
     leaving = true;
     await forget();
-    leaveFor(signInUrl());
+    await leaveFor(signInUrl());
 }
 
 // Signs out (the account screen's button): deletes the offline copies and
@@ -87,7 +92,7 @@ async function endSession(csrf) {
     await forget();
     try {
         if (await signOut(csrf)) {
-            leaveFor(`/signin?return_to=${encodeURIComponent('/read/')}`);
+            await leaveFor(`/signin?return_to=${encodeURIComponent('/read/')}`);
             return true;
         }
     } catch (error) {
