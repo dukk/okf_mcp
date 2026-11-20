@@ -27,6 +27,9 @@ const CACHE_COUNTS: &str = "async () => { const out = {}; \
 const READ_ALPHA: &str = "async () => \
     (await fetch('/api/v1/catalogs/main/concepts/systems/alpha.md')).status";
 
+/// The catalog the reader remembers in `localStorage` (null for none).
+const REMEMBERED_CATALOG: &str = "() => localStorage.getItem('okf.read.catalog')";
+
 /// The status `GET /api/v1/session` answers the page with now.
 const SESSION_STATUS: &str = "async () => (await fetch('/api/v1/session')).status";
 
@@ -131,9 +134,17 @@ async fn signing_in_returns_to_the_route_and_signing_out_wipes_the_caches() {
         signed_in_with_a_copy(ui);
         // Sign-in sent the browser back to the route it started from.
         assert_eq!(ui.eval("() => location.hash", json!(null)), json!("#/me"));
+        // Opening a catalog's tree remembers it; back to the account.
+        ui.eval("() => { location.hash = '#/t/main'; }", json!(null));
+        ui.wait_visible("#screen-tree");
+        assert_eq!(ui.eval(REMEMBERED_CATALOG, json!(null)), json!("main"));
+        ui.eval("() => { location.hash = '#/me'; }", json!(null));
+        ui.wait_visible("#sign-out");
         ui.click("#sign-out");
         ui.wait_visible("#signin-email");
         assert_no_offline_copies(ui);
+        // The next person to sign in here never sees this one's catalog.
+        assert_eq!(ui.eval(REMEMBERED_CATALOG, json!(null)), json!(null));
         // The server ended the session, not only the page.
         assert_eq!(ui.eval(SESSION_STATUS, json!(null)), json!(401));
     })

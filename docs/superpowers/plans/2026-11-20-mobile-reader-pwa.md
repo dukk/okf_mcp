@@ -39,6 +39,7 @@
 | `src/http/read/js/cache.js` | Page-side cache upkeep: `wipe`, `evictCatalog`, `evictDocument`, `offlineDocuments`, and the invalidation marks it sends the worker. (The worker keeps the owner record.) |
 | `src/http/read/js/route.js` | Hash routes: `parse`, `hrefs`, `hrefFor`, `fromBrowse`, `parentOf`. |
 | `src/http/read/js/main.js` | Boot, session, worker registration, screen dispatch, freshness banner, failure handling, tabs. |
+| `src/http/read/js/refusals.js` | What a refused read does (effects, drawing, severity, `fail`/`settle`/`drawWorst`), without the DOM, so Node tests it. |
 | `src/http/read/js/parts.js` | Shared view parts: `searchForm`, `crumbs`, `renderBody`, `message`. |
 | `src/http/read/js/listing.js` | `folderListing`: one folder's subfolders, index and concepts from the tree. |
 | `tests/read_worker/*.test.mjs`, `storage.mjs`, `page.mjs`, `esm-hooks.mjs` | Node tests (`just test-worker`) of the worker and of the page modules without a DOM (api, cache, route, listing), with a shared in-memory Cache Storage. |
@@ -1879,7 +1880,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 6: Boot, sign-in, account and sign-out
 
 **Files:**
-- Create: `src/http/read/js/main.js`, `src/http/read/js/screens/me.js`, and minimal `home.js`, `catalogs.js`, `tree.js`, `search.js`, `concept.js`, `document.js` (completed in Tasks 7 to 9)
+- Create: `src/http/read/js/main.js`, `src/http/read/js/refusals.js`, `tests/read_worker/refusals.test.mjs`, `src/http/read/js/screens/me.js`, and minimal `home.js`, `catalogs.js`, `tree.js`, `search.js`, `concept.js`, `document.js` (completed in Tasks 7 to 9)
 - Modify: `tests/ui_e2e/harness.rs`, `tests/ui_e2e/main.rs`
 - Create: `tests/ui_e2e/read.rs`
 
@@ -2081,11 +2082,12 @@ Expected: FAIL, timed out waiting for `#signin-email` (no `main.js` yet).
 // and waits for it to control the page, checks the session, then renders
 // the screen the hash names. (Which account the cached copies belong to is
 // the worker's decision, sw.js `admit`.) Every ReadError a screen throws
-// comes back here, to effects() and draw(), the one place that decides
+// comes back here, to a refusals.js handler, the one place that decides
 // what a refusal does.
 import { $, h, clear } from '/ui/js/core/dom.js';
 import { ago } from '/ui/js/core/format.js';
 import { read, ReadError, KIND } from './api.js';
+import { refusals } from './refusals.js';
 import { wipe, evictCatalog, evictDocument } from './cache.js';
 import { parse, hrefs, parentOf } from './route.js';
 import { message } from './parts.js';
@@ -2124,8 +2126,17 @@ function signInUrl() {
     return `/signin?return_to=${encodeURIComponent(`/read/${location.hash}`)}`;
 }
 
-async function signIn() {
+// Deletes everything this device keeps of the account: every offline copy
+// and the remembered catalog, so the next person to sign in here never sees
+// the last one's catalog name. Sign-out, "Delete offline copies" and a 401
+// all go through here.
+async function forget() {
+    choose(null);
     await wipe();
+}
+
+async function signIn() {
+    await forget();
     location.assign(signInUrl());
 }
 
@@ -2150,37 +2161,10 @@ function tabs() {
     }
 }
 
-// What a refusal changes, whichever screen shows now: a 401 or a lost
-// grant is true even when the screen that asked has been left. Run as soon
-// as that one request is refused, never after its siblings.
-async function effects(route, error) {
+// Draws a refusal's notice on `view` (the screen at `route`); refusals.js
+// decides when, and which refusals draw something else.
+function paint(view, route, error) {
     switch (error.kind) {
-        case KIND.SIGNED_OUT:
-            await signIn();
-            return;
-        case KIND.CATALOG_GONE:
-            if (route.catalog) await evictCatalog(route.catalog);
-            if (route.catalog === state.catalog) choose(null);
-            return;
-        case KIND.CONCEPT_GONE:
-            await evictDocument(route.catalog, route.screen === 'document' ? 'documents' : 'concepts', route.path);
-            return;
-        case KIND.LOCKED:
-        case KIND.UNAVAILABLE:
-        case KIND.FAILED:
-            return;
-    }
-}
-
-// What a refusal shows, on the screen that asked, while it is still shown.
-function draw(view, route, error, live) {
-    if (!live()) return;
-    switch (error.kind) {
-        case KIND.SIGNED_OUT:
-            return; // effects() has already left for sign-in.
-        case KIND.CATALOG_GONE:
-            location.hash = hrefs.catalogs(route.catalog);
-            return;
         case KIND.CONCEPT_GONE:
             clear(view).append(message('This concept no longer exists.',
                 h('a', { href: hrefs.tree(route.catalog, parentOf(route.path)), id: 'gone-folder' }, 'Open its folder'), 'concept-gone'));
@@ -2193,18 +2177,9 @@ function draw(view, route, error, live) {
             clear(view).append(message('Not available offline.',
                 h('a', { href: hrefs.home(), id: 'offline-list-link' }, 'See what is available offline'), 'unavailable'));
             return;
-        case KIND.FAILED:
+        default:
             clear(view).append(message(error.message, null, 'failed'));
-            return;
     }
-}
-
-// The kinds from most to least serious: when several reads of one screen
-// are refused, the most serious one alone draws.
-const SEVERITY = [KIND.SIGNED_OUT, KIND.CATALOG_GONE, KIND.CONCEPT_GONE, KIND.LOCKED, KIND.FAILED, KIND.UNAVAILABLE];
-
-function worst(errors) {
-    return [...errors].sort((a, b) => SEVERITY.indexOf(a.kind) - SEVERITY.indexOf(b.kind))[0];
 }
 
 async function show() {
@@ -2223,30 +2198,28 @@ async function show() {
     const view = h('section', { class: 'screen', id: `screen-${route.screen}` });
     clear($('#reader')).append(view);
     const live = () => mine === generation;
+    const refusal = refusals(route, live, {
+        signIn, evictCatalog, evictDocument, choose,
+        current: () => state.catalog,
+        go: hash => { location.hash = hash; },
+        paint: error => paint(view, route, error),
+    });
     const ctx = {
-        state, route, choose, freshness, live,
-        // A single refused read (a screen's, or a button's later): its
-        // effects, then its drawing.
-        fail: async error => { await effects(route, error); draw(view, route, error, live); },
-        // For a screen that makes several reads at once: `settle` runs each
-        // read's refusal effects the moment it is refused (marking the
-        // error handled), and `drawWorst` draws once all have settled.
-        settle: promise => promise.catch(async error => {
-            if (error instanceof ReadError) {
-                error.handled = true;
-                await effects(route, error);
-            }
-            throw error;
-        }),
-        drawWorst: errors => draw(view, route, worst(errors), live),
+        state, route, choose, forget, freshness, live,
+        fail: refusal.fail,
+        settle: refusal.settle,
+        drawWorst: refusal.drawWorst,
     };
     try {
         await SCREENS[route.screen].render(view, ctx);
     } catch (error) {
-        if (!(error instanceof ReadError)) throw error;
-        if (error.handled) draw(view, route, error, live);
-        else await ctx.fail(error);
+        await refusal.caught(error);
     }
+}
+
+// A warning, not an error: the reader still works online.
+function registrationFailed(error) {
+    console.warn('the reader\'s worker could not be registered:', error?.message);
 }
 
 // How long a first visit waits for the new worker to take control.
@@ -2261,7 +2234,9 @@ function registerWorker() {
     if (!('serviceWorker' in navigator)) return Promise.resolve();
     const workers = navigator.serviceWorker;
     if (workers.controller) {
-        workers.register('/read/sw.js', { scope: '/read/' }).catch(() => {});
+        // Already controlled: this checks for a newer build in the
+        // background, and the worker it has keeps serving if that fails.
+        workers.register('/read/sw.js', { scope: '/read/' }).catch(registrationFailed);
         return Promise.resolve();
     }
     return new Promise(resolve => {
@@ -2271,7 +2246,7 @@ function registerWorker() {
         // takes this page over and fires controllerchange.
         workers.addEventListener('controllerchange', done, { once: true });
         workers.register('/read/sw.js', { scope: '/read/' }).catch(error => {
-            console.warn('offline reading is unavailable:', error.message);
+            registrationFailed(error);
             done();
         });
     });
@@ -2296,23 +2271,153 @@ async function boot() {
 boot();
 ```
 
+> **Corrected (issue #813, 2026-11-20, review).** The refusal handling is in its own module,
+> `src/http/read/js/refusals.js` (below), with no DOM, so `tests/read_worker/refusals.test.mjs`
+> runs it in Node with deferred reads: a late refusal of catalog A after moving to B evicts A
+> without forgetting B or navigating; a 401 signs in after the screen was left; `settle` acts on a
+> refusal while a sibling read is still out; `drawWorst` draws the most serious; a refusal `settle`
+> handled is drawn by `caught` but not acted on again. `show()` builds one handler per screen
+> (`refusals(route, live, actions)`) and passes `fail`, `settle` and `drawWorst` on as before; the
+> notices themselves are drawn by main.js's `paint`. `forget()` (in `ctx`) deletes the offline
+> copies **and the remembered catalog**; sign-out, "Delete offline copies" and a 401 (`signIn`) all
+> go through it, and the sign-out journey checks `localStorage.getItem('okf.read.catalog')` is null
+> afterwards. A failed registration warns on an already-controlled page too
+> (`registrationFailed`). The listings above and below are the shipped files.
+
+`src/http/read/js/refusals.js`:
+
+```js
+// What a refused read does (reader design, "Error handling"), apart from
+// the DOM: main.js builds one handler per screen it shows, and gives it the
+// actions that touch the session, the caches, the remembered catalog, the
+// hash and the view. Kept free of the DOM so tests/read_worker/ can run it
+// in Node, with deferred reads.
+import { KIND, ReadError } from './api.js';
+import { hrefs } from './route.js';
+
+// The kinds from most to least serious: when several reads of one screen
+// are refused, the most serious one alone draws.
+export const SEVERITY = Object.freeze([
+    KIND.SIGNED_OUT, KIND.CATALOG_GONE, KIND.CONCEPT_GONE, KIND.LOCKED, KIND.FAILED, KIND.UNAVAILABLE,
+]);
+
+// A kind's place in SEVERITY; one it does not list ranks last.
+function rank(error) {
+    const at = SEVERITY.indexOf(error?.kind);
+    return at < 0 ? SEVERITY.length : at;
+}
+
+// The most serious of `errors` (the first of equals).
+export function worst(errors) {
+    return [...errors].sort((a, b) => rank(a) - rank(b))[0];
+}
+
+// The refusal handler of one shown screen.
+//
+// `route` is the screen's route with its catalog fixed when it was shown,
+// so a refusal that answers after the user moved on acts on what was asked
+// about. `live()` says whether that screen still shows. `actions`:
+//   signIn()                   wipe and leave for sign-in
+//   evictCatalog(catalog)      delete a catalog's cached reads
+//   evictDocument(catalog, kind, path)  delete one document's copies
+//   current()                  the remembered catalog now
+//   choose(catalog)            remember a catalog (null forgets it)
+//   go(hash)                   navigate to a reader route
+//   paint(error)               draw the refusal's notice on the screen
+export function refusals(route, live, actions) {
+    // What a refusal changes, whichever screen shows now: a 401 or a lost
+    // grant is true even when the screen that asked has been left. Run as
+    // soon as that one request is refused, never after its siblings.
+    async function effects(error) {
+        switch (error.kind) {
+            case KIND.SIGNED_OUT:
+                await actions.signIn();
+                return;
+            case KIND.CATALOG_GONE:
+                if (route.catalog) await actions.evictCatalog(route.catalog);
+                // Forget it only while it is still the remembered one: a
+                // late refusal never undoes a newer choice.
+                if (route.catalog === actions.current()) actions.choose(null);
+                return;
+            case KIND.CONCEPT_GONE:
+                await actions.evictDocument(route.catalog, route.screen === 'document' ? 'documents' : 'concepts', route.path);
+                return;
+            case KIND.LOCKED:
+            case KIND.UNAVAILABLE:
+            case KIND.FAILED:
+                return;
+        }
+    }
+
+    // What a refusal shows, on the screen that asked, while it is still shown.
+    function draw(error) {
+        if (!live()) return;
+        switch (error.kind) {
+            case KIND.SIGNED_OUT:
+                return; // effects() has already left for sign-in.
+            case KIND.CATALOG_GONE:
+                actions.go(hrefs.catalogs(route.catalog));
+                return;
+            case KIND.CONCEPT_GONE:
+            case KIND.LOCKED:
+            case KIND.UNAVAILABLE:
+            case KIND.FAILED:
+                actions.paint(error);
+                return;
+        }
+    }
+
+    // A single refused read (a screen's, or a button's later): its effects,
+    // then its drawing.
+    async function fail(error) {
+        await effects(error);
+        draw(error);
+    }
+
+    return {
+        effects,
+        draw,
+        fail,
+        // For a screen that makes several reads at once: `settle` runs each
+        // read's refusal effects the moment it is refused (marking the error
+        // handled), and `drawWorst` draws once all have settled.
+        settle: promise => promise.catch(async error => {
+            if (error instanceof ReadError) {
+                error.handled = true;
+                await effects(error);
+            }
+            throw error;
+        }),
+        drawWorst: errors => draw(worst(errors)),
+        // What a screen's render threw: a refusal already handled by
+        // `settle` is drawn only; any other refusal fails; anything that is
+        // not a refusal is a bug, and is thrown on.
+        async caught(error) {
+            if (!(error instanceof ReadError)) throw error;
+            if (error.handled) draw(error);
+            else await fail(error);
+        },
+    };
+}
+```
+
 - [ ] **Step 5: Write `src/http/read/js/screens/me.js`**
 
 ```js
 // Account: who is signed in, until when, sign-out (which deletes every
-// offline copy first, even if the server cannot be reached), and a local
-// "Delete offline copies" that works with no connection at all.
+// offline copy and the remembered catalog first, even if the server cannot
+// be reached), and a local "Delete offline copies" that works with no
+// connection at all. Both delete through `ctx.forget` (main.js).
 import { h } from '/ui/js/core/dom.js';
 import { when } from '/ui/js/core/format.js';
 import { signOut, ReadError } from '../api.js';
-import { wipe } from '../cache.js';
 import { message } from '../parts.js';
 
-function deleteOffline(view) {
+function deleteOffline(view, ctx) {
     const button = h('button', { type: 'button', class: 'secondary', id: 'delete-offline' }, 'Delete offline copies');
     button.addEventListener('click', async () => {
         button.disabled = true;
-        await wipe();
+        await ctx.forget();
         view.append(message('Offline copies are deleted from this device.', null, 'offline-deleted'));
     });
     return button;
@@ -2322,13 +2427,13 @@ export async function render(view, ctx) {
     const session = ctx.state.session;
     view.append(h('h1', {}, 'Account'));
     if (!session) {
-        view.append(message('Account details and sign-out need a connection.', null, 'account-offline'), deleteOffline(view));
+        view.append(message('Account details and sign-out need a connection.', null, 'account-offline'), deleteOffline(view, ctx));
         return;
     }
     const button = h('button', { type: 'button', id: 'sign-out' }, 'Sign out');
     button.addEventListener('click', async () => {
         button.disabled = true;
-        await wipe();
+        await ctx.forget();
         try {
             if (await signOut(session.csrf)) {
                 location.assign(`/signin?return_to=${encodeURIComponent('/read/')}`);
@@ -2345,7 +2450,7 @@ export async function render(view, ctx) {
         session.email ? h('p', { class: 'hint' }, session.email) : null,
         h('p', { class: 'hint' }, `This session ends by ${when(session.expires_at)}.`),
         button,
-        deleteOffline(view));
+        deleteOffline(view, ctx));
 }
 ```
 
@@ -2372,7 +2477,7 @@ Expected: PASS.
 Run: `tools/agentic/gate.sh fmt`, `tools/agentic/gate.sh lint`. Expected: exit 0.
 
 ```bash
-git add src/http/read/js tests/ui_e2e/harness.rs tests/ui_e2e/main.rs tests/ui_e2e/read.rs
+git add src/http/read/js tests/read_worker/refusals.test.mjs tests/ui_e2e/harness.rs tests/ui_e2e/main.rs tests/ui_e2e/read.rs
 git commit -m "feat(read): boot, session sign-in, account and sign-out
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"

@@ -80,6 +80,8 @@ sign-in (the reader is cookie-only).
   contract shared with the console's stylesheet.
 - `sw.js`: the service worker (caching, below).
 - `js/main.js`: hash router and screen dispatch; registers `sw.js`.
+- `js/refusals.js`: what a refused read does (effects, drawing, severity), without
+  the DOM, so it is tested in Node.
 - `js/api.js`: read-only client (below).
 - `js/names.js`: a classic script setting `self.READ_CACHES` (the cache
   names), loaded by `index.html` and by `sw.js` through `importScripts`, so
@@ -197,6 +199,9 @@ record, a wipe, or a takeover that could not delete the old copies),
 nothing is served and the leftover copies are deleted, and the page's
 "Available offline" list shows only the recorded owner's copies.
 Sign-out wipes everything before calling `DELETE /api/v1/session`.
+Sign-out, "Delete offline copies" and a `401` also forget the remembered
+catalog, so the next person to sign in on the device never sees the last
+one's catalog name.
 
 The shell is installed only when it is entirely one build's:
 `/read/shell.json` lists each file with the SHA-256 of the bytes this build
@@ -222,7 +227,7 @@ draws.
 | Answer | Action |
 |---|---|
 | `2xx` | Render. With `X-Read-Offline`, show "Offline, synced <ago of X-Read-Cached-At>". |
-| `401` | Wipe `read-content` and `read-meta`; navigate to `/signin?return_to=/read/` plus the current hash. |
+| `401` | Wipe `read-content` and `read-meta` and forget the remembered catalog; navigate to `/signin?return_to=/read/` plus the current hash. |
 | `403` with body `error` `Forbidden`, or `404` with `CatalogNotSelected` or `UnknownName` (a catalog no longer reachable) | Evict that catalog's entries in both caches and the remembered catalog; go to the picker with a short note. |
 | `404` with `NotFound` on a concept | Evict that concept's entries; show "This concept no longer exists" and a link to its parent folder. |
 | `404` with `NotFound` on a folder's `index.md` | Evict that document's entry and show the folder's lists without it. |
