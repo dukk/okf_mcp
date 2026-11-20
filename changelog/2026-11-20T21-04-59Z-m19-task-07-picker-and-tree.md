@@ -19,3 +19,13 @@
   `read.rs`, and `tree.js` re-checks `ctx.live()` after the index read's
   `catch` so a folder left during the eviction does not draw over the next
   screen.
+
+## Review
+- `tests/read_worker/tree.test.mjs` runs `screens/tree.js` in Node with
+  controlled promises: a deleted index is evicted and the lists still
+  render; an unavailable index is skipped with nothing evicted; any other
+  refusal is thrown; and a folder left while the eviction is pending draws
+  and reports nothing more (it fails without the `ctx.live()` re-check).
+  No seam in `tree.js`: `esm-hooks.mjs` maps the imports of a module
+  loaded with the `?doubles` query to `tests/read_worker/tree-doubles/`
+  (a fake `h`, `read`, `evictDocument` and view parts).
