@@ -13,6 +13,7 @@ use crate::mcp::OkfServer;
 
 /// Tools that only read: never change a catalog, a changeset or a run.
 pub(crate) const READS: &[&str] = &[
+    "cited_by",
     "get_concept",
     "history",
     "links_report",
@@ -151,7 +152,7 @@ fn every_tool_is_classified_exactly_once() {
         registered, classified,
         "the registered tools and the classified tools differ"
     );
-    assert_eq!(registered.len(), 44);
+    assert_eq!(registered.len(), 45);
 }
 
 #[test]
