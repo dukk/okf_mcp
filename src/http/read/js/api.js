@@ -49,9 +49,18 @@ export async function read(path) {
     } catch {
         throw new ReadError(KIND.UNAVAILABLE, 'Not available offline.');
     }
-    const body = await response.json().catch(() => null);
     if (!response.ok) {
+        // A refusal's body is optional: without one, its status still decides.
+        const body = await response.json().catch(() => null);
         throw new ReadError(classify(response.status, body), body?.message ?? `HTTP ${response.status}`, body);
+    }
+    // A 2xx whose body cannot be read (the connection dropped after the
+    // headers, or it is not JSON) is a failed read, never empty data.
+    let body;
+    try {
+        body = await response.json();
+    } catch {
+        throw new ReadError(KIND.FAILED, 'The answer could not be read.');
     }
     return {
         data: body,

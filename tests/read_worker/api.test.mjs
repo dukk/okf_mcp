@@ -72,6 +72,25 @@ test('read turns a refusal into a classified ReadError carrying the body', async
     assert.deepEqual([failed.kind, failed.message, failed.body], [KIND.FAILED, 'HTTP 502', null]);
 });
 
+test('a 2xx whose body cannot be read is a failed read, never empty data', async () => {
+    fakeFetch(() => new Response('{"path": ', { status: 200, headers: { 'content-type': 'application/json' } }));
+    const malformed = await read('/x').catch(error => error);
+    assert.deepEqual([malformed instanceof ReadError, malformed.kind], [true, KIND.FAILED]);
+    // The connection drops after the headers: the body stream errors.
+    fakeFetch(() => new Response(new ReadableStream({
+        start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"path": "a.md", '));
+            controller.error(new TypeError('network error'));
+        },
+    }), { status: 200 }));
+    const dropped = await read('/x').catch(error => error);
+    assert.deepEqual([dropped instanceof ReadError, dropped.kind], [true, KIND.FAILED]);
+    // readAll stops with the same classified error, not a TypeError on null data.
+    fakeFetch(() => new Response('not json', { status: 200 }));
+    const listing = await readAll('/catalogs', 'catalogs').catch(error => error);
+    assert.deepEqual([listing instanceof ReadError, listing.kind], [true, KIND.FAILED]);
+});
+
 test('read without a network or a cached copy is unavailable', async () => {
     fakeFetch(() => { throw new TypeError('Failed to fetch'); });
     const error = await read('/x').catch(failure => failure);
