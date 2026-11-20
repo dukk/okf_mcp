@@ -1616,10 +1616,11 @@ import * as catalogs from './screens/catalogs.js';
 import * as tree from './screens/tree.js';
 import * as search from './screens/search.js';
 import * as concept from './screens/concept.js';
-import * as document from './screens/document.js';
+// Not `document`: that name would hide the browser's global in this module.
+import * as documentScreen from './screens/document.js';
 import * as me from './screens/me.js';
 
-const SCREENS = { home, catalogs, tree, search, concept, document, me };
+const SCREENS = { home, catalogs, tree, search, concept, document: documentScreen, me };
 const NEEDS_CATALOG = new Set(['home']);
 const CATALOG_KEY = 'okf.read.catalog';
 
