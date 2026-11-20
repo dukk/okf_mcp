@@ -40,7 +40,7 @@
 | `src/http/read/js/main.js` | Boot, session, worker registration, screen dispatch, freshness banner, failure handling, tabs. |
 | `src/http/read/js/parts.js` | Shared view parts: `searchForm`, `crumbs`, `renderBody`, `message`. |
 | `src/http/read/js/listing.js` | `folderListing`: one folder's subfolders, index and concepts from the tree. |
-| `src/http/read/js/screens/{home,catalogs,tree,search,concept,me}.js` | One screen each. |
+| `src/http/read/js/screens/{home,catalogs,tree,search,concept,document,me}.js` | One screen each. |
 | `tests/ui_e2e/harness.rs` (modify) | `open_reader`, `sign_in_reader`, `wait_worker`, `go_offline`. |
 | `tests/ui_e2e/read.rs` (create), `tests/ui_e2e/main.rs` (modify) | The reader's browser journeys. |
 | `docs/reference/reader.md` (create), `README.md` (modify) | How to install and what works offline. |
@@ -1239,6 +1239,7 @@ export async function offlineDocuments(catalog) {
 //   #/t/<catalog>[/<folder>...]           a folder of the tree
 //   #/s/<catalog>[?q=<query>]             search
 //   #/v/<catalog>/<path>.md[/<section>]   a concept, optionally at a heading
+//   #/d/<catalog>/<path>                  a log.md or AGENTS.md (read as a document)
 //   #/me                                  account
 const dec = decodeURIComponent;
 const enc = encodeURIComponent;
@@ -1260,6 +1261,7 @@ export function parse(hash) {
             if (end < 0) return { screen: 'tree', catalog, folder: rest.join('/') };
             return { screen: 'concept', catalog, path: rest.slice(0, end + 1).join('/'), section: rest[end + 1] ?? null };
         }
+        case 'd': return { screen: 'document', catalog, path: rest.join('/') };
         case 'me': return { screen: 'me' };
         default: return { screen: 'home' };
     }
@@ -1272,6 +1274,7 @@ export const hrefs = Object.freeze({
     search: (catalog, query = '') => `#/s/${enc(catalog)}${query ? `?q=${enc(query)}` : ''}`,
     concept: (catalog, path, section = null) =>
         `#/v/${[catalog, ...segments(path), ...(section ? [section] : [])].map(enc).join('/')}`,
+    document: (catalog, path) => `#/d/${[catalog, ...segments(path)].map(enc).join('/')}`,
     me: () => '#/me',
 });
 
@@ -1280,11 +1283,19 @@ export function parentOf(path) {
     return segments(path).slice(0, -1).join('/');
 }
 
-// Where a document opens: a folder's index.md opens its folder, anything
-// else the concept view.
+// The files the server serves through /documents, not /concepts (as the
+// console's browse.js).
+export const DOCUMENTS = new Set(['index.md', 'log.md', 'AGENTS.md']);
+
+// Where a document opens: a folder's index.md opens its folder, a log.md or
+// AGENTS.md the document view, anything else the concept view. Every link
+// the reader makes (recent changes, backlinks, search hits, body links,
+// the offline list) goes through here.
 export function hrefFor(catalog, path, section = null) {
     const parts = segments(path);
-    if (parts[parts.length - 1] === 'index.md') return hrefs.tree(catalog, parts.slice(0, -1).join('/'));
+    const name = parts[parts.length - 1];
+    if (name === 'index.md') return hrefs.tree(catalog, parts.slice(0, -1).join('/'));
+    if (DOCUMENTS.has(name)) return hrefs.document(catalog, parts.join('/'));
     return hrefs.concept(catalog, parts.join('/'), section);
 }
 
@@ -1605,9 +1616,10 @@ import * as catalogs from './screens/catalogs.js';
 import * as tree from './screens/tree.js';
 import * as search from './screens/search.js';
 import * as concept from './screens/concept.js';
+import * as document from './screens/document.js';
 import * as me from './screens/me.js';
 
-const SCREENS = { home, catalogs, tree, search, concept, me };
+const SCREENS = { home, catalogs, tree, search, concept, document, me };
 const NEEDS_CATALOG = new Set(['home']);
 const CATALOG_KEY = 'okf.read.catalog';
 
@@ -1652,7 +1664,7 @@ function tabs() {
     $('#tab-browse').setAttribute('href', catalog ? hrefs.tree(catalog) : hrefs.catalogs());
     $('#tab-search').setAttribute('href', catalog ? hrefs.search(catalog) : hrefs.catalogs());
     $('#bar-catalog').textContent = catalog ?? 'Reader';
-    const active = { home: 'tab-home', tree: 'tab-browse', concept: 'tab-browse', search: 'tab-search', me: 'tab-me' }[current];
+    const active = { home: 'tab-home', tree: 'tab-browse', concept: 'tab-browse', document: 'tab-browse', search: 'tab-search', me: 'tab-me' }[current];
     for (const tab of document.querySelectorAll('.tabs a')) {
         if (tab.id === active) tab.setAttribute('aria-current', 'page');
         else tab.removeAttribute('aria-current');
@@ -1675,7 +1687,7 @@ async function fail(view, route, error, live) {
             return;
         }
         case KIND.CONCEPT_GONE:
-            await evictDocument(route.catalog, 'concepts', route.path);
+            await evictDocument(route.catalog, route.screen === 'document' ? 'documents' : 'concepts', route.path);
             if (!live()) return;
             clear(view).append(message('This concept no longer exists.',
                 h('a', { href: hrefs.tree(route.catalog, parentOf(route.path)), id: 'gone-folder' }, 'Open its folder'), 'concept-gone'));
@@ -1740,16 +1752,36 @@ async function show() {
     }
 }
 
+// How long a first visit waits for the new worker to take control.
+const WORKER_WAIT_MS = 5000;
+
+// Registers the worker and resolves once it controls this page, so the
+// first screen's reads already go through it and are cached (on a first
+// visit, a direct concept link included). It resolves anyway, without a
+// worker, when registration fails or takes too long: the reader then works
+// online and only offline reading is lost.
 function registerWorker() {
-    if (!('serviceWorker' in navigator)) return;
-    navigator.serviceWorker.register('/read/sw.js', { scope: '/read/' }).catch(error => {
-        // The reader still works online; only offline reading is lost.
-        console.warn('offline reading is unavailable:', error.message);
+    if (!('serviceWorker' in navigator)) return Promise.resolve();
+    const workers = navigator.serviceWorker;
+    if (workers.controller) {
+        workers.register('/read/sw.js', { scope: '/read/' }).catch(() => {});
+        return Promise.resolve();
+    }
+    return new Promise(resolve => {
+        const timer = setTimeout(resolve, WORKER_WAIT_MS);
+        const done = () => { clearTimeout(timer); resolve(); };
+        // sw.js calls skipWaiting and clients.claim, so a first install
+        // takes this page over and fires controllerchange.
+        workers.addEventListener('controllerchange', done, { once: true });
+        workers.register('/read/sw.js', { scope: '/read/' }).catch(error => {
+            console.warn('offline reading is unavailable:', error.message);
+            done();
+        });
     });
 }
 
 async function boot() {
-    registerWorker();
+    await registerWorker();
     try {
         const { data } = await read('/session');
         state.session = data;
@@ -1823,7 +1855,7 @@ export async function render(view, ctx) {
 
 - [ ] **Step 6: Write minimal screens so `main.js` loads**
 
-Each of `home.js`, `catalogs.js`, `tree.js`, `search.js`, `concept.js` in `src/http/read/js/screens/` starts as the following, with its screen name in the text; Tasks 7 to 9 replace each one completely:
+Each of `home.js`, `catalogs.js`, `tree.js`, `search.js`, `concept.js` and `document.js` in `src/http/read/js/screens/` starts as the following, with its screen name in the text; Tasks 7 to 9 replace each one completely:
 
 ```js
 // Replaced by its full screen in a later task of the reader plan.
@@ -2129,15 +2161,59 @@ export async function render(view, ctx) {
 }
 ```
 
-- [ ] **Step 4: Run it to see it pass**
+- [ ] **Step 4: Write `src/http/read/js/screens/document.js`**
+
+A `log.md` or `AGENTS.md` (the server reads these through `/documents`, not `/concepts`), so links to them from recent changes, backlinks and bodies open something real:
+
+```js
+// A log.md or AGENTS.md: breadcrumbs, its name and its rendered text.
+import { h } from '/ui/js/core/dom.js';
+import { read, enc, encPath } from '../api.js';
+import { crumbs, renderBody } from '../parts.js';
+
+export async function render(view, ctx) {
+    const { catalog, path } = ctx.route;
+    const result = await read(`/catalogs/${enc(catalog)}/documents/${encPath(path)}`);
+    if (!ctx.live()) return;
+    ctx.freshness(result);
+    view.append(crumbs(catalog, path, false), h('h1', { id: 'document-title' }, path.split('/').pop()),
+        renderBody(result.data.body_html));
+}
+```
+
+And a journey for it in `tests/ui_e2e/read.rs` (the fixture imports `log.md`, so recent changes lists it):
+
+```rust
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_log_in_recent_changes_opens_as_a_document() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/c", EMAIL, PASSWORD);
+        ui.click("[data-catalog=main]");
+        ui.wait_visible("#recent");
+        let href = ui.eval(
+            "() => [...document.querySelectorAll('#recent a')].map(a => a.getAttribute('href')).find(h => h.endsWith('log.md'))",
+            json!(null),
+        );
+        assert_eq!(href, json!("#/d/main/log.md"));
+        ui.open_reader("/d/main/log.md");
+        ui.wait_text("#document-title", "log.md");
+        ui.wait_text("#body", "Log");
+        assert!(!ui.present("#concept-gone") && !ui.present("#failed"));
+    })
+    .await;
+}
+```
+
+- [ ] **Step 5: Run it to see it pass**
 
 Run: `scripts/test-pg.sh run cargo test --test ui_e2e read:: -- --test-threads=2`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/http/read/js/screens/concept.js tests/ui_e2e/read.rs
+git add src/http/read/js/screens/concept.js src/http/read/js/screens/document.js src/http/read/js/route.js tests/ui_e2e/read.rs
 git commit -m "feat(read): concept view with outline, reader links and backlinks
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -2326,6 +2402,22 @@ async fn viewed_concepts_are_readable_offline_and_unviewed_ones_say_so() {
         // Home lists what can be read.
         ui.open_reader("/");
         ui.wait_text("#offline-list", "Alpha");
+        drop(offline);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_first_concept_a_first_visit_opens_is_readable_offline() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        // A direct link on a first visit, read once, never revisited online.
+        ui.sign_in_reader("/v/main/systems/alpha.md", EMAIL, PASSWORD);
+        ui.wait_text("#body", "marmalade");
+        let offline = ui.go_offline();
+        ui.reload_reader();
+        ui.wait_text("#body", "marmalade");
+        ui.wait_text("#offline-banner", "Offline. Synced");
         drop(offline);
     })
     .await;

@@ -103,7 +103,17 @@ The reader imports `/ui/js/core/dom.js` (`h()`, `clear()`) and
 | `#/t/{catalog}/{folder}` | Tree: one folder's `index.md` rendered first (when it has one), then its subfolders and concepts. Logs and machinery files are not listed. | `GET /api/v1/catalogs/{c}/tree`, `GET .../documents/{folder}/index.md` |
 | `#/s/{catalog}?q=` | Search results: title, path, snippet | `GET /api/v1/search?q=&catalogs={c}&limit=50` |
 | `#/v/{catalog}/{path}` | Concept: title, breadcrumbs (tree folders), collapsible outline, `body_html`, a "Show the rest" action when the body is shortened (refetches with `?full=true`), and a "Linked from" list. A route with a section always asks for `?full=true`, as the console does, so outline links in a long concept reach their heading. | `GET /api/v1/catalogs/{c}/concepts/{path}`, `GET .../links/{path}` |
+| `#/d/{catalog}/{path}` | A `log.md` or `AGENTS.md`, read through `/documents` (as the console does), so links to them from recent changes, backlinks and bodies are never dead | `GET .../documents/{path}` |
 | `#/me` | Signed-in user, sign-out, and "Delete offline copies" (local, works offline) | `GET /api/v1/session` (user, `csrf`, `expires_at`; the `csrf` token is kept in memory only), `DELETE /api/v1/session` with the `X-OKF-CSRF` header |
+
+Every link the reader makes goes through one rule: a folder's `index.md`
+opens its folder, a `log.md` or `AGENTS.md` the document view, anything else
+the concept view.
+
+On every launch, boot waits (up to five seconds) for the worker to control
+the page before the first read, so on a first visit the first screen's reads
+already go through the worker and are cached. If registration fails or takes
+longer, the reader runs online without offline copies.
 
 Concept links in `body_html` are written by `src/render.rs` as
 `#/browse/{catalog}/{path segments}[/{section slug}]`. The reader rewrites
@@ -243,6 +253,9 @@ Browser journeys (`tests/ui_e2e/read.rs`, rustwright headless Chromium):
     opened through a section link answers a plain open.
 8l. A success held in the worker until after its concept (or folder index)
     was deleted and evicted does not put it back.
+8m. A concept opened once on a first visit (a direct link, no second online
+    visit) is readable offline after a reload.
+8n. A `log.md` in recent changes links to the document view, which renders.
 9. Sign-out wipes the caches.
 10. A new shell version replaces the old shell cache on activate.
 
