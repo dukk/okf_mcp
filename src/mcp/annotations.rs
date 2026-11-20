@@ -30,6 +30,7 @@ pub(crate) const READS: &[&str] = &[
     "read_document",
     "search",
     "sprawl",
+    "whoami",
 ];
 
 /// Tools whose effect stays unpublished (a changeset entry, a maintenance
@@ -150,7 +151,7 @@ fn every_tool_is_classified_exactly_once() {
         registered, classified,
         "the registered tools and the classified tools differ"
     );
-    assert_eq!(registered.len(), 43);
+    assert_eq!(registered.len(), 44);
 }
 
 #[test]

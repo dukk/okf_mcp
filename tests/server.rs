@@ -448,3 +448,41 @@ async fn a_session_answers_only_the_key_that_opened_it() {
     assert_eq!(own, 202);
     assert_eq!(own_stream, 200);
 }
+
+/// Issue #666: `whoami` over a real session names the key's user with their
+/// label, the actor, the reach and the server's clock, and no key id or name.
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_names_the_user_the_reach_and_the_clock() {
+    let server = TestServer::start(two_catalogs(), Config::default()).await;
+    server.set_user_label("tester", "Test Person").await;
+    let key = server
+        .key("whoami-key", Access::Write, &["pg"], Some("pg"))
+        .await;
+    let client = server.client(&key, None).await.unwrap();
+
+    let before = chrono::Utc::now();
+    let result = call(&client, "whoami", serde_json::json!({})).await;
+    let me = structured(&result);
+
+    assert_eq!(me["user"], "tester");
+    assert_eq!(me["user_label"], "Test Person");
+    assert_eq!(me["actor"], "whoami-key");
+    assert_eq!(me["credential"], "api_key");
+    assert_eq!(me["client_name"], serde_json::Value::Null);
+    assert_eq!(me["access"], "write");
+    assert_eq!(me["all_catalogs"], false);
+    assert_eq!(
+        me["catalogs"],
+        serde_json::json!([{"name": "pg", "level": "write"}])
+    );
+    assert_eq!(me["default_catalog"], "pg");
+    let now = chrono::DateTime::parse_from_rfc3339(me["now"].as_str().unwrap()).unwrap();
+    assert!(
+        (now.with_timezone(&chrono::Utc) - before)
+            .num_seconds()
+            .abs()
+            < 60
+    );
+    let text = me.to_string();
+    assert!(!text.contains(&key), "the secret must not appear");
+}

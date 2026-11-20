@@ -25,6 +25,7 @@ mod restructure;
 pub(crate) mod search;
 #[cfg(test)]
 pub(crate) mod testing;
+pub(crate) mod whoami;
 pub(crate) mod writes;
 
 use std::sync::Arc;
@@ -67,7 +68,7 @@ pub const INSTRUCTIONS: &str = "Open Knowledge Format catalogs: concepts (markdo
     person to type an id. To write, call `open_changeset` first and pass the handle it \
     returns as `changeset` to every edit, `publish`, `discard`, `revert` and `pending_changes`; \
     reads take it too to see its drafts, and `list_changesets` finds a lost one. Nothing is \
-    visible to others until `publish`.";
+    visible to others until `publish`. `whoami` says who you act for and the server's time.";
 
 /// The line [`INSTRUCTIONS`] gains when `[feedback]` is set and
 /// `send_feedback` is offered (issue #674), naming the product.
@@ -217,7 +218,8 @@ impl OkfServer {
             + Self::changes_router()
             + Self::restructure_router()
             + Self::maintenance_router()
-            + Self::feedback_router();
+            + Self::feedback_router()
+            + Self::whoami_router();
         // Point every description at the tool's heading in the public reference. `map` holds
         // each tool as `{ call, attr }`; `attr` is the `Tool` that `tools/list` sends.
         for (name, route) in router.map.iter_mut() {

@@ -76,6 +76,7 @@ A tool is one of five kinds:
 | [`sprawl`](#sprawl) | Sprawl Report | read-only |
 | [`stamp`](#stamp) | Stamp Concept | staged |
 | [`unquestion`](#unquestion) | Resolve Question | staged |
+| [`whoami`](#whoami) | Who Am I | read-only |
 
 ## `add_source`
 
@@ -629,6 +630,15 @@ Remove one queued question, by its 1-based number in open_questions or its exact
 | `path` | string | yes | The concept, with or without `.md`, e.g. `/infra/ntp` or `/infra/ntp.md`. |
 | `question` | [`QuestionRef`](#type-questionref) | yes | The question to remove: its 1-based number in `open_questions`, or its exact text. |
 | `changeset` | string | yes | The changeset to write to: the handle `open_changeset` returned. |
+
+## `whoami`
+
+**Who Am I** (read-only)
+
+Who this connection acts for and the server's current time: the user (id and label), the actor writes are recorded as (what `by` defaults to), the credential (`api_key`, or `oauth` with its client's name), its access, the catalogs it reaches with each level, its default catalog, and `now` (UTC, as stamps are written). For the connection's selection, see `list_catalogs`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
 
 ## Types
 
