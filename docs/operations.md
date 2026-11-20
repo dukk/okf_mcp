@@ -2301,8 +2301,8 @@ route answers 404 (`POST /signin` included).
 - **one button per `[[auth.oidc]]` provider**;
 - **Use an API key instead**: the console's pasted-key card.
 
-It takes `return_to`, a same-origin path starting `/ui/` or
-`/oauth/authorize?`; anything else becomes `/ui/`. The console's card links
+It takes `return_to`, a same-origin path starting `/ui/`, `/read/` (the
+mobile reader) or `/oauth/authorize?`; anything else becomes `/ui/`. The console's card links
 to it with "Sign in with your account", carrying the page you were on.
 
 - **One refusal for everything.** Every refused password sign-in (a wrong
@@ -3431,6 +3431,15 @@ same errors as the other routes: 401 without a valid key (plain text, with
 `WWW-Authenticate: Bearer`), and otherwise `{"error": ..., "message": ...}`
 with the statuses in the README's "Routes". An unknown `/api/v1` path is 404,
 key or not.
+
+Every answer a route gives a signed-in caller also carries `X-OKF-Account`:
+16 hex digits of SHA-256 of a prefixed id (the user's id for a console
+session, the key's id for a bearer key or grant). It is stable per account,
+differs between accounts, and names no user, key or secret; the mobile
+reader's service worker uses it to keep its copies to one account. The
+refusals given before a route runs (the 401 for a missing or bad
+credential, the 403 for a console write without `X-OKF-CSRF`, a 500 from
+the credential lookup) and the 404 for an unknown path do not carry it.
 
 The sign-in pages use the console's CSP (their scripts are static files
 under `/ui/js/signin/`), with `Cache-Control: no-store`. Sign-out is
