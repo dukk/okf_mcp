@@ -201,7 +201,8 @@ nothing is served and the leftover copies are deleted, and the page's
 Sign-out wipes everything before calling `DELETE /api/v1/session`.
 Sign-out, "Delete offline copies" and a `401` also forget the remembered
 catalog, so the next person to sign in on the device never sees the last
-one's catalog name.
+one's catalog name. While a sign-out (or a 401's way to sign-in) is under
+way, no catalog the user opens is remembered.
 
 The shell is installed only when it is entirely one build's:
 `/read/shell.json` lists each file with the SHA-256 of the bytes this build

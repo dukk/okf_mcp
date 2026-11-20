@@ -6,7 +6,7 @@
 // what a refusal does.
 import { $, h, clear } from '/ui/js/core/dom.js';
 import { ago } from '/ui/js/core/format.js';
-import { read, ReadError, KIND } from './api.js';
+import { read, signOut, ReadError, KIND } from './api.js';
 import { refusals } from './refusals.js';
 import { wipe, evictCatalog, evictDocument } from './cache.js';
 import { parse, hrefs, parentOf } from './route.js';
@@ -27,18 +27,28 @@ const CATALOG_KEY = 'okf.read.catalog';
 const state = { session: null, catalog: remembered() };
 // Bumped on every navigation, so a late answer never draws over a newer screen.
 let generation = 0;
+// True while the page is leaving this account (a sign-out under way, or a
+// 401 on its way to sign-in): no catalog is remembered meanwhile, so one
+// chosen during the wipe or the DELETE never outlives the account.
+let leaving = false;
 
 function remembered() {
     try { return localStorage.getItem(CATALOG_KEY); } catch { return null; }
 }
 
-// Makes `catalog` the current one (null forgets it).
-function choose(catalog) {
-    state.catalog = catalog;
+// Stores `catalog` as the remembered one (null deletes it).
+function remember(catalog) {
     try {
         if (catalog) localStorage.setItem(CATALOG_KEY, catalog);
         else localStorage.removeItem(CATALOG_KEY);
     } catch { /* storage blocked: the choice lasts for this visit only */ }
+}
+
+// Makes `catalog` the current one (null forgets it). While the page is
+// leaving the account it is current for this page only, never remembered.
+function choose(catalog) {
+    state.catalog = catalog;
+    remember(leaving ? null : catalog);
     tabs();
 }
 
@@ -55,9 +65,36 @@ async function forget() {
     await wipe();
 }
 
+// Leaves the account for the sign-in page at `url`, deleting the
+// remembered catalog once more on the way out.
+function leaveFor(url) {
+    remember(null);
+    location.assign(url);
+}
+
 async function signIn() {
+    leaving = true;
     await forget();
-    location.assign(signInUrl());
+    leaveFor(signInUrl());
+}
+
+// Signs out (the account screen's button): deletes the offline copies and
+// the remembered catalog, then ends the session and leaves for sign-in.
+// Returns false, keeping the session, when the server could not be reached
+// or refused; catalogs are remembered again from then on.
+async function endSession(csrf) {
+    leaving = true;
+    await forget();
+    try {
+        if (await signOut(csrf)) {
+            leaveFor(`/signin?return_to=${encodeURIComponent('/read/')}`);
+            return true;
+        }
+    } catch (error) {
+        if (!(error instanceof ReadError)) throw error;
+    }
+    leaving = false;
+    return false;
 }
 
 // Shows the offline banner when `result` came from the worker's cache.
@@ -125,7 +162,7 @@ async function show() {
         paint: error => paint(view, route, error),
     });
     const ctx = {
-        state, route, choose, forget, freshness, live,
+        state, route, choose, forget, signOut: endSession, freshness, live,
         fail: refusal.fail,
         settle: refusal.settle,
         drawWorst: refusal.drawWorst,

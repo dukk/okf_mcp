@@ -3,6 +3,8 @@
 //! links, search, offline reading from the service worker's caches, and
 //! what a revoked session, a removed grant or an unlock does to them.
 
+use std::time::{Duration, Instant};
+
 use chrono::Utc;
 use okf_mcp::config::Config;
 use okf_mcp::store::audit::AuditActor;
@@ -146,6 +148,33 @@ async fn signing_in_returns_to_the_route_and_signing_out_wipes_the_caches() {
         // The next person to sign in here never sees this one's catalog.
         assert_eq!(ui.eval(REMEMBERED_CATALOG, json!(null)), json!(null));
         // The server ended the session, not only the page.
+        assert_eq!(ui.eval(SESSION_STATUS, json!(null)), json!(401));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_catalog_opened_while_signing_out_is_not_remembered() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        signed_in_with_a_copy(ui);
+        ui.hold_next("DELETE", "/api/v1/session");
+        ui.click("#sign-out");
+        // The copies are deleted and the DELETE is out, held.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while ui.held_matches() == 0 {
+            assert!(Instant::now() < deadline, "sign-out never sent its DELETE");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // Opening a catalog meanwhile shows it, but does not remember it.
+        ui.eval("() => { location.hash = '#/t/main'; }", json!(null));
+        ui.wait_visible("#screen-tree");
+        assert_eq!(ui.eval(REMEMBERED_CATALOG, json!(null)), json!(null));
+        // The page leaves once the DELETE answers (`release_held` would
+        // wait on a flag of the page it leaves).
+        ui.eval("() => window.releaseHeld()", json!(null));
+        ui.wait_visible("#signin-email");
+        assert_eq!(ui.eval(REMEMBERED_CATALOG, json!(null)), json!(null));
         assert_eq!(ui.eval(SESSION_STATUS, json!(null)), json!(401));
     })
     .await;

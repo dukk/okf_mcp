@@ -1,10 +1,9 @@
 // Account: who is signed in, until when, sign-out (which deletes every
 // offline copy and the remembered catalog first, even if the server cannot
 // be reached), and a local "Delete offline copies" that works with no
-// connection at all. Both delete through `ctx.forget` (main.js).
+// connection at all. Both delete through main.js (`ctx.signOut`, `ctx.forget`).
 import { h } from '/ui/js/core/dom.js';
 import { when } from '/ui/js/core/format.js';
-import { signOut, ReadError } from '../api.js';
 import { message } from '../parts.js';
 
 function deleteOffline(view, ctx) {
@@ -27,15 +26,8 @@ export async function render(view, ctx) {
     const button = h('button', { type: 'button', id: 'sign-out' }, 'Sign out');
     button.addEventListener('click', async () => {
         button.disabled = true;
-        await ctx.forget();
-        try {
-            if (await signOut(session.csrf)) {
-                location.assign(`/signin?return_to=${encodeURIComponent('/read/')}`);
-                return;
-            }
-        } catch (error) {
-            if (!(error instanceof ReadError)) throw error;
-        }
+        // On success the page has left for sign-in.
+        if (await ctx.signOut(session.csrf)) return;
         button.disabled = false;
         view.append(message('The server could not be reached to end the session. Offline copies are deleted.', null, 'sign-out-failed'));
     });
