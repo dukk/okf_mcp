@@ -1672,54 +1672,61 @@ function tabs() {
     }
 }
 
-// Acts on a refusal. The cache and session side effects always happen, even
-// when the screen that asked has been left (`live()` false): a 401 or a lost
-// grant is true whichever screen shows now. Only the drawing is skipped then.
-async function fail(view, route, error, live) {
+// What a refusal changes, whichever screen shows now: a 401 or a lost
+// grant is true even when the screen that asked has been left. Run as soon
+// as that one request is refused, never after its siblings.
+async function effects(route, error) {
     switch (error.kind) {
         case KIND.SIGNED_OUT:
             await signIn();
             return;
-        case KIND.CATALOG_GONE: {
-            const catalog = route.catalog;
-            if (catalog) await evictCatalog(catalog);
-            if (catalog === state.catalog) choose(null);
-            if (live()) location.hash = hrefs.catalogs(catalog);
+        case KIND.CATALOG_GONE:
+            if (route.catalog) await evictCatalog(route.catalog);
+            if (route.catalog === state.catalog) choose(null);
             return;
-        }
         case KIND.CONCEPT_GONE:
             await evictDocument(route.catalog, route.screen === 'document' ? 'documents' : 'concepts', route.path);
-            if (!live()) return;
+            return;
+        case KIND.LOCKED:
+        case KIND.UNAVAILABLE:
+        case KIND.FAILED:
+            return;
+    }
+}
+
+// What a refusal shows, on the screen that asked, while it is still shown.
+function draw(view, route, error, live) {
+    if (!live()) return;
+    switch (error.kind) {
+        case KIND.SIGNED_OUT:
+            return; // effects() has already left for sign-in.
+        case KIND.CATALOG_GONE:
+            location.hash = hrefs.catalogs(route.catalog);
+            return;
+        case KIND.CONCEPT_GONE:
             clear(view).append(message('This concept no longer exists.',
                 h('a', { href: hrefs.tree(route.catalog, parentOf(route.path)), id: 'gone-folder' }, 'Open its folder'), 'concept-gone'));
             return;
         case KIND.LOCKED:
-            if (!live()) return;
             clear(view).append(message(error.message,
                 error.body?.error === 'UnlockRequired' ? h('a', { href: '/ui/', id: 'unlock-link' }, 'Unlock in the console') : null, 'locked'));
             return;
         case KIND.UNAVAILABLE:
-            if (!live()) return;
             clear(view).append(message('Not available offline.',
                 h('a', { href: hrefs.home(), id: 'offline-list-link' }, 'See what is available offline'), 'unavailable'));
             return;
         case KIND.FAILED:
-            if (!live()) return;
             clear(view).append(message(error.message, null, 'failed'));
             return;
     }
 }
 
 // The kinds from most to least serious: when several reads of one screen
-// are refused, every refusal's side effects happen, and the most serious
-// one alone draws.
+// are refused, the most serious one alone draws.
 const SEVERITY = [KIND.SIGNED_OUT, KIND.CATALOG_GONE, KIND.CONCEPT_GONE, KIND.LOCKED, KIND.FAILED, KIND.UNAVAILABLE];
 
-async function failAll(view, route, errors, live) {
-    const ordered = [...errors].sort((a, b) => SEVERITY.indexOf(a.kind) - SEVERITY.indexOf(b.kind));
-    for (const [at, error] of ordered.entries()) {
-        await fail(view, route, error, at === 0 ? live : () => false);
-    }
+function worst(errors) {
+    return [...errors].sort((a, b) => SEVERITY.indexOf(a.kind) - SEVERITY.indexOf(b.kind))[0];
 }
 
 async function show() {
@@ -1738,18 +1745,29 @@ async function show() {
     const view = h('section', { class: 'screen', id: `screen-${route.screen}` });
     clear($('#reader')).append(view);
     const live = () => mine === generation;
-    // `fail` and `failAll` are also for reads a screen makes later (a
-    // button's), so they get the same handling as the first render's.
     const ctx = {
         state, route, choose, freshness, live,
-        fail: error => fail(view, route, error, live),
-        failAll: errors => failAll(view, route, errors, live),
+        // A single refused read (a screen's, or a button's later): its
+        // effects, then its drawing.
+        fail: async error => { await effects(route, error); draw(view, route, error, live); },
+        // For a screen that makes several reads at once: `settle` runs each
+        // read's refusal effects the moment it is refused (marking the
+        // error handled), and `drawWorst` draws once all have settled.
+        settle: promise => promise.catch(async error => {
+            if (error instanceof ReadError) {
+                error.handled = true;
+                await effects(route, error);
+            }
+            throw error;
+        }),
+        drawWorst: errors => draw(view, route, worst(errors), live),
     };
     try {
         await SCREENS[route.screen].render(view, ctx);
     } catch (error) {
         if (!(error instanceof ReadError)) throw error;
-        await ctx.fail(error);
+        if (error.handled) draw(view, route, error, live);
+        else await ctx.fail(error);
     }
 }
 
@@ -2104,14 +2122,15 @@ export async function render(view, ctx) {
     // scroll to would be missing (every navigation renders afresh, an
     // outline tap after "Show the whole concept" included).
     const firstUrl = section ? `${conceptUrl}?full=true` : conceptUrl;
-    // Both reads settle before anything is decided, so a refusal of either
-    // (say a 404 for the concept and a late 401 for its links) is acted on.
-    const settled = await Promise.allSettled([read(firstUrl), backlinks(base, path)]);
+    // Each read's refusal is acted on the moment it comes (ctx.settle: a
+    // 401 wipes and signs in without waiting for the other read); what to
+    // draw is decided once both have settled.
+    const settled = await Promise.allSettled([ctx.settle(read(firstUrl)), ctx.settle(backlinks(base, path))]);
     const refused = settled.filter(outcome => outcome.status === 'rejected').map(outcome => outcome.reason);
     const unexpected = refused.find(reason => !(reason instanceof ReadError));
     if (unexpected) throw unexpected;
     if (refused.length) {
-        await ctx.failAll(refused);
+        ctx.drawWorst(refused);
         return;
     }
     const [result, links] = settled.map(outcome => outcome.value);
@@ -2182,22 +2201,14 @@ export async function render(view, ctx) {
 }
 ```
 
-And a journey for it in `tests/ui_e2e/read.rs` (the fixture imports `log.md`, so recent changes lists it):
+And a journey for the route itself in `tests/ui_e2e/read.rs` (Task 9 adds the one that reaches it from recent changes, once Home exists):
 
 ```rust
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_log_in_recent_changes_opens_as_a_document() {
+async fn a_log_opens_as_a_document() {
     let (server, _) = server().await;
     drive(server.base.clone(), move |ui| {
-        ui.sign_in_reader("/c", EMAIL, PASSWORD);
-        ui.click("[data-catalog=main]");
-        ui.wait_visible("#recent");
-        let href = ui.eval(
-            "() => [...document.querySelectorAll('#recent a')].map(a => a.getAttribute('href')).find(h => h.endsWith('log.md'))",
-            json!(null),
-        );
-        assert_eq!(href, json!("#/d/main/log.md"));
-        ui.open_reader("/d/main/log.md");
+        ui.sign_in_reader("/d/main/log.md", EMAIL, PASSWORD);
         ui.wait_text("#document-title", "log.md");
         ui.wait_text("#body", "Log");
         assert!(!ui.present("#concept-gone") && !ui.present("#failed"));
@@ -2243,6 +2254,28 @@ async fn home_lists_recent_changes_and_search_finds_a_concept() {
         ui.wait_text("#hits", "Alpha");
         ui.click("#hits a");
         ui.wait_text("#concept-title", "Alpha");
+    })
+    .await;
+}
+```
+
+And one that checks recent changes links a `log.md` to the document view (the fixture imports `log.md`, so recent changes lists it):
+
+```rust
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_log_in_recent_changes_opens_as_a_document() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/c", EMAIL, PASSWORD);
+        ui.click("[data-catalog=main]");
+        ui.wait_visible("#recent");
+        let href = ui.eval(
+            "() => [...document.querySelectorAll('#recent a')].map(a => a.getAttribute('href')).find(h => h.endsWith('log.md'))",
+            json!(null),
+        );
+        assert_eq!(href, json!("#/d/main/log.md"));
+        ui.click("#recent a[href='#/d/main/log.md']");
+        ui.wait_text("#document-title", "log.md");
     })
     .await;
 }
@@ -2847,6 +2880,30 @@ async fn a_late_refusal_from_home_evicts_the_catalog_it_asked_about() {
             json!(null),
         );
         assert_eq!(kept, json!({ "other": true, "chosen": "other" }));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_401_signs_out_without_waiting_for_a_sibling_read() {
+    let (server, user_id) = server().await;
+    let runtime = tokio::runtime::Handle::current();
+    let pool = server.db.pool.clone();
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        runtime.block_on(async {
+            user_sessions::revoke_all(&pool, &user_id, None).await.expect("revoke");
+        });
+        // Beta's links read waits in the page and is never released; its
+        // concept read answers 401 at once.
+        ui.hold_next("GET", "/links/systems/beta.md");
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.wait_visible("#signin-email");
+        let counts = ui.eval(CACHE_COUNTS, json!(null));
+        assert!(counts.get("read-content").is_none(), "{counts}");
     })
     .await;
 }

@@ -187,8 +187,10 @@ reads such as "Show the whole concept"). The cache and session side effects
 user has left the screen that asked; only the drawing is skipped then. The
 catalog a refusal applies to is the one the screen asked about, fixed when
 the screen starts, never the current choice when the answer arrives. When
-one screen makes several reads (a concept and its links), all of them
-settle and every refusal is acted on; the most serious one draws.
+one screen makes several reads (a concept and its links), each refusal's
+effects (wipe, evict, sign-in) run the moment that read is refused, without
+waiting for the others; once all have settled, the most serious refusal
+draws.
 
 | Answer | Action |
 |---|---|
@@ -256,6 +258,8 @@ Browser journeys (`tests/ui_e2e/read.rs`, rustwright headless Chromium):
 8m. A concept opened once on a first visit (a direct link, no second online
     visit) is readable offline after a reload.
 8n. A `log.md` in recent changes links to the document view, which renders.
+8o. A concept read answered `401` while its links read is still held wipes
+    and signs out without waiting for the links read.
 9. Sign-out wipes the caches.
 10. A new shell version replaces the old shell cache on activate.
 
