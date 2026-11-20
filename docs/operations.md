@@ -29,7 +29,7 @@ changesets and the routes in detail.
   | OIDC sign-in and link flows | The callback lands elsewhere and the flow is unknown |
   | Passkey registration and sign-in ceremonies | Finishing on another replica fails |
   | The OAuth access-token cache | A token revoked on one replica still works on another until it expires |
-  | Rate-limit buckets | Counted per replica, so each replica allows the whole budget |
+  | Rate-limit buckets | Counted per replica, so each replica allows the whole budget (with `[redis]` they are shared) |
 
   The credential, user, settings and catalog caches are not in the table: since
   milestone 18 they follow Postgres change messages on every replica, with or
@@ -569,7 +569,8 @@ back to memory, because that would split the state between replicas.
   OAuth token refresh, which need only Postgres; the durable account lockout
   (10 wrong passwords, Postgres) still holds. Each failure is counted as
   `limit` and logged at `warn` with the limiter's name. A call to an
-  unreachable Redis waits up to the 2-second command timeout first.
+  unreachable Redis waits up to the 2-second command timeout first, once per
+  limit the request checks (a reset request checks two, so up to 4 seconds).
 - **An entry Redis lost** (evicted, or Redis restarted without persistence)
   fails closed too: a 404 for a session, an unknown code, an expired flow. The
   person starts again. A lost rate-limit bucket starts full again: an idle
@@ -1372,7 +1373,7 @@ on its own task), so find a call by its tool span, not by the request's trace.
 | `okf.archive.export` and `okf.archive.import` | `okf.catalog` (only for a catalog that exists), `okf.archive.size` (bytes, on success), `okf.outcome` |
 | `okf.mail.job` | `okf.mail.template`, `okf.mail.provider`, `okf.outcome`. Never the address |
 | `okf.oauth.token` | `okf.oauth.grant` |
-| Redis calls: `connect` and `subscribe` (at `info`), then `publish`, `admits`, `bind`, `release`, `load_state`, `store_state`, `delete_state`, `run_counter`, the rate limits' `take` and the stored-state operations (at `debug`, off by default) | `db.system.name` (`redis`), `db.operation.name` (the same set as `okf_redis_errors_total`'s `operation`, except `decode`, which is a metric label only). Never a key name, a session or flow id, a value or the URL |
+| Redis calls: `connect` and `subscribe` (at `info`), then `publish`, `admits`, `bind`, `release`, `load_state`, `store_state`, `delete_state`, `run_counter`, the rate limits' `take` (operation `limit`) and the stored-state operations (at `debug`, off by default) | `db.system.name` (`redis`), `db.operation.name` (the same set as `okf_redis_errors_total`'s `operation`, except `decode`, which is a metric label only). Never a key name, a session or flow id, a value or the URL |
 | Everything else (store, handlers) | Function spans at `debug` and `trace`, off by default; they carry safe ids only |
 
 An event logged inside a span is exported as a log record carrying the span's
