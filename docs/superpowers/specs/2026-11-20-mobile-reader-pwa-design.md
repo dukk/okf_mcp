@@ -176,10 +176,22 @@ network failed also carries `X-Read-Offline: 1`. The worker never builds an
 error page: it passes the network's answer through, answers from cache, or
 lets the fetch fail.
 
-Caches are tied to the signed-in user: after `GET /api/v1/session` succeeds,
-the page compares the user with `read-owner` and wipes `read-content` and
-`read-meta` when it differs, then records the user. Sign-out wipes both
-before calling `DELETE /api/v1/session`.
+Caches are tied to one account, decided by the worker, which every reader
+tab shares. Every `/api/v1` answer carries `X-OKF-Account`, an opaque tag
+(16 hex digits of SHA-256 of a prefixed user or key id). The first answer
+for a new account wipes `read-content` and `read-meta` (with a `*` mark, so
+answers still on their way for the old account drop their copies) and
+records the new owner in `read-owner`; an answer to a request that started
+before the current owner took over is never kept. So signing in as someone
+else in another tab, with a reader tab left open, never mixes two accounts'
+copies. Sign-out wipes everything before calling `DELETE /api/v1/session`.
+
+The shell is installed only when it is entirely one build's:
+`/read/shell.json` lists each file with the SHA-256 of the bytes this build
+serves, and the worker checks that the listing's version is its own and
+that every file it fetched hashes as listed. A deploy between its requests,
+or replicas on two builds, fails the install; the browser keeps the worker
+it had and tries again on a later visit.
 
 ## Error handling
 
@@ -218,7 +230,9 @@ Rust unit tests (`src/http/ui.rs`, `src/http/pages.rs`):
 - `/ui/sw.js` does not serve the reader's worker; `/read/styles.css` does not
   serve the console's stylesheet.
 - `/read/shell.json` lists every reader file and the shared console files,
-  each of which exists.
+  each served with exactly the bytes its SHA-256 names.
+- `X-OKF-Account` tags are stable per account, distinct between accounts,
+  16 hex digits, and name no user.
 - `safe_return_to` accepts `/read/...` and still rejects `//host`,
   backslashes and other prefixes.
 
@@ -265,6 +279,12 @@ Browser journeys (`tests/ui_e2e/read.rs`, rustwright headless Chromium):
     and signs out without waiting for the links read.
 8p. With every Cache Storage call rejected (page and worker), the reader
     boots, reads concepts and recent changes online, and deletion works.
+8q. Signing in as a second account in another tab while a reader tab stays
+    open: the next read wipes the first account's copies and records the
+    second as owner.
+8r. A new worker whose `read.css` answer is not the listed build's does not
+    install (no shell cache, no control) and the reader still works online;
+    with consistent files it installs.
 9. Sign-out wipes the caches.
 10. A new shell version replaces the old shell cache on activate.
 

@@ -28,6 +28,7 @@
 | `src/http/read.rs` (create) | The reader's routes: `/read`, `/read/`, `/read/shell.json`, `/read/sw.js` (version substituted), `/read/{*path}`; the shell version, a hash of every precached file (the reader's and the shared console files). |
 | `src/http/mod.rs` (modify) | Declare `mod read;` and merge `read::routes()`. |
 | `src/http/pages.rs` (modify) | `return_to` accepts `/read/` paths. |
+| `src/http/console_session.rs` (modify) | Every `/api/v1` answer carries `X-OKF-Account`, an opaque tag of the account it was made for. |
 | `src/http/read/index.html` | The reader's page: head metadata, bar, banner, main, bottom tabs. |
 | `src/http/read/manifest.webmanifest` | Install metadata. |
 | `src/http/read/icons/*.png` | App icons (192, 512, maskable 512, Apple 180). |
@@ -35,7 +36,7 @@
 | `src/http/read/sw.js` | The service worker. |
 | `src/http/read/js/names.js` | Cache names and the cap, shared by page and worker (classic script). |
 | `src/http/read/js/api.js` | Read-only client: `read`, `readAll`, `signOut`, `classify`, `KIND`, `ReadError`, `enc`, `encPath`. |
-| `src/http/read/js/cache.js` | Page-side cache upkeep: `wipe`, `claimFor`, `evictCatalog`, `evictDocument`, `offlineDocuments`, and the invalidation marks it sends the worker. |
+| `src/http/read/js/cache.js` | Page-side cache upkeep: `wipe`, `evictCatalog`, `evictDocument`, `offlineDocuments`, and the invalidation marks it sends the worker. (The worker keeps the owner record.) |
 | `src/http/read/js/route.js` | Hash routes: `parse`, `hrefs`, `hrefFor`, `fromBrowse`, `parentOf`. |
 | `src/http/read/js/main.js` | Boot, session, worker registration, screen dispatch, freshness banner, failure handling, tabs. |
 | `src/http/read/js/parts.js` | Shared view parts: `searchForm`, `crumbs`, `renderBody`, `message`. |
@@ -258,21 +259,26 @@ mod tests {
         let listing: serde_json::Value =
             serde_json::from_str(&text(response).await).expect("json");
         assert_eq!(listing["version"], SHELL_VERSION.as_str());
-        let files: Vec<&str> = listing["files"]
-            .as_array()
-            .expect("files")
+        let entries = listing["files"].as_array().expect("files");
+        let files: Vec<&str> = entries
             .iter()
-            .filter_map(serde_json::Value::as_str)
+            .filter_map(|entry| entry["url"].as_str())
             .collect();
+        assert_eq!(files.len(), entries.len(), "every entry has a url");
         assert!(files.contains(&"/read/"));
         assert!(!files.contains(&"/read/index.html"));
         assert!(files.contains(&"/read/manifest.webmanifest"));
         for shared in SHARED_CONSOLE_FILES {
             assert!(files.contains(shared), "{shared}");
         }
-        // Each listed file is served, so `cache.addAll` cannot fail on one.
-        for file in files {
-            assert_eq!(get(file).await.status(), StatusCode::OK, "{file}");
+        // Each listed file is served, with exactly the bytes its hash
+        // names, so a worker that verifies them installs.
+        for entry in entries {
+            let url = entry["url"].as_str().expect("url");
+            let response = get(url).await;
+            assert_eq!(response.status(), StatusCode::OK, "{url}");
+            let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+            assert_eq!(entry["sha256"], sha256_hex(&bytes), "{url}");
         }
     }
 
@@ -412,8 +418,11 @@ Put this above the test module:
 //! credential; the page reads `/api/v1` with the session cookie.
 
 use std::collections::hash_map::DefaultHasher;
+use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 use std::sync::LazyLock;
+
+use sha2::{Digest, Sha256};
 
 use axum::extract::Path;
 use axum::http::{header, StatusCode};
@@ -511,20 +520,47 @@ where
         .layer(middleware::map_response(security_headers))
 }
 
-/// `GET /read/shell.json`: `{"version": ..., "files": [...]}`, what the
-/// worker precaches. `index.html` is listed as `/read/`, the URL the page
-/// is opened at.
+/// `bytes`' SHA-256 as 64 lowercase hex digits, as the worker computes it
+/// with `crypto.subtle.digest`.
+#[tracing::instrument(level = "trace", skip_all)]
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            // `write!` into a String cannot fail; `let _` drops the Ok.
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        })
+}
+
+/// The worker's precache listing, built once: the shell version and each
+/// file's URL with the SHA-256 of the bytes this build serves for it. The
+/// worker installs only when the listing's version is its own and every file
+/// it fetched hashes as listed, so a deploy between its requests (or a mix
+/// of replicas on two builds) fails the install instead of caching a mix.
+/// `index.html` is listed as `/read/`, the URL the page is opened at.
+static SHELL_LISTING: LazyLock<serde_json::Value> = LazyLock::new(|| {
+    let reader = READ_ASSETS.iter().map(|(name, body)| {
+        let url = match *name {
+            "index.html" => "/read/".to_string(),
+            "sw.js" => "/read/sw.js".to_string(),
+            other => format!("/read/{other}"),
+        };
+        // The worker's own bytes as served (version filled in).
+        let bytes: &[u8] = if *name == "sw.js" { WORKER.as_bytes() } else { body };
+        serde_json::json!({ "url": url, "sha256": sha256_hex(bytes) })
+    });
+    let shared = SHARED_CONSOLE_FILES
+        .iter()
+        .map(|url| serde_json::json!({ "url": url, "sha256": sha256_hex(shared_bytes(url)) }));
+    serde_json::json!({ "version": SHELL_VERSION.as_str(), "files": reader.chain(shared).collect::<Vec<_>>() })
+});
+
+/// `GET /read/shell.json`: `{"version": ..., "files": [{"url", "sha256"}]}`,
+/// what the worker precaches and how to check it.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn shell() -> Json<serde_json::Value> {
-    let files: Vec<String> = READ_ASSETS
-        .iter()
-        .map(|(name, _)| match *name {
-            "index.html" => "/read/".to_string(),
-            other => format!("/read/{other}"),
-        })
-        .chain(SHARED_CONSOLE_FILES.iter().map(|file| (*file).to_string()))
-        .collect();
-    Json(serde_json::json!({ "version": SHELL_VERSION.as_str(), "files": files }))
+    Json(SHELL_LISTING.clone())
 }
 
 /// `GET /read/sw.js`: the worker, with its version, revalidated on every
@@ -569,10 +605,11 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 2: Sign-in can return to the reader
+### Task 2: Server support: sign-in returns to the reader, answers name their account
 
 **Files:**
 - Modify: `src/http/pages.rs:195-205` (`is_safe_return_to`) and its tests (`:317-339`)
+- Modify: `src/http/console_session.rs` (`ACCOUNT_HEADER`, `account_tag`, `require_principal`, tests)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -632,6 +669,82 @@ Expected: PASS.
 ```bash
 git add src/http/pages.rs
 git commit -m "feat(read): sign-in may return to /read/
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+- [ ] **Step 6: Tag every `/api/v1` answer with its account**
+
+The reader shares the console's cookie, so another tab can sign in as someone else while a reader tab stays open. Its service worker must know whose answer each response is, so it never files one account's answers under another's. In `src/http/console_session.rs`, add after the `CSRF_HEADER` constant:
+
+```rust
+/// The header that names, opaquely, the account an `/api/v1` answer was
+/// made for (a user for a session, the key for a bearer credential), so the
+/// mobile reader's worker never files one account's answers under another's.
+pub const ACCOUNT_HEADER: &str = "x-okf-account";
+
+/// An opaque, stable tag for the account `id`: 16 hex digits of SHA-256 of
+/// a prefixed id, so the header names no user and no key.
+///
+/// # Arguments
+/// * `id` - a user's id, or a key's id.
+///
+/// # Returns
+/// The header value.
+#[tracing::instrument(level = "trace", skip_all)]
+pub(crate) fn account_tag(id: &str) -> HeaderValue {
+    let digest = Sha256::digest(format!("okf-account:{id}").as_bytes());
+    let hex = digest.iter().take(8).fold(String::with_capacity(16), |mut hex, byte| {
+        // `write!` into a String cannot fail; `let _` drops the Ok.
+        let _ = write!(hex, "{byte:02x}");
+        hex
+    });
+    HeaderValue::from_str(&hex).expect("hex digits are a valid header value")
+}
+```
+
+with `use std::fmt::Write as _;` and `use sha2::{Digest, Sha256};` among the imports. In `require_principal`, the bearer branch's `return next.run(request).await;` becomes:
+
+```rust
+            let tag = account_tag(&principal.key_id);
+            let mut response = next.run(request).await;
+            response.headers_mut().insert(ACCOUNT_HEADER, tag);
+            return response;
+```
+
+(take `tag` before `principal` is moved into the extensions), and the session branch's final `next.run(request).await` becomes:
+
+```rust
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(ACCOUNT_HEADER, account_tag(&row.user_id));
+    response
+```
+
+(`row.user_id` is still in scope; if the borrow checker objects because `row` was partly moved into `ConsoleSession`, take `let tag = account_tag(&row.user_id);` before that insert.)
+
+Add to the module's tests:
+
+```rust
+    #[test]
+    fn account_tags_are_stable_opaque_and_distinct() {
+        let alice = account_tag("user-alice");
+        assert_eq!(alice, account_tag("user-alice"));
+        assert_ne!(alice, account_tag("user-bob"));
+        let text = alice.to_str().expect("ascii");
+        assert_eq!(text.len(), 16);
+        assert!(text.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(!text.contains("alice"));
+    }
+```
+
+- [ ] **Step 7: Run it and commit**
+
+Run: `cargo test --lib http::console_session::tests::account_tags`
+Expected: PASS. (The header on real answers is checked by the two-account journey in Task 11.)
+
+```bash
+git add src/http/console_session.rs
+git commit -m "feat(read): /api/v1 answers carry an opaque account tag
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -701,7 +814,8 @@ self.READ_CACHES = Object.freeze({
 // answer of its own; the page decides what every refusal means.
 importScripts('/read/js/names.js');
 
-const SHELL = `${READ_CACHES.shellPrefix}__SHELL_VERSION__`;
+const VERSION = '__SHELL_VERSION__';
+const SHELL = `${READ_CACHES.shellPrefix}${VERSION}`;
 const CONTENT = /^\/api\/v1\/catalogs\/[^/]+\/(concepts|documents)\//;
 const META = [
     /^\/api\/v1\/catalogs$/,
@@ -709,14 +823,30 @@ const META = [
     /^\/api\/v1\/catalogs\/[^/]+\/links\//,
 ];
 
+// Installs only a shell that is entirely this build's: the listing must
+// carry this worker's version, and every file must hash as listed. A deploy
+// between these requests, or replicas on two builds, fails the install; the
+// browser keeps the worker it had and tries again on a later visit.
 self.addEventListener('install', event => {
     event.waitUntil((async () => {
         const listing = await (await fetch('/read/shell.json', { cache: 'no-store' })).json();
+        if (listing.version !== VERSION) throw new Error('the shell listing is from another build');
+        const responses = await Promise.all(listing.files.map(verified));
         const cache = await caches.open(SHELL);
-        await cache.addAll(listing.files);
+        await Promise.all(listing.files.map((file, at) => cache.put(file.url, responses[at])));
         await self.skipWaiting();
     })());
 });
+
+// `file.url`'s answer, refused unless its bytes hash as `file.sha256`.
+async function verified(file) {
+    const response = await fetch(file.url, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`shell file ${file.url}: HTTP ${response.status}`);
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', await response.clone().arrayBuffer()));
+    const hex = [...digest].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    if (hex !== file.sha256) throw new Error(`shell file ${file.url} is from another build`);
+    return response;
+}
 
 // Invalidation marks, in memory: the page sends one ('*' for a wipe, an
 // encoded catalog for a lost grant, or one document's API path for a
@@ -730,6 +860,9 @@ const marks = new Map();
 self.addEventListener('message', event => {
     if (event.data?.type !== 'invalidate') return;
     marks.set(event.data.scope, Date.now());
+    // A wipe also deletes read-owner: the next account to answer owns the
+    // copies afresh.
+    if (event.data.scope === '*') owner = null;
     event.ports[0]?.postMessage('ok');
 });
 
@@ -782,7 +915,8 @@ async function networkFirst(request, cacheName, capped) {
     } catch (failure) {
         const cached = cache ? await cachedCopy(cache, request).catch(() => null) : null;
         if (!cached) throw failure;
-        if (capped) await upkeep(() => remember(cache, cached.key, cached.response.clone(), startedAt, false));
+        // `capped: null`: a renewal, not a fresh answer, and never trimmed.
+        if (capped) await upkeep(() => remember(cache, cached.key, cached.response.clone(), startedAt, null));
         return stamped(cached.response, 'X-Read-Offline', '1');
     }
     if (response.ok && cache) {
@@ -793,6 +927,48 @@ async function networkFirst(request, cacheName, capped) {
 }
 
 const CATALOG = /^\/api\/v1\/catalogs\/([^/]+)\//;
+const OWNER_KEY = '/read/__owner';
+
+// The account the cached copies belong to, { tag, since } (`since`: when it
+// became the owner), read from read-owner on first use; `undefined` until
+// then, null for none. The worker, which every reader tab shares, decides
+// ownership, so a sign-in as someone else in another tab cannot slip one
+// account's answers in among another's.
+let owner;
+// Ownership decisions run one at a time, in arrival order.
+let ownerQueue = Promise.resolve();
+
+async function loadOwner() {
+    try {
+        const stored = await (await caches.open(READ_CACHES.owner)).match(OWNER_KEY);
+        return stored ? await stored.json() : null;
+    } catch {
+        return null;
+    }
+}
+
+// Whether an answer for account `tag`, to a request that started at
+// `startedAt`, may be cached. The first answer for a new account makes it
+// the owner: the copies are wiped first, and a '*' mark makes every answer
+// already on its way for the old account drop its copy (remember's second
+// check). An answer from before the current owner took over is never kept.
+function admit(tag, startedAt) {
+    const decision = ownerQueue.then(async () => {
+        if (!tag) return false;
+        if (owner === undefined) owner = await loadOwner();
+        if (owner?.tag === tag) return true;
+        if (owner && startedAt <= owner.since) return false;
+        marks.set('*', Date.now());
+        await Promise.all([READ_CACHES.content, READ_CACHES.meta].map(name => caches.delete(name)));
+        owner = { tag, since: Date.now() };
+        await caches.open(READ_CACHES.owner)
+            .then(cache => cache.put(OWNER_KEY, new Response(JSON.stringify(owner))))
+            .catch(() => {});
+        return true;
+    });
+    ownerQueue = decision.catch(() => false);
+    return decision.catch(() => false);
+}
 
 // Whether the page wiped everything, or evicted `url`'s catalog or the
 // document itself (any form of it: the mark is its path, without query),
@@ -811,12 +987,16 @@ function invalidatedSince(url, startedAt) {
 // deletes it.
 async function remember(cache, key, response, startedAt, capped) {
     if (invalidatedSince(key.url ?? key, startedAt)) return;
+    // A fresh answer must belong to the current owner (or become it); a
+    // renewed offline copy already does.
+    if (capped !== null && !(await admit(response.headers.get('X-OKF-Account'), startedAt))) return;
+    if (invalidatedSince(key.url ?? key, startedAt)) return;
     await renew(cache, key, response);
     if (invalidatedSince(key.url ?? key, startedAt)) {
         await cache.delete(key);
         return;
     }
-    if (capped) await trim(cache);
+    if (capped === true) await trim(cache);
 }
 
 // The cached answer to `request`, or, for a concept, the other form of it
@@ -1138,8 +1318,9 @@ export async function signOut(csrf) {
 // here, where the answers are classified; the worker only fills them.
 import { enc, encPath } from './api.js';
 
+// The owner record (read-owner) is kept by the worker (sw.js, `admit`);
+// the page only deletes it with the rest.
 const { content, meta, owner } = self.READ_CACHES;
-const OWNER_KEY = '/read/__owner';
 // How long to wait for the worker to confirm a mark before deleting anyway.
 const MARK_WAIT_MS = 1000;
 // Without Cache Storage (an unusual private mode) the reader works online
@@ -1182,20 +1363,6 @@ export async function wipe() {
 }
 
 // Makes the caches `user`'s: wipes them when they were someone else's.
-// Recording the owner is best effort: on a full disk the caches are wiped
-// (they may be someone else's) and the reader boots anyway; the next read's
-// own cache write fails the same way, so nothing unowned is kept. When
-// storage refuses even to open, there is nothing to claim.
-export function claimFor(user) {
-    return storage(async () => {
-        const store = await caches.open(owner);
-        const recorded = await store.match(OWNER_KEY);
-        if (recorded && (await recorded.text()) === user) return;
-        await wipe();
-        await (await caches.open(owner)).put(OWNER_KEY, new Response(user));
-    });
-}
-
 // Deletes the entries of `cacheNames` whose URL path `matches`.
 function evict(cacheNames, matches) {
     return storage(async () => {
@@ -1623,7 +1790,7 @@ Expected: FAIL, timed out waiting for `#signin-email` (no `main.js` yet).
 import { $, h, clear } from '/ui/js/core/dom.js';
 import { ago } from '/ui/js/core/format.js';
 import { read, ReadError, KIND } from './api.js';
-import { claimFor, wipe, evictCatalog, evictDocument } from './cache.js';
+import { wipe, evictCatalog, evictDocument } from './cache.js';
 import { parse, hrefs, parentOf } from './route.js';
 import { message } from './parts.js';
 import * as home from './screens/home.js';
@@ -1819,7 +1986,6 @@ async function boot() {
     try {
         const { data } = await read('/session');
         state.session = data;
-        await claimFor(data.user);
     } catch (error) {
         if (!(error instanceof ReadError)) throw error;
         if (error.kind === KIND.SIGNED_OUT) { await signIn(); return; }
@@ -2609,7 +2775,8 @@ async fn with_storage_full_the_reader_boots_and_still_deletes_its_copies() {
         ui.wait_worker();
         ui.open_reader("/v/main/systems/alpha.md");
         ui.wait_text("#body", "marmalade");
-        // The owner record goes too, so boot must write it again, and cannot.
+        // The owner record goes too, so the worker must write it again on
+        // the next answer, and cannot.
         ui.eval("async () => { await caches.delete('read-owner'); return true; }", json!(null));
         let full = ui.limit_storage();
         ui.open_reader("/me");
@@ -2745,6 +2912,85 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - [ ] **Step 1: Write the journeys**
 
 ```rust
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn signing_in_as_someone_else_in_another_tab_never_mixes_their_copies() {
+    let (server, _) = server().await;
+    server.user_with_password("second", "second@example.com", PASSWORD).await;
+    crate::support::server::applied(&server.app, async {
+        ceiling::entitle(
+            &server.db.pool,
+            &NewEntitlement { user: "second", catalog: "main", access: Access::Read },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("entitle");
+    })
+    .await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        let first = ui.eval("async () => (await fetch('/api/v1/session')).headers.get('x-okf-account')", json!(null));
+        // Another tab signs in as `second`; this reader tab stays open.
+        ui.in_second_tab(|tab| {
+            tab.goto(&format!("{}/signin", ui.base), rustwright::GotoOptions::default()).expect("sign-in page");
+            tab.fill("#signin-email", "second@example.com", rustwright::ActionOptions::default()).expect("email");
+            tab.fill("#signin-password", PASSWORD, rustwright::ActionOptions::default()).expect("password");
+            tab.click("#signin-submit", rustwright::ActionOptions::default()).expect("submit");
+        });
+        let second = ui.eval("async () => (await fetch('/api/v1/session')).headers.get('x-okf-account')", json!(null));
+        assert_ne!(first, second, "the tag names the account");
+        // The open tab reads beta, now as `second`: the worker wipes the
+        // first account's copies before keeping this one.
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.wait_text("#concept-title", "Beta");
+        let paths = ui.eval(
+            "async () => (await (await caches.open('read-content')).keys()).map(k => new URL(k.url).pathname)",
+            json!(null),
+        );
+        let paths: Vec<&str> = paths.as_array().expect("paths").iter().filter_map(|p| p.as_str()).collect();
+        assert!(paths.iter().all(|p| !p.ends_with("/alpha.md")), "{paths:?}");
+        assert!(paths.iter().any(|p| p.ends_with("/beta.md")), "{paths:?}");
+        let recorded = ui.eval(
+            "async () => (await (await (await caches.open('read-owner')).match('/read/__owner')).json()).tag",
+            json!(null),
+        );
+        assert_eq!(recorded, second);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_shell_from_another_build_is_not_installed() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        // As if a deploy landed between the worker's requests: every new
+        // worker gets a read.css that is not the one its listing names.
+        let tamper = ui.tamper_new_workers("*/read/read.css", "/* another build */");
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.poll_eval(
+            "async () => { const r = await navigator.serviceWorker.getRegistration('/read/'); \
+             return !!r && !r.installing; }",
+        );
+        let installed = ui.eval(
+            "async () => ({ controlled: navigator.serviceWorker.controller !== null, \
+             shells: (await caches.keys()).filter(n => n.startsWith('read-shell-')).length })",
+            json!(null),
+        );
+        assert_eq!(installed, json!({ "controlled": false, "shells": 0 }));
+        // The reader still works online.
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        // The next build's files are consistent again: the install goes through.
+        drop(tamper);
+        ui.reload_reader();
+        ui.wait_worker();
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_revoked_session_wipes_the_caches_on_the_next_answer() {
     let (server, user_id) = server().await;
@@ -3305,6 +3551,109 @@ and, also in `impl Ui`, a variant of `hold_answer` that does not wait for the an
 
 `window.heldFetched` turning true is the journey's signal that the worker has finished with the old 200: the worker answers the page only after its cache write (or refusal to write).
 
+The two-account and other-build journeys need two more harness pieces. In `impl Ui`:
+
+```rust
+    /// Runs `visit` on a second tab of the same browser (same cookies), and
+    /// closes it after.
+    pub fn in_second_tab(&self, visit: impl FnOnce(&Page)) {
+        let tab = self.browser.new_page().expect("open a second tab");
+        visit(&tab);
+        drop(tab);
+    }
+
+    /// While the returned guard lives, every service worker that starts gets
+    /// `body` instead of the server's answer for URLs matching `pattern`
+    /// (DevTools: auto-attach to new service workers paused, enable `Fetch`
+    /// on them, then let them run). A background thread answers the
+    /// DevTools events.
+    pub fn tamper_new_workers(&self, pattern: &str, body: &str) -> Tamper {
+        Tamper::start(DevTools::connect(&self.browser), pattern, body)
+    }
+```
+
+and beside `DevTools`:
+
+```rust
+/// Rewrites matching responses for every new service worker until dropped
+/// (see [`Ui::tamper_new_workers`]).
+pub struct Tamper {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Tamper {
+    fn start(mut devtools: DevTools, pattern: &str, body: &str) -> Self {
+        devtools.call(
+            None,
+            "Target.setAutoAttach",
+            serde_json::json!({
+                "autoAttach": true,
+                "waitForDebuggerOnStart": true,
+                "flatten": true,
+                "filter": [{ "type": "service_worker" }],
+            }),
+        );
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (pattern, body) = (pattern.to_string(), base64_encode(body.as_bytes()));
+        let stopping = std::sync::Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
+            while !stopping.load(std::sync::atomic::Ordering::Relaxed) {
+                let Some(event) = devtools.read_json() else { continue };
+                let session = event["sessionId"].as_str().map(str::to_string);
+                match event["method"].as_str() {
+                    Some("Target.attachedToTarget") => {
+                        let worker = event["params"]["sessionId"].as_str().expect("a session").to_string();
+                        devtools.send(Some(&worker), "Fetch.enable", serde_json::json!({
+                            "patterns": [{ "urlPattern": pattern, "requestStage": "Response" }],
+                        }));
+                        devtools.send(Some(&worker), "Runtime.runIfWaitingForDebugger", serde_json::json!({}));
+                    }
+                    Some("Fetch.requestPaused") => {
+                        devtools.send(session.as_deref(), "Fetch.fulfillRequest", serde_json::json!({
+                            "requestId": event["params"]["requestId"],
+                            "responseCode": 200,
+                            "responseHeaders": [{ "name": "Content-Type", "value": "text/css; charset=utf-8" }],
+                            "body": body,
+                        }));
+                    }
+                    _ => {}
+                }
+            }
+        });
+        Self { stop, thread: Some(thread) }
+    }
+}
+
+impl Drop for Tamper {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Standard base64 (DevTools wants response bodies in it).
+fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk.iter().enumerate().fold(0u32, |n, (at, byte)| n | u32::from(*byte) << (16 - 8 * at));
+        for at in 0..4 {
+            if at <= chunk.len() {
+                out.push(char::from(ALPHABET[(n >> (18 - 6 * at) & 63) as usize]));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+```
+
+`DevTools::send` is `call` without waiting for the answer (the thread reads answers and events in one loop): add it beside `call`, sending `{"id", "method", "params", "sessionId"}` as `try_call` does and returning at once. If Chromium does not auto-attach service workers from the browser session, attach on `Target.targetCreated` instead (`Target.setDiscoverTargets`), accepting that the first request may slip through, and say so in the journey.
+
 Add the polling helper these use to `impl Ui` in `tests/ui_e2e/harness.rs`:
 
 ```rust
@@ -3403,7 +3752,8 @@ Find the list of reference documents in `README.md` (search for `docs/reference/
 ## Added
 - A mobile reader at `/read/`: an installable, read-only web app (iPhone through Add to Home Screen, Android through Chrome's install prompt) with the catalog picker, folder tree, concepts with outline and backlinks, search, recent changes and account. It signs in with the console's session cookie.
 - Offline reading: a service worker scoped to `/read/` precaches the reader and keeps network-first copies of opened concepts and folder pages (up to 200, least recently viewed out first) and of trees, recent changes and backlinks.
-- `GET /read/shell.json` lists the files the worker precaches; `/read/sw.js` carries, as its version, a hash of every one of them (the shared console files included).
+- `GET /read/shell.json` lists the files the worker precaches, each with the SHA-256 of the bytes this build serves; the worker installs only when the listing's version is its own and every file hashes as listed. `/read/sw.js` carries, as its version, a hash of every precached file (the shared console files included).
+- Every `/api/v1` answer carries `X-OKF-Account`, an opaque 16-hex-digit tag of the account it was made for; the reader's worker uses it to keep copies to one account.
 
 ## Changed
 - `build.rs` embeds `src/http/read` as `READ_ASSETS` beside the console's `ASSETS`, through one shared function.
