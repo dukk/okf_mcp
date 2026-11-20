@@ -72,8 +72,10 @@ self.addEventListener('activate', event => {
 // or before a matching mark, so a slow 2xx cannot put back what a 401 or a
 // lost grant removed. Memory needs no storage quota, and a request still on
 // its way keeps the worker alive, so the marks last as long as they matter.
-// (A new worker activates only once this one has no fetch on its way, even
-// with skipWaiting, so one worker at a time holds the marks that matter.)
+// (The Service Worker spec's Try Activate starts a new worker only once this
+// one has no events pending, skipWaiting or not, so one worker at a time
+// holds the marks that matter; a request the browser times out is the
+// exception, and its answer is then no longer this worker's to keep.)
 const marks = new Map();
 
 // The account the cached copies belong to, { tag, since }, read from
