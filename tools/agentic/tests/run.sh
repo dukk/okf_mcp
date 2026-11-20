@@ -280,6 +280,38 @@ test_merge_falls_back_to_the_base_tip() {
     want_rc 0; want_out "MERGED PR 7 -> milestone/9-x $tip"
 }
 
+test_merge_refuses_without_a_base_branch() {
+    new_fixtures; good_pr "$head_a"
+    # A PR with no baseRefName at all, then one whose baseRefName is null.
+    printf '{"headRefOid":"%s","mergeStateStatus":"CLEAN"}\n' "$head_a" >"$fx/pr-view.json"
+    run_merge
+    want_rc 1; want_out "REFUSE: could not read the base branch of PR 7"; want_not_merged
+    printf '{"headRefOid":"%s","mergeStateStatus":"CLEAN","baseRefName":null}\n' "$head_a" \
+        >"$fx/pr-view.json"
+    run_merge
+    want_rc 1; want_out "REFUSE: could not read the base branch of PR 7"; want_not_merged
+}
+
+test_merge_keeps_the_sha_when_origin_is_unavailable() {
+    new_fixtures; base_pr "$head_a" milestone/9-x ccccccc3333333333333333333333333333333333
+    # The merge has happened; a fetch that fails must not hide it. Put origin
+    # back however the test ends (the repository is shared by every test).
+    trap 'git -C "$repo" remote set-url origin "$work/origin.git"' EXIT
+    git -C "$repo" remote set-url origin "$work/no-such-origin.git"
+    run_merge
+    want_rc 0; want_out "MERGED PR 7 -> milestone/9-x ccccccc"
+    want_out "warning: could not fetch origin afterwards"
+    [ "$(cat "$fx/merged")" = "$head_a" ] || die "merged the wrong head"
+}
+
+test_merge_warns_when_no_merge_commit_can_be_found() {
+    # No mergeCommit from gh, and origin has no such base branch.
+    new_fixtures; base_pr "$head_a" milestone/absent
+    run_merge
+    want_rc 0
+    want_out "MERGED PR 7 -> milestone/absent; warning: could not find the merge commit"
+}
+
 # --- watch-review.sh ---
 
 test_watch_succeeds_on_current_head_review() {
