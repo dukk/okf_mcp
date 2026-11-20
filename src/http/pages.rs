@@ -175,8 +175,8 @@ pub(crate) fn respond(status: StatusCode, document: String, csp: &str) -> Respon
         .into_response()
 }
 
-/// Where a sign-in may send the browser next: a console path or an OAuth
-/// authorize URL on this origin, or else [`DEFAULT_RETURN_TO`].
+/// Where a sign-in may send the browser next: a console path, a reader path
+/// or an OAuth authorize URL on this origin, or else [`DEFAULT_RETURN_TO`].
 ///
 /// # Arguments
 /// * `raw` - the `return_to` a page or form carried, if any.
@@ -192,16 +192,18 @@ pub(crate) fn safe_return_to(raw: Option<&str>) -> String {
     }
 }
 
-/// Whether `path` is a same-origin console or authorize path.
+/// Whether `path` is a same-origin console, reader or authorize path.
 #[tracing::instrument(level = "trace", skip_all)]
 fn is_safe_return_to(path: &str) -> bool {
     // Visible ASCII only: no spaces, no control characters (a header
     // injection) and no `\`, which some browsers read as `/` (so `/\host`
-    // would leave the origin). Both prefixes start with one `/` followed by
+    // would leave the origin). Every prefix starts with one `/` followed by
     // a path segment, so the result can never be `//host`.
     path.bytes()
         .all(|byte| byte.is_ascii_graphic() && byte != b'\\')
-        && (path.starts_with("/ui/") || path.starts_with("/oauth/authorize?"))
+        && (path.starts_with("/ui/")
+            || path.starts_with("/read/")
+            || path.starts_with("/oauth/authorize?"))
 }
 
 #[cfg(test)]
@@ -317,7 +319,13 @@ mod tests {
 
     #[test]
     fn return_to_keeps_same_origin_console_and_authorize_paths() {
-        for kept in ["/ui/", "/ui/#/keys", "/oauth/authorize?client_id=x&state=y"] {
+        for kept in [
+            "/ui/",
+            "/ui/#/keys",
+            "/oauth/authorize?client_id=x&state=y",
+            "/read/",
+            "/read/#/v/main/systems/alpha.md",
+        ] {
             assert_eq!(safe_return_to(Some(kept)), kept);
         }
     }
@@ -336,6 +344,10 @@ mod tests {
             Some("/oauth/authorize"),
             Some("/oauth/authorizex?y"),
             Some("/ui"),
+            Some("/read"),
+            Some("/readx/"),
+            Some("/read/\\evil"),
+            Some("/read/ x"),
         ] {
             assert_eq!(safe_return_to(refused), DEFAULT_RETURN_TO, "{refused:?}");
         }
