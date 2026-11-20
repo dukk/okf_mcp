@@ -97,7 +97,7 @@ Append an entry (id, resource, title, author) to a concept's `sources`, refusing
 
 **Create Concept** (staged)
 
-Create a concept in the changeset `changeset` names (open one with open_changeset); nothing is visible to others until `publish`. `path` is the new concept's path, `.md` optional (e.g. /infra/ntp). Needs `type` in `frontmatter`; the server writes `generated: { by, at }` itself. With `index_summary`, also lists it in its folder's index.md (creating folder indexes as needed). Write access.
+Create a concept in the changeset `changeset` names (open one with open_changeset); nothing is visible to others until `publish`. `path` is the new concept's path, `.md` optional (e.g. /infra/ntp). Needs `type` in `frontmatter`; the server writes `generated: { by, at }` itself. With `index_summary`, also lists it in its folder's index.md (creating folder indexes as needed); `folder_summary` describes a new folder there. Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -106,6 +106,7 @@ Create a concept in the changeset `changeset` names (open one with open_changese
 | `body` | string | yes | The markdown body after the frontmatter. |
 | `index_summary` | string | no | List the concept in its folder's index.md with this summary, creating folder indexes as needed. |
 | `index_section` | string | no | The index.md section to list it under (default: the section the server chooses for it); needs `index_summary`. |
+| `folder_summary` | string | no | With `index_summary`, the new folder's summary in its parent's index.md (default: a TODO); for nested new folders, the innermost. Refused if the folder exists. |
 | `by` | string | no | Who wrote it, for the `generated` stamp (default: the key's actor). |
 | `changeset` | string | yes | The changeset to write to: the handle `open_changeset` returned. |
 
@@ -177,11 +178,11 @@ A document's revisions, newest first: revision, op (create, update, delete, impo
 
 **Add Index Entry** (staged)
 
-List a concept in its folder's index.md as `* [Title](name.md) - summary`, in the changeset `changeset` names (open one with open_changeset); nothing happens if it is already linked (a name with a space, `)`, `#` or `:` is written percent-encoded, e.g. `a%20b.md`; an older raw bullet for it counts as linked, with a note; repair_indexes rewrites it). Replayed at publish onto an index.md that changed meanwhile, unless a free edit of that index.md follows. Write access.
+List a concept in its folder's index.md as `* [Title](name.md) - summary`, in the changeset `changeset` names (open one with open_changeset); nothing happens if it is already linked (a name with a space, `)`, `#` or `:` is written percent-encoded, e.g. `a%20b.md`; an older raw bullet for it counts as linked, with a note; repair_indexes rewrites it). Replayed at publish onto an index.md that changed meanwhile, unless a free edit of that index.md follows. With a folder `path` (`/infra/`), sets the summary of its listing in the parent's index.md instead, replayed the same way. Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `path` | string | yes | The concept to list, with or without `.md`, e.g. `/infra/ntp`; its folder's index.md must exist (`repair_indexes` creates missing ones). |
+| `path` | string | yes | The concept to list, with or without `.md`, e.g. `/infra/ntp`; its folder's index.md must exist (`repair_indexes` creates missing ones). Or a folder, e.g. `/infra/`, to set its listing's summary in its parent's index.md. |
 | `summary` | string | yes | The text after the link's ` - `. |
 | `section` | string | no | The heading to list it under, e.g. `Build infrastructure` (default: `Concepts`). |
 | `title` | string | no | The link text (default: the concept's frontmatter title). |
@@ -389,6 +390,7 @@ Move or rename a concept in the changeset `changeset` names (open one with open_
 |---|---|---|---|
 | `old` | string | yes | The concept to move, `.md` optional, e.g. `/infra/ntp`. |
 | `new` | string | yes | Its new path, `.md` optional, e.g. `/playbooks/ntp.md`; it must not exist. |
+| `folder_summary` | string | no | The new folder's summary in its parent's index.md (default: a TODO); for nested new folders, the innermost. Refused if the folder exists. |
 | `changeset` | string | yes | The changeset to write to: the handle `open_changeset` returned. |
 
 ## `oldest`
@@ -590,6 +592,7 @@ Carve a section (and its subsections) out of a concept into a new concept, in th
 | `description` | string | no | A one-sentence description; also the index listing's summary and the default stub. Without it, a placeholder is written and a note says so. |
 | `stub` | string | no | The paragraph left under the heading in the parent; a link to the new concept is appended unless it has one. |
 | `sources` | array of string | no | Ids of the parent's sources to copy (default: those the section's footnotes cite, else all of them). |
+| `folder_summary` | string | no | The new folder's summary in its parent's index.md (default: a TODO); for nested new folders, the innermost. Refused if the folder exists. |
 | `by` | string | no | Who wrote it, for the `generated` stamp (default: the key's actor). |
 | `changeset` | string | yes | The changeset to write to: the handle `open_changeset` returned. |
 

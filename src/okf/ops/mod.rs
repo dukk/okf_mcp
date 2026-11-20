@@ -47,7 +47,8 @@ pub use content::{create_concept, edit_document, replace_body, set_frontmatter, 
 pub use delete::delete_concept;
 pub use frontmatter::{question, remove_source, review, source, stamp, unquestion, OUTCOMES};
 pub use log_index::{
-    ensure_index, index, log, repair_catalog, repair_indexes, starter_files, STARTER_FILE_COUNT,
+    ensure_folder_index, ensure_index, index, log, repair_catalog, repair_indexes, starter_files,
+    STARTER_FILE_COUNT,
 };
 pub use moves::move_concept;
 pub use relink::{rewrite_links, Moved, Redirect};

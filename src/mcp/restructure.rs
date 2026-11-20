@@ -26,6 +26,8 @@ pub struct MoveConceptParams {
     pub old: String,
     /// Its new path, `.md` optional, e.g. `/playbooks/ntp.md`; it must not exist.
     pub new: String,
+    /// The new folder's summary in its parent's index.md (default: a TODO); for nested new folders, the innermost. Refused if the folder exists.
+    pub folder_summary: Option<String>,
     /// The changeset to write to: the handle `open_changeset` returned.
     pub changeset: String,
 }
@@ -51,6 +53,8 @@ pub struct SplitConceptParams {
     pub stub: Option<String>,
     /// Ids of the parent's sources to copy (default: those the section's footnotes cite, else all of them).
     pub sources: Option<Vec<String>>,
+    /// The new folder's summary in its parent's index.md (default: a TODO); for nested new folders, the innermost. Refused if the folder exists.
+    pub folder_summary: Option<String>,
     /// Who wrote it, for the `generated` stamp (default: the key's actor).
     pub by: Option<String>,
     /// The changeset to write to: the handle `open_changeset` returned.
@@ -87,10 +91,11 @@ pub(crate) async fn move_concept(
     let MoveConceptParams {
         old,
         new,
+        folder_summary,
         changeset,
     } = params;
     apply(ctx, &changeset, None, move |ws, _| {
-        ops::move_concept(ws, &old, &new)
+        ops::move_concept(ws, &old, &new, folder_summary.as_deref())
     })
     .await
 }
@@ -123,6 +128,7 @@ pub(crate) async fn split_concept(
         description,
         stub,
         sources,
+        folder_summary,
         by,
         changeset,
     } = params;
@@ -138,6 +144,7 @@ pub(crate) async fn split_concept(
             description: description.as_deref(),
             stub: stub.as_deref(),
             sources: &sources,
+            folder_summary: folder_summary.as_deref(),
         };
         ops::split_concept(ws, op_ctx, &split)
     })
@@ -301,6 +308,7 @@ mod tests {
         MoveConceptParams {
             old: "/infra/time".to_string(),
             new: new.to_string(),
+            folder_summary: None,
             changeset: handle.to_string(),
         }
     }
@@ -379,6 +387,7 @@ mod tests {
                 description: Some("UDP ports.".to_string()),
                 stub: None,
                 sources: None,
+                folder_summary: None,
                 by: None,
                 changeset: handle.clone(),
             },
@@ -432,6 +441,7 @@ mod tests {
                 description: None,
                 stub: None,
                 sources: None,
+                folder_summary: None,
                 by: None,
                 changeset: handle.clone(),
             },

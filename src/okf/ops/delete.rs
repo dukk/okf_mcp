@@ -558,7 +558,8 @@ mod tests {
         let moving = MemWorkspace::from_files(logged_files());
         let deleting = MemWorkspace::from_files(logged_files());
 
-        let moved = crate::okf::ops::move_concept(&moving, "/infra/v", "/infra/w.md").unwrap();
+        let moved =
+            crate::okf::ops::move_concept(&moving, "/infra/v", "/infra/w.md", None).unwrap();
         delete_concept(&deleting, "/infra/v").unwrap();
 
         assert!(matches!(
