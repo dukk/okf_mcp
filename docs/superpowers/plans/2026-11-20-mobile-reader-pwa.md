@@ -55,7 +55,7 @@
 - Modify: `build.rs`
 - Modify: `src/http/ui.rs` (`asset`, `content_type`, tests)
 - Create: `src/http/read.rs`
-- Modify: `src/http/mod.rs:18` (module list) and `:413` (`open.merge(ui::routes())`)
+- Modify: `src/http/mod.rs` (the module list, and `open.merge(ui::routes())` near line 433)
 - Create: `src/http/read/index.html`, `src/http/read/manifest.webmanifest`, `src/http/read/icons/` (4 PNGs)
 
 - [ ] **Step 1: Generate the icons**
@@ -585,7 +585,9 @@ async fn worker() -> Response {
 
 - [ ] **Step 9: Register the module**
 
-In `src/http/mod.rs`, add `mod read;` beside `mod ui;` (line 18), and change `open.merge(ui::routes())` (line 413) to `open.merge(ui::routes()).merge(read::routes())`.
+> **Corrected (issue #808, 2026-11-20).** The plan's line numbers (`:18`, `:413`) were stale: `ui::routes()` is near line 433 of `src/http/mod.rs`. Fixed inline; no other task refers to them.
+
+In `src/http/mod.rs`, add `mod read;` beside `mod ui;` (rustfmt sorts it into the list), and change `open.merge(ui::routes())` (near line 433) to `open.merge(ui::routes()).merge(read::routes())`.
 
 - [ ] **Step 10: Run the tests to see them pass**
 
