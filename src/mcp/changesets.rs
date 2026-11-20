@@ -512,7 +512,7 @@ pub struct PendingFile {
     pub stale: bool,
     /// Whether publish can replay the entry onto newer text (log.md and index.md bookkeeping only).
     pub replayable: bool,
-    /// Whether `diff` shows the entry replayed onto the published text, the bytes publish would write: true only for a stale, replayable entry whose replay succeeds. False: `diff` shows the entry's stored text.
+    /// Whether `diff` shows the entry replayed onto the published text, the bytes publish would write: true only for a stale, replayable entry whose replay succeeds. Publish still runs its lint on that result. False: `diff` shows the entry's stored text, or the `replay_error` note.
     pub replayed: bool,
     /// Why publish cannot replay this stale, replayable entry (null otherwise): publish would refuse the changeset until the path is discarded and the change made again. `diff` is then a one-line note saying so.
     pub replay_error: Option<String>,
