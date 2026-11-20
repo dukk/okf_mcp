@@ -400,6 +400,69 @@ fn raw_names(index: &str, target: &str) -> Vec<String> {
     raws
 }
 
+/// [`raw_names`] that really are raw: encoding would change them, and they
+/// hold no `%XX` escape (rule 1 of [`lists_raw_target`]).
+#[tracing::instrument(level = "trace", skip_all)]
+fn unencoded_raw_names(index: &str, target: &str) -> Vec<String> {
+    raw_names(index, target)
+        .into_iter()
+        .filter(|raw| encode_link_path(raw) != raw.as_str())
+        .filter(|raw| py_unquote(raw) == raw.as_str())
+        .collect()
+}
+
+/// Does the bullet's destination, which starts at `start` in `line` and
+/// matched `raw` (a raw name of `target`), match a strictly longer raw name
+/// of another existing document, ending at `)` or `#` as written (issue
+/// #734)? A `#` or `)` ends the shorter match inside the longer name
+/// (`a b.md` inside `a b.md#extra.md`), so the bullet could be either
+/// document's: the longest name wins and the shorter target leaves the
+/// bullet alone. This is the conservative choice for the shorter target
+/// (it never rewrites or counts the bullet). For two concepts of one folder
+/// the longer one's own pass still rewrites it, in whichever order the
+/// targets are processed; for a folder index against a concept of that
+/// folder no pass reads the parent's bullet, so it stays as written. The
+/// check runs only on a match, so the catalog is listed rarely. A failed
+/// listing counts as ambiguous: leaving a bullet is always safe.
+///
+/// # Arguments
+/// * `workspace` - lists the existing documents.
+/// * `line` - the bullet.
+/// * `start` - the byte offset of its destination in `line`.
+/// * `index` - the index holding it.
+/// * `target` - the target being matched.
+/// * `raw` - the raw name of `target` that matched.
+///
+/// # Returns
+/// `true` when another document's longer raw name matches the bullet.
+#[tracing::instrument(level = "trace", skip_all)]
+fn belongs_to_longer_raw(
+    workspace: &dyn Workspace,
+    line: &str,
+    start: usize,
+    index: &str,
+    target: &str,
+    raw: &str,
+) -> bool {
+    let Ok(documents) = workspace.list_markdown() else {
+        return true;
+    };
+    let destination = &line[start..];
+    documents
+        .iter()
+        .filter(|other| other.as_str() != target)
+        // Every name another document could be written as, with no rule-2
+        // (`%XX`) filter: a bullet that holds an escape is not raw for its
+        // own document, but it still shows the destination is not ours.
+        .flat_map(|other| raw_names(index, other))
+        .filter(|longer| longer.len() > raw.len())
+        .any(|longer| {
+            destination
+                .strip_prefix(longer.as_str())
+                .is_some_and(|rest| rest.starts_with(')') || rest.starts_with('#'))
+        })
+}
+
 /// The first bullet of `text` that [`lists_raw_target`] counts as a raw
 /// listing of `target`, by exactly its rules 0-3, and the line it would be
 /// rewritten to.
@@ -416,11 +479,7 @@ pub(crate) fn first_raw_listing(
     index: &str,
     target: &str,
 ) -> Option<RawListing> {
-    let raws: Vec<String> = raw_names(index, target)
-        .into_iter()
-        .filter(|raw| encode_link_path(raw) != raw.as_str())
-        .filter(|raw| py_unquote(raw) == raw.as_str())
-        .collect();
+    let raws = unencoded_raw_names(index, target);
     // Lines in order, so the first raw bullet is the one found (a replay
     // of the rewrite takes the first line equal to it, the same line).
     text.split('\n')
@@ -439,7 +498,13 @@ pub(crate) fn first_raw_listing(
                         resolve_link(workspace, &link.target, index)
                             .is_none_or(|r| !workspace.exists(&r.path))
                     });
-                (ends && broken).then(|| RawListing {
+                // Issue #734: another existing document's raw name may extend
+                // this one (`a b.md` and `a b.md#extra.md`), and then the
+                // bullet is that document's listing, not this target's.
+                (ends
+                    && broken
+                    && !belongs_to_longer_raw(workspace, line, start, index, target, raw))
+                .then(|| RawListing {
                     line: line.to_string(),
                     fixed: format!("{}{}{rest}", &line[..start], encode_link_path(raw)),
                 })
@@ -1725,5 +1790,57 @@ mod tests {
             }])
         );
         assert_eq!(back, ops);
+    }
+
+    /// A catalog whose reads work but whose `list_markdown` fails, to reach
+    /// `belongs_to_longer_raw`'s fallback (issue #734).
+    #[derive(Debug, Default)]
+    struct FailingListing(MemWorkspace);
+
+    impl Workspace for FailingListing {
+        fn read_to_string(&self, path: &str) -> Result<String, OkfError> {
+            self.0.read_to_string(path)
+        }
+        fn write_atomic(&self, path: &str, contents: &str) -> Result<(), OkfError> {
+            self.0.write_atomic(path, contents)
+        }
+        fn is_file(&self, path: &str) -> bool {
+            self.0.is_file(path)
+        }
+        fn is_dir(&self, path: &str) -> bool {
+            self.0.is_dir(path)
+        }
+        fn list_markdown(&self) -> Result<Vec<String>, OkfError> {
+            Err(OkfError::Io {
+                path: String::new(),
+                source: std::io::Error::other("listing unavailable"),
+            })
+        }
+        fn list_files(&self) -> Result<Vec<String>, OkfError> {
+            self.0.list_files()
+        }
+    }
+
+    #[test]
+    fn a_failed_catalog_listing_leaves_a_raw_bullet_unassigned() {
+        // Issue #734: with the catalog unlistable, the raw bullet might
+        // belong to a longer document, so no target takes it.
+        let bullet = "* [Short](a b.md) - summary";
+        let working = MemWorkspace::default();
+        let failing = FailingListing::default();
+        for ws in [&working as &dyn Workspace, &failing] {
+            ws.write_atomic("d/a b.md", "---\ntype: Note\n---\n")
+                .unwrap();
+        }
+        // The same call finds the bullet when the catalog lists fine, so the
+        // `None` below is the fallback and nothing else.
+        assert!(first_raw_listing(&working, bullet, "d/index.md", "d/a b.md").is_some());
+        assert!(first_raw_listing(&failing, bullet, "d/index.md", "d/a b.md").is_none());
+        assert!(!lists_raw_target(
+            &failing,
+            bullet,
+            "d/index.md",
+            "d/a b.md"
+        ));
     }
 }
