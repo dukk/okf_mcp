@@ -200,7 +200,7 @@ export async function render(main) {
         manager ? null : h('p', { class: 'muted small', id: 'settings-readonly' },
             'Changing settings or the mail queue needs an admin key that reaches every catalog.'),
         h('section', { class: 'account-section', id: 'settings-policy' }, h('h2', {}, 'Policy'),
-            h('p', { class: 'muted small' }, 'The config file\'s [auth] table gives the defaults (product_name is okf and support_contact none); a value saved here overrides it until Reset.'),
+            h('p', { class: 'muted small' }, 'The config file\'s [auth] table gives the defaults; a value saved here overrides it until Reset.'),
             settingsStale,
             settings),
         h('section', { class: 'account-section' }, h('h2', {}, 'Sign-in providers'), providers),

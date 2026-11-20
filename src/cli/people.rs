@@ -639,7 +639,9 @@ mod tests {
             Command::Settings(command) => {
                 crate::cli::admin::settings(pool, &config.auth, command, now).await
             }
-            Command::Mail(command) => crate::cli::admin::mail(pool, command, now).await,
+            Command::Mail(command) => {
+                crate::cli::admin::mail(pool, &config.auth, command, now).await
+            }
             Command::Catalog(CatalogCommand::SetOwner { name, team }) => {
                 set_owner(pool, &name, &team, now).await
             }

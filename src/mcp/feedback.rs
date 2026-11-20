@@ -31,11 +31,17 @@ pub(crate) const UNASSIGNED_USER: &str = "unassigned";
 /// The client name sent when the session's `initialize` named none.
 pub(crate) const UNKNOWN_CLIENT: &str = "unknown";
 
-/// The tool's description. A test checks the third-party disclosure and the
-/// "ask the user first" guidance are in it.
-pub(crate) const DESCRIPTION: &str = "Send feedback about using Telekin (something \
-    confusing, broken, missing or good) to Telekin's team. The feedback goes to Telekin's team \
-    through a third-party form service (Forminit). Ask the user before including catalog \
+/// Where [`DESCRIPTION`] names the product: the words [`description`]
+/// replaces with the server's product name.
+const PRODUCT: &str = "this server";
+
+/// The tool's description as written on the tool, naming no product (the
+/// public tool reference shows it so); a session's tool list names the
+/// product instead ([`description`]). A test checks the third-party
+/// disclosure and the "ask the user first" guidance are in it.
+pub(crate) const DESCRIPTION: &str = "Send feedback about using this server (something \
+    confusing, broken, missing or good) to this server's team. The feedback goes to this \
+    server's team through a third-party form service (Forminit). Ask the user before including catalog \
     content, personal details or anything the user hasn't agreed to share. When the user asks \
     you to send feedback, send the user's own words and set `from` to `user`; when you report \
     your own experience, set `from` to `agent`. What is sent: message, kind, from, tool, \
@@ -44,6 +50,26 @@ pub(crate) const DESCRIPTION: &str = "Send feedback about using Telekin (somethi
     catalog content is sent unless it is in the message. A message is at most 4,000 characters, \
     and each credential may send a limited number per hour (10 by default). Returns the \
     feedback's id at once; delivery happens in the background.";
+
+/// The tool's description for a session: [`DESCRIPTION`] naming the
+/// product.
+///
+/// # Arguments
+/// * `product_name` - the effective `product_name` setting.
+///
+/// # Returns
+/// The description, "Send feedback about using Acme Notes ... to Acme
+/// Notes's team ...".
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
+    )
+)]
+pub(crate) fn description(product_name: &str) -> String {
+    DESCRIPTION.replace(PRODUCT, product_name)
+}
 
 /// `send_feedback`'s arguments.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -248,10 +274,11 @@ mod tests {
 
     use super::*;
     use crate::auth::Principal;
+    use crate::config::AuthConfig;
     use crate::config::{Config, FeedbackConfig};
     use crate::mail::feedback::tests::{config_on, mock_forminit, API_KEY, FORM};
     use crate::mcp::testing::{app_with, context, principal, McpProbe, TestApp};
-    use crate::mcp::{OkfServer, FEEDBACK_INSTRUCTIONS, INSTRUCTIONS};
+    use crate::mcp::{feedback_instructions, OkfServer, INSTRUCTIONS, TOOL_REFERENCE_URL};
     use crate::store::keys::{self, Access, Grants, NewKey};
 
     /// A `[feedback]` config whose form is never reached (nothing runs a
@@ -307,7 +334,7 @@ mod tests {
         let description = tool.description.as_deref().unwrap_or_default();
 
         for required in [
-            "goes to Telekin's team through a third-party form service (Forminit)",
+            "goes to this server's team through a third-party form service (Forminit)",
             "Ask the user before including catalog content, personal details or anything the \
              user hasn't agreed to share",
             "send the user's own words",
@@ -357,7 +384,7 @@ mod tests {
         );
         assert_eq!(
             on_server.get_info().instructions,
-            Some(format!("{INSTRUCTIONS} {FEEDBACK_INSTRUCTIONS}"))
+            Some(format!("{INSTRUCTIONS} {}", feedback_instructions("okf")))
         );
         // The function refuses too, and stores nothing.
         let refused = send(&context(&off, reader(false), None), None, &params("hi")).await;
@@ -366,6 +393,43 @@ mod tests {
             "{refused:?}"
         );
         assert!(rows(&off).await.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_session_names_the_configured_product_in_the_tool_and_instructions() {
+        let branded = Config {
+            auth: AuthConfig {
+                product_name: "Acme Notes".to_string(),
+                ..AuthConfig::default()
+            },
+            ..configured()
+        };
+        let test = app_with(&[("pg", &[])], branded).await;
+
+        let server = OkfServer::new(Arc::clone(&test.app));
+
+        use rmcp::ServerHandler;
+        let instructions = server.get_info().instructions.unwrap_or_default();
+        assert!(
+            instructions.ends_with(&feedback_instructions("Acme Notes")),
+            "{instructions}"
+        );
+        assert!(
+            instructions.contains("To tell Acme Notes's team"),
+            "{instructions}"
+        );
+        let tool = server.tool_router.get(TOOL).expect("offered");
+        let shown = tool.description.as_deref().unwrap_or_default();
+        assert!(shown.starts_with(&description("Acme Notes")), "{shown}");
+        assert!(
+            shown.contains("goes to Acme Notes's team through a third-party form service"),
+            "{shown}"
+        );
+        assert!(!shown.contains("this server"), "{shown}");
+        assert!(
+            shown.ends_with(&format!("{TOOL_REFERENCE_URL}#{TOOL}")),
+            "{shown}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

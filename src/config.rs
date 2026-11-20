@@ -16,7 +16,7 @@ use bytesize::ByteSize;
 use lettre::message::Mailbox;
 use serde::{Deserialize, Deserializer};
 
-use crate::store::catalogs;
+use crate::store::{catalogs, settings};
 
 use crate::error::OkfError;
 use crate::telemetry::config::TelemetryConfig;
@@ -150,9 +150,10 @@ impl Default for OAuthConfig {
     }
 }
 
-/// The `[auth]` section: the defaults for the console's sign-in policy.
-/// The policy keys can be overridden at run time by `server_settings`
-/// (`store::settings`); `trusted_proxy_header` is config-only.
+/// The `[auth]` section: the defaults for the console's sign-in policy and
+/// branding. The policy and branding keys can be overridden at run time by
+/// `server_settings` (`store::settings`); `trusted_proxy_header` and `oidc`
+/// are config-only.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct AuthConfig {
@@ -181,7 +182,30 @@ pub struct AuthConfig {
     pub trusted_proxy_header: Option<String>,
     /// The OIDC providers (`[[auth.oidc]]`); none by default.
     pub oidc: Vec<OidcProviderConfig>,
+    /// The default product name people see in mail, on the server's pages,
+    /// in the console and in passkey prompts
+    /// ([`settings::DEFAULT_PRODUCT_NAME`] when unset).
+    pub product_name: String,
+    /// The default support contact (an email address or `https://` URL);
+    /// `None` shows no contact line.
+    pub support_contact: Option<String>,
+    /// The default `https://` URL of the console's "Send feedback" link;
+    /// `None` shows no link.
+    pub feedback_url: Option<String>,
+    /// The name the MCP server reports in `initialize` (`serverInfo.name`;
+    /// [`DEFAULT_MCP_SERVER_NAME`] when unset). Config-only: it is an
+    /// identifier, not display text (`serverInfo.title` is the product
+    /// name). 1 to [`MAX_MCP_SERVER_NAME_CHARS`] of ASCII letters, digits,
+    /// `-`, `_` and `.`.
+    pub mcp_server_name: String,
 }
+
+/// The MCP server's reported name with no `[auth] mcp_server_name`: this
+/// crate's name, read at compile time.
+pub const DEFAULT_MCP_SERVER_NAME: &str = env!("CARGO_PKG_NAME");
+
+/// The longest `[auth] mcp_server_name`, in characters.
+pub const MAX_MCP_SERVER_NAME_CHARS: usize = 64;
 
 /// One `[[auth.oidc]]` provider (spec "OIDC"). The client secret is read
 /// from the environment variable `client_secret_env` at start-up, never
@@ -255,6 +279,10 @@ impl Default for AuthConfig {
             reset_link_ttl: DEFAULT_RESET_LINK_TTL,
             trusted_proxy_header: None,
             oidc: Vec::new(),
+            product_name: settings::DEFAULT_PRODUCT_NAME.to_string(),
+            support_contact: None,
+            feedback_url: None,
+            mcp_server_name: DEFAULT_MCP_SERVER_NAME.to_string(),
         }
     }
 }
@@ -267,8 +295,9 @@ impl AuthConfig {
     ///
     /// # Errors
     /// A zero or out-of-range duration, `max_keys_per_user` above
-    /// [`MAX_KEYS_PER_USER_LIMIT`], or a `trusted_proxy_header` that is not
-    /// an HTTP header name.
+    /// [`MAX_KEYS_PER_USER_LIMIT`], a `trusted_proxy_header` that is not
+    /// an HTTP header name, a malformed `mcp_server_name`, or a branding
+    /// default the matching setting would refuse.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -305,7 +334,39 @@ impl AuthConfig {
                 ));
             }
         }
-        Ok(())
+        let name = &self.mcp_server_name;
+        let well_formed = name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+        if name.is_empty() || name.len() > MAX_MCP_SERVER_NAME_CHARS || !well_formed {
+            return Err(format!(
+                "auth.mcp_server_name takes 1 to {MAX_MCP_SERVER_NAME_CHARS} ASCII letters, \
+                 digits, '-', '_' and '.', not {name:?}"
+            ));
+        }
+        // The same checks `okf-mcp settings set` applies, so a default the
+        // file gives is one the Settings page could have stored.
+        settings::check_branding_defaults(self).map_err(|problem| format!("auth.{problem}"))
+    }
+
+    /// The branding this file gives: what people see where no setting
+    /// overrides it. The product name is trimmed, as a stored one is.
+    ///
+    /// # Returns
+    /// The default product name, support contact and feedback URL.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
+    pub fn default_brand(&self) -> settings::Brand {
+        settings::Brand {
+            product_name: self.product_name.trim().to_string(),
+            support_contact: self.support_contact.clone(),
+            feedback_url: self.feedback_url.clone(),
+        }
     }
 }
 
@@ -1982,6 +2043,72 @@ mod tests {
             too_long.contains("auth.console_session_absolute") && too_long.contains("10 years"),
             "{too_long}"
         );
+    }
+
+    #[test]
+    fn the_branding_defaults_read_from_the_auth_table() {
+        let text = "[auth]\n\
+                    product_name = \" Acme Notes \"\n\
+                    support_contact = \"help@example.com\"\n\
+                    feedback_url = \"https://example.com/feedback\"\n";
+
+        let config = Config::from_toml(text).unwrap();
+
+        assert_eq!(config.validate(), Ok(()));
+        assert_eq!(
+            config.auth.default_brand(),
+            settings::Brand {
+                product_name: "Acme Notes".to_string(),
+                support_contact: Some("help@example.com".to_string()),
+                feedback_url: Some("https://example.com/feedback".to_string()),
+            }
+        );
+        assert_eq!(
+            Config::from_toml("").unwrap().auth.default_brand(),
+            settings::Brand::default()
+        );
+    }
+
+    #[test]
+    fn the_mcp_server_name_reads_from_the_auth_table_and_is_checked() {
+        assert_eq!(
+            Config::from_toml("").unwrap().auth.mcp_server_name,
+            "okf_mcp"
+        );
+        let named = Config::from_toml("[auth]\nmcp_server_name = \"acme-notes.v1\"\n").unwrap();
+        assert_eq!(named.validate(), Ok(()));
+        assert_eq!(named.auth.mcp_server_name, "acme-notes.v1");
+        let longest = format!("[auth]\nmcp_server_name = \"{}\"\n", "a".repeat(64));
+        assert_eq!(Config::from_toml(&longest).unwrap().validate(), Ok(()));
+
+        let too_long = format!("[auth]\nmcp_server_name = \"{}\"\n", "a".repeat(65));
+        for text in [
+            "[auth]\nmcp_server_name = \"\"\n",
+            "[auth]\nmcp_server_name = \"Acme Notes\"\n",
+            "[auth]\nmcp_server_name = \"acm\u{e9}\"\n",
+            too_long.as_str(),
+        ] {
+            let problem = Config::from_toml(text).unwrap().validate().unwrap_err();
+            assert!(
+                problem.starts_with("auth.mcp_server_name"),
+                "{text}: {problem}"
+            );
+        }
+    }
+
+    #[test]
+    fn branding_defaults_the_settings_would_refuse_are_refused() {
+        let refused = [
+            "[auth]\nproduct_name = \"\"\n",
+            "[auth]\nproduct_name = \"Acme\\u0007\"\n",
+            "[auth]\nsupport_contact = \"http://example.com\"\n",
+            "[auth]\nfeedback_url = \"help@example.com\"\n",
+        ];
+
+        for text in refused {
+            let problem = Config::from_toml(text).unwrap().validate().unwrap_err();
+            assert!(problem.starts_with("auth."), "{text}: {problem}");
+        }
     }
 
     #[test]

@@ -62,6 +62,8 @@ pub(super) async fn settings(
 ///
 /// # Arguments
 /// * `pool` - the migrated database (apalis's schema included).
+/// * `defaults` - the config file's `[auth]` table: a test mail's branding
+///   defaults.
 /// * `command` - which mail subcommand.
 /// * `now` - the server clock: a queued mail's and a retry's start of the
 ///   24-hour retry window (plan Decision 11).
@@ -75,12 +77,20 @@ pub(super) async fn settings(
 #[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn mail(
     pool: &PgPool,
+    defaults: &AuthConfig,
     command: MailCommand,
     now: DateTime<Utc>,
 ) -> anyhow::Result<String> {
     Ok(match command {
         MailCommand::Test { address } => {
-            queue::enqueue(pool, &address, &Template::Test, now).await?;
+            queue::enqueue(
+                pool,
+                &address,
+                &Template::Test,
+                now,
+                &defaults.default_brand(),
+            )
+            .await?;
             format!("queued a test email to {address}\n")
         }
         MailCommand::Queue => {
@@ -242,7 +252,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn mail_test_queue_retry_and_delete() {
         let db = test_db().await;
-        let run = |command| mail(&db.pool, command, Utc::now());
+        let defaults = AuthConfig::default();
+        let run = |command| mail(&db.pool, &defaults, command, Utc::now());
 
         let queued = run(MailCommand::Test {
             address: "ops@example.com".to_string(),

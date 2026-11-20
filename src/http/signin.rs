@@ -651,7 +651,15 @@ pub(crate) async fn notify_method_added(
         method: method.to_string(),
     };
     let mut savepoint = conn.begin().await?;
-    match mail_queue::enqueue_in(&mut savepoint, to, &template, app.clock().now()).await {
+    match mail_queue::enqueue_in(
+        &mut savepoint,
+        to,
+        &template,
+        app.clock().now(),
+        &app.config().auth.default_brand(),
+    )
+    .await
+    {
         Ok(()) => savepoint.commit().await?,
         Err(error) => {
             savepoint.rollback().await?;
@@ -793,7 +801,14 @@ async fn send_reset(app: &App, email: &str) -> Result<(), OkfError> {
     };
     let link = mail::link(public_url, RESET_PATH, &issued.token);
     let template = Template::Reset { link };
-    mail_queue::enqueue(app.pool(), &issued.to, &template, app.clock().now()).await?;
+    mail_queue::enqueue(
+        app.pool(),
+        &issued.to,
+        &template,
+        app.clock().now(),
+        &app.config().auth.default_brand(),
+    )
+    .await?;
     tracing::info!(user = %issued.user.id, "password reset link queued");
     Ok(())
 }

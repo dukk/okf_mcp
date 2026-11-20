@@ -41,7 +41,7 @@ use crate::app::App;
 use crate::clock::Clock;
 use crate::config::MailProvider;
 use crate::error::OkfError;
-use crate::store::settings;
+use crate::store::settings::{self, Brand};
 use crate::store::users::check_email;
 use crate::telemetry::metrics::{MailOutcome, MailStatus, Metrics};
 use crate::telemetry::subscriber::split_event;
@@ -232,6 +232,8 @@ fn queue_error(error: impl std::fmt::Display) -> OkfError {
 /// * `to` - one recipient address.
 /// * `template` - what to send.
 /// * `now` - when (server clock): the start of the 24-hour retry window.
+/// * `defaults` - the config's branding (`AuthConfig::default_brand`):
+///   what a mail takes where no setting overrides it.
 ///
 /// # Errors
 /// As [`enqueue_in`].
@@ -241,10 +243,11 @@ pub async fn enqueue(
     to: &str,
     template: &Template,
     now: DateTime<Utc>,
+    defaults: &Brand,
 ) -> Result<(), OkfError> {
     let mut conn = pool.acquire().await?;
     // `&mut *conn`: the pooled connection's inner `PgConnection`.
-    enqueue_in(&mut conn, to, template, now).await
+    enqueue_in(&mut conn, to, template, now, defaults).await
 }
 
 /// [`enqueue`], inside the caller's transaction: the job exists only if the
@@ -256,6 +259,8 @@ pub async fn enqueue(
 /// * `to` - one recipient address.
 /// * `template` - what to send.
 /// * `now` - when (server clock): the start of the 24-hour retry window.
+/// * `defaults` - the config's branding (`AuthConfig::default_brand`):
+///   what a mail takes where no setting overrides it.
 ///
 /// # Errors
 /// [`OkfError::LimitExceeded`] with `limit: "email"` for a malformed
@@ -266,11 +271,12 @@ pub async fn enqueue_in(
     to: &str,
     template: &Template,
     now: DateTime<Utc>,
+    defaults: &Brand,
 ) -> Result<(), OkfError> {
     check_email(to)?;
     // The brand stored now, read on the same connection: whoever queues the
     // mail (a server or the CLI), it names the product the operator set.
-    let brand = settings::brand_in(&mut *conn).await?;
+    let brand = settings::brand_in(&mut *conn, defaults).await?;
     let (subject, text, html) = render(template, &brand);
     let job = SendMail {
         mail: Mail {
@@ -1016,7 +1022,9 @@ mod tests {
 
     /// Enqueues mail to `to` and waits (up to 10 s) for `worker` to claim it.
     async fn enqueue_claimed_by(pool: &PgPool, to: &str, worker: &str) {
-        enqueue(pool, to, &Template::Test, now()).await.unwrap();
+        enqueue(pool, to, &Template::Test, now(), &Brand::default())
+            .await
+            .unwrap();
         let mut claimed_by: Option<String> = None;
         for _ in 0..100 {
             // `convert_from(job, 'UTF8')`: the payload is JSON bytes.
@@ -1102,9 +1110,15 @@ mod tests {
             link: crate::mail::link("https://okf.example.com", crate::mail::RESET_PATH, "s3cr3t"),
         };
 
-        enqueue(&db.pool, "alice@example.com", &template, now())
-            .await
-            .unwrap();
+        enqueue(
+            &db.pool,
+            "alice@example.com",
+            &template,
+            now(),
+            &Brand::default(),
+        )
+        .await
+        .unwrap();
 
         let queued = list(&db.pool).await.unwrap();
         assert_eq!(queued.len(), 1);
@@ -1139,6 +1153,7 @@ mod tests {
             "alice@example.com, bob@example.com",
             &Template::Test,
             now(),
+            &Brand::default(),
         )
         .await;
 
@@ -1164,9 +1179,15 @@ mod tests {
             .unwrap()
         }
         let db = test_db().await;
-        enqueue(&db.pool, "alice@example.com", &Template::Test, now())
-            .await
-            .unwrap();
+        enqueue(
+            &db.pool,
+            "alice@example.com",
+            &Template::Test,
+            now(),
+            &Brand::default(),
+        )
+        .await
+        .unwrap();
         let before = stored_subject(&db.pool, "alice@example.com").await;
 
         settings::set(
@@ -1180,9 +1201,15 @@ mod tests {
         .unwrap();
         // Inside a caller's transaction too.
         let mut tx = db.pool.begin().await.unwrap();
-        enqueue_in(&mut tx, "bob@example.com", &Template::Test, now())
-            .await
-            .unwrap();
+        enqueue_in(
+            &mut tx,
+            "bob@example.com",
+            &Template::Test,
+            now(),
+            &Brand::default(),
+        )
+        .await
+        .unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(before, "okf test email");
@@ -1203,9 +1230,15 @@ mod tests {
             link: link.clone(),
             user: "alice".to_string(),
         };
-        enqueue(&db.pool, "alice@example.com", &template, now())
-            .await
-            .unwrap();
+        enqueue(
+            &db.pool,
+            "alice@example.com",
+            &template,
+            now(),
+            &Brand::default(),
+        )
+        .await
+        .unwrap();
         wait_for(&db.pool, "Done", 1).await;
         stop(shutdown, worker).await;
         let listed = list(&db.pool).await.unwrap();
@@ -1249,9 +1282,15 @@ mod tests {
         );
         let (shutdown, worker) = start_context(context, &worker_name());
 
-        enqueue(&db.pool, "alice@example.com", &Template::Test, now())
-            .await
-            .unwrap();
+        enqueue(
+            &db.pool,
+            "alice@example.com",
+            &Template::Test,
+            now(),
+            &Brand::default(),
+        )
+        .await
+        .unwrap();
         wait_for_series(
             &registry,
             "okf_mail_jobs_total{outcome=\"retry\",provider=\"smtp\"}",
@@ -1265,9 +1304,15 @@ mod tests {
             1.0,
         )
         .await;
-        enqueue(&db.pool, "bob@example.com", &Template::Test, now())
-            .await
-            .unwrap();
+        enqueue(
+            &db.pool,
+            "bob@example.com",
+            &Template::Test,
+            now(),
+            &Brand::default(),
+        )
+        .await
+        .unwrap();
         wait_for_series(
             &registry,
             "okf_mail_jobs_total{outcome=\"failed\",provider=\"smtp\"}",
@@ -1369,7 +1414,9 @@ mod tests {
     async fn depth_counts_the_unsent_jobs_by_status() {
         let db = test_db().await;
         for to in ["a@example.com", "b@example.com", "c@example.com"] {
-            enqueue(&db.pool, to, &Template::Test, now()).await.unwrap();
+            enqueue(&db.pool, to, &Template::Test, now(), &Brand::default())
+                .await
+                .unwrap();
         }
         sqlx::query(
             "UPDATE apalis.jobs SET status = 'Killed' \
@@ -1407,9 +1454,15 @@ mod tests {
         ]);
         let (shutdown, worker) = start(&db.pool, Arc::clone(&mailer));
 
-        enqueue(&db.pool, "alice@example.com", &Template::Test, now())
-            .await
-            .unwrap();
+        enqueue(
+            &db.pool,
+            "alice@example.com",
+            &Template::Test,
+            now(),
+            &Brand::default(),
+        )
+        .await
+        .unwrap();
         wait_for(&db.pool, "Failed", 1).await;
         let first_wait = wait_left(&db.pool).await;
         let listed = list(&db.pool).await.unwrap();
@@ -1464,9 +1517,15 @@ mod tests {
         ))]);
         let (shutdown, worker) = start(&db.pool, Arc::clone(&mailer));
 
-        enqueue(&db.pool, "alice@example.com", &Template::Test, now())
-            .await
-            .unwrap();
+        enqueue(
+            &db.pool,
+            "alice@example.com",
+            &Template::Test,
+            now(),
+            &Brand::default(),
+        )
+        .await
+        .unwrap();
         wait_for(&db.pool, "Killed", 1).await;
         let listed = list(&db.pool).await.unwrap();
         // Killed is final: polls pass and nobody takes it again.
@@ -1502,6 +1561,7 @@ mod tests {
             "alice@example.com",
             &Template::Test,
             now() - TimeDelta::hours(25),
+            &Brand::default(),
         )
         .await
         .unwrap();
@@ -1557,7 +1617,9 @@ mod tests {
         drop(held_a);
         // The rest arrive with both workers free to race for each one.
         for to in &recipients[2..] {
-            enqueue(&db.pool, to, &Template::Test, now()).await.unwrap();
+            enqueue(&db.pool, to, &Template::Test, now(), &Brand::default())
+                .await
+                .unwrap();
         }
         let mut done = 0_i64;
         for _ in 0..200 {
@@ -1673,9 +1735,15 @@ mod tests {
         insert_worker(&db.pool, "stale", TimeDelta::hours(1)).await;
         insert_worker(&db.pool, "holds-a-job", TimeDelta::hours(1)).await;
         insert_worker(&db.pool, "recent", TimeDelta::seconds(30)).await;
-        enqueue(&db.pool, "alice@example.com", &Template::Test, now())
-            .await
-            .unwrap();
+        enqueue(
+            &db.pool,
+            "alice@example.com",
+            &Template::Test,
+            now(),
+            &Brand::default(),
+        )
+        .await
+        .unwrap();
         sqlx::query("UPDATE apalis.jobs SET status = 'Running', lock_by = 'holds-a-job'")
             .execute(&db.pool)
             .await
@@ -1695,9 +1763,15 @@ mod tests {
     async fn a_stale_worker_row_that_finished_jobs_goes_once_the_jobs_do() {
         let db = test_db().await;
         insert_worker(&db.pool, "finished", TimeDelta::days(9)).await;
-        enqueue(&db.pool, "alice@example.com", &Template::Test, now())
-            .await
-            .unwrap();
+        enqueue(
+            &db.pool,
+            "alice@example.com",
+            &Template::Test,
+            now(),
+            &Brand::default(),
+        )
+        .await
+        .unwrap();
         sqlx::query(
             "UPDATE apalis.jobs SET status = 'Done', lock_by = 'finished', \
              done_at = $1 - interval '8 days'",
@@ -1731,9 +1805,15 @@ mod tests {
             ..Scripted::default()
         });
         let (shutdown, worker) = start(&db.pool, Arc::clone(&mailer));
-        enqueue(&db.pool, "alice@example.com", &Template::Test, now())
-            .await
-            .unwrap();
+        enqueue(
+            &db.pool,
+            "alice@example.com",
+            &Template::Test,
+            now(),
+            &Brand::default(),
+        )
+        .await
+        .unwrap();
         wait_for(&db.pool, "Running", 0).await;
 
         stop(shutdown, worker).await;
@@ -1745,9 +1825,15 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn retry_and_delete_refuse_unknown_and_unfinished_jobs() {
         let db = test_db().await;
-        enqueue(&db.pool, "alice@example.com", &Template::Test, now())
-            .await
-            .unwrap();
+        enqueue(
+            &db.pool,
+            "alice@example.com",
+            &Template::Test,
+            now(),
+            &Brand::default(),
+        )
+        .await
+        .unwrap();
         let id = only_id(&db.pool).await;
 
         let pending_retry = retry(&db.pool, &id, now()).await;
@@ -1793,9 +1879,15 @@ mod tests {
     async fn prune_keeps_a_week_of_done_and_a_month_of_failed_jobs() {
         let db = test_db().await;
         for _ in 0..4 {
-            enqueue(&db.pool, "alice@example.com", &Template::Test, now())
-                .await
-                .unwrap();
+            enqueue(
+                &db.pool,
+                "alice@example.com",
+                &Template::Test,
+                now(),
+                &Brand::default(),
+            )
+            .await
+            .unwrap();
         }
         // Age the four jobs by hand: done 8 days ago, done 6 days ago,
         // failed 31 days ago, failed 29 days ago.
@@ -1887,9 +1979,15 @@ mod tests {
         .await
         .unwrap();
         admin.close().await.unwrap();
-        enqueue(&db.pool, "alice@example.com", &Template::Test, now())
-            .await
-            .unwrap();
+        enqueue(
+            &db.pool,
+            "alice@example.com",
+            &Template::Test,
+            now(),
+            &Brand::default(),
+        )
+        .await
+        .unwrap();
         wait_for(&db.pool, "Done", 1).await;
         let sent_by: String = sqlx::query_scalar("SELECT lock_by FROM apalis.jobs")
             .fetch_one(&db.pool)

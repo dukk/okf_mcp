@@ -648,6 +648,7 @@ async fn an_unlock_and_its_end_invalidate_the_unlocked_admin() {
     let policy = UnlockPolicy {
         max_hours: 4,
         notify_owners: false,
+        brand_defaults: crate::store::settings::Brand::default(),
     };
     let new = NewUnlock {
         catalog: "main",
@@ -690,6 +691,7 @@ async fn ending_an_unlock_of_a_deleted_user_sends_nothing_and_does_not_bump() {
     let policy = UnlockPolicy {
         max_hours: 4,
         notify_owners: false,
+        brand_defaults: crate::store::settings::Brand::default(),
     };
     let new = NewUnlock {
         catalog: "main",

@@ -70,22 +70,62 @@ pub const INSTRUCTIONS: &str = "Open Knowledge Format catalogs: concepts (markdo
     visible to others until `publish`.";
 
 /// The line [`INSTRUCTIONS`] gains when `[feedback]` is set and
-/// `send_feedback` is offered (issue #674).
-pub const FEEDBACK_INSTRUCTIONS: &str = "To tell Telekin's team about something confusing, \
-    broken, missing or good, call `send_feedback` (it goes through a third-party form service; \
-    ask the user before including catalog content or personal details).";
+/// `send_feedback` is offered (issue #674), naming the product.
+///
+/// # Arguments
+/// * `product_name` - the effective `product_name` setting.
+///
+/// # Returns
+/// The line, "To tell Acme Notes's team about ...".
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
+    )
+)]
+pub fn feedback_instructions(product_name: &str) -> String {
+    format!(
+        "To tell {product_name}'s team about something confusing, broken, missing or good, call \
+         `send_feedback` (it goes through a third-party form service; ask the user before \
+         including catalog content or personal details)."
+    )
+}
 
 /// The public tool reference (`docs/reference/tools.md`), generated from the tool list by a test.
 /// Each tool's description ends with a link to its heading here (the tool's name is the anchor).
 pub const TOOL_REFERENCE_URL: &str =
     "https://github.com/hypotheosis/okf_mcp/blob/main/docs/reference/tools.md";
 
+/// A tool's description as `tools/list` sends it: its own text, then a
+/// link to its heading in the public reference.
+///
+/// # Arguments
+/// * `description` - the tool's own description.
+/// * `name` - the tool's name (the heading's anchor).
+///
+/// # Returns
+/// `"<description> Reference: <TOOL_REFERENCE_URL>#<name>"`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
+    )
+)]
+fn with_reference(description: &str, name: &str) -> String {
+    format!("{description} Reference: {TOOL_REFERENCE_URL}#{name}")
+}
+
 /// The MCP handler: one per session (rmcp's factory makes it).
 pub struct OkfServer {
     app: Arc<App>,
     tool_router: ToolRouter<OkfServer>,
-    // `INSTRUCTIONS`, plus `FEEDBACK_INSTRUCTIONS` when the tool is offered.
+    // `INSTRUCTIONS`, plus `feedback_instructions` when the tool is offered.
     instructions: String,
+    // `serverInfo`: `[auth] mcp_server_name`, the version, and the product
+    // name as its display title.
+    server_info: Implementation,
     // Held for the session's life: `okf.mcp.sessions.active` counts it open
     // until the handler is dropped.
     _session: SessionGuard,
@@ -99,12 +139,28 @@ impl OkfServer {
     ///
     /// # Returns
     /// The handler, with every tool registered, except `send_feedback`
-    /// without `[feedback]`: then it is neither listed nor callable.
+    /// without `[feedback]`: then it is neither listed nor callable. With
+    /// it, the tool's description and the instructions name the product
+    /// as the `product_name` setting says when the session starts, as
+    /// `serverInfo.title` does; `serverInfo.name` is `[auth]
+    /// mcp_server_name`.
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn new(app: Arc<App>) -> Self {
         let mut tool_router = Self::tools();
+        let product_name = app.settings().product_name.clone();
+        // `env!` reads this crate's version at compile time.
+        let server_info = Implementation::new(
+            &app.config().auth.mcp_server_name,
+            env!("CARGO_PKG_VERSION"),
+        )
+        .with_title(&product_name);
         let instructions = if app.config().feedback.is_some() {
-            format!("{INSTRUCTIONS} {FEEDBACK_INSTRUCTIONS}")
+            if let Some(route) = tool_router.map.get_mut(feedback::TOOL) {
+                route.attr.description = Some(
+                    with_reference(&feedback::description(&product_name), feedback::TOOL).into(),
+                );
+            }
+            format!("{INSTRUCTIONS} {}", feedback_instructions(&product_name))
         } else {
             tool_router.remove_route(feedback::TOOL);
             INSTRUCTIONS.to_string()
@@ -114,6 +170,7 @@ impl OkfServer {
             app,
             tool_router,
             instructions,
+            server_info,
         }
     }
 
@@ -165,8 +222,7 @@ impl OkfServer {
         // each tool as `{ call, attr }`; `attr` is the `Tool` that `tools/list` sends.
         for (name, route) in router.map.iter_mut() {
             let description = route.attr.description.as_deref().unwrap_or_default();
-            route.attr.description =
-                Some(format!("{description} Reference: {TOOL_REFERENCE_URL}#{name}").into());
+            route.attr.description = Some(with_reference(description, name).into());
         }
         router
     }
@@ -274,12 +330,8 @@ impl ServerHandler for OkfServer {
 
     #[tracing::instrument(level = "trace", skip_all)]
     fn get_info(&self) -> ServerConfig {
-        // `env!` reads this crate's name and version at compile time.
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new(
-                env!("CARGO_PKG_NAME"),
-                env!("CARGO_PKG_VERSION"),
-            ))
+            .with_server_info(self.server_info.clone())
             .with_instructions(self.instructions.clone())
     }
 }
@@ -485,6 +537,44 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn the_server_info_takes_the_configured_name_and_the_product_title() {
+        use crate::config::AuthConfig;
+        use crate::store::audit::AuditActor;
+        use crate::store::settings::{self, SettingKey};
+        let config = Config {
+            auth: AuthConfig {
+                mcp_server_name: "acme-notes".to_string(),
+                product_name: "Acme Notes".to_string(),
+                ..AuthConfig::default()
+            },
+            ..Config::default()
+        };
+        let test = testing::app_with(&[("pg", &[])], config).await;
+
+        let info = OkfServer::new(Arc::clone(&test.app)).get_info().server_info;
+        assert_eq!(info.name, "acme-notes");
+        assert_eq!(info.title.as_deref(), Some("Acme Notes"));
+        assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
+
+        // A Settings override retitles the next session; the name stays.
+        crate::invalidate::testing::applied(&test.app, async {
+            settings::set(
+                test.app.pool(),
+                SettingKey::ProductName,
+                "Other",
+                &AuditActor::cli(),
+                chrono::Utc::now(),
+            )
+            .await
+            .expect("set product_name");
+        })
+        .await;
+        let info = OkfServer::new(Arc::clone(&test.app)).get_info().server_info;
+        assert_eq!(info.name, "acme-notes");
+        assert_eq!(info.title.as_deref(), Some("Other"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn the_server_names_itself_and_needs_a_principal_on_the_request() {
         let test = testing::app_with(&[("pg", &[])], Config::default()).await;
         let server = OkfServer::new(Arc::clone(&test.app));
@@ -497,6 +587,7 @@ mod tests {
         let refused = server.context(&without_key);
 
         assert_eq!(info.server_info.name, env!("CARGO_PKG_NAME"));
+        assert_eq!(info.server_info.title.as_deref(), Some("okf"));
         assert!(info.capabilities.tools.is_some());
         assert_eq!(
             admitted

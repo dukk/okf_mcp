@@ -989,7 +989,10 @@ async fn dispatch(
             // Only queues and lists: no mailer is built, so no mail secret
             // is needed here.
             let pool = connect(cli.database_url.as_deref(), &config).await?;
-            print!("{}", admin::mail(&pool, command, clock.now()).await?);
+            print!(
+                "{}",
+                admin::mail(&pool, &config.auth, command, clock.now()).await?
+            );
         }
         Command::Unlock(command) => {
             let pool = connect(cli.database_url.as_deref(), &config).await?;

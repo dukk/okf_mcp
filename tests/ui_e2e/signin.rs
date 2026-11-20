@@ -10,6 +10,7 @@ use okf_mcp::mail::{link, SETUP_PATH};
 use okf_mcp::mail::{queue as mail_queue, Template};
 use okf_mcp::store::email_tokens::{self, Purpose};
 use okf_mcp::store::keys::Access;
+use okf_mcp::store::settings::Brand;
 use okf_mcp::store::sign_in_events::{self, Method, Outcome};
 use okf_mcp::store::{ceiling, passkeys, users};
 use rustwright::GotoOptions;
@@ -112,9 +113,15 @@ async fn a_setup_link_sets_a_password_and_the_console_shows_the_user() {
         link: link(&server.base, SETUP_PATH, &token),
         user: "alice".to_string(),
     };
-    mail_queue::enqueue(pool, "alice@example.com", &template, Utc::now())
-        .await
-        .expect("queue the mail");
+    mail_queue::enqueue(
+        pool,
+        "alice@example.com",
+        &template,
+        Utc::now(),
+        &Brand::default(),
+    )
+    .await
+    .expect("queue the mail");
     let job: String = sqlx::query_scalar("SELECT convert_from(job, 'UTF8') FROM apalis.jobs")
         .fetch_one(pool)
         .await
