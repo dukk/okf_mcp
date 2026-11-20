@@ -202,3 +202,27 @@ async fn signing_out_without_a_connection_still_deletes_the_offline_copies() {
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_picker_and_the_tree_lead_from_a_catalog_to_its_concepts() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/c", EMAIL, PASSWORD);
+        // Two catalogs, so the picker stays.
+        ui.wait_visible("[data-catalog=other]");
+        ui.click("[data-catalog=main]");
+        ui.wait_visible("#screen-home");
+        ui.click("#tab-browse");
+        // The root folder: its index's body, then its folders.
+        ui.wait_text("#body", "Main");
+        ui.wait_text("#folders", "systems");
+        ui.click("#folders a");
+        // systems/: its index body, and its two concepts by title.
+        ui.wait_text("#body", "Systems");
+        ui.wait_text("#concepts", "Alpha");
+        ui.wait_text("#concepts", "Beta");
+        assert!(!ui.text("#concepts").contains("log"), "logs are not listed");
+        ui.wait_text(".crumbs", "Contents");
+    })
+    .await;
+}

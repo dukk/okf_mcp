@@ -2644,6 +2644,7 @@ export async function render(view, ctx) {
             if (error.kind === KIND.CONCEPT_GONE) await evictDocument(catalog, 'documents', listing.index.path);
             else if (error.kind !== KIND.UNAVAILABLE) throw error;
         }
+        if (!ctx.live()) return;
     }
     if (listing.folders.length) {
         view.append(h('h2', {}, 'Folders'), h('ul', { class: 'list', id: 'folders' }, listing.folders.map(name =>
@@ -2659,7 +2660,14 @@ export async function render(view, ctx) {
 - [ ] **Step 5: Run it to see it pass**
 
 Run: `scripts/test-pg.sh run cargo test --test ui_e2e read:: -- --test-threads=2`
-Expected: PASS (both journeys).
+Expected: PASS (all four `read::` journeys: the three of Task 6 and this one).
+
+> **Corrected (issue #814).** The journey is appended after the three shipped
+> Task 6 journeys (`tests/ui_e2e/read.rs` imports `crate::harness::{drive, Ui}`
+> and defines `server()`, `EMAIL` and `PASSWORD`; read it before appending).
+> `tree.js` also checks `ctx.live()` after the index read's `catch`, since the
+> eviction there awaits and the user may have left the folder meanwhile. The
+> shipped files are `src/http/read/js/screens/catalogs.js` and `tree.js`.
 
 - [ ] **Step 6: Commit**
 
