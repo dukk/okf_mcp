@@ -950,6 +950,17 @@ struct NewPasswordForm {
     return_to: Option<String>,
 }
 
+/// Where a successful first password setup sends the browser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AfterSetup<'a> {
+    /// The `onboarding_url` setting: an `https://` URL, usually on another
+    /// origin, so it is reached by a forwarding page, never a 303 (the
+    /// setup form's `form-action 'self'` would block the redirect).
+    Guide(&'a str),
+    /// A same-origin path from `safe_return_to`, reached by a 303.
+    Return(&'a str),
+}
+
 /// Where a successful first password setup sends the browser: an OAuth
 /// authorization it was continuing (`/oauth/authorize?...`) always resumes;
 /// otherwise the `onboarding_url` setting (a getting-started guide) when one
@@ -962,7 +973,7 @@ struct NewPasswordForm {
 /// * `onboarding_url` - the effective `onboarding_url` setting.
 ///
 /// # Returns
-/// The `Location` to redirect to.
+/// The destination, and so how to reach it.
 #[cfg_attr(
     dylint_lib = "hyp_tracing",
     allow(
@@ -970,10 +981,10 @@ struct NewPasswordForm {
         reason = "trivial accessor or conversion: chooses one of its arguments, no I/O"
     )
 )]
-fn after_setup<'a>(return_to: &'a str, onboarding_url: Option<&'a str>) -> &'a str {
+fn after_setup<'a>(return_to: &'a str, onboarding_url: Option<&'a str>) -> AfterSetup<'a> {
     match onboarding_url {
-        Some(url) if !return_to.starts_with(OAUTH_CONTINUATION) => url,
-        _ => return_to,
+        Some(url) if !return_to.starts_with(OAUTH_CONTINUATION) => AfterSetup::Guide(url),
+        _ => AfterSetup::Return(return_to),
     }
 }
 
@@ -981,9 +992,10 @@ fn after_setup<'a>(return_to: &'a str, onboarding_url: Option<&'a str>) -> &'a s
 /// one non-console destination `safe_return_to` keeps).
 const OAUTH_CONTINUATION: &str = "/oauth/authorize?";
 
-/// `POST /account/setup`: sets the password and signs in, then redirects
-/// as [`after_setup`] says. The link is used only once the password passes,
-/// so a weak one can be retried.
+/// `POST /account/setup`: sets the password and signs in, then sends the
+/// browser where [`after_setup`] says: a 303 to a same-origin path, or a
+/// forwarding page to the onboarding guide. The link is used only once the
+/// password passes, so a weak one can be retried.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn setup_post(
     State(app): State<Arc<App>>,
@@ -1034,8 +1046,31 @@ async fn setup_post(
     // header map would only mean no cookie to send.
     let cookie = used.cookie.unwrap_or_default();
     let settings = app.settings();
-    let destination = after_setup(&return_to, settings.onboarding_url.as_deref());
-    (cookie, Redirect::to(destination)).into_response()
+    match after_setup(&return_to, settings.onboarding_url.as_deref()) {
+        AfterSetup::Guide(url) => (cookie, guide_forward_page(url, &brand)).into_response(),
+        AfterSetup::Return(path) => (cookie, Redirect::to(path)).into_response(),
+    }
+}
+
+/// The answer to a setup that goes on to the onboarding guide: a page that
+/// refreshes to it ([`pages::forward_body`]), under the console CSP.
+///
+/// # Arguments
+/// * `url` - the `onboarding_url` setting.
+/// * `brand` - the product name and support contact.
+///
+/// # Returns
+/// A 200 page.
+#[tracing::instrument(level = "debug", skip_all)]
+fn guide_forward_page(url: &str, brand: &Brand) -> Response {
+    const HEADING: &str = "Opening the getting-started guide";
+    pages::page(
+        StatusCode::OK,
+        HEADING,
+        &pages::forward_body(HEADING, "setup-forward", url),
+        CONTENT_SECURITY_POLICY,
+        brand,
+    )
 }
 
 /// Uses an emailed link and stores the new password it was for, in one
@@ -1848,6 +1883,27 @@ mod tests {
         app_with(&[("main", MAIN)], config).await
     }
 
+    /// Where a setup's answer sends the browser: the `Location` of a 303,
+    /// or the target of a forwarding page, which must refresh to the same
+    /// URL its link names and carry no `Location`.
+    fn destination(reply: &Reply) -> String {
+        if reply.status == StatusCode::SEE_OTHER {
+            return reply.location().to_string();
+        }
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+        assert_eq!(reply.location(), "", "a forwarding page, not a redirect");
+        let page = reply.text();
+        let marker = "id=\"setup-forward\" href=\"";
+        let start = page.find(marker).expect("the continue link") + marker.len();
+        let end = start + page[start..].find('"').expect("closing quote");
+        let target = page[start..end].replace("&amp;", "&");
+        assert!(
+            page.contains(&format!("content=\"0;url={}\"", &page[start..end])),
+            "{page}"
+        );
+        target
+    }
+
     /// A fresh setup link for `user_id`.
     async fn setup_token(test: &TestApp, user_id: &str) -> String {
         email_tokens::issue(
@@ -1879,15 +1935,19 @@ mod tests {
     fn after_setup_prefers_the_guide_but_keeps_an_oauth_continuation() {
         let oauth = "/oauth/authorize?client_id=x&state=y";
 
-        assert_eq!(after_setup("/ui/", Some(ONBOARDING)), ONBOARDING);
-        assert_eq!(after_setup("/ui/#/keys", Some(ONBOARDING)), ONBOARDING);
-        assert_eq!(after_setup(oauth, Some(ONBOARDING)), oauth);
-        assert_eq!(after_setup("/ui/", None), "/ui/");
-        assert_eq!(after_setup(oauth, None), oauth);
+        let guide = AfterSetup::Guide(ONBOARDING);
+        assert_eq!(after_setup("/ui/", Some(ONBOARDING)), guide);
+        assert_eq!(after_setup("/ui/#/keys", Some(ONBOARDING)), guide);
+        assert_eq!(
+            after_setup(oauth, Some(ONBOARDING)),
+            AfterSetup::Return(oauth)
+        );
+        assert_eq!(after_setup("/ui/", None), AfterSetup::Return("/ui/"));
+        assert_eq!(after_setup(oauth, None), AfterSetup::Return(oauth));
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_first_setup_redirects_to_the_onboarding_guide_and_still_signs_in() {
+    async fn a_first_setup_forwards_to_the_onboarding_guide_and_still_signs_in() {
         let test = onboarding_app().await;
         let alice = user_with_password(&test, "alice", "alice@example.com", None).await;
         let token = setup_token(&test, &alice.id).await;
@@ -1905,8 +1965,11 @@ mod tests {
             .send(&test, "GET", "/api/v1/session", Payload::Empty)
             .await;
 
-        assert_eq!(done.status, StatusCode::SEE_OTHER);
-        assert_eq!(done.location(), ONBOARDING);
+        // A forwarding page, not a 303: the browser would block a redirect
+        // to another origin after the form's POST (`form-action 'self'`).
+        assert_eq!(done.status, StatusCode::OK);
+        assert_eq!(destination(&done), ONBOARDING);
+        assert!(!done.text().contains("<form"));
         assert!(done.set_cookie(COOKIE).is_some(), "{:?}", done.headers);
         assert_eq!(session.status, StatusCode::OK);
         assert_eq!(session.json()["user"], "alice");
@@ -1952,7 +2015,7 @@ mod tests {
                         setup_form(&token, PASSWORD, Some(hostile)),
                     )
                     .await;
-                assert_eq!(done.location(), expected, "{hostile}");
+                assert_eq!(destination(&done), expected, "{hostile}");
             }
         }
     }
