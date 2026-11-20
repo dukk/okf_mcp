@@ -490,6 +490,26 @@ test_watchdog_alarms_on_a_genuinely_long_process() {
     want_rc 3; want_out "pid=$ps_pid elapsed=5000s"; want_out "fake_test"
 }
 
+test_watchdog_sees_a_test_binary_in_the_build_dir_layout() {
+    # Issue #738: cargo 1.100 runs test binaries from
+    # <build-dir>/debug/build/<package>/<hash>/out/, with no /debug/deps/ in
+    # the path, and the watchdog missed a lib test binary hung for 50 min.
+    # The gate limit is out of reach, so only the test-binary limit can fire.
+    new_fixtures
+    fake_pids=()
+    trap 'kill "${fake_pids[@]}" 2>/dev/null' EXIT
+    local binary=$work/build-dir/debug/build/okf_mcp/0e3f1e14f080a04c/out/okf_mcp-0e3f1e14f080a04c
+    (cd "$work/wt" && exec -a "$binary" sleep 30) >/dev/null 2>&1 &
+    local hung=$!
+    fake_pids+=("$hung")
+    sleep 1.2 # so the fake has run longer than the 0 s limit
+    out=$(cd "$work/wt" && AGENTIC_WATCHDOG_TEST=0 AGENTIC_WATCHDOG_GATE=999999 \
+        timeout 15 "$tools/watchdog.sh" --once 2>&1)
+    rc=$?
+    want_rc 3; want_out "pid=$hung "; want_out "okf_mcp-0e3f1e14f080a04c"
+    kill "$hung"; wait "$hung" 2>/dev/null || true
+}
+
 # --- gate.sh ---
 
 test_gate_timeout_returns_124() {

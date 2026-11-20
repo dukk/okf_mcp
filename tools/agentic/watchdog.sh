@@ -6,7 +6,9 @@
 # is inside this repository (the main checkout or any registered worktree,
 # wherever it lives), and exits 3, which
 # notifies the coordinator, when one has run longer than its limit:
-#   test binaries (target/.../debug/deps/*)   AGENTIC_WATCHDOG_TEST   default 1200 s
+#   test binaries                             AGENTIC_WATCHDOG_TEST   default 1200 s
+#     (.../debug/deps/<name>-<hash>, or .../debug/build/<package>/<hash>/out/
+#     <name>-<hash> in the newer build-dir layout, which cargo 1.100 uses)
 #   cargo test|clippy|build, just test|lint   AGENTIC_WATCHDOG_GATE   default 4800 s
 # A reading is only trusted when it is plausible: ps sometimes reports a
 # wrapped etimes (about 4.1e9 s) for a process that is starting or exiting
@@ -59,7 +61,7 @@ while :; do
         cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null) || continue
         in_checkout "$cwd" || continue
         limit=$gate_limit
-        case "$args" in */debug/deps/*) limit=$test_limit ;; esac
+        case "$args" in */debug/deps/* | */debug/build/*/out/*) limit=$test_limit ;; esac
         if [ "$elapsed" -gt "$limit" ]; then
             plausible "$elapsed" || continue
             # Re-read: the first reading may belong to a process that has gone.
@@ -70,7 +72,7 @@ while :; do
             found+="pid=$pid elapsed=${elapsed}s cwd=$cwd cmd=${args:0:200}"$'\n'
         fi
     done < <(ps -eo pid=,etimes=,args= \
-        | grep -E '/debug/deps/|cargo (test|clippy|build)|just (test|lint|test-ui)' \
+        | grep -E '/debug/deps/|/debug/build/[^/ ]+/[^/ ]+/out/|cargo (test|clippy|build)|just (test|lint|test-ui)' \
         | grep -v -E 'grep|watchdog\.sh')
     if [ -n "$found" ]; then
         echo "WATCHDOG $(date -u +%FT%TZ): long-running test processes in $root:"
