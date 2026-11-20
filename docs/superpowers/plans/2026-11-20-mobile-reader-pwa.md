@@ -3027,6 +3027,12 @@ export async function render(view, ctx) {
 }
 ```
 
+> **Corrected (issue #816, 2026-11-20).** `screens/home.js`, `screens/search.js` and `screens/me.js` shipped with these differences from the code above; read them for the final text.
+>
+> - Never pass a conditional child to the native `append` (it prints "null", issue #302): home draws `fill(view, installHint(), searchForm(catalog))`, and `me.js` (the same bug, issue #843) uses `fill`.
+> - After every await, home and search check `ctx.live()` before drawing, and the offline list is read before the check, so a late answer never draws over a newer screen or touches the banner.
+> - The two journeys above open home with a helper (`signed_in_at_home`: sign in at `#/t/main`, which remembers `main`, then open `#/`) instead of clicking `[data-catalog=main]`, so they do not depend on the picker (Task 7). Extra journeys cover home and search offline (`home_and_search_without_a_connection`, `home_lists_cached_recent_changes_and_viewed_concepts_offline`), the install hint (`the_install_hint_shows_on_an_iphone_browser_until_dismissed`, which imports the real `home.js` into the page) and `an_account_without_an_email_shows_no_null`.
+
 - [ ] **Step 5: Run it to see it pass**
 
 Run: `scripts/test-pg.sh run cargo test --test ui_e2e read:: -- --test-threads=2`

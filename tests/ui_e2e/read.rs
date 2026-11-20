@@ -380,3 +380,177 @@ async fn a_late_whole_concept_does_not_touch_a_newer_screen() {
     })
     .await;
 }
+
+/// Signs in and opens home for `main`. The catalog picker is a later task,
+/// so the catalog is chosen by opening its tree, which the reader then
+/// remembers.
+fn signed_in_at_home(ui: &Ui) {
+    ui.sign_in_reader("/t/main", EMAIL, PASSWORD);
+    ui.open_reader("/");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn home_lists_recent_changes_and_search_finds_a_concept() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        signed_in_at_home(ui);
+        ui.wait_text("#recent", "systems/alpha.md");
+        // Nothing but the search box is drawn in place of an absent hint.
+        let drawn = ui.eval(
+            "() => document.querySelector('#screen-home').textContent",
+            json!(null),
+        );
+        assert!(
+            !drawn.as_str().unwrap_or("").contains("null"),
+            "stray text: {drawn}"
+        );
+        ui.fill("#search-input", "marmalade");
+        ui.eval(
+            "() => { document.querySelector('#search-form').requestSubmit(); return true; }",
+            json!(null),
+        );
+        ui.wait_text("#hits", "Alpha");
+        let drawn = ui.eval(
+            "() => document.querySelector('#hits').textContent",
+            json!(null),
+        );
+        assert!(
+            !drawn.as_str().unwrap_or("").contains("null"),
+            "stray text: {drawn}"
+        );
+        ui.click("#hits a");
+        ui.wait_text("#concept-title", "Alpha");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_log_in_recent_changes_opens_as_a_document() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        signed_in_at_home(ui);
+        ui.wait_visible("#recent");
+        let href = ui.eval(
+            "() => [...document.querySelectorAll('#recent a')].map(a => a.getAttribute('href')).find(h => h.endsWith('log.md'))",
+            json!(null),
+        );
+        assert_eq!(href, json!("#/d/main/log.md"));
+        // Several changes touch the log: follow the first of its links.
+        ui.eval(
+            "() => { document.querySelector(\"#recent a[href='#/d/main/log.md']\").click(); return true; }",
+            json!(null),
+        );
+        ui.wait_text("#document-title", "log.md");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn home_and_search_without_a_connection() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        // Opening the tree makes `main` the remembered catalog.
+        ui.sign_in_reader("/t/main", EMAIL, PASSWORD);
+        ui.wait_worker();
+        // Home was never read online, so there are no recent changes to
+        // show and nothing viewed: the list says so.
+        let offline = ui.go_offline();
+        ui.open_reader("/");
+        ui.wait_visible("#reader");
+        let shown = ui.text("#reader");
+        assert!(shown.contains("Nothing yet"), "home shows: {shown}");
+        assert!(!ui.present("#recent"));
+        // Search needs the server and says so, with a way to the list.
+        ui.open_reader("/s/main?q=marmalade");
+        ui.wait_visible("#search-offline");
+        ui.click("#offline-list-link");
+        ui.wait_visible("#offline-list");
+        drop(offline);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn home_lists_cached_recent_changes_and_viewed_concepts_offline() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        signed_in_at_home(ui);
+        ui.wait_worker();
+        // Read home and a concept online, then lose the connection: the
+        // cached recent changes show with the banner, and the concept is
+        // listed as readable offline.
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        ui.open_reader("/");
+        ui.wait_visible("#recent");
+        let offline = ui.go_offline();
+        ui.reload_reader();
+        ui.wait_text("#recent", "systems/alpha.md");
+        ui.wait_text("#offline-banner", "Offline. Synced");
+        ui.wait_text("#offline-list", "Alpha");
+        drop(offline);
+    })
+    .await;
+}
+
+/// Renders the real home screen into a detached section, with the
+/// navigator the journey asks for (`ios`, `standalone`), and reports
+/// whether the install hint is drawn.
+const HOME_HINT: &str = "async ({ ios, standalone }) => { \
+    const define = (name, value) => Object.defineProperty(navigator, name, { value, configurable: true }); \
+    define('userAgent', ios ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)' : 'Mozilla/5.0 (X11; Linux x86_64)'); \
+    define('standalone', standalone); \
+    const home = await import('/read/js/screens/home.js'); \
+    const view = document.createElement('section'); \
+    await home.render(view, { route: { catalog: 'main' }, live: () => true, freshness: () => {} }); \
+    return view.querySelector('#install-hint') !== null; }";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_install_hint_shows_on_an_iphone_browser_until_dismissed() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_text("#account-user", "reader");
+        let hint = |ios: bool, standalone: bool| {
+            ui.eval(HOME_HINT, json!({ "ios": ios, "standalone": standalone }))
+        };
+        // Not an iPhone or iPad: no hint. Installed already: no hint.
+        assert_eq!(hint(false, false), json!(false));
+        assert_eq!(hint(true, true), json!(false));
+        assert_eq!(hint(true, false), json!(true));
+        // Dismissing it is remembered, and the hint goes.
+        let dismissed = ui.eval(
+            "async () => { \
+             const home = await import('/read/js/screens/home.js'); \
+             const view = document.createElement('section'); \
+             await home.render(view, { route: { catalog: 'main' }, live: () => true, freshness: () => {} }); \
+             view.querySelector('#install-hint button').click(); \
+             return [view.querySelector('#install-hint') === null, localStorage.getItem('okf.read.install-hint')]; }",
+            json!(null),
+        );
+        assert_eq!(dismissed, json!([true, "dismissed"]));
+        assert_eq!(hint(true, false), json!(false));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_account_without_an_email_shows_no_null() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_text("#account-user", "reader");
+        // The real account screen, for a session with no email.
+        let drawn = ui.eval(
+            "async () => { const me = await import('/read/js/screens/me.js'); \
+             const view = document.createElement('section'); \
+             await me.render(view, { state: { session: { user: 'reader', email: null, csrf: 'x', expires_at: new Date().toISOString() } } }); \
+             return view.textContent; }",
+            json!(null),
+        );
+        let drawn = drawn.as_str().unwrap_or("");
+        assert!(drawn.contains("Signed in as reader"), "not drawn: {drawn}");
+        assert!(!drawn.contains("null"), "stray text: {drawn}");
+    })
+    .await;
+}
