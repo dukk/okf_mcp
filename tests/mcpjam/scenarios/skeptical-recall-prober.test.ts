@@ -50,7 +50,9 @@ describe(SCENARIOS.scatteredFacts.goal, () => {
 describe(SCENARIOS.sourceAttribution.goal, () => {
     const { session, paths } = useScenario(SCENARIOS.sourceAttribution);
     const path = paths.at("history/footbridge");
-    const sourceId = "family-diary-1995-10-03";
+    // Unique to this run's folder: `cited_by` searches the whole catalog, so a
+    // fixed id would also match a concurrent or kept run in a shared catalog.
+    const sourceId = `family-diary-1995-10-03${paths.folder.replace(/[^a-z0-9]+/gi, "-")}`;
 
     test("the source is attached as metadata, not just claimed in prose", async () => {
         const changeset = await session().openChangeset();
