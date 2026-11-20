@@ -634,3 +634,322 @@ async fn a_team_or_catalog_recreated_under_an_old_name_never_lends_its_label_to_
         assert_eq!(labels("catalog", "catalog.deleted"), [Value::Null]);
     }
 }
+
+/// Teams `family` (owned by TEST_USER) and `other` (owned by `bob`), as
+/// [`family`] makes them, then `rounds` members added to each in turn, so
+/// other teams' entries sit between every two of family's. Entry ids start
+/// above 7,000,000 first, so no id can pass for a small number elsewhere
+/// in a payload.
+async fn interleaved(test: &TestApp, root: &str, rounds: usize) {
+    sqlx::query("SELECT setval(pg_get_serial_sequence('audit_entries', 'id'), 7000000)")
+        .execute(test.app.pool())
+        .await
+        .unwrap();
+    family(test, root).await;
+    for round in 0..rounds {
+        for (team, user) in [
+            ("family", format!("fam-{round}")),
+            ("other", format!("oth-{round}")),
+        ] {
+            let steps = [
+                ("POST", "/api/v1/users".to_string(), json!({"name": user})),
+                (
+                    "PUT",
+                    format!("/api/v1/teams/{team}/members/{user}"),
+                    json!({"role": "member"}),
+                ),
+            ];
+            for (method, uri, body) in steps {
+                let (status, answer) = send(test, method, &uri, Some(root), Some(body)).await;
+                assert!(status.is_success(), "{method} {uri}: {status} {answer}");
+            }
+        }
+    }
+}
+
+/// Every entry id [`interleaved`] numbered (the fixture's own entries,
+/// written before it, have small ids that could match any digit).
+async fn every_id(test: &TestApp) -> Vec<i64> {
+    sqlx::query_scalar("SELECT id FROM audit_entries WHERE id > 7000000 ORDER BY id")
+        .fetch_all(test.app.pool())
+        .await
+        .unwrap()
+}
+
+/// An owner's `GET` of `uri`, answering the status and the JSON body.
+async fn owner_get(test: &TestApp, owner: &mut Browser, uri: &str) -> (StatusCode, Value) {
+    owner.send(test, "GET", uri, Payload::Empty).await.parts()
+}
+
+/// `token` with one character changed to another base64url character.
+fn tampered(token: &str) -> String {
+    let mut chars: Vec<char> = token.chars().collect();
+    let middle = chars.len() / 2;
+    chars[middle] = if chars[middle] == 'A' { 'B' } else { 'A' };
+    chars.into_iter().collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_owners_page_and_export_carry_no_global_entry_id() {
+    let test = app().await;
+    let root = every_catalog_admin(&test).await;
+    interleaved(&test, &root, 4).await;
+    let mut owner = Browser::session_for(&test, TEST_USER).await;
+
+    let (_, admin_view) = send(&test, "GET", "/api/v1/audit?team=family", Some(&root), None).await;
+    let family_ids: Vec<i64> = admin_view["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["id"].as_i64().expect("an admin sees ids"))
+        .collect();
+    let (status, page) = owner_get(&test, &mut owner, "/api/v1/audit?team=family&limit=2").await;
+    let (_, again) = owner_get(&test, &mut owner, "/api/v1/audit?team=family&limit=2").await;
+    let (_, whole) = owner_get(&test, &mut owner, "/api/v1/audit?team=family").await;
+    let export = owner
+        .send(
+            &test,
+            "GET",
+            "/api/v1/audit/export?team=family",
+            Payload::Empty,
+        )
+        .await;
+    let ids = every_id(&test).await;
+
+    assert!(ids.len() > 6, "{ids:?}");
+    // The seed is what the test needs: family's ids have gaps, which is
+    // what a raw id would reveal.
+    assert_eq!(family_ids.len(), 6, "{admin_view}");
+    // Newest first: the four members, then bob's addition, which came
+    // straight after family's creation; another team's entry sits between
+    // every other two.
+    assert!(
+        family_ids[..5].windows(2).all(|pair| pair[0] - pair[1] > 1),
+        "other teams' entries between every two of family's: {family_ids:?}"
+    );
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(whole["entries"].as_array().unwrap().len(), 6, "{whole}");
+    let exported = lines(&export.text());
+    assert_eq!(exported, whole["entries"].as_array().unwrap().clone());
+    for entry in whole["entries"].as_array().unwrap().iter().chain(&exported) {
+        assert_eq!(entry.get("id"), None, "no id key: {entry}");
+    }
+    let cursor = page["next_after"]
+        .as_str()
+        .expect("an owner's cursor is a sealed string");
+    assert_ne!(
+        Some(cursor),
+        again["next_after"].as_str(),
+        "two cursors for one place look unrelated"
+    );
+    // No entry id, of any team, appears anywhere in what the owner got.
+    for text in [page.to_string(), whole.to_string(), export.text()] {
+        for id in &ids {
+            assert!(!text.contains(&id.to_string()), "entry id {id} in {text}");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_owner_pages_through_every_entry_once_with_sealed_cursors() {
+    let test = app().await;
+    let root = every_catalog_admin(&test).await;
+    interleaved(&test, &root, 3).await;
+    let mut owner = Browser::session_for(&test, TEST_USER).await;
+
+    let (_, whole) = owner_get(&test, &mut owner, "/api/v1/audit?team=family").await;
+    let mut paged = Vec::new();
+    let mut cursors = Vec::new();
+    let mut uri = "/api/v1/audit?team=family&limit=2".to_string();
+    // Bounded: a cursor that never advanced would loop forever.
+    for _ in 0..20 {
+        let (status, page) = owner_get(&test, &mut owner, &uri).await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {page}");
+        paged.extend(page["entries"].as_array().unwrap().iter().cloned());
+        let Some(next) = page["next_after"].as_str() else {
+            break;
+        };
+        cursors.push(next.to_string());
+        uri = format!("/api/v1/audit?after={next}&team=family&limit=2");
+    }
+    let from_first = lines(
+        &owner
+            .send(
+                &test,
+                "GET",
+                &format!("/api/v1/audit/export?after={}&team=family", cursors[0]),
+                Payload::Empty,
+            )
+            .await
+            .text(),
+    );
+
+    let whole = whole["entries"].as_array().unwrap().clone();
+    assert_eq!(whole.len(), 5, "{whole:?}");
+    assert_eq!(paged, whole, "every entry once, newest first");
+    // Five entries at two a page: three pages, the last not full.
+    assert_eq!(cursors.len(), 2);
+    assert_eq!(
+        from_first,
+        whole[2..],
+        "the export starts after an owner's cursor"
+    );
+    assert_eq!(from_first.len(), 3, "{from_first:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tampered_raw_or_foreign_cursor_is_refused_and_shows_nothing() {
+    let test = app().await;
+    let root = every_catalog_admin(&test).await;
+    interleaved(&test, &root, 2).await;
+    // TEST_USER owns a second team with entries of its own.
+    for (method, uri, body) in [
+        (
+            "POST",
+            "/api/v1/teams",
+            json!({"name": "second", "owner": TEST_USER}),
+        ),
+        (
+            "PUT",
+            "/api/v1/teams/second/members/oth-0",
+            json!({"role": "member"}),
+        ),
+    ] {
+        let (status, answer) = send(&test, method, uri, Some(&root), Some(body)).await;
+        assert!(status.is_success(), "{method} {uri}: {status} {answer}");
+    }
+    let mut owner = Browser::session_for(&test, TEST_USER).await;
+    let (_, page) = owner_get(&test, &mut owner, "/api/v1/audit?team=family&limit=1").await;
+    let cursor = page["next_after"].as_str().unwrap().to_string();
+    let raw = every_id(&test).await.last().copied().unwrap();
+
+    let mut refusals = Vec::new();
+    for path in ["/api/v1/audit", "/api/v1/audit/export"] {
+        for (team, after) in [
+            ("family", tampered(&cursor)),
+            ("family", raw.to_string()),
+            ("family", "not-a-cursor".to_string()),
+            ("family", format!("{cursor}A")),
+            ("second", cursor.clone()),
+        ] {
+            let uri = format!("{path}?team={team}&after={after}");
+            let reply = owner.send(&test, "GET", &uri, Payload::Empty).await;
+            refusals.push((uri, reply.status, reply.json(), reply.text()));
+        }
+    }
+    let (good, rest) = owner_get(
+        &test,
+        &mut owner,
+        &format!("/api/v1/audit?team=family&after={cursor}"),
+    )
+    .await;
+
+    for (uri, status, body, text) in &refusals {
+        assert_eq!(*status, StatusCode::BAD_REQUEST, "{uri}: {text}");
+        assert_eq!(body["error"], "InvalidPath", "{uri}: {text}");
+        assert_eq!(body.get("entries"), None, "{uri}: {text}");
+    }
+    // Every refusal reads the same, whatever was wrong with the cursor.
+    let reasons: std::collections::BTreeSet<&str> = refusals
+        .iter()
+        .map(|(_, _, body, _)| body["message"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(reasons.len(), 1, "{reasons:?}");
+    assert_eq!(
+        good,
+        StatusCode::OK,
+        "the genuine cursor still works: {rest}"
+    );
+    assert_eq!(rest["entries"].as_array().unwrap().len(), 3, "{rest}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rotated_key_refuses_the_cursors_it_sealed() {
+    let test = app().await;
+    let root = every_catalog_admin(&test).await;
+    interleaved(&test, &root, 1).await;
+    let mut owner = Browser::session_for(&test, TEST_USER).await;
+    let (_, page) = owner_get(&test, &mut owner, "/api/v1/audit?team=family&limit=1").await;
+    let cursor = page["next_after"].as_str().unwrap().to_string();
+
+    sqlx::query("DELETE FROM server_keys")
+        .execute(test.app.pool())
+        .await
+        .unwrap();
+    let (stale, _) = owner_get(
+        &test,
+        &mut owner,
+        &format!("/api/v1/audit?team=family&after={cursor}"),
+    )
+    .await;
+    let (fresh, first) = owner_get(&test, &mut owner, "/api/v1/audit?team=family&limit=1").await;
+    let next = first["next_after"].as_str().unwrap().to_string();
+    let (resumed, _) = owner_get(
+        &test,
+        &mut owner,
+        &format!("/api/v1/audit?team=family&after={next}"),
+    )
+    .await;
+
+    assert_eq!(stale, StatusCode::BAD_REQUEST);
+    assert_eq!(fresh, StatusCode::OK);
+    assert_eq!(resumed, StatusCode::OK, "a cursor under the new key opens");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_admin_still_pages_by_raw_ids_and_refuses_an_owners_cursor() {
+    let test = app().await;
+    let root = every_catalog_admin(&test).await;
+    interleaved(&test, &root, 1).await;
+    let mut owner = Browser::session_for(&test, TEST_USER).await;
+    let (_, owned) = owner_get(&test, &mut owner, "/api/v1/audit?team=family&limit=1").await;
+    let sealed = owned["next_after"].as_str().unwrap().to_string();
+
+    let (status, page) = send(
+        &test,
+        "GET",
+        "/api/v1/audit?team=family&limit=1",
+        Some(&root),
+        None,
+    )
+    .await;
+    let first_id = page["entries"][0]["id"]
+        .as_i64()
+        .expect("an admin sees the id");
+    let after = page["next_after"]
+        .as_i64()
+        .expect("an admin's cursor is the raw id");
+    let (_, rest) = send(
+        &test,
+        "GET",
+        &format!("/api/v1/audit?team=family&after={after}"),
+        Some(&root),
+        None,
+    )
+    .await;
+    let (refused, body) = send(
+        &test,
+        "GET",
+        &format!("/api/v1/audit?team=family&after={sealed}"),
+        Some(&root),
+        None,
+    )
+    .await;
+    let export = export_ids(&test, &root, &format!("team=family&after={after}")).await;
+
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(after, first_id, "the cursor is the last entry's id");
+    let rest_ids: Vec<i64> = rest["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["id"].as_i64().unwrap())
+        .collect();
+    assert!(
+        !rest_ids.is_empty() && rest_ids.iter().all(|id| *id < after),
+        "{rest}"
+    );
+    assert_eq!(export, rest_ids, "the export starts after a raw id too");
+    assert_eq!(refused, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "InvalidPath");
+}

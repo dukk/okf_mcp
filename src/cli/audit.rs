@@ -97,7 +97,7 @@ fn format_record(record: &AuditRecord) -> String {
         .map(|team| escaped(team).into_owned())
         .collect();
     tab_row(&[
-        &record.id.to_string(),
+        &record.cursor.to_string(),
         &record.at,
         &record.action,
         &escaped(&format_actor(&record.actor)),

@@ -1146,7 +1146,9 @@ pub struct AuditQuery<'a> {
     pub since: Option<DateTime<Utc>>,
     /// Before this time.
     pub until: Option<DateTime<Utc>>,
-    /// Older than this entry id (the cursor).
+    /// Older than this entry id (the cursor). A team owner's request never
+    /// sets it from the query string directly: the route opens the owner's
+    /// sealed cursor into it (`http::api::audit::cursor`, issue #430).
     pub after: Option<i64>,
     /// At most this many ([`AuditQuery::page_size`]).
     pub limit: i64,
@@ -1292,8 +1294,18 @@ pub struct TargetView {
 /// One entry as a reader sees it.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct AuditRecord {
-    /// Its id (the cursor).
-    pub id: i64,
+    /// Its id, the admin's and provisioner's cursor; `None` for a team
+    /// owner, whose payload then has no `id` key at all (issue #430): ids
+    /// are one global sequence, so the gaps between an owner's entries
+    /// would show how much every other team did in between.
+    // `skip_serializing_if` leaves the key out of the JSON when it is `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<i64>,
+    /// Its id for the server's own use: the next page's cursor, which the
+    /// owner routes seal (`http::api::audit::cursor`) before an owner sees
+    /// it. Never serialized, in any view.
+    #[serde(skip)]
+    pub cursor: i64,
     /// When (`2026-11-13T12:00:00Z`).
     pub at: String,
     /// The action.
@@ -1441,7 +1453,7 @@ pub async fn export_lines(
             lines.push('\n');
         }
         match page.last() {
-            Some(last) if page.len() as i64 == MAX_PAGE => page_query.after = Some(last.id),
+            Some(last) if page.len() as i64 == MAX_PAGE => page_query.after = Some(last.cursor),
             _ => return Ok(lines),
         }
     }
@@ -1587,7 +1599,8 @@ impl ListedRow {
     /// person who is operator staff (`target_operator`, such as the admin an
     /// unlock is for) is hidden, with a credential naming them; and `teams`
     /// holds only the owner's team (the SQL drops the others, which may be
-    /// another customer's or a staff member's personal team). The stored
+    /// another customer's or a staff member's personal team); and the record
+    /// has no `id` (issue #430), only the unserialized `cursor`. The stored
     /// entry is never changed.
     #[tracing::instrument(level = "trace", skip_all)]
     fn into_record(self, owner: bool, labels: &Labels) -> AuditRecord {
@@ -1643,7 +1656,8 @@ impl ListedRow {
             }
         };
         AuditRecord {
-            id: self.id,
+            id: (!owner).then_some(self.id),
+            cursor: self.id,
             at: crate::clock::format_timestamp(self.at),
             action: self.action,
             source: self.source,
@@ -3418,7 +3432,7 @@ mod tests {
         let rest = list_plain(
             &db.pool,
             &Viewer::Admin,
-            &query(None, None, Some(first[1].id), 2),
+            &query(None, None, Some(first[1].cursor), 2),
         )
         .await
         .unwrap();

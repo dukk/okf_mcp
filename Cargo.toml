@@ -109,6 +109,9 @@ pulldown-cmark = { version = "0.13.6", default-features = false, features = ["ht
 # Data parallelism for building snapshots and running analyses across documents.
 rayon = "1.12.0"
 regex = "1.13.1"
+# The owner audit view's opaque cursors (`http::api::audit::cursor`):
+# ChaCha20-Poly1305 from ring, already in the lock through rustls and sqlx.
+ring = "0.17.14"
 # Runner HTTP client and endpoint normalization, with explicit TLS support.
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
 # MCP: the server handler, `#[tool]` macros, and the streamable HTTP service.

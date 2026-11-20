@@ -268,6 +268,7 @@ mod tests {
                 "oauth_clients",
                 "oauth_tokens",
                 "revisions",
+                "server_keys",
                 "server_settings",
                 "server_state",
                 "sign_in_code_catalogs",

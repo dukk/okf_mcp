@@ -355,6 +355,12 @@ audit tables), so deleting one never changes or removes its entries.
   person's name.
 - `GET /api/v1/audit?team=&action=&actor=&target=&since=&until=&after=&limit=`,
   newest first, cursor-paged (`after`).
+- *(Corrected, issue #430, 2026-11-20.)* An owner sees no entry id: ids are
+  one server-wide sequence, so their gaps would show other teams' activity.
+  An owner's entries have no `id`, and its cursor is the next entry id and
+  its audit team encrypted under a server key kept in `server_keys`; a raw
+  id, an altered cursor or another team's is 400. Admins and provisioners
+  keep raw ids.
 - `GET /api/v1/audit/export?...` with the same filters: JSON Lines, for a
   customer's compliance request.
 - CLI: `okf-mcp audit list` and `okf-mcp audit export` (same filters).
@@ -766,7 +772,7 @@ are the places where what shipped is narrower, wider or more exact.
     lock, so a concurrent transfer can still need a retry.
   - #423: the provisioner's every-use auditing (above).
   - #430: the owner view exposes global entry ids, which show other teams'
-    activity volume.
+    activity volume; fixed after the milestone (above).
   - #434 and #440: test flakes (the settings set/reset race test, the
     passkey journey).
   - From milestone 13: #361, #381 and #385 (console follow-ups).

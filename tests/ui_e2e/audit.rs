@@ -225,6 +225,66 @@ async fn an_owner_reads_its_team_and_sees_an_operator() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_owner_loads_more_through_its_sealed_cursor_and_sees_no_entry_id() {
+    let server = login_server().await;
+    member(&server, Access::Read).await;
+    let root = server.key("console-admin", Access::Admin, &[], None).await;
+    call(
+        &server,
+        &root,
+        "POST",
+        "/api/v1/teams",
+        json!({"name": "family", "owner": "alice"}),
+    )
+    .await;
+    // 101 members: 102 entries of family's, more than one page (100), with
+    // each user's own creation between two of them.
+    for index in 0..101 {
+        let name = format!("kin-{index}");
+        call(
+            &server,
+            &root,
+            "POST",
+            "/api/v1/users",
+            json!({"name": name}),
+        )
+        .await;
+        call(
+            &server,
+            &root,
+            "PUT",
+            &format!("/api/v1/teams/family/members/{name}"),
+            json!({"role": "member"}),
+        )
+        .await;
+    }
+    drive(console_base(&server), move |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.wait_visible("[data-nav=audit]");
+        ui.open("/audit");
+        ui.select("#audit-team", "family");
+        ui.wait_visible("#audit-more");
+        assert_eq!(rows(ui), 100);
+        // The owner's cursor is a sealed string, and the server takes no
+        // other from an owner: the second page draws only if the console
+        // passed it back as it came.
+        ui.click("#audit-more");
+        ui.wait_text("#audit-table", "team.created");
+        ui.wait_hidden("#audit-more");
+        assert_eq!(rows(ui), 102);
+        ui.wait_hidden("#audit-error");
+        let (_, text) = ui.download("#audit-export");
+        let entries = json_lines(&text);
+        assert_eq!(entries.len(), 102, "{text}");
+        assert!(
+            entries.iter().all(|entry| entry.get("id").is_none()),
+            "an owner's export carries entry ids: {text}"
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_late_table_load_never_draws_over_a_newer_filter() {
     let server = server().await;
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
