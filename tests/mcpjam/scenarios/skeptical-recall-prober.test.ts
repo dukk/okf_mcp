@@ -92,7 +92,7 @@ describe(SCENARIOS.sourceAttribution.goal, () => {
             }>("cited_by", { source_id: id, catalogs: [session().catalog] });
             // Hit paths come back without the leading slash, as `search` returns them.
             expect(found.hits.map((hit) => `/${hit.path}`)).toEqual([path]);
-            expect(found.hits[0].sources.map((entry) => entry.id)).toEqual([sourceId]);
+            expect(found.hits[0]?.sources.map((entry) => entry.id)).toEqual([sourceId]);
             expect(found.truncated).toBe(false);
         }
     });
