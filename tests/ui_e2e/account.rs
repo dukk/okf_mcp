@@ -859,7 +859,7 @@ async fn a_member_deletes_their_account_with_their_password_and_is_signed_out() 
         // While it runs the button is disabled, so a second click sends
         // nothing.
         ui.wait_visible("#account-delete");
-        assert!(disabled(&ui, "#account-delete"), "disabled while it runs");
+        assert!(disabled(ui, "#account-delete"), "disabled while it runs");
         assert!(ui.click_twice("#account-delete"), "still disabled");
         ui.release_held();
         assert_eq!(ui.held_matches(), 1, "one deletion was sent");
@@ -903,7 +903,7 @@ async fn a_refused_deletion_shows_the_reason_and_keeps_the_page() {
         ui.wait_visible("#account-delete-reason");
         ui.wait_text("#account-delete-reason", "owns catalog(s) \"main\"");
         ui.wait_visible("#account-delete");
-        assert!(!disabled(&ui, "#account-delete"), "usable again");
+        assert!(!disabled(ui, "#account-delete"), "usable again");
         assert!(!ui.page.is_visible("#login").expect("visible"));
         assert_eq!(ui.eval(SESSION_STATUS, json!(null)), json!(200));
         // A wrong password replaces the reason with its own.
