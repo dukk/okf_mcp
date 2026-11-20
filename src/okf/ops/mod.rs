@@ -18,7 +18,7 @@
 //! ([`OkfError::NotFound`], [`OkfError::InvalidPath`],
 //! [`OkfError::FrontmatterParse`], [`OkfError::Shape`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
@@ -47,7 +47,8 @@ pub use content::{create_concept, edit_document, replace_body, set_frontmatter, 
 pub use delete::delete_concept;
 pub use frontmatter::{question, remove_source, review, source, stamp, unquestion, OUTCOMES};
 pub use log_index::{
-    ensure_index, index, log, repair_catalog, repair_indexes, starter_files, STARTER_FILE_COUNT,
+    ensure_folder_index, ensure_index, index, log, repair_catalog, repair_indexes, starter_files,
+    STARTER_FILE_COUNT,
 };
 pub use moves::move_concept;
 pub use relink::{rewrite_links, Moved, Redirect};
@@ -83,6 +84,13 @@ pub struct OpOutcome {
     pub message: String,
     /// What `okf.py` prints to stderr, without its `okf: ` prefix.
     pub notes: Vec<String>,
+    /// Touched paths whose entry starts again on the revision published
+    /// now, as if the changeset had not edited them before: the earlier
+    /// base revision and replay are dropped. `revert` sets it, because its
+    /// text is a whole-file choice made against the published history
+    /// (issue #788). Every other op leaves it empty, so an entry keeps its
+    /// first edit's base.
+    pub rebased: BTreeSet<String>,
 }
 
 impl OpOutcome {

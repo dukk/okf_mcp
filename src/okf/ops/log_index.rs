@@ -28,11 +28,11 @@ use crate::okf::doc::Doc;
 use crate::okf::markdown::encode_link_path;
 use crate::okf::ops::replay::{
     already_lists, first_raw_listing, folder_heading, insert_index_bullet_text, lists_target,
-    log_text, missing_heading, new_index_text, rewrite_raw_listing_text, root_index_text, ReplayOp,
-    LOG_TEMPLATE,
+    log_text, missing_heading, new_index_text, rewrite_raw_listing_text, root_index_text,
+    set_listing_summary_text, ReplayOp, LOG_TEMPLATE,
 };
 use crate::okf::ops::{load_concept, refused, LogKind, OpContext, OpOutcome};
-use crate::okf::paths::{basename, dirname, is_concept, join};
+use crate::okf::paths::{basename, dirname, escapes_root, is_concept, join, normpath};
 use crate::okf::pystr::is_py_space;
 use crate::okf::rules::is_machinery;
 use crate::okf::workspace::Workspace;
@@ -48,6 +48,13 @@ const INDEX: &str = "index.md";
 const FOLDER_TODO: &str = "TODO: describe this folder";
 /// The summary of a concept listing whose concept has no `description`.
 const CONCEPT_TODO: &str = "TODO: describe this concept";
+/// The end of `ensure_index`'s note for a folder it listed with the TODO
+/// placeholder. `okf.py` says "; replace its TODO lines (and the parent's
+/// listing)", which steers to a free edit of the parent index, the one edit
+/// publish cannot replay (issue #668); `tests/parity.rs` translates it.
+pub(crate) const FOLDER_NOTE: &str =
+    "; replace its TODO line, and describe the folder with folder_summary, \
+                           or with index on the folder's path (ending in /)";
 /// The heading folder listings go under.
 const SECTIONS: &str = "Sections";
 
@@ -226,23 +233,29 @@ fn concept_bullet(listing: &Listing<'_>) -> String {
     )
 }
 
-/// Port of `cmd_index`: lists a concept in its folder's `index.md`.
+/// Port of `cmd_index`: lists a concept in its folder's `index.md`. A
+/// folder reference instead sets that folder's listing summary in its
+/// parent's index (issue #668, see `describe_folder`); `okf.py` has no
+/// such form.
 ///
 /// # Arguments
 /// * `workspace` - the catalog; `_ctx` is unused (no timestamp).
-/// * `concept` - the concept reference.
+/// * `concept` - the concept reference, or a folder: `/infra/`,
+///   `/infra/index.md`, or `/infra` when no concept `/infra.md` exists.
 /// * `summary` - the text after ` - `.
 /// * `section` - the heading to list under; `None` for `# Concepts`.
 /// * `title` - the link text; `None` (or empty) for the concept's `title`.
 ///
 /// # Returns
-/// The outcome, with a `ListBullet` replay op; nothing is touched when the
-/// index already links the concept.
+/// The outcome, with a `ListBullet` replay op (a folder: a
+/// `SetListingSummary`); nothing is touched when the index already links
+/// the concept (or the folder's listing already has that summary).
 ///
 /// # Errors
 /// As [`crate::okf::ops::stamp`] when loading the concept;
 /// [`OkfError::Refused`] without a title, without a folder `index.md`, or
-/// for a missing `section` heading.
+/// for a missing `section` heading; for a folder, a `section` or `title`,
+/// and `describe_folder`'s errors.
 #[tracing::instrument(level = "debug", skip_all)]
 pub fn index(
     workspace: &dyn Workspace,
@@ -252,7 +265,19 @@ pub fn index(
     section: Option<&str>,
     title: Option<&str>,
 ) -> Result<OpOutcome, OkfError> {
-    let loaded = load_concept(workspace, concept)?;
+    let loaded = match folder_reference(concept) {
+        Some(folder) => return index_folder(workspace, &folder?, summary, section, title),
+        None => match load_concept(workspace, concept) {
+            Ok(loaded) => loaded,
+            // `/infra` names no concept but a folder: describe the folder.
+            Err(OkfError::NotFound { .. })
+                if workspace.exists(&join(&bare_reference(concept), INDEX)) =>
+            {
+                return index_folder(workspace, &bare_reference(concept), summary, section, title);
+            }
+            Err(error) => return Err(error),
+        },
+    };
     // `a.title or data.get("title")`: an empty string counts as absent. Every
     // YAML scalar is a `Value::Str`, so only a list or mapping is dropped here.
     let frontmatter_title = loaded.data.get("title").and_then(Value::as_str);
@@ -273,21 +298,109 @@ pub fn index(
     Ok(outcome)
 }
 
+/// `reference` without its leading `/`s and `.`/`..` components.
+#[tracing::instrument(level = "trace", skip_all)]
+fn bare_reference(reference: &str) -> String {
+    let normal = normpath(reference.trim_start_matches('/'));
+    if normal == "." {
+        String::new()
+    } else {
+        normal
+    }
+}
+
+/// The folder a reference names when it is written as one: ending in `/`,
+/// or naming an `index.md` (`/` and `/index.md` are the root, `""`).
+///
+/// # Returns
+/// `None` for any other reference (a concept's); `Some(Err)` with
+/// [`OkfError::InvalidPath`] for a folder outside the catalog.
+#[tracing::instrument(level = "trace", skip_all)]
+fn folder_reference(reference: &str) -> Option<Result<String, OkfError>> {
+    let bare = reference.trim_start_matches('/');
+    let folder = if bare.is_empty() || bare.ends_with('/') {
+        bare.trim_end_matches('/')
+    } else if bare == INDEX {
+        ""
+    } else {
+        bare.strip_suffix("/index.md")?
+    };
+    let folder = bare_reference(folder);
+    if escapes_root(&folder) {
+        return Some(Err(OkfError::InvalidPath {
+            path: reference.to_string(),
+            reason: "is outside the catalog".to_string(),
+        }));
+    }
+    Some(Ok(folder))
+}
+
+/// `index` on a folder: `describe_folder`, refusing the concept-only
+/// arguments.
+#[tracing::instrument(level = "trace", skip_all)]
+fn index_folder(
+    workspace: &dyn Workspace,
+    folder: &str,
+    summary: &str,
+    section: Option<&str>,
+    title: Option<&str>,
+) -> Result<OpOutcome, OkfError> {
+    if section.is_some_and(|s| !s.is_empty()) || title.is_some_and(|t| !t.is_empty()) {
+        return Err(refused(format!(
+            "/{folder}/ is a folder: index sets its listing's summary only; leave out section \
+             and title"
+        )));
+    }
+    describe_folder(workspace, folder, summary)
+}
+
 /// Port of `ensure_index`: makes sure `folder/index.md` exists and is
 /// listed in its parent's index, creating missing ancestor indexes too.
+/// [`ensure_folder_index`] with no summary: every new folder is listed with
+/// the TODO placeholder, as `okf.py` lists it.
+///
+/// # Arguments
+/// * `workspace` - the catalog.
+/// * `folder` - catalog-relative folder; `""` (the root) does nothing.
+/// * `outcome` - gains each file written, its replay ops and notes.
+///
+/// # Errors
+/// As [`ensure_folder_index`].
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "one-line delegation to an instrumented function"
+    )
+)]
+pub fn ensure_index(
+    workspace: &dyn Workspace,
+    folder: &str,
+    outcome: &mut OpOutcome,
+) -> Result<(), OkfError> {
+    ensure_folder_index(workspace, folder, None, outcome)
+}
+
+/// `ensure_index`, with an optional summary for `folder`'s own listing in
+/// its parent (`folder_summary`, issue #668).
 ///
 /// As in `okf.py`, the folder's own `index.md` is written first; then the
 /// parent is ensured (recursively), and only after that is the folder listed
 /// in it. So the notes come out outermost-first.
 ///
 /// A new index is `# <Folder name>` and a TODO line; its parent gains
-/// `* [<Folder name>](<name>/) - TODO: describe this folder` under
-/// `# Sections` (created when missing), with an absolute `/<folder>/` href
-/// when the parent's bullets are absolute.
+/// `* [<Folder name>](<name>/) - <summary>` under `# Sections` (created
+/// when missing), with an absolute `/<folder>/` href when the parent's
+/// bullets are absolute. The summary is `summary` with its whitespace
+/// collapsed, for `folder` only (the innermost new folder); every ancestor
+/// created on the way, and `folder` without a summary, gets
+/// `TODO: describe this folder`. That default is `okf.py`'s; the summary is
+/// a server-only divergence.
 ///
 /// # Arguments
 /// * `workspace` - the catalog.
 /// * `folder` - catalog-relative folder; `""` (the root) does nothing.
+/// * `summary` - the summary of `folder`'s listing, if it is created.
 /// * `outcome` - gains each file written, its replay ops (`CreateIndex`,
 ///   then the parent's `ListBullet`) and one note per created index.
 ///
@@ -297,9 +410,10 @@ pub fn index(
 /// so run it on a scratch copy (as the write path does) and drop the copy
 /// on error.
 #[tracing::instrument(level = "debug", skip_all)]
-pub fn ensure_index(
+pub fn ensure_folder_index(
     workspace: &dyn Workspace,
     folder: &str,
+    summary: Option<&str>,
     outcome: &mut OpOutcome,
 ) -> Result<(), OkfError> {
     if folder.is_empty() {
@@ -317,25 +431,55 @@ pub fn ensure_index(
         },
     );
     let parent = dirname(folder);
-    ensure_index(workspace, parent, outcome)?;
+    ensure_folder_index(workspace, parent, None, outcome)?;
     let parent_index = join(parent, INDEX);
     let parent_text = workspace.read_text(&parent_index)?;
-    insert_folder_listing(workspace, folder, &parent_text, outcome)?;
-    outcome.notes.push(format!(
-        "created /{folder}/index.md; replace its TODO lines (and the parent's listing)"
-    ));
+    insert_folder_listing(workspace, folder, summary, &parent_text, outcome)?;
+    outcome.notes.push(match summary {
+        Some(_) => format!("created /{folder}/index.md; replace its TODO line"),
+        None => format!("created /{folder}/index.md{FOLDER_NOTE}"),
+    });
+    Ok(())
+}
+
+/// Refuses a `folder_summary` that would describe no new folder: the
+/// concept's folder is the root, or its `index.md` exists already. Checked
+/// before an op writes anything.
+///
+/// # Arguments
+/// * `workspace` - the catalog.
+/// * `folder` - the folder `ensure_folder_index` will be called for.
+///
+/// # Errors
+/// [`OkfError::Refused`], pointing at `index` for an existing folder.
+#[tracing::instrument(level = "trace", skip_all)]
+pub(crate) fn check_new_folder(workspace: &dyn Workspace, folder: &str) -> Result<(), OkfError> {
+    if folder.is_empty() {
+        return Err(refused(
+            "folder_summary describes a new folder, and the root is no new folder; leave it out"
+                .to_string(),
+        ));
+    }
+    if workspace.exists(&join(folder, INDEX)) {
+        return Err(refused(format!(
+            "folder_summary describes a new folder, and /{folder}/ exists; leave it out, or \
+             describe /{folder}/ with index (path /{folder}/, summary)"
+        )));
+    }
     Ok(())
 }
 
 /// `ensure_index`'s listing of `folder` in its parent's index:
-/// `* [<Folder name>](<name>/) - TODO: describe this folder` under
-/// `# Sections` (created when missing), with an absolute `/<folder>/` href
-/// when the parent's bullets are absolute. It does not check whether the
-/// parent lists the folder already ([`repair_indexes`] does, first).
+/// `* [<Folder name>](<name>/) - <summary>` (the TODO placeholder without
+/// one) under `# Sections` (created when missing), with an absolute
+/// `/<folder>/` href when the parent's bullets are absolute. It does not
+/// check whether the parent lists the folder already ([`repair_indexes`]
+/// does, first).
 ///
 /// # Arguments
 /// * `workspace` - the catalog.
 /// * `folder` - catalog-relative folder, not the root.
+/// * `summary` - the listing's summary; `None` for the TODO placeholder.
 /// * `parent_text` - the parent's `index.md`, as read.
 /// * `outcome` - gains the parent's `ListBullet` replay op.
 ///
@@ -345,11 +489,12 @@ pub fn ensure_index(
 fn insert_folder_listing(
     workspace: &dyn Workspace,
     folder: &str,
+    summary: Option<&str>,
     parent_text: &str,
     outcome: &mut OpOutcome,
 ) -> Result<(), OkfError> {
     let parent_index = join(dirname(folder), INDEX);
-    let bullet = folder_bullet(folder, parent_text);
+    let bullet = folder_bullet(folder, summary, parent_text);
     let updated = insert_index_bullet_text(parent_text, &bullet, Some(SECTIONS), true)
         .expect("create_section always finds a place for the bullet");
     workspace.write_atomic(&parent_index, &updated)?;
@@ -366,11 +511,11 @@ fn insert_folder_listing(
 }
 
 /// The bullet [`insert_folder_listing`] writes for `folder` in its parent's
-/// index: `* [<Folder name>](<href>) - TODO: describe this folder`, with
-/// the href `/<folder>/` when the parent's bullets are absolute, else
-/// `<name>/`.
+/// index: `* [<Folder name>](<href>) - <summary>`, the summary collapsed (or
+/// `TODO: describe this folder`), with the href `/<folder>/` when the
+/// parent's bullets are absolute, else `<name>/`.
 #[tracing::instrument(level = "trace", skip_all)]
-fn folder_bullet(folder: &str, parent_text: &str) -> String {
+fn folder_bullet(folder: &str, summary: Option<&str>, parent_text: &str) -> String {
     let absolute = parent_text
         .split('\n')
         .any(|line| line.starts_with("* [") && line.contains("](/"));
@@ -379,7 +524,89 @@ fn folder_bullet(folder: &str, parent_text: &str) -> String {
     } else {
         format!("{}/", encode_link_path(basename(folder)))
     };
-    format!("* [{}]({href}) - {FOLDER_TODO}", folder_heading(folder))
+    let summary = summary.map_or_else(|| FOLDER_TODO.to_string(), collapse_whitespace);
+    format!("* [{}]({href}) - {summary}", folder_heading(folder))
+}
+
+/// `index` on a folder (issue #668): sets the summary of `folder`'s listing
+/// in its parent's `index.md` (the text after ` - `), recording a
+/// [`ReplayOp::SetListingSummary`] so publish redoes it on newer text
+/// instead of conflicting. The label and link stay as they are.
+///
+/// # Arguments
+/// * `workspace` - the catalog.
+/// * `folder` - catalog-relative folder, not the root, e.g. `infra/hosts`.
+/// * `summary` - the new summary; whitespace runs collapse to single spaces.
+///
+/// # Returns
+/// The outcome: `<parent>/index.md: <bullet>`, or nothing touched when the
+/// listing already has that summary.
+///
+/// # Errors
+/// [`OkfError::Refused`] for the root, or when the parent's index does not
+/// list the folder with a working leading link (a raw, unencoded one points
+/// at `repair_indexes`, which rewrites it); [`OkfError::NotFound`] without
+/// the folder's or its parent's `index.md`; the workspace's write error.
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) fn describe_folder(
+    workspace: &dyn Workspace,
+    folder: &str,
+    summary: &str,
+) -> Result<OpOutcome, OkfError> {
+    if folder.is_empty() {
+        return Err(refused(
+            "the root is listed in no index.md; describe the catalog by editing /index.md"
+                .to_string(),
+        ));
+    }
+    let target = join(folder, INDEX);
+    if !workspace.exists(&target) {
+        return Err(OkfError::NotFound {
+            path: format!("/{target}"),
+        });
+    }
+    let parent_index = join(dirname(folder), INDEX);
+    let text = workspace.read_text(&parent_index)?;
+    let summary = collapse_whitespace(summary);
+    let Some(updated) =
+        set_listing_summary_text(workspace, &text, &parent_index, &target, &summary)
+    else {
+        let how = if first_raw_listing(workspace, &text, &parent_index, &target).is_some() {
+            "its listing's link does not resolve; run repair_indexes first"
+        } else {
+            "no bullet there starts with a link to it; repair_indexes lists it"
+        };
+        return Err(refused(format!(
+            "/{parent_index} does not list /{folder}/: {how}"
+        )));
+    };
+    if updated == text {
+        return Ok(OpOutcome::unchanged(format!(
+            "{parent_index}: /{folder}/ already has that summary"
+        )));
+    }
+    workspace.write_atomic(&parent_index, &updated)?;
+    let line = set_line(&updated, &text);
+    let mut outcome = OpOutcome {
+        message: format!("{parent_index}: {line}"),
+        ..OpOutcome::default()
+    };
+    outcome.record(
+        &parent_index,
+        ReplayOp::SetListingSummary { target, summary },
+    );
+    Ok(outcome)
+}
+
+/// The line of `updated` that differs from `before` (the two have the same
+/// number of lines: [`set_listing_summary_text`] rewrites one in place).
+#[tracing::instrument(level = "trace", skip_all)]
+fn set_line<'a>(updated: &'a str, before: &str) -> &'a str {
+    updated
+        .split('\n')
+        .zip(before.split('\n'))
+        .find(|(new, old)| new != old)
+        .map_or("", |(new, _)| new)
 }
 
 /// Does `bullet`, written in `index`, link `target`? Not for every label: a
@@ -665,16 +892,17 @@ fn repair_counted(workspace: &dyn Workspace) -> Result<(OpOutcome, RepairCounts)
             rewrite_raw_listings(workspace, &read, &parent_index, &index_path, &mut outcome)?;
         counts.rewritten += fixed;
         if !already_lists(workspace, &parent_text, &parent_index, &index_path) {
-            let bullet = folder_bullet(folder, &parent_text);
+            let bullet = folder_bullet(folder, None, &parent_text);
             if !links_back(workspace, &parent_index, &bullet, &index_path) {
                 outcome
                     .notes
                     .push(unlinkable_note(&format!("{folder}/"), &parent_index));
                 continue;
             }
-            insert_folder_listing(workspace, folder, &parent_text, &mut outcome)?;
+            insert_folder_listing(workspace, folder, None, &parent_text, &mut outcome)?;
             outcome.notes.push(format!(
-                "listed /{folder}/ in /{parent_index} with a TODO summary"
+                "listed /{folder}/ in /{parent_index} with a TODO summary; describe it with \
+                 index on /{folder}/"
             ));
             counts.placeholders += 1;
         }
@@ -1918,8 +2146,8 @@ mod tests {
         assert_eq!(
             nested.notes,
             [
-                "created /ops/index.md; replace its TODO lines (and the parent's listing)",
-                "created /ops/deep/index.md; replace its TODO lines (and the parent's listing)",
+                format!("created /ops/index.md{FOLDER_NOTE}"),
+                format!("created /ops/deep/index.md{FOLDER_NOTE}"),
             ]
         );
     }
@@ -2054,8 +2282,8 @@ mod tests {
                 "created /log.md",
                 "listed /a-note.md under its file name: it has no title",
                 "listed /a-note.md with a TODO summary: it has no description",
-                "listed /infra/ in /index.md with a TODO summary",
-                "listed /infra/hosts/ in /infra/index.md with a TODO summary",
+                "listed /infra/ in /index.md with a TODO summary; describe it with index on /infra/",
+                "listed /infra/hosts/ in /infra/index.md with a TODO summary; describe it with index on /infra/hosts/",
                 "listed /infra/hosts/web.md with a TODO summary: it has no description",
             ]
         );
@@ -2125,7 +2353,7 @@ mod tests {
         );
         assert_eq!(
             outcome.notes,
-            ["listed /ops/deep/ in /ops/index.md with a TODO summary"]
+            ["listed /ops/deep/ in /ops/index.md with a TODO summary; describe it with index on /ops/deep/"]
         );
     }
 
@@ -2412,5 +2640,149 @@ mod tests {
 
         assert!(outcome.touched.is_empty());
         assert_eq!(ws.read_to_string("log.md").unwrap(), "# Log\n");
+    }
+
+    /// A root listing `learning/`, with the folder's own index.
+    fn learning(root: &str) -> MemWorkspace {
+        MemWorkspace::from_files([
+            ("index.md", root),
+            (
+                "learning/index.md",
+                "# Learning\n\nTODO: say what this folder holds.\n",
+            ),
+            ("my docs/index.md", "# My docs\n"),
+        ])
+    }
+
+    const LEARNING_ROOT: &str =
+        "# Root\n\n# Sections\n\n* [Learning](learning/) - TODO: describe this folder\n";
+
+    #[test]
+    fn index_on_a_folder_sets_its_listing_summary_and_records_the_op() {
+        for path in ["/learning/", "learning/", "/learning/index.md", "/learning"] {
+            let ws = learning(LEARNING_ROOT);
+
+            let outcome = index(&ws, &ctx(), path, " What we\n  learn. ", None, None).unwrap();
+
+            assert_eq!(
+                ws.read_to_string("index.md").unwrap(),
+                "# Root\n\n# Sections\n\n* [Learning](learning/) - What we learn.\n",
+                "{path}"
+            );
+            assert_eq!(outcome.touched, ["index.md"], "{path}");
+            assert_eq!(
+                outcome.replay["index.md"],
+                [ReplayOp::SetListingSummary {
+                    target: "learning/index.md".to_string(),
+                    summary: "What we learn.".to_string(),
+                }],
+                "{path}"
+            );
+            assert_eq!(
+                outcome.message,
+                "index.md: * [Learning](learning/) - What we learn."
+            );
+        }
+    }
+
+    #[test]
+    fn index_on_a_folder_with_that_summary_already_changes_nothing() {
+        let ws = learning("# Root\n\n* [Learning](/learning/) - Ours.\n");
+
+        let outcome = index(&ws, &ctx(), "/learning/", "Ours.", None, None).unwrap();
+
+        assert!(outcome.touched.is_empty(), "{outcome:?}");
+        assert_eq!(
+            outcome.message,
+            "index.md: /learning/ already has that summary"
+        );
+    }
+
+    #[test]
+    fn index_on_a_folder_refuses_what_it_cannot_describe() {
+        let ws = learning("# Root\n\n# Sections\n\n* [My docs](my docs/) - Mine.\n");
+
+        let section = index(&ws, &ctx(), "/learning/", "x", Some("Sections"), None);
+        let title = index(&ws, &ctx(), "/learning/", "x", None, Some("L"));
+        let root = index(&ws, &ctx(), "/", "x", None, None);
+        let unlisted = index(&ws, &ctx(), "/learning/", "x", None, None);
+        let raw = index(&ws, &ctx(), "/my docs/", "x", None, None);
+        let missing = index(&ws, &ctx(), "/nowhere/", "x", None, None);
+        let outside = index(&ws, &ctx(), "/../x/", "x", None, None);
+
+        assert!(refusal(section.unwrap_err()).contains("leave out section and title"));
+        assert!(refusal(title.unwrap_err()).contains("leave out section and title"));
+        assert!(refusal(root.unwrap_err()).starts_with("the root is listed in no index.md"));
+        assert_eq!(
+            refusal(unlisted.unwrap_err()),
+            "/index.md does not list /learning/: no bullet there starts with a link to it; \
+             repair_indexes lists it"
+        );
+        assert_eq!(
+            refusal(raw.unwrap_err()),
+            "/index.md does not list /my docs/: its listing's link does not resolve; run \
+             repair_indexes first"
+        );
+        assert!(
+            matches!(missing, Err(OkfError::NotFound { ref path }) if path == "/nowhere/index.md")
+        );
+        assert!(
+            matches!(outside, Err(OkfError::InvalidPath { .. })),
+            "{outside:?}"
+        );
+        // Nothing was written.
+        assert_eq!(
+            ws.read_to_string("index.md").unwrap(),
+            "# Root\n\n# Sections\n\n* [My docs](my docs/) - Mine.\n"
+        );
+    }
+
+    #[test]
+    fn ensure_folder_index_describes_the_innermost_new_folder_only() {
+        let ws = MemWorkspace::from_files([("index.md", "# Root\n")]);
+        let mut outcome = OpOutcome::default();
+
+        ensure_folder_index(&ws, "ops/deep", Some("  Deep\n ops. "), &mut outcome).unwrap();
+
+        assert_eq!(
+            ws.read_to_string("index.md").unwrap(),
+            "# Root\n\n# Sections\n\n* [Ops](ops/) - TODO: describe this folder\n"
+        );
+        assert_eq!(
+            ws.read_to_string("ops/index.md").unwrap(),
+            "# Ops\n\nTODO: say what this folder holds.\n\n# Sections\n\n* [Deep](deep/) - Deep ops.\n"
+        );
+        assert_eq!(
+            outcome.replay["ops/index.md"][1],
+            ReplayOp::ListBullet {
+                target: "ops/deep/index.md".to_string(),
+                bullet: "* [Deep](deep/) - Deep ops.".to_string(),
+                section: Some("Sections".to_string()),
+                create_section: true,
+            }
+        );
+        assert_eq!(
+            outcome.notes,
+            [
+                format!("created /ops/index.md{FOLDER_NOTE}"),
+                "created /ops/deep/index.md; replace its TODO line".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn check_new_folder_refuses_the_root_and_an_existing_folder() {
+        let ws = learning(LEARNING_ROOT);
+
+        let root = check_new_folder(&ws, "").unwrap_err();
+        let existing = check_new_folder(&ws, "learning").unwrap_err();
+
+        assert!(refusal(root).contains("the root is no new folder"));
+        assert_eq!(
+            refusal(existing),
+            "folder_summary describes a new folder, and /learning/ exists; leave it out, or \
+             describe /learning/ with index (path /learning/, summary)"
+        );
+        assert!(check_new_folder(&ws, "fresh").is_ok());
     }
 }

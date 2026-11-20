@@ -467,7 +467,7 @@ fn run_op(
             outcome.message = outcome.touched.join("\n");
             Ok(outcome)
         }
-        "mv" => move_concept(workspace, text("old"), text("new")).map(with_touched),
+        "mv" => move_concept(workspace, text("old"), text("new"), None).map(with_touched),
         "split" => {
             // `source` is okf.py's repeatable `--source`: null or a list of ids.
             let sources: Vec<String> = step
@@ -484,6 +484,7 @@ fn run_op(
                 description: optional("description"),
                 stub: optional("stub"),
                 sources: &sources,
+                folder_summary: None,
             };
             split_concept(workspace, &ctx, &split).map(with_touched)
         }
@@ -582,6 +583,11 @@ const INTENTIONAL_TRANSLATIONS: &[Translation] = &[
     Translation {
         python: "named with --source",
         telekin: "named with sources",
+        golden: Some("ops.json"),
+    },
+    Translation {
+        python: "; replace its TODO lines (and the parent's listing)",
+        telekin: "; replace its TODO line, and describe the folder with folder_summary, or with index on the folder's path (ending in /)",
         golden: Some("ops.json"),
     },
     Translation {

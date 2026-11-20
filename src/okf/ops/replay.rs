@@ -24,6 +24,11 @@
 //! `rewrite_raw_listing_text`, works on universal-newline text, like the
 //! other index edits.
 //!
+//! Issue #668 adds [`ReplayOp::SetListingSummary`]: `index` on a folder
+//! replaces the summary of the folder's listing in its parent's index, so
+//! describing a folder needs no free edit of that (often shared) index.
+//! Its edit, `set_listing_summary_text`, works on universal-newline text.
+//!
 //! [`log_text`] is `okf.py`'s `cmd_log` body (`:752`) and
 //! [`insert_index_bullet_text`] its `insert_index_bullet` (`:1410`), line
 //! for line. `okf.py` reads and writes these files in text mode, so both
@@ -125,6 +130,17 @@ pub enum ReplayOp {
         /// Its rewrite.
         fixed: String,
     },
+    /// `index` on a folder: replace the summary (the text after ` - `) of
+    /// the first bullet whose leading link resolves to `target` (issue
+    /// #668). The label and link are kept as they read now, so someone
+    /// else's edit of them survives; a bullet no longer there is refused,
+    /// never silently dropped or applied to another line.
+    SetListingSummary {
+        /// Catalog-relative path the bullet lists (a folder's `index.md`).
+        target: String,
+        /// The new summary, its whitespace already collapsed.
+        summary: String,
+    },
 }
 
 /// Redoes `ops` on a file's current text (design "Publish", step 3).
@@ -133,8 +149,9 @@ pub enum ReplayOp {
 /// a listing whose `target` the index already links, a `CreateIndex` or
 /// `CreateLog` of a file that exists (someone else's text wins), an `Unlist` whose listing is gone, a `Relink` with
 /// no link left into its source, an `Unlink` with no link left into its
-/// target, and a `RewriteRawListing` whose raw line is gone all leave the
-/// text alone. Text that no operation
+/// target, a `RewriteRawListing` whose raw line is gone, and a
+/// `SetListingSummary` whose bullet already reads so all leave the text
+/// alone. Text that no operation
 /// changes is returned byte for byte; text a bookkeeping edit changed has
 /// `\n` endings, as `okf.py` writes it, while a `Relink` or an `Unlink`
 /// keeps the file's own line endings.
@@ -150,14 +167,16 @@ pub enum ReplayOp {
 ///
 /// # Errors
 /// [`OkfError::NotFound`] when a `Log`, `ListBullet`, `Unlist`, `Relink`,
-/// `Unlink` or `RewriteRawListing` (or nothing) finds no file. For `Unlist` this is deliberate, not "already
+/// `Unlink`, `RewriteRawListing` or `SetListingSummary` (or nothing) finds
+/// no file. For `Unlist` this is deliberate, not "already
 /// gone": publish never replays onto a file deleted since the entry's base
 /// (`replayed_text` makes that a conflict), so a missing file here means the
 /// ops themselves are wrong. [`OkfError::Refused`] when a listing's section
 /// heading is gone, when a move's `Unlist` finds its listing changed since
-/// the move, or when a `Relink` redirects (or an `Unlink` names) a
-/// non-concept (`index.md`, `log.md`), which only a corrupt stored op can
-/// hold.
+/// the move, when a `SetListingSummary` finds no bullet listing its target
+/// (another changeset removed or rewrote it), or when a `Relink` redirects
+/// (or an `Unlink` names) a non-concept (`index.md`, `log.md`), which only a
+/// corrupt stored op can hold.
 ///
 /// # Examples
 /// ```
@@ -230,6 +249,18 @@ pub fn replay(path: &str, current: Option<&str>, ops: &[ReplayOp]) -> Result<Str
                 } else {
                     rewrite_raw_listing_text(&no_dirs, &base, path, target, line, fixed)
                         .map(|(updated, _)| updated)
+                }
+            }
+            ReplayOp::SetListingSummary { target, summary } => {
+                let base = universal_newlines(present(path, &text)?);
+                // A raw (unencoded) bullet never matches here: its link does
+                // not resolve to `target`, so the replay refuses rather than
+                // guess (`index` refuses one at write time too).
+                match set_listing_summary_text(&no_dirs, &base, path, target, summary) {
+                    None => return Err(lost_listing(path, target)),
+                    // Already reads so: unchanged, byte for byte.
+                    Some(updated) if updated == base.as_ref() => None,
+                    Some(updated) => Some(updated),
                 }
             }
             ReplayOp::Relink { redirect } => {
@@ -673,6 +704,85 @@ pub(crate) fn unlist_text(
     // `Vec::remove(at)` takes the line out, like Python's `lines.pop(at)`.
     let bullet = lines.remove(at).to_string();
     Some((lines.join("\n"), bullet))
+}
+
+/// Does the link at the start of `line` (its first link, opening right
+/// after the bullet marker) resolve to `target`, in the sense of
+/// [`lists_target`] (a link to `folder` counts for `folder/index.md`)?
+///
+/// # Returns
+/// That link, or `None`.
+#[tracing::instrument(level = "trace", skip_all)]
+fn leading_link_to(
+    workspace: &dyn Workspace,
+    line: &str,
+    index: &str,
+    target: &str,
+) -> Option<crate::okf::markdown::LinkMatch> {
+    if !is_bullet(line) {
+        return None;
+    }
+    let link = find_links(line).into_iter().next()?;
+    // `* [`: the link must open the bullet, so a link in another bullet's
+    // summary (`* [A](a.md) - see [infra](infra/)`) is never taken for the
+    // listing of `infra/`.
+    if link.range.start != 2 {
+        return None;
+    }
+    let resolved = resolve_link(workspace, &link.target, index)?;
+    (resolved.path == target || target.strip_suffix("/index.md") == Some(resolved.path.as_str()))
+        .then_some(link)
+}
+
+/// The edit of [`ReplayOp::SetListingSummary`], shared by `index` and its
+/// replay: the first bullet of `text` whose leading link resolves to
+/// `target` gets `summary` as the text after its first ` - ` past the link
+/// (or ` - <summary>` after the link when it has none); the label, the link
+/// and anything between the link and the ` - ` are kept.
+///
+/// # Arguments
+/// * `workspace` - resolves directory links (replay passes an empty one).
+/// * `text` - the index, with universal newlines.
+/// * `index` - its catalog-relative path.
+/// * `target` - the catalog-relative path listed.
+/// * `summary` - the new summary, whitespace already collapsed.
+///
+/// # Returns
+/// The new text (equal to `text` when the bullet already reads so), or
+/// `None` when no bullet lists `target` that way.
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) fn set_listing_summary_text(
+    workspace: &dyn Workspace,
+    text: &str,
+    index: &str,
+    target: &str,
+    summary: &str,
+) -> Option<String> {
+    let mut lines: Vec<Cow<'_, str>> = text.split('\n').map(Cow::Borrowed).collect();
+    let (at, end) = lines.iter().enumerate().find_map(|(i, line)| {
+        leading_link_to(workspace, line, index, target).map(|link| (i, link.range.end))
+    })?;
+    let line = &lines[at];
+    let keep = match line[end..].find(" - ") {
+        Some(dash) => &line[..end + dash],
+        None => &line[..end],
+    };
+    let updated = format!("{keep} - {summary}");
+    lines[at] = Cow::Owned(updated);
+    Some(lines.join("\n"))
+}
+
+/// The refusal of a `SetListingSummary` whose bullet is gone at publish.
+#[tracing::instrument(level = "trace", skip_all)]
+fn lost_listing(index: &str, target: &str) -> OkfError {
+    let listed = target.strip_suffix("index.md").unwrap_or(target);
+    OkfError::Refused {
+        reason: format!(
+            "{index} no longer lists /{listed} (another changeset removed or rewrote its \
+             listing since this one set its summary); discard {index} from this changeset \
+             and set the summary again"
+        ),
+    }
 }
 
 /// The refusal of a stored `Relink` whose source is not a concept: the
@@ -1842,5 +1952,183 @@ mod tests {
             "d/index.md",
             "d/a b.md"
         ));
+    }
+
+    /// The op `index` records for describing `folder`.
+    fn describe(folder: &str, summary: &str) -> ReplayOp {
+        ReplayOp::SetListingSummary {
+            target: format!("{folder}/index.md"),
+            summary: summary.to_string(),
+        }
+    }
+
+    const ROOT_WITH_LEARNING: &str =
+        "# Root\n\n# Sections\n\n* [Learning](learning/) - TODO: describe this folder\n";
+
+    #[test]
+    fn set_listing_summary_serializes_with_an_op_tag() {
+        let ops = vec![describe("learning", "What we learn.")];
+
+        let value = serde_json::to_value(&ops).unwrap();
+        let back: Vec<ReplayOp> = serde_json::from_value(value.clone()).unwrap();
+
+        assert_eq!(
+            value,
+            json!([{
+                "op": "set_listing_summary",
+                "target": "learning/index.md",
+                "summary": "What we learn."
+            }])
+        );
+        assert_eq!(back, ops);
+    }
+
+    #[test]
+    fn set_listing_summary_replays_onto_newer_text_and_keeps_their_label() {
+        // Since the edit, someone else listed another folder and relabelled
+        // ours: the replay changes only the summary.
+        let newer = concat!(
+            "# Root\n\nAbout.\n\n# Sections\n\n",
+            "* [Our learning](learning/) - TODO: describe this folder\n",
+            "* [Preferences](preferences/) - What we like.\n",
+        );
+
+        let text = replay(
+            "index.md",
+            Some(newer),
+            &[describe("learning", "What we learn.")],
+        );
+
+        assert_eq!(
+            text.unwrap(),
+            concat!(
+                "# Root\n\nAbout.\n\n# Sections\n\n",
+                "* [Our learning](learning/) - What we learn.\n",
+                "* [Preferences](preferences/) - What we like.\n",
+            )
+        );
+    }
+
+    #[test]
+    fn a_listing_and_its_summary_both_replay_onto_a_concurrent_folder_line() {
+        // The TODO-then-describe flow: `ensure_index`'s listing, then `index`
+        // on the folder, both replayed onto a root that gained a line.
+        let ops = [
+            ReplayOp::ListBullet {
+                target: "learning/index.md".to_string(),
+                bullet: "* [Learning](learning/) - TODO: describe this folder".to_string(),
+                section: Some("Sections".to_string()),
+                create_section: true,
+            },
+            describe("learning", "What we learn."),
+        ];
+        let newer = "# Root\n\n# Sections\n\n* [Preferences](preferences/) - What we like.\n";
+
+        let text = replay("index.md", Some(newer), &ops).unwrap();
+
+        assert_eq!(
+            text,
+            concat!(
+                "# Root\n\n# Sections\n\n",
+                "* [Preferences](preferences/) - What we like.\n",
+                "* [Learning](learning/) - What we learn.\n",
+            )
+        );
+    }
+
+    #[test]
+    fn set_listing_summary_refuses_a_listing_another_changeset_removed() {
+        let gone = "# Root\n\n# Sections\n\n* [Preferences](preferences/) - What we like.\n";
+
+        let error = replay("index.md", Some(gone), &[describe("learning", "x")]).unwrap_err();
+
+        let OkfError::Refused { reason } = &error else {
+            panic!("not Refused: {error:?}")
+        };
+        assert!(
+            reason.starts_with("index.md no longer lists /learning/ (another changeset"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn set_listing_summary_of_a_missing_index_is_not_found() {
+        let error = replay("index.md", None, &[describe("learning", "x")]).unwrap_err();
+
+        assert!(matches!(error, OkfError::NotFound { ref path } if path == "index.md"));
+    }
+
+    #[test]
+    fn set_listing_summary_that_already_reads_so_keeps_the_bytes() {
+        let crlf = ROOT_WITH_LEARNING
+            .replace("TODO: describe this folder", "Ours.")
+            .replace('\n', "\r\n");
+
+        let text = replay("index.md", Some(&crlf), &[describe("learning", "Ours.")]).unwrap();
+
+        assert_eq!(text, crlf);
+    }
+
+    #[test]
+    fn set_listing_summary_never_edits_a_bullet_that_only_mentions_the_folder() {
+        // A link to the folder in another bullet's summary is not its
+        // listing: the listing below is the one changed.
+        let text = concat!(
+            "# Root\n\n# Concepts\n\n* [Notes](notes.md) - see [learning](learning/)\n",
+            "* See [learning](learning/) - for more\n\n",
+            "# Sections\n\n* [Learning](learning/) - TODO: describe this folder\n",
+        );
+        let only_mentioned = concat!(
+            "# Root\n\n* [Notes](notes.md) - see [learning](learning/)\n",
+            "* See [learning](learning/) - for more\n",
+        );
+
+        let set = replay("index.md", Some(text), &[describe("learning", "New.")]).unwrap();
+        let refused = replay(
+            "index.md",
+            Some(only_mentioned),
+            &[describe("learning", "New.")],
+        );
+
+        assert_eq!(
+            set,
+            concat!(
+                "# Root\n\n# Concepts\n\n* [Notes](notes.md) - see [learning](learning/)\n",
+                "* See [learning](learning/) - for more\n\n",
+                "# Sections\n\n* [Learning](learning/) - New.\n",
+            )
+        );
+        assert!(
+            matches!(refused, Err(OkfError::Refused { .. })),
+            "{refused:?}"
+        );
+    }
+
+    #[test]
+    fn set_listing_summary_refuses_a_raw_listing_rather_than_guess() {
+        // Issue #731's raw folder bullet: its link does not resolve, so the
+        // replay cannot tell it lists `my docs/`; it refuses, never edits it.
+        let raw = "# Root\n\n# Sections\n\n* [My docs](my docs/) - Mine.\n";
+
+        let result = replay("index.md", Some(raw), &[describe("my docs", "New.")]);
+
+        assert!(
+            matches!(result, Err(OkfError::Refused { .. })),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn set_listing_summary_text_keeps_what_sits_between_the_link_and_the_dash() {
+        let ws = MemWorkspace::default();
+        let with_aside = "* [L](/learning/) (archived) - old - older\n";
+        let bare = "- [L](learning) \n";
+
+        let aside =
+            set_listing_summary_text(&ws, with_aside, "index.md", "learning/index.md", "New.");
+        let appended = set_listing_summary_text(&ws, bare, "index.md", "learning/index.md", "New.");
+
+        assert_eq!(aside.unwrap(), "* [L](/learning/) (archived) - New.\n");
+        assert_eq!(appended.unwrap(), "- [L](learning) - New.\n");
     }
 }

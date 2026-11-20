@@ -5,7 +5,7 @@
 //! one `#[tool_router]` block with its own router, joined in
 //! `OkfServer::tools`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use axum::http::request::Parts;
@@ -32,6 +32,9 @@ use crate::okf::rules;
 use crate::okf::workspace::Workspace;
 use crate::store::audit::Action;
 use crate::store::keys::Access;
+// `as publishing`: the module's `publish` would clash with this file's
+// `publish` function.
+use crate::store::publish as publishing;
 use crate::write::{apply_audited, OpAudit, WriteReport};
 
 /// `list_changesets`' arguments.
@@ -403,9 +406,6 @@ pub(crate) async fn publish(
     ctx: &ToolContext,
     params: PublishParams,
 ) -> Result<Published, OkfError> {
-    // `as publishing`: the module's `publish` would clash with this function.
-    use crate::store::publish as publishing;
-
     let message = params.message.trim();
     if message.is_empty() {
         return Err(OkfError::Refused {
@@ -512,7 +512,11 @@ pub struct PendingFile {
     pub stale: bool,
     /// Whether publish can replay the entry onto newer text (log.md and index.md bookkeeping only).
     pub replayable: bool,
-    /// A unified diff against the published text (`/dev/null` for a new or deleted file). A deletion of a path deleted since (no published file), or a file equal to the published one, gets a one-line note instead.
+    /// Whether `diff` shows the entry replayed onto the published text, the bytes publish would write: true only for a stale, replayable entry whose replay succeeds. Publish still runs its lint on that result. False: `diff` shows the entry's stored text, or the `replay_error` note.
+    pub replayed: bool,
+    /// Why publish cannot replay this stale, replayable entry (null otherwise): publish would refuse the changeset until the path is discarded and the change made again. `diff` is then a one-line note saying so.
+    pub replay_error: Option<String>,
+    /// A unified diff against the published text (`/dev/null` for a new or deleted file); for a stale, replayable entry, of its replayed text (`replayed`). A deletion of a path deleted since (no published file), a file equal to the published one, or a replay that would fail at publish (`replay_error`) gets a one-line note instead.
     pub diff: String,
 }
 
@@ -680,9 +684,13 @@ pub(crate) async fn discard(
 /// `delete` revision) to the changeset a handle names, as a free edit.
 ///
 /// It goes through [`apply_audited`], so every write rule applies, and
-/// records `catalog.reverted` in the edit's own transaction. Sending a path
-/// the changeset created (never published) back to "absent" leaves no
-/// entry for it, so the report's `touched` is empty.
+/// records `catalog.reverted` in the edit's own transaction. The entry's
+/// base is the revision published now, in the snapshot the write's overlay
+/// is built on, even when the changeset had edited the path before (issue
+/// #788): publish then conflicts only if the path is published again after
+/// the revert. Sending a path that is not published now (one the changeset
+/// created, or one deleted since) back to "absent" leaves no entry for it,
+/// so the report's `touched` is empty.
 ///
 /// # Arguments
 /// * `ctx` - the call's context.
@@ -754,12 +762,17 @@ pub(crate) async fn revert(
         }
         let message = format!("{path}: reverted to revision {revision}");
         // No replay: a revert is a free edit, which conflicts on a stale
-        // base. `path` moves into the outcome (no copy).
+        // base. Its text is a whole-file choice made against the published
+        // history, so its base is the revision published now, even when the
+        // changeset already had an entry for the path (`rebased`, issue
+        // #788): an earlier edit's base and replay no longer apply to it.
+        // `path` moves into the outcome after one copy for `rebased`.
         Ok(OpOutcome {
-            touched: vec![path],
+            touched: vec![path.clone()],
             replay: BTreeMap::new(),
             message,
             notes: Vec::new(),
+            rebased: BTreeSet::from([path]),
         })
     })
     .await
@@ -864,17 +877,71 @@ fn pending_files(
                 }
             }
             let old = published.as_ref().map(|file| file.content.as_slice());
+            let stale = entry.base_revision != current_revision;
+            let replayable = entry.replay.is_some();
+            // A stale, replayable entry is shown as publish would write it:
+            // its operations redone on the published text by the function
+            // publish calls (issue #787). Its stored text was built on the
+            // old base, so a diff of that would show everything published
+            // since as deleted.
+            let (replayed, replay_error, diff) = if stale && replayable {
+                match publishing::replayed_text(entry, old) {
+                    Ok(Some(text)) => (
+                        true,
+                        None,
+                        unified_diff(&entry.path, old, Some(text.as_bytes())),
+                    ),
+                    Ok(None) => {
+                        let reason = cannot_replay(&entry.path, current_revision);
+                        (false, Some(reason.clone()), format!("{reason}\n"))
+                    }
+                    Err(error) => {
+                        let reason = error.to_string();
+                        let note = format!(
+                            "Publish cannot replay this entry onto the published text: {reason}\n"
+                        );
+                        (false, Some(reason), note)
+                    }
+                }
+            } else {
+                let diff = unified_diff(&entry.path, old, entry.content.as_deref());
+                (false, None, diff)
+            };
             Ok(PendingFile {
                 path: format!("/{}", entry.path),
                 change,
                 base_revision: entry.base_revision,
                 current_revision,
-                stale: entry.base_revision != current_revision,
-                replayable: entry.replay.is_some(),
-                diff: unified_diff(&entry.path, old, entry.content.as_deref()),
+                stale,
+                replayable,
+                replayed,
+                replay_error,
+                diff,
             })
         })
         .collect()
+}
+
+/// Why a stale, replayable entry has no replay at publish (the cases
+/// [`publishing::replayed_text`] answers `None` for): publish refuses it
+/// with Conflict.
+///
+/// # Arguments
+/// * `path` - catalog-relative path.
+/// * `current` - the path's published revision now (`None`: not live).
+///
+/// # Returns
+/// The reason, naming the path and what to do.
+#[tracing::instrument(level = "trace", skip_all)]
+fn cannot_replay(path: &str, current: Option<i32>) -> String {
+    let now = match current {
+        Some(revision) => format!("revision {revision}"),
+        None => "a deleted document".to_string(),
+    };
+    format!(
+        "Publish cannot replay this entry onto /{path} as published now ({now}) and would \
+         refuse it with Conflict; discard /{path} from this changeset and make the change again"
+    )
 }
 
 /// A unified diff (3 lines of context) between the published and the
@@ -959,8 +1026,11 @@ impl OkfServer {
         description = "Add a document's content at an earlier revision (from `history`), or its \
                        deletion for a `delete` revision, to the changeset `changeset` names, for \
                        review and publish like any other edit. Every write rule applies, so \
-                       machinery cannot be reverted. Reverting a file this changeset created to \
-                       a `delete` revision drops it from the changeset. Write access.",
+                       machinery cannot be reverted. The revert is based on the revision \
+                       published now, even if this changeset edited the document before, so \
+                       publish conflicts only if the document is published again after it. \
+                       Reverting a file this changeset created to a `delete` revision drops it \
+                       from the changeset. Write access.",
         annotations(
             title = "Revert Document",
             read_only_hint = false,
@@ -984,7 +1054,10 @@ impl OkfServer {
         description = "The unpublished changeset `changeset` names: each changed path \
                        (create, update or delete), the revision it was based on and the one \
                        published now, whether that base is stale, whether publish can replay \
-                       it, and a unified diff against the published text.",
+                       it, and a unified diff against the published text. A stale entry \
+                       publish can replay is diffed as replayed onto the published text \
+                       (replayed: true), the bytes publish would write; one whose replay would \
+                       fail gets replay_error and a note instead.",
         annotations(
             title = "Show Pending Changes",
             read_only_hint = true,
@@ -2002,6 +2075,429 @@ mod publish_tests {
         );
     }
 
+    /// `pending_changes` on `handle`.
+    async fn shown(ctx: &ToolContext, handle: &str) -> PendingChanges {
+        let params = PendingParams {
+            changeset: handle.to_string(),
+        };
+        pending_changes(ctx, params).await.unwrap()
+    }
+
+    /// The `+` and `-` lines of a unified diff, without its two headers.
+    fn changed_lines(diff: &str) -> Vec<&str> {
+        diff.lines()
+            .filter(|line| !line.starts_with("+++ ") && !line.starts_with("--- "))
+            .filter(|line| line.starts_with('+') || line.starts_with('-'))
+            .collect()
+    }
+
+    /// The replayable bookkeeping write a test makes.
+    #[derive(Clone, Copy)]
+    enum Bookkeeping {
+        /// A `log` entry (log.md).
+        Log,
+        /// An `index` listing of `/infra/<name>.md` (infra/index.md).
+        Listing,
+    }
+
+    impl Bookkeeping {
+        /// The path the write changes.
+        fn path(self) -> &'static str {
+            match self {
+                Bookkeeping::Log => "log.md",
+                Bookkeeping::Listing => "infra/index.md",
+            }
+        }
+
+        /// Writes `name`'s entry in `handle`; returns the text it adds.
+        async fn write(self, ctx: &ToolContext, handle: &str, name: &str) -> String {
+            match self {
+                Bookkeeping::Log => {
+                    let text = format!("from {name}");
+                    log_entry(ctx, handle, &text).await;
+                    text
+                }
+                Bookkeeping::Listing => {
+                    let summary = format!("the {name}");
+                    list(ctx, handle, &format!("/infra/{name}.md"), &summary).await;
+                    summary
+                }
+            }
+        }
+    }
+
+    /// A stale, replayable entry in `a` (another changeset published its
+    /// path since) is shown as publish writes it: one `+` line for this
+    /// entry, and nothing published since shown as deleted (issue #787).
+    /// Publishing then writes exactly the diff shown.
+    async fn a_stale_replayable_entry_is_shown_as_publish_writes_it(kind: Bookkeeping) {
+        let test = pg().await;
+        let first = writer(&test, "writer-a", "pg").await;
+        let second = writer(&test, "writer-b", "pg").await;
+        let (a, b) = (open(&first).await, open(&second).await);
+        let ours = kind.write(&first, &a, "x").await;
+        let theirs = kind.write(&second, &b, "y").await;
+        publish_as(&second, &b, "theirs").await.unwrap();
+        let path = kind.path();
+        let before = published_text(&test, path).await;
+        assert!(before.contains(&theirs), "{before}");
+
+        let pending = shown(&first, &a).await;
+
+        let file = &pending.files[0];
+        let expected_path = format!("/{path}");
+        assert_eq!(
+            (
+                file.path.as_str(),
+                file.stale,
+                file.replayable,
+                file.replayed,
+                file.replay_error.as_deref()
+            ),
+            (expected_path.as_str(), true, true, true, None)
+        );
+        let changed = changed_lines(&file.diff);
+        assert_eq!(changed.len(), 1, "{}", file.diff);
+        assert!(
+            changed[0].starts_with('+') && changed[0].contains(&ours),
+            "{}",
+            file.diff
+        );
+        publish_as(&first, &a, "ours").await.unwrap();
+        let after = published_text(&test, path).await;
+        assert!(after.contains(&ours) && after.contains(&theirs), "{after}");
+        assert_eq!(
+            file.diff,
+            unified_diff(path, Some(before.as_bytes()), Some(after.as_bytes()))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stale_log_entry_is_shown_replayed_without_deleting_one_published_since() {
+        a_stale_replayable_entry_is_shown_as_publish_writes_it(Bookkeeping::Log).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stale_index_listing_is_shown_replayed_without_deleting_one_published_since() {
+        a_stale_replayable_entry_is_shown_as_publish_writes_it(Bookkeeping::Listing).await;
+    }
+
+    /// The revision of `path` in this server's snapshot.
+    async fn published_revision(test: &TestApp, path: &str) -> Option<i32> {
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
+        state.current().revision(path)
+    }
+
+    /// The entry `handle` holds for `path` (`path` without its `/`).
+    async fn entry_for(test: &TestApp, handle: &str, path: &str) -> Option<EntryRow> {
+        let row = changeset_row(test, handle).await;
+        let entries = changesets::entries(test.app.pool(), row.id).await.unwrap();
+        entries.into_iter().find(|entry| entry.path == path)
+    }
+
+    /// `revert` of `path` to `revision` in `handle`.
+    async fn revert_in(ctx: &ToolContext, handle: &str, path: &str, revision: i32) -> WriteReport {
+        let params = RevertParams {
+            path: path.to_string(),
+            revision,
+            changeset: handle.to_string(),
+        };
+        revert(ctx, params).await.unwrap()
+    }
+
+    /// A concept for a.md whose body is the heading `title`.
+    fn note(title: &str) -> String {
+        format!("---\ntype: Note\ntitle: A\ndescription: A note.\n---\n# {title}\n")
+    }
+
+    /// Publishes, in a changeset of its own, `text` at `path` (`None`
+    /// deletes it), as another writer would.
+    async fn publish_file(ctx: &ToolContext, path: &str, text: Option<&str>) {
+        let handle = open(ctx).await;
+        let (path, text) = (path.to_string(), text.map(str::to_string));
+        apply(ctx, &handle, None, move |workspace, _| {
+            match &text {
+                Some(text) => workspace.write_atomic(&path, text)?,
+                None => {
+                    workspace.remove(&path)?;
+                }
+            }
+            let mut outcome = OpOutcome::default();
+            outcome.touch(&path);
+            Ok(outcome)
+        })
+        .await
+        .unwrap();
+        publish_as(ctx, &handle, "another writer").await.unwrap();
+    }
+
+    /// The issue's sequence: a `log` entry, two publishes of log.md by
+    /// others, a revert to the revision published now and the same `log`
+    /// again. The entry is based on that revision, is not stale, shows one
+    /// added line, and publishes it beside both others' lines (issue #788).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_revert_to_the_published_revision_rebases_a_stale_entry_so_it_publishes() {
+        let test = pg().await;
+        let ours = writer(&test, "writer-a", "pg").await;
+        let theirs = writer(&test, "writer-b", "pg").await;
+        let handle = open(&ours).await;
+        log_entry(&ours, &handle, "from a").await;
+        let first_base = published_revision(&test, "log.md").await;
+        for text in ["from b one", "from b two"] {
+            let other = open(&theirs).await;
+            log_entry(&theirs, &other, text).await;
+            publish_as(&theirs, &other, text).await.unwrap();
+        }
+        let now = published_revision(&test, "log.md").await.unwrap();
+        assert_eq!(first_base.map(|base| base + 2), Some(now));
+        let before = published_text(&test, "log.md").await;
+        assert!(shown(&ours, &handle).await.files[0].stale);
+
+        revert_in(&ours, &handle, "/log.md", now).await;
+        log_entry(&ours, &handle, "from a").await;
+
+        let entry = entry_for(&test, &handle, "log.md").await.unwrap();
+        // Based on the revision the revert read; the revert is a free edit,
+        // so the `log` after it adds no replay to it.
+        assert_eq!((entry.base_revision, entry.replay), (Some(now), None));
+        let pending = shown(&ours, &handle).await;
+        let file = &pending.files[0];
+        assert_eq!(
+            (
+                file.base_revision,
+                file.current_revision,
+                file.stale,
+                file.replayable,
+                file.replayed,
+                file.replay_error.as_deref()
+            ),
+            (Some(now), Some(now), false, false, false, None)
+        );
+        let changed = changed_lines(&file.diff);
+        assert_eq!(changed.len(), 1, "{}", file.diff);
+        assert!(
+            changed[0].starts_with('+') && changed[0].contains("from a"),
+            "{}",
+            file.diff
+        );
+        let published = publish_as(&ours, &handle, "ours").await.unwrap();
+        assert!(published.report.published);
+        let after = published_text(&test, "log.md").await;
+        assert!(
+            ["from a", "from b one", "from b two"]
+                .iter()
+                .all(|text| after.contains(&format!("* **Update:** {text}"))),
+            "{after}"
+        );
+        assert_eq!(
+            file.diff,
+            unified_diff("log.md", Some(before.as_bytes()), Some(after.as_bytes()))
+        );
+    }
+
+    /// A revert to an older revision of a path the changeset had edited is
+    /// a whole-file choice based on the revision published now: it publishes
+    /// that revision's text over the later ones. Another revert, then a
+    /// publish by someone else, conflicts on the revision the revert read.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_revert_to_an_older_revision_conflicts_only_on_a_publish_after_it() {
+        let test = pg().await;
+        let ours = writer(&test, "writer-a", "pg").await;
+        let theirs = writer(&test, "writer-b", "pg").await;
+        let (handle, later) = (open(&ours).await, open(&ours).await);
+        body(&ours, &handle, "/a.md", "# A\n\nOurs.\n").await;
+        body(&ours, &later, "/a.md", "# A\n\nLater.\n").await;
+        publish_file(&theirs, "a.md", Some(&note("Two"))).await;
+        publish_file(&theirs, "a.md", Some(&note("Three"))).await;
+        let three = published_revision(&test, "a.md").await;
+
+        revert_in(&ours, &handle, "/a.md", 1).await;
+        let entry = entry_for(&test, &handle, "a.md").await.unwrap();
+        assert_eq!(
+            (entry.base_revision, entry.content.as_deref()),
+            (three, Some(NOTE.as_bytes()))
+        );
+        publish_as(&ours, &handle, "back to one").await.unwrap();
+        assert_eq!(published_text(&test, "a.md").await, NOTE);
+
+        // `later` was based on revision 1 too; reverting it reads revision
+        // 4 (the one just published), and a publish after that conflicts.
+        let four = published_revision(&test, "a.md").await;
+        revert_in(&ours, &later, "/a.md", 2).await;
+        publish_file(&theirs, "a.md", Some(&note("Five"))).await;
+        let five = published_revision(&test, "a.md").await;
+        let error = publish_as(&ours, &later, "back to two").await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                OkfError::Conflict { ref files } if files == &[ConflictFile {
+                    path: "/a.md".to_string(),
+                    base_revision: four,
+                    current_revision: five,
+                }]
+            ),
+            "{error:?}"
+        );
+    }
+
+    /// A revert to a `delete` revision of a path the changeset had edited
+    /// takes the revision published now as its base too: a deletion of a
+    /// file published since, or no entry once the file is gone already.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_revert_to_a_deletion_rebases_or_drops_the_entry() {
+        let test = pg().await;
+        let ours = writer(&test, "writer-a", "pg").await;
+        let theirs = writer(&test, "writer-b", "pg").await;
+        let (gone, back) = (open(&ours).await, open(&ours).await);
+        body(&ours, &gone, "/a.md", "# A\n\nOurs.\n").await;
+        body(&ours, &back, "/a.md", "# A\n\nOurs.\n").await;
+        publish_file(&theirs, "a.md", None).await;
+        // The deletion is a.md's revision 2.
+        let deleted = 2;
+
+        // Deleted since: nothing to delete, so the entry goes.
+        let report = revert_in(&ours, &gone, "/a.md", deleted).await;
+        assert!(report.touched.is_empty(), "{report:?}");
+        assert!(entry_for(&test, &gone, "a.md").await.is_none());
+
+        // Created again since: a deletion based on that revision, which
+        // publishes.
+        publish_file(&theirs, "a.md", Some(&note("Again"))).await;
+        let again = published_revision(&test, "a.md").await;
+        revert_in(&ours, &back, "/a.md", deleted).await;
+        let entry = entry_for(&test, &back, "a.md").await.unwrap();
+        assert_eq!((entry.base_revision, entry.content), (again, None));
+        publish_as(&ours, &back, "delete again").await.unwrap();
+        assert_eq!(published_revision(&test, "a.md").await, None);
+    }
+
+    /// The revert's base is the revision in the snapshot its write's overlay
+    /// is built on, never a newer one: a publish that snapshot has not seen
+    /// (here an import, with no refresh) leaves the base behind, and publish
+    /// reports the conflict instead of writing over that revision.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_revert_on_a_stale_snapshot_keeps_the_older_base_and_conflicts() {
+        let test = pg().await;
+        let ours = writer(&test, "writer-a", "pg").await;
+        let theirs = writer(&test, "writer-b", "pg").await;
+        let handle = open(&ours).await;
+        // Based on revision 1; revision 2 is published, and seen, after it.
+        body(&ours, &handle, "/a.md", "# A\n\nOurs.\n").await;
+        publish_file(&theirs, "a.md", Some(&note("Two"))).await;
+        let options = ImportOptions {
+            replace: true,
+            scope: ImportScope::Everything,
+            expect_generation: None,
+            expect_catalog_id: None,
+            actor: "cli",
+            audit: &crate::store::audit::AuditActor::cli(),
+            now: Utc::now(),
+        };
+        let incoming = files(&[
+            ("a.md", "# Imported\n"),
+            ("hub.md", HUB),
+            ("infra/index.md", "# Infra\n"),
+            ("infra/x.md", X),
+            ("infra/y.md", Y),
+            ("log.md", "# Log\n"),
+        ]);
+        import(test.app.pool(), "pg", incoming, &options)
+            .await
+            .unwrap();
+        // The import wrote revision 3; this server's snapshot still has 2
+        // (an import refreshes nothing, and the cached catalog directory row
+        // still names the old generation, so no read here refreshes it).
+        // The assertion on `seen` checks that premise.
+        let seen = published_revision(&test, "a.md").await;
+
+        revert_in(&ours, &handle, "/a.md", 1).await;
+
+        // Neither the first edit's base (1) nor the database's revision (3):
+        // the revision the write's snapshot holds.
+        let entry = entry_for(&test, &handle, "a.md").await.unwrap();
+        assert_eq!((seen, entry.base_revision), (Some(2), Some(2)));
+        let error = publish_as(&ours, &handle, "revert").await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                OkfError::Conflict { ref files } if files == &[ConflictFile {
+                    path: "/a.md".to_string(),
+                    base_revision: Some(2),
+                    current_revision: Some(3),
+                }]
+            ),
+            "{error:?}"
+        );
+        assert_eq!(published_text(&test, "a.md").await, "# Imported\n");
+    }
+
+    /// An entry nobody published over keeps today's diff: its stored text
+    /// against the published text, not marked replayed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_fresh_replayable_entry_is_diffed_as_stored() {
+        let test = pg().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        log_entry(&ctx, &handle, "from a").await;
+        let published = published_text(&test, "log.md").await;
+        let row = changeset_row(&test, &handle).await;
+        let entries = changesets::entries(test.app.pool(), row.id).await.unwrap();
+
+        let pending = shown(&ctx, &handle).await;
+
+        let file = &pending.files[0];
+        assert_eq!(
+            (
+                file.stale,
+                file.replayable,
+                file.replayed,
+                file.replay_error.as_deref()
+            ),
+            (false, true, false, None)
+        );
+        assert_eq!(
+            file.diff,
+            unified_diff(
+                "log.md",
+                Some(published.as_bytes()),
+                entries[0].content.as_deref()
+            )
+        );
+    }
+
+    /// A stale entry whose replay publish would refuse as a conflict (its
+    /// stored operations do not read) shows why, not a diff.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stale_entry_publish_cannot_replay_shows_the_conflict_not_a_diff() {
+        let test = pg().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        let unreadable = EntryRow {
+            path: "a.md".to_string(),
+            base_revision: Some(0),
+            content: Some(b"# A\n".to_vec()),
+            executable: false,
+            replay: Some(serde_json::json!("not a list of operations")),
+        };
+        insert_entry(&test, &handle, unreadable).await;
+
+        let pending = shown(&ctx, &handle).await;
+
+        let file = &pending.files[0];
+        assert_eq!(
+            (file.stale, file.replayable, file.replayed),
+            (true, true, false)
+        );
+        let reason = file.replay_error.as_deref().unwrap();
+        assert!(
+            reason.contains("refuse it with Conflict") && reason.contains("discard /a.md"),
+            "{reason}"
+        );
+        assert_eq!(file.diff, format!("{reason}\n"));
+        let error = publish_as(&ctx, &handle, "a").await.unwrap_err();
+        assert_eq!(error.kind(), "Conflict");
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_lint_error_in_a_changed_file_is_refused() {
         let test = pg().await;
@@ -2397,6 +2893,7 @@ mod changes_tests {
             body: "# New\n".to_string(),
             index_summary: None,
             index_section: None,
+            folder_summary: None,
             by: None,
             changeset: handle.to_string(),
         };
@@ -2673,6 +3170,8 @@ mod changes_tests {
             (file.base_revision, file.current_revision, file.stale),
             (Some(2), Some(3), true)
         );
+        // A free edit has no replay: the stored text, as before issue #787.
+        assert!(!file.replayed && file.replay_error.is_none());
         assert!(file.diff.contains("-# Three\n"), "{}", file.diff);
     }
 
@@ -3034,7 +3533,7 @@ mod restructure_publish_tests {
     async fn moved(session: &Session, old: &str, new: &str) -> WriteReport {
         let (old, new) = (old.to_string(), new.to_string());
         apply(&session.ctx, &session.handle, None, move |ws, _| {
-            ops::move_concept(ws, &old, &new)
+            ops::move_concept(ws, &old, &new, None)
         })
         .await
         .unwrap()
@@ -3073,6 +3572,7 @@ mod restructure_publish_tests {
                 description: Some("The part."),
                 stub: None,
                 sources: &[],
+                folder_summary: None,
             };
             ops::split_concept(ws, op, &split)
         })
@@ -3090,6 +3590,7 @@ mod restructure_publish_tests {
             // `bool::then`: `Some(..)` when true, like `x if cond else None`.
             index_summary: listed.then(|| "q".to_string()),
             index_section: None,
+            folder_summary: None,
             by: None,
             changeset: session.handle.clone(),
         };
