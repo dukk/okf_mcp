@@ -12,6 +12,7 @@ use crate::labels::DisplayName;
 use crate::store::audit::{self, Action, AuditActor, Entry, People, RowLock, Target};
 use crate::store::catalogs::{is_unique_violation, is_valid_name};
 use crate::store::changesets::{self, ChangesetState};
+use crate::store::passwords::PasswordStamp;
 use crate::store::user_sessions;
 
 /// A user to create.
@@ -1002,6 +1003,180 @@ impl DeleteOptions {
     };
 }
 
+/// How the person deleting their own account proved it is them, moments
+/// before ([`delete_own`]). Checked again under the user's row lock, so a
+/// change that commits in between refuses the deletion.
+// `Copy`: two borrowed values, cheap to pass by value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Proof<'a> {
+    /// The current password matched; the user's stored password must still
+    /// be the one it matched (a reset or change meanwhile refuses).
+    Password(&'a PasswordStamp),
+    /// A fresh passkey assertion verified; the passkey (its raw credential
+    /// id) must still be the user's (a removal meanwhile refuses).
+    Passkey(&'a [u8]),
+}
+
+/// A signed-in person's request to delete their own account
+/// (`DELETE /api/v1/me`, issue #355). `Debug` is redacted where it holds a
+/// secret.
+pub struct OwnDeletion<'a> {
+    /// The session user's `users.id`; the name must still name it.
+    pub user_id: &'a str,
+    /// The session user's name.
+    pub name: &'a str,
+    /// The raw id of the asking session (the cookie's value), which must
+    /// still be in force.
+    pub session_id: &'a str,
+    /// How the person re-authenticated.
+    pub proof: Proof<'a>,
+}
+
+// Hand-written (Python's `__repr__`): the session id is a credential.
+impl std::fmt::Debug for OwnDeletion<'_> {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display or Debug impl: runs inside the subscriber while it formats an event"
+        )
+    )]
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OwnDeletion")
+            .field("user_id", &self.user_id)
+            .field("name", &self.name)
+            .field("session_id", &"<redacted>")
+            .field("proof", &self.proof)
+            .finish()
+    }
+}
+
+/// Deletes the signed-in person's own account (issue #355): exactly
+/// [`delete`] with the API's [`DeleteOptions`] (so the last admin user
+/// stays, and every other refusal of `delete` applies), the person as the
+/// actor, and, under the user's row lock, three more checks:
+/// - the name still names `own.user_id`;
+/// - the asking session is still in force (held `FOR SHARE`, as a password
+///   change from a session holds it), so a sign-out-everywhere, reset or
+///   admin change that ended it refuses the deletion;
+/// - the [`Proof`] still holds: the stored password is the one the typed
+///   password matched, or the asserted passkey is still the user's.
+///
+/// Keys, grants, sign-in codes, sessions, passkeys, linked identities,
+/// emailed links, entitlements, memberships and the personal team all go
+/// in that one transaction, or nothing does.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `own` - who asks, from which session, with what proof.
+/// * `actor` - the person, for the audit log (`user.deleted`).
+/// * `now` - the server clock.
+///
+/// # Returns
+/// What went.
+///
+/// # Errors
+/// [`OkfError::Unauthenticated`] once the session has ended or the user is
+/// gone; [`OkfError::Forbidden`] when the password changed or the passkey
+/// was removed since it was checked; otherwise as [`delete`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.delete_own"))]
+pub async fn delete_own(
+    pool: &PgPool,
+    own: &OwnDeletion<'_>,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<DeletedUser, OkfError> {
+    match delete_checked(
+        pool,
+        own.name,
+        DeleteOptions::default(),
+        Some(own),
+        actor,
+        now,
+    )
+    .await
+    {
+        // The session's own name naming nobody: the user went meanwhile.
+        Err(OkfError::UnknownName { noun: "user", .. }) => Err(session_ended()),
+        other => other,
+    }
+}
+
+/// The 401 for a deletion whose session (or user) is gone.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
+fn session_ended() -> OkfError {
+    OkfError::Unauthenticated {
+        reason: "this session has ended; sign in again".to_string(),
+    }
+}
+
+/// [`delete_own`]'s checks, run under the user's row lock (which every
+/// writer of the password, a passkey or a session's user takes first, or
+/// which, for a session revoke, never follows a session row lock).
+///
+/// # Arguments
+/// * `conn` - the deletion's transaction, holding the user `FOR UPDATE`.
+/// * `own` - the request.
+/// * `user_id` - the id the name resolved to under the lock.
+/// * `now` - the server clock.
+///
+/// # Errors
+/// As [`delete_own`]; [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.check_own_deletion"))]
+async fn check_own_deletion(
+    conn: &mut PgConnection,
+    own: &OwnDeletion<'_>,
+    user_id: &str,
+    now: DateTime<Utc>,
+) -> Result<(), OkfError> {
+    if user_id != own.user_id
+        || !user_sessions::hold_live(&mut *conn, own.session_id, own.user_id, now).await?
+    {
+        return Err(session_ended());
+    }
+    let holds = match own.proof {
+        Proof::Password(stamp) => {
+            // The row is ours `FOR UPDATE`: a plain read sees the hash as
+            // it stays until we commit.
+            let stored: Option<String> =
+                sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
+                    .bind(user_id)
+                    .fetch_one(&mut *conn)
+                    .await?;
+            stored.as_deref() == Some(stamp.as_str())
+        }
+        Proof::Passkey(credential_id) => {
+            // A removal locks the user first (`passkeys::remove`), so it
+            // either committed before us or waits for us.
+            let found: Option<i32> = sqlx::query_scalar(
+                "SELECT 1 FROM user_passkeys WHERE user_id = $1 AND credential_id = $2",
+            )
+            .bind(user_id)
+            .bind(credential_id)
+            .fetch_optional(&mut *conn)
+            .await?;
+            found.is_some()
+        }
+    };
+    if !holds {
+        return Err(OkfError::Forbidden {
+            reason: match own.proof {
+                Proof::Password(_) => "the password changed meanwhile; give the current one again",
+                Proof::Passkey(_) => "that passkey was removed meanwhile; confirm again",
+            }
+            .to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// Deletes a user and everything that is only theirs, in one transaction
 /// (spec Part 3): its keys, grants and sign-in codes (revoked ones too),
 /// sessions, sign-in methods, emailed links, entitlements, memberships and
@@ -1012,7 +1187,8 @@ impl DeleteOptions {
 /// Lock order: every admin row in id order, then the user with every other
 /// user its entries resolve (the actor, its credential's owner, the people
 /// of its open changesets' personal owner teams), in id order
-/// ([`audit::lock_people`], as [`set_admin`]), then its personal team, then
+/// ([`audit::lock_people`], as [`set_admin`]), then (for [`delete_own`]
+/// only) the asking session's row `FOR SHARE`, then its personal team, then
 /// its shared teams in id order, then its keys and grants in id order, then
 /// their open changesets in id order. A key or code being created for the
 /// user holds the user `FOR KEY SHARE` (`id_of`); the deletion waits for it
@@ -1045,6 +1221,29 @@ pub async fn delete(
     pool: &PgPool,
     name: &str,
     options: DeleteOptions,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<DeletedUser, OkfError> {
+    delete_checked(pool, name, options, None, actor, now).await
+}
+
+/// The one deletion path: [`delete`], plus [`delete_own`]'s checks when
+/// `own` is given, run right after the user's row is locked.
+///
+/// # Arguments
+/// As [`delete`]; `own` - a self-service deletion's request, if it is one.
+///
+/// # Returns
+/// What went.
+///
+/// # Errors
+/// As [`delete`] and [`delete_own`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.delete_checked"))]
+async fn delete_checked(
+    pool: &PgPool,
+    name: &str,
+    options: DeleteOptions,
+    own: Option<&OwnDeletion<'_>>,
     actor: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<DeletedUser, OkfError> {
@@ -1086,6 +1285,12 @@ pub async fn delete(
         .await?
         .ok_or_else(|| unknown(name))?;
     audit::refuse_admin_target(actor, is_admin, name)?;
+    // Under the user's lock and before any team, catalog or key: the
+    // session and passkey rows it reads are the user's children, which no
+    // writer locks before a team or a key.
+    if let Some(own) = own {
+        check_own_deletion(&mut tx, own, &user_id, now).await?;
+    }
     // The personal team: a catalog assigned to it concurrently takes
     // `FOR KEY SHARE` on this row, so either it waits for this delete (and
     // then fails its foreign-key check), or this waits for it and the
@@ -3698,3 +3903,7 @@ pub(crate) mod tests {
             .clone()
     }
 }
+
+#[cfg(test)]
+#[path = "users_own_deletion_tests.rs"]
+mod own_deletion_tests;

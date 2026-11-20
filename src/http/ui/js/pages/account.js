@@ -7,7 +7,11 @@
 // while the page is shown. The server refuses removing the last sign-in
 // method (409, toasted with its reason). Changing the password, adding a
 // passkey or linking an account signs the other sessions out, unless
-// "Keep me signed in elsewhere" is ticked.
+// "Keep me signed in elsewhere" is ticked. "Delete your account" (issue
+// #355) asks for the current password or a passkey, then DELETE /me; a
+// refusal (the personal team owns catalogs, the last owner of a shared
+// team, the last admin) shows its reason on the page and keeps the
+// controls, and a deletion signs the console out.
 import { h, fill, fact } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { toast } from '../core/toast.js';
@@ -20,7 +24,7 @@ import { confirmDialog } from '../components/confirm.js';
 import { accessPill } from '../components/levels.js';
 import { ceilingPager } from '../components/ceiling.js';
 import { sessionTable, signInTable } from '../components/activity.js';
-import { createCredential } from '../signin/webauthn.js';
+import { assertionJson, createCredential, requestOptions } from '../signin/webauthn.js';
 
 export async function render(main) {
     main.append(h('header', { class: 'page-head' },
@@ -40,7 +44,19 @@ export async function render(main) {
     const identities = section('account-identities', 'Linked accounts', 'Sign in through another identity provider.');
     const sessions = section('account-sessions', 'Where you are signed in');
     const signIns = section('account-sign-ins', 'Recent sign-ins');
-    main.append(profile.el, owned.el, ceiling.el, password.el, passkeys.el, identities.el, sessions.el, signIns.el);
+    const removal = section('account-deletion', 'Delete your account',
+        'Deleting your account removes your keys, OAuth grants, sessions, passkeys, linked accounts and your '
+        + 'personal team, at once and for good. Catalogs and their history stay; the audit log keeps its '
+        + 'entries, naming you only as a deleted user.');
+    main.append(profile.el, owned.el, ceiling.el, password.el, passkeys.el, identities.el, sessions.el, signIns.el,
+        removal.el);
+    // What the delete section is drawn from: the account (whether it has a
+    // password) and how many passkeys it has, each set by its own read;
+    // `null` until that read answers. `deleteRefusal` is the last refusal's
+    // reason, kept across redraws until the next attempt.
+    let deleteAccount = null;
+    let deletePasskeys = null;
+    let deleteRefusal = null;
     // The ceiling table, a page at a time: drawn once, then redrawn with
     // each committed page. `shownPrefix` is the prefix the drawn rows
     // answer (null before the first page), for the empty text.
@@ -76,6 +92,8 @@ export async function render(main) {
         fill(owned.body, ownedTeams(account.owned_team_details ?? []));
         owned.el.hidden = !(account.owned_team_details ?? []).length;
         fill(password.body, passwordForm(account));
+        deleteAccount = account;
+        drawDelete();
     }
 
     // The display-name editor: the label is user text, shown in an input's
@@ -177,6 +195,8 @@ export async function render(main) {
         let list;
         try { ({ passkeys: list } = await api.get('/me/passkeys')); } catch { return; }
         if (!main.isConnected) return;
+        deletePasskeys = list.length;
+        drawDelete();
         const name = h('input', { id: 'passkey-name', 'aria-label': 'A name for the new passkey',
                                   placeholder: 'a name, such as laptop', autocomplete: 'off' });
         const keep = keepSessionsBox('passkey-keep-sessions');
@@ -337,6 +357,90 @@ export async function render(main) {
         // A 401 means it had ended already: the 401 handler shows the card.
         try { await api.del(`/me/sessions/${enc(entry.id_prefix)}`); } catch { return; /* toasted */ }
         signedOut();
+    }
+
+    // The delete section: a password box when the account has a password,
+    // a passkey button when it has a passkey, else a note saying how to get
+    // either. Both controls share one pending key, so a second click (or a
+    // redraw while the request runs) never sends a second deletion. No
+    // control is drawn until the account read has answered: the typed
+    // confirmation needs its id, whichever read answers first.
+    function drawDelete() {
+        if (!main.isConnected) return;
+        if (deleteAccount === null) {
+            fill(removal.body, h('p', { class: 'muted small', id: 'account-delete-loading' },
+                'Loading your account... Deleting it needs your account ID, so this waits for it.'));
+            return;
+        }
+        const key = 'account:delete';
+        const refusal = h('p', { id: 'account-delete-reason', class: 'error', role: 'alert' }, deleteRefusal ?? '');
+        refusal.hidden = !deleteRefusal;
+        const parts = [refusal];
+        if (deleteAccount?.has_password) {
+            const typed = h('input', { type: 'password', id: 'account-delete-password', autocomplete: 'current-password',
+                                       'aria-label': 'Your current password' });
+            const go = guard(h('button', { type: 'button', id: 'account-delete', class: 'danger' },
+                'Delete my account'), key);
+            go.addEventListener('click', () => removeAccount(key, () => ({ password: typed.value })));
+            parts.push(h('label', {}, 'Current password', typed), go);
+        }
+        if (deletePasskeys) {
+            const go = guard(h('button', { type: 'button', id: 'account-delete-passkey', class: 'danger' },
+                'Confirm with a passkey and delete my account'), key);
+            go.addEventListener('click', () => removeAccount(key, passkeyProof));
+            parts.push(h('div', { class: 'inline-form' }, go));
+        }
+        if (deleteAccount && !deleteAccount.has_password && deletePasskeys === 0) {
+            parts.push(h('p', { class: 'muted small', id: 'account-delete-needs-proof' },
+                'Set a password or add a passkey first: deleting your account asks for one to confirm it is you.'));
+        }
+        fill(removal.body, ...parts);
+    }
+
+    // The passkey proof: the server's challenge for this account's own
+    // passkeys, the browser's prompt, and its assertion. Rejects with the
+    // refusal to show.
+    async function passkeyProof() {
+        const challenge = await api.post('/me/passkeys/confirm/start', {}, { quiet: true });
+        let credential;
+        try {
+            credential = await navigator.credentials.get(requestOptions(challenge));
+        } catch (error) {
+            throw new Error(error?.name === 'NotAllowedError'
+                ? 'the passkey prompt was cancelled or timed out'
+                : String(error?.message ?? error));
+        }
+        return { passkey: assertionJson(credential) };
+    }
+
+    // Confirms, re-authenticates and deletes. A refusal keeps the page and
+    // its controls, with the reason shown; a 401 means this session ended
+    // (the 401 handler shows the sign-in card); a deletion signs out.
+    async function removeAccount(key, proof) {
+        // The typed confirmation is never skipped: without the account id
+        // there is nothing to type, so there is no deletion.
+        const id = deleteAccount?.user;
+        if (!id) return;
+        const ok = await confirmDialog({
+            title: 'Delete your account?',
+            message: 'This cannot be undone. You are signed out everywhere, and your keys and grants stop working.',
+            action: 'Delete my account',
+            typed: id,
+        });
+        if (!ok) return;
+        await once(key, async () => {
+            try {
+                await api.del('/me', { body: await proof(), quiet: true });
+            } catch (error) {
+                if (error.status === 401) return;
+                deleteRefusal = `Your account was not deleted: ${reason(error)}.`;
+                drawDelete();
+                return;
+            }
+            signedOut('Your account was deleted.');
+        });
+        // Drawn again once the write settled, so the controls are usable.
+        if (main.isConnected) drawDelete();
     }
 
     async function drawSignIns() {

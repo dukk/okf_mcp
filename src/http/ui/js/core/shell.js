@@ -83,7 +83,7 @@ export async function freshAccount() {
 // signedOut() after signing this browser's own session out.
 let leave = () => {};
 export function setSignedOutHandler(handler) { leave = handler; }
-export function signedOut() { leave(); }
+export function signedOut(message) { leave(message); }
 
 // After a key's user changed: when it is the signed-in key, its user is
 // shell state (#whoami, the Users page's "you" marker), so reload whoami.

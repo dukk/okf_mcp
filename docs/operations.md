@@ -1798,6 +1798,12 @@ REST, and a non-zero exit naming the cause on the command line.
   unchanged. A user being a plain member of a shared team, or the owner of one
   with other owners, does not stop the deletion: the membership goes with
   it.
+- A person deleting their own account from the Account page
+  (`DELETE /api/v1/me`, [Deleting your own account](#deleting-your-own-account))
+  goes through the same deletion, with the same refusals as REST: the last
+  admin user, catalogs its personal team owns and shared teams it is the
+  only owner of are refused, with the reason shown on the page. The account
+  is never disabled instead.
 - `team delete` is refused for a personal team (it goes with its user) and
   for a team that owns a catalog.
 - `team remove-member` and `team set-role` never remove or demote a team's
@@ -2016,7 +2022,7 @@ of `docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`).
 | Action | Recorded when | Details |
 |---|---|---|
 | **Users** | | |
-| `user.deleted` | A user is deleted (`user delete`, `DELETE /api/v1/users/{name}`, the console). A refused deletion records nothing | `keys` (keys and grants deleted), `codes` (sign-in codes deleted), `changesets_discarded` |
+| `user.deleted` | A user is deleted (`user delete`, `DELETE /api/v1/users/{name}`, the console), or deletes their own account (`DELETE /api/v1/me`, with the person as the actor). A refused deletion records nothing | `keys` (keys and grants deleted), `codes` (sign-in codes deleted), `changesets_discarded` |
 | `user.created` | A user is created (`user create`, `POST /api/v1/users`, the console). A refused create records nothing | none |
 | `user.email_changed` | A user's email is set or cleared (`user set-email`, `PUT /api/v1/users/{name}/email`). A change of letter case only, or clearing an email that is not set, records nothing | `cleared` (never the address) |
 | `user.display_name_changed` | A user's display name changes. A provisioner is refused an admin user; the same text again, and a refused change, record nothing | `length` (in characters; never the text) |
@@ -2346,9 +2352,46 @@ token derived from it, stored hashed too.
   - A password reset signs every session of the user out.
   - The Account page signs out one session at a time, this browser's
     included.
+  - Deleting your own account ends every session of yours.
   - An admin signs a user out everywhere with
     `okf-mcp user revoke-sessions NAME` or the user drawer's "Sign out
     everywhere", or ends one session from the drawer.
+
+### Deleting your own account
+
+A signed-in person deletes their own account from the Account page's
+"Delete your account" section (`DELETE /api/v1/me`, issue #355). It asks
+again that it is them, in the same request:
+
+- with the current password, checked as a sign-in is (a wrong one counts
+  toward the 10-failure lockout, and a locked account is refused); or
+- with a fresh assertion from one of their own passkeys
+  (`POST /api/v1/me/passkeys/confirm/start` for the challenge, which only
+  the account's passkeys can answer; the ceremony is single use, bound to
+  the 5-minute `okf_passkey` cookie and to this session).
+
+An account with neither a password nor a passkey (only a linked OIDC
+account) cannot confirm, and the page says to set a password or add a
+passkey first. The page draws no deletion control until it has read the
+account, since the confirmation asks you to type its ID. A key or OAuth token is refused (403): only a console session
+may delete its account.
+
+The deletion is the same one an admin's `DELETE /api/v1/users/{name}` runs
+([Deletion rules](#deletion-rules)), in one transaction under the user's
+row lock: keys and OAuth grants (revoked ones too), sign-in codes, every
+console session, passkeys, linked identities, emailed links, entitlements,
+team memberships and the personal team all go, or nothing does. Under that
+lock it also checks that this session is still in force, and that the
+password is still the one typed or the passkey is still the account's, so
+a reset, password change, passkey removal or sign-out that commits first
+refuses the deletion. It is recorded as `user.deleted`, with the person as
+the actor (the log then names them `deleted user #N`, as for any deleted
+user). The refusals are the deletion rules': the last admin user, a
+personal team that owns a catalog, and the only owner of a shared team are
+refused with a 409 whose reason the page shows; nothing is deleted or
+disabled. A deletion clears the session cookie (and any passkey ceremony
+cookie), and the console shows the
+sign-in card with "Your account was deleted."
 
 ### Setting up an account, and resetting a password
 
@@ -3534,6 +3577,7 @@ does. Limits are in [Signing in and self-service](#signing-in-and-self-service).
 | `GET /api/v1/me/ceiling` | console session, or a key that belongs to a user | `?prefix=&after=&limit=`: one page of the user's ceiling, `{ceiling: [{catalog, access}], next}`, by catalog name in byte order; `prefix` (trimmed, lowercased) keeps the names that start with it, and one no name can start with finds nothing; `next` is present when more follow (send it back as `after`); `limit` is 100 by default, at most 1000. Each page is one bounded read: no request reads the whole ceiling. 400 for a malformed `after`, 404 for a key without a user |
 | `GET /api/v1/me/keys` | console session | `{keys, ceiling}`: the user's keys, revoked and expired ones included, as `GET /api/v1/keys` shows them (with `catalog_access`, `expires_at`, `self_issued`), and the ceiling on the catalogs its live self-issued keys name (`{catalog: "read"\|"write"}`; a catalog left out is outside it) |
 | `POST /api/v1/me/keys` | console session | Body `{name, catalogs: [{catalog, access}], default_catalog, actor, expires_at}` (`actor` defaults to `name`; `expires_at` RFC 3339, and absent means the lifetime limit, or none). Answers `{key, secret}`, the secret once. 400 for no catalogs, a repeated catalog, an unknown level, or a malformed or past expiry; 409 for a bad or taken name or a default that is not one of `catalogs`; 422 above the ceiling (`admin` included), past the key limit or the lifetime limit (`limit` is `ceiling`, `max_keys_per_user` or `max_key_lifetime`), or for an unknown field such as `all`, `user` or `maintenance_report` |
+| `DELETE /api/v1/me` | console session | Deletes your own account ([Deleting your own account](#deleting-your-own-account)). Body `{password}` or `{passkey}` (the browser's answer to `POST /api/v1/me/passkeys/confirm/start`), exactly one. 204, clearing the session cookie and any `okf_passkey` ceremony cookie, whichever proof was used. 400 for neither or both; 403 for a key or token, a wrong password, a locked account, a passkey that does not verify, another session's ceremony, or a password or passkey changed meanwhile (never 401, which the console reads as signed out); 401 once this session has ended; 404 for a passkey while passkeys are off; 409 for a refusal of the deletion rules (the last admin user, a personal team owning a catalog, the only owner of a shared team); 410 for an expired or used passkey ceremony |
 | `PATCH /api/v1/me/keys/{id}` | console session | Body `{name}`. Renames a live key; answers its view. 409 for a bad or taken name or a revoked key |
 | `DELETE /api/v1/me/keys/{id}` | console session | Revokes it (the row stays, revoked); answers its view. 409 if already revoked |
 | `GET /api/v1/me/grants` | console session | `{grants, ceiling}`: the user's OAuth grants, revoked ones included, as key views (`client_name`, `catalog_access`, `self_issued`, `revoked_at`, ...), and the ceiling on the catalogs its live self-issued grants name, as for `/me/keys` |
@@ -3542,6 +3586,7 @@ does. Limits are in [Signing in and self-service](#signing-in-and-self-service).
 | `GET /api/v1/me/passkeys` | console session | `{passkeys}`, oldest first: `id` (unpadded base64url), `name`, `created_at`, `last_used_at` |
 | `POST /api/v1/me/passkeys/register/start` | console session | Body `{name, keep_sessions}`. The WebAuthn creation options; the ceremony is bound to a 5-minute `okf_passkey` cookie and to this session. 404 while passkeys are off, 422 for a bad name |
 | `POST /api/v1/me/passkeys/register/finish` | console session | Body: the browser's credential. Stores the passkey; 201 `{id, name}`. Signs the other sessions out unless the start said `keep_sessions`. 403 for another session's ceremony, 409 for a passkey already registered, 410 for an expired ceremony, 422 for a credential that does not verify (`limit: "passkey"`), 401 only once the session has ended |
+| `POST /api/v1/me/passkeys/confirm/start` | console session | The WebAuthn request options for re-authenticating with one of your own passkeys before `DELETE /api/v1/me`; the ceremony is bound to a 5-minute `okf_passkey` cookie and to this session, and replaces any other ceremony the session holds. 404 while passkeys are off, 409 when you have no passkey |
 | `PATCH /api/v1/me/passkeys/{id}` | console session | Body `{name}`. Renames it; 204. 422 for an empty, over-64-character or control-character name (`limit: "passkey_name"`) |
 | `DELETE /api/v1/me/passkeys/{id}` | console session | Removes it; 204. 409 for the last sign-in method |
 | `GET /api/v1/me/identities` | console session | `{identities, providers}`: the linked identities (`provider`, `email_at_link`, `created_at`, `last_used_at`; never the subject) and the configured providers (`id`, `label`) |
