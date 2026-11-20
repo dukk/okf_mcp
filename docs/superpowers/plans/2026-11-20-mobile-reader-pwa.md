@@ -35,7 +35,7 @@
 | `src/http/read/sw.js` | The service worker. |
 | `src/http/read/js/names.js` | Cache names and the cap, shared by page and worker (classic script). |
 | `src/http/read/js/api.js` | Read-only client: `read`, `readAll`, `signOut`, `classify`, `KIND`, `ReadError`, `enc`, `encPath`. |
-| `src/http/read/js/cache.js` | Page-side cache upkeep: `wipe`, `claimFor`, `evictCatalog`, `evictDocument`, `offlineDocuments`, and the invalidation marks. |
+| `src/http/read/js/cache.js` | Page-side cache upkeep: `wipe`, `claimFor`, `evictCatalog`, `evictDocument`, `offlineDocuments`, and the invalidation marks it sends the worker. |
 | `src/http/read/js/route.js` | Hash routes: `parse`, `hrefs`, `hrefFor`, `fromBrowse`, `parentOf`. |
 | `src/http/read/js/main.js` | Boot, session, worker registration, screen dispatch, freshness banner, failure handling, tabs. |
 | `src/http/read/js/parts.js` | Shared view parts: `searchForm`, `crumbs`, `renderBody`, `message`. |
@@ -686,14 +686,6 @@ self.READ_CACHES = Object.freeze({
     content: 'read-content',
     meta: 'read-meta',
     owner: 'read-owner',
-    // Invalidation marks (milliseconds since the epoch), never wiped: the
-    // page writes one before it wipes or evicts, and the worker refuses to
-    // store an answer to a request that started before the mark, so a slow
-    // 2xx cannot put back what a 401 or a lost grant took away.
-    guard: 'read-guard',
-    guardAll: '/read/__guard/all',
-    // `catalog` as it appears, encoded, in the API URL.
-    guardCatalog: catalog => `/read/__guard/catalog/${catalog}`,
     contentCap: 200,
 });
 ```
@@ -724,6 +716,20 @@ self.addEventListener('install', event => {
         await cache.addAll(listing.files);
         await self.skipWaiting();
     })());
+});
+
+// Invalidation marks, in memory: the page sends one ('*' for a wipe, else
+// an encoded catalog) and waits for the reply before it deletes anything.
+// The worker then refuses to store an answer to a request that started at
+// or before a matching mark, so a slow 2xx cannot put back what a 401 or a
+// lost grant removed. Memory needs no storage quota, and a request still on
+// its way keeps the worker alive, so the marks last as long as they matter.
+const marks = new Map();
+
+self.addEventListener('message', event => {
+    if (event.data?.type !== 'invalidate') return;
+    marks.set(event.data.scope, Date.now());
+    event.ports[0]?.postMessage('ok');
 });
 
 self.addEventListener('activate', event => {
@@ -770,10 +776,10 @@ async function networkFirst(request, cacheName, capped) {
     try {
         response = await fetch(request);
     } catch (failure) {
-        const cached = await cache.match(request);
+        const cached = await cachedCopy(cache, request);
         if (!cached) throw failure;
-        if (capped) await upkeep(() => remember(cache, request, cached.clone(), startedAt, false));
-        return stamped(cached, 'X-Read-Offline', '1');
+        if (capped) await upkeep(() => remember(cache, cached.key, cached.response.clone(), startedAt, false));
+        return stamped(cached.response, 'X-Read-Offline', '1');
     }
     if (response.ok) {
         const copy = stamped(response.clone(), 'X-Read-Cached-At', new Date().toISOString());
@@ -786,31 +792,45 @@ const CATALOG = /^\/api\/v1\/catalogs\/([^/]+)\//;
 
 // Whether the page wiped everything, or evicted `url`'s catalog, at or
 // after `startedAt`.
-async function invalidatedSince(url, startedAt) {
-    const guard = await caches.open(READ_CACHES.guard);
+function invalidatedSince(url, startedAt) {
     const catalog = CATALOG.exec(new URL(url).pathname)?.[1];
-    const marks = await Promise.all([
-        guard.match(READ_CACHES.guardAll),
-        catalog ? guard.match(READ_CACHES.guardCatalog(catalog)) : null,
-    ]);
-    for (const mark of marks) {
-        if (mark && Number(await mark.text()) >= startedAt) return true;
-    }
-    return false;
+    return [marks.get('*'), catalog ? marks.get(catalog) : undefined]
+        .some(at => at !== undefined && at >= startedAt);
 }
 
-// Stores `response` unless the page invalidated it since `startedAt`. The
-// check runs again after the write: the page sets its mark before it
-// deletes, so an eviction that began meanwhile either finds this entry and
-// deletes it, or set its mark before this second check, which deletes it.
-async function remember(cache, request, response, startedAt, capped) {
-    if (await invalidatedSince(request.url, startedAt)) return;
-    await renew(cache, request, response);
-    if (await invalidatedSince(request.url, startedAt)) {
-        await cache.delete(request);
+// Stores `response` under `key` unless the page invalidated it since
+// `startedAt`. The check runs again after the write: the page's mark is in
+// place before it deletes, so an eviction that began meanwhile either finds
+// this entry and deletes it, or marked before this second check, which
+// deletes it.
+async function remember(cache, key, response, startedAt, capped) {
+    if (invalidatedSince(key.url ?? key, startedAt)) return;
+    await renew(cache, key, response);
+    if (invalidatedSince(key.url ?? key, startedAt)) {
+        await cache.delete(key);
         return;
     }
     if (capped) await trim(cache);
+}
+
+// The cached answer to `request`, or, for a concept, the other form of it
+// that holds the same body: a `?full=true` copy answers a plain request, and
+// a plain copy answers `?full=true` when it carries the whole body (it was
+// not shortened). Returns { key, response } or null.
+async function cachedCopy(cache, request) {
+    const exact = await cache.match(request);
+    if (exact) return { key: request, response: exact };
+    const url = new URL(request.url);
+    if (!/\/concepts\//.test(url.pathname)) return null;
+    if (url.searchParams.get('full') === 'true') {
+        url.searchParams.delete('full');
+        const plain = await cache.match(url.href);
+        const body = plain ? await plain.clone().json().catch(() => null) : null;
+        return body?.body_html ? { key: url.href, response: plain } : null;
+    }
+    url.searchParams.set('full', 'true');
+    const full = await cache.match(url.href);
+    return full ? { key: url.href, response: full } : null;
 }
 
 // Runs one cache write, logging rather than throwing when it fails.
@@ -1112,32 +1132,57 @@ export async function signOut(csrf) {
 // here, where the answers are classified; the worker only fills them.
 import { enc, encPath } from './api.js';
 
-const { content, meta, owner, guard, guardAll, guardCatalog } = self.READ_CACHES;
+const { content, meta, owner } = self.READ_CACHES;
 const OWNER_KEY = '/read/__owner';
+// How long to wait for the worker to confirm a mark before deleting anyway.
+const MARK_WAIT_MS = 1000;
+// Without Cache Storage (an unusual private mode) the reader works online
+// and keeps nothing, so every function here does nothing.
+const CACHING = 'caches' in self;
 
-// Records that what `key` covers is invalid from now on (see names.js). It
-// is written before the deletion it announces, never after.
-async function mark(key) {
-    await (await caches.open(guard)).put(key, new Response(String(Date.now())));
+// Tells the worker that `scope` ('*' or an encoded catalog) is invalid from
+// now on, and waits for it to confirm, so the mark is in place before the
+// deletion it announces (see sw.js). With no worker controlling the page,
+// no answer of the worker's can be on its way, so there is nothing to mark.
+function mark(scope) {
+    const worker = navigator.serviceWorker?.controller;
+    if (!worker) return Promise.resolve();
+    return new Promise(resolve => {
+        const channel = new MessageChannel();
+        const timer = setTimeout(resolve, MARK_WAIT_MS);
+        channel.port1.onmessage = () => { clearTimeout(timer); resolve(); };
+        worker.postMessage({ type: 'invalidate', scope }, [channel.port2]);
+    });
 }
 
 // Deletes every cached catalog read and the record of whose they were.
+// Deleting needs no free storage, so this works on a full disk too.
 export async function wipe() {
-    await mark(guardAll);
+    if (!CACHING) return;
+    await mark('*');
     await Promise.all([content, meta, owner].map(name => caches.delete(name)));
 }
 
 // Makes the caches `user`'s: wipes them when they were someone else's.
+// Recording the owner is best effort: on a full disk the caches are wiped
+// (they may be someone else's) and the reader boots anyway; the next read's
+// own cache write fails the same way, so nothing unowned is kept.
 export async function claimFor(user) {
+    if (!CACHING) return;
     const store = await caches.open(owner);
     const recorded = await store.match(OWNER_KEY);
     if (recorded && (await recorded.text()) === user) return;
     await wipe();
-    await (await caches.open(owner)).put(OWNER_KEY, new Response(user));
+    try {
+        await (await caches.open(owner)).put(OWNER_KEY, new Response(user));
+    } catch (error) {
+        console.warn('reader cache write failed:', error.name);
+    }
 }
 
 // Deletes the entries of `cacheNames` whose URL path `matches`.
 async function evict(cacheNames, matches) {
+    if (!CACHING) return;
     await Promise.all(cacheNames.map(async name => {
         const cache = await caches.open(name);
         const keys = await cache.keys();
@@ -1148,7 +1193,7 @@ async function evict(cacheNames, matches) {
 // Deletes everything cached for `catalog`, and keeps answers already on
 // their way from putting it back.
 export async function evictCatalog(catalog) {
-    await mark(guardCatalog(enc(catalog)));
+    await mark(enc(catalog));
     const prefix = `/api/v1/catalogs/${enc(catalog)}/`;
     await evict([content, meta], path => path.startsWith(prefix));
 }
@@ -1163,6 +1208,7 @@ export function evictDocument(catalog, kind, path) {
 // The concepts and documents of `catalog` readable offline, newest first,
 // one per path: [{ path, title, cachedAt }].
 export async function offlineDocuments(catalog) {
+    if (!CACHING) return [];
     const cache = await caches.open(content);
     const keys = await cache.keys();
     const prefix = `/api/v1/catalogs/${enc(catalog)}/`;
@@ -2404,6 +2450,62 @@ Add to `impl Ui` in `tests/ui_e2e/harness.rs`:
         );
         devtools
     }
+```
+
+Two more for refused writes and for the short and full forms of a concept:
+
+```rust
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn with_storage_full_the_reader_boots_and_still_deletes_its_copies() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        // The owner record goes too, so boot must write it again, and cannot.
+        ui.eval("async () => { await caches.delete('read-owner'); return true; }", json!(null));
+        let full = ui.limit_storage();
+        ui.open_reader("/me");
+        ui.reload_reader();
+        ui.wait_visible("#account-user");
+        ui.click("#delete-offline");
+        ui.wait_visible("#offline-deleted");
+        let counts = ui.eval(CACHE_COUNTS, json!(null));
+        assert!(counts.get("read-content").is_none(), "{counts}");
+        ui.click("#sign-out");
+        ui.wait_visible("#signin-email");
+        drop(full);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn offline_a_concept_opens_from_either_its_short_or_its_full_copy() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        // Beta opened plainly (its whole body fits): cached without ?full.
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.wait_text("#body", "Two settings");
+        // Alpha opened only through a section link: cached with ?full=true.
+        ui.open_reader("/v/main/systems/alpha.md/alpha");
+        ui.wait_text("#body", "marmalade");
+        let offline = ui.go_offline();
+        // Beta's outline link asks for ?full=true: the plain copy answers.
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.wait_text("#concept-title", "Beta");
+        ui.click("#outline summary");
+        ui.click("#outline a");
+        ui.wait_text("#body", "Two settings");
+        // Alpha opened plainly: the full copy answers.
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        drop(offline);
+    })
+    .await;
+}
 ```
 
 If this Chromium does not refuse writes under the override (the concept then renders either way, so the journey proves nothing), check by evaluating a `caches.open('x').then(c => c.put('/x', new Response('y'.repeat(1e6))))` in the page under the override; it must reject.

@@ -135,12 +135,22 @@ Three caches:
 3. `read-meta`: the catalog list, trees, recent changes and backlinks.
    Network-first, cache fallback.
 4. `read-owner`: one entry naming the user the caches belong to.
-5. `read-guard`: invalidation marks, never wiped. Before a wipe the page
-   writes an "all" mark, and before evicting a catalog it writes that
-   catalog's mark (the time, in milliseconds). The worker does not store an
-   answer to a request that started at or before a matching mark, and checks
-   again after writing (deleting the entry if a mark appeared meanwhile), so
-   a slow `2xx` can never put back what a `401` or a lost grant removed.
+
+Invalidation marks live in the worker's memory, not in storage, so a full
+disk never blocks a deletion. Before a wipe the page sends the worker an
+"all" mark, and before evicting a catalog that catalog's mark, and waits
+(up to a second) for the worker to confirm before deleting. The worker does
+not store an answer to a request that started at or before a matching mark,
+and checks again after writing (deleting the entry if a mark appeared
+meanwhile), so a slow `2xx` can never put back what a `401` or a lost grant
+removed. A request on its way keeps the worker alive, so its marks last as
+long as they matter. Recording the cache owner is best effort: on a full
+disk the caches are wiped and the reader boots anyway. Without Cache Storage
+at all, the reader works online and keeps nothing.
+
+Offline, a concept request is also answered by its other cached form: a
+`?full=true` copy answers a plain request, and a plain copy answers
+`?full=true` when it holds the whole body (it was not shortened).
 
 Never cached: search, `/api/v1/session`, `/api/v1/me`, every non-GET request, everything outside
 `GET /api/v1` and the shell.
@@ -226,6 +236,10 @@ Browser journeys (`tests/ui_e2e/read.rs`, rustwright headless Chromium):
     read still lists its folders and concepts, and the index's copy goes.
 8i. In a long concept, expanding the body and following an outline link
     keeps the whole body and reaches the heading.
+8j. With storage full and the owner record gone, the reader boots, deletes
+    its offline copies and signs out.
+8k. Offline, a concept opened plainly answers its outline links, and one
+    opened through a section link answers a plain open.
 9. Sign-out wipes the caches.
 10. A new shell version replaces the old shell cache on activate.
 
