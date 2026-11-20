@@ -202,3 +202,38 @@ async fn signing_out_without_a_connection_still_deletes_the_offline_copies() {
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_concept_shows_its_body_follows_links_and_lists_backlinks() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/main/systems/alpha.md", EMAIL, PASSWORD);
+        ui.wait_text("#concept-title", "Alpha");
+        ui.wait_text("#body", "marmalade");
+        ui.wait_text(".crumbs", "systems");
+        // render.rs's console link becomes a reader route, at the section.
+        let href = ui.eval(
+            "() => document.querySelector('#body a').getAttribute('href')",
+            json!(null),
+        );
+        assert_eq!(href, json!("#/v/main/systems/beta.md?s=settings"));
+        ui.click("#body a");
+        ui.wait_text("#concept-title", "Beta");
+        ui.wait_text("#outline", "Settings");
+        // Beta is linked from alpha and from the systems index.
+        ui.wait_text("#backlinks", "Alpha");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_log_opens_as_a_document() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/d/main/log.md", EMAIL, PASSWORD);
+        ui.wait_text("#document-title", "log.md");
+        ui.wait_text("#body", "Log");
+        assert!(!ui.present("#concept-gone") && !ui.present("#failed"));
+    })
+    .await;
+}
