@@ -32,6 +32,9 @@ use crate::okf::rules;
 use crate::okf::workspace::Workspace;
 use crate::store::audit::Action;
 use crate::store::keys::Access;
+// `as publishing`: the module's `publish` would clash with this file's
+// `publish` function.
+use crate::store::publish as publishing;
 use crate::write::{apply_audited, OpAudit, WriteReport};
 
 /// `list_changesets`' arguments.
@@ -403,9 +406,6 @@ pub(crate) async fn publish(
     ctx: &ToolContext,
     params: PublishParams,
 ) -> Result<Published, OkfError> {
-    // `as publishing`: the module's `publish` would clash with this function.
-    use crate::store::publish as publishing;
-
     let message = params.message.trim();
     if message.is_empty() {
         return Err(OkfError::Refused {
@@ -512,7 +512,11 @@ pub struct PendingFile {
     pub stale: bool,
     /// Whether publish can replay the entry onto newer text (log.md and index.md bookkeeping only).
     pub replayable: bool,
-    /// A unified diff against the published text (`/dev/null` for a new or deleted file). A deletion of a path deleted since (no published file), or a file equal to the published one, gets a one-line note instead.
+    /// Whether `diff` shows the entry replayed onto the published text, the bytes publish would write: true only for a stale, replayable entry whose replay succeeds. Publish still runs its lint on that result. False: `diff` shows the entry's stored text, or the `replay_error` note.
+    pub replayed: bool,
+    /// Why publish cannot replay this stale, replayable entry (null otherwise): publish would refuse the changeset until the path is discarded and the change made again. `diff` is then a one-line note saying so.
+    pub replay_error: Option<String>,
+    /// A unified diff against the published text (`/dev/null` for a new or deleted file); for a stale, replayable entry, of its replayed text (`replayed`). A deletion of a path deleted since (no published file), a file equal to the published one, or a replay that would fail at publish (`replay_error`) gets a one-line note instead.
     pub diff: String,
 }
 
@@ -864,17 +868,71 @@ fn pending_files(
                 }
             }
             let old = published.as_ref().map(|file| file.content.as_slice());
+            let stale = entry.base_revision != current_revision;
+            let replayable = entry.replay.is_some();
+            // A stale, replayable entry is shown as publish would write it:
+            // its operations redone on the published text by the function
+            // publish calls (issue #787). Its stored text was built on the
+            // old base, so a diff of that would show everything published
+            // since as deleted.
+            let (replayed, replay_error, diff) = if stale && replayable {
+                match publishing::replayed_text(entry, old) {
+                    Ok(Some(text)) => (
+                        true,
+                        None,
+                        unified_diff(&entry.path, old, Some(text.as_bytes())),
+                    ),
+                    Ok(None) => {
+                        let reason = cannot_replay(&entry.path, current_revision);
+                        (false, Some(reason.clone()), format!("{reason}\n"))
+                    }
+                    Err(error) => {
+                        let reason = error.to_string();
+                        let note = format!(
+                            "Publish cannot replay this entry onto the published text: {reason}\n"
+                        );
+                        (false, Some(reason), note)
+                    }
+                }
+            } else {
+                let diff = unified_diff(&entry.path, old, entry.content.as_deref());
+                (false, None, diff)
+            };
             Ok(PendingFile {
                 path: format!("/{}", entry.path),
                 change,
                 base_revision: entry.base_revision,
                 current_revision,
-                stale: entry.base_revision != current_revision,
-                replayable: entry.replay.is_some(),
-                diff: unified_diff(&entry.path, old, entry.content.as_deref()),
+                stale,
+                replayable,
+                replayed,
+                replay_error,
+                diff,
             })
         })
         .collect()
+}
+
+/// Why a stale, replayable entry has no replay at publish (the cases
+/// [`publishing::replayed_text`] answers `None` for): publish refuses it
+/// with Conflict.
+///
+/// # Arguments
+/// * `path` - catalog-relative path.
+/// * `current` - the path's published revision now (`None`: not live).
+///
+/// # Returns
+/// The reason, naming the path and what to do.
+#[tracing::instrument(level = "trace", skip_all)]
+fn cannot_replay(path: &str, current: Option<i32>) -> String {
+    let now = match current {
+        Some(revision) => format!("revision {revision}"),
+        None => "a deleted document".to_string(),
+    };
+    format!(
+        "Publish cannot replay this entry onto /{path} as published now ({now}) and would \
+         refuse it with Conflict; discard /{path} from this changeset and make the change again"
+    )
 }
 
 /// A unified diff (3 lines of context) between the published and the
@@ -984,7 +1042,10 @@ impl OkfServer {
         description = "The unpublished changeset `changeset` names: each changed path \
                        (create, update or delete), the revision it was based on and the one \
                        published now, whether that base is stale, whether publish can replay \
-                       it, and a unified diff against the published text.",
+                       it, and a unified diff against the published text. A stale entry \
+                       publish can replay is diffed as replayed onto the published text \
+                       (replayed: true), the bytes publish would write; one whose replay would \
+                       fail gets replay_error and a note instead.",
         annotations(
             title = "Show Pending Changes",
             read_only_hint = true,
@@ -2002,6 +2063,180 @@ mod publish_tests {
         );
     }
 
+    /// `pending_changes` on `handle`.
+    async fn shown(ctx: &ToolContext, handle: &str) -> PendingChanges {
+        let params = PendingParams {
+            changeset: handle.to_string(),
+        };
+        pending_changes(ctx, params).await.unwrap()
+    }
+
+    /// The `+` and `-` lines of a unified diff, without its two headers.
+    fn changed_lines(diff: &str) -> Vec<&str> {
+        diff.lines()
+            .filter(|line| !line.starts_with("+++ ") && !line.starts_with("--- "))
+            .filter(|line| line.starts_with('+') || line.starts_with('-'))
+            .collect()
+    }
+
+    /// The replayable bookkeeping write a test makes.
+    #[derive(Clone, Copy)]
+    enum Bookkeeping {
+        /// A `log` entry (log.md).
+        Log,
+        /// An `index` listing of `/infra/<name>.md` (infra/index.md).
+        Listing,
+    }
+
+    impl Bookkeeping {
+        /// The path the write changes.
+        fn path(self) -> &'static str {
+            match self {
+                Bookkeeping::Log => "log.md",
+                Bookkeeping::Listing => "infra/index.md",
+            }
+        }
+
+        /// Writes `name`'s entry in `handle`; returns the text it adds.
+        async fn write(self, ctx: &ToolContext, handle: &str, name: &str) -> String {
+            match self {
+                Bookkeeping::Log => {
+                    let text = format!("from {name}");
+                    log_entry(ctx, handle, &text).await;
+                    text
+                }
+                Bookkeeping::Listing => {
+                    let summary = format!("the {name}");
+                    list(ctx, handle, &format!("/infra/{name}.md"), &summary).await;
+                    summary
+                }
+            }
+        }
+    }
+
+    /// A stale, replayable entry in `a` (another changeset published its
+    /// path since) is shown as publish writes it: one `+` line for this
+    /// entry, and nothing published since shown as deleted (issue #787).
+    /// Publishing then writes exactly the diff shown.
+    async fn a_stale_replayable_entry_is_shown_as_publish_writes_it(kind: Bookkeeping) {
+        let test = pg().await;
+        let first = writer(&test, "writer-a", "pg").await;
+        let second = writer(&test, "writer-b", "pg").await;
+        let (a, b) = (open(&first).await, open(&second).await);
+        let ours = kind.write(&first, &a, "x").await;
+        let theirs = kind.write(&second, &b, "y").await;
+        publish_as(&second, &b, "theirs").await.unwrap();
+        let path = kind.path();
+        let before = published_text(&test, path).await;
+        assert!(before.contains(&theirs), "{before}");
+
+        let pending = shown(&first, &a).await;
+
+        let file = &pending.files[0];
+        let expected_path = format!("/{path}");
+        assert_eq!(
+            (
+                file.path.as_str(),
+                file.stale,
+                file.replayable,
+                file.replayed,
+                file.replay_error.as_deref()
+            ),
+            (expected_path.as_str(), true, true, true, None)
+        );
+        let changed = changed_lines(&file.diff);
+        assert_eq!(changed.len(), 1, "{}", file.diff);
+        assert!(
+            changed[0].starts_with('+') && changed[0].contains(&ours),
+            "{}",
+            file.diff
+        );
+        publish_as(&first, &a, "ours").await.unwrap();
+        let after = published_text(&test, path).await;
+        assert!(after.contains(&ours) && after.contains(&theirs), "{after}");
+        assert_eq!(
+            file.diff,
+            unified_diff(path, Some(before.as_bytes()), Some(after.as_bytes()))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stale_log_entry_is_shown_replayed_without_deleting_one_published_since() {
+        a_stale_replayable_entry_is_shown_as_publish_writes_it(Bookkeeping::Log).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stale_index_listing_is_shown_replayed_without_deleting_one_published_since() {
+        a_stale_replayable_entry_is_shown_as_publish_writes_it(Bookkeeping::Listing).await;
+    }
+
+    /// An entry nobody published over keeps today's diff: its stored text
+    /// against the published text, not marked replayed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_fresh_replayable_entry_is_diffed_as_stored() {
+        let test = pg().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        log_entry(&ctx, &handle, "from a").await;
+        let published = published_text(&test, "log.md").await;
+        let row = changeset_row(&test, &handle).await;
+        let entries = changesets::entries(test.app.pool(), row.id).await.unwrap();
+
+        let pending = shown(&ctx, &handle).await;
+
+        let file = &pending.files[0];
+        assert_eq!(
+            (
+                file.stale,
+                file.replayable,
+                file.replayed,
+                file.replay_error.as_deref()
+            ),
+            (false, true, false, None)
+        );
+        assert_eq!(
+            file.diff,
+            unified_diff(
+                "log.md",
+                Some(published.as_bytes()),
+                entries[0].content.as_deref()
+            )
+        );
+    }
+
+    /// A stale entry whose replay publish would refuse as a conflict (its
+    /// stored operations do not read) shows why, not a diff.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stale_entry_publish_cannot_replay_shows_the_conflict_not_a_diff() {
+        let test = pg().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        let unreadable = EntryRow {
+            path: "a.md".to_string(),
+            base_revision: Some(0),
+            content: Some(b"# A\n".to_vec()),
+            executable: false,
+            replay: Some(serde_json::json!("not a list of operations")),
+        };
+        insert_entry(&test, &handle, unreadable).await;
+
+        let pending = shown(&ctx, &handle).await;
+
+        let file = &pending.files[0];
+        assert_eq!(
+            (file.stale, file.replayable, file.replayed),
+            (true, true, false)
+        );
+        let reason = file.replay_error.as_deref().unwrap();
+        assert!(
+            reason.contains("refuse it with Conflict") && reason.contains("discard /a.md"),
+            "{reason}"
+        );
+        assert_eq!(file.diff, format!("{reason}\n"));
+        let error = publish_as(&ctx, &handle, "a").await.unwrap_err();
+        assert_eq!(error.kind(), "Conflict");
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_lint_error_in_a_changed_file_is_refused() {
         let test = pg().await;
@@ -2674,6 +2909,8 @@ mod changes_tests {
             (file.base_revision, file.current_revision, file.stale),
             (Some(2), Some(3), true)
         );
+        // A free edit has no replay: the stored text, as before issue #787.
+        assert!(!file.replayed && file.replay_error.is_none());
         assert!(file.diff.contains("-# Three\n"), "{}", file.diff);
     }
 

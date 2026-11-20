@@ -470,7 +470,7 @@ fn merge(
             merged.push(entry);
             continue;
         }
-        match replayed_text(&entry, live)? {
+        match replayed_text(&entry, live.map(|row| row.content.as_slice()))? {
             Some(text) => {
                 replayed.push(format!("/{}", entry.path));
                 entry.content = Some(text.into_bytes());
@@ -494,7 +494,14 @@ fn merge(
     }
 }
 
-/// A stale entry's content redone on the current text.
+/// A stale entry's content redone on the current text: the bytes publish
+/// writes for it. `pending_changes` diffs the same result (issue #787), so
+/// what it shows cannot drift from what publish does.
+///
+/// # Arguments
+/// * `entry` - the changeset's entry for the path.
+/// * `live` - the path's live published content now (`None`: no live
+///   document, a tombstone included).
 ///
 /// # Returns
 /// `None` when it cannot be replayed: a conflict. That is a deletion, a
@@ -505,7 +512,10 @@ fn merge(
 /// # Errors
 /// The replay's own error (text it cannot place a bullet in).
 #[tracing::instrument(level = "trace", skip_all)]
-fn replayed_text(entry: &EntryRow, live: Option<&CurrentRow>) -> Result<Option<String>, OkfError> {
+pub(crate) fn replayed_text(
+    entry: &EntryRow,
+    live: Option<&[u8]>,
+) -> Result<Option<String>, OkfError> {
     // A deletion is never replayed: whatever was published since is
     // something the changeset did not see.
     let (Some(_), Some(stored)) = (&entry.content, &entry.replay) else {
@@ -520,7 +530,7 @@ fn replayed_text(entry: &EntryRow, live: Option<&CurrentRow>) -> Result<Option<S
         (None, None) => None,
         // Deleted since the entry's base: a conflict, not a re-creation.
         (None, Some(_)) => return Ok(None),
-        (Some(row), _) => match std::str::from_utf8(&row.content) {
+        (Some(content), _) => match std::str::from_utf8(content) {
             Ok(text) => Some(text),
             Err(_) => return Ok(None),
         },

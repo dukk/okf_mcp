@@ -431,7 +431,7 @@ Every queued open_questions entry in a catalog, grouped by concept and numbered 
 
 **Show Pending Changes** (read-only)
 
-The unpublished changeset `changeset` names: each changed path (create, update or delete), the revision it was based on and the one published now, whether that base is stale, whether publish can replay it, and a unified diff against the published text.
+The unpublished changeset `changeset` names: each changed path (create, update or delete), the revision it was based on and the one published now, whether that base is stale, whether publish can replay it, and a unified diff against the published text. A stale entry publish can replay is diffed as replayed onto the published text (replayed: true), the bytes publish would write; one whose replay would fail gets replay_error and a note instead.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
