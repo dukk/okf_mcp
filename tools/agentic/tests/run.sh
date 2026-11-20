@@ -547,7 +547,10 @@ test_watchdog_flags_an_idle_cat_on_a_pipe_without_argument_text() {
 }
 
 test_watchdog_ignores_a_sleep_and_a_cat_on_a_file() {
-    new_fixtures; fake_pids=(); trap 'kill "${fake_pids[@]}" 2>/dev/null' EXIT
+    new_fixtures; fake_pids=()
+    # A stopped process ignores SIGTERM until it is continued, so the cleanup
+    # continues every fake first, whether the test passes or dies.
+    trap 'kill -CONT "${fake_pids[@]}" 2>/dev/null; kill "${fake_pids[@]}" 2>/dev/null' EXIT
     (cd "$work/wt" && exec sleep 20) >/dev/null 2>&1 &
     fake_pids+=("$!")
     # A cat whose stdin is a regular file: fd 0 is not a pipe or socket. It must
@@ -579,15 +582,23 @@ test_watchdog_ignores_a_sleep_and_a_cat_on_a_file() {
     want_rc 0
     kill -0 "$file_cat" 2>/dev/null || die "the cat on a file exited before the scan"
     kill -CONT "$file_cat"; kill "$file_cat"; wait "$file_cat" 2>/dev/null || true
+    [ ! -d "/proc/$file_cat" ] || die "the cat on a file outlived the test"
 }
 
 test_watchdog_ignores_an_idle_reader_outside_a_checkout() {
     new_fixtures; fake_pids=(); trap 'kill "${fake_pids[@]}" 2>/dev/null' EXIT
+    # Two identical readers on pipes, one inside a checkout and one outside
+    # every checkout: only the directory differs, so only the checkout filter
+    # can tell them apart.
+    idle_reader cat
+    local inside=$reader_pid outside
     (cd "$work/elsewhere" && exec cat < <(sleep 20)) >/dev/null 2>&1 &
-    fake_pids+=("$!")
+    outside=$!; fake_pids+=("$outside")
     sleep 1.2
+    [ "$(readlink "/proc/$outside/fd/0" | cut -d: -f1)" = pipe ] || die "the outside reader is not on a pipe"
     idle_watchdog AGENTIC_WATCHDOG_IDLE=0
-    want_rc 0
+    want_rc 3; want_out "pid=$inside "
+    ! grep -q "pid=$outside " <<<"$out" || die "reported a reader outside every checkout"
 }
 
 test_watchdog_ignores_an_idle_reader_under_the_limit() {
