@@ -487,7 +487,9 @@ test_watchdog_ignores_an_implausible_reread() {
 
 test_watchdog_alarms_on_a_genuinely_long_process() {
     watchdog_with_ps 5000 5001
-    want_rc 3; want_out "pid=$ps_pid elapsed=5000s"; want_out "fake_test"
+    want_rc 3; want_out "pid=$ps_pid elapsed=5000s comm=sleep cwd=$work/wt"
+    # Alerts carry no command line: argv[0] here is a path to the fake binary.
+    ! grep -q "fake_test" <<<"$out" || die "the alert includes command-line text"
 }
 
 test_watchdog_sees_a_test_binary_in_the_build_dir_layout() {
@@ -506,8 +508,153 @@ test_watchdog_sees_a_test_binary_in_the_build_dir_layout() {
     out=$(cd "$work/wt" && AGENTIC_WATCHDOG_TEST=0 AGENTIC_WATCHDOG_GATE=999999 \
         timeout 15 "$tools/watchdog.sh" --once 2>&1)
     rc=$?
-    want_rc 3; want_out "pid=$hung "; want_out "okf_mcp-0e3f1e14f080a04c"
+    want_rc 3; want_out "pid=$hung "
+    ! grep -q "okf_mcp-0e3f1e14f080a04c" <<<"$out" || die "the alert includes command-line text"
     kill "$hung"; wait "$hung" 2>/dev/null || true
+}
+
+# --- idle stdin readers (issue #780) ---
+
+# idle_reader <comm> [args...]: starts the real <comm> in $work/wt with a pipe
+# on stdin that nothing ever writes to or closes (a 20 s sleep holds it open,
+# so the test is bounded), and sets reader_pid. Output goes to /dev/null so the
+# fake doesn't hold the runner's pipe open.
+idle_reader() {
+    (cd "$work/wt" && exec "$@" < <(sleep 20)) >/dev/null 2>&1 &
+    reader_pid=$!; fake_pids+=("$reader_pid")
+}
+
+# idle_watchdog [env...]: one watchdog pass from $work/wt with the test and gate
+# limits out of reach, so only the idle check can fire.
+idle_watchdog() {
+    out=$(cd "$work/wt" && env AGENTIC_WATCHDOG_TEST=999999 AGENTIC_WATCHDOG_GATE=999999 "$@" \
+        timeout 15 "$tools/watchdog.sh" --once 2>&1)
+    rc=$?
+}
+
+test_watchdog_flags_an_idle_cat_on_a_pipe_without_argument_text() {
+    new_fixtures; fake_pids=(); trap 'kill "${fake_pids[@]}" 2>/dev/null' EXIT
+    # tee reads stdin like cat and takes a distinctive argument to look for.
+    idle_reader tee "$work/wt/distinct-secret-arg.out"
+    local tee_pid=$reader_pid
+    idle_reader cat
+    sleep 1.2 # so both have run longer than the 0 s limit
+    idle_watchdog AGENTIC_WATCHDOG_IDLE=0
+    want_rc 3; want_out "pid=$reader_pid "; want_out "comm=cat cwd=$work/wt"
+    want_out "pid=$tee_pid "; want_out "comm=tee "
+    ! grep -q "distinct-secret-arg" <<<"$out" || die "the alert includes argument text"
+    ! grep -q "cmd=" <<<"$out" || die "the alert has a cmd field"
+}
+
+test_watchdog_ignores_a_sleep_and_a_cat_on_a_file() {
+    new_fixtures; fake_pids=()
+    # A stopped process ignores SIGTERM until it is continued, so the cleanup
+    # continues every fake first, whether the test passes or dies.
+    trap 'kill -CONT "${fake_pids[@]}" 2>/dev/null; kill "${fake_pids[@]}" 2>/dev/null' EXIT
+    (cd "$work/wt" && exec sleep 20) >/dev/null 2>&1 &
+    fake_pids+=("$!")
+    # A cat whose stdin is a regular file: fd 0 is not a pipe or socket. It must
+    # still be alive during the scan, or the test proves nothing (a cat on an
+    # empty file exits at once). A 1 MiB file and a stdout pipe nobody reads
+    # keep it blocked in a write, and a SIGSTOP holds it in state T.
+    head -c 1048576 /dev/zero >"$work/regular-input"
+    (cd "$work/wt" && exec cat < "$work/regular-input" > >(sleep 20)) >/dev/null 2>&1 &
+    local file_cat=$!
+    fake_pids+=("$file_cat")
+    # Stop it only once it has exec'd cat: until then it is the subshell.
+    local tries=0 state=
+    while [ "$(cat "/proc/$file_cat/comm" 2>/dev/null)" != cat ] && [ "$tries" -lt 50 ]; do
+        tries=$((tries + 1)); sleep 0.1
+    done
+    kill -STOP "$file_cat"
+    tries=0
+    while [ "$tries" -lt 50 ]; do
+        state=$(awk '/^State:/ {print $2}' "/proc/$file_cat/status" 2>/dev/null)
+        [ "$state" = T ] && break
+        tries=$((tries + 1)); sleep 0.1
+    done
+    [ "$state" = T ] || die "the cat on a file is not alive and stopped (state: ${state:-gone})"
+    [ "$(readlink "/proc/$file_cat/fd/0")" = "$work/regular-input" ] || die "fd 0 is not the regular file"
+    # tail -f is a follower, not a stuck reader.
+    idle_reader tail -f /dev/stdin
+    sleep 1.2
+    idle_watchdog AGENTIC_WATCHDOG_IDLE=0
+    want_rc 0
+    kill -0 "$file_cat" 2>/dev/null || die "the cat on a file exited before the scan"
+    kill -CONT "$file_cat"; kill "$file_cat"; wait "$file_cat" 2>/dev/null || true
+    [ ! -d "/proc/$file_cat" ] || die "the cat on a file outlived the test"
+}
+
+test_watchdog_ignores_an_idle_reader_outside_a_checkout() {
+    new_fixtures; fake_pids=(); trap 'kill "${fake_pids[@]}" 2>/dev/null' EXIT
+    # Two identical readers on pipes, one inside a checkout and one outside
+    # every checkout: only the directory differs, so only the checkout filter
+    # can tell them apart.
+    idle_reader cat
+    local inside=$reader_pid outside
+    (cd "$work/elsewhere" && exec cat < <(sleep 20)) >/dev/null 2>&1 &
+    outside=$!; fake_pids+=("$outside")
+    sleep 1.2
+    [ "$(readlink "/proc/$outside/fd/0" | cut -d: -f1)" = pipe ] || die "the outside reader is not on a pipe"
+    idle_watchdog AGENTIC_WATCHDOG_IDLE=0
+    want_rc 3; want_out "pid=$inside "
+    ! grep -q "pid=$outside " <<<"$out" || die "reported a reader outside every checkout"
+}
+
+test_watchdog_ignores_an_idle_reader_under_the_limit() {
+    new_fixtures; fake_pids=(); trap 'kill "${fake_pids[@]}" 2>/dev/null' EXIT
+    idle_reader cat
+    sleep 1.2 # older than 0 s, far under the 3600 s limit
+    idle_watchdog AGENTIC_WATCHDOG_IDLE=3600
+    want_rc 0
+}
+
+test_watchdog_ignores_a_reader_that_uses_cpu() {
+    new_fixtures; fake_pids=(); trap 'kill "${fake_pids[@]}" 2>/dev/null' EXIT
+    # cat copying from a pipe that never stops producing is busy, not stuck.
+    (cd "$work/wt" && exec cat < <(timeout 4 yes)) >/dev/null 2>&1 &
+    fake_pids+=("$!")
+    sleep 3
+    # A zero-tick CPU allowance, so any CPU at all counts as busy.
+    idle_watchdog AGENTIC_WATCHDOG_IDLE=0 AGENTIC_WATCHDOG_IDLE_CPU=0
+    want_rc 0
+    sleep 2 # let the 4 s producer end so no cat outlives the test
+}
+
+# idle_watchdog_with_ps <etimes>: a stub `ps` lists one real idle cat in the
+# checkout with the given etimes (and answers the re-read with it), and the
+# idle limit is left unset, so the default applies. The caller sets up the
+# fixtures and the cleanup trap first, so the helper can run twice in one test.
+idle_watchdog_with_ps() {
+    idle_reader cat
+    sleep 0.3
+    mkdir -p "$fx/bin"
+    printf '%s\n' "693000.50 1.00" >"$fx/uptime"
+    cat >"$fx/bin/ps" <<STUB
+#!/usr/bin/env bash
+case "\$*" in
+    *"-p "*) echo "  $1" ;;
+    *args=*) ;;
+    *) echo "$reader_pid $1 cat" ;;
+esac
+STUB
+    chmod +x "$fx/bin/ps"
+    idle_watchdog PATH="$fx/bin:$PATH" AGENTIC_UPTIME_FILE="$fx/uptime"
+}
+
+test_watchdog_default_idle_limit_is_600_seconds() {
+    new_fixtures; fake_pids=(); trap 'kill "${fake_pids[@]}" 2>/dev/null' EXIT
+    unset AGENTIC_WATCHDOG_IDLE
+    idle_watchdog_with_ps 601
+    want_rc 3; want_out "pid=$reader_pid elapsed=601s comm=cat"
+    idle_watchdog_with_ps 599
+    want_rc 0
+}
+
+test_watchdog_ignores_an_idle_reader_with_a_wrapped_etimes() {
+    new_fixtures; fake_pids=(); trap 'kill "${fake_pids[@]}" 2>/dev/null' EXIT
+    idle_watchdog_with_ps 4123168608
+    want_rc 0
 }
 
 # --- gate.sh ---
