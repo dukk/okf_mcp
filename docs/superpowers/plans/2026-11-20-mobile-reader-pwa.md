@@ -807,6 +807,20 @@ self.READ_CACHES = Object.freeze({
 
 - [ ] **Step 4: Write `src/http/read/sw.js`**
 
+> **Corrected (issue #810, 2026-11-20).** The listing below is the worker as shipped; it replaces
+> the earlier text, which never kept an answer that made an account the owner, nor any answer
+> on its way with it: the takeover set a `'*'` mark at its own time, which every request that
+> had already started (the first screen of a first visit, journeys 8m and 8q) then matched, and
+> the request-time `caches.open` handle wrote into a cache the takeover had just deleted. Now an
+> owner change bumps an `epoch` instead (a copy is kept only while the epoch it was admitted
+> under is current, checked before and after the write), `store` opens the cache at write time,
+> marks and `since` use the monotonic `performance.now()` (so `since` is not stored: a record
+> read from `read-owner` is `{ tag }`, and no request of the reading worker predates it), a
+> failed takeover disowns the copies, and a half-written shell cache is deleted. `remember` is
+> now `store(cacheName, key, response, { startedAt, held, capped })`; `admit` returns the epoch
+> or null. Nothing in a later task calls these: the page only deletes `read-owner`, and journey
+> 8q reads its `.tag`, which is unchanged.
+
 ```js
 // The reader's service worker (reader design, "Caching"). Its scope is
 // /read/, so it never controls a console page. The shell is precached and
@@ -824,6 +838,13 @@ const META = [
     /^\/api\/v1\/catalogs\/[^/]+\/(tree|recent-changes)$/,
     /^\/api\/v1\/catalogs\/[^/]+\/links\//,
 ];
+const CATALOG = /^\/api\/v1\/catalogs\/([^/]+)\//;
+const OWNER_KEY = '/read/__owner';
+
+// The worker's own clock for ordering requests against marks and owner
+// changes. It is monotonic (a wall-clock change cannot reorder them) and
+// lives as long as this worker, as the marks and the in-memory owner do.
+const now = () => performance.now();
 
 // Installs only a shell that is entirely this build's: the listing must
 // carry this worker's version, and every file must hash as listed. A deploy
@@ -831,11 +852,19 @@ const META = [
 // browser keeps the worker it had and tries again on a later visit.
 self.addEventListener('install', event => {
     event.waitUntil((async () => {
-        const listing = await (await fetch('/read/shell.json', { cache: 'no-store' })).json();
+        const answer = await fetch('/read/shell.json', { cache: 'no-store' });
+        if (!answer.ok) throw new Error(`shell listing: HTTP ${answer.status}`);
+        const listing = await answer.json();
         if (listing.version !== VERSION) throw new Error('the shell listing is from another build');
         const responses = await Promise.all(listing.files.map(verified));
         const cache = await caches.open(SHELL);
-        await Promise.all(listing.files.map((file, at) => cache.put(file.url, responses[at])));
+        try {
+            await Promise.all(listing.files.map((file, at) => cache.put(file.url, responses[at])));
+        } catch (failure) {
+            // A half-written shell is never used; leave no copy of it.
+            await caches.delete(SHELL).catch(() => {});
+            throw failure;
+        }
         await self.skipWaiting();
     })());
 });
@@ -850,6 +879,16 @@ async function verified(file) {
     return response;
 }
 
+self.addEventListener('activate', event => {
+    event.waitUntil((async () => {
+        const names = await caches.keys().catch(() => []);
+        await Promise.all(names
+            .filter(name => name.startsWith(READ_CACHES.shellPrefix) && name !== SHELL)
+            .map(name => caches.delete(name).catch(() => false)));
+        await self.clients.claim();
+    })());
+});
+
 // Invalidation marks, in memory: the page sends one ('*' for a wipe, an
 // encoded catalog for a lost grant, or one document's API path for a
 // deleted document) and waits for the reply before it deletes anything.
@@ -857,25 +896,41 @@ async function verified(file) {
 // or before a matching mark, so a slow 2xx cannot put back what a 401 or a
 // lost grant removed. Memory needs no storage quota, and a request still on
 // its way keeps the worker alive, so the marks last as long as they matter.
+// (A new worker activates only once this one has no fetch on its way, even
+// with skipWaiting, so one worker at a time holds the marks that matter.)
 const marks = new Map();
 
+// The account the cached copies belong to, { tag, since }, read from
+// read-owner on first use (`undefined` until then). `tag` is null when no
+// account owns them; `since` is when the owner took over, on `now()`'s
+// clock (-Infinity for a record this worker read: no request of its own
+// predates it). The worker, which every reader tab shares, decides
+// ownership, so a sign-in as someone else in another tab cannot slip one
+// account's answers in among another's.
+let owner;
+// Bumped whenever the owner changes. A copy is kept only while the epoch it
+// was admitted under is current, so an answer admitted for the old owner
+// drops its copy when a new one takes over, without touching the new
+// owner's answers already on their way.
+let epoch = 0;
+// Ownership decisions run one at a time, in arrival order.
+let ownerQueue = Promise.resolve(null);
+
+// No account owns the copies from now on; answers to requests that started
+// before this are never kept.
+function disown() {
+    owner = { tag: null, since: now() };
+    epoch += 1;
+}
+
 self.addEventListener('message', event => {
-    if (event.data?.type !== 'invalidate') return;
-    marks.set(event.data.scope, Date.now());
+    const scope = event.data?.type === 'invalidate' ? event.data.scope : undefined;
+    if (typeof scope !== 'string') return;
+    marks.set(scope, now());
     // A wipe also deletes read-owner: the next account to answer owns the
     // copies afresh.
-    if (event.data.scope === '*') owner = null;
+    if (scope === '*') disown();
     event.ports[0]?.postMessage('ok');
-});
-
-self.addEventListener('activate', event => {
-    event.waitUntil((async () => {
-        const names = await caches.keys();
-        await Promise.all(names
-            .filter(name => name.startsWith(READ_CACHES.shellPrefix) && name !== SHELL)
-            .map(name => caches.delete(name)));
-        await self.clients.claim();
-    })());
 });
 
 self.addEventListener('fetch', event => {
@@ -892,10 +947,11 @@ self.addEventListener('fetch', event => {
     } else if (!url.pathname.startsWith('/api/')) {
         event.respondWith(fromShell(request, request));
     }
-    // Any other API read (session, search, whoami) goes to the network as is.
+    // Any other API read (session, search, me) goes to the network as is.
 });
 
 // The shell's copy of `key`, else the network's answer to `request`.
+// Storage that refuses to read means the network's answer.
 async function fromShell(key, request) {
     const cached = await caches.match(key, { cacheName: SHELL }).catch(() => undefined);
     return cached ?? fetch(request);
@@ -904,72 +960,92 @@ async function fromShell(key, request) {
 // The network's answer, remembered when it is a 2xx; without a network,
 // the remembered copy marked X-Read-Offline. `capped` caches keep only the
 // newest READ_CACHES.contentCap entries. Remembering is best effort: a
-// failed write (a full disk, QuotaExceededError) never costs the page the
-// answer it already has.
+// failed write (a full disk, QuotaExceededError, storage that refuses to
+// open) never costs the page the answer it already has.
 async function networkFirst(request, cacheName, capped) {
-    // Storage that refuses to open (denied by browser settings) means no
-    // copies, never a lost answer: the network's answer still goes through.
-    const cache = await caches.open(cacheName).catch(() => null);
-    const startedAt = Date.now();
+    const startedAt = now();
     let response;
     try {
         response = await fetch(request);
     } catch (failure) {
-        const cached = cache ? await cachedCopy(cache, request).catch(() => null) : null;
+        const held = epoch;
+        const cached = await caches.open(cacheName)
+            .then(cache => cachedCopy(cache, request))
+            .catch(() => null);
         if (!cached) throw failure;
-        // `capped: null`: a renewal, not a fresh answer, and never trimmed.
-        if (capped) await upkeep(() => remember(cache, cached.key, cached.response.clone(), startedAt, null));
+        // Re-put so the copy counts as recently viewed; a renewal, never trimmed.
+        if (capped) {
+            await upkeep(() => store(cacheName, cached.key, cached.response.clone(), { startedAt, held, capped: false }));
+        }
         return stamped(cached.response, 'X-Read-Offline', '1');
     }
-    if (response.ok && cache) {
+    if (response.ok) {
         const copy = stamped(response.clone(), 'X-Read-Cached-At', new Date().toISOString());
-        await upkeep(() => remember(cache, request, copy, startedAt, capped));
+        await upkeep(async () => {
+            if (invalidatedSince(request.url, startedAt)) return;
+            const held = await admit(response.headers.get('X-OKF-Account'), startedAt);
+            if (held !== null) await store(cacheName, request, copy, { startedAt, held, capped });
+        });
     }
     return response;
 }
 
-const CATALOG = /^\/api\/v1\/catalogs\/([^/]+)\//;
-const OWNER_KEY = '/read/__owner';
-
-// The account the cached copies belong to, { tag, since } (`since`: when it
-// became the owner), read from read-owner on first use; `undefined` until
-// then, null for none. The worker, which every reader tab shares, decides
-// ownership, so a sign-in as someone else in another tab cannot slip one
-// account's answers in among another's.
-let owner;
-// Ownership decisions run one at a time, in arrival order.
-let ownerQueue = Promise.resolve();
-
 async function loadOwner() {
     try {
         const stored = await (await caches.open(READ_CACHES.owner)).match(OWNER_KEY);
-        return stored ? await stored.json() : null;
+        const record = stored ? await stored.json() : null;
+        return { tag: typeof record?.tag === 'string' ? record.tag : null, since: -Infinity };
     } catch {
-        return null;
+        return { tag: null, since: -Infinity };
     }
 }
 
-// Whether an answer for account `tag`, to a request that started at
-// `startedAt`, may be cached. The first answer for a new account makes it
-// the owner: the copies are wiped first, and a '*' mark makes every answer
-// already on its way for the old account drop its copy (remember's second
-// check). An answer from before the current owner took over is never kept.
+// The epoch under which an answer for account `tag`, to a request that
+// started at `startedAt`, may be cached, or null when it may not. The first
+// answer for a new account makes it the owner (`takeOver`). An answer for
+// another account to a request from before the current owner took over is
+// never kept, so a late answer for the old account cannot take the copies
+// back.
 function admit(tag, startedAt) {
     const decision = ownerQueue.then(async () => {
-        if (!tag) return false;
-        if (owner === undefined) owner = await loadOwner();
-        if (owner?.tag === tag) return true;
-        if (owner && startedAt <= owner.since) return false;
-        marks.set('*', Date.now());
-        await Promise.all([READ_CACHES.content, READ_CACHES.meta].map(name => caches.delete(name)));
-        owner = { tag, since: Date.now() };
-        await caches.open(READ_CACHES.owner)
-            .then(cache => cache.put(OWNER_KEY, new Response(JSON.stringify(owner))))
-            .catch(() => {});
-        return true;
+        if (!tag) return null;
+        if (owner === undefined) {
+            const stored = await loadOwner();
+            // A wipe may have disowned the copies while the record was read.
+            if (owner === undefined) owner = stored;
+        }
+        if (owner.tag === tag) return epoch;
+        if (startedAt <= owner.since) return null;
+        return takeOver(tag);
     });
-    ownerQueue = decision.catch(() => false);
-    return decision.catch(() => false);
+    ownerQueue = decision.catch(() => null);
+    return ownerQueue;
+}
+
+// Makes `tag` the owner: bumps the epoch first (so the old owner's copies
+// still on their way drop themselves), deletes the old owner's copies, and
+// only then records the new owner, so the record never names an account
+// whose copies are not entirely its own. Returns the new epoch, or null
+// when the copies could not be deleted or a wipe came meanwhile.
+async function takeOver(tag) {
+    owner = { tag, since: now() };
+    epoch += 1;
+    const mine = epoch;
+    try {
+        await Promise.all([READ_CACHES.content, READ_CACHES.meta].map(name => caches.delete(name)));
+    } catch {
+        // The old copies may still be there: nobody owns them, and the next
+        // answer tries again.
+        if (epoch === mine) disown();
+        return null;
+    }
+    if (epoch !== mine) return null;
+    // Best effort: without the record, a restarted worker treats the next
+    // answer as a new owner and wipes, which loses copies but never mixes them.
+    await caches.open(READ_CACHES.owner)
+        .then(cache => cache.put(OWNER_KEY, new Response(JSON.stringify({ tag }))))
+        .catch(() => {});
+    return epoch === mine ? mine : null;
 }
 
 // Whether the page wiped everything, or evicted `url`'s catalog or the
@@ -982,23 +1058,25 @@ function invalidatedSince(url, startedAt) {
         .some(at => at !== undefined && at >= startedAt);
 }
 
-// Stores `response` under `key` unless the page invalidated it since
-// `startedAt`. The check runs again after the write: the page's mark is in
-// place before it deletes, so an eviction that began meanwhile either finds
-// this entry and deletes it, or marked before this second check, which
-// deletes it.
-async function remember(cache, key, response, startedAt, capped) {
-    if (invalidatedSince(key.url ?? key, startedAt)) return;
-    // A fresh answer must belong to the current owner (or become it); a
-    // renewed offline copy already does.
-    if (capped !== null && !(await admit(response.headers.get('X-OKF-Account'), startedAt))) return;
-    if (invalidatedSince(key.url ?? key, startedAt)) return;
+// Stores `response` under `key` in `cacheName`, unless the page invalidated
+// it since `startedAt` or the owner changed since epoch `held`. The cache is
+// opened here, not when the request started: a takeover or a wipe deletes
+// the cache, and a handle from before would write where nobody reads. The
+// checks run again after the write: the page marks before it deletes, and a
+// takeover bumps the epoch before it deletes, so an eviction that began
+// meanwhile either finds this entry and deletes it, or changed the state
+// before this second check, which deletes it.
+async function store(cacheName, key, response, { startedAt, held, capped }) {
+    const url = key.url ?? key;
+    const current = () => epoch === held && !invalidatedSince(url, startedAt);
+    if (!current()) return;
+    const cache = await caches.open(cacheName);
     await renew(cache, key, response);
-    if (invalidatedSince(key.url ?? key, startedAt)) {
+    if (!current()) {
         await cache.delete(key);
         return;
     }
-    if (capped === true) await trim(cache);
+    if (capped) await trim(cache);
 }
 
 // The cached answer to `request`, or, for a concept, the other form of it
@@ -1026,7 +1104,7 @@ async function upkeep(write) {
     try {
         await write();
     } catch (error) {
-        console.warn('reader cache write failed:', error.name);
+        console.warn('reader cache write failed:', error?.name);
     }
 }
 

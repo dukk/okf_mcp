@@ -179,9 +179,10 @@ lets the fetch fail.
 Caches are tied to one account, decided by the worker, which every reader
 tab shares. Every `/api/v1` answer carries `X-OKF-Account`, an opaque tag
 (16 hex digits of SHA-256 of a prefixed user or key id). The first answer
-for a new account wipes `read-content` and `read-meta` (with a `*` mark, so
-answers still on their way for the old account drop their copies) and
-records the new owner in `read-owner`; an answer to a request that started
+for a new account wipes `read-content` and `read-meta` (after starting a new
+ownership epoch, so answers still on their way for the old account drop
+their copies, while the new account's keep theirs) and records the new
+owner in `read-owner`; another account's answer to a request that started
 before the current owner took over is never kept. So signing in as someone
 else in another tab, with a reader tab left open, never mixes two accounts'
 copies. Sign-out wipes everything before calling `DELETE /api/v1/session`.
