@@ -35,11 +35,11 @@ where
     Router::new()
         .route("/", get(|| async { Redirect::to("/ui/") }))
         .route("/ui", get(|| async { Redirect::permanent("/ui/") }))
-        .route("/ui/", get(|| async { asset("index.html") }))
+        .route("/ui/", get(|| async { asset(ASSETS, "index.html") }))
         .route("/ui/manifest.json", get(manifest))
         .route(
             "/ui/{*path}",
-            get(|Path(path): Path<String>| async move { asset(&path) }),
+            get(|Path(path): Path<String>| async move { asset(ASSETS, &path) }),
         )
         .layer(middleware::map_response(security_headers))
 }
@@ -74,14 +74,23 @@ fn content_type(path: &str) -> &'static str {
         Some("js") => "text/javascript; charset=utf-8",
         Some("svg") => "image/svg+xml",
         Some("woff2") => "font/woff2",
+        Some("png") => "image/png",
+        Some("webmanifest") => "application/manifest+json",
         _ => "application/octet-stream",
     }
 }
 
-/// One embedded file, revalidated on every load (`no-cache`), or 404.
+/// One embedded file from `table`, revalidated on every load (`no-cache`),
+/// or 404.
+///
+/// # Arguments
+/// * `table` - the embedded files to look in ([`ASSETS`] or the reader's).
+///   The bytes are `'static` (they live in the binary), which axum needs to
+///   send them without copying.
+/// * `path` - the file's path below its tree.
 #[tracing::instrument(level = "trace", skip_all)]
-fn asset(path: &str) -> Response {
-    match ASSETS.iter().find(|(name, _)| *name == path) {
+pub(crate) fn asset(table: &[(&str, &'static [u8])], path: &str) -> Response {
+    match table.iter().find(|(name, _)| *name == path) {
         Some((name, body)) => (
             [
                 (header::CONTENT_TYPE, content_type(name)),
@@ -92,6 +101,24 @@ fn asset(path: &str) -> Response {
             .into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+/// One console file's bytes, by its path below `src/http/ui`.
+///
+/// # Returns
+/// `None` when the console embeds no such file.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
+pub(crate) fn console_file(path: &str) -> Option<&'static [u8]> {
+    ASSETS
+        .iter()
+        .find(|(name, _)| *name == path)
+        .map(|(_, body)| *body)
 }
 
 /// Adds the CSP, `nosniff` and `no-referrer` to every console response.
@@ -192,5 +219,10 @@ mod tests {
         assert_eq!(content_type("a/b.css"), "text/css; charset=utf-8");
         assert_eq!(content_type("x.svg"), "image/svg+xml");
         assert_eq!(content_type("README"), "application/octet-stream");
+        assert_eq!(content_type("icons/a.png"), "image/png");
+        assert_eq!(
+            content_type("manifest.webmanifest"),
+            "application/manifest+json"
+        );
     }
 }
