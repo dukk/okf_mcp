@@ -26,11 +26,27 @@ use super::server::TestServer;
 /// # Returns
 /// The running server.
 pub async fn start_oauth_server(catalogs: Vec<(&str, Files)>) -> TestServer {
-    TestServer::start_with(catalogs, |base| Config {
+    start_oauth_server_with(catalogs, OAuthConfig::default()).await
+}
+
+/// [`start_oauth_server`] on `oauth` instead of the default `[oauth]`
+/// settings (`cimd_allow_private` is still turned on).
+///
+/// # Arguments
+/// * `catalogs` - as for [`TestServer::start`].
+/// * `oauth` - the `[oauth]` settings.
+///
+/// # Returns
+/// The running server.
+pub async fn start_oauth_server_with(
+    catalogs: Vec<(&str, Files)>,
+    oauth: OAuthConfig,
+) -> TestServer {
+    TestServer::start_with(catalogs, move |base| Config {
         public_url: Some(base.to_string()),
         oauth: OAuthConfig {
             cimd_allow_private: true,
-            ..OAuthConfig::default()
+            ..oauth
         },
         ..Config::default()
     })

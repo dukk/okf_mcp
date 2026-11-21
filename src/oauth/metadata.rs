@@ -199,6 +199,7 @@ mod tests {
                 .into(),
             access_token_ttl: std::time::Duration::from_secs(3600),
             refresh_token_ttl: std::time::Duration::from_secs(30 * 86_400),
+            refresh_reuse_grace: chrono::TimeDelta::seconds(60),
             code_max_expiry: std::time::Duration::from_secs(7 * 86_400),
             dcr_enabled,
             cimd_allow_private: false,

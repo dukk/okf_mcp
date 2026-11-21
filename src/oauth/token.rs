@@ -272,11 +272,14 @@ async fn revoke_family(app: &App, oauth: &OAuth, family_id: &str) -> Result<(), 
     Ok(())
 }
 
-/// `POST /oauth/token`. One `okf.oauth.token` span per request; its grant
-/// is one of the closed set, set once the form is read (an unsupported
-/// type stays empty: a client chose it). The span also carries `method`
-/// (`oauth_token`) and `outcome` (`ok` or `failed`, the spellings of
-/// `okf_auth_attempts_total`), and never a code, token or client id.
+/// `POST /oauth/token`. One `okf.oauth.token` span per request; its
+/// `okf.grant` is one of the closed set, set once the form is read (an
+/// unsupported type stays empty: a client chose it). The span also carries
+/// `method` (`oauth_token`), `outcome` (`ok` or `failed`, the spellings of
+/// `okf_auth_attempts_total`), `okf.error` (the RFC 6749 error code, on
+/// failure) and, for a refresh, `okf.refresh` (what presenting the token
+/// found), and never a code, token or client id. No attribute key holds
+/// `auth` or `token`, which trace backends' default scrubbers hide.
 #[tracing::instrument(
     level = "info",
     name = "okf.oauth.token",
@@ -284,7 +287,9 @@ async fn revoke_family(app: &App, oauth: &OAuth, family_id: &str) -> Result<(), 
     fields(
         method = "oauth_token",
         outcome = tracing::field::Empty,
-        okf.oauth.grant = tracing::field::Empty
+        okf.grant = tracing::field::Empty,
+        okf.error = tracing::field::Empty,
+        okf.refresh = tracing::field::Empty
     )
 )]
 async fn token(
@@ -294,10 +299,12 @@ async fn token(
     // Held so the inner function records the grant on this span, not on its own.
     let span = tracing::Span::current();
     let result = issue_token(&span, app, form).await;
-    let outcome = if result.is_ok() {
-        Outcome::Ok
-    } else {
-        Outcome::Failed
+    let outcome = match &result {
+        Ok(_) => Outcome::Ok,
+        Err(error) => {
+            span.record("okf.error", error.code());
+            Outcome::Failed
+        }
     };
     span.record("outcome", outcome.as_str());
     result
@@ -323,12 +330,12 @@ async fn issue_token(
     })?;
     match required(&form.grant_type, "grant_type")? {
         "authorization_code" => {
-            span.record("okf.oauth.grant", Grant::AuthorizationCode.as_str());
+            span.record("okf.grant", Grant::AuthorizationCode.as_str());
             exchange_code(&app, oauth, &form).await
         }
         "refresh_token" => {
-            span.record("okf.oauth.grant", Grant::RefreshToken.as_str());
-            refresh(&app, oauth, &form).await
+            span.record("okf.grant", Grant::RefreshToken.as_str());
+            refresh(span, &app, oauth, &form).await
         }
         other => Err(OAuthError::UnsupportedGrantType(format!(
             "{other:?} is not supported"
@@ -463,14 +470,26 @@ async fn exchange_code(
     Ok(remember(oauth, minted))
 }
 
-/// `grant_type=refresh_token`.
+/// `grant_type=refresh_token`. Records what presenting the token found on
+/// `span` (the request's `okf.oauth.token` span) as `okf.refresh`:
+/// `rotated`, `grace` (a used token rotated again within
+/// `oauth.refresh_reuse_grace`), `reused` (the family is revoked) or
+/// `unknown`.
 #[tracing::instrument(level = "debug", skip_all)]
-async fn refresh(app: &App, oauth: &OAuth, form: &TokenForm) -> Result<TokenResponse, OAuthError> {
+async fn refresh(
+    span: &tracing::Span,
+    app: &App,
+    oauth: &OAuth,
+    form: &TokenForm,
+) -> Result<TokenResponse, OAuthError> {
     let presented = required(&form.refresh_token, "refresh_token")?;
     let client_id = required(&form.client_id, "client_id")?;
     let now = app.clock().now();
     let mut tx = app.pool().begin().await.map_err(OkfError::from)?;
-    match token_rows::use_refresh(&mut tx, &keys::hash(presented), now).await? {
+    let grace = oauth.settings.refresh_reuse_grace;
+    let found = token_rows::use_refresh(&mut tx, &keys::hash(presented), now, grace).await?;
+    span.record("okf.refresh", refresh_label(&found));
+    match found {
         RefreshUse::Unknown => Err(OAuthError::InvalidGrant(
             "unknown, expired or revoked refresh token".to_string(),
         )),
@@ -488,6 +507,10 @@ async fn refresh(app: &App, oauth: &OAuth, form: &TokenForm) -> Result<TokenResp
             family_id,
             resource,
             client_id: grant_client,
+            // A rotation within the grace window mints a successor like a
+            // first one: the family then holds one live pair per process
+            // that raced, each rotating on its own from here.
+            again: _,
         } => {
             // Each refusal returns before `commit`, so dropping `tx` rolls
             // back the `used_at` mark and the rightful client can still use
@@ -519,6 +542,29 @@ async fn refresh(app: &App, oauth: &OAuth, form: &TokenForm) -> Result<TokenResp
             app.metrics().oauth_token_issued(Grant::RefreshToken);
             Ok(remember(oauth, minted))
         }
+    }
+}
+
+/// The `okf.refresh` span value for what presenting a refresh token found.
+///
+/// # Arguments
+/// * `found` - [`token_rows::use_refresh`]'s answer.
+///
+/// # Returns
+/// One of `rotated`, `grace`, `reused` or `unknown`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
+fn refresh_label(found: &RefreshUse) -> &'static str {
+    match found {
+        RefreshUse::Rotated { again: false, .. } => "rotated",
+        RefreshUse::Rotated { again: true, .. } => "grace",
+        RefreshUse::Reused { .. } => "reused",
+        RefreshUse::Unknown => "unknown",
     }
 }
 
@@ -567,13 +613,22 @@ mod tests {
     use crate::oauth::state::code_key;
     use crate::oauth::testing::{
         authorization_code, authorization_code_for, authorize_query_for, form,
-        insert_loopback_client, oauth_app, oauth_app_with_metrics, send, CLIENT_ID,
+        insert_loopback_client, oauth_app, oauth_app_with, oauth_app_with_metrics, send, CLIENT_ID,
         LOOPBACK_CLIENT_ID, LOOPBACK_ON_PORT, LOOPBACK_REDIRECT_URI, REDIRECT_URI, RESOURCE,
         VERIFIER,
     };
 
     fn exchange(code: &str) -> String {
         exchange_with(code, "", "")
+    }
+
+    /// [`oauth_app`] with `oauth.refresh_reuse_grace` off, so a second use
+    /// of a refresh token revokes its family at once.
+    async fn oauth_app_without_grace() -> TestApp {
+        let mut config =
+            crate::store::oauth::testing::oauth_config(crate::oauth::testing::PUBLIC_URL);
+        config.oauth.refresh_reuse_grace = std::time::Duration::ZERO;
+        oauth_app_with(config).await
     }
 
     /// An exchange request with the field `name` set to `value` instead
@@ -635,7 +690,7 @@ mod tests {
         assert_eq!(headers.get_all("cache-control").iter().count(), 1);
         assert_eq!(headers["pragma"], "no-cache");
         assert_eq!(body["token_type"], "Bearer");
-        assert_eq!(body["expires_in"], 3600);
+        assert_eq!(body["expires_in"], 24 * 60 * 60);
         let access = text(&body, "access_token");
         assert!(access.starts_with("okfat_"));
         assert!(text(&body, "refresh_token").starts_with("okfrt_"));
@@ -826,12 +881,15 @@ mod tests {
             .iter()
             .find(|span| span.name == "okf.oauth.token")
             .expect("an okf.oauth.token span");
-        let grant = span
-            .attributes
-            .iter()
-            .find(|attribute| attribute.key.as_str() == "okf.oauth.grant")
-            .map(|attribute| attribute.value.to_string());
-        assert_eq!(grant.as_deref(), Some("refresh_token"));
+        let attribute = |key: &str| {
+            span.attributes
+                .iter()
+                .find(|attribute| attribute.key.as_str() == key)
+                .map(|attribute| attribute.value.to_string())
+        };
+        assert_eq!(attribute("okf.grant").as_deref(), Some("refresh_token"));
+        assert_eq!(attribute("okf.refresh").as_deref(), Some("rotated"));
+        assert_eq!(attribute("okf.error"), None, "it succeeded");
         let exported = observed.exported_text();
         for secret in [refresh_token.as_str(), CLIENT_ID] {
             assert!(!exported.contains(secret), "{secret} in {exported}");
@@ -894,7 +952,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn refresh_rotates_and_a_reused_refresh_token_revokes_the_family() {
-        let test = oauth_app().await;
+        let test = oauth_app_without_grace().await;
         let code = authorization_code(&test).await;
         let (_, _, first) = token(&test, exchange(&code)).await;
         let old_refresh = text(&first, "refresh_token");
@@ -919,6 +977,96 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
+    /// Issue #884: processes of one client sharing a credential refresh
+    /// with the same token at once. Within `oauth.refresh_reuse_grace` the
+    /// loser is rotated too, and nobody is signed out: both new pairs work.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_racing_refresh_within_the_grace_window_keeps_the_family() {
+        let test = oauth_app().await;
+        let code = authorization_code(&test).await;
+        let (_, _, first) = token(&test, exchange(&code)).await;
+        let shared = text(&first, "refresh_token");
+
+        let (won, _, winner) = token(&test, refresh(&shared, CLIENT_ID)).await;
+        let (lost, _, loser) = token(&test, refresh(&shared, CLIENT_ID)).await;
+
+        assert_eq!(won, StatusCode::OK, "{winner}");
+        assert_eq!(lost, StatusCode::OK, "{loser}");
+        assert_ne!(
+            text(&winner, "refresh_token"),
+            text(&loser, "refresh_token")
+        );
+        assert!(works(&test, &text(&winner, "access_token")).await);
+        assert!(works(&test, &text(&loser, "access_token")).await);
+        for pair in [&winner, &loser] {
+            let (status, _, next) =
+                token(&test, refresh(&text(pair, "refresh_token"), CLIENT_ID)).await;
+            assert_eq!(status, StatusCode::OK, "each successor rotates: {next}");
+        }
+    }
+
+    /// Within the window, a used token presented by another client is
+    /// refused as an unused one is, and spends nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_grace_window_still_refuses_another_client() {
+        let test = oauth_app().await;
+        let code = authorization_code(&test).await;
+        let (_, _, first) = token(&test, exchange(&code)).await;
+        let shared = text(&first, "refresh_token");
+        let (status, _, winner) = token(&test, refresh(&shared, CLIENT_ID)).await;
+        assert_eq!(status, StatusCode::OK, "{winner}");
+
+        let (status, _, refused) = token(&test, refresh(&shared, "another-client")).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(refused["error"], "invalid_grant");
+        assert!(works(&test, &text(&winner, "access_token")).await);
+    }
+
+    /// The span says why a refresh failed: a reuse past the window is
+    /// `okf.refresh = reused` with `okf.error = invalid_grant`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_reused_refresh_says_so_on_its_span() {
+        use crate::telemetry::config::LogFormat;
+        use crate::telemetry::subscriber::capture::observe;
+
+        let test = oauth_app_without_grace().await;
+        let code = authorization_code(&test).await;
+        let (_, _, first) = token(&test, exchange(&code)).await;
+        let shared = text(&first, "refresh_token");
+        let (status, _, _) = token(&test, refresh(&shared, CLIENT_ID)).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let observed = tokio::task::block_in_place(|| {
+            observe("trace", "trace", "trace", LogFormat::Text, || {
+                tokio::runtime::Handle::current()
+                    .block_on(token(&test, refresh(&shared, CLIENT_ID)));
+            })
+        });
+
+        let span = observed
+            .spans
+            .iter()
+            .find(|span| span.name == "okf.oauth.token")
+            .expect("an okf.oauth.token span");
+        let attribute = |key: &str| {
+            span.attributes
+                .iter()
+                .find(|attribute| attribute.key.as_str() == key)
+                .map(|attribute| attribute.value.to_string())
+        };
+        assert_eq!(attribute("okf.refresh").as_deref(), Some("reused"));
+        assert_eq!(attribute("okf.error").as_deref(), Some("invalid_grant"));
+        assert_eq!(attribute("outcome").as_deref(), Some("failed"));
+        for attribute in &span.attributes {
+            let key = attribute.key.as_str();
+            assert!(
+                !key.contains("auth") && !key.contains("token"),
+                "{key} would be scrubbed by a trace backend"
+            );
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_refresh_on_the_other_replica_catches_up_on_its_grant() {
         // The code is exchanged on A; the refresh token lives in Postgres,
@@ -934,7 +1082,13 @@ mod tests {
             ..TokenForm::default()
         };
 
-        let answer = super::refresh(&b, b.oauth().expect("OAuth is on"), &request).await;
+        let answer = super::refresh(
+            &tracing::Span::none(),
+            &b,
+            b.oauth().expect("OAuth is on"),
+            &request,
+        )
+        .await;
 
         assert!(
             answer.is_ok(),
@@ -978,7 +1132,12 @@ mod tests {
 
         let answer = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            super::refresh(&cold, cold.oauth().expect("OAuth is on"), &request),
+            super::refresh(
+                &tracing::Span::none(),
+                &cold,
+                cold.oauth().expect("OAuth is on"),
+                &request,
+            ),
         )
         .await
         .expect("the refresh never waits for a second connection");
