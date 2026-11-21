@@ -27,8 +27,8 @@ use crate::labels::directory::Wanted;
 use crate::mcp::blocking;
 use crate::mcp::changesets::unified_diff;
 use crate::mcp::documents::{
-    get_concept, read_document, Concept, Document, GetConceptParams, InboundLink, OutboundLink,
-    ReadDocumentParams,
+    get_concept, read_document, text_field, Concept, Document, GetConceptParams, InboundLink,
+    OutboundLink, ReadDocumentParams,
 };
 use crate::mcp::history::{history, History, HistoryParams};
 use crate::okf::outline::Outline;
@@ -70,6 +70,8 @@ pub(crate) struct TreeDocument {
     pub kind: &'static str,
     /// Its title, if it has one.
     pub title: Option<String>,
+    /// Its frontmatter `description`, when that is a string.
+    pub description: Option<String>,
 }
 
 /// `GET /catalogs/{catalog}/tree`.
@@ -170,6 +172,12 @@ struct RecentQuery {
 pub(crate) struct RecentChange {
     /// `/`-prefixed path; a deleted document's too.
     pub path: String,
+    /// The document's title as the catalog has it now; `None` for a
+    /// deletion, a document gone since, or one without a title.
+    pub title: Option<String>,
+    /// Its frontmatter `description` now, when that is a string; `None` as
+    /// for `title`.
+    pub description: Option<String>,
     /// The path's revision number, 1 for the first.
     pub revision: i32,
     /// `create`, `update`, `delete` or `import`.
@@ -276,6 +284,7 @@ async fn tree(
                 path: format!("/{}", doc.path()),
                 kind: kind_name(doc.kind(), doc.path())?,
                 title: doc.title().map(str::to_string),
+                description: text_field(doc, "description"),
             })
         })
         .collect();
@@ -562,17 +571,32 @@ async fn recent_changes(
         wanted.user(&row.actor);
     }
     let labels = ctx.labels_for(&wanted).await?;
+    // Titles and descriptions come from the published snapshot, read now:
+    // the history rows hold no content.
+    let loaded = ctx.snapshot(&state);
+    let snapshot = loaded.snapshot();
     let changes = page
         .rows
         .into_iter()
-        .map(|row| RecentChange {
-            path: format!("/{}", row.path),
-            revision: row.revision,
-            op: row.op,
-            actor_label: labels.actor(&row.actor).map(str::to_string),
-            actor: row.actor,
-            message: row.message,
-            at: format_timestamp(row.created_at),
+        .map(|row| {
+            // A deletion names no document, even if one was created again
+            // at the path since.
+            let doc = if row.op == "delete" {
+                None
+            } else {
+                snapshot.get(&row.path)
+            };
+            RecentChange {
+                path: format!("/{}", row.path),
+                title: doc.and_then(|doc| doc.title().map(str::to_string)),
+                description: doc.and_then(|doc| text_field(doc, "description")),
+                revision: row.revision,
+                op: row.op,
+                actor_label: labels.actor(&row.actor).map(str::to_string),
+                actor: row.actor,
+                message: row.message,
+                at: format_timestamp(row.created_at),
+            }
         })
         .collect();
     Ok(Json(RecentChanges {
@@ -665,12 +689,58 @@ mod tests {
         assert_eq!(tree["catalog"], "main");
         assert_eq!(
             entry(&tree, "/systems/alpha.md"),
-            &json!({"path": "/systems/alpha.md", "kind": "concept", "title": "Alpha"})
+            &json!({"path": "/systems/alpha.md", "kind": "concept", "title": "Alpha", "description": null})
         );
         assert_eq!(entry(&tree, "/systems/index.md")["kind"], "index");
         assert_eq!(entry(&tree, "/log.md")["kind"], "log");
         assert_eq!(entry(&tree, "/AGENTS.md")["kind"], "machinery");
         assert_eq!(tree["documents"].as_array().map(Vec::len), Some(MAIN.len()));
+    }
+
+    #[tokio::test]
+    async fn the_tree_gives_each_document_its_description() {
+        let test = app_with(
+            &[
+                (
+                    "main",
+                    &[
+                        ("index.md", "---\ntitle: Main\ndescription: Everything we keep.\n---\n# Main\n"),
+                        ("systems/alpha.md", "---\ntype: system\ntitle: Alpha\ndescription: Runs the jobs.\n---\n# Alpha\n"),
+                        ("systems/beta.md", "---\ntype: system\ntitle: Beta\n---\n# Beta\n"),
+                        ("systems/gamma.md", "---\ntitle: Gamma\ndescription: [not, a, string]\n---\n# Gamma\n"),
+                    ],
+                ),
+                ("other", &[("index.md", "# Other\n")]),
+            ],
+            Config::default(),
+        )
+        .await;
+        let keys = keys(&test).await;
+
+        let (status, tree) = send(
+            &test,
+            "GET",
+            "/api/v1/catalogs/main/tree",
+            Some(&keys.read),
+            None,
+        )
+        .await;
+
+        assert_eq!(status.as_u16(), 200, "{tree}");
+        assert_eq!(
+            entry(&tree, "/index.md")["description"],
+            "Everything we keep."
+        );
+        assert_eq!(
+            entry(&tree, "/systems/alpha.md")["description"],
+            "Runs the jobs."
+        );
+        // No description, or one that is not a string: null.
+        assert_eq!(entry(&tree, "/systems/beta.md")["description"], Value::Null);
+        assert_eq!(
+            entry(&tree, "/systems/gamma.md")["description"],
+            Value::Null
+        );
     }
 
     #[tokio::test]
@@ -1263,6 +1333,64 @@ mod tests {
         assert_eq!(deleted.as_u16(), 200, "{removal}");
         assert_eq!(removal["op"], "delete");
         assert_eq!(removal.get("text"), Some(&Value::Null));
+    }
+
+    /// Each change names its document as the catalog has it now: the title
+    /// and description of the current file, and null for a deletion or a
+    /// document that is gone since.
+    #[tokio::test]
+    async fn recent_changes_carry_titles_and_descriptions_from_the_snapshot() {
+        let test = app().await;
+        let keys = keys(&test).await;
+        let alpha = "---\ntype: system\ntitle: Alpha\ndescription: Runs the jobs.\n---\n# Alpha\n";
+        let entries: Vec<(&str, &str)> = MAIN
+            .iter()
+            .filter(|(path, _)| *path != "systems/beta.md")
+            .map(|(path, text)| {
+                if *path == "systems/alpha.md" {
+                    (*path, alpha)
+                } else {
+                    (*path, *text)
+                }
+            })
+            .collect();
+        publish(&test, "main", &entries, "editor").await;
+
+        let (status, page) = send(
+            &test,
+            "GET",
+            "/api/v1/catalogs/main/recent-changes",
+            Some(&keys.read),
+            None,
+        )
+        .await;
+
+        assert_eq!(status.as_u16(), 200, "{page}");
+        let change = |path: &str, revision: i64| -> Value {
+            page["changes"]
+                .as_array()
+                .expect("changes")
+                .iter()
+                .find(|change| change["path"] == path && change["revision"] == revision)
+                .cloned()
+                .unwrap_or_else(|| panic!("{path} revision {revision} in {page}"))
+        };
+        let edited = change("/systems/alpha.md", 2);
+        assert_eq!(edited["title"], "Alpha");
+        assert_eq!(edited["description"], "Runs the jobs.");
+        // An older revision of a file that still exists names it as it is now.
+        assert_eq!(
+            change("/systems/alpha.md", 1)["description"],
+            "Runs the jobs."
+        );
+        // The deletion, and the earlier revision of the deleted file: null.
+        for revision in [1, 2] {
+            let gone = change("/systems/beta.md", revision);
+            assert_eq!(gone["title"], Value::Null, "{gone}");
+            assert_eq!(gone["description"], Value::Null, "{gone}");
+        }
+        // A file with no title: null, not its path.
+        assert_eq!(change("/log.md", 1)["title"], Value::Null);
     }
 
     #[tokio::test]

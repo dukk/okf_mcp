@@ -93,11 +93,21 @@ pub struct SkippedCatalog {
     pub error: serde_json::Value,
 }
 
+/// Runs a search for the MCP tool: as [`run_with`] without plain snippets.
+///
+/// # Errors
+/// As [`run_with`].
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) async fn run(ctx: &ToolContext, params: SearchParams) -> Result<SearchResult, OkfError> {
+    run_with(ctx, params, false).await
+}
+
 /// Runs a search.
 ///
 /// # Arguments
 /// * `ctx` - the call's context.
 /// * `params` - the arguments.
+/// * `plain_snippets` - also make each hit's `snippet_text`.
 ///
 /// # Returns
 /// The merged hits.
@@ -112,7 +122,11 @@ pub struct SkippedCatalog {
 /// and listed in [`SearchResult::skipped`], so one broken changeset does not
 /// fail a search across every catalog.
 #[tracing::instrument(level = "debug", skip_all)]
-pub(crate) async fn run(ctx: &ToolContext, params: SearchParams) -> Result<SearchResult, OkfError> {
+pub(crate) async fn run_with(
+    ctx: &ToolContext,
+    params: SearchParams,
+    plain_snippets: bool,
+) -> Result<SearchResult, OkfError> {
     let states = ctx.states(params.catalogs.as_deref()).await?;
     let pinned = ctx.pin(params.changeset.as_deref()).await?;
     require_selected(pinned.as_ref(), &states)?;
@@ -125,6 +139,7 @@ pub(crate) async fn run(ctx: &ToolContext, params: SearchParams) -> Result<Searc
         tags: params.tags,
         status: params.status,
         limit: hit_limit(params.limit),
+        plain_snippets,
     };
     // Each catalog's view (published, or the pinned changeset's overlay), taken
     // once here. Both hold `Arc`s (reference-counted pointers, cheap to
