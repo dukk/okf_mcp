@@ -7,6 +7,11 @@ Visual reference: [`assets/2026-11-21-reader-polish-mockups.html`](assets/2026-1
 It mocks three directions on Home, Folder and Concept, with placeholder content.
 Open it in a phone-sized viewport and use **Views** to switch between them.
 
+As built, the reader differs from this design where the plan says so: see
+"Changes from the spec" and the dated Corrected notes in
+`docs/superpowers/plans/2026-11-21-reader-polish.md`, collected under
+"Changed from the plan" in `changelog/2026-11-21T19-53-32Z-reader-polish.md`.
+
 ## Goal
 
 The reader works, but it looks spartan and reads like raw data. It shows
@@ -45,7 +50,7 @@ The three uses it must serve are all real:
 ### Home
 
 1. **Search box,** with the catalog's page count ("Search 1,284 pages"). Tapping it opens Search.
-2. **Jump back in:** up to 3 rows (icon, title, folder and "read 2 h ago", an offline mark). It is taken from the reader's offline cache, newest first, and hidden when the cache is empty.
+2. **Jump back in:** up to 3 rows (icon, title, folder and "Synced 2 h ago", an offline mark). It is taken from the reader's offline cache, most recently viewed first, and hidden when the cache is empty. As built (issue #867), the time is when the copy was last fetched from the server: the cache keeps no reading time, so "read 2 h ago" would not be true.
 3. **Activity:**
    - **Filter chips:** All, Created, Edited, Deleted, By me.
    - **Day headings:** Today, Yesterday, then dates.

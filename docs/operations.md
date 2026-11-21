@@ -3418,13 +3418,14 @@ the same port as `/mcp`:
 The console's files hold no catalog data, so they need no key. Every
 `/ui/` response carries:
 
-- `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`
+- `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`
 - `X-Content-Type-Options: nosniff`
 - `Referrer-Policy: no-referrer`
 - `Cache-Control: no-cache` on each file (the browser revalidates on every load)
 
 Google Fonts (`fonts.googleapis.com` for the stylesheet, `fonts.gstatic.com`
-for the fonts) is the only third-party origin the console loads from. Behind
+for the fonts) is the only third-party origin the console loads from. The
+reader at `/read/` serves its own fonts, hence `font-src 'self'`. Behind
 a proxy that adds its own CSP, keep these sources or the fonts fall back to
 the system ones.
 
