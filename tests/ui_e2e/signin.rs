@@ -315,7 +315,7 @@ async fn the_welcome_page_links_on_to_the_console_signed_in() {
         set_password_and_welcome(ui, &setup);
         ui.click("#setup-console");
         ui.wait_visible("#app");
-        ui.wait_text("#whoami", "alice");
+        ui.wait_text("#whoami", "Alice - ");
     })
     .await;
 }
