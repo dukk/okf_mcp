@@ -3061,6 +3061,11 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 The folder screen reads only the tree now (spec change 5): the index's title and description head the page, and its body opens behind "About" as a document (`#/d/<catalog>/<folder>/index.md`, which the document screen and the refusal handler already serve and evict). A deleted index is therefore handled by the document screen's refusal (`KIND.CONCEPT_GONE` evicts `documents/<path>`), and the tree screen has no index read to test.
 
+> **Corrected (issue #868).** 2026-11-21: in the picker journey the catalog's label is
+> "Main" (the journey calls `server.set_catalog_label("main", "Main")`), so it
+> asserts `"Main"` and needs no `UNTITLED_CATALOG` import; drop that import
+> from Step 6. Nothing else differs.
+
 - [ ] **Step 1: Write the failing listing tests**
 
 In `tests/read_worker/route.test.mjs`, import `folderTitles` too (`const { folderListing, folderTitles } = await page('listing.js');`), give the `TREE` entry `/systems/index.md` a description (`{ path: '/systems/index.md', kind: 'index', title: 'Systems', description: 'What runs where.' }`), and replace the three `folderListing` tests with:
@@ -3392,7 +3397,7 @@ export async function render(view, ctx) {
 
 - [ ] **Step 6: Update the journeys**
 
-Add `use okf_mcp::labels::UNTITLED_CATALOG;` to the imports of `tests/ui_e2e/read.rs`. In `a_log_opens_as_a_document` and `a_log_in_recent_changes_opens_as_a_document`, `ui.wait_text("#document-title", "log.md");` becomes `ui.wait_text("#document-title", "Log");`.
+In `a_log_opens_as_a_document` and `a_log_in_recent_changes_opens_as_a_document`, `ui.wait_text("#document-title", "log.md");` becomes `ui.wait_text("#document-title", "Log");`.
 
 Replace the body of `the_picker_and_the_tree_lead_from_a_catalog_to_its_concepts` after `ui.click("#tab-browse");` with:
 
@@ -3406,13 +3411,13 @@ Replace the body of `the_picker_and_the_tree_lead_from_a_catalog_to_its_concepts
         assert_eq!(ui.text("#concepts"), "", "logs are not listed as concepts");
         ui.wait_visible("#folder-log");
         // The catalog list has been read: breadcrumbs name the catalog by its label.
-        ui.wait_text("#bar-label", UNTITLED_CATALOG);
+        ui.wait_text("#bar-label", "Main");
         ui.click("#folders a");
         // systems/: its two concepts by title, under the catalog's label.
         ui.wait_text("#concepts", "Alpha");
         ui.wait_text("#concepts", "Beta");
         ui.wait_text("#folder-title", "systems");
-        ui.wait_text(".crumbs", UNTITLED_CATALOG);
+        ui.wait_text(".crumbs", "Main");
         // About opens the index's text.
         ui.click("#about");
         ui.wait_text("#document-title", "About");
