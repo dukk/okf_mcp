@@ -4,7 +4,14 @@
 - `tests/ui_e2e/read.rs` `serve_a_sample_catalog_for_the_visual_check`, an
   ignored test that serves a sample catalog (placeholder content shaped like
   the mockup's) so the reader can be opened on a phone through
-  `adb reverse`.
+  `adb reverse`. It names `owner` as the actor of the setup's own changes
+  (they were recorded under the operating-system login) and asserts the
+  actors it shows.
+- Journeys `a_concept_body_is_plain_text_not_a_card`,
+  `the_outline_opens_without_picos_gaps_and_stays_muted_when_focused`,
+  `the_breadcrumbs_have_no_pico_nav_spacing` and
+  `the_home_search_box_has_no_margin`: computed-style checks that fail with
+  Pico's defaults.
 
 ## Changed
 - Home: the search box sits directly under the header, as in the mockup
