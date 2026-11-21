@@ -122,6 +122,14 @@ async fn server_with_outline_limit(outline_chars: usize) -> (TestServer, String)
 /// * `name` - the catalog.
 /// * `entries` - `(path, text)` of each file.
 async fn server_with_catalog(name: &str, entries: &[(String, String)]) -> TestServer {
+    server_with_catalog_and_reader(name, entries).await.0
+}
+
+/// [`server_with_catalog`], and the reader's user id as well.
+async fn server_with_catalog_and_reader(
+    name: &str,
+    entries: &[(String, String)],
+) -> (TestServer, String) {
     let borrowed: Vec<(&str, &str)> = entries
         .iter()
         .map(|(path, text)| (path.as_str(), text.as_str()))
@@ -131,7 +139,7 @@ async fn server_with_catalog(name: &str, entries: &[(String, String)]) -> TestSe
         ..Config::default()
     })
     .await;
-    server.user_with_password("reader", EMAIL, PASSWORD).await;
+    let id = server.user_with_password("reader", EMAIL, PASSWORD).await;
     crate::support::server::applied(&server.app, async {
         ceiling::entitle(
             &server.db.pool,
@@ -147,7 +155,7 @@ async fn server_with_catalog(name: &str, entries: &[(String, String)]) -> TestSe
         .expect("entitle");
     })
     .await;
-    server
+    (server, id)
 }
 
 /// A root index and `count` notes, `notes/n000.md` on, titled `N0` on,
@@ -704,7 +712,7 @@ async fn home_lists_recent_changes_and_search_finds_a_concept() {
     let (server, _) = server().await;
     drive(server.base.clone(), move |ui| {
         signed_in_at_home(ui);
-        ui.wait_text("#recent", "systems/alpha.md");
+        ui.wait_text("#recent", "Alpha");
         // Nothing but the search box is drawn in place of an absent hint.
         let drawn = ui.eval(
             "() => document.querySelector('#screen-home').textContent",
@@ -942,10 +950,241 @@ async fn home_lists_cached_recent_changes_and_viewed_concepts_offline() {
         ui.wait_visible("#recent");
         let offline = ui.go_offline();
         ui.reload_reader();
-        ui.wait_text("#recent", "systems/alpha.md");
+        ui.wait_text("#recent", "Alpha");
         ui.wait_text("#offline-banner", "Offline. Synced");
         ui.wait_text("#offline-list", "Alpha");
         drop(offline);
+    })
+    .await;
+}
+
+/// The group of `#recent` whose heading says `who`, as `[shown, all]`
+/// counts of its documents, or `null` when there is none.
+const GROUP_ROWS: &str = "(who) => { \
+    const group = [...document.querySelectorAll('#recent .group')] \
+        .find(g => g.querySelector('.who').textContent.includes(who)); \
+    if (!group) return null; \
+    const rows = [...group.querySelectorAll('.items .row')]; \
+    return [rows.filter(r => !r.hidden).length, rows.length]; }";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_import_shows_as_one_group_that_expands() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        signed_in_at_home(ui);
+        ui.wait_text("#recent", "imported 6 pages");
+        // One group for the whole import, three documents shown.
+        assert_eq!(ui.eval(GROUP_ROWS, json!("imported 6 pages")), json!([3, 6]));
+        assert_eq!(
+            ui.eval(
+                "() => [...document.querySelectorAll('#recent .who')].filter(w => w.textContent.includes('imported')).length",
+                json!(null)
+            ),
+            json!(1)
+        );
+        ui.wait_text("#recent .group-more", "+3 more");
+        ui.click("#recent .group-more");
+        assert_eq!(ui.eval(GROUP_ROWS, json!("imported 6 pages")), json!([6, 6]));
+        assert!(!ui.present("#recent .group-more"));
+        // A chip filters: the fixture deletes nothing.
+        ui.click("[data-filter=deleted]");
+        ui.wait_visible("#recent-empty");
+        ui.click("[data-filter=all]");
+        ui.wait_text("#recent", "imported 6 pages");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn show_older_reads_the_next_page_of_changes() {
+    // 60 notes and a root index: more changes than one page of 50.
+    let server = server_with_catalog("many", &notes(60, "Body.")).await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/t/many", EMAIL, PASSWORD);
+        ui.open_reader("/");
+        ui.wait_visible("#recent-older");
+        let rows = "() => document.querySelectorAll('#recent .row, #recent a.group-head').length";
+        let first = ui.eval(rows, json!(null));
+        ui.click("#recent-older");
+        ui.wait_hidden("#recent-older");
+        let all = ui.eval(rows, json!(null));
+        assert!(all.as_u64() > first.as_u64(), "{first} then {all}");
+    })
+    .await;
+}
+
+/// The cursor of the second page of `many`'s recent changes, as the
+/// `after=` query value the page sends for "Show older".
+const OLDER_CURSOR: &str = "async () => { \
+    const page = await (await fetch('/api/v1/catalogs/many/recent-changes?limit=50')).json(); \
+    return `&after=${encodeURIComponent(page.next_after)}`; }";
+
+/// True in the page once `read-content` holds nothing of `many`.
+const NO_MANY_CONTENT: &str = "async () => (await (await caches.open('read-content')).keys()) \
+    .every(k => !new URL(k.url).pathname.includes('/catalogs/many/'))";
+
+/// True in the page once `read-content` holds something of `many`.
+const HAS_MANY_CONTENT: &str = "async () => (await (await caches.open('read-content')).keys()) \
+    .some(k => new URL(k.url).pathname.includes('/catalogs/many/'))";
+
+/// How many rows and group heads of `#recent` are drawn.
+const RECENT_ROWS: &str =
+    "() => document.querySelectorAll('#recent .row, #recent a.group-head').length";
+
+/// Home of `many` (more changes than one page), signed in and with the
+/// worker caching reads, "Show older" showing.
+fn many_at_home(ui: &Ui) {
+    ui.sign_in_reader("/t/many", EMAIL, PASSWORD);
+    ui.wait_worker();
+    ui.open_reader("/");
+    ui.wait_visible("#recent-older");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn show_older_keeps_its_rows_and_clears_its_notice_when_a_retry_works() {
+    let server = server_with_catalog("many", &notes(60, "Body.")).await;
+    drive(server.base.clone(), move |ui| {
+        many_at_home(ui);
+        let first = ui.eval(RECENT_ROWS, json!(null));
+        // Offline, the next page cannot be read: the notice shows, the rows
+        // stay and the button works again.
+        let offline = ui.go_offline();
+        ui.click("#recent-older");
+        ui.wait_visible("#older-offline");
+        assert_eq!(ui.eval(RECENT_ROWS, json!(null)), first);
+        ui.poll_eval("() => document.querySelector('#recent-older').disabled === false");
+        // Asking again offline adds no second notice.
+        ui.click("#recent-older");
+        ui.poll_eval("() => document.querySelector('#recent-older').disabled === false");
+        assert_eq!(
+            ui.eval(
+                "() => document.querySelectorAll('#older-offline').length",
+                json!(null)
+            ),
+            json!(1)
+        );
+        drop(offline);
+        // The connection is back: the retry reads the page, and the notice goes.
+        ui.click("#recent-older");
+        ui.wait_hidden("#recent-older");
+        assert!(!ui.present("#older-offline"));
+        let all = ui.eval(RECENT_ROWS, json!(null));
+        assert!(all.as_u64() > first.as_u64(), "{first} then {all}");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn show_older_with_a_lost_grant_evicts_the_catalog() {
+    let (server, _) = server_with_catalog_and_reader("many", &notes(60, "Body.")).await;
+    let runtime = tokio::runtime::Handle::current();
+    let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
+    drive(server.base.clone(), move |ui| {
+        many_at_home(ui);
+        // Read a concept through the worker, so `read-content` holds a copy
+        // of `many` to evict, and come back to Home.
+        ui.open_reader("/v/many/notes/n000.md");
+        ui.wait_text("#body", "Body.");
+        ui.poll_eval(HAS_MANY_CONTENT);
+        ui.open_reader("/");
+        ui.wait_visible("#recent-older");
+        lose_catalog(&runtime, &pool, &app, "many");
+        ui.click("#recent-older");
+        ui.poll_eval(NO_MANY_CONTENT);
+        ui.poll_eval("() => location.hash.startsWith('#/c')");
+        assert_eq!(ui.eval(REMEMBERED_CATALOG, json!(null)), json!(null));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn show_older_with_a_401_signs_out() {
+    let (server, user_id) = server_with_catalog_and_reader("many", &notes(60, "Body.")).await;
+    let runtime = tokio::runtime::Handle::current();
+    let pool = server.db.pool.clone();
+    drive(server.base.clone(), move |ui| {
+        many_at_home(ui);
+        revoke_sessions(&runtime, &pool, &user_id);
+        ui.click("#recent-older");
+        ui.wait_visible("#signin-email");
+        assert_no_offline_copies(ui);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_late_show_older_answer_leaves_the_newer_screen_alone() {
+    let server = server_with_catalog("many", &notes(60, "Body.")).await;
+    drive(server.base.clone(), move |ui| {
+        many_at_home(ui);
+        let suffix = ui.eval(OLDER_CURSOR, json!(null));
+        ui.hold_next("GET", suffix.as_str().expect("cursor"));
+        ui.click("#recent-older");
+        wait_held(ui);
+        // Leave for the account screen, then let the page of changes arrive.
+        ui.open_reader("/me");
+        ui.wait_visible("#account-user");
+        ui.release_held();
+        assert!(ui.present("#account-user"));
+        assert!(!ui.present("#recent"));
+        assert!(!ui.present("#older-offline"));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jump_back_in_lists_the_concepts_read_last() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        signed_in_at_home(ui);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        ui.open_reader("/");
+        ui.wait_text("#jump-back", "Alpha");
+        ui.wait_text("#jump-back", "Synced ");
+        // Online, the offline list is not drawn: Jump back in stands for it.
+        assert!(!ui.present("#offline-list"));
+        // A search box that counts the catalog's pages.
+        ui.poll_eval(
+            "() => document.querySelector('#search-input').placeholder.startsWith('Search ') \
+             && document.querySelector('#search-input').placeholder.endsWith('pages')",
+        );
+    })
+    .await;
+}
+
+/// Moves the cached copy of alpha's concept read to `days` days ago, as
+/// its `X-Read-Cached-At` says (the time of the last network read).
+const AGE_ALPHA_COPY: &str = "async (days) => { \
+    const cache = await caches.open('read-content'); \
+    const key = (await cache.keys()).find(k => k.url.includes('/concepts/systems/alpha.md')); \
+    const old = await cache.match(key, { ignoreVary: true }); \
+    const headers = new Headers(old.headers); \
+    headers.set('X-Read-Cached-At', new Date(Date.now() - days * 86400000).toISOString()); \
+    await cache.put(key, new Response(await old.blob(), { status: old.status, headers })); \
+    return true; }";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jump_back_in_says_when_a_copy_was_synced_not_when_it_was_read() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        signed_in_at_home(ui);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        ui.eval(AGE_ALPHA_COPY, json!(7));
+        // Read it again with no connection: the worker keeps the week-old
+        // time, so the row must not claim it was read just now.
+        let offline = ui.go_offline();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        drop(offline);
+        ui.open_reader("/");
+        ui.wait_text("#jump-back", "Alpha");
+        let row = ui.text("#jump-back");
+        assert!(row.contains("Synced 7 d ago"), "{row}");
+        assert!(!row.contains("read "), "{row}");
     })
     .await;
 }
@@ -959,7 +1198,7 @@ const HOME_HINT: &str = "async ({ ios, standalone }) => { \
     define('standalone', standalone); \
     const home = await import('/read/js/screens/home.js'); \
     const view = document.createElement('section'); \
-    await home.render(view, { route: { catalog: 'main' }, live: () => true, freshness: () => {} }); \
+    await home.render(view, { route: { catalog: 'main' }, state: { session: null }, live: () => true, freshness: () => {}, summary: async () => null }); \
     return view.querySelector('#install-hint') !== null; }";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -980,7 +1219,7 @@ async fn the_install_hint_shows_on_an_iphone_browser_until_dismissed() {
             "async () => { \
              const home = await import('/read/js/screens/home.js'); \
              const view = document.createElement('section'); \
-             await home.render(view, { route: { catalog: 'main' }, live: () => true, freshness: () => {} }); \
+             await home.render(view, { route: { catalog: 'main' }, state: { session: null }, live: () => true, freshness: () => {}, summary: async () => null }); \
              view.querySelector('#install-hint button').click(); \
              return [view.querySelector('#install-hint') === null, localStorage.getItem('okf.read.install-hint')]; }",
             json!(null),
@@ -1458,8 +1697,19 @@ fn lose_main(
     pool: &sqlx::PgPool,
     app: &std::sync::Arc<okf_mcp::app::App>,
 ) {
+    lose_catalog(runtime, pool, app, "main");
+}
+
+/// Takes the reader's grant on `catalog` away, and waits until the server
+/// applies it.
+fn lose_catalog(
+    runtime: &tokio::runtime::Handle,
+    pool: &sqlx::PgPool,
+    app: &std::sync::Arc<okf_mcp::app::App>,
+    catalog: &str,
+) {
     runtime.block_on(crate::support::server::applied(app, async {
-        ceiling::unentitle(pool, "reader", "main", &AuditActor::cli(), Utc::now())
+        ceiling::unentitle(pool, "reader", catalog, &AuditActor::cli(), Utc::now())
             .await
             .expect("unentitle");
     }));
@@ -1820,7 +2070,7 @@ async fn a_late_refusal_from_home_evicts_the_catalog_it_asked_about() {
         ui.wait_text("#concept-title", "Notes");
         // Home for main, whose recent changes wait in the page.
         ui.open_reader("/c");
-        ui.hold_next("GET", "/catalogs/main/recent-changes?limit=20");
+        ui.hold_next("GET", "/catalogs/main/recent-changes?limit=50");
         ui.click("[data-catalog=main]");
         ui.wait_visible("#screen-home");
         wait_held(ui);
