@@ -86,8 +86,10 @@ cache-first. Catalog reads go through the service worker, which is scoped to
   there.
 - **One account.** Every answer an `/api/v1` route gives a signed-in caller
   carries `X-OKF-Account`, an opaque tag of the account it was made for ([operations](../operations.md#web-console)).
-  The worker keeps one recorded owner for all copies. The first answer for a
-  different account deletes the old copies and takes over, and copies are
+  The worker keeps one recorded owner for all copies. The first successful
+  answer for a different account, cached or not (boot's session check and
+  a search count too; the worker reads their tag and never keeps their
+  bodies), deletes the old copies and takes over, and copies are
   served offline only to their owner, so a second account signing in on the
   same device, even in another tab, never reads the first one's. An answer
   with no tag is not cached. With no recorded owner, nothing is served offline.

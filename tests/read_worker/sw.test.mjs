@@ -343,8 +343,84 @@ test('a navigation under /read/ gets the shell\'s page', async () => {
     const worker = startWorker(storage);
     const answer = await worker.get('/read/v/main/alpha.md', { mode: 'navigate' });
     assert.equal(await answer.text(), 'page');
-    assert.equal(worker.get('/api/v1/session'), undefined, 'other API reads are left alone');
 });
+
+const SESSION = '/api/v1/session';
+
+/** Requests `path`, which the worker must answer (it passes it through). */
+function passedThrough(worker, path) {
+    const answer = worker.get(path);
+    assert.ok(answer, `the worker answers ${path}`);
+    return answer;
+}
+
+test('a passed-through answer for a new account takes over and wipes before the page gets it', async () => {
+    const storage = new Storage();
+    const worker = startWorker(storage);
+    await readAll(worker, [concept('alpha'), '/api/v1/catalogs'], 'A');
+    const session = passedThrough(worker, SESSION);
+    await worker.waitHeld(1);
+    worker.answer(SESSION, 'B', '{"user":"second"}');
+    const answer = await session;
+    // Already done when the page has the answer: the page reads Cache Storage itself.
+    assert.deepEqual(storage.paths('read-content'), []);
+    assert.deepEqual(storage.paths('read-meta'), []);
+    assert.equal(await storage.ownerTag(), 'B');
+    assert.equal(await answer.text(), '{"user":"second"}', 'the answer is the network\'s');
+    assert.equal(answer.headers.get('X-Read-Cached-At'), null);
+    assert.ok([...storage.caches.keys()].every(name => !storage.paths(name).includes(SESSION)), 'never stored');
+    worker.goOffline();
+    await assert.rejects(worker.get(concept('alpha')), 'B is never served A\'s copy');
+    await assert.rejects(worker.get('/api/v1/catalogs'));
+});
+
+test('a late passed-through answer for the old account after a takeover changes nothing', async () => {
+    const storage = new Storage();
+    const worker = startWorker(storage);
+    await readAll(worker, [concept('alpha')], 'A');
+    const late = passedThrough(worker, SESSION);
+    await worker.waitHeld(1);
+    await readAll(worker, [concept('beta')], 'B');
+    worker.answer(SESSION, 'A');
+    assert.equal((await late).status, 200, 'the page still gets its answer');
+    assert.equal(await storage.ownerTag(), 'B');
+    assert.deepEqual(storage.paths('read-content'), [concept('beta')]);
+    worker.goOffline();
+    assert.equal((await worker.get(concept('beta'))).headers.get('X-Read-Offline'), '1');
+});
+
+test('a passed-through answer that started before a wipe does not take over', async () => {
+    const storage = new Storage();
+    const worker = startWorker(storage);
+    await readAll(worker, [concept('alpha')], 'A');
+    const late = passedThrough(worker, SESSION);
+    await worker.waitHeld(1);
+    await worker.mark('*');
+    worker.answer(SESSION, 'B');
+    await late;
+    assert.equal(await storage.ownerTag(), 'A', 'no new record (the page deletes the old one)');
+    worker.goOffline();
+    await assert.rejects(worker.get(concept('alpha')), 'nobody owns the copies after the wipe');
+});
+
+for (const [what, tag, status] of [
+    ['without an account tag', null, 200],
+    ['for the current owner', 'A', 200],
+    ['that is not a 2xx', 'B', 401],
+]) {
+    test(`a passed-through answer ${what} changes nothing`, async () => {
+        const storage = new Storage();
+        const worker = startWorker(storage, {
+            route: path => (path === '/api/v1/search' ? new Response('{}', { status, headers: tag ? { 'X-OKF-Account': tag } : {} }) : undefined),
+        });
+        await readAll(worker, [concept('alpha')], 'A');
+        assert.equal((await passedThrough(worker, '/api/v1/search')).status, status);
+        assert.equal(await storage.ownerTag(), 'A');
+        assert.deepEqual(storage.paths('read-content'), [concept('alpha')]);
+        worker.goOffline();
+        assert.equal((await worker.get(concept('alpha'))).headers.get('X-Read-Offline'), '1');
+    });
+}
 
 /** A server for install: the listing and its files, optionally tampered with. */
 function shellServer({ version = VERSION, tamper = false } = {}) {

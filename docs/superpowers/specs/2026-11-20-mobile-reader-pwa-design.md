@@ -186,12 +186,18 @@ lets the fetch fail.
 
 Caches are tied to one account, decided by the worker, which every reader
 tab shares. Every `/api/v1` answer carries `X-OKF-Account`, an opaque tag
-(16 hex digits of SHA-256 of a prefixed user or key id). The first answer
-for a new account wipes `read-content` and `read-meta` (after starting a new
+(16 hex digits of SHA-256 of a prefixed user or key id). The first `2xx`
+answer for a new account, cached or passed through uncached (the session,
+search, `/api/v1/me`: the worker reads the tag but never stores the body),
+wipes `read-content` and `read-meta` (after starting a new
 ownership epoch, so answers still on their way for the old account drop
 their copies, while the new account's keep theirs) and records the new
 owner in `read-owner`; another account's answer to a request that started
-before the current owner took over is never kept. So signing in as someone
+before the current owner took over (or before a wipe) never takes over. A
+passed-through answer that takes over reaches the page only once the old
+copies are deleted, so boot's session check alone hands the device to the
+new account, for the page's "Available offline" list as well as the
+worker's offline answers. So signing in as someone
 else in another tab, with a reader tab left open, never mixes two accounts'
 copies. Offline, a cached copy is served only to the account that owns the
 copies: its own `X-OKF-Account` must be the owner's. With no owner (no
