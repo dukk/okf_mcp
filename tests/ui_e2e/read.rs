@@ -654,7 +654,9 @@ async fn an_empty_concept_has_no_show_whole_button() {
     drive(server.base.clone(), move |ui| {
         ui.sign_in_reader("/v/main/systems/empty.md", EMAIL, PASSWORD);
         ui.wait_text("#concept-title", "Empty");
-        ui.wait_visible("#body");
+        // The title and the body are drawn together; an empty body is plain text
+        // with no box, so it is present but never "visible".
+        assert!(ui.present("#body"));
         assert!(!ui.present("#show-full") && !ui.present("#shortened"));
     })
     .await;
