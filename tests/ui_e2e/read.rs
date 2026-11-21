@@ -753,7 +753,14 @@ async fn a_shell_from_another_build_is_not_installed() {
         let tamper = ui.tamper_new_workers("*/read/read.css", "/* another build */");
         ui.sign_in_reader("/me", EMAIL, PASSWORD);
         ui.wait_text("#account-user", "reader");
-        assert!(tamper.rewritten() >= 1, "no worker fetched read.css");
+        // Boot goes on without the worker after five seconds, so the
+        // account screen says nothing about the install: wait for the
+        // install's read.css fetch itself, then for the install to settle.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while tamper.rewritten() == 0 {
+            assert!(Instant::now() < deadline, "no worker fetched read.css");
+            std::thread::sleep(Duration::from_millis(50));
+        }
         ui.poll_eval(
             "async () => { const r = await navigator.serviceWorker.getRegistration('/read/'); \
              return !r || (!r.installing && !r.waiting); }",
@@ -917,6 +924,7 @@ async fn a_late_refusal_from_home_evicts_the_catalog_it_asked_about() {
         ui.hold_next("GET", "/catalogs/main/recent-changes?limit=20");
         ui.click("[data-catalog=main]");
         ui.wait_visible("#screen-home");
+        wait_held(ui);
         // Switch to other, then lose main, then let main's answer through.
         ui.open_reader("/c");
         ui.click("[data-catalog=other]");
@@ -1040,6 +1048,8 @@ async fn a_folder_whose_index_is_deleted_meanwhile_still_lists_its_concepts() {
         ui.wait_visible("#folders");
         ui.open_reader("/t/main/systems");
         ui.wait_visible("#screen-tree");
+        // The index read is out (held), so the old tree asked for it.
+        wait_held(ui);
         runtime.block_on(publish(
             &pool,
             &app,

@@ -60,6 +60,12 @@ changed, because no journey found a bug.
   for it to be drawn again. The late-401 journey could revoke the session before the 404
   arrived, so it now waits for the 404's Resource Timing entry first. The lost-grant journey
   waits the same way for its links read.
+- Every journey waits on the event it depends on, never on something the page happens to show:
+  - The other-build journey polls `Tamper::rewritten()` (a bounded loop) before it waits for the
+    install to settle. Boot goes on after five seconds without the worker, so the account
+    screen says nothing about the install.
+  - The late-refusal-from-Home and deleted-folder-index journeys wait for the held read to be
+    out (`wait_held`) before they change the server.
 - The DevTools assumptions in the plan hold. The plan has a dated correction for the places
   where the shipped code differs: the `base64` crate replaces a hand-written encoder, the
   other-build poll is now `!r || ...` because a failed first install clears the registration,

@@ -3402,8 +3402,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 > - `DevTools::call` keeps the events that arrive while it waits (`pending`), and `event`
 >   looks there first, so a `Fetch.requestPaused` that lands during `release` is not lost.
 >   `DevTools::send` returns the command's id, and `try_call` sends through it.
-> - `Tamper` counts what it rewrote (`rewritten()`). The other-build journey asserts it is at
->   least 1, so the journey cannot pass without the tampering taking place. It polls
+> - `Tamper` counts what it rewrote (`rewritten()`). The other-build journey waits, with a
+>   deadline, until it is at least 1, so the journey cannot pass without the tampering taking
+>   place. The account screen is no sign of that, because boot goes on after five seconds
+>   without the worker. It polls
 >   `!r || (!r.installing && !r.waiting)`, not `!!r && !r.installing`: a failed first install
 >   clears the registration, so the plan's condition never turns true. After the guard is
 >   dropped it also asserts that exactly one shell cache is installed.
