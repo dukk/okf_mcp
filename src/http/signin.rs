@@ -1924,7 +1924,9 @@ mod tests {
         let marker = "id=\"setup-guide\" role=\"button\" href=\"";
         let start = page.find(marker).expect("the guide link") + marker.len();
         let end = start + page[start..].find('"').expect("closing quote");
-        page[start..end].replace("&quot;", "\"").replace("&amp;", "&")
+        page[start..end]
+            .replace("&quot;", "\"")
+            .replace("&amp;", "&")
     }
 
     /// A fresh setup link for `user_id`.
@@ -2021,7 +2023,10 @@ mod tests {
             "{page}"
         );
         assert!(!page.contains("<script>alert(1)"), "{page}");
-        assert_eq!(welcome_guide(&done), "https://docs.example.com/s?a=1&b=\"2\"");
+        assert_eq!(
+            welcome_guide(&done),
+            "https://docs.example.com/s?a=1&b=\"2\""
+        );
         assert!(page.contains("a=1&amp;b=&quot;2&quot;"), "{page}");
     }
 
