@@ -4455,6 +4455,14 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 The journeys check behaviour; this task checks the look against the mockup, on a real phone, in both themes, and produces a page with each screen before and after for the review. Screenshots are working files: keep them in the session scratchpad, never in the repository.
 
+> **Corrected (issue #872, 2026-11-21).** The sample's Kubernetes description holds a
+> colon and a space, which is not valid unquoted YAML: the front matter failed to
+> parse and the concept showed no type, tags or lede. It is quoted below. The
+> device can be on wireless adb (`adb reverse` works the same); the mockup opens
+> from a local web server over `adb reverse` as readily as from Files (a browser
+> will not open `file://` from a VIEW intent). The phone's browser opens every
+> `am start` URL in a new tab, so close the tabs afterwards.
+
 - [ ] **Step 1: A sample catalog to look at**
 
 At the end of `tests/ui_e2e/read.rs`:
@@ -4465,7 +4473,7 @@ At the end of `tests/ui_e2e/read.rs`:
 /// quotes, code and links, several actors and kinds of change).
 fn visual_sample() -> Vec<(String, String)> {
     let mut long = String::from(
-        "---\ntype: system\ntitle: Kubernetes cluster\ndescription: The home cluster: three control-plane nodes and five workers, deployed from git.\n\
+        "---\ntype: system\ntitle: Kubernetes cluster\ndescription: \"The home cluster: three control-plane nodes and five workers, deployed from git.\"\n\
          tags: [k8s, infra, platform]\n---\n# Kubernetes cluster\n\n\
          > This is the test cluster. Production runs separately: see [Production deployment](production.md).\n\n\
          The cluster runs three control-plane nodes and five workers. Workloads are deployed from the `infra` repository.\n\n",
