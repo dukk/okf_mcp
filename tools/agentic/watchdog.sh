@@ -24,6 +24,19 @@
 # (#371, #534). So a reading above the host's uptime is ignored, and a flagged
 # process is read once more (bounded) and must still exist, still be over its
 # limit and still be no older than the host.
+# A third check covers an agent that stops without any process left to see
+# (#850): `expect.sh start <worktree>` records that the coordinator waits for
+# that agent's report. A pending expectation alerts when its worktree is idle:
+# no test or gate process works there (a cargo, rustc, just or flock process,
+# a gate.sh, or a test binary with its cwd in the worktree; a gate waiting for
+# the shared gate lock counts as working) and the newest activity is older than
+# AGENTIC_WATCHDOG_QUIET (default 1200 s). Activity is the newest of: any mtime
+# under <worktree>/target/i*-logs, the worktree's HEAD reflog time and the
+# expectation's start time (a time in the future counts as now). An expectation
+# whose worktree is gone is dropped with a note. The alert names the worktree's
+# basename, the label and the idle seconds. After an alert, `expect.sh done`
+# or `expect.sh start` (which restarts the quiet clock) the expectation, or a
+# restarted watchdog alerts again at once while it is still idle.
 # It reports each process's pid, elapsed time, comm (the executable's name)
 # and directory, never its command line: command lines can carry credentials.
 # (Matching still reads the command line internally.)
@@ -44,6 +57,7 @@ test_limit=${AGENTIC_WATCHDOG_TEST:-1200}
 gate_limit=${AGENTIC_WATCHDOG_GATE:-4800}
 idle_limit=${AGENTIC_WATCHDOG_IDLE:-600}
 interval=${AGENTIC_WATCHDOG_INTERVAL:-300}
+quiet_limit=${AGENTIC_WATCHDOG_QUIET:-1200}
 # Up to this much CPU (utime + stime, in clock ticks; default one second) still
 # counts as idle.
 idle_cpu_ticks=${AGENTIC_WATCHDOG_IDLE_CPU:-$(getconf CLK_TCK 2>/dev/null || echo 100)}
@@ -62,6 +76,66 @@ in_checkout() {
 # unknown, nothing is ruled out.
 plausible() {
     [ -z "${uptime:-}" ] || [ "$1" -le "$uptime" ]
+}
+
+# Prints the newest mtime (whole seconds) of everything under $1's
+# target/i*-logs directories, or nothing when there are none.
+newest_log_time() {
+    local dir newest=0 time
+    for dir in "$1"/target/i*-logs; do
+        [ -d "$dir" ] || continue
+        time=$(agentic_bounded_call find "$dir" -printf '%T@\n' 2>/dev/null \
+            | sort -n | tail -n 1)
+        time=${time%%.*}
+        case "$time" in '' | *[!0-9]*) continue ;; esac
+        [ "$time" -gt "$newest" ] && newest=$time
+    done
+    [ "$newest" -gt 0 ] && printf '%s\n' "$newest"
+    return 0
+}
+
+# Checks every pending expectation (expect.sh), appends alerts to $found.
+check_expectations() {
+    local dir file started label wt name now newest time idle busy cwd
+    dir=$(agentic_expect_dir) || return 0
+    [ -d "$dir" ] || return 0
+    # Working processes: the cwd of each cargo, rustc, just or flock, of a
+    # gate.sh (a bash, so by its argument) and of a test binary.
+    local busy_cwds=()
+    while read -r pid comm args; do
+        case "$comm" in
+            cargo | cargo-* | rustc | just | flock) ;;
+            *) case "$args" in */gate.sh* | */debug/deps/* | */debug/build/*/out/*) ;; *) continue ;; esac ;;
+        esac
+        cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null) && busy_cwds+=("$cwd")
+    done < <(ps -eo pid=,comm=,args= | grep -v -E 'grep|watchdog\.sh')
+    now=$(agentic_now)
+    for file in "$dir"/*; do
+        [ -f "$file" ] || continue
+        wt=$(agentic_expect_field "$file" path)
+        label=$(agentic_expect_field "$file" label)
+        started=$(agentic_expect_field "$file" start)
+        name=$(basename "$file")
+        if [ ! -d "$wt" ]; then
+            rm -f "$file"
+            echo "watchdog: dropped the expectation for $name: its worktree is gone"
+            continue
+        fi
+        case "$started" in '' | *[!0-9]*) started=$now ;; esac
+        busy=0
+        for cwd in "${busy_cwds[@]}"; do
+            case "$cwd" in "$wt" | "$wt"/*) busy=1 ;; esac
+        done
+        [ "$busy" = 0 ] || continue
+        newest=$started
+        time=$(newest_log_time "$wt")
+        [ -n "$time" ] && [ "$time" -gt "$newest" ] && newest=$time
+        time=$(agentic_git -C "$wt" log -g -1 --format=%ct HEAD 2>/dev/null)
+        case "$time" in '' | *[!0-9]*) ;; *) [ "$time" -gt "$newest" ] && newest=$time ;; esac
+        idle=$((now - newest))
+        [ "$idle" -gt "$quiet_limit" ] || continue
+        found+="agent at $name quiet for ${idle}s with a report pending: ${label:-no label}"$'\n'
+    done
 }
 
 while :; do
@@ -114,6 +188,7 @@ while :; do
         [ "$again" -gt "$idle_limit" ] && plausible "$again" || continue
         found+="pid=$pid elapsed=${elapsed}s comm=$comm cwd=$cwd idle-stdin-reader"$'\n'
     done < <(ps -eo pid=,etimes=,comm= | awk '$3=="cat"||$3=="tee"||$3=="head"||$3=="tail"')
+    check_expectations
     if [ -n "$found" ]; then
         echo "WATCHDOG $(date -u +%FT%TZ): long-running or idle processes in $root:"
         printf '%s' "$found"

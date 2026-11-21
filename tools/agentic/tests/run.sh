@@ -819,6 +819,152 @@ EOF
         || die "cargo got SQLX_OFFLINE=$(cat "$fx/sqlx_offline"), want true"
 }
 
+# --- expect.sh and the watchdog's quiet-agent check (#850) ---
+
+# expect_wt <name>: a fresh linked worktree $work/<name> and the real time in
+# $t0. The fake clock starts at $t0, so the worktree's HEAD reflog is not newer
+# than the expectation.
+expect_wt() {
+    rm -rf "$repo/.git/agentic-expect" # every test starts with an empty ledger
+    git -C "$repo" worktree add -q -b "$1" "$work/$1"
+    t0=$(date +%s)
+    echo "$t0" >"$fx/clock"
+}
+
+# expect_watchdog <seconds after t0>: one watchdog pass on the fake clock, with
+# the process limits out of reach so only the quiet-agent check can fire.
+expect_watchdog() {
+    echo $((t0 + $1)) >"$fx/clock"
+    out=$(cd "$repo" && env AGENTIC_NOW_CMD=fake-now AGENTIC_WATCHDOG_TEST=999999 \
+        AGENTIC_WATCHDOG_GATE=999999 timeout 15 "$tools/watchdog.sh" --once 2>&1)
+    rc=$?
+}
+
+expect_start() {
+    (cd "$repo" && AGENTIC_NOW_CMD=fake-now "$tools/expect.sh" start "$@") >/dev/null
+}
+
+test_expect_start_list_done() {
+    new_fixtures; expect_wt ex-list
+    expect_start "$work/ex-list" "task 5"
+    echo $((t0 + 90)) >"$fx/clock"
+    out=$(cd "$repo" && AGENTIC_NOW_CMD=fake-now "$tools/expect.sh" list 2>&1); rc=$?
+    want_rc 0; want_out "ex-list waiting 90s: task 5"
+    out=$(cd "$repo" && "$tools/expect.sh" done "$work/ex-list" 2>&1); rc=$?
+    want_rc 0
+    out=$(cd "$repo" && "$tools/expect.sh" list 2>&1)
+    want_no_out "ex-list"
+}
+
+test_expect_rejects_a_missing_worktree_and_bad_usage() {
+    new_fixtures
+    out=$(cd "$repo" && "$tools/expect.sh" start "$work/nowhere" 2>&1); rc=$?
+    want_rc 2
+    out=$(cd "$repo" && "$tools/expect.sh" 2>&1); rc=$?
+    want_rc 2; want_out "usage:"
+}
+
+test_watchdog_flags_an_idle_agent_with_a_report_pending() {
+    new_fixtures; expect_wt ex-idle
+    expect_start "$work/ex-idle" "task 7 review"
+    expect_watchdog 1300
+    want_rc 3; want_out "agent at ex-idle quiet for 1300s"; want_out "task 7 review"
+    # A restarted watchdog alerts again while the agent is still idle.
+    expect_watchdog 1400
+    want_rc 3; want_out "quiet for 1400s"
+}
+
+test_watchdog_ignores_an_agent_under_the_quiet_limit() {
+    new_fixtures; expect_wt ex-young
+    expect_start "$work/ex-young" "task 7"
+    expect_watchdog 1100
+    want_rc 0
+    # The limit is configurable.
+    echo $((t0 + 100)) >"$fx/clock"
+    out=$(cd "$repo" && env AGENTIC_NOW_CMD=fake-now AGENTIC_WATCHDOG_QUIET=50 \
+        timeout 15 "$tools/watchdog.sh" --once 2>&1); rc=$?
+    want_rc 3; want_out "quiet for 100s"
+}
+
+test_watchdog_ignores_an_agent_with_a_fresh_log() {
+    new_fixtures; expect_wt ex-log
+    expect_start "$work/ex-log" "task 7"
+    mkdir -p "$work/ex-log/target/i7-logs/deep"
+    touch -d "@$((t0 + 1000))" "$work/ex-log/target/i7-logs/deep/gate.log"
+    expect_watchdog 1300
+    want_rc 0
+    expect_watchdog 2300
+    want_rc 3; want_out "quiet for 1300s"
+}
+
+test_watchdog_counts_a_new_commit_as_activity() {
+    new_fixtures; expect_wt ex-commit
+    expect_start "$work/ex-commit" "task 7"
+    # The reflog time is the real time of this commit, at or after t0.
+    git_quiet -C "$work/ex-commit" commit -q --allow-empty -m work
+    now=$(date +%s)
+    expect_watchdog $((now - t0 + 100))
+    want_rc 0
+}
+
+# A fake working process with its cwd in the worktree: start_busy <dir> <cmd...>.
+start_busy() {
+    fake_pids=()
+    trap 'kill "${fake_pids[@]}" 2>/dev/null' EXIT
+    (cd "$1" && shift && exec "$@") >/dev/null 2>&1 &
+    fake_pids+=("$!")
+    sleep 0.3
+}
+
+test_watchdog_ignores_an_agent_with_a_gate_waiting_for_the_lock() {
+    new_fixtures; expect_wt ex-gate
+    expect_start "$work/ex-gate" "task 7"
+    # gate.sh waiting on the shared lock is a bash running gate.sh (then flock).
+    printf '#!/usr/bin/env bash\nsleep 30\n' >"$fx/gate.sh"
+    start_busy "$work/ex-gate" bash "$fx/gate.sh" lint
+    expect_watchdog 3000
+    want_rc 0
+}
+
+test_watchdog_ignores_an_agent_with_a_cargo_build_running() {
+    new_fixtures; expect_wt ex-cargo
+    expect_start "$work/ex-cargo" "task 7"
+    mkdir -p "$fx/bin"; cp "$(command -v sleep)" "$fx/bin/cargo"
+    mkdir -p "$work/ex-cargo/target"
+    start_busy "$work/ex-cargo/target" "$fx/bin/cargo" 30
+    expect_watchdog 3000
+    want_rc 0
+}
+
+test_watchdog_alert_leaves_out_command_lines() {
+    new_fixtures; expect_wt ex-secret
+    expect_start "$work/ex-secret" "task 7"
+    # An unrelated process in the worktree does not count as work, and its
+    # command line (here a fake credential) never reaches the alert.
+    start_busy "$work/ex-secret" bash -c 'exec -a "--token=SECRETVALUE" sleep 30'
+    expect_watchdog 1300
+    want_rc 3; want_out "agent at ex-secret"; want_no_out "SECRETVALUE"
+}
+
+test_watchdog_drops_an_expectation_whose_worktree_is_gone() {
+    new_fixtures; expect_wt ex-gone
+    expect_start "$work/ex-gone" "task 7"
+    git -C "$repo" worktree remove --force "$work/ex-gone"
+    expect_watchdog 5000
+    want_rc 0; want_out "dropped the expectation for ex-gone"
+    [ ! -e "$repo/.git/agentic-expect/ex-gone" ] || die "the entry is still there"
+}
+
+test_watchdog_stops_alerting_once_the_report_is_done() {
+    new_fixtures; expect_wt ex-done
+    expect_start "$work/ex-done" "task 7"
+    expect_watchdog 1300
+    want_rc 3
+    (cd "$repo" && "$tools/expect.sh" done "$work/ex-done") >/dev/null
+    expect_watchdog 1400
+    want_rc 0
+}
+
 # --- runner ---
 
 passed=0
