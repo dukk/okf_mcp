@@ -802,6 +802,23 @@ test_gate_dylint_timeout_returns_124() {
     want_rc 124; want_out "Treat this as a HANG"
 }
 
+test_gate_worker_runs_the_just_recipe() {
+    new_fixtures; fake_just 'printf "%s\n" "$*" >"$GH_FIXTURES/just_args"; exit 0'
+    out=$(cd "$repo" && PATH="$fx/bin:$PATH" "$tools/gate.sh" worker 2>&1)
+    rc=$?
+    want_rc 0
+    [ "$(cat "$fx/just_args")" = test-worker ] \
+        || die "just got '$(cat "$fx/just_args")', want 'test-worker'"
+}
+
+test_gate_worker_timeout_returns_124() {
+    new_fixtures; fake_just 'exec sleep 30'
+    out=$(cd "$repo" && PATH="$fx/bin:$PATH" AGENTIC_TIMEOUT_WORKER=1s \
+        "$tools/gate.sh" worker 2>&1)
+    rc=$?
+    want_rc 124; want_out "Treat this as a HANG"
+}
+
 test_gate_narrow_builds_offline() {
     new_fixtures
     mkdir -p "$fx/bin"
