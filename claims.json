@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 305,
+  "next_claim_seq": 306,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "8f684f41126fce578bd4059dd6fe7fcdb199f7293ad274744b0b5860e0329994"
+    "mac": "b750c9f76f6cc088bdf5a27e92278f4604103ebae166845785e0d0771bcde6ec"
   },
-  "next_evidence_seq": 330,
+  "next_evidence_seq": 340,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "f4679a2d0b60b4ae145b327e91f6f509b2e565a8912566460729a5c08d79adb6"
+    "mac": "ba222e38a54d8e47dad845300bde3c4a2388c02f831e3b3ee2a29b2d15d20714"
   },
   "claims": [
     {
@@ -1353,7 +1353,8 @@
       ],
       "tags": [
         "baseline-2026-11-21",
-        "area:ops-2"
+        "area:ops-2",
+        "issue:891"
       ],
       "status": {
         "state": "active"
@@ -1421,10 +1422,10 @@
         }
       ],
       "created_at": "2026-11-21T19:06:29.655947925Z",
-      "updated_at": "2026-11-21T19:08:01.219520947Z",
+      "updated_at": "2026-11-21T21:18:06.363595241Z",
       "seal": {
         "by": "server",
-        "mac": "7a0e855001cf6e17322176459e8aac0bdc17a1792831c0e2e82d6746775147e4"
+        "mac": "6ff52dc063c8433291de77ba50d1d08961f00dc9033f8380ac428fa6c9dfd439"
       }
     },
     {
@@ -2161,6 +2162,72 @@
             "by": "server",
             "mac": "9f4c43fd65ff88136b294598b6df318f2c32644654b43b9775fb5b17440e8f0e"
           }
+        },
+        {
+          "id": "EVD-0332",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- deleting_a_user (5 passed, 0 failed)",
+          "summary": "Ran http::api::people::tests::deleting_a_user_over_rest_takes_its_keys_and_refuses_the_last_admin (asserts DELETE /api/v1/users/alice for the last admin answers 409 with \"last admin user\", then 204 once another admin exists) and cli::people::tests::deleting_a_user_takes_its_keys_and_may_delete_the_last_admin (asserts `user delete alice` of the only admin succeeds). Both passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/people.rs",
+              "lines": {
+                "start": 2264,
+                "end": 2309
+              },
+              "commit": "f499a0170f49b58af96b8e765d4142539627957e"
+            }
+          },
+          "recorded_at": "2026-11-21T21:20:59.609705574Z",
+          "seal": {
+            "by": "server",
+            "mac": "48b432e52c38aff8f302daa6dc8482338dc1fec5c89f60c45d85434298c3b622"
+          }
+        },
+        {
+          "id": "EVD-0333",
+          "kind": "test",
+          "locator": "src/cli/people.rs:1119-1145 cli::people::tests::deleting_a_user_takes_its_keys_and_may_delete_the_last_admin",
+          "summary": "The CLI test makes alice the only admin, runs `user delete alice`, and asserts it prints \"deleted user alice ...\" (passed in the narrow run).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli/people.rs",
+              "lines": {
+                "start": 1119,
+                "end": 1145
+              },
+              "commit": "f499a0170f49b58af96b8e765d4142539627957e"
+            }
+          },
+          "recorded_at": "2026-11-21T21:20:59.649877967Z",
+          "seal": {
+            "by": "server",
+            "mac": "ebd46030d5fa77849dd1fa0a689f800b11ff59e1041d7ecef549c6119a7747cf"
+          }
+        },
+        {
+          "id": "EVD-0334",
+          "kind": "inspection",
+          "locator": "src/http/ui/js/pages/users.js:242",
+          "summary": "The console's delete button calls api.del(`/users/${name}`), i.e. the same REST DELETE /api/v1/users/{name}, so the console inherits the REST last-admin refusal.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/ui/js/pages/users.js",
+              "lines": {
+                "start": 242,
+                "end": 242
+              },
+              "commit": "f499a0170f49b58af96b8e765d4142539627957e"
+            }
+          },
+          "recorded_at": "2026-11-21T21:20:59.677622548Z",
+          "seal": {
+            "by": "server",
+            "mac": "9c779ab420fec5a1c1af6cf0f7a7183825fb40c3ec7ac467ce202469e922d889"
+          }
         }
       ],
       "verdicts": [
@@ -2176,13 +2243,28 @@
             "by": "server",
             "mac": "82bf31951022b019bd0c8ba153d0091bc01fa6788cd49e1c582927afe6ea9e51"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The REST test asserts DELETE of the last admin answers 409 \"last admin user\"; the console's delete calls that same REST route; the CLI test asserts `user delete` of the only admin succeeds. All three paths the sentence names are shown, two by passing tests.",
+          "auditor": "claude-opus-5-5",
+          "evidence_ids": [
+            "EVD-0332",
+            "EVD-0333",
+            "EVD-0334"
+          ],
+          "recorded_at": "2026-11-21T21:21:11.026734419Z",
+          "seal": {
+            "by": "server",
+            "mac": "471efc0584fe17bd94d248e6b2e306ec02b50b49caafa4175b3a1c1c5aa06577"
+          }
         }
       ],
       "created_at": "2026-11-21T19:06:29.655947925Z",
-      "updated_at": "2026-11-21T19:09:16.124752612Z",
+      "updated_at": "2026-11-21T21:21:11.026734419Z",
       "seal": {
         "by": "server",
-        "mac": "db756ea236b18022aa386f5187564e31545ed10bc6d0c9aa5c29bc529e0fb224"
+        "mac": "44bd39d43427df7eac8f594ab17c5235854b9118303e8acceb8ee00e9a9d4c91"
       }
     },
     {
@@ -3190,7 +3272,8 @@
       ],
       "tags": [
         "baseline-2026-11-21",
-        "area:small-docs"
+        "area:small-docs",
+        "issue:891"
       ],
       "status": {
         "state": "active"
@@ -3235,10 +3318,10 @@
         }
       ],
       "created_at": "2026-11-21T19:06:36.900182326Z",
-      "updated_at": "2026-11-21T19:09:15.095330596Z",
+      "updated_at": "2026-11-21T21:19:21.686043288Z",
       "seal": {
         "by": "server",
-        "mac": "e404612d8b0dcb9ff49839285f6000ff43002b8ea7d26ffb7ab7140cb323a007"
+        "mac": "6a399692ca40ca93cdcff8e2002125db730bb55c77915921f49127d82aaed71e"
       }
     },
     {
@@ -3718,7 +3801,8 @@
       ],
       "tags": [
         "baseline-2026-11-21",
-        "area:small-docs"
+        "area:small-docs",
+        "issue:891"
       ],
       "status": {
         "state": "active"
@@ -3763,10 +3847,10 @@
         }
       ],
       "created_at": "2026-11-21T19:06:36.900182326Z",
-      "updated_at": "2026-11-21T19:09:15.222935407Z",
+      "updated_at": "2026-11-21T21:16:35.932319516Z",
       "seal": {
         "by": "server",
-        "mac": "b819a8aef3d169d362a5cb11a83dd7ac6af82448596a8efc2a0fef153079c310"
+        "mac": "78ceec704fff3469232b4b0860e43b42115b0549638c1d700296fe5b1790db92"
       }
     },
     {
@@ -5024,6 +5108,52 @@
             "by": "server",
             "mac": "64807fc4cee768a3b8384b056b369beff6ec8a39146ecd314fd7c677a9f320e2"
           }
+        },
+        {
+          "id": "EVD-0337",
+          "kind": "inspection",
+          "locator": "https://github.com/hypotheosis/hyp-rust-policy-lints/blob/3dc37e5edd76327590fdf6f0169a31f2fb85d645/lints/hyp_tracing/src/tracing_fns.rs#L145 (tag v0.1.2), lines 19-20, 145, 200-204, 253-254",
+          "summary": "At tag v0.1.2 (commit 3dc37e5, the tag Cargo.toml:247 pins): the lint returns early for a `--test` compilation, build scripts and cargo test/bench targets (line 145); skips FnKind::Closure and const fns (line 204); and accepts an allow/expect only when it carries a non-empty reason (lines 253-254), with instrument_exemption_without_justification declared for exemptions \"without a stated reason\" (line 84).",
+          "stance": "supports",
+          "recorded_at": "2026-11-21T21:20:59.755188060Z",
+          "seal": {
+            "by": "server",
+            "mac": "5366c7c8572e942874d9bce8d1bc6446d023fa87d3acf4a7cbc3a2413cfd968c"
+          }
+        },
+        {
+          "id": "EVD-0338",
+          "kind": "inspection",
+          "locator": "https://github.com/hypotheosis/hyp-rust-policy-lints/tree/3dc37e5edd76327590fdf6f0169a31f2fb85d645/lints/hyp_tracing/ui (tag v0.1.2)",
+          "summary": "The lint's UI tests include const_fn.rs and closure_only.rs with no .stderr file (no diagnostic expected), and allow_unjustified, allow_empty_reason, expect_unjustified and expect_blank_reason each with a .stderr (diagnostic expected for an exemption without a reason).",
+          "stance": "supports",
+          "recorded_at": "2026-11-21T21:20:59.777370652Z",
+          "seal": {
+            "by": "server",
+            "mac": "d1af1cba43e15c084d6944946eabb5f96e275841d61ac89f8db440ea365f4115"
+          }
+        },
+        {
+          "id": "EVD-0339",
+          "kind": "inspection",
+          "locator": "Cargo.toml:247",
+          "summary": "The workspace loads hyp-rust-policy-lints at tag v0.1.2, pattern lints/hyp_tracing, so the v0.1.2 source is the code the doc describes.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "Cargo.toml",
+              "lines": {
+                "start": 242,
+                "end": 248
+              },
+              "commit": "f499a0170f49b58af96b8e765d4142539627957e"
+            }
+          },
+          "recorded_at": "2026-11-21T21:20:59.805518425Z",
+          "seal": {
+            "by": "server",
+            "mac": "f9762de5506731f4790c7607b0319ce538584ca2d0a54099292dcc4606273b42"
+          }
         }
       ],
       "verdicts": [
@@ -5039,13 +5169,28 @@
             "by": "server",
             "mac": "5f158ce98a129ee2b66bc5863789cdc731aa9dfec0a8a7d46e7960c71dddf70f"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The pinned lint source (v0.1.2, commit 3dc37e5) skips closures, const fns and test compilations and reports an allow/expect without a reason; its UI tests expect no diagnostic for const fn and closures and a diagnostic for unjustified exemptions. Cargo.toml pins exactly that tag.",
+          "auditor": "claude-opus-5-5",
+          "evidence_ids": [
+            "EVD-0337",
+            "EVD-0338",
+            "EVD-0339"
+          ],
+          "recorded_at": "2026-11-21T21:21:11.135177818Z",
+          "seal": {
+            "by": "server",
+            "mac": "877deec06c2de2392c139a4e138266329c895dc0f1aba6c5ba1e406524ad2069"
+          }
         }
       ],
       "created_at": "2026-11-21T19:06:36.900182326Z",
-      "updated_at": "2026-11-21T19:09:15.552379411Z",
+      "updated_at": "2026-11-21T21:21:11.135177818Z",
       "seal": {
         "by": "server",
-        "mac": "1706b16a8e88c0cc9a80752088e7adc105e51d2331d826415295664fa879bee0"
+        "mac": "f4768b8d4581b5c04224fb878830b69426e105fd191f3223e62a4125c7de6464"
       }
     },
     {
@@ -10424,7 +10569,8 @@
       ],
       "tags": [
         "baseline-2026-11-21",
-        "area:ops-3"
+        "area:ops-3",
+        "issue:891"
       ],
       "status": {
         "state": "active"
@@ -10491,10 +10637,10 @@
         }
       ],
       "created_at": "2026-11-21T19:06:57.634988013Z",
-      "updated_at": "2026-11-21T19:10:26.157991411Z",
+      "updated_at": "2026-11-21T19:44:06.572140261Z",
       "seal": {
         "by": "server",
-        "mac": "86200455b3d85bd8850079e7a765bcd4d372622b8d5e6c9256906cced53167c6"
+        "mac": "b0bef1e42125406863399f5be0fb32f617bca3527c433d110433061ef1853ffe"
       }
     },
     {
@@ -12036,7 +12182,8 @@
       ],
       "tags": [
         "baseline-2026-11-21",
-        "area:readme-a"
+        "area:readme-a",
+        "issue:890"
       ],
       "status": {
         "state": "active"
@@ -12081,10 +12228,10 @@
         }
       ],
       "created_at": "2026-11-21T19:07:06.412184286Z",
-      "updated_at": "2026-11-21T19:09:35.454323400Z",
+      "updated_at": "2026-11-21T19:42:27.904686157Z",
       "seal": {
         "by": "server",
-        "mac": "bb8800ccaf47032470ca28190a1076b423c9910df57fc1c56d644d683a465efe"
+        "mac": "90c668ad7438fac5cb4db1b55fa5fd5642e36c5e608a61c529120f7ae7b4e902"
       }
     },
     {
@@ -12186,7 +12333,8 @@
       ],
       "tags": [
         "baseline-2026-11-21",
-        "area:readme-a"
+        "area:readme-a",
+        "issue:891"
       ],
       "status": {
         "state": "active"
@@ -12231,10 +12379,10 @@
         }
       ],
       "created_at": "2026-11-21T19:07:06.412184286Z",
-      "updated_at": "2026-11-21T19:09:35.498314267Z",
+      "updated_at": "2026-11-21T20:07:33.016631882Z",
       "seal": {
         "by": "server",
-        "mac": "3c9cb069ea50a193f6ebf130ffceeca0e59b122d3cd1d933ae8e31dec5fc71a5"
+        "mac": "40b54595e7a6e41c3f83e5a61f5c833733adb02556945a2d041400bab08869d2"
       }
     },
     {
@@ -13139,6 +13287,50 @@
             "by": "server",
             "mac": "e8525006b98871c5503792dcd973d28f089206e76dc5772956abdc7b6ea57c50"
           }
+        },
+        {
+          "id": "EVD-0335",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- names_group_actors_and_revoked_pairs_can_be_reissued (1 passed)",
+          "summary": "The test creates two live keys named \"claude\" with actors claude-code-tui and claude-ai-web (both succeed), asserts revoke/grant/ungrant by the bare name are refused as \"ambiguous\", then revokes with NAME plus actor claude-code-tui and asserts the first key's id was revoked; a new key with the revoked name/actor pair is then created. Passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/keys.rs",
+              "lines": {
+                "start": 2707,
+                "end": 2745
+              },
+              "commit": "f499a0170f49b58af96b8e765d4142539627957e"
+            }
+          },
+          "recorded_at": "2026-11-21T21:20:59.704935576Z",
+          "seal": {
+            "by": "server",
+            "mac": "3f72d4d08559568c504d22244437fc725bfc757b432d5b439a460604780ad018"
+          }
+        },
+        {
+          "id": "EVD-0336",
+          "kind": "inspection",
+          "locator": "src/store/keys.rs:2917",
+          "summary": "A test calls grant_target with the key's immutable id (by_id.id), showing selection by immutable id; the resolver doc comment (src/store/keys.rs:1107-1108) says an exact id resolves before an unambiguous active name and an actor disambiguates a name.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/keys.rs",
+              "lines": {
+                "start": 2910,
+                "end": 2920
+              },
+              "commit": "f499a0170f49b58af96b8e765d4142539627957e"
+            }
+          },
+          "recorded_at": "2026-11-21T21:20:59.732128103Z",
+          "seal": {
+            "by": "server",
+            "mac": "695f2fdd255649efc5a319c8e8770ee6b061d0eda7a801628cb9fc2e7aaf5260"
+          }
         }
       ],
       "verdicts": [
@@ -13154,13 +13346,27 @@
             "by": "server",
             "mac": "354c62d969f84bea8359b86d36f4e0361043fdde1b862c268d8a21281b212c88"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "A passing test creates two live keys sharing a name with different actors, shows the bare name is refused as ambiguous for revoke, grant and ungrant, and revokes by NAME with an actor; another test grants by immutable id. That covers every selector form and the shared-name rule.",
+          "auditor": "claude-opus-5-5",
+          "evidence_ids": [
+            "EVD-0335",
+            "EVD-0336"
+          ],
+          "recorded_at": "2026-11-21T21:21:11.110568023Z",
+          "seal": {
+            "by": "server",
+            "mac": "6e81f169a0944c75b319f909febfe50ad5ff7202142574bd485e540cefa08671"
+          }
         }
       ],
       "created_at": "2026-11-21T19:07:06.412184286Z",
-      "updated_at": "2026-11-21T19:09:35.695962408Z",
+      "updated_at": "2026-11-21T21:21:11.110568023Z",
       "seal": {
         "by": "server",
-        "mac": "a845df78d6e79409a9183d70b4c3f0b222fd932b59d85cc0e1d207447ceee50f"
+        "mac": "f2a6d83f063009e45860e8d3f1a11a3b26132a883de9f2bd00a43251b203918c"
       }
     },
     {
@@ -13795,7 +14001,8 @@
       ],
       "tags": [
         "baseline-2026-11-21",
-        "area:readme-a"
+        "area:readme-a",
+        "issue:891"
       ],
       "status": {
         "state": "active"
@@ -13840,10 +14047,10 @@
         }
       ],
       "created_at": "2026-11-21T19:07:06.412184286Z",
-      "updated_at": "2026-11-21T19:09:59.340963818Z",
+      "updated_at": "2026-11-21T19:59:11.484044891Z",
       "seal": {
         "by": "server",
-        "mac": "eeb6357d162d59ece2aa2c1b314b3ab4c3d5056efc39c3ef661f136082df18c8"
+        "mac": "23da4ab1f7a484640be3cbc4825af500be6283f2b756ac41ef00699e19240bcf"
       }
     },
     {
@@ -14927,7 +15134,8 @@
       ],
       "tags": [
         "baseline-2026-11-21",
-        "area:readme-b"
+        "area:readme-b",
+        "issue:891"
       ],
       "status": {
         "state": "active"
@@ -14972,10 +15180,10 @@
         }
       ],
       "created_at": "2026-11-21T19:07:17.608189865Z",
-      "updated_at": "2026-11-21T19:10:10.114955483Z",
+      "updated_at": "2026-11-21T20:02:54.689347162Z",
       "seal": {
         "by": "server",
-        "mac": "41107a23967e9289a29640bcaa606d756038898158744d1aa7020e8a7c32af64"
+        "mac": "9ab1c1511235b254384ce4b216e706598994eaba1d98b0463e70be7b7367bb3e"
       }
     },
     {
@@ -15002,7 +15210,8 @@
       ],
       "tags": [
         "baseline-2026-11-21",
-        "area:readme-b"
+        "area:readme-b",
+        "issue:891"
       ],
       "status": {
         "state": "active"
@@ -15047,10 +15256,10 @@
         }
       ],
       "created_at": "2026-11-21T19:07:17.608189865Z",
-      "updated_at": "2026-11-21T19:10:10.208383737Z",
+      "updated_at": "2026-11-21T20:02:54.712470287Z",
       "seal": {
         "by": "server",
-        "mac": "585d07cd4d3bfe10ea4e0939cf93eaf79bd43e3e18c3052c12663b7f9dee8da9"
+        "mac": "75cf53fabfdd08c0d0f3d49f57588a34c442e577e0c7927f37e9930bc2f8df8a"
       }
     },
     {
@@ -15077,7 +15286,8 @@
       ],
       "tags": [
         "baseline-2026-11-21",
-        "area:readme-b"
+        "area:readme-b",
+        "issue:891"
       ],
       "status": {
         "state": "active"
@@ -15122,10 +15332,10 @@
         }
       ],
       "created_at": "2026-11-21T19:07:17.608189865Z",
-      "updated_at": "2026-11-21T19:10:10.231055013Z",
+      "updated_at": "2026-11-21T20:02:54.734721428Z",
       "seal": {
         "by": "server",
-        "mac": "1e82c40ba09d0e0843a028630adfac0886fa5c1f0dc313280b235b69c14cafc6"
+        "mac": "3d3190e35056f7b1c0594eaa0a4fbbc23f0c18dc5614104ca9cb3de075403e7e"
       }
     },
     {
@@ -15230,7 +15440,8 @@
       ],
       "tags": [
         "baseline-2026-11-21",
-        "area:readme-b"
+        "area:readme-b",
+        "issue:891"
       ],
       "status": {
         "state": "active"
@@ -15275,10 +15486,10 @@
         }
       ],
       "created_at": "2026-11-21T19:07:17.608189865Z",
-      "updated_at": "2026-11-21T19:10:10.274968230Z",
+      "updated_at": "2026-11-21T20:03:45.161458926Z",
       "seal": {
         "by": "server",
-        "mac": "03f8d274dce299c00379d0ae94874cc48be9f8443bd8009c8d3fe06aadb25f02"
+        "mac": "1733f87f90585fdc209ef37887f9fc147ee635504dbdd95b6ddc72a6a7b924cd"
       }
     },
     {
@@ -15757,7 +15968,8 @@
       ],
       "tags": [
         "baseline-2026-11-21",
-        "area:readme-b"
+        "area:readme-b",
+        "issue:891"
       ],
       "status": {
         "state": "active"
@@ -15802,10 +16014,10 @@
         }
       ],
       "created_at": "2026-11-21T19:07:17.608189865Z",
-      "updated_at": "2026-11-21T19:10:10.419933741Z",
+      "updated_at": "2026-11-21T20:05:30.149774463Z",
       "seal": {
         "by": "server",
-        "mac": "bd32a720172bd84c6488b0cd8f807af64d6e454242a2709065af85a5f619ef9f"
+        "mac": "dbf045e5225fdd12a190d82cf8cc583dcb196bf7f82d610a7d8039154e886e8c"
       }
     },
     {
@@ -16288,7 +16500,9 @@
         "area:readme-b"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "Misstated: the auditor read README.md:491-493 \"one that gets no edit within 24 hours is discarded\" as \"idle for 24 hours\". The natural reading, matching the design spec (2026-10-26 design :633), the M8 plan and the open_changeset description, is \"still empty after 24 hours\". Docs and code agree. Replaced by a precisely worded claim. The README wording is to be clarified under issue #891. Triage decision by pgrace, 2026-11-21.",
+        "retired_at": "2026-11-21T20:00:50.336603595Z"
       },
       "evidence": [
         {
@@ -16330,10 +16544,10 @@
         }
       ],
       "created_at": "2026-11-21T19:07:17.608189865Z",
-      "updated_at": "2026-11-21T19:10:10.560674745Z",
+      "updated_at": "2026-11-21T20:00:50.336603595Z",
       "seal": {
         "by": "server",
-        "mac": "e8caf24a2c60691b7a8cabab065a159f3c54b92713e4e404294a98018cec0111"
+        "mac": "c63dd25d336ac0397d3a19a75b9d8a7fed6365881bfd97e82058225bd8bb242c"
       }
     },
     {
@@ -16662,7 +16876,8 @@
       ],
       "tags": [
         "baseline-2026-11-21",
-        "area:readme-b"
+        "area:readme-b",
+        "issue:891"
       ],
       "status": {
         "state": "active"
@@ -16707,10 +16922,10 @@
         }
       ],
       "created_at": "2026-11-21T19:07:17.608189865Z",
-      "updated_at": "2026-11-21T19:10:10.664935581Z",
+      "updated_at": "2026-11-21T20:06:22.198566614Z",
       "seal": {
         "by": "server",
-        "mac": "1859d7aa7a8509b813b1f0b36530871cfc606854db6a8d358debedfcb19b0775"
+        "mac": "857f4a482eeed7e1272989a6505cdf5cd61c98e77100fd41dec76bdfaf954e80"
       }
     },
     {
@@ -20077,7 +20292,8 @@
       ],
       "tags": [
         "baseline-2026-11-21",
-        "area:ops-1"
+        "area:ops-1",
+        "issue:891"
       ],
       "status": {
         "state": "active"
@@ -20122,10 +20338,10 @@
         }
       ],
       "created_at": "2026-11-21T19:07:50.360239770Z",
-      "updated_at": "2026-11-21T19:12:15.194098167Z",
+      "updated_at": "2026-11-21T20:08:29.914730680Z",
       "seal": {
         "by": "server",
-        "mac": "c8fca25b985582e0bda94e532396c510ebe84a821b7b526a14c44a0d5cf9bb79"
+        "mac": "8b2b340895a76e11e0b5ac7148d77941d34e6a385989ed21e962ec67ed859774"
       }
     },
     {
@@ -20153,7 +20369,8 @@
       ],
       "tags": [
         "baseline-2026-11-21",
-        "area:ops-1"
+        "area:ops-1",
+        "issue:891"
       ],
       "status": {
         "state": "active"
@@ -20198,10 +20415,10 @@
         }
       ],
       "created_at": "2026-11-21T19:07:50.360239770Z",
-      "updated_at": "2026-11-21T19:12:15.213818883Z",
+      "updated_at": "2026-11-21T20:08:29.941537804Z",
       "seal": {
         "by": "server",
-        "mac": "56431f39b7f5b84ce0291e39a793bde9638e52c35dc9bde2cfd748c19ae1460e"
+        "mac": "2c76fd78af02c13dcf9048e29e82546c0c7fc5c07984470d20c9063249de0c28"
       }
     },
     {
@@ -20306,7 +20523,8 @@
       ],
       "tags": [
         "baseline-2026-11-21",
-        "area:ops-1"
+        "area:ops-1",
+        "issue:890"
       ],
       "status": {
         "state": "active"
@@ -20351,10 +20569,10 @@
         }
       ],
       "created_at": "2026-11-21T19:07:50.360239770Z",
-      "updated_at": "2026-11-21T19:12:15.249554519Z",
+      "updated_at": "2026-11-21T19:42:27.999947518Z",
       "seal": {
         "by": "server",
-        "mac": "ea89873e6da49fbeb5f918602d700fee57d5bdb7a4414b23ec7edd59510b7bb9"
+        "mac": "06599cbfc9ec2379037f3559269404eb95654e8420c92297a7303ed430d02fec"
       }
     },
     {
@@ -21474,7 +21692,8 @@
       ],
       "tags": [
         "baseline-2026-11-21",
-        "area:ops-1"
+        "area:ops-1",
+        "issue:891"
       ],
       "status": {
         "state": "active"
@@ -21519,10 +21738,10 @@
         }
       ],
       "created_at": "2026-11-21T19:07:50.360239770Z",
-      "updated_at": "2026-11-21T19:12:15.528718313Z",
+      "updated_at": "2026-11-21T21:10:10.132261139Z",
       "seal": {
         "by": "server",
-        "mac": "4899f95d000dccaa513ae3b870c455ca3c9a831fa54881c38d8be7a9f8840bd8"
+        "mac": "319a47760a9c790179681f8aab4824e824b7389148c691dd3653a7f362fd0041"
       }
     },
     {
@@ -21549,7 +21768,8 @@
       ],
       "tags": [
         "baseline-2026-11-21",
-        "area:ops-1"
+        "area:ops-1",
+        "issue:891"
       ],
       "status": {
         "state": "active"
@@ -21594,10 +21814,10 @@
         }
       ],
       "created_at": "2026-11-21T19:07:50.360239770Z",
-      "updated_at": "2026-11-21T19:12:15.548692069Z",
+      "updated_at": "2026-11-21T21:16:35.958846852Z",
       "seal": {
         "by": "server",
-        "mac": "dd8ec9a9c95f7e3d53e34fc10609b8d83590a660ae1c3b24998d54f23af335a8"
+        "mac": "745a5efc22c27877d116159dd8efe7775c0c8fd1f9ba4a07ce1a4c5d1513c704"
       }
     },
     {
@@ -23473,6 +23693,107 @@
       "seal": {
         "by": "server",
         "mac": "ea6d0ed33828697f75b5a653fa7f220eadb0d94588e743e3a1a129d733ca3411"
+      }
+    },
+    {
+      "id": "CLM-0305",
+      "statement": "An open changeset that is empty and whose last change is more than 24 hours old is discarded by housekeeping; an open changeset holding edits is never discarded by it, however long it sits idle.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "README.md Changesets (replaces retired CLM-0211, which misread the sentence)",
+      "source_anchor": {
+        "path": "README.md",
+        "lines": {
+          "start": 489,
+          "end": 493
+        },
+        "commit": "f499a0170f49b58af96b8e765d4142539627957e"
+      },
+      "derived_from": [
+        "CLM-0003"
+      ],
+      "artifacts": [
+        "README.md",
+        "src/store/changesets.rs",
+        "src/housekeeping.rs"
+      ],
+      "tags": [
+        "baseline-2026-11-21",
+        "area:readme-b",
+        "issue:891"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0330",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib store::changesets::tests::prune_discards_only_empty_changesets_idle_past_the_cutoff (1 passed, against a testcontainer Postgres, at f499a01)",
+          "summary": "The test opens three changesets: an empty one 25h old, an empty one created now, and one 25h old with an entry put 25h ago. It then runs prune_empty with a cutoff of now-24h. It asserts that exactly 1 is pruned: the old empty one becomes Discarded, while the new empty one and the old one holding an edit stay Open. Ran and passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/changesets.rs",
+              "lines": {
+                "start": 1041,
+                "end": 1070
+              },
+              "commit": "f499a0170f49b58af96b8e765d4142539627957e"
+            }
+          },
+          "recorded_at": "2026-11-21T20:01:06.309167515Z",
+          "seal": {
+            "by": "server",
+            "mac": "538afd3c3651e954a42f40ebfd7ac902ff6b574b3fc0d68b1d61a0dde3f70cca"
+          }
+        },
+        {
+          "id": "EVD-0331",
+          "kind": "inspection",
+          "locator": "src/store/changesets.rs:706-725; src/housekeeping.rs:469-482",
+          "summary": "prune_empty's UPDATE discards only rows with state 'open', updated_at < cutoff, and NOT EXISTS changeset_entries. Housekeeping calls it with cutoff = now - EMPTY_CHANGESET_HOURS (24). It is the only time-based changeset discard in housekeeping; user deletion's discard is a separate path, not idle-based.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/changesets.rs",
+              "lines": {
+                "start": 706,
+                "end": 725
+              },
+              "commit": "f499a0170f49b58af96b8e765d4142539627957e"
+            }
+          },
+          "recorded_at": "2026-11-21T20:01:06.371273883Z",
+          "seal": {
+            "by": "server",
+            "mac": "6b9dd12ea83e18a5cb5c664fd552b535c67bf95f8dbe87017e8179891bcaef80"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The executed test pins both halves of the claim: an old empty changeset is discarded, while a new empty one and an old one holding an edit stay open. The SQL makes \"empty\" (no changeset_entries) a condition of the prune. The README's \"no edit within 24 hours\" means this when read as \"never written to\"; the wording is clarified under #891.",
+          "auditor": "claude-opus-5-5",
+          "evidence_ids": [
+            "EVD-0330",
+            "EVD-0331"
+          ],
+          "recorded_at": "2026-11-21T20:01:15.562501152Z",
+          "seal": {
+            "by": "server",
+            "mac": "e13b7654b719a24ad41b2789887422418daefc1ae8b5f284bda2a32034a9f32c"
+          }
+        }
+      ],
+      "created_at": "2026-11-21T20:00:50.368228186Z",
+      "updated_at": "2026-11-21T20:01:15.562501152Z",
+      "seal": {
+        "by": "server",
+        "mac": "e7900b2953b846b198c2824f040223500ee58589ecdcd20f0ef8c24875b9524b"
       }
     }
   ]
