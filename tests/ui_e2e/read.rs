@@ -713,6 +713,42 @@ async fn an_account_without_an_email_shows_no_null() {
     .await;
 }
 
+/// `[data-theme on <html>, the light theme-color meta's colour]` now.
+const THEME_STATE: &str = "() => [document.documentElement.dataset.theme ?? null, \
+    document.querySelector('meta[name=theme-color][media*=light]').content]";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_theme_choice_overrides_the_system_and_survives_a_reload() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_text("#account-user", "reader");
+        assert_eq!(ui.eval(THEME_STATE, json!(null)), json!([null, "#ffffff"]));
+        ui.click("#theme-dark");
+        // Dark even where the system is light: the system bar follows.
+        assert_eq!(
+            ui.eval(THEME_STATE, json!(null)),
+            json!(["dark", "#191919"])
+        );
+        ui.reload_reader();
+        ui.wait_text("#account-user", "reader");
+        assert_eq!(
+            ui.eval(THEME_STATE, json!(null)),
+            json!(["dark", "#191919"])
+        );
+        assert_eq!(
+            ui.eval(
+                "() => document.querySelector('#theme-dark').getAttribute('aria-pressed')",
+                json!(null)
+            ),
+            json!("true")
+        );
+        ui.click("#theme-system");
+        assert_eq!(ui.eval(THEME_STATE, json!(null)), json!([null, "#ffffff"]));
+    })
+    .await;
+}
+
 /// Tries to write 1 MB into a cache and answers the error's name.
 const PROBE_WRITE: &str = "async () => { try { \
     await (await caches.open('probe')).put('/probe', new Response('y'.repeat(1e6))); return 'written'; \
