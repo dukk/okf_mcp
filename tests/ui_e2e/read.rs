@@ -541,7 +541,7 @@ async fn home_lists_recent_changes_and_search_finds_a_concept() {
     let (server, _) = server().await;
     drive(server.base.clone(), move |ui| {
         signed_in_at_home(ui);
-        ui.wait_text("#recent", "systems/alpha.md");
+        ui.wait_text("#recent", "Alpha");
         // Nothing but the search box is drawn in place of an absent hint.
         let drawn = ui.eval(
             "() => document.querySelector('#screen-home').textContent",
@@ -634,10 +634,87 @@ async fn home_lists_cached_recent_changes_and_viewed_concepts_offline() {
         ui.wait_visible("#recent");
         let offline = ui.go_offline();
         ui.reload_reader();
-        ui.wait_text("#recent", "systems/alpha.md");
+        ui.wait_text("#recent", "Alpha");
         ui.wait_text("#offline-banner", "Offline. Synced");
         ui.wait_text("#offline-list", "Alpha");
         drop(offline);
+    })
+    .await;
+}
+
+/// The group of `#recent` whose heading says `who`, as `[shown, all]`
+/// counts of its documents, or `null` when there is none.
+const GROUP_ROWS: &str = "(who) => { \
+    const group = [...document.querySelectorAll('#recent .group')] \
+        .find(g => g.querySelector('.who').textContent.includes(who)); \
+    if (!group) return null; \
+    const rows = [...group.querySelectorAll('.items .row')]; \
+    return [rows.filter(r => !r.hidden).length, rows.length]; }";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_import_shows_as_one_group_that_expands() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        signed_in_at_home(ui);
+        ui.wait_text("#recent", "imported 6 pages");
+        // One group for the whole import, three documents shown.
+        assert_eq!(ui.eval(GROUP_ROWS, json!("imported 6 pages")), json!([3, 6]));
+        assert_eq!(
+            ui.eval(
+                "() => [...document.querySelectorAll('#recent .who')].filter(w => w.textContent.includes('imported')).length",
+                json!(null)
+            ),
+            json!(1)
+        );
+        ui.wait_text("#recent .group-more", "+3 more");
+        ui.click("#recent .group-more");
+        assert_eq!(ui.eval(GROUP_ROWS, json!("imported 6 pages")), json!([6, 6]));
+        assert!(!ui.present("#recent .group-more"));
+        // A chip filters: the fixture deletes nothing.
+        ui.click("[data-filter=deleted]");
+        ui.wait_visible("#recent-empty");
+        ui.click("[data-filter=all]");
+        ui.wait_text("#recent", "imported 6 pages");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn show_older_reads_the_next_page_of_changes() {
+    // 60 notes and a root index: more changes than one page of 50.
+    let server = server_with_catalog("many", &notes(60, "Body.")).await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/t/many", EMAIL, PASSWORD);
+        ui.open_reader("/");
+        ui.wait_visible("#recent-older");
+        let rows = "() => document.querySelectorAll('#recent .row, #recent a.group-head').length";
+        let first = ui.eval(rows, json!(null));
+        ui.click("#recent-older");
+        ui.wait_hidden("#recent-older");
+        let all = ui.eval(rows, json!(null));
+        assert!(all.as_u64() > first.as_u64(), "{first} then {all}");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jump_back_in_lists_the_concepts_read_last() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        signed_in_at_home(ui);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        ui.open_reader("/");
+        ui.wait_text("#jump-back", "Alpha");
+        ui.wait_text("#jump-back", "read ");
+        // Online, the offline list is not drawn: Jump back in stands for it.
+        assert!(!ui.present("#offline-list"));
+        // A search box that counts the catalog's pages.
+        ui.poll_eval(
+            "() => document.querySelector('#search-input').placeholder.startsWith('Search ') \
+             && document.querySelector('#search-input').placeholder.endsWith('pages')",
+        );
     })
     .await;
 }
@@ -651,7 +728,7 @@ const HOME_HINT: &str = "async ({ ios, standalone }) => { \
     define('standalone', standalone); \
     const home = await import('/read/js/screens/home.js'); \
     const view = document.createElement('section'); \
-    await home.render(view, { route: { catalog: 'main' }, live: () => true, freshness: () => {} }); \
+    await home.render(view, { route: { catalog: 'main' }, state: { session: null }, live: () => true, freshness: () => {}, summary: async () => null }); \
     return view.querySelector('#install-hint') !== null; }";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -672,7 +749,7 @@ async fn the_install_hint_shows_on_an_iphone_browser_until_dismissed() {
             "async () => { \
              const home = await import('/read/js/screens/home.js'); \
              const view = document.createElement('section'); \
-             await home.render(view, { route: { catalog: 'main' }, live: () => true, freshness: () => {} }); \
+             await home.render(view, { route: { catalog: 'main' }, state: { session: null }, live: () => true, freshness: () => {}, summary: async () => null }); \
              view.querySelector('#install-hint button').click(); \
              return [view.querySelector('#install-hint') === null, localStorage.getItem('okf.read.install-hint')]; }",
             json!(null),
@@ -1456,7 +1533,7 @@ async fn a_late_refusal_from_home_evicts_the_catalog_it_asked_about() {
         ui.wait_text("#concept-title", "Notes");
         // Home for main, whose recent changes wait in the page.
         ui.open_reader("/c");
-        ui.hold_next("GET", "/catalogs/main/recent-changes?limit=20");
+        ui.hold_next("GET", "/catalogs/main/recent-changes?limit=50");
         ui.click("[data-catalog=main]");
         ui.wait_visible("#screen-home");
         wait_held(ui);
