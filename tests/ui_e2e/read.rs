@@ -807,20 +807,6 @@ async fn with_storage_full_the_reader_boots_and_still_deletes_its_copies() {
         ui.wait_worker();
         ui.open_reader("/v/main/systems/alpha.md");
         ui.wait_text("#body", "marmalade");
-        // The owner record goes, and the worker is replaced by a new one
-        // (unregister, reload) that holds no owner in memory: its first
-        // cacheable answer must make this account the owner, which means
-        // writing the record, and under a full quota it cannot. (Stopping
-        // the worker through DevTools leaves it unable to restart here.)
-        ui.eval(
-            "async () => { await caches.delete('read-owner'); \
-             await (await navigator.serviceWorker.getRegistration('/read/')).unregister(); return true; }",
-            json!(null),
-        );
-        // `/me` reads only the session, which the worker never keeps.
-        ui.open_reader("/me");
-        ui.reload_reader();
-        ui.wait_worker();
         // A quota below what is used stays exceeded when the takeover
         // deletes the old copies, so no write of any size succeeds.
         let full = ui.limit_storage_to(1.0);
@@ -828,6 +814,13 @@ async fn with_storage_full_the_reader_boots_and_still_deletes_its_copies() {
             ui.eval(PROBE_WRITE, json!(null)),
             json!("QuotaExceededError")
         );
+        // "Delete offline copies" leaves no owner, so the next answer for
+        // this account (any tagged one, the session included) must make it
+        // the owner, which means writing the record, and under a full quota
+        // it cannot.
+        ui.open_reader("/me");
+        ui.click("#delete-offline");
+        ui.wait_visible("#offline-deleted");
         // A cacheable read still answers online, and keeps nothing.
         ui.open_reader("/v/main/systems/beta.md");
         ui.wait_text("#body", "Two settings");
@@ -859,19 +852,15 @@ async fn a_failed_owner_record_write_keeps_no_copy_of_the_new_owners_reads() {
         ui.wait_worker();
         ui.open_reader("/v/main/systems/alpha.md");
         ui.wait_text("#body", "marmalade");
-        // A new worker with the owner record gone: its first cacheable
-        // answer is a takeover, which must write the record.
-        ui.eval(
-            "async () => { await caches.delete('read-owner'); \
-             await (await navigator.serviceWorker.getRegistration('/read/')).unregister(); return true; }",
-            json!(null),
-        );
-        ui.open_reader("/me");
-        ui.reload_reader();
-        ui.wait_worker();
         // Only the owner record's write is refused; a copy of beta could
         // be written, and must not be kept without an owner to name.
         let refused = ui.refuse_cache_puts_of("__owner");
+        // "Delete offline copies" leaves no owner: the next answer for this
+        // account (any tagged one, the session included) is a takeover,
+        // which must write the record.
+        ui.open_reader("/me");
+        ui.click("#delete-offline");
+        ui.wait_visible("#offline-deleted");
         ui.open_reader("/v/main/systems/beta.md");
         ui.wait_text("#body", "Two settings");
         let counts = ui.eval(CACHE_COUNTS, json!(null));
@@ -1042,11 +1031,18 @@ fn main_files_without(path: &str) -> okf_mcp::archive::Files {
     entries
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn signing_in_as_someone_else_in_another_tab_never_mixes_their_copies() {
+/// The account the page's owner record (`read-owner`) names, or null.
+const OWNER_TAG: &str =
+    "async () => { const r = await (await caches.open('read-owner')).match('/read/__owner'); \
+    return r ? (await r.json()).tag : null; }";
+
+const SECOND_EMAIL: &str = "second@example.com";
+
+/// [`server`] with a second user, `second`, who can read `main`.
+async fn server_with_a_second_reader() -> TestServer {
     let (server, _) = server().await;
     server
-        .user_with_password("second", "second@example.com", PASSWORD)
+        .user_with_password("second", SECOND_EMAIL, PASSWORD)
         .await;
     crate::support::server::applied(&server.app, async {
         ceiling::entitle(
@@ -1063,45 +1059,104 @@ async fn signing_in_as_someone_else_in_another_tab_never_mixes_their_copies() {
         .expect("entitle");
     })
     .await;
+    server
+}
+
+/// Signs in as `second` in another tab (the same cookies), at the console's
+/// sign-in page, so none of its answers go through the reader's worker; the
+/// reader tab stays open.
+fn sign_in_second_in_another_tab(ui: &Ui) {
+    ui.in_second_tab(|tab| {
+        tab.goto(
+            &format!("{}/signin", ui.base),
+            rustwright::GotoOptions::default(),
+        )
+        .expect("open the sign-in page");
+        let options = rustwright::ActionOptions::default;
+        tab.fill("#signin-email", SECOND_EMAIL, options())
+            .expect("email");
+        tab.fill("#signin-password", PASSWORD, options())
+            .expect("password");
+        tab.click("#signin-submit", options()).expect("submit");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !tab.url().contains("/ui/") {
+            assert!(
+                Instant::now() < deadline,
+                "the second sign-in never finished"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    });
+}
+
+/// Reloads the reader on the Account screen, so boot's session check is the
+/// only read, and waits until it names `second`.
+fn only_the_session_check_as_second(ui: &Ui) {
+    ui.open_reader("/me");
+    ui.reload_reader();
+    ui.wait_text("#account-user", "second");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn signing_in_as_someone_else_in_another_tab_never_mixes_their_copies() {
+    let server = server_with_a_second_reader().await;
     drive(server.base.clone(), move |ui| {
         ui.sign_in_reader("/me", EMAIL, PASSWORD);
         ui.wait_worker();
         ui.open_reader("/v/main/systems/alpha.md");
         ui.wait_text("#body", "marmalade");
-        let first = ui.eval(ACCOUNT_TAG, json!(null));
-        assert!(content_paths(ui).iter().any(|path| path.ends_with("/alpha.md")));
-        // Another tab signs in as `second` (the same cookies); this reader
-        // tab stays open.
-        ui.in_second_tab(|tab| {
-            tab.goto(&format!("{}/signin", ui.base), rustwright::GotoOptions::default())
-                .expect("open the sign-in page");
-            let options = rustwright::ActionOptions::default;
-            tab.fill("#signin-email", "second@example.com", options())
-                .expect("email");
-            tab.fill("#signin-password", PASSWORD, options())
-                .expect("password");
-            tab.click("#signin-submit", options()).expect("submit");
-            let deadline = Instant::now() + Duration::from_secs(10);
-            while !tab.url().contains("/ui/") {
-                assert!(Instant::now() < deadline, "the second sign-in never finished");
-                std::thread::sleep(Duration::from_millis(50));
-            }
-        });
+        let first = ui.eval(OWNER_TAG, json!(null));
+        assert!(first.is_string(), "{first}");
+        assert!(content_paths(ui)
+            .iter()
+            .any(|path| path.ends_with("/alpha.md")));
+        sign_in_second_in_another_tab(ui);
+        // No concept is read as `second` before the copies are checked: the
+        // session check alone hands them over, wiping the first account's.
+        only_the_session_check_as_second(ui);
+        let paths = content_paths(ui);
+        assert!(
+            paths.iter().all(|path| !path.ends_with("/alpha.md")),
+            "{paths:?}"
+        );
+        let recorded = ui.eval(OWNER_TAG, json!(null));
         let second = ui.eval(ACCOUNT_TAG, json!(null));
-        assert!(second.is_string() && first.is_string(), "{first} {second}");
+        assert!(second.is_string(), "{second}");
         assert_ne!(first, second, "the tag names the account");
-        // The open tab reads beta, now as `second`: the worker wipes the
-        // first account's copies before keeping this one.
+        assert_eq!(recorded, second);
+        // The new owner's own reads are kept.
         ui.open_reader("/v/main/systems/beta.md");
         ui.wait_text("#concept-title", "Beta");
         let paths = content_paths(ui);
-        assert!(paths.iter().all(|path| !path.ends_with("/alpha.md")), "{paths:?}");
-        assert!(paths.iter().any(|path| path.ends_with("/beta.md")), "{paths:?}");
-        let recorded = ui.eval(
-            "async () => (await (await (await caches.open('read-owner')).match('/read/__owner')).json()).tag",
-            json!(null),
+        assert!(
+            paths.iter().any(|path| path.ends_with("/beta.md")),
+            "{paths:?}"
         );
-        assert_eq!(recorded, second);
+        assert_eq!(ui.eval(OWNER_TAG, json!(null)), second);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_session_check_as_someone_else_alone_hides_the_first_accounts_copies_offline() {
+    let server = server_with_a_second_reader().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        // Recent changes too, so Home offline would draw from a kept listing.
+        ui.open_reader("/");
+        ui.wait_visible("#recent");
+        sign_in_second_in_another_tab(ui);
+        only_the_session_check_as_second(ui);
+        let offline = ui.go_offline();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_visible("#unavailable");
+        ui.open_reader("/");
+        let listed = ui.wait_text("#offline-list", "Nothing yet");
+        assert!(!listed.contains("Alpha"), "{listed}");
+        drop(offline);
     })
     .await;
 }

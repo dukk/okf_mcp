@@ -859,6 +859,14 @@ self.READ_CACHES = Object.freeze({
 > nothing is served and `read-content` and `read-meta` are deleted (best effort); a copy for
 > another account is deleted. Only a checked copy is renewed. Task 5's `offlineDocuments` is
 > corrected to match.
+>
+> **Corrected (issue #858, 2026-11-21).** Any other API read (session, search, whoami) is no
+> longer left to the network: the fetch handler answers it with `passThrough`, which returns the
+> network's answer unchanged and never stores it, but runs a `2xx`'s `X-OKF-Account` through
+> `admit`, under the same ordering rules, before the page gets it. Before, only answers the
+> worker cached decided ownership, so boot's session check as a new account (another tab signed
+> in) left the old account the owner, and offline the worker served it its copies. In the
+> listing below, read the fetch handler's last branches and `passThrough` in `sw.js` as shipped.
 
 ```js
 // The reader's service worker (reader design, "Caching"). Its scope is
@@ -3085,6 +3093,13 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 >   a failed record write from a failed copy write; `a_failed_owner_record_write_keeps_no_copy_of_the_new_owners_reads`
 >   refuses only the record's `Cache.put` (harness `refuse_cache_puts_of`) and fails if the worker
 >   keeps a copy after it.
+>
+> **Corrected (issue #858, 2026-11-21).** The session check now decides ownership too (Task 3), so
+> replacing the worker no longer leaves the takeover to the next concept read: boot's session read
+> takes over first, before the limit or the refusal is set. Both journeys now set
+> `limit_storage_to(1.0)` or `refuse_cache_puts_of("__owner")` first, then click "Delete offline
+> copies" on `#/me`, which leaves no owner (the `*` mark), so the next tagged answer is the takeover
+> under test. They no longer unregister the worker.
 
 **Files:**
 - Modify: `tests/ui_e2e/read.rs`

@@ -2,8 +2,10 @@
 // /read/, so it never controls a console page. The shell is precached and
 // served cache-first; concept and document reads (read-content, capped) and
 // listings (read-meta) are network-first with the cache as the offline
-// fallback. Only 2xx answers are cached. The worker never makes an error
-// answer of its own; the page decides what every refusal means.
+// fallback. Only 2xx answers are cached. Every other API read passes
+// through uncached, but a 2xx's account tag still decides who owns the
+// copies, as a cached answer's does. The worker never makes an error answer
+// of its own; the page decides what every refusal means.
 importScripts('/read/js/names.js');
 
 const VERSION = '__SHELL_VERSION__';
@@ -122,10 +124,11 @@ self.addEventListener('fetch', event => {
         event.respondWith(networkFirst(request, READ_CACHES.content, true));
     } else if (META.some(pattern => pattern.test(url.pathname))) {
         event.respondWith(networkFirst(request, READ_CACHES.meta, false));
-    } else if (!url.pathname.startsWith('/api/')) {
+    } else if (url.pathname.startsWith('/api/')) {
+        event.respondWith(passThrough(request));
+    } else {
         event.respondWith(fromShell(request, request));
     }
-    // Any other API read (session, search, me) goes to the network as is.
 });
 
 // The shell's copy of `key`, else the network's answer to `request`.
@@ -168,6 +171,29 @@ async function networkFirst(request, cacheName, capped) {
     return response;
 }
 
+// The network's answer to any other API read (session, search, whoami),
+// unchanged and never stored. A 2xx's account tag still goes through `admit`,
+// with its ordering rules: an answer for another account, to a request that
+// started after the current owner took over (or after a wipe), deletes the
+// old copies and takes over, so a session check alone hands the device to a
+// new account. The page gets the answer once that decision is made: when
+// boot's session check resolves, the old owner's copies are gone for the
+// page's own reads of Cache Storage too (cache.js, `offlineDocuments`). The
+// decision waits in turn even for the current owner's answer: `takeOver`
+// names the new owner before it deletes, so an answer for that owner that
+// skipped the queue could reach the page mid-wipe. Only a takeover takes
+// long, once per account change; an answer without a tag, or not a 2xx,
+// goes straight back. Either way nothing changes unless the tag is new. The
+// worker's own offline reads cannot overtake a takeover either: `ownedCopy`
+// decides in turn (`currentOwner`), after every decision queued before it.
+async function passThrough(request) {
+    const startedAt = now();
+    const response = await fetch(request);
+    const tag = response.ok ? response.headers.get('X-OKF-Account') : null;
+    if (tag) await admit(tag, startedAt);
+    return response;
+}
+
 async function loadOwner() {
     try {
         const stored = await (await caches.open(READ_CACHES.owner)).match(OWNER_KEY);
@@ -180,7 +206,8 @@ async function loadOwner() {
 
 // The epoch under which an answer for account `tag`, to a request that
 // started at `startedAt`, may be cached, or null when it may not. The first
-// answer for a new account makes it the owner (`takeOver`). An answer for
+// answer for a new account, cached or passed through (`passThrough`), makes
+// it the owner (`takeOver`). An answer for
 // another account to a request from before the current owner took over is
 // never kept, so a late answer for the old account cannot take the copies
 // back.
