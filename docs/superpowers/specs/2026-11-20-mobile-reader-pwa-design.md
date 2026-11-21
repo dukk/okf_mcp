@@ -20,7 +20,7 @@ the web console, and reuses the console's session sign-in.
 | Screens | Catalog picker, home (search and recent changes), search results, concept view with backlinks, tree browse, account. |
 | Offline search | None. Offline, search says it needs a connection; home lists what is available offline. |
 | Styling | Independent of the console: Pico CSS plus the reader's own `read.css` and tokens. The console's `styles.css` is not loaded. System fonts. |
-| Cache cap | 200 concepts, least recently viewed evicted first. |
+| Cache cap | 200 entries in `read-content`, least recently viewed evicted first (a concept kept in both short and whole form counts twice; see Caching). |
 
 ## Out of scope (MVP)
 
@@ -261,7 +261,7 @@ Browser journeys (`tests/ui_e2e/read.rs`, rustwright headless Chromium):
 1. Signed out, `/read/` goes to sign-in and returns to the same route.
 2. Catalog picker, tree drill-down, concept, an internal link, "Linked from".
 3. Search renders results; offline, search says it needs a connection.
-4. View three concepts, go offline, reload: all three render with the synced
+4. View two concepts, go offline, reload: both render with the synced
    note; an unviewed concept shows "Not available offline".
 5. After viewing 201 concepts, the least recently viewed one is no longer
    cached and a re-viewed early one still is (no test hook: the journey
