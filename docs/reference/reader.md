@@ -150,10 +150,12 @@ worker deletes the shell caches of other versions.
   blocks on it, but an answer that worker was already fetching is not stopped.
 - **Cache Storage can refuse every delete.** If it refuses to delete both the
   old copies and the old owner record during a takeover, the worker keeps
-  nothing new and serves nothing until it restarts or a later answer's takeover succeeds; then it finds the old
-  account's consistent record and copies and serves them offline until the
-  next answer names the signed-in account and wipes them. That is the same
-  exposure as signing in as someone else and going offline before any answer.
+  nothing new and serves nothing. A later answer retries the takeover, and
+  once one succeeds it deletes the old copies and records the new owner, so
+  the old account's copies are gone. Only a worker restart while the old
+  record and copies are still on disk finds them again, consistent, and serves
+  them offline, until a takeover succeeds. That is the same exposure as signing
+  in as someone else and going offline before any answer.
 
 ## For maintainers
 
