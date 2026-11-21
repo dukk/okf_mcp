@@ -476,8 +476,9 @@ async fn a_log_in_recent_changes_opens_as_a_document() {
 async fn home_and_search_without_a_connection() {
     let (server, _) = server().await;
     drive(server.base.clone(), move |ui| {
-        // Opening the tree makes `main` the remembered catalog.
-        ui.sign_in_reader("/t/main", EMAIL, PASSWORD);
+        // Opening the search screen makes `main` the remembered catalog
+        // without reading (and so caching) anything.
+        ui.sign_in_reader("/s/main", EMAIL, PASSWORD);
         ui.wait_worker();
         // Home was never read online, so there are no recent changes to
         // show and nothing viewed: the list says so.
@@ -808,6 +809,10 @@ async fn with_storage_full_the_reader_boots_and_still_deletes_its_copies() {
             json!(null),
         );
         let full = ui.limit_storage();
+        assert_eq!(
+            ui.eval(PROBE_WRITE, json!(null)),
+            json!("QuotaExceededError")
+        );
         ui.open_reader("/me");
         ui.reload_reader();
         ui.wait_visible("#account-user");
@@ -872,10 +877,14 @@ async fn with_cache_storage_denied_the_reader_still_reads_online() {
         ui.click("#delete-offline");
         ui.wait_visible("#offline-deleted");
         drop(denied);
+        // A fresh document, without the page-side override.
+        ui.reload_reader();
         let kept = ui.eval(
             "async () => (await (await caches.open('read-content')).keys()).map(k => new URL(k.url).pathname)",
             json!(null),
         );
+        // The delete above could not run while denied, so an empty cache
+        // means the denied worker never kept a copy.
         assert_eq!(kept, json!([]), "the denied worker kept copies");
     })
     .await;

@@ -3063,14 +3063,14 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 > **Corrected (issue #817, 2026-11-20).** Task 10 shipped in `tests/ui_e2e/read.rs` and
 > `tests/ui_e2e/harness.rs`; read those, not the listings below, where they differ:
 >
-> - `limit_storage` and `deny_cache_storage` work as listed. Each journey now proves its override
+> - `limit_storage` and `deny_cache_storage` work as listed. Each storage-full and denied journey now proves its override
 >   first (a 1 MB `cache.put` rejects with `QuotaExceededError`; `caches.open` rejects with
 >   `SecurityError`), and the denied journey checks that the worker kept nothing while denied.
 > - `go_offline`'s guard now sets `offline: false` on every target it cut off before the connection
 >   closes (a `Drop` impl on `DevTools`), instead of relying on the close.
 > - `open_reader` waits up to 2 s for `location.hash` to settle: a reload sent right after a
 >   hash-only `goto` reloaded the previous route (seen as `#/me` instead of the concept).
-> - The journeys start from `sign_in_reader("/t/main", ...)` (the picker does not need a click), and
+> - The journeys start from `sign_in_reader` at `/me`, a concept link or `/t/main` (the picker needs no click), and
 >   the first-visit journey calls `wait_worker` before going offline.
 > - Added `coming_back_online_reads_fresh_content_again`, which goes offline, drops the guard and
 >   reads fresh content (the home banner hides again).

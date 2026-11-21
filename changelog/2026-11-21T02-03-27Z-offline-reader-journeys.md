@@ -10,7 +10,7 @@ Harness (`tests/ui_e2e/harness.rs`):
 
 - `limit_storage` (`Storage.overrideQuotaForOrigin`) and `deny_cache_storage` (a script on every
   new document plus `Runtime.evaluate` in the page and service-worker targets). Both worked as
-  the plan assumed; each journey asserts that the override refuses writes.
+  the plan assumed; the storage-full and denied journeys assert that the override refuses writes.
 - `go_offline`'s guard now restores `offline: false` on every target it changed when dropped.
   `coming_back_online_reads_fresh_content_again` covers it.
 - `open_reader` waits for the hash to settle; a reload straight after a hash-only navigation
