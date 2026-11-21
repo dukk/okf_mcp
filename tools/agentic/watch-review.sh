@@ -45,8 +45,9 @@ head=""
 
 # Exits 5 when the bot cannot review the PR as it stands: GitHub reports it
 # BEHIND or DIRTY (conflicting) against main, or the bot has answered since
-# the watcher started with an "out of date" notice. A failed lookup decides
-# nothing.
+# the watcher started with an "out of date" notice. Returns 1 when a lookup
+# failed: the PR's state is then unknown, so the caller must not re-trigger
+# on this pass.
 exit_if_out_of_date() {
     local merge_state notices
     if merge_state=$(agentic_gh pr view "$pr" -R "$repo" --json mergeStateStatus \
@@ -60,9 +61,13 @@ exit_if_out_of_date() {
         esac
     else
         echo "watch-review.sh: could not read the merge state of PR $pr; retrying" >&2
+        return 1
     fi
     [ "$retriggered" = 1 ] || return 0
-    if notices=$(agentic_api_list "repos/$repo/issues/$pr/comments"); then
+    if ! notices=$(agentic_api_list "repos/$repo/issues/$pr/comments"); then
+        echo "watch-review.sh: could not read the comments on PR $pr; retrying" >&2
+        return 1
+    else
         # shellcheck disable=SC2016 # $started is a jq variable
         notices=$(agentic_jq_bot "$bot" '[.[] | select(.user.login | is_bot)
             | select((.created_at // null) == null or (.created_at | fromdateiso8601) >= $started)
@@ -102,8 +107,9 @@ while :; do
                 "once the gates pass and every thread has a reply"
             exit 4
         fi
-        exit_if_out_of_date
-        if [ "$retriggered" = 0 ]; then
+        if ! exit_if_out_of_date; then
+            : # state unknown: no re-trigger on this pass
+        elif [ "$retriggered" = 0 ]; then
             waited=$(($(agentic_now) - started))
             if ! reactions=$(agentic_api_list "repos/$repo/issues/$pr/reactions"); then
                 echo "watch-review.sh: could not read the reactions on PR $pr; retrying" >&2

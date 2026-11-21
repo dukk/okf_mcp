@@ -405,6 +405,15 @@ test_watch_earlier_rounds_reaction_does_not_delay_retrigger() {
         || die "re-triggered at $(cat "$fx/comment-times" 2>/dev/null), want 1120"
 }
 
+test_watch_merge_state_error_never_retriggers() {
+    new_fixtures; good_pr "$head_a"
+    echo '[]' >"$fx/api/pulls_7_reviews.1.json"
+    touch "$fx/merge-state.fail"
+    run_watch
+    want_rc 2; want_out "could not read the merge state"
+    ! grep -q '^pr comment' "$fx/calls.log" || die "re-triggered with the merge state unknown"
+}
+
 test_watch_exits_5_at_once_when_conflicting() {
     new_fixtures; good_pr "$head_a"
     echo '[]' >"$fx/api/pulls_7_reviews.1.json"

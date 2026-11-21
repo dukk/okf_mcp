@@ -19,4 +19,4 @@
 - `tools/agentic/tests/run.sh`: an earlier round's reaction does not delay
   the re-trigger; `DIRTY` and `BEHIND` exit 5 at once; an "out of date"
   notice after the re-trigger exits 5; the deadline and delay expectations
-  follow the new limits. 75 passed.
+  follow the new limits; a failed merge-state or comments lookup posts no re-trigger on that pass. 76 passed.
