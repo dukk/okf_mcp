@@ -3074,7 +3074,17 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 >   the first-visit journey calls `wait_worker` before going offline.
 > - Added `coming_back_online_reads_fresh_content_again`, which goes offline, drops the guard and
 >   reads fresh content (the home banner hides again).
-> - The 200-cap journey reads n001 again after 198 others (n002..n199), not 199.
+> - The 200-cap journey reads n000 again after n001..n199 and then adds n200, and asserts n000
+>   survives and n001 is evicted (a FIFO cache fails it; n001 re-read, as first written, did not tell
+>   LRU from FIFO).
+> - `with_storage_full_...` replaces the worker (unregister, reload) after deleting `read-owner`, so
+>   its first cacheable read is a takeover that must write the record, under `limit_storage_to(1.0)`
+>   (a quota below usage, so deleting copies does not free room for a write). Stopping workers
+>   through DevTools (`ServiceWorker.stopAllWorkers`, `Target.closeTarget`) left every fetch through
+>   the worker hanging, so it is not used. Because every write fails there, that journey cannot tell
+>   a failed record write from a failed copy write; `a_failed_owner_record_write_keeps_no_copy_of_the_new_owners_reads`
+>   refuses only the record's `Cache.put` (harness `refuse_cache_puts_of`) and fails if the worker
+>   keeps a copy after it.
 
 **Files:**
 - Modify: `tests/ui_e2e/read.rs`

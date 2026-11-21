@@ -246,6 +246,16 @@ impl Ui {
             )
             .as_f64()
             .expect("storage usage");
+        self.limit_storage_to(used)
+    }
+
+    /// [`Ui::limit_storage`] with the quota given in bytes. A quota below
+    /// what is used now stays exceeded even after the reader deletes some
+    /// of its copies, so a write of any size is refused.
+    ///
+    /// # Panics
+    /// If Chromium refuses a DevTools call.
+    pub fn limit_storage_to(&self, quota: f64) -> DevTools {
         let mut devtools = DevTools::connect(&self.browser);
         let attached = devtools.call(
             None,
@@ -259,8 +269,52 @@ impl Ui {
         devtools.call(
             Some(&session),
             "Storage.overrideQuotaForOrigin",
-            serde_json::json!({ "origin": self.base, "quotaSize": used }),
+            serde_json::json!({ "origin": self.base, "quotaSize": quota }),
         );
+        devtools
+    }
+
+    /// Makes every `Cache.put` of a URL containing `needle` reject with
+    /// QuotaExceededError in every running service worker, while the
+    /// returned value lives (a full disk for that one write, while the
+    /// others succeed). The override is in the worker's memory only, so it
+    /// ends when that worker does.
+    ///
+    /// # Panics
+    /// If Chromium refuses a DevTools call.
+    pub fn refuse_cache_puts_of(&self, needle: &str) -> DevTools {
+        let source = format!(
+            "{{ const put = Cache.prototype.put; \
+               Cache.prototype.put = function (request, response) {{ \
+                 const url = typeof request === 'string' ? request : request.url; \
+                 if (url.includes({needle:?})) return Promise.reject(new DOMException('full', 'QuotaExceededError')); \
+                 return put.call(this, request, response); }}; }}"
+        );
+        let mut devtools = DevTools::connect(&self.browser);
+        let targets = devtools.call(None, "Target.getTargets", serde_json::json!({}));
+        let ids: Vec<String> = targets["targetInfos"]
+            .as_array()
+            .expect("targets")
+            .iter()
+            .filter(|target| target["type"] == "service_worker")
+            .filter_map(|target| target["targetId"].as_str().map(str::to_string))
+            .collect();
+        for id in ids {
+            let attached = devtools.call(
+                None,
+                "Target.attachToTarget",
+                serde_json::json!({ "targetId": id, "flatten": true }),
+            );
+            let session = attached["sessionId"]
+                .as_str()
+                .expect("a DevTools session")
+                .to_string();
+            devtools.call(
+                Some(&session),
+                "Runtime.evaluate",
+                serde_json::json!({ "expression": source }),
+            );
+        }
         devtools
     }
 

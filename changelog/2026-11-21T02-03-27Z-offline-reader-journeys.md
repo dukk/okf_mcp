@@ -16,4 +16,9 @@ Harness (`tests/ui_e2e/harness.rs`):
 - `open_reader` waits for the hash to settle; a reload straight after a hash-only navigation
   could reload the previous route and made journeys flaky under load.
 
+Review follow-up: the 200-cap journey now re-reads n000 (not n001), so it tells least-recently-viewed
+from first-in-first-out eviction; the storage-full journey replaces the worker so the failed owner-record
+write really happens (`limit_storage_to`), and `a_failed_owner_record_write_keeps_no_copy_of_the_new_owners_reads`
+(harness `refuse_cache_puts_of`) refuses only that write.
+
 The plan's Task 10 carries a dated correction note.

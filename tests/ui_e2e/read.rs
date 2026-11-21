@@ -706,16 +706,17 @@ async fn the_content_cache_keeps_the_most_recently_viewed_two_hundred() {
     drive(server.base.clone(), move |ui| {
         ui.sign_in_reader("/me", EMAIL, PASSWORD);
         ui.wait_worker();
-        // Read n000 and n001 first, then n001 again after 198 others, so
-        // n000 is the least recently viewed when the 201st arrives.
+        // Read n000 and n001, then 198 others (200 in all), then n000
+        // again, which makes n001 the least recently viewed. n200 then
+        // evicts n001; a cache that kept insertion order would evict n000.
         let fetched = ui.eval(
             "async () => { const get = n => fetch(`/api/v1/catalogs/many/concepts/notes/n${String(n).padStart(3, '0')}.md`); \
-             await get(0); await get(1); for (let n = 2; n <= 199; n++) await get(n); await get(1); await get(200); \
+             await get(0); await get(1); for (let n = 2; n <= 199; n++) await get(n); await get(0); await get(200); \
              const cache = await caches.open('read-content'); const keys = (await cache.keys()).map(k => new URL(k.url).pathname); \
              return { size: keys.length, has0: keys.some(p => p.endsWith('n000.md')), has1: keys.some(p => p.endsWith('n001.md')) }; }",
             json!(null),
         );
-        assert_eq!(fetched, json!({ "size": 200, "has0": false, "has1": true }));
+        assert_eq!(fetched, json!({ "size": 200, "has0": true, "has1": false }));
     })
     .await;
 }
@@ -806,16 +807,35 @@ async fn with_storage_full_the_reader_boots_and_still_deletes_its_copies() {
         ui.wait_worker();
         ui.open_reader("/v/main/systems/alpha.md");
         ui.wait_text("#body", "marmalade");
-        // The owner record goes too, so the worker must write it again on
-        // the next answer, and cannot.
+        // The owner record goes, and the worker is replaced by a new one
+        // (unregister, reload) that holds no owner in memory: its first
+        // cacheable answer must make this account the owner, which means
+        // writing the record, and under a full quota it cannot. (Stopping
+        // the worker through DevTools leaves it unable to restart here.)
         ui.eval(
-            "async () => { await caches.delete('read-owner'); return true; }",
+            "async () => { await caches.delete('read-owner'); \
+             await (await navigator.serviceWorker.getRegistration('/read/')).unregister(); return true; }",
             json!(null),
         );
-        let full = ui.limit_storage();
+        // `/me` reads only the session, which the worker never keeps.
+        ui.open_reader("/me");
+        ui.reload_reader();
+        ui.wait_worker();
+        // A quota below what is used stays exceeded when the takeover
+        // deletes the old copies, so no write of any size succeeds.
+        let full = ui.limit_storage_to(1.0);
         assert_eq!(
             ui.eval(PROBE_WRITE, json!(null)),
             json!("QuotaExceededError")
+        );
+        // A cacheable read still answers online, and keeps nothing.
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.wait_text("#body", "Two settings");
+        let counts = ui.eval(CACHE_COUNTS, json!(null));
+        assert!(
+            counts["read-content"].as_u64().unwrap_or(0) == 0
+                && counts["read-owner"].as_u64().unwrap_or(0) == 0,
+            "the failed takeover kept copies: {counts}"
         );
         ui.open_reader("/me");
         ui.reload_reader();
@@ -827,6 +847,40 @@ async fn with_storage_full_the_reader_boots_and_still_deletes_its_copies() {
         ui.click("#sign-out");
         ui.wait_visible("#signin-email");
         drop(full);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_owner_record_write_keeps_no_copy_of_the_new_owners_reads() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        // A new worker with the owner record gone: its first cacheable
+        // answer is a takeover, which must write the record.
+        ui.eval(
+            "async () => { await caches.delete('read-owner'); \
+             await (await navigator.serviceWorker.getRegistration('/read/')).unregister(); return true; }",
+            json!(null),
+        );
+        ui.open_reader("/me");
+        ui.reload_reader();
+        ui.wait_worker();
+        // Only the owner record's write is refused; a copy of beta could
+        // be written, and must not be kept without an owner to name.
+        let refused = ui.refuse_cache_puts_of("__owner");
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.wait_text("#body", "Two settings");
+        let counts = ui.eval(CACHE_COUNTS, json!(null));
+        assert!(
+            counts["read-content"].as_u64().unwrap_or(0) == 0
+                && counts["read-owner"].as_u64().unwrap_or(0) == 0,
+            "the failed takeover kept copies: {counts}"
+        );
+        drop(refused);
     })
     .await;
 }
