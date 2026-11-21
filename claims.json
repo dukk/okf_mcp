@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 305,
+  "next_claim_seq": 325,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "8f684f41126fce578bd4059dd6fe7fcdb199f7293ad274744b0b5860e0329994"
+    "mac": "aea479987e6c1bfc1c845a1d301281508fab9bc0878522181b0a0d9f980a6f20"
   },
-  "next_evidence_seq": 330,
+  "next_evidence_seq": 357,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "f4679a2d0b60b4ae145b327e91f6f509b2e565a8912566460729a5c08d79adb6"
+    "mac": "2d244e7786baa64b89afd2c0557f5f8206db8942e8920779d64ef6049b34b034"
   },
   "claims": [
     {
@@ -5558,6 +5558,28 @@
             "by": "server",
             "mac": "8dd3b2b140af0ca20aa99dba4bb1e4d398d511c3c08e4f3697e3cd203c3c93b8"
           }
+        },
+        {
+          "id": "EVD-0351",
+          "kind": "analysis",
+          "locator": "src/http/read/js/refusals.js:26-70; tests/read_worker/refusals.test.mjs (worker.log: 115 pass)",
+          "summary": "Re-audit at head 5ff95d3: refusals.js changed only a comment; classification and effects are unchanged. SIGNED_OUT still calls actions.signIn(), which now wipes and shows the signed-out screen instead of navigating, so \"wipes and signs in\" holds with \"signs in\" meaning the Sign in screen; reader.md:138 is reworded to say so.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/read/js/refusals.js",
+              "lines": {
+                "start": 26,
+                "end": 70
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:58:07.540734626Z",
+          "seal": {
+            "by": "server",
+            "mac": "d8c250d4fd9fd964154d91174bd099e524f71ff648df9cde7debecb671c44389"
+          }
         }
       ],
       "verdicts": [
@@ -5573,13 +5595,26 @@
             "by": "server",
             "mac": "0858712bb8c7fa885a4b036ccec5eca3aa3fb7d9c7e620839d9d8a0abac40ff0"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on head; refusal mapping unchanged, 401 now ends in the signed-out screen.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0351"
+          ],
+          "recorded_at": "2026-11-21T22:58:19.456298005Z",
+          "seal": {
+            "by": "server",
+            "mac": "effc5770f11b19e6e4dc983bb939e4b8c6a44c3ce0324759ff5913963ff7f6db"
+          }
         }
       ],
       "created_at": "2026-11-21T19:06:36.900182326Z",
-      "updated_at": "2026-11-21T19:09:15.693068012Z",
+      "updated_at": "2026-11-21T22:58:19.456298005Z",
       "seal": {
         "by": "server",
-        "mac": "3e5362f8fe5dcf536ed2f2f9c2760f4cda53ff03f2b7d6e3d4b5f276e489ce62"
+        "mac": "7c7522d7ce35bc22272e6ff354e820951bde38cc6083974bd584e6666015d9c2"
       }
     },
     {
@@ -5634,6 +5669,28 @@
             "by": "server",
             "mac": "1689acd68da08f5a58008c51cfd47139062b9648dceeac49d88098afe9b23495"
           }
+        },
+        {
+          "id": "EVD-0352",
+          "kind": "inspection",
+          "locator": "src/http/read/js/main.js:80-135",
+          "summary": "Re-audit at head: endSession still runs forget() first, calls signOut(csrf), then leaveFor() which now calls wipeOnExit() (wipe plus remember(null)) and navigates; on false/ReadError it returns false keeping the session. Same sequence, helper renamed. The sign-out journeys pass.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/read/js/main.js",
+              "lines": {
+                "start": 80,
+                "end": 135
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:58:07.567774725Z",
+          "seal": {
+            "by": "server",
+            "mac": "4d7d9964af85c5c9a20d9ca60fe86046ee50c9df8177691ca3de618ff32dea28"
+          }
         }
       ],
       "verdicts": [
@@ -5649,13 +5706,26 @@
             "by": "server",
             "mac": "fc4f290525838cabf08cc4d9928d531b3ae640c724a1173414ac3bcd36e4ad62"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on head; sign-out sequence is the same.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0352"
+          ],
+          "recorded_at": "2026-11-21T22:58:19.478138127Z",
+          "seal": {
+            "by": "server",
+            "mac": "1b3ccfa1891074f8f90be6cb16500ca045d348c11ee5a55acef466a2b060bba5"
+          }
         }
       ],
       "created_at": "2026-11-21T19:06:36.900182326Z",
-      "updated_at": "2026-11-21T19:09:15.709869166Z",
+      "updated_at": "2026-11-21T22:58:19.478138127Z",
       "seal": {
         "by": "server",
-        "mac": "7d847f316a28389e3d16a544754f1041bd70d7a0af1c7da5dcb23a1ab7c56d64"
+        "mac": "e16d3627303ef581a38e153c7d6a03e2ccbb3e38ba00b5a7f93800dd1ed79eee"
       }
     },
     {
@@ -5709,6 +5779,28 @@
             "by": "server",
             "mac": "e4a3e747643d1ad1bfe6d7b2d73731b1d39f11183dd241d1d20e9bc98bf3c747"
           }
+        },
+        {
+          "id": "EVD-0353",
+          "kind": "test",
+          "locator": "cargo test http::read::tests::the_shell_listing_names_every_reader_file_and_the_shared_ones and the_worker_is_revalidated_and_carries_the_shell_version (test.log: ok)",
+          "summary": "Re-audit at head: both tests still pass, now against the per-request listing (version = shell_version_for(default name)); sw.js still sent with Cache-Control no-cache, and the rendered files carry per-file SHA-256.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/read.rs",
+              "lines": {
+                "start": 388,
+                "end": 438
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:58:07.594297092Z",
+          "seal": {
+            "by": "server",
+            "mac": "654648898cd1bb742b85dd0ea6147e5061c6d65c3141bbe20e9aae639b871ead"
+          }
         }
       ],
       "verdicts": [
@@ -5724,13 +5816,26 @@
             "by": "server",
             "mac": "43afee825dca305ec9a728f108b83aa276f9094636c39505300a47ba22f0f0df"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on head; both tests pass against the per-request rendering.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0353"
+          ],
+          "recorded_at": "2026-11-21T22:58:19.499470827Z",
+          "seal": {
+            "by": "server",
+            "mac": "28a8c55130287bfe25ca34bd700b5ee0014e676b3a2b0ba6e2e29f1e4b21e691"
+          }
         }
       ],
       "created_at": "2026-11-21T19:06:36.900182326Z",
-      "updated_at": "2026-11-21T19:09:15.726477939Z",
+      "updated_at": "2026-11-21T22:58:19.499470827Z",
       "seal": {
         "by": "server",
-        "mac": "087aa1d19254ce1ef3ec5a28092cf900282a2b5289da99ae375cefaf740d7e8e"
+        "mac": "a95033058f737c04fe44414e5a91cc757b0db40ff92b5db959d47c85bec003e2"
       }
     },
     {
@@ -5784,6 +5889,28 @@
             "by": "server",
             "mac": "c4c7e01c3dbc728552bf002c931b170b0b4031e8c81644731b0aaa284743cf9c"
           }
+        },
+        {
+          "id": "EVD-0354",
+          "kind": "inspection",
+          "locator": "src/http/read.rs:60-100, 199-230",
+          "summary": "Re-audit at head: BUILD_VERSION still hashes READ_ASSETS chained with SHARED_CONSOLE_FILES (pico.min.css, dom.js, format.js); the served version additionally folds in the product name. The claim as worded still holds and the doc now says so.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/read.rs",
+              "lines": {
+                "start": 60,
+                "end": 100
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:58:07.617948180Z",
+          "seal": {
+            "by": "server",
+            "mac": "da1c3fa98c7578dc1040f4afcd797e6738a31927b25b567f58a96ba7c536eb31"
+          }
         }
       ],
       "verdicts": [
@@ -5799,13 +5926,26 @@
             "by": "server",
             "mac": "e46a08e22f3070fb038fc98987ea02dacf6aed97ce10a5214af1b1e8ee66cbed"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on head; the file set hashed is unchanged, the name is added on top.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0354"
+          ],
+          "recorded_at": "2026-11-21T22:58:19.522009421Z",
+          "seal": {
+            "by": "server",
+            "mac": "b0611b2b0cf0ef7a7d031d33ee9626835d76855ee6fb0b34b0837f08b621d8aa"
+          }
         }
       ],
       "created_at": "2026-11-21T19:06:36.900182326Z",
-      "updated_at": "2026-11-21T19:09:15.742951531Z",
+      "updated_at": "2026-11-21T22:58:19.522009421Z",
       "seal": {
         "by": "server",
-        "mac": "41dadca9e218174e66180ed9c116aa4dbfe5e470b9c43b8c6312ac336ff2845d"
+        "mac": "1add0fc87aa4b6e3605544eabe66d3bf9622ea05e5357ec2621d26e9c82e9e0a"
       }
     },
     {
@@ -5860,6 +6000,28 @@
             "by": "server",
             "mac": "75dde0a0a825cd7bad7ea7d7212aabdf5cb3238a5d7ea806b660ed7fd4cc8c5a"
           }
+        },
+        {
+          "id": "EVD-0356",
+          "kind": "inspection",
+          "locator": "src/http/read/js/main.js:273; src/http/read/js/cache.js:10",
+          "summary": "Re-audit at head: WORKER_WAIT_MS = 5000 (main.js:273) and MARK_WAIT_MS = 1000 (cache.js:10); lines moved only.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/read/js/main.js",
+              "lines": {
+                "start": 270,
+                "end": 275
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:58:07.667598214Z",
+          "seal": {
+            "by": "server",
+            "mac": "64ad2e76115300c09849fc8a92742cba0daadaf6a7c78d993058e18203880c01"
+          }
         }
       ],
       "verdicts": [
@@ -5875,13 +6037,26 @@
             "by": "server",
             "mac": "017a4bc370a1e6547aa91943b3bd04b5371186c881679d56b45fa10d52883d64"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on head; constants unchanged, lines moved.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0356"
+          ],
+          "recorded_at": "2026-11-21T22:58:19.565509285Z",
+          "seal": {
+            "by": "server",
+            "mac": "ae76750488c869180b1c49abfbf0a4b0a251af6e217492b6fd7091ba732b9185"
+          }
         }
       ],
       "created_at": "2026-11-21T19:06:36.900182326Z",
-      "updated_at": "2026-11-21T19:09:15.757403355Z",
+      "updated_at": "2026-11-21T22:58:19.565509285Z",
       "seal": {
         "by": "server",
-        "mac": "543a185721a6248561b94b34f818900d5ca844965c2c81be75092f8d0a4a756b"
+        "mac": "dfd6247dd543d8a8d2e1aded149a7132f280bd0e32370f6ca1379f2106de6391"
       }
     },
     {
@@ -17065,6 +17240,28 @@
             "by": "server",
             "mac": "5c018a5017817871d287dd2ff422567aed411312164f2fe52b8810b5a89715a9"
           }
+        },
+        {
+          "id": "EVD-0355",
+          "kind": "inspection",
+          "locator": "src/http/read.rs:136-150",
+          "summary": "Re-audit at head: routes() still registers /read (308 to /read/), /read/ (now the index handler), /read/shell.json, /read/sw.js and /read/{*path}.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/read.rs",
+              "lines": {
+                "start": 136,
+                "end": 150
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:58:07.639955573Z",
+          "seal": {
+            "by": "server",
+            "mac": "0217bc1b1d29e4f214416825078dab78913e8d2cac72f131dd666e494618c08a"
+          }
         }
       ],
       "verdicts": [
@@ -17080,13 +17277,26 @@
             "by": "server",
             "mac": "0aeadc3d7bab0c29baad37d7a5b228b225a5d1fb6e2e40d15a29f0fbc5cbe2c7"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on head; /read/ still routed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0355"
+          ],
+          "recorded_at": "2026-11-21T22:58:19.544034104Z",
+          "seal": {
+            "by": "server",
+            "mac": "4861d3c9e60c41ac4257357a20303b3d7540e63da8a61e7ef671413fd55e8031"
+          }
         }
       ],
       "created_at": "2026-11-21T19:07:17.608189865Z",
-      "updated_at": "2026-11-21T19:10:10.783173670Z",
+      "updated_at": "2026-11-21T22:58:19.544034104Z",
       "seal": {
         "by": "server",
-        "mac": "f1ce69cdf6c3d1940bcb7f4c1febe98d5ac19cf1cfbcc41b54fa79ef57292cd3"
+        "mac": "1142e7f95f3175901f6d4c7374d34b3a0701593c6be8fd6688945b7449c9079e"
       }
     },
     {
@@ -23473,6 +23683,1338 @@
       "seal": {
         "by": "server",
         "mac": "ea6d0ed33828697f75b5a653fa7f220eadb0d94588e743e3a1a129d733ca3411"
+      }
+    },
+    {
+      "id": "CLM-0305",
+      "statement": "The change on branch okf-mcp-900 makes the mobile reader installable before sign-in and names it after the product, as issue #900 asks.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "hypotheosis/okf_mcp#900 title: Reader: installable before sign-in, named after the product",
+      "derived_from": [],
+      "artifacts": [
+        "src/http/read.rs",
+        "src/http/read/js/main.js"
+      ],
+      "tags": [
+        "from-issue:900"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0350",
+          "kind": "analysis",
+          "locator": "children of CLM-0305",
+          "summary": "Every child is supported: stays on the reader with manifest and worker, Sign in with return_to, 401 wipes (boot and later), refusals unchanged, product naming with escaping, run-time rename and shell hash, CSP, journeys, docs, changelog and gates. Not covered by any test: Chrome's own installability check (Page.getInstallabilityErrors), which the PR says was not run.",
+          "stance": "supports",
+          "recorded_at": "2026-11-21T22:58:07.513509236Z",
+          "seal": {
+            "by": "server",
+            "mac": "c3cf6a6f03752e7e1bae2824755f00ef503ae44d3fc352e9df85204147715667"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All 19 children are supported by tests or inspection I ran or read myself. Chrome's installability check itself was not run; the worker, manifest link and manifest content are asserted instead.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0350"
+          ],
+          "recorded_at": "2026-11-21T22:58:19.422643974Z",
+          "seal": {
+            "by": "server",
+            "mac": "a7ba7bdbdaa31a1b6e9fca7eba4f1fcaf4a1abf762656a8508016227fb583318"
+          }
+        }
+      ],
+      "created_at": "2026-11-21T22:56:19.448666366Z",
+      "updated_at": "2026-11-21T22:58:19.422643974Z",
+      "seal": {
+        "by": "server",
+        "mac": "0b6ea2c5cd0437ad0b67371ece784b9f79c1749804ef9a1d00ddb37df9ac657f"
+      }
+    },
+    {
+      "id": "CLM-0306",
+      "statement": "Signed out, /read/ stays on /read/ and shows its own signed-out screen (#screen-signed-out) with a Sign in link (#signed-out-signin) instead of navigating away.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "#900 Decisions: 'Signed out, /read/ shows its own signed-out screen with a \"Sign in\" button ... instead of redirecting'; PR: 'A signed-out reader now stays on /read/ with its own \"Sign in\" screen'",
+      "derived_from": [
+        "CLM-0305"
+      ],
+      "artifacts": [
+        "src/http/read/js/main.js",
+        "tests/ui_e2e/read.rs"
+      ],
+      "tags": [
+        "from-issue:900"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0330",
+          "kind": "test",
+          "locator": "tests/ui_e2e/read.rs a_signed_out_reader_stays_on_the_reader_and_can_be_installed; target/i900-logs/test-ui.log (test read::a_signed_out_reader_stays_on_the_reader_and_can_be_installed ... ok; 268 passed)",
+          "summary": "Journey opens /read/ signed out, waits for #signed-out-signin and asserts location.pathname == /read/ (no navigation). Passed in the logged test-ui run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/read.rs",
+              "lines": {
+                "start": 201,
+                "end": 238
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:56:46.340198972Z",
+          "seal": {
+            "by": "server",
+            "mac": "6d0afdb6311792c7cb0c7ef186dab3d1b86af7180ecc7dd0c3be51952a819319"
+          }
+        },
+        {
+          "id": "EVD-0331",
+          "kind": "inspection",
+          "locator": "src/http/read/js/main.js:95-115",
+          "summary": "signIn() sets signedOut, wipes, and showSignedOut() renders section#screen-signed-out with a#signed-out-signin; no location.assign on this path (only leaveFor does, used by account sign-out).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/read/js/main.js",
+              "lines": {
+                "start": 95,
+                "end": 115
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:56:46.389801890Z",
+          "seal": {
+            "by": "server",
+            "mac": "484d721ab91514b85eb6d971ff2c3da949d001859d8cc9068be333a6b99fcc73"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code draws the screen without navigating and the passing journey asserts pathname stays /read/.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0330",
+            "EVD-0331"
+          ],
+          "recorded_at": "2026-11-21T22:57:48.412593888Z",
+          "seal": {
+            "by": "server",
+            "mac": "f0641d04323a859cf98ceaa3eb3a2fb48db7a281570ce50a88fb8d825f695a30"
+          }
+        }
+      ],
+      "created_at": "2026-11-21T22:56:19.448666366Z",
+      "updated_at": "2026-11-21T22:57:48.412593888Z",
+      "seal": {
+        "by": "server",
+        "mac": "f239f00a99e84ffe26cd96cf8a84459d057db9dc159215425e30293ff6ee962a"
+      }
+    },
+    {
+      "id": "CLM-0307",
+      "statement": "On the signed-out screen the page still links its manifest (/read/manifest.webmanifest) and a service worker controls the page.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "#900 Decisions: 'The page then keeps its manifest and service worker'; PR Validation: 'the journeys assert the manifest link, the manifest content and that the worker controls the page while signed out'",
+      "derived_from": [
+        "CLM-0305"
+      ],
+      "artifacts": [
+        "tests/ui_e2e/read.rs",
+        "src/http/read/index.html"
+      ],
+      "tags": [
+        "from-issue:900"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0332",
+          "kind": "test",
+          "locator": "tests/ui_e2e/read.rs a_signed_out_reader_stays_on_the_reader_and_can_be_installed; harness wait_worker (tests/ui_e2e/harness.rs:194)",
+          "summary": "Test asserts link[rel=manifest] href == /read/manifest.webmanifest on the signed-out page, calls wait_worker (navigator.serviceWorker.controller !== null) and fetches the manifest. Passed in test-ui run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/read.rs",
+              "lines": {
+                "start": 201,
+                "end": 238
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:56:46.421450424Z",
+          "seal": {
+            "by": "server",
+            "mac": "41eb981dc3962ba3548782460e6b7666f21111b9b8019d53611c34cce2feb8d9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Journey asserts the manifest link and that a worker controls the page while signed out. Chrome's own installability check was not run (the PR says so).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0332"
+          ],
+          "recorded_at": "2026-11-21T22:57:48.473471603Z",
+          "seal": {
+            "by": "server",
+            "mac": "d7921fc8a4ef3cc62f87cf0201c49a8a5117c57fc2397c5c752bc0e1aa4f19bc"
+          }
+        }
+      ],
+      "created_at": "2026-11-21T22:56:19.448666366Z",
+      "updated_at": "2026-11-21T22:57:48.473471603Z",
+      "seal": {
+        "by": "server",
+        "mac": "4982805ac8b6fe312d6e96a1f8d683f5a775bf3a7c2ea19813eedfbb7f5eaa7e"
+      }
+    },
+    {
+      "id": "CLM-0308",
+      "statement": "The Sign in link goes to /signin with return_to set to the current reader URL, and after signing in the browser returns to the same reader route.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "#900: 'a \"Sign in\" button that goes to /signin?return_to=<current reader URL>'; PR: 'a #signed-out-signin link to /signin?return_to=/read/<hash>'",
+      "derived_from": [
+        "CLM-0305"
+      ],
+      "artifacts": [
+        "src/http/read/js/main.js",
+        "tests/ui_e2e/read.rs"
+      ],
+      "tags": [
+        "from-issue:900"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0333",
+          "kind": "test",
+          "locator": "tests/ui_e2e/read.rs sign_in_from_the_signed_out_screen_returns_to_the_same_route; test-ui.log: ... ok",
+          "summary": "Opens /read/#/t/main signed out, clicks #signed-out-signin, asserts pathname /signin and return_to == /read/#/t/main, signs in, asserts back at /read/ with hash #/t/main and #screen-tree visible. Passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/read.rs",
+              "lines": {
+                "start": 240,
+                "end": 268
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:56:46.455879237Z",
+          "seal": {
+            "by": "server",
+            "mac": "f3cb2730cd35992456341c774bb5bca5fbaf07783752cf428539b7fd25e2c0c3"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The journey checks the return_to value and the return to the same route after sign-in.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0333"
+          ],
+          "recorded_at": "2026-11-21T22:57:48.491658365Z",
+          "seal": {
+            "by": "server",
+            "mac": "25e800de0a90c9648ac60b2fa6a312538f6b4d0b8660b04ec1ce85fdc9e7cd44"
+          }
+        }
+      ],
+      "created_at": "2026-11-21T22:56:19.448666366Z",
+      "updated_at": "2026-11-21T22:57:48.491658365Z",
+      "seal": {
+        "by": "server",
+        "mac": "a0da6debef4e1464539be27389625185c62f0f1c9166b4f21d680d2a4f62fe5d"
+      }
+    },
+    {
+      "id": "CLM-0309",
+      "statement": "A 401 at boot still deletes the device's offline copies and the remembered catalog.",
+      "kind": "security",
+      "level": "artifact",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "#900: 'Today a 401 deletes the device's offline copies at boot. Keep that behaviour exactly.'; PR: 'a 401 (at boot or later) still wipes the offline copies and the remembered catalog'",
+      "derived_from": [
+        "CLM-0305"
+      ],
+      "artifacts": [
+        "src/http/read/js/main.js",
+        "tests/ui_e2e/read.rs"
+      ],
+      "tags": [
+        "from-issue:900"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0334",
+          "kind": "test",
+          "locator": "tests/ui_e2e/read.rs a_401_at_boot_deletes_the_copies_already_on_the_device; test-ui.log: ... ok",
+          "summary": "Signs in with a cached copy and remembered catalog, revokes the session, reloads; asserts #signed-out-signin visible, pathname /read/, assert_no_offline_copies, and remembered catalog null. Passed. Only the post-condition assertions on where the page lands changed; the wipe assertions are as before.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/read.rs",
+              "lines": {
+                "start": 2392,
+                "end": 2414
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:56:46.490879803Z",
+          "seal": {
+            "by": "server",
+            "mac": "ffdad3ae9c9d18a547ba8cd55008422e633c12f5838617ee61c75d580013fec5"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Boot journey asserts no offline copies and no remembered catalog after the 401 at reload.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0334"
+          ],
+          "recorded_at": "2026-11-21T22:58:07.490840811Z",
+          "seal": {
+            "by": "server",
+            "mac": "89846be8f3553e3f6bf5fe67bbcd19abb483f86769cd7823d25fd138ef4c5a65"
+          }
+        }
+      ],
+      "created_at": "2026-11-21T22:56:19.448666366Z",
+      "updated_at": "2026-11-21T22:58:07.490840811Z",
+      "seal": {
+        "by": "server",
+        "mac": "05219c42329494fb105b22fe560c991e0225523a1ab6f9c2b599b2eeb9a19e21"
+      }
+    },
+    {
+      "id": "CLM-0310",
+      "statement": "A 401 after boot (mid-session) also wipes the offline copies and shows the signed-out screen.",
+      "kind": "security",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR: 'a 401 mid-session also shows the signed-out screen (not only at boot)'",
+      "derived_from": [
+        "CLM-0305"
+      ],
+      "artifacts": [
+        "src/http/read/js/main.js",
+        "tests/ui_e2e/read.rs"
+      ],
+      "tags": [
+        "from-issue:900"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0335",
+          "kind": "test",
+          "locator": "tests/ui_e2e/read.rs show_older_with_a_401_signs_out, a_revoked_session_wipes_the_caches_on_the_next_answer, a_401_signs_out_without_waiting_for_a_sibling_read, a_late_401_after_an_ordinary_refusal_still_signs_out; test-ui.log all ok",
+          "summary": "Four mid-session 401 journeys each wait for #signed-out-signin and assert_no_offline_copies (and remembered catalog null in one). All passed in the 268-test run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/read.rs",
+              "lines": {
+                "start": 1170,
+                "end": 1190
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:56:46.575232146Z",
+          "seal": {
+            "by": "server",
+            "mac": "e8f331dd79e5192a6cf6559d51fb713e694e04d7adbe0821201b46baf76ac06b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Four mid-session 401 journeys assert the signed-out screen and no copies.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0335"
+          ],
+          "recorded_at": "2026-11-21T22:57:48.520361821Z",
+          "seal": {
+            "by": "server",
+            "mac": "35c72ee1605b3de3f83f784bb8d09a44340285104d36b5829120bfd36f92570a"
+          }
+        }
+      ],
+      "created_at": "2026-11-21T22:56:19.448666366Z",
+      "updated_at": "2026-11-21T22:57:48.520361821Z",
+      "seal": {
+        "by": "server",
+        "mac": "cd4fadb43539d86ec92f21819436ea7cd374189cbb68b71a90ca67c67f950da6"
+      }
+    },
+    {
+      "id": "CLM-0311",
+      "statement": "Every other existing refusal path (for example a removed grant evicting its catalog) is unchanged: the diff alters no refusal classification or effect other than the 401 sign-in action.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 4,
+      "verification_method": "analysis",
+      "source": "#900: 'Keep every existing refusal path, such as a removed grant evicting its catalog. Only the automatic navigation away is replaced'; PR: 'Other refusal paths are unchanged.'",
+      "derived_from": [
+        "CLM-0305"
+      ],
+      "artifacts": [
+        "src/http/read/js/main.js",
+        "src/http/read/js/refusals.js"
+      ],
+      "tags": [
+        "from-issue:900"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0336",
+          "kind": "analysis",
+          "locator": "git diff origin/main..HEAD -- src/http/read/js/refusals.js src/http/read/js/main.js",
+          "summary": "refusals.js diff is one comment line (signIn() description). main.js diff touches only the signIn/leaveFor/wipeOnExit helpers, adds showSignedOut and a signedOut guard in show(); classify/effects for 403/404 eviction and LOCKED are untouched. tests/read_worker (115 pass) and the UI journeys for eviction pass.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/read/js/refusals.js",
+              "lines": {
+                "start": 26,
+                "end": 70
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:56:46.610049281Z",
+          "seal": {
+            "by": "server",
+            "mac": "39c4ac37ab5cef69944dba2f10eb4eaf7d505e901521492220e9e53269611816"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Diff read in full: only the 401 action changed; classification and eviction code untouched and their tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0336"
+          ],
+          "recorded_at": "2026-11-21T22:57:48.537733800Z",
+          "seal": {
+            "by": "server",
+            "mac": "337fbc7bad0616efde50554c241d19214160dda06647efb270093971507e6826"
+          }
+        }
+      ],
+      "created_at": "2026-11-21T22:56:19.448666366Z",
+      "updated_at": "2026-11-21T22:57:48.537733800Z",
+      "seal": {
+        "by": "server",
+        "mac": "f36f8d8e61c7604dc269a5986c6fe9d98d89a68217eb507b8bb7e4b01623d86c"
+      }
+    },
+    {
+      "id": "CLM-0312",
+      "statement": "Account sign-out (the account screen's button) still navigates to /signin after wiping.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR: 'Account sign-out still goes to /signin.'",
+      "derived_from": [
+        "CLM-0305"
+      ],
+      "artifacts": [
+        "src/http/read/js/main.js",
+        "tests/ui_e2e/read.rs"
+      ],
+      "tags": [
+        "from-issue:900"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0337",
+          "kind": "inspection",
+          "locator": "src/http/read/js/main.js:121-135 (endSession); tests/ui_e2e/read.rs (#sign-out then wait_visible #signin-email, ~line 285)",
+          "summary": "endSession still calls leaveFor('/signin?return_to=/read/') after the DELETE succeeds, which does location.assign. The journey clicks #sign-out and waits for the sign-in form #signin-email; it passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/read/js/main.js",
+              "lines": {
+                "start": 80,
+                "end": 135
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:56:46.646983044Z",
+          "seal": {
+            "by": "server",
+            "mac": "f5e0f0ddafdfa92e9f511375341e98b0622eb2ccc193100c8128738a968748c6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "endSession still navigates to /signin via leaveFor; the sign-out journeys still reach #signin-email.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0337"
+          ],
+          "recorded_at": "2026-11-21T22:57:48.555138198Z",
+          "seal": {
+            "by": "server",
+            "mac": "b23e63074c26b0c72dc12ca67d1f6e7af2e68d7bb5181cb15c456cb424f40d50"
+          }
+        }
+      ],
+      "created_at": "2026-11-21T22:56:19.448666366Z",
+      "updated_at": "2026-11-21T22:57:48.555138198Z",
+      "seal": {
+        "by": "server",
+        "mac": "dc635d2645e18ef170485a6a6bd7bedd50fb1fdee4ecb22d40bc6c70cc898785"
+      }
+    },
+    {
+      "id": "CLM-0313",
+      "statement": "The manifest's name is \"<product> Reader\" and its short_name is \"<product>\", and with the default product name they are \"okf Reader\" and \"okf\".",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "#900 Decisions: 'The manifest's name is \"<product> Reader\" and its short_name is \"<product>\"'; Tests: 'including escaping and the default name'",
+      "derived_from": [
+        "CLM-0305"
+      ],
+      "artifacts": [
+        "src/http/read.rs",
+        "src/http/read/manifest.webmanifest"
+      ],
+      "tags": [
+        "from-issue:900"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0338",
+          "kind": "test",
+          "locator": "cargo test http::read::tests::the_manifest_is_named_after_the_product (test.log: ok; 3258 passed, 0 failed)",
+          "summary": "Asserts rendered manifest for \"Acme Notes\" has name \"Acme Notes Reader\", short_name \"Acme Notes\", and for DEFAULT_PRODUCT_NAME name \"okf Reader\", short_name \"okf\". Also the e2e journey fetches the live manifest and asserts the same default values.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/read.rs",
+              "lines": {
+                "start": 443,
+                "end": 457
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:57:15.011054125Z",
+          "seal": {
+            "by": "server",
+            "mac": "53626ec6ff9b011af6cf4a88f113b105ccbc1a3f70ee6b7c072129815838f11b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Unit test asserts exact names for a custom and the default product.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0338"
+          ],
+          "recorded_at": "2026-11-21T22:57:48.575589827Z",
+          "seal": {
+            "by": "server",
+            "mac": "36c9b0091cf2290f1462d6050894bc0a2705d34fa3c488a70a9a56d9952781be"
+          }
+        }
+      ],
+      "created_at": "2026-11-21T22:56:19.448666366Z",
+      "updated_at": "2026-11-21T22:57:48.575589827Z",
+      "seal": {
+        "by": "server",
+        "mac": "2ebf5e8c4b8d935905b172e476b455214fb9a9355ce7d03c002809e23a0c613c"
+      }
+    },
+    {
+      "id": "CLM-0314",
+      "statement": "The page title is \"<product> Reader\" and apple-mobile-web-app-title is \"<product>\".",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "#900 Decisions: 'title \"<product> Reader\", apple title \"<product>\"'",
+      "derived_from": [
+        "CLM-0305"
+      ],
+      "artifacts": [
+        "src/http/read.rs",
+        "src/http/read/index.html"
+      ],
+      "tags": [
+        "from-issue:900"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0339",
+          "kind": "test",
+          "locator": "cargo test http::read::tests::the_page_is_named_after_the_product_and_escapes_it (test.log: ok)",
+          "summary": "Asserts <title>Acme Notes Reader</title> and apple-mobile-web-app-title content \"Acme Notes\", and no leftover placeholder. The e2e journey asserts document.title == \"okf Reader\".",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/read.rs",
+              "lines": {
+                "start": 470,
+                "end": 487
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:57:15.034438644Z",
+          "seal": {
+            "by": "server",
+            "mac": "5545737de9c5fb70d473b58c2ffd6ae2220d08d2306e55e68d00da66bfcf9983"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Unit test asserts the title and apple title strings.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0339"
+          ],
+          "recorded_at": "2026-11-21T22:57:48.596719549Z",
+          "seal": {
+            "by": "server",
+            "mac": "5a956bd5123fd11ba39d842885bba977587fc75ed2779191cc12c0822bb60a6e"
+          }
+        }
+      ],
+      "created_at": "2026-11-21T22:56:19.448666366Z",
+      "updated_at": "2026-11-21T22:57:48.596719549Z",
+      "seal": {
+        "by": "server",
+        "mac": "06c609884956aa2595d7e3d57b2bd7425934e15f72e2867688c0bfb48408fb6a"
+      }
+    },
+    {
+      "id": "CLM-0315",
+      "statement": "The product name is escaped for JSON in the manifest (still valid JSON for quotes and backslashes) and for HTML in the page (a hostile name cannot inject a tag).",
+      "kind": "security",
+      "level": "artifact",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "#900: 'Escape the name properly for JSON and HTML.'; PR: 'HTML-escaped via pages::escape for the page, JSON-escaped for the manifest'",
+      "derived_from": [
+        "CLM-0305"
+      ],
+      "artifacts": [
+        "src/http/read.rs"
+      ],
+      "tags": [
+        "from-issue:900"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0340",
+          "kind": "test",
+          "locator": "cargo test http::read::tests::the_manifest_escapes_the_name_for_json and ...the_page_is_named_after_the_product_and_escapes_it (test.log: ok)",
+          "summary": "Manifest with name Acme \"Notes\" \\ <b> still parses and round-trips name/short_name. Page with name \"><script>alert(1)</script> contains no raw <script>alert and contains the &quot;&gt;&lt;script&gt; form (pages::escape escapes & < > \" ').",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/read.rs",
+              "lines": {
+                "start": 460,
+                "end": 487
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:57:15.059681149Z",
+          "seal": {
+            "by": "server",
+            "mac": "5a7ee2f358371b539a4dcdda105a66f819f03158f4ff28774db27d98ae20d4b3"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Two unit tests with hostile names; assertions read and match the claim.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0340"
+          ],
+          "recorded_at": "2026-11-21T22:57:48.617966860Z",
+          "seal": {
+            "by": "server",
+            "mac": "c805af467152a81212afc5cacf7c0d367a1e5b07b7b20960c528c5641f771390"
+          }
+        }
+      ],
+      "created_at": "2026-11-21T22:56:19.448666366Z",
+      "updated_at": "2026-11-21T22:57:48.617966860Z",
+      "seal": {
+        "by": "server",
+        "mac": "42e893ba3f9fe8adfac5029b5eb2dc65ccb88e0d64b9aaeb30b482904bdf8f0f"
+      }
+    },
+    {
+      "id": "CLM-0316",
+      "statement": "The product name is read from the settings on each request (so a run-time rename shows without a restart), not computed once at startup.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "#900 Constraints: 'The product name can change at run time through server_settings, so don't compute it once at startup.'; PR: 'the listing is built per request rather than cached'",
+      "derived_from": [
+        "CLM-0305"
+      ],
+      "artifacts": [
+        "src/http/read.rs"
+      ],
+      "tags": [
+        "from-issue:900"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0341",
+          "kind": "test",
+          "locator": "cargo test http::read::tests::the_served_files_follow_a_rename_made_at_run_time (test.log: ok)",
+          "summary": "Boots the full router, GETs /read/, manifest and shell.json, renames via settings::set(ProductName), polls until the manifest shows \"Acme Notes Reader\", then asserts the page title changed and the listing version differs; no restart. Handlers call product_name(&app) per request (read.rs index/file/shell/worker).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/read.rs",
+              "lines": {
+                "start": 540,
+                "end": 600
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:57:15.081630723Z",
+          "seal": {
+            "by": "server",
+            "mac": "24267af6e82cb1091bd2750ecedcaa5ed0f24c51380b5d03f99785e12d187212"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "An end-to-end router test renames at run time and sees the new name without restart.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0341"
+          ],
+          "recorded_at": "2026-11-21T22:57:48.636303782Z",
+          "seal": {
+            "by": "server",
+            "mac": "2a0d1c45cd9372ffa6c148aa1a35ad1de91667301f13adbc2594b13595004f29"
+          }
+        }
+      ],
+      "created_at": "2026-11-21T22:56:19.448666366Z",
+      "updated_at": "2026-11-21T22:57:48.636303782Z",
+      "seal": {
+        "by": "server",
+        "mac": "116bd9a4f7b71f0166796fa4be98db709807d19b842f18933ac0e3d79ae0a16f"
+      }
+    },
+    {
+      "id": "CLM-0317",
+      "statement": "A product rename changes the shell version, the sw.js bytes, and the SHA-256 of index.html and manifest.webmanifest in shell.json, while a file that does not carry the name keeps its hash.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "#900 Constraints: 'the hash must change when the name changes'; PR: 'The shell version is the build hash combined with the product name; shell.json and sw.js are built per request, so a run-time rename changes the version'",
+      "derived_from": [
+        "CLM-0305"
+      ],
+      "artifacts": [
+        "src/http/read.rs"
+      ],
+      "tags": [
+        "from-issue:900"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0342",
+          "kind": "test",
+          "locator": "cargo test http::read::tests::a_rename_changes_the_shell_version_and_the_listing (test.log: ok)",
+          "summary": "Asserts shell_version_for differs by name, listing versions differ, sha256 for /read/, /read/manifest.webmanifest and /read/sw.js all differ between two names, and /read/icons.svg keeps its hash.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/read.rs",
+              "lines": {
+                "start": 489,
+                "end": 525
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:57:15.102735714Z",
+          "seal": {
+            "by": "server",
+            "mac": "ec7250553ffe31fbd8310ce68e42ab172a7fa0baf458e9cfffb52cf8b494b42b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test asserts version and per-file hashes change on rename and an unaffected file keeps its hash.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0342"
+          ],
+          "recorded_at": "2026-11-21T22:57:48.653829231Z",
+          "seal": {
+            "by": "server",
+            "mac": "b757ff022b40a337eeff0ca590b320b742961b68222ee969001e2beb5cef9217"
+          }
+        }
+      ],
+      "created_at": "2026-11-21T22:56:19.448666366Z",
+      "updated_at": "2026-11-21T22:57:48.653829231Z",
+      "seal": {
+        "by": "server",
+        "mac": "1c5ba6680c0f69ab388937bab60c5a3510e84842c88fdc32e2a8d41f21008ec9"
+      }
+    },
+    {
+      "id": "CLM-0318",
+      "statement": "The Content-Security-Policy is unchanged and the reader's index.html gains no inline script.",
+      "kind": "security",
+      "level": "artifact",
+      "integrity_level": 4,
+      "verification_method": "analysis",
+      "source": "#900 Constraints: 'CSP. Keep it as is: no inline scripts.'",
+      "derived_from": [
+        "CLM-0305"
+      ],
+      "artifacts": [
+        "src/http/ui.rs",
+        "src/http/read/index.html"
+      ],
+      "tags": [
+        "from-issue:900"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0343",
+          "kind": "analysis",
+          "locator": "git diff origin/main..HEAD -- src/http/ui.rs src/http/read/index.html; git grep -n \"<script\" src/http/read/index.html",
+          "summary": "ui.rs diff is only content_type becoming pub(crate); CONTENT_SECURITY_POLICY (script-src 'self') is untouched, and routes() still applies the security_headers layer to the rendered responses. index.html diff changes only the title and apple title; its three script tags are all src= (no inline). Unit test also asserts rendered page has no \"<script>\" bare tag.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/ui.rs",
+              "lines": {
+                "start": 16,
+                "end": 24
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:57:15.123264903Z",
+          "seal": {
+            "by": "server",
+            "mac": "9fc82966b21ff5ca8816d84a754b5e9d62a582a9852a514776a43ba7c9d50eff"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "CSP constant untouched, no inline script in the template, security layer still wraps the new handlers.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0343"
+          ],
+          "recorded_at": "2026-11-21T22:57:48.671800631Z",
+          "seal": {
+            "by": "server",
+            "mac": "e68a6c763fddb6ac3105d85f841fa6f722af1e0ed8f132907f4208a8cb4ad528"
+          }
+        }
+      ],
+      "created_at": "2026-11-21T22:56:19.448666366Z",
+      "updated_at": "2026-11-21T22:57:48.671800631Z",
+      "seal": {
+        "by": "server",
+        "mac": "406df97de02a1f430c557ce461ff087293eb03ecb534d8574d56628539d71630"
+      }
+    },
+    {
+      "id": "CLM-0319",
+      "statement": "No test or code still expects the old redirect from a 401: every journey that reaches the reader signed out or after a 401 now waits for #signed-out-signin, and #signin-email is awaited only after clicking Sign in or signing out.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "#900 Tests: 'Update the journeys that assert the old redirect.'",
+      "derived_from": [
+        "CLM-0305"
+      ],
+      "artifacts": [
+        "tests/ui_e2e/read.rs",
+        "tests/ui_e2e/harness.rs"
+      ],
+      "tags": [
+        "from-issue:900"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0344",
+          "kind": "analysis",
+          "locator": "git grep -n \"signin-email\" tests/ui_e2e/; tests/ui_e2e/read.rs lines 245, 285, 318, 1614; tests/ui_e2e/harness.rs:183-187",
+          "summary": "The only #signin-email waits left in read.rs follow a click on #signed-out-signin (245) or on #sign-out (285, 318, 1614, account sign-out which still navigates); sign_in_reader now clicks #signed-out-signin first. Four 401 journeys moved to #signed-out-signin. Other files (consent, signin, self_service) do not use the reader.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "signin-email",
+              "scope": [
+                "tests/ui_e2e"
+              ],
+              "hits": 14,
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:57:15.154781989Z",
+          "seal": {
+            "by": "server",
+            "mac": "4634151a6142731d3a489cf074bc52495e8b987c38e6ea72452cc7d96a764e8a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Search of the e2e tests shows every remaining #signin-email wait follows a click that navigates to sign-in.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0344"
+          ],
+          "recorded_at": "2026-11-21T22:57:48.695843012Z",
+          "seal": {
+            "by": "server",
+            "mac": "b7c5eab2fbc8935555250d57accc2b4dfd74737a8149084f0abd287bde780ae6"
+          }
+        }
+      ],
+      "created_at": "2026-11-21T22:56:19.448666366Z",
+      "updated_at": "2026-11-21T22:57:48.695843012Z",
+      "seal": {
+        "by": "server",
+        "mac": "0cd4bce5a116c8d0c81e71536f0b59029d6a25def7bbc08be5df1ece755b67e3"
+      }
+    },
+    {
+      "id": "CLM-0320",
+      "statement": "docs/reference/reader.md and docs/operations.md describe the signed-out screen instead of a redirect, the product-name install name, and what product_name names; no doc still says the reader redirects signed-out visits or is called \"Catalog Reader\".",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "#900 Docs: 'Update docs/reference/reader.md and docs/operations.md wherever they describe the redirect, the manifest, or what product_name names.'",
+      "derived_from": [
+        "CLM-0305"
+      ],
+      "artifacts": [
+        "docs/reference/reader.md",
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:900"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0345",
+          "kind": "inspection",
+          "locator": "docs/reference/reader.md:21-35, 138, 160-165; docs/operations.md:2750, 3408",
+          "summary": "reader.md describes the signed-out screen, a Name section (name/short_name/title/iOS title, per-request rendering) and the version covering the product name; operations.md product_name row names the reader and the /read/ route row says the page stays. No \"Catalog Reader\" remains outside the new changelog and the historical docs/superpowers/plans/2026-11-20-mobile-reader-pwa.md (a dated plan, not a behavior doc).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/reference/reader.md",
+              "lines": {
+                "start": 21,
+                "end": 35
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:57:15.181447619Z",
+          "seal": {
+            "by": "server",
+            "mac": "ab4b9406a0d7c3553553bd1ef251100297b02618bd694f81e5fb659458b8721d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The two named docs carry the new behavior and no redirect wording for the reader remains there. The only \"Catalog Reader\" left is in a dated historical plan.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0345"
+          ],
+          "recorded_at": "2026-11-21T22:57:48.717144704Z",
+          "seal": {
+            "by": "server",
+            "mac": "4f536e2df90fc08863750436df228468013fd5bae595e866d2b6180e675773c0"
+          }
+        }
+      ],
+      "created_at": "2026-11-21T22:56:19.448666366Z",
+      "updated_at": "2026-11-21T22:57:48.717144704Z",
+      "seal": {
+        "by": "server",
+        "mac": "1021d28370745a7b900c5d79266b6d479a11f5f56f803a2494b5530dfd4103fa"
+      }
+    },
+    {
+      "id": "CLM-0321",
+      "statement": "A dated changelog entry for the change exists under changelog/.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "#900 Docs: 'Add a changelog entry.'",
+      "derived_from": [
+        "CLM-0305"
+      ],
+      "artifacts": [
+        "changelog/2026-11-21T22-22-33Z-reader-install-name.md"
+      ],
+      "tags": [
+        "from-issue:900"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0346",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-21T22-22-33Z-reader-install-name.md",
+          "summary": "New timestamped file with Why, What changed and Tests sections for #900.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-21T22-22-33Z-reader-install-name.md",
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:57:15.203438053Z",
+          "seal": {
+            "by": "server",
+            "mac": "f7ed7089673139cb53f3bd4afeb9d2fc4df2b5dd3250df0e8bef6248d5a00095"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The file exists and describes the change.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0346"
+          ],
+          "recorded_at": "2026-11-21T22:57:48.737884034Z",
+          "seal": {
+            "by": "server",
+            "mac": "c66e819fb153fb3334144c6e3ce9417acf8e44d126eea94f5630b89c2c1daf1e"
+          }
+        }
+      ],
+      "created_at": "2026-11-21T22:56:19.448666366Z",
+      "updated_at": "2026-11-21T22:57:48.737884034Z",
+      "seal": {
+        "by": "server",
+        "mac": "d6e8a92de3c69438e151ea1a96583e5982953b63196deb1446a7209b98b1c4bf"
+      }
+    },
+    {
+      "id": "CLM-0322",
+      "statement": "read.css hides the header and tabs on the signed-out screen.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "test",
+      "source": "PR: 'read.css hides the header and tabs on the signed-out screen.'",
+      "derived_from": [
+        "CLM-0305"
+      ],
+      "artifacts": [
+        "src/http/read/read.css",
+        "tests/ui_e2e/read.rs"
+      ],
+      "tags": [
+        "from-issue:900"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0347",
+          "kind": "test",
+          "locator": "src/http/read/read.css:222-224; tests/ui_e2e/read.rs a_signed_out_reader_stays_on_the_reader_and_can_be_installed (wait_hidden #top, .tabs)",
+          "summary": "CSS rule `.signed-out .top, .signed-out .tabs { display: none; }` (header#top has class top, nav has class tabs); the journey waits for both to be hidden on the signed-out screen. Passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/read/read.css",
+              "lines": {
+                "start": 222,
+                "end": 224
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:57:15.225500517Z",
+          "seal": {
+            "by": "server",
+            "mac": "2a07b5ea2784639e4ca613f349806c2b80c1f219d246112f5c4940235efb2d48"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "CSS rule and a journey asserting the elements are hidden.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0347"
+          ],
+          "recorded_at": "2026-11-21T22:57:48.758517644Z",
+          "seal": {
+            "by": "server",
+            "mac": "26ba393ce17d994d22c697ee643e4a95f7285db037561cb41a2c08677ff0ba10"
+          }
+        }
+      ],
+      "created_at": "2026-11-21T22:56:19.448666366Z",
+      "updated_at": "2026-11-21T22:57:48.758517644Z",
+      "seal": {
+        "by": "server",
+        "mac": "bf9889a6dbafb56c88a2369dd7cea36d4041cb246788a9c3a9f761d93fcdee70"
+      }
+    },
+    {
+      "id": "CLM-0323",
+      "statement": "shell.json and sw.js are built per request (no cached static listing or worker), and routes() takes the app state while ui::content_type is pub(crate).",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR: 'shell.json and sw.js are built per request ... routes() takes the app state; ui::content_type is pub(crate).'",
+      "derived_from": [
+        "CLM-0305"
+      ],
+      "artifacts": [
+        "src/http/read.rs",
+        "src/http/ui.rs"
+      ],
+      "tags": [
+        "from-issue:900"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0348",
+          "kind": "inspection",
+          "locator": "src/http/read.rs:141-150, 197-255; src/http/ui.rs:72",
+          "summary": "shell() and worker() take State<Arc<App>> and call shell_listing/render_worker per request; the former LazyLock SHELL_LISTING and WORKER statics are gone (git grep finds none). routes() returns Router<Arc<App>> (it is called with no argument, and its Router state is the app, so \"takes the app state\" is loose: the state is supplied by the router, not a parameter); content_type is pub(crate).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/read.rs",
+              "lines": {
+                "start": 197,
+                "end": 255
+              },
+              "commit": "5ff95d35e6a850c60cd9ec4633f99a6794de3a1f"
+            }
+          },
+          "recorded_at": "2026-11-21T22:57:15.252435168Z",
+          "seal": {
+            "by": "server",
+            "mac": "a3b95c07252190d63954acf29205b0a80642d86381fd75b4d805b5789c38233c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Handlers build both per request and the statics are gone. \"routes() takes the app state\" is loosely worded (it returns Router<Arc<App>>, with no parameter) but not wrong in substance.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0348"
+          ],
+          "recorded_at": "2026-11-21T22:57:48.782898406Z",
+          "seal": {
+            "by": "server",
+            "mac": "0580d1f1ef171b288399f9dc00eb502e431b40a3c2790d52b157c8a674167b77"
+          }
+        }
+      ],
+      "created_at": "2026-11-21T22:56:19.448666366Z",
+      "updated_at": "2026-11-21T22:57:48.782898406Z",
+      "seal": {
+        "by": "server",
+        "mac": "0147437e58ffcd3fa7ccf33e5cd8982f274879f3712df78c6894643d848d230b"
+      }
+    },
+    {
+      "id": "CLM-0324",
+      "statement": "On the head commit the gates pass: fmt, lint, dylint, worker (115 tests), test (3258 passed, 0 failed), test-ui (268 passed, 0 failed, 1 ignored).",
+      "kind": "non_functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR Validation: 'fmt, lint, dylint, worker (115 tests), test (3258 passed, 0 failed), test-ui (268 passed, 0 failed, 1 ignored) all green via tools/agentic/gate.sh.'",
+      "derived_from": [
+        "CLM-0305"
+      ],
+      "artifacts": [
+        "target/i900-logs/summary.log"
+      ],
+      "tags": [
+        "from-issue:900"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0349",
+          "kind": "log",
+          "locator": "target/i900-logs/summary.log, test.log, test-ui.log, worker.log",
+          "summary": "summary.log: fmt, dylint, lint, test, test-ui all exit 0. test.log result lines sum to 3258 passed, 0 failed; test-ui.log: 268 passed, 0 failed, 1 ignored; worker.log: tests 115, pass 115, fail 0. The logs were written 17:23-17:54, the commit at 17:54:55 on a clean tree, so they ran on the pre-commit working tree; I did not rerun them.",
+          "stance": "supports",
+          "recorded_at": "2026-11-21T22:57:15.275698117Z",
+          "seal": {
+            "by": "server",
+            "mac": "e38bc69b5aa72d07b84b53e5597bf55e1ff0bbed43b9be236fd23324014648e6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The logs show the stated counts and exit 0s. I did not rerun; the logs predate the commit (clean tree afterwards), so they describe the same content.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0349"
+          ],
+          "recorded_at": "2026-11-21T22:57:48.806809846Z",
+          "seal": {
+            "by": "server",
+            "mac": "52a02244dfd625ec2096e6ad7d95b68c1b76fd350da45a2b9707164e04ee21c2"
+          }
+        }
+      ],
+      "created_at": "2026-11-21T22:56:19.448666366Z",
+      "updated_at": "2026-11-21T22:57:48.806809846Z",
+      "seal": {
+        "by": "server",
+        "mac": "3017152face1f04f795fa7a2f96057f1b5d1eeac8fa9a85df1a73147a11e8237"
       }
     }
   ]
