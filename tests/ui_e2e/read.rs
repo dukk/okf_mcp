@@ -2370,3 +2370,100 @@ async fn offline_at_boot_keeps_the_copies_and_says_the_account_needs_a_connectio
     })
     .await;
 }
+
+/// The sample catalog of the visual check: placeholder content shaped like
+/// the mockup's (folders with descriptions, a long concept with tags,
+/// quotes, code and links, several actors and kinds of change).
+fn visual_sample() -> Vec<(String, String)> {
+    let mut long = String::from(
+        "---\ntype: system\ntitle: Kubernetes cluster\ndescription: The home cluster: three control-plane nodes and five workers, deployed from git.\n\
+         tags: [k8s, infra, platform]\n---\n# Kubernetes cluster\n\n\
+         > This is the test cluster. Production runs separately: see [Production deployment](production.md).\n\n\
+         The cluster runs three control-plane nodes and five workers. Workloads are deployed from the `infra` repository.\n\n",
+    );
+    for section in [
+        "Nodes",
+        "Deployments",
+        "Ingress",
+        "Certificates",
+        "Upgrades",
+        "Incidents",
+    ] {
+        long.push_str(&format!(
+            "## {section}\n\nEach node is a virtual machine. Upgrades go one node at a time, with `kubectl drain` first, \
+             and the control plane last. See [Image updater](image-updater.md) for how new builds roll out.\n\n"
+        ));
+    }
+    [
+        ("index.md", "---\ntitle: Example Notes\ndescription: What the team keeps.\n---\n# Example Notes\n".to_string()),
+        ("infra/index.md", "---\ntitle: Infrastructure\ndescription: Shared platforms that services run on.\n---\n# Infrastructure\n".to_string()),
+        ("infra/network/index.md", "---\ntitle: Network\ndescription: Routers, DNS, the edge.\n---\n# Network\n".to_string()),
+        ("infra/network/dns.md", "---\ntitle: Internal DNS\ndescription: Names under example.internal.\n---\n# Internal DNS\n\nServes example.internal.\n".to_string()),
+        ("infra/kubernetes.md", long),
+        ("infra/image-updater.md", "---\ntitle: Image updater\ndescription: Moves deployments to the newest build.\n---\n# Image updater\n\nIt watches the registry and links back to [the cluster](kubernetes.md).\n".to_string()),
+        ("infra/production.md", "---\ntitle: Production deployment\ndescription: How a release reaches production.\n---\n# Production deployment\n\nSee [the cluster](kubernetes.md), [its nodes](kubernetes.md#nodes) and [upgrades](kubernetes.md#upgrades).\n".to_string()),
+        ("infra/old-vpn.md", "---\ntitle: Old VPN notes\n---\n# Old VPN notes\n".to_string()),
+        ("processes/index.md", "---\ntitle: Processes\ndescription: How work gets done here.\n---\n# Processes\n".to_string()),
+        ("processes/release.md", "---\ntype: process\ntitle: Release process\ndescription: How a release is cut, tagged and shipped.\n---\n# Release process\n\n1. Tag.\n2. Ship.\n".to_string()),
+    ]
+    .into_iter()
+    .map(|(path, text)| (path.to_string(), text))
+    .collect()
+}
+
+/// Serves [`visual_sample`] for the visual check (plan Task 10), with later
+/// rounds by other actors so Home shows groups, edits and a deletion. Not a
+/// journey: run it by hand (it is ignored otherwise); it prints the URL and
+/// serves for `READER_VISUAL_MINUTES` (default 30).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "serves a sample catalog for the manual visual check"]
+async fn serve_a_sample_catalog_for_the_visual_check() {
+    let server = server_with_catalog("notes", &visual_sample()).await;
+    server.set_catalog_label("notes", "Example Notes").await;
+    let mut entries = visual_sample();
+    if let Some((_, text)) = entries
+        .iter_mut()
+        .find(|(path, _)| path.as_str() == "processes/release.md")
+    {
+        text.push_str("3. Announce.\n");
+    }
+    let edited: Vec<(&str, &str)> = entries
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    publish_as(&server, "sam", files(&edited)).await;
+    let kept: Vec<(&str, &str)> = edited
+        .iter()
+        .copied()
+        .filter(|(path, _)| *path != "infra/old-vpn.md")
+        .collect();
+    publish_as(&server, "alex", files(&kept)).await;
+    let minutes = std::env::var("READER_VISUAL_MINUTES")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(30);
+    eprintln!(
+        "visual check: {}/read/ (sign in as {EMAIL}, password {PASSWORD}); serving for {minutes} min",
+        server.base
+    );
+    tokio::time::sleep(Duration::from_secs(minutes * 60)).await;
+}
+
+/// Imports `entries` over the `notes` catalog as `actor`, as a publish would.
+async fn publish_as(server: &TestServer, actor: &str, entries: okf_mcp::archive::Files) {
+    let options = ImportOptions {
+        replace: true,
+        scope: ImportScope::Everything,
+        expect_generation: None,
+        expect_catalog_id: None,
+        actor,
+        audit: &AuditActor::cli(),
+        now: Utc::now(),
+    };
+    crate::support::server::applied(&server.app, async {
+        import(&server.db.pool, "notes", entries, &options)
+            .await
+            .expect("import");
+    })
+    .await;
+}
