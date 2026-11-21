@@ -238,6 +238,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_shell_precaches_the_fonts_the_sprite_and_their_licenses() {
+        let response = get("/read/shell.json").await;
+        let listing: serde_json::Value = serde_json::from_str(&text(response).await).expect("json");
+        let files: Vec<&str> = listing["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .filter_map(|entry| entry["url"].as_str())
+            .collect();
+        for url in [
+            "/read/icons.svg",
+            "/read/fonts/inter-latin.woff2",
+            "/read/fonts/literata-latin.woff2",
+            "/read/fonts/literata-italic-latin.woff2",
+            "/read/fonts/OFL-Inter.txt",
+            "/read/fonts/OFL-Literata.txt",
+        ] {
+            assert!(files.contains(&url), "{url} in {files:?}");
+        }
+        assert_eq!(
+            get("/read/fonts/inter-latin.woff2").await.headers()["content-type"],
+            "font/woff2"
+        );
+        assert_eq!(
+            get("/read/icons.svg").await.headers()["content-type"],
+            "image/svg+xml"
+        );
+        assert_eq!(
+            get("/read/fonts/OFL-Inter.txt").await.headers()["content-type"],
+            "text/plain; charset=utf-8"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_system_bars_follow_the_theme() {
+        let page = text(get("/read/").await).await;
+        assert!(page.contains(
+            r##"<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">"##
+        ));
+        assert!(page.contains(
+            r##"<meta name="theme-color" content="#191919" media="(prefers-color-scheme: dark)">"##
+        ));
+        let manifest: serde_json::Value =
+            serde_json::from_str(&text(get("/read/manifest.webmanifest").await).await)
+                .expect("json");
+        // Neutral, so no colour of the old accent shows in a system bar.
+        assert_eq!(manifest["theme_color"], "#ffffff");
+        assert_eq!(manifest["background_color"], "#ffffff");
+    }
+
+    #[tokio::test]
     async fn the_reader_and_the_console_never_serve_each_others_files() {
         assert_eq!(
             get("/read/styles.css").await.status(),
@@ -315,5 +366,39 @@ mod tests {
         for url in SHARED_CONSOLE_FILES {
             assert!(!shared_bytes(url).is_empty(), "{url} is embedded");
         }
+    }
+
+    /// Every icon the reader's page and scripts name by a literal
+    /// (`icons.svg#i-NAME` in markup, `icon('NAME'` in a script) is a
+    /// symbol of the sprite, so no icon draws empty.
+    #[test]
+    fn every_icon_the_reader_names_is_in_its_sprite() {
+        let sprite = READ_ASSETS
+            .iter()
+            .find(|(name, _)| *name == "icons.svg")
+            .map(|(_, body)| String::from_utf8_lossy(body).into_owned())
+            .expect("icons.svg is embedded");
+        let named =
+            regex::Regex::new(r"icons\.svg#i-([a-z-]+)|icon\('([a-z-]+)'").expect("valid regex");
+        let mut seen = 0;
+        for (name, body) in READ_ASSETS {
+            if !(name.ends_with(".js") || name.ends_with(".html")) {
+                continue;
+            }
+            let text = String::from_utf8_lossy(body);
+            for found in named.captures_iter(&text) {
+                let icon = found
+                    .get(1)
+                    .or_else(|| found.get(2))
+                    .map(|group| group.as_str())
+                    .expect("one group matched");
+                seen += 1;
+                assert!(
+                    sprite.contains(&format!("id=\"i-{icon}\"")),
+                    "{name} names i-{icon}, which icons.svg lacks"
+                );
+            }
+        }
+        assert!(seen > 0, "the reader names no icon");
     }
 }

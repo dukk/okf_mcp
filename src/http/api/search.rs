@@ -6,7 +6,7 @@ use std::sync::Arc;
 use axum::extract::{Query, State};
 use axum::routing::get;
 use axum::{Extension, Json, Router};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::app::App;
 use crate::auth::Principal;
@@ -15,7 +15,7 @@ use crate::http::api::context;
 use crate::http::requester::Requester;
 use crate::http::AppError;
 use crate::mcp::context::ToolContext;
-use crate::mcp::search::{run, SearchParams, SearchResult};
+use crate::mcp::search::{run_with, LabeledHit, SearchParams, SearchResult, SkippedCatalog};
 use crate::store::keys::Access;
 
 /// This area's routes.
@@ -41,6 +41,53 @@ struct SearchArgs {
     catalogs: Option<String>,
     /// At most this many hits (as the tool: default 20, at most 200).
     limit: Option<usize>,
+}
+
+/// One hit as `GET /search` answers it: the `search` tool's hit, plus its
+/// snippet as plain text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct WebHit {
+    /// The tool's hit; `flatten` writes its fields beside `snippet_text`.
+    #[serde(flatten)]
+    pub hit: LabeledHit,
+    /// The snippet's text without markdown syntax
+    /// ([`crate::okf::search::SearchHit::snippet_text`]), for a client that
+    /// shows it as text (the mobile reader); null without a snippet.
+    pub snippet_text: Option<String>,
+}
+
+/// `GET /search`'s answer: the tool's result, each hit a [`WebHit`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct WebSearch {
+    /// As [`SearchResult::hits`], best first.
+    pub hits: Vec<WebHit>,
+    /// As [`SearchResult::skipped`].
+    pub skipped: Vec<SkippedCatalog>,
+}
+
+/// The tool's result with each hit's plain snippet moved beside it.
+///
+/// # Arguments
+/// * `result` - the search's result, made with plain snippets.
+///
+/// # Returns
+/// The same hits, in the same order.
+#[tracing::instrument(level = "trace", skip_all)]
+fn with_plain_snippets(result: SearchResult) -> WebSearch {
+    let hits = result
+        .hits
+        .into_iter()
+        .map(|mut hit| {
+            // `hit.hit.hit` is the LabeledHit's CatalogHit's SearchHit;
+            // `take` moves the text out, leaving `None` (it is not serialized there).
+            let snippet_text = hit.hit.hit.snippet_text.take();
+            WebHit { hit, snippet_text }
+        })
+        .collect();
+    WebSearch {
+        hits,
+        skipped: result.skipped,
+    }
 }
 
 /// The names in a `catalogs=` value.
@@ -129,7 +176,7 @@ async fn search(
     Extension(principal): Extension<Arc<Principal>>,
     requester: Requester,
     Query(args): Query<SearchArgs>,
-) -> Result<Json<SearchResult>, AppError> {
+) -> Result<Json<WebSearch>, AppError> {
     let named = args
         .catalogs
         .as_deref()
@@ -146,7 +193,7 @@ async fn search(
     } else {
         named
     };
-    let result = run(
+    let result = run_with(
         &ctx,
         SearchParams {
             query: args.q,
@@ -157,9 +204,10 @@ async fn search(
             limit: args.limit,
             changeset: None,
         },
+        true,
     )
     .await?;
-    Ok(Json(result))
+    Ok(Json(with_plain_snippets(result)))
 }
 
 #[cfg(test)]
@@ -269,6 +317,10 @@ mod tests {
         assert_eq!(found["hits"][0]["catalog"], "main");
         assert_eq!(found["hits"][0]["path"], "/systems/alpha.md");
         assert_eq!(found["hits"][0]["snippet"], "Alpha runs [Beta](beta.md).");
+        // The same text without its markdown syntax, for the reader.
+        assert_eq!(found["hits"][0]["snippet_text"], "Alpha runs Beta.");
+        // An empty query has no snippet, so no plain one either.
+        assert_eq!(limited["hits"][0]["snippet_text"], serde_json::Value::Null);
         assert_eq!(limited["hits"].as_array().map(Vec::len), Some(1));
         assert_eq!(
             elsewhere["hits"],
