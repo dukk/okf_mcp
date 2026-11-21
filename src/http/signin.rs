@@ -954,8 +954,8 @@ struct NewPasswordForm {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AfterSetup<'a> {
     /// The `onboarding_url` setting: an `https://` URL, usually on another
-    /// origin, so it is reached by a forwarding page, never a 303 (the
-    /// setup form's `form-action 'self'` would block the redirect).
+    /// origin, so it is reached by a link on a welcome page, never a 303
+    /// (the setup form's `form-action 'self'` would block the redirect).
     Guide(&'a str),
     /// A same-origin path from `safe_return_to`, reached by a 303.
     Return(&'a str),
@@ -994,7 +994,7 @@ const OAUTH_CONTINUATION: &str = "/oauth/authorize?";
 
 /// `POST /account/setup`: sets the password and signs in, then sends the
 /// browser where [`after_setup`] says: a 303 to a same-origin path, or a
-/// forwarding page to the onboarding guide. The link is used only once the
+/// welcome page that links to the onboarding guide. The link is used only once the
 /// password passes, so a weak one can be retried.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn setup_post(
@@ -1047,13 +1047,16 @@ async fn setup_post(
     let cookie = used.cookie.unwrap_or_default();
     let settings = app.settings();
     match after_setup(&return_to, settings.onboarding_url.as_deref()) {
-        AfterSetup::Guide(url) => (cookie, guide_forward_page(url, &brand)).into_response(),
+        AfterSetup::Guide(url) => (cookie, welcome_page(url, &brand)).into_response(),
         AfterSetup::Return(path) => (cookie, Redirect::to(path)).into_response(),
     }
 }
 
-/// The answer to a setup that goes on to the onboarding guide: a page that
-/// refreshes to it ([`pages::forward_body`]), under the console CSP.
+/// The answer to a setup that goes on to the onboarding guide: a welcome
+/// page the person clicks through, under the console CSP. It has no timer,
+/// no `<meta http-equiv="refresh">` and no form: a timed refresh would fail
+/// WCAG 2.2.1, and a link click is not a form submission, so the setup
+/// form's `form-action 'self'` cannot block it.
 ///
 /// # Arguments
 /// * `url` - the `onboarding_url` setting.
@@ -1062,16 +1065,29 @@ async fn setup_post(
 /// # Returns
 /// A 200 page.
 #[tracing::instrument(level = "debug", skip_all)]
-fn guide_forward_page(url: &str, brand: &Brand) -> Response {
-    const HEADING: &str = "Opening the getting-started guide";
+fn welcome_page(url: &str, brand: &Brand) -> Response {
+    // `role="button"` makes Pico style the link as its primary button, so
+    // no inline style (the CSP forbids it) and no new CSS is needed.
+    let body = format!(
+        r#"        <h1 id="setup-welcome">Your account is ready</h1>
+        <p>Thanks for joining {product}. You're signed in.</p>
+        <p><a id="setup-guide" role="button" href="{url}">Open the quick start guide</a></p>
+        <p class="muted">or go to <a id="setup-console" href="{console}">your console</a></p>"#,
+        product = escape(&brand.product_name),
+        url = escape(url),
+        console = CONSOLE_PATH,
+    );
     pages::page(
         StatusCode::OK,
-        HEADING,
-        &pages::forward_body(HEADING, "setup-forward", url),
+        "Your account is ready",
+        &body,
         CONTENT_SECURITY_POLICY,
         brand,
     )
 }
+
+/// The console, which the welcome page links to as the other way on.
+const CONSOLE_PATH: &str = "/ui/";
 
 /// Uses an emailed link and stores the new password it was for, in one
 /// transaction, so the link is used only if the password change commits:
@@ -1883,25 +1899,32 @@ mod tests {
         app_with(&[("main", MAIN)], config).await
     }
 
-    /// Where a setup's answer sends the browser: the `Location` of a 303,
-    /// or the target of a forwarding page, which must refresh to the same
-    /// URL its link names and carry no `Location`.
-    fn destination(reply: &Reply) -> String {
-        if reply.status == StatusCode::SEE_OTHER {
-            return reply.location().to_string();
-        }
+    /// The `Location` of a setup answered with a 303, and nothing else: a
+    /// setup that goes to this origin's own path must redirect, not show a page.
+    fn redirect_target(reply: &Reply) -> String {
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.text());
+        reply.location().to_string()
+    }
+
+    /// The welcome page a setup with an onboarding guide answers with: a 200
+    /// with no `Location`, no refresh and no form, whose `#setup-guide` link is
+    /// the (unescaped) guide URL and whose `#setup-console` link is the console.
+    fn welcome_guide(reply: &Reply) -> String {
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
-        assert_eq!(reply.location(), "", "a forwarding page, not a redirect");
+        assert_eq!(reply.location(), "", "a page, not a redirect");
         let page = reply.text();
-        let marker = "id=\"setup-forward\" href=\"";
-        let start = page.find(marker).expect("the continue link") + marker.len();
-        let end = start + page[start..].find('"').expect("closing quote");
-        let target = page[start..end].replace("&amp;", "&");
+        assert!(!page.contains("http-equiv"), "no refresh: {page}");
+        assert!(!page.contains("<form"), "no form: {page}");
+        assert!(page.contains("id=\"setup-welcome\""), "{page}");
+        assert!(page.contains("Your account is ready"), "{page}");
         assert!(
-            page.contains(&format!("content=\"0;url={}\"", &page[start..end])),
+            page.contains("id=\"setup-console\" href=\"/ui/\""),
             "{page}"
         );
-        target
+        let marker = "id=\"setup-guide\" role=\"button\" href=\"";
+        let start = page.find(marker).expect("the guide link") + marker.len();
+        let end = start + page[start..].find('"').expect("closing quote");
+        page[start..end].replace("&quot;", "\"").replace("&amp;", "&")
     }
 
     /// A fresh setup link for `user_id`.
@@ -1947,7 +1970,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_first_setup_forwards_to_the_onboarding_guide_and_still_signs_in() {
+    async fn a_first_setup_welcomes_the_person_before_the_onboarding_guide_and_still_signs_in() {
         let test = onboarding_app().await;
         let alice = user_with_password(&test, "alice", "alice@example.com", None).await;
         let token = setup_token(&test, &alice.id).await;
@@ -1965,14 +1988,41 @@ mod tests {
             .send(&test, "GET", "/api/v1/session", Payload::Empty)
             .await;
 
-        // A forwarding page, not a 303: the browser would block a redirect
-        // to another origin after the form's POST (`form-action 'self'`).
-        assert_eq!(done.status, StatusCode::OK);
-        assert_eq!(destination(&done), ONBOARDING);
-        assert!(!done.text().contains("<form"));
+        // A welcome page, not a 303: the browser would block a redirect to
+        // another origin after the form's POST (`form-action 'self'`).
+        assert_eq!(welcome_guide(&done), ONBOARDING);
+        assert!(done.text().contains("Thanks for joining"));
         assert!(done.set_cookie(COOKIE).is_some(), "{:?}", done.headers);
         assert_eq!(session.status, StatusCode::OK);
         assert_eq!(session.json()["user"], "alice");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_welcome_page_escapes_the_product_name_and_the_guide_url() {
+        let mut config = crate::http::api::testing::login_config();
+        config.auth.product_name = "<script>alert(1)</script> & Co".to_string();
+        config.auth.onboarding_url = Some("https://docs.example.com/s?a=1&b=\"2\"".to_string());
+        let test = app_with(&[("main", MAIN)], config).await;
+        let alice = user_with_password(&test, "alice", "alice@example.com", None).await;
+        let token = setup_token(&test, &alice.id).await;
+
+        let done = Browser::default()
+            .send(
+                &test,
+                "POST",
+                "/account/setup",
+                setup_form(&token, PASSWORD, None),
+            )
+            .await;
+
+        let page = done.text();
+        assert!(
+            page.contains("Thanks for joining &lt;script&gt;alert(1)&lt;/script&gt; &amp; Co."),
+            "{page}"
+        );
+        assert!(!page.contains("<script>alert(1)"), "{page}");
+        assert_eq!(welcome_guide(&done), "https://docs.example.com/s?a=1&b=\"2\"");
+        assert!(page.contains("a=1&amp;b=&quot;2&quot;"), "{page}");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2000,7 +2050,7 @@ mod tests {
     async fn a_hostile_return_to_on_setup_still_never_leaves_for_it() {
         let test = onboarding_app().await;
         let plain = login_app().await;
-        for (app, expected) in [(&test, ONBOARDING), (&plain, "/ui/")] {
+        for (app, guide) in [(&test, true), (&plain, false)] {
             let hostile_values = ["https://evil.example/", "//evil.example", "/\\evil.example"];
             for (n, hostile) in hostile_values.into_iter().enumerate() {
                 let name = format!("alice{n}");
@@ -2015,7 +2065,11 @@ mod tests {
                         setup_form(&token, PASSWORD, Some(hostile)),
                     )
                     .await;
-                assert_eq!(destination(&done), expected, "{hostile}");
+                if guide {
+                    assert_eq!(welcome_guide(&done), ONBOARDING, "{hostile}");
+                } else {
+                    assert_eq!(redirect_target(&done), "/ui/", "{hostile}");
+                }
             }
         }
     }
