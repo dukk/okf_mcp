@@ -6,7 +6,7 @@
 // what a refusal does.
 import { $, h, clear } from '/ui/js/core/dom.js';
 import { ago } from '/ui/js/core/format.js';
-import { read, signOut, ReadError, KIND } from './api.js';
+import { read, readAll, signOut, ReadError, KIND } from './api.js';
 import { refusals } from './refusals.js';
 import { wipe, evictCatalog, evictDocument } from './cache.js';
 import { parse, hrefs, parentOf } from './route.js';
@@ -24,7 +24,12 @@ const SCREENS = { home, catalogs, tree, search, concept, document: documentScree
 const NEEDS_CATALOG = new Set(['home']);
 const CATALOG_KEY = 'okf.read.catalog';
 
-const state = { session: null, catalog: remembered() };
+// `known`: the catalogs the account reaches, by name (GET /catalogs: label,
+// page count), once read; `titles`: each catalog's folder titles (folder
+// path to title), as its tree was last read, for breadcrumbs.
+const state = { session: null, catalog: remembered(), known: null, titles: new Map() };
+// The catalog list's read, shared by every screen of this page load.
+let catalogRead = null;
 // Bumped on every navigation, so a late answer never draws over a newer screen.
 let generation = 0;
 // True while the page is leaving this account (a sign-out under way, or a
@@ -110,12 +115,52 @@ function freshness(result) {
     banner.hidden = false;
 }
 
+// The catalogs the account reaches, by name, read once per page load (the
+// worker keeps a copy for offline). A refused read gives an empty map and
+// is tried again next time: the header then shows the catalog's name, and
+// each screen's own reads decide what the refusal means.
+function catalogList() {
+    catalogRead ??= readAll('/catalogs', 'catalogs').then(result => {
+        state.known = new Map(result.data.map(found => [found.name, found]));
+        relabel();
+        return state.known;
+    }, error => {
+        catalogRead = null;
+        if (error instanceof ReadError) return new Map();
+        throw error;
+    });
+    return catalogRead;
+}
+
+// Shows the catalogs' labels wherever the page names a catalog: the header,
+// and every element a screen marked data-catalog-label="<name>" (the
+// breadcrumbs' root) while the list was still being read. The one place
+// that updates them; screens drawn later read the labels from state.known
+// (ctx.label()). Never blocks a screen.
+function relabel() {
+    header();
+    for (const element of document.querySelectorAll('[data-catalog-label]')) {
+        const label = state.known?.get(element.dataset.catalogLabel)?.label;
+        if (label) element.textContent = label;
+    }
+}
+
+// The header: the current catalog's mark and label, and where its search
+// icon goes.
+function header() {
+    const catalog = state.catalog;
+    const label = (catalog && state.known?.get(catalog)?.label) || catalog || 'Reader';
+    $('#bar-label').textContent = label;
+    $('#bar-mark').textContent = ([...label.trim()][0] ?? 'R').toUpperCase();
+    $('#bar-search').setAttribute('href', catalog ? hrefs.search(catalog) : hrefs.catalogs());
+}
+
 function tabs() {
     const current = parse(location.hash).screen;
     const catalog = state.catalog;
     $('#tab-browse').setAttribute('href', catalog ? hrefs.tree(catalog) : hrefs.catalogs());
     $('#tab-search').setAttribute('href', catalog ? hrefs.search(catalog) : hrefs.catalogs());
-    $('#bar-catalog').textContent = catalog ?? 'Reader';
+    header();
     const active = { home: 'tab-home', tree: 'tab-browse', concept: 'tab-browse', document: 'tab-browse', search: 'tab-search', me: 'tab-me' }[current];
     for (const tab of document.querySelectorAll('.tabs a')) {
         if (tab.id === active) tab.setAttribute('aria-current', 'page');
@@ -159,6 +204,9 @@ async function show() {
     }
     const view = h('section', { class: 'screen', id: `screen-${route.screen}` });
     clear($('#reader')).append(view);
+    // Every screen change starts at the top (a section route scrolls to its
+    // heading once drawn).
+    window.scrollTo(0, 0);
     const live = () => mine === generation;
     const refusal = refusals(route, live, {
         signIn, evictCatalog, evictDocument, choose,
@@ -171,9 +219,19 @@ async function show() {
         fail: refusal.fail,
         settle: refusal.settle,
         drawWorst: refusal.drawWorst,
+        // The current catalog's entry of GET /catalogs ({ label, concepts, ... }), or null.
+        summary: () => catalogList().then(found => found.get(route.catalog) ?? null),
+        // Its label now: its name until the list has been read.
+        label: () => state.known?.get(route.catalog)?.label ?? route.catalog,
+        // Its folder titles from the last tree read, or null.
+        titles: () => state.titles.get(route.catalog) ?? null,
+        rememberTitles: titles => { state.titles.set(route.catalog, titles); },
     };
     try {
         await SCREENS[route.screen].render(view, ctx);
+        // A screen drawn after the list was read may still name its catalog
+        // by name (a crumb without `root`): relabel it now.
+        if (state.known && live()) relabel();
     } catch (error) {
         await refusal.caught(error);
     }
@@ -186,6 +244,13 @@ function registrationFailed(error) {
 
 // How long a first visit waits for the new worker to take control.
 const WORKER_WAIT_MS = 5000;
+
+// The reader decides where each screen starts (at the top), not the browser.
+if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+// The header's hairline shows once the page is scrolled.
+window.addEventListener('scroll', () => {
+    $('#top').classList.toggle('scrolled', window.scrollY > 4);
+}, { passive: true });
 
 // Registers the worker and resolves once it controls this page, so the
 // first screen's reads already go through it and are cached (on a first
@@ -225,6 +290,8 @@ async function boot() {
         // Offline (or the server failing): read what is cached; the
         // banner says so on the first cached answer.
     }
+    // Not awaited: the first screen never waits for the labels.
+    catalogList();
     $('#reader').hidden = false;
     window.addEventListener('hashchange', show);
     await show();

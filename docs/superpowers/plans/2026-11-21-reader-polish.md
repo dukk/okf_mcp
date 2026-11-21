@@ -2653,6 +2653,8 @@ In `boot()`, after the session `try`/`catch` and before `$('#reader').hidden = f
     catalogList();
 ```
 
+> **Corrected (issue #866, 2026-11-21).** Two existing journeys needed a change the step did not list. (1) `the_picker_and_the_tree_lead_from_a_catalog_to_its_concepts` waited for the breadcrumb root `Contents`; the root is now the catalog's label, so the journey sets the label (`server.set_catalog_label("main", "Main")`) and waits for `Main`. (2) Task 2's `.meta` (a flex row with margins) made the interim search hit's snippet span unclickable at the link's centre (`NotReceivingEvents`), so the interim `search.js` uses `class: 'hint'` for the snippet until Task 8 rewrites it. Task 5 and 8 take note: `.meta` is the concept meta row, not a snippet or a sub-line inside an `<a>`; the interim `home.js` and `catalogs.js` spans use it too, and their rewrites (Tasks 5 and 9) replace them.
+
 - [ ] **Step 8: Run the tests**
 
 Run: `tools/agentic/gate.sh narrow --lib -- http::read::tests::every_icon` (PASS), `tools/agentic/gate.sh worker` (PASS: `tree.test.mjs` and `catalogs.test.mjs` still pass with the new doubles), then `tools/agentic/gate.sh narrow --test ui_e2e -- read:: --test-threads=2`

@@ -115,6 +115,54 @@ async fn server_with_outline_limit(outline_chars: usize) -> (TestServer, String)
     (server, id)
 }
 
+/// A server with one catalog `name` holding `entries`, sign-in routes on,
+/// and the user `reader` entitled to read it.
+///
+/// # Arguments
+/// * `name` - the catalog.
+/// * `entries` - `(path, text)` of each file.
+async fn server_with_catalog(name: &str, entries: &[(String, String)]) -> TestServer {
+    let borrowed: Vec<(&str, &str)> = entries
+        .iter()
+        .map(|(path, text)| (path.as_str(), text.as_str()))
+        .collect();
+    let server = TestServer::start_with(vec![(name, files(&borrowed))], |base| Config {
+        public_url: Some(base.to_string()),
+        ..Config::default()
+    })
+    .await;
+    server.user_with_password("reader", EMAIL, PASSWORD).await;
+    crate::support::server::applied(&server.app, async {
+        ceiling::entitle(
+            &server.db.pool,
+            &NewEntitlement {
+                user: "reader",
+                catalog: name,
+                access: Access::Read,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("entitle");
+    })
+    .await;
+    server
+}
+
+/// A root index and `count` notes, `notes/n000.md` on, titled `N0` on,
+/// each with `body` below its heading.
+fn notes(count: usize, body: &str) -> Vec<(String, String)> {
+    std::iter::once(("index.md".to_string(), "# Many\n".to_string()))
+        .chain((0..count).map(|n| {
+            (
+                format!("notes/n{n:03}.md"),
+                format!("---\ntitle: N{n}\n---\n# N{n}\n\n{body}\n"),
+            )
+        }))
+        .collect()
+}
+
 /// Signs in at the reader's account screen, waits for the worker, and has
 /// it cache alpha, so there is an offline copy for sign-out to delete.
 fn signed_in_with_a_copy(ui: &Ui) {
@@ -217,8 +265,78 @@ async fn signing_out_without_a_connection_still_deletes_the_offline_copies() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_header_shows_the_catalog_label_and_opens_the_picker() {
+    let (server, _) = server().await;
+    server.set_catalog_label("main", "Example Notes").await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/t/main", EMAIL, PASSWORD);
+        ui.wait_text("#bar-label", "Example Notes");
+        assert_eq!(ui.text("#bar-mark"), "E");
+        assert_eq!(
+            ui.eval(
+                "() => document.querySelector('#bar-search').getAttribute('href')",
+                json!(null)
+            ),
+            json!("#/s/main")
+        );
+        ui.click("#bar-catalog");
+        ui.wait_visible("#catalog-list");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_screen_change_starts_at_the_top() {
+    let server = server_with_catalog("many", &notes(60, "Body.")).await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/t/many/notes", EMAIL, PASSWORD);
+        ui.wait_text("#concepts", "N59");
+        ui.eval(
+            "() => { window.scrollTo(0, 1500); return true; }",
+            json!(null),
+        );
+        ui.poll_eval("() => window.scrollY > 0");
+        ui.poll_eval("() => document.querySelector('#top').classList.contains('scrolled')");
+        ui.click("#tab-home");
+        ui.wait_visible("#screen-home");
+        ui.poll_eval("() => window.scrollY === 0");
+    })
+    .await;
+}
+
+/// The breadcrumbs' root (the catalog's name until its label is known).
+const CRUMB_ROOT: &str = ".crumbs [data-catalog-label]";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn breadcrumbs_take_the_catalog_label_when_the_list_answers_late() {
+    let (server, _) = server().await;
+    server.set_catalog_label("main", "Example Notes").await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/t/main", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.wait_text(CRUMB_ROOT, "Example Notes");
+        // Boot reads the catalog list before any page-side override could
+        // be installed, so the answer is held in the worker (DevTools
+        // pauses survive the reload) rather than with `hold_next`.
+        let mut paused = ui.pause_worker_responses("*/api/v1/catalogs");
+        ui.reload_reader();
+        let held = paused.next_paused();
+        // The tree draws without waiting for the list: its crumb names the catalog.
+        ui.wait_visible("#folders");
+        assert_eq!(ui.text(CRUMB_ROOT), "main");
+        assert_eq!(ui.text("#bar-label"), "main");
+        paused.release(&held);
+        // One update, in place, once the list answers.
+        ui.wait_text(CRUMB_ROOT, "Example Notes");
+        ui.wait_text("#bar-label", "Example Notes");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_picker_and_the_tree_lead_from_a_catalog_to_its_concepts() {
     let (server, _) = server().await;
+    server.set_catalog_label("main", "Main").await;
     drive(server.base.clone(), move |ui| {
         ui.sign_in_reader("/c", EMAIL, PASSWORD);
         // Two catalogs, so the picker stays.
@@ -236,7 +354,7 @@ async fn the_picker_and_the_tree_lead_from_a_catalog_to_its_concepts() {
         ui.wait_text("#body", "Systems");
         ui.wait_text("#concepts", "Alpha");
         ui.wait_text("#concepts", "Beta");
-        ui.wait_text(".crumbs", "Contents");
+        ui.wait_text(".crumbs", "Main");
     })
     .await;
 }

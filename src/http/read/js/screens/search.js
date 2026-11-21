@@ -26,5 +26,5 @@ export async function render(view, ctx) {
         h('ul', { class: 'list', id: 'hits' }, hits.map(hit => h('li', {},
             // h() drops a null child; the native append would print "null".
             h('a', { href: hrefFor(hit.catalog, hit.path) }, hit.title ?? hit.path,
-                hit.snippet ? h('span', { class: 'meta' }, hit.snippet) : null)))));
+                hit.snippet ? h('span', { class: 'hint' }, hit.snippet) : null)))));
 }
