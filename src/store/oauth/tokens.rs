@@ -1,7 +1,7 @@
 //! `oauth_tokens`: access and refresh tokens, by SHA-256. A family is every
 //! token minted from one authorization code (Task 6 rotates within it).
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use sqlx::{PgConnection, PgPool};
 
 use crate::error::OkfError;
@@ -255,7 +255,8 @@ pub async fn lock_family(conn: &mut PgConnection, family_id: &str) -> Result<(),
 /// What presenting a refresh token found ([`use_refresh`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RefreshUse {
-    /// Live and unused: now marked used. Mint its successor in the same
+    /// Live and unused, now marked used; or used within the reuse grace
+    /// window and still live (`again`). Mint its successor in the same
     /// transaction.
     Rotated {
         /// Its grant.
@@ -269,9 +270,14 @@ pub enum RefreshUse {
         /// checks the presenting client against it without another
         /// connection or a cache load while its locks are held.
         client_id: Option<String>,
+        /// `true` when the token had already been used, within the grace
+        /// window: another process of the same client lost a race to
+        /// rotate it. Its first use stays the window's start.
+        again: bool,
     },
-    /// Already used once: a stolen copy, or the client replaying it. The
-    /// caller revokes the family.
+    /// Already used, past the grace window (or in a revoked family): a
+    /// stolen copy, or the client replaying it. The caller revokes the
+    /// family.
     Reused {
         /// The family to revoke.
         family_id: String,
@@ -342,8 +348,14 @@ pub async fn lock_grant(conn: &mut PgConnection, grant_id: &str) -> Result<bool,
 /// then its family's lock ([`lock_family`]), locks its row and, if it is
 /// live and unused, marks it used.
 ///
-/// Reuse is checked first: a used token is `Reused` even after its family
-/// was revoked, so replaying it again stays harmless (revoking twice).
+/// A used token is `Reused`, which revokes its family, unless it is
+/// presented again within `grace` of its first use while it, its family
+/// and its grant are still live: then it rotates again (`again`). Several
+/// processes of one client sharing a credential refresh at once when the
+/// access token expires, and only the first can win the rotation; without
+/// the window every loser would sign the client out. A used token in a
+/// revoked family is `Reused` (revoking twice is harmless), never rotated:
+/// a family revocation revokes its used tokens too.
 ///
 /// # Arguments
 /// * `tx` - a read-committed transaction, the one the successor is minted
@@ -351,6 +363,7 @@ pub async fn lock_grant(conn: &mut PgConnection, grant_id: &str) -> Result<bool,
 ///   releases the family lock).
 /// * `sha256` - the presented token's hash.
 /// * `now` - the server clock.
+/// * `grace` - `oauth.refresh_reuse_grace`; zero turns the window off.
 ///
 /// # Returns
 /// What was found.
@@ -362,6 +375,7 @@ pub async fn use_refresh(
     tx: &mut PgConnection,
     sha256: &[u8; 32],
     now: DateTime<Utc>,
+    grace: TimeDelta,
 ) -> Result<RefreshUse, OkfError> {
     // The grant and the family first: a token's grant and family never
     // change, so reading them before the locks is safe; the token's state
@@ -409,13 +423,29 @@ pub async fn use_refresh(
     else {
         return Ok(RefreshUse::Unknown);
     };
-    if used_at.is_some() {
-        return Ok(RefreshUse::Reused { family_id });
-    }
     // An expired grant is refused as a revoked one is (the credential
     // cache refuses it the same way).
     let grant_expired = grant_expires_at.is_some_and(|at| at <= now);
-    if revoked_at.is_some() || grant_revoked_at.is_some() || grant_expired || expires_at <= now {
+    let live =
+        revoked_at.is_none() && grant_revoked_at.is_none() && !grant_expired && expires_at > now;
+    if let Some(first_use) = used_at {
+        // `now - first_use` is a `TimeDelta`; a clock that stepped back
+        // makes it negative, which is still inside an open window. A zero
+        // grace closes the window even for a second use at the same instant.
+        let within_grace = grace > TimeDelta::zero() && now - first_use <= grace;
+        if !(live && within_grace) {
+            return Ok(RefreshUse::Reused { family_id });
+        }
+        // `used_at` is left as it is, so the window never slides.
+        return Ok(RefreshUse::Rotated {
+            grant_id,
+            family_id,
+            resource,
+            client_id,
+            again: true,
+        });
+    }
+    if !live {
         return Ok(RefreshUse::Unknown);
     }
     sqlx::query("UPDATE oauth_tokens SET used_at = $2 WHERE sha256 = $1")
@@ -428,6 +458,7 @@ pub async fn use_refresh(
         family_id,
         resource,
         client_id,
+        again: false,
     })
 }
 
@@ -684,7 +715,9 @@ mod tests {
     /// `use_refresh` in its own committed transaction.
     async fn present(db: &crate::db::pg_support::TestDb, sha256: &[u8; 32]) -> RefreshUse {
         let mut tx = db.pool.begin().await.unwrap();
-        let found = use_refresh(&mut tx, sha256, now()).await.unwrap();
+        let found = use_refresh(&mut tx, sha256, now(), TimeDelta::zero())
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
         found
     }
@@ -704,6 +737,7 @@ mod tests {
                 family_id: "family-a".to_string(),
                 resource: "https://okf.example.com/mcp".to_string(),
                 client_id: Some("https://client.example.com/client.json".to_string()),
+                again: false,
             }
         );
         assert_eq!(
@@ -714,13 +748,121 @@ mod tests {
         );
     }
 
+    /// `use_refresh` at `at` with `grace`, in its own committed transaction.
+    async fn present_with(
+        db: &crate::db::pg_support::TestDb,
+        sha256: &[u8; 32],
+        at: DateTime<Utc>,
+        grace: TimeDelta,
+    ) -> RefreshUse {
+        let mut tx = db.pool.begin().await.unwrap();
+        let found = use_refresh(&mut tx, sha256, at, grace).await.unwrap();
+        tx.commit().await.unwrap();
+        found
+    }
+
+    /// Issue #884: processes sharing one credential refresh at once; a
+    /// second use within the window rotates again, measured from the first
+    /// use (it never slides), and past it the use is a reuse.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_second_use_within_the_grace_window_rotates_again() {
+        let (db, grant) = with_grant().await;
+        store(
+            &db,
+            &token(&grant, TokenKind::Refresh, "family-g", [30; 32]),
+        )
+        .await;
+        let grace = TimeDelta::seconds(60);
+
+        let first = present_with(&db, &[30; 32], now(), grace).await;
+        let racing = present_with(&db, &[30; 32], now(), grace).await;
+        let at_the_edge = present_with(&db, &[30; 32], now() + grace, grace).await;
+        let past_it =
+            present_with(&db, &[30; 32], now() + grace + TimeDelta::seconds(1), grace).await;
+
+        assert!(
+            matches!(first, RefreshUse::Rotated { again: false, .. }),
+            "{first:?}"
+        );
+        assert_eq!(
+            racing,
+            RefreshUse::Rotated {
+                grant_id: grant.clone(),
+                family_id: "family-g".to_string(),
+                resource: "https://okf.example.com/mcp".to_string(),
+                client_id: Some("https://client.example.com/client.json".to_string()),
+                again: true,
+            }
+        );
+        assert!(
+            matches!(at_the_edge, RefreshUse::Rotated { again: true, .. }),
+            "the window's end is inside it: {at_the_edge:?}"
+        );
+        assert_eq!(
+            past_it,
+            RefreshUse::Reused {
+                family_id: "family-g".to_string()
+            },
+            "uses inside the window did not slide it"
+        );
+    }
+
+    /// The grace window never revives a revoked family or grant: the used
+    /// token is a reuse, as without the window.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_grace_window_does_not_rotate_a_revoked_family_or_grant() {
+        let (db, grant) = with_grant().await;
+        let grace = TimeDelta::seconds(60);
+        store(
+            &db,
+            &token(&grant, TokenKind::Refresh, "family-h", [31; 32]),
+        )
+        .await;
+        store(
+            &db,
+            &token(&grant, TokenKind::Refresh, "family-i", [32; 32]),
+        )
+        .await;
+        for hash in [[31; 32], [32; 32]] {
+            assert!(matches!(
+                present_with(&db, &hash, now(), grace).await,
+                RefreshUse::Rotated { again: false, .. }
+            ));
+        }
+
+        revoke_family(&db.pool, "family-h", now()).await.unwrap();
+        let in_revoked_family = present_with(&db, &[31; 32], now(), grace).await;
+        sqlx::query("UPDATE api_keys SET revoked_at = $2 WHERE id = $1")
+            .bind(&grant)
+            .bind(now())
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let in_revoked_grant = present_with(&db, &[32; 32], now(), grace).await;
+
+        assert_eq!(
+            in_revoked_family,
+            RefreshUse::Reused {
+                family_id: "family-h".to_string()
+            }
+        );
+        assert_eq!(
+            in_revoked_grant,
+            RefreshUse::Reused {
+                family_id: "family-i".to_string()
+            }
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_rolled_back_rotation_leaves_the_token_unused() {
         let (db, grant) = with_grant().await;
         store(&db, &token(&grant, TokenKind::Refresh, "family-b", [9; 32])).await;
 
         let mut tx = db.pool.begin().await.unwrap();
-        let first = use_refresh(&mut tx, &[9; 32], now()).await.unwrap();
+        let first = use_refresh(&mut tx, &[9; 32], now(), TimeDelta::zero())
+            .await
+            .unwrap();
         // Dropped without `commit`: sqlx rolls the transaction back.
         drop(tx);
 
@@ -754,7 +896,9 @@ mod tests {
         }
         let present_at = async |byte: u8, at: DateTime<Utc>| {
             let mut tx = db.pool.begin().await.unwrap();
-            let found = use_refresh(&mut tx, &[byte; 32], at).await.unwrap();
+            let found = use_refresh(&mut tx, &[byte; 32], at, TimeDelta::zero())
+                .await
+                .unwrap();
             tx.commit().await.unwrap();
             found
         };
@@ -798,9 +942,14 @@ mod tests {
         store(&db, &token(&grant, TokenKind::Refresh, "g", [13; 32])).await;
         let mut tx = db.pool.begin().await.unwrap();
         // One second on, the short-lived token has expired.
-        let expired = use_refresh(&mut tx, &[11; 32], now() + TimeDelta::seconds(1))
-            .await
-            .unwrap();
+        let expired = use_refresh(
+            &mut tx,
+            &[11; 32],
+            now() + TimeDelta::seconds(1),
+            TimeDelta::zero(),
+        )
+        .await
+        .unwrap();
         drop(tx);
         crate::store::keys::revoke_by_id(
             &db.pool,
@@ -897,7 +1046,9 @@ mod tests {
         // R0 -> (A1, R1), committed.
         let mut tx = db.pool.begin().await.unwrap();
         assert!(matches!(
-            use_refresh(&mut tx, &r0, now()).await.unwrap(),
+            use_refresh(&mut tx, &r0, now(), TimeDelta::zero())
+                .await
+                .unwrap(),
             RefreshUse::Rotated { .. }
         ));
         insert(
@@ -918,7 +1069,9 @@ mod tests {
         // R1 -> (A2, R2), held open after inserting the successors.
         let mut rotation = db.pool.begin().await.unwrap();
         assert!(matches!(
-            use_refresh(&mut rotation, &r1, now()).await.unwrap(),
+            use_refresh(&mut rotation, &r1, now(), TimeDelta::zero())
+                .await
+                .unwrap(),
             RefreshUse::Rotated { .. }
         ));
         insert(
@@ -943,7 +1096,9 @@ mod tests {
             let family_id = match trigger {
                 Trigger::Reuse => {
                     let mut tx = pool.begin().await.unwrap();
-                    let found = use_refresh(&mut tx, &r0, now()).await.unwrap();
+                    let found = use_refresh(&mut tx, &r0, now(), TimeDelta::zero())
+                        .await
+                        .unwrap();
                     drop(tx);
                     let RefreshUse::Reused { family_id } = found else {
                         panic!("R0 is a reuse, found {found:?}");

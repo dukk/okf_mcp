@@ -23,6 +23,7 @@ use axum::http::{header, HeaderValue};
 use axum::middleware;
 use axum::response::Response;
 use axum::Router;
+use chrono::TimeDelta;
 
 use crate::app::App;
 use crate::config::Config;
@@ -63,6 +64,9 @@ pub struct OAuthSettings {
     pub access_token_ttl: Duration,
     /// `oauth.refresh_token_ttl`.
     pub refresh_token_ttl: Duration,
+    /// `oauth.refresh_reuse_grace`, as the `TimeDelta` the store compares
+    /// with the token's first use (zero turns the window off).
+    pub refresh_reuse_grace: TimeDelta,
     /// `oauth.code_max_expiry`.
     pub code_max_expiry: Duration,
     /// `oauth.dcr_enabled`.
@@ -112,9 +116,10 @@ impl OAuth {
     /// `None` without `public_url` (OAuth off), else the state.
     ///
     /// # Errors
-    /// [`OkfError::Config`] if `public_url` cannot appear in a header
-    /// (`Config::validate` refuses such a URL first, so only a caller that
-    /// skipped validation sees this).
+    /// [`OkfError::Config`] if `public_url` cannot appear in a header, and
+    /// [`OkfError::LimitExceeded`] if `oauth.refresh_reuse_grace` is past
+    /// chrono's range (`Config::validate` refuses both first, so only a
+    /// caller that skipped validation sees these).
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn new(config: &Config, redis: Option<&Redis>) -> Result<Option<Self>, OkfError> {
         let Some(public_url) = config.public_url.as_deref() else {
@@ -131,6 +136,14 @@ impl OAuth {
             issuer,
             access_token_ttl: config.oauth.access_token_ttl,
             refresh_token_ttl: config.oauth.refresh_token_ttl,
+            // `Config::validate` caps the window at ten minutes, well inside
+            // chrono's range; only a caller that skipped validation fails.
+            refresh_reuse_grace: TimeDelta::from_std(config.oauth.refresh_reuse_grace).map_err(
+                |_| OkfError::LimitExceeded {
+                    limit: "duration",
+                    reason: "oauth.refresh_reuse_grace is too long".to_string(),
+                },
+            )?,
             code_max_expiry: config.oauth.code_max_expiry,
             dcr_enabled: config.oauth.dcr_enabled,
             cimd_allow_private: config.oauth.cimd_allow_private,
