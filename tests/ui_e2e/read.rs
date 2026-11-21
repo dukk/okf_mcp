@@ -782,8 +782,13 @@ async fn show_older_with_a_lost_grant_evicts_the_catalog() {
     let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
     drive(server.base.clone(), move |ui| {
         many_at_home(ui);
-        // The first page was cached by the worker.
+        // Read a concept through the worker, so `read-content` holds a copy
+        // of `many` to evict, and come back to Home.
+        ui.open_reader("/v/many/notes/n000.md");
+        ui.wait_text("#body", "Body.");
         ui.poll_eval(HAS_MANY_CONTENT);
+        ui.open_reader("/");
+        ui.wait_visible("#recent-older");
         lose_catalog(&runtime, &pool, &app, "many");
         ui.click("#recent-older");
         ui.poll_eval(NO_MANY_CONTENT);
