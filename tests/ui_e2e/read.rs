@@ -654,7 +654,9 @@ async fn an_empty_concept_has_no_show_whole_button() {
     drive(server.base.clone(), move |ui| {
         ui.sign_in_reader("/v/main/systems/empty.md", EMAIL, PASSWORD);
         ui.wait_text("#concept-title", "Empty");
-        ui.wait_visible("#body");
+        // The title and the body are drawn together; an empty body is plain text
+        // with no box, so it is present but never "visible".
+        assert!(ui.present("#body"));
         assert!(!ui.present("#show-full") && !ui.present("#shortened"));
     })
     .await;
@@ -2367,6 +2369,288 @@ async fn offline_at_boot_keeps_the_copies_and_says_the_account_needs_a_connectio
             .any(|path| path.ends_with("/alpha.md")));
         assert_eq!(ui.eval(REMEMBERED_CATALOG, json!(null)), json!("main"));
         drop(offline);
+    })
+    .await;
+}
+
+/// The sample catalog of the visual check: placeholder content shaped like
+/// the mockup's (folders with descriptions, a long concept with tags,
+/// quotes, code and links, several actors and kinds of change).
+fn visual_sample() -> Vec<(String, String)> {
+    let mut long = String::from(
+        "---\ntype: system\ntitle: Kubernetes cluster\ndescription: \"The home cluster: three control-plane nodes and five workers, deployed from git.\"\n\
+         tags: [k8s, infra, platform]\n---\n# Kubernetes cluster\n\n\
+         > This is the test cluster. Production runs separately: see [Production deployment](production.md).\n\n\
+         The cluster runs three control-plane nodes and five workers. Workloads are deployed from the `infra` repository.\n\n",
+    );
+    for section in [
+        "Nodes",
+        "Deployments",
+        "Ingress",
+        "Certificates",
+        "Upgrades",
+        "Incidents",
+    ] {
+        long.push_str(&format!(
+            "## {section}\n\nEach node is a virtual machine. Upgrades go one node at a time, with `kubectl drain` first, \
+             and the control plane last. See [Image updater](image-updater.md) for how new builds roll out.\n\n"
+        ));
+    }
+    [
+        ("index.md", "---\ntitle: Example Notes\ndescription: What the team keeps.\n---\n# Example Notes\n".to_string()),
+        ("infra/index.md", "---\ntitle: Infrastructure\ndescription: Shared platforms that services run on.\n---\n# Infrastructure\n".to_string()),
+        ("infra/network/index.md", "---\ntitle: Network\ndescription: Routers, DNS, the edge.\n---\n# Network\n".to_string()),
+        ("infra/network/dns.md", "---\ntitle: Internal DNS\ndescription: Names under example.internal.\n---\n# Internal DNS\n\nServes example.internal.\n".to_string()),
+        ("infra/kubernetes.md", long),
+        ("infra/image-updater.md", "---\ntitle: Image updater\ndescription: Moves deployments to the newest build.\n---\n# Image updater\n\nIt watches the registry and links back to [the cluster](kubernetes.md).\n".to_string()),
+        ("infra/production.md", "---\ntitle: Production deployment\ndescription: How a release reaches production.\n---\n# Production deployment\n\nSee [the cluster](kubernetes.md), [its nodes](kubernetes.md#nodes) and [upgrades](kubernetes.md#upgrades).\n".to_string()),
+        ("infra/old-vpn.md", "---\ntitle: Old VPN notes\n---\n# Old VPN notes\n".to_string()),
+        ("processes/index.md", "---\ntitle: Processes\ndescription: How work gets done here.\n---\n# Processes\n".to_string()),
+        ("processes/release.md", "---\ntype: process\ntitle: Release process\ndescription: How a release is cut, tagged and shipped.\n---\n# Release process\n\n1. Tag.\n2. Ship.\n".to_string()),
+    ]
+    .into_iter()
+    .map(|(path, text)| (path.to_string(), text))
+    .collect()
+}
+
+/// Serves [`visual_sample`] for the visual check (plan Task 10), with later
+/// rounds by other actors so Home shows groups, edits and a deletion. Not a
+/// journey: run it by hand (it is ignored otherwise); it prints the URL and
+/// serves for `READER_VISUAL_MINUTES` (default 30).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "serves a sample catalog for the manual visual check"]
+async fn serve_a_sample_catalog_for_the_visual_check() {
+    let server = server_with_catalog("notes", &visual_sample()).await;
+    server.set_catalog_label("notes", "Example Notes").await;
+    pin_the_seed_actor(&server).await;
+    let mut entries = visual_sample();
+    if let Some((_, text)) = entries
+        .iter_mut()
+        .find(|(path, _)| path.as_str() == "processes/release.md")
+    {
+        text.push_str("3. Announce.\n");
+    }
+    let edited: Vec<(&str, &str)> = entries
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    publish_as(&server, "sam", files(&edited)).await;
+    let kept: Vec<(&str, &str)> = edited
+        .iter()
+        .copied()
+        .filter(|(path, _)| *path != "infra/old-vpn.md")
+        .collect();
+    publish_as(&server, "alex", files(&kept)).await;
+    let actors: Vec<String> =
+        sqlx::query_scalar("SELECT DISTINCT actor FROM revisions ORDER BY actor")
+            .fetch_all(&server.db.pool)
+            .await
+            .expect("read the actors");
+    assert_eq!(
+        actors,
+        ["alex", "owner", "sam", "tester"],
+        "a real login would show on Home"
+    );
+    let minutes = std::env::var("READER_VISUAL_MINUTES")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(30);
+    eprintln!(
+        "visual check: {}/read/ (sign in as {EMAIL}, password {PASSWORD}); serving for {minutes} min",
+        server.base
+    );
+    tokio::time::sleep(Duration::from_secs(minutes * 60)).await;
+}
+
+/// Names `owner` as the actor of every change the server's own setup made
+/// (creating the catalog is recorded under the operating-system user, whose
+/// login would show on Home), leaving the rounds by `sam` and `alex` and the
+/// seed import's `tester` as they are.
+///
+/// # Panics
+/// If the update fails.
+async fn pin_the_seed_actor(server: &TestServer) {
+    for statement in [
+        "UPDATE documents SET updated_by = 'owner' WHERE updated_by NOT IN ('tester', 'sam', 'alex')",
+        "UPDATE revisions SET actor = 'owner' WHERE actor NOT IN ('tester', 'sam', 'alex')",
+    ] {
+        sqlx::query(statement)
+            .execute(&server.db.pool)
+            .await
+            .expect("pin the seed actor");
+    }
+}
+
+/// Imports `entries` over the `notes` catalog as `actor`, as a publish would.
+async fn publish_as(server: &TestServer, actor: &str, entries: okf_mcp::archive::Files) {
+    let options = ImportOptions {
+        replace: true,
+        scope: ImportScope::Everything,
+        expect_generation: None,
+        expect_catalog_id: None,
+        actor,
+        audit: &AuditActor::cli(),
+        now: Utc::now(),
+    };
+    crate::support::server::applied(&server.app, async {
+        import(&server.db.pool, "notes", entries, &options)
+            .await
+            .expect("import");
+    })
+    .await;
+}
+
+/// The computed style of the first element matching `selector`, for each
+/// property in `properties` (camelCase names), as an object.
+fn computed(ui: &Ui, selector: &str, properties: &[&str]) -> serde_json::Value {
+    ui.eval(
+        "([selector, properties]) => { const style = getComputedStyle(document.querySelector(selector)); \
+         return Object.fromEntries(properties.map(name => [name, style[name]])); }",
+        json!([selector, properties]),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_concept_body_is_plain_text_not_a_card() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/main/systems/beta.md", EMAIL, PASSWORD);
+        ui.wait_text("#concept-title", "Beta");
+        // Pico draws an <article> as a card; the body must have none of it.
+        let body = computed(
+            ui,
+            "#body",
+            &["paddingTop", "paddingLeft", "backgroundColor", "boxShadow"],
+        );
+        assert_eq!(body["paddingTop"], json!("0px"), "{body}");
+        assert_eq!(body["paddingLeft"], json!("0px"), "{body}");
+        assert_eq!(body["backgroundColor"], json!("rgba(0, 0, 0, 0)"), "{body}");
+        assert_eq!(body["boxShadow"], json!("none"), "{body}");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_outline_opens_without_picos_gaps_and_stays_muted_when_focused() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/main/systems/beta.md", EMAIL, PASSWORD);
+        ui.wait_text("#concept-title", "Beta");
+        ui.click("details.toc summary");
+        // Pico colours a summary that matches :focus-visible (a keyboard or
+        // touch focus); a mouse click alone does not, so press a key on it.
+        ui.page
+            .press_key(Some("details.toc summary"), "Shift")
+            .expect("press a key on the summary");
+        let focused = ui.eval(
+            "() => document.querySelector('details.toc summary').matches(':focus-visible')",
+            json!(null),
+        );
+        assert_eq!(focused, json!(true), "the summary must show a focus ring");
+        // Pico fades a summary's colour; read the settled one.
+        ui.eval(
+            "() => { document.querySelector('details.toc summary').style.transition = 'none'; }",
+            json!(null),
+        );
+        let summary = computed(ui, "details.toc summary", &["marginBottom", "color"]);
+        let item = computed(
+            ui,
+            "details.toc li",
+            &["marginTop", "marginBottom", "color"],
+        );
+        // Pico leaves a gap under an open summary and margins on list items.
+        assert_eq!(summary["marginBottom"], json!("0px"), "{summary}");
+        assert_eq!(item["marginTop"], json!("0px"), "{item}");
+        assert_eq!(item["marginBottom"], json!("0px"), "{item}");
+        // The clicked summary has focus; Pico would turn it to its accent.
+        assert_eq!(summary["color"], item["color"], "{summary} {item}");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_breadcrumbs_have_no_pico_nav_spacing() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/main/systems/beta.md", EMAIL, PASSWORD);
+        ui.wait_text("#concept-title", "Beta");
+        let items = ui.eval(
+            "() => [...document.querySelectorAll('.crumbs li, .crumbs a')].map(element => { \
+             const style = getComputedStyle(element); \
+             return [style.paddingTop, style.paddingLeft, style.marginTop, style.marginLeft].join(' '); })",
+            json!(null),
+        );
+        let items = items.as_array().expect("an array");
+        assert!(!items.is_empty(), "no breadcrumb items");
+        for item in items {
+            assert_eq!(item, &json!("0px 0px 0px 0px"), "{items:?}");
+        }
+        let list = computed(ui, ".crumbs ol", &["marginLeft"]);
+        assert_eq!(list["marginLeft"], json!("2px"), "{list}");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_home_search_box_has_no_margin() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/t/main", EMAIL, PASSWORD);
+        ui.wait_visible("#screen-tree");
+        ui.eval("() => { location.hash = '#/'; }", json!(null));
+        ui.wait_visible("#search-form");
+        let form = computed(ui, "#search-form", &["marginTop", "marginBottom"]);
+        assert_eq!(form["marginTop"], json!("0px"), "{form}");
+        assert_eq!(form["marginBottom"], json!("0px"), "{form}");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_meta_separator_trails_a_fact_and_never_leads_one() {
+    // Per visible `.fact`: whether its ::before and ::after hold the dot.
+    const SEPARATORS: &str = "() => [...document.querySelectorAll('#concept-meta .fact')] \
+        .filter(fact => !fact.hidden) \
+        .map(fact => [fact.id || 'reading', \
+            getComputedStyle(fact, '::before').content.includes('\\u00B7'), \
+            getComputedStyle(fact, '::after').content.includes('\\u00B7')])";
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/main/systems/beta.md", EMAIL, PASSWORD);
+        ui.wait_text("#concept-title", "Beta");
+        // The edit fact starts hidden and is revealed once the history answers.
+        ui.wait_visible("#concept-edited");
+        // Shown: the reading time trails a dot, the last fact has none, and
+        // no fact leads with one.
+        assert_eq!(
+            ui.eval(SEPARATORS, json!(null)),
+            json!([["reading", false, true], ["concept-edited", false, false]])
+        );
+        // Hidden again: the reading time is now the last visible fact.
+        ui.eval(
+            "() => { document.querySelector('#concept-edited').hidden = true; }",
+            json!(null),
+        );
+        assert_eq!(
+            ui.eval(SEPARATORS, json!(null)),
+            json!([["reading", false, false]])
+        );
+        // Wrapped onto a second line, the edit fact starts the line with no dot.
+        ui.eval(
+            "() => { document.querySelector('#concept-edited').hidden = false; \
+             document.querySelector('#concept-meta').style.width = '120px'; }",
+            json!(null),
+        );
+        let wrapped = ui.eval(
+            "() => document.querySelector('#concept-edited').offsetTop \
+             > document.querySelector('#concept-meta .fact').offsetTop",
+            json!(null),
+        );
+        assert_eq!(wrapped, json!(true), "the row did not wrap");
+        assert_eq!(
+            ui.eval(SEPARATORS, json!(null)),
+            json!([["reading", false, true], ["concept-edited", false, false]])
+        );
     })
     .await;
 }
