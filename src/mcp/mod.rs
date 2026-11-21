@@ -4,6 +4,7 @@
 //! plain function, which the module's tests call directly.
 
 pub(crate) mod catalogs;
+pub(crate) mod cited_by;
 // The tool classification the annotations are checked against (tests), and
 // the closed list of tool names the `tool` metric label draws from.
 pub(crate) mod annotations;
@@ -219,7 +220,8 @@ impl OkfServer {
             + Self::restructure_router()
             + Self::maintenance_router()
             + Self::feedback_router()
-            + Self::whoami_router();
+            + Self::whoami_router()
+            + Self::cited_by_router();
         // Point every description at the tool's heading in the public reference. `map` holds
         // each tool as `{ call, attr }`; `attr` is the `Tool` that `tools/list` sends.
         for (name, route) in router.map.iter_mut() {

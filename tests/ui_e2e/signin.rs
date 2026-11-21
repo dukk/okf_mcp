@@ -1,9 +1,15 @@
 //! Signing in as a person: an emailed setup link, a password, the console
 //! showing the user, a reload that resumes the session, sign-out, and
-//! signing in again with the password.
+//! signing in again with the password. A first setup with an onboarding
+//! guide on another origin ends on a welcome page that links to it: a 303
+//! there after the setup form's POST would be blocked by the console CSP's
+//! `form-action 'self'`.
 
 use std::time::Duration;
 
+use axum::response::Html;
+use axum::routing::get;
+use axum::Router;
 use chrono::Utc;
 use okf_mcp::config::Config;
 use okf_mcp::mail::{link, SETUP_PATH};
@@ -15,7 +21,7 @@ use okf_mcp::store::sign_in_events::{self, Method, Outcome};
 use okf_mcp::store::{ceiling, passkeys, users};
 use rustwright::GotoOptions;
 
-use crate::harness::drive;
+use crate::harness::{drive, Ui};
 use crate::support::server::{files, TestServer};
 use okf_mcp::store::audit::AuditActor;
 use okf_mcp::store::ceiling::NewEntitlement;
@@ -178,6 +184,140 @@ async fn a_setup_link_sets_a_password_and_the_console_shows_the_user() {
     ));
     // `http::serve` gives requests their peer address (plan Decision 7).
     assert_eq!(events[0].ip, "127.0.0.1".parse().ok());
+}
+
+/// Serves a page at `/start/` standing in for the getting-started guide,
+/// on its own port (so another origin).
+///
+/// # Returns
+/// The guide's URL, `http://127.0.0.1:<port>/start/`.
+async fn guide_host() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let url = format!("http://{}/start/", listener.local_addr().expect("address"));
+    let router = Router::new().route(
+        "/start/",
+        get(|| async {
+            Html("<!DOCTYPE html><title>guide</title><p id=\"guide\">first fifteen minutes</p>")
+        }),
+    );
+    // Runs until the test's runtime shuts down.
+    tokio::spawn(async move { axum::serve(listener, router).await });
+    url
+}
+
+/// A server whose `onboarding_url` is `guide`, with a setup link for a new
+/// user `alice` (no password yet); returns both.
+async fn onboarding_server(guide: String) -> (TestServer, String) {
+    let server = TestServer::start_with(
+        vec![("main", files(&[("index.md", "# Main\n")]))],
+        move |base| {
+            let mut config = Config {
+                public_url: Some(base.to_string()),
+                ..Config::default()
+            };
+            config.auth.onboarding_url = Some(guide);
+            config
+        },
+    )
+    .await;
+    let pool = &server.db.pool;
+    users::create(
+        pool,
+        &users::NewUser {
+            name: "alice",
+            display_name: &okf_mcp::labels::DisplayName::parse("Alice").unwrap(),
+        },
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("create alice");
+    users::set_email(
+        pool,
+        "alice",
+        Some("alice@example.com"),
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("set the email");
+    let alice = users::find_by_email(pool, "alice@example.com")
+        .await
+        .expect("find alice")
+        .expect("alice exists");
+    let token = email_tokens::issue(
+        pool,
+        &alice.id,
+        Purpose::Setup,
+        Duration::from_secs(3600),
+        Utc::now(),
+    )
+    .await
+    .expect("issue a setup link");
+    let setup = link(&server.base, SETUP_PATH, &token);
+    (server, setup)
+}
+
+/// Sets alice's password on `setup`, and waits for the welcome page.
+fn set_password_and_welcome(ui: &Ui, setup: &str) {
+    ui.page
+        .goto(setup, GotoOptions::default())
+        .expect("open the setup link");
+    ui.wait_text("#setup-form", "Confirm the password");
+    ui.fill("#setup-password", PASSWORD);
+    ui.fill("#setup-confirm", PASSWORD);
+    ui.click("#setup-submit");
+    ui.wait_text("#setup-welcome", "Your account is ready");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_first_setup_welcomes_then_opens_an_onboarding_guide_on_another_origin() {
+    let guide = guide_host().await;
+    let (server, setup) = onboarding_server(guide.clone()).await;
+    let pool = server.db.pool.clone();
+    let origin = server.base.clone();
+
+    let ran = drive(server.base.clone(), move |ui| {
+        set_password_and_welcome(ui, &setup);
+        // Still on this origin: no redirect took the browser away.
+        let href = ui.eval("() => location.origin", serde_json::json!(null));
+        assert_eq!(href.as_str(), Some(origin.as_str()), "still on the console");
+        ui.click("#setup-guide");
+        ui.wait_visible("#guide");
+        let href = ui.eval("() => location.href", serde_json::json!(null));
+        assert_eq!(href.as_str(), Some(guide.as_str()), "on the guide");
+        // Signed in on the way: back at the console, the session is there.
+        ui.open("");
+        assert_eq!(ui.eval(SESSION_STATUS, serde_json::json!(null)), 200);
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let events = sign_in_events::recent(&pool, "alice", 10)
+        .await
+        .expect("events");
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        (&events[0].method, &events[0].outcome),
+        (Method::Setup, Outcome::Ok)
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_welcome_page_links_on_to_the_console_signed_in() {
+    let guide = guide_host().await;
+    let (server, setup) = onboarding_server(guide).await;
+
+    drive(server.base.clone(), move |ui| {
+        set_password_and_welcome(ui, &setup);
+        ui.click("#setup-console");
+        ui.wait_visible("#app");
+        ui.wait_text("#whoami", "Alice - ");
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

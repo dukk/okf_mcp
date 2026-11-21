@@ -848,7 +848,8 @@ impl OkfServer {
         title = "Add Source",
         description = "Append an entry (id, resource, title, author) to a \
                        concept's `sources`, refusing a duplicate id, in the changeset `changeset` \
-                       names (open one with open_changeset). Write access.",
+                       names (open one with open_changeset); `cited_by` finds a source's citations. Write \
+                       access.",
         annotations(
             title = "Add Source",
             read_only_hint = false,
@@ -873,7 +874,8 @@ impl OkfServer {
                        when none are left, in the changeset `changeset` names (open one with \
                        open_changeset). Refused while a footnote in the body still cites it (its \
                        label is the id, or its definition names the id, title or resource): \
-                       remove the citation first. Write access.",
+                       remove the citation first. `cited_by` finds a source's citations. Write \
+                       access.",
         annotations(
             title = "Remove Source",
             read_only_hint = false,

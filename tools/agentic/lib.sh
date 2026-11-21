@@ -127,6 +127,20 @@ agentic_state_dir() {
     printf '%s\n' "$common/agentic"
 }
 
+# The directory of pending-report expectations (expect.sh), shared by every
+# worktree. Printed, not created: expect.sh start creates it.
+agentic_expect_dir() {
+    local common
+    common=$(agentic_git rev-parse --path-format=absolute --git-common-dir) || return 1
+    printf '%s\n' "$common/agentic-expect"
+}
+
+# agentic_expect_field <file> <key>: the value of a `key=value` line of an
+# expectation file. The file is only ever read as text, never sourced.
+agentic_expect_field() {
+    sed -n "s/^$2=//p" "$1" | head -n 1
+}
+
 # The top of the main checkout (the parent of the common .git directory).
 agentic_main_checkout() {
     local common
