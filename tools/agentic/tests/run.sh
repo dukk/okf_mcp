@@ -840,6 +840,14 @@ expect_watchdog() {
     rc=$?
 }
 
+# expect_watchdog_at <epoch>: like expect_watchdog, with the fake clock at <epoch>.
+expect_watchdog_at() {
+    echo "$1" >"$fx/clock"
+    out=$(cd "$repo" && env AGENTIC_NOW_CMD=fake-now AGENTIC_WATCHDOG_TEST=999999 \
+        AGENTIC_WATCHDOG_GATE=999999 timeout 15 "$tools/watchdog.sh" --once 2>&1)
+    rc=$?
+}
+
 expect_start() {
     (cd "$repo" && AGENTIC_NOW_CMD=fake-now "$tools/expect.sh" start "$@") >/dev/null
 }
@@ -899,11 +907,46 @@ test_watchdog_ignores_an_agent_with_a_fresh_log() {
 
 test_watchdog_counts_a_new_commit_as_activity() {
     new_fixtures; expect_wt ex-commit
+    # The expectation is older than the quiet limit before the commit.
+    echo $((t0 - 5000)) >"$fx/clock"
     expect_start "$work/ex-commit" "task 7"
-    # The reflog time is the real time of this commit, at or after t0.
     git_quiet -C "$work/ex-commit" commit -q --allow-empty -m work
     now=$(date +%s)
-    expect_watchdog $((now - t0 + 100))
+    echo "$now" >"$fx/clock"
+    expect_watchdog_at "$now"
+    want_rc 0
+    # Without the commit the same expectation is idle.
+    expect_watchdog_at $((now + 1300))
+    want_rc 3
+}
+
+test_watchdog_counts_a_fresh_start_as_activity() {
+    new_fixtures; expect_wt ex-rearm
+    # The worktree's last commit and logs are older than the limit; the agent
+    # was sent back (expect.sh start) 100 s ago.
+    mkdir -p "$work/ex-rearm/target/i7-logs"
+    touch -d "@$((t0 - 9000))" "$work/ex-rearm/target/i7-logs/gate.log"
+    echo $((t0 + 3000)) >"$fx/clock"
+    expect_start "$work/ex-rearm" "task 7 round 2"
+    expect_watchdog 3100
+    want_rc 0
+    expect_watchdog 4400
+    want_rc 3; want_out "quiet for 1400s"
+}
+
+test_watchdog_counts_a_checkout_of_an_old_commit_as_activity() {
+    new_fixtures; expect_wt ex-old
+    # An old commit: its committer date is long before the quiet limit.
+    GIT_COMMITTER_DATE="@$((t0 - 90000)) +0000" GIT_AUTHOR_DATE="@$((t0 - 90000)) +0000" \
+        git_quiet -C "$work/ex-old" commit -q --allow-empty -m old
+    git -C "$work/ex-old" branch old-tip
+    git_quiet -C "$work/ex-old" commit -q --allow-empty -m newer
+    echo $((t0 - 5000)) >"$fx/clock"
+    expect_start "$work/ex-old" "task 7"
+    # A fresh reflog event pointing at the OLD commit.
+    git_quiet -C "$work/ex-old" checkout -q --detach old-tip
+    now=$(date +%s)
+    expect_watchdog_at "$now"
     want_rc 0
 }
 

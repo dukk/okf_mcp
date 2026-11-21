@@ -130,7 +130,11 @@ check_expectations() {
         newest=$started
         time=$(newest_log_time "$wt")
         [ -n "$time" ] && [ "$time" -gt "$newest" ] && newest=$time
-        time=$(agentic_git -C "$wt" log -g -1 --format=%ct HEAD 2>/dev/null)
+        # The reflog event time (HEAD@{<epoch>}), not the commit's own date: a
+        # checkout or reset to an old commit is fresh activity.
+        time=$(agentic_git -C "$wt" reflog -1 --date=unix --format=%gd HEAD 2>/dev/null)
+        time=${time#HEAD@\{}
+        time=${time%\}}
         case "$time" in '' | *[!0-9]*) ;; *) [ "$time" -gt "$newest" ] && newest=$time ;; esac
         idle=$((now - newest))
         [ "$idle" -gt "$quiet_limit" ] || continue
