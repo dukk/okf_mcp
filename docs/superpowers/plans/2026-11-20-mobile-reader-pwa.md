@@ -4237,6 +4237,23 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ### Task 12: Documentation and changelog
 
+> **Corrected (issue #819, 2026-11-21).** The shipped `docs/reference/reader.md` is written from the
+> code, not from the draft below, and differs from it as follows. It adds the route table (with
+> `?s=<slug>`, the `#/d/` document view and the picker's `?gone=`), "Show the whole concept", the iOS
+> install hint, the account screen's offline form, and the short/full fallback. Its offline section
+> says the 200 cap covers concepts and documents only (trees, recent changes and links are uncapped),
+> that an owning account alone is served offline, and lists when copies go: sign-out with its second
+> wipe, a `401`, a lost grant (that catalog), a deleted document (its copies), account change in
+> another tab through `X-OKF-Account`, and that the remembered catalog is forgotten on sign-out and a
+> `401`. It adds storage refusal, the verified install (`shell.json`) and the known limits the task
+> changelogs record. The maintainers section names `just test-worker` (Node 18.19+ or 20.6+),
+> `tests/read_worker/` and `tests/ui_e2e/read.rs`. The README link is in the Web console section and
+> the Layout list, not a "reference documents" list (there is none), and `docs/operations.md` gets a
+> `/read/` row in its web-console route table. The changelog is one milestone summary,
+> `changelog/2026-11-21T03-56-14Z-m19-mobile-reader.md`, linking the per-task files, and the commit
+> carries the Sonnet attribution. The draft's "Cached copies are wiped ... the concept's `404`" note
+> is now exact: a deleted document evicts its own copies only.
+
 **Files:**
 - Create: `docs/reference/reader.md`
 - Modify: `README.md` (one line in its feature or documentation list)

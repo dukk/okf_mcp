@@ -465,6 +465,10 @@ discarded at `/ui/#/changesets`.
 The routes, the security headers and the API reference are in
 [`docs/operations.md`](docs/operations.md#web-console).
 
+On a phone, the [mobile reader](docs/reference/reader.md) at `/read/` is an
+installable, read-only app for reading a catalog, offline included. It signs
+in with the same account.
+
 ## Writing
 
 ### Changesets
@@ -681,6 +685,8 @@ key's actor.
 - `Dockerfile`, `.github/workflows/image.yml` - the container image, built and
   pushed to GHCR on a `v*` tag.
 - `docs/operations.md` - the operator guide.
+- `docs/reference/` - the [tool reference](docs/reference/tools.md) and the
+  [mobile reader](docs/reference/reader.md).
 - `docs/superpowers/` - the design and the per-milestone plans.
 - `skills/` - Claude Code skills for daily catalog maintenance
   ([`skills/README.md`](skills/README.md)).

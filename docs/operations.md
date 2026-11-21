@@ -3403,6 +3403,7 @@ the same port as `/mcp`:
 | `GET /ui/*` | none | The console's static files, embedded in the binary at build time; an unknown file is 404 |
 | `GET /ui/manifest.json` | none | `{"pages": [...]}`: the console pages this build has |
 | `GET /ui/brand.json` | none | `{"product_name", "support_contact", "feedback_url", "docs_url", "feedback_form"}`: the [branding settings](#settings) (`null` when unset), which the console shows before anyone signs in, and `feedback_form`, `{"disclosure", "max_message_chars", "kinds"}` with a `[feedback]` table, else `null` (never the form id or the API key). `onboarding_url` is not in it |
+| `GET /read`, `GET /read/` | none | The [mobile reader](reference/reader.md), an installable read-only app for phones: `/read` redirects (308) to `/read/`. Its files (`GET /read/*`, `GET /read/sw.js`, and `GET /read/shell.json`, the worker's precache listing with a SHA-256 per file) are embedded in the binary, carry the console's security headers and hold no catalog data; the app reads `/api/v1` with the console's session cookie |
 | `/api/v1/*` | bearer key or console session | The JSON API; each endpoint checks the level it needs |
 | `GET /signin`, `POST /signin` | none | The sign-in page and its password form ([Signing in and self-service](#signing-in-and-self-service)). Without `public_url` the page offers only the pasted key and the POST is 404; with `password_sign_in` off the POST is 404 |
 | `GET /signin/forgot`, `POST /signin/forgot` | none | Ask for a reset link; only with `public_url` set |
