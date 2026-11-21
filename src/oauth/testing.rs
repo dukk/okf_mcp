@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
 use crate::app::App;
+use crate::config::Config;
 use crate::db::redis_support::TestRedis;
 use crate::http::api::testing::{Browser, MAIN};
 use crate::http::console_session::COOKIE;
@@ -50,9 +51,24 @@ pub(crate) const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
 /// # Panics
 /// If the database or the insert fails: a broken test setup.
 pub(crate) async fn oauth_app() -> TestApp {
+    oauth_app_with(oauth_config(PUBLIC_URL)).await
+}
+
+/// [`oauth_app`] on `config` instead of [`oauth_config`]'s defaults, for a
+/// test that needs another OAuth setting (no refresh reuse grace window).
+///
+/// # Arguments
+/// * `config` - the settings; start from `oauth_config(PUBLIC_URL)`.
+///
+/// # Returns
+/// The app and its database.
+///
+/// # Panics
+/// As [`oauth_app`].
+pub(crate) async fn oauth_app_with(config: Config) -> TestApp {
     let test = app_with(
         &[("main", MAIN), ("other", &[("index.md", "# Other\n")])],
-        oauth_config(PUBLIC_URL),
+        config,
     )
     .await;
     // Corrected (issue #247): `insert_dcr` lets Postgres pick a UUID, so the

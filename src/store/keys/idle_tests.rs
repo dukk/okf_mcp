@@ -152,9 +152,14 @@ async fn an_idle_grant_is_revoked_like_an_operator_revoke_and_its_tokens_stop_wo
     );
     // Its refresh token is refused, even at a time it had not expired yet.
     let mut tx = db.pool.begin().await.expect("begin");
-    let presented = tokens::use_refresh(&mut tx, &[2; 32], last + TimeDelta::days(1))
-        .await
-        .expect("present the token");
+    let presented = tokens::use_refresh(
+        &mut tx,
+        &[2; 32],
+        last + TimeDelta::days(1),
+        TimeDelta::zero(),
+    )
+    .await
+    .expect("present the token");
     assert_eq!(presented, RefreshUse::Unknown);
 }
 
@@ -382,7 +387,7 @@ async fn a_refresh_admitted_before_expiry_is_never_undone_by_the_idle_pass() {
     // before expiry and admitted, then paused before minting.
     let presented_at = now() - TimeDelta::seconds(1);
     let mut rotation = db.pool.begin().await.expect("begin");
-    let admitted = tokens::use_refresh(&mut rotation, &[1; 32], presented_at)
+    let admitted = tokens::use_refresh(&mut rotation, &[1; 32], presented_at, TimeDelta::zero())
         .await
         .expect("present the token");
     assert!(
@@ -488,7 +493,13 @@ async fn a_rotation_after_a_revocation_is_refused() {
     let pool = db.pool.clone();
     let refresh = tokio::spawn(async move {
         let mut tx = pool.begin().await.expect("begin");
-        tokens::use_refresh(&mut tx, &[1; 32], now() - TimeDelta::seconds(1)).await
+        tokens::use_refresh(
+            &mut tx,
+            &[1; 32],
+            now() - TimeDelta::seconds(1),
+            TimeDelta::zero(),
+        )
+        .await
     });
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
