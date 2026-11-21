@@ -391,6 +391,175 @@ async fn a_concept_shows_its_body_follows_links_and_lists_backlinks() {
     .await;
 }
 
+/// A catalog whose concept `sections.md` is made of level-1 sections only,
+/// with a description and tags, linked three times by `links.md`, and whose
+/// `untitled.md` has no frontmatter title and starts with a `# One` section.
+fn sectioned() -> Vec<(String, String)> {
+    [
+        ("index.md", "# Deep\n"),
+        (
+            "sections.md",
+            "---\ntype: system\ntitle: Sections\ndescription: Two parts, no title heading.\n\
+             tags: [infra, k8s]\n---\n# One\n\nFirst `code` part.\n\n# Two\n\nSecond part.\n",
+        ),
+        (
+            "untitled.md",
+            "---\ntype: note\n---\n# One\n\nFirst part.\n\n# Two\n\nSecond part.\n",
+        ),
+        (
+            "links.md",
+            "---\ntitle: Links\n---\n# Links\n\nSee [it](sections.md).\n\nAgain [one](sections.md#one).\n\n\
+             And [two](sections.md#two).\n",
+        ),
+    ]
+    .iter()
+    .map(|(path, text)| (path.to_string(), text.to_string()))
+    .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_concept_of_level_one_sections_has_an_outline_and_a_meta_row() {
+    let server = server_with_catalog("deep", &sectioned()).await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/deep/sections.md", EMAIL, PASSWORD);
+        ui.wait_text("#concept-title", "Sections");
+        // Both level-1 sections are listed (only a title heading is dropped).
+        ui.wait_text("#outline summary", "2 sections");
+        assert!(ui.text("#outline").contains("One") && ui.text("#outline").contains("Two"));
+        // The meta row: type, tags, reading time, the last edit.
+        ui.wait_text("#concept-meta", "system");
+        ui.wait_text("#concept-meta", "k8s");
+        ui.wait_text("#concept-meta", "min read");
+        ui.wait_text("#concept-meta", "Edited");
+        ui.wait_text(".concept-lede", "Two parts, no title heading.");
+        // The body is set in the serif reading type.
+        assert_eq!(
+            ui.eval(
+                "() => document.querySelector('#body').classList.contains('serif')",
+                json!(null)
+            ),
+            json!(true)
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_concept_draws_before_its_history_answers() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_visible("#account-user");
+        // The history read waits in the page; the concept and its links do not.
+        ui.hold_next("GET", "/history/systems/alpha.md?limit=1");
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        ui.wait_visible("#backlinks");
+        wait_held(ui);
+        assert_eq!(
+            ui.eval(
+                "() => document.querySelector('#concept-edited').hidden",
+                json!(null)
+            ),
+            json!(true),
+            "the edit line waits for the history"
+        );
+        ui.release_held();
+        ui.wait_visible("#concept-edited");
+        ui.wait_text("#concept-edited", "Edited");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_concept_offline_has_no_edit_line() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        ui.wait_visible("#concept-edited");
+        let offline = ui.go_offline();
+        // The worker keeps no history: the concept shows from its copy and
+        // the edit line stays hidden, with no notice in its place.
+        ui.reload_reader();
+        ui.wait_text("#body", "marmalade");
+        ui.wait_text("#offline-banner", "Offline. Synced");
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(
+            ui.eval(
+                "() => document.querySelector('#concept-edited').hidden",
+                json!(null)
+            ),
+            json!(true)
+        );
+        drop(offline);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lost_grant_answered_to_the_history_read_still_evicts() {
+    let (server, _) = server().await;
+    let runtime = tokio::runtime::Handle::current();
+    let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.hold_next("GET", "/history/systems/alpha.md?limit=1");
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        wait_held(ui);
+        lose_main(&runtime, &pool, &app);
+        ui.release_held();
+        // The refusal went through ctx.fail: evicted, and the picker names it.
+        ui.wait_visible("#screen-catalogs");
+        ui.wait_visible("#catalog-gone");
+        ui.poll_eval(NO_MAIN_CONTENT);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_untitled_concept_keeps_its_first_heading_in_the_body_and_the_outline() {
+    let server = server_with_catalog("deep", &sectioned()).await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/deep/untitled.md", EMAIL, PASSWORD);
+        // No frontmatter title: the page is named by its file, and `# One`
+        // is a section, not the title.
+        ui.wait_text("#concept-title", "untitled.md");
+        ui.wait_text("#outline summary", "2 sections");
+        assert!(ui.text("#outline").contains("One") && ui.text("#outline").contains("Two"));
+        assert_eq!(
+            ui.eval(
+                "() => [...document.querySelectorAll('#body h1')].map(h => h.textContent)",
+                json!(null)
+            ),
+            json!(["One", "Two"])
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_document_that_links_three_times_shows_once_with_a_count() {
+    let server = server_with_catalog("deep", &sectioned()).await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/deep/sections.md", EMAIL, PASSWORD);
+        ui.wait_text("#backlinks", "Links");
+        assert_eq!(
+            ui.eval(
+                "() => [...document.querySelectorAll('#backlinks .row')].filter(r => r.textContent.includes('Links')).length",
+                json!(null)
+            ),
+            json!(1)
+        );
+        ui.wait_text("#backlinks", "3 links");
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_log_opens_as_a_document() {
     let (server, _) = server().await;
@@ -403,20 +572,61 @@ async fn a_log_opens_as_a_document() {
     .await;
 }
 
-/// Beta's body is over 20 characters: with this limit only its outline
-/// comes back, with a button for the whole concept.
+/// Beta's body is over 20 characters: with this limit the API answers with
+/// its outline only, and the reader still shows it whole.
 const SHORT_OUTLINE: usize = 20;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_whole_concept_replaces_the_outline_notice() {
+async fn a_long_concept_renders_whole_without_a_button() {
     let (server, _) = server_with_outline_limit(SHORT_OUTLINE).await;
     drive(server.base.clone(), move |ui| {
         ui.sign_in_reader("/v/main/systems/beta.md", EMAIL, PASSWORD);
-        ui.wait_visible("#show-full");
-        assert!(!ui.present("#body"));
-        ui.click("#show-full");
         ui.wait_text("#body", "Two settings");
-        assert!(!ui.present("#shortened") && !ui.present("#show-full"));
+        assert!(!ui.present("#show-full") && !ui.present("#shortened"));
+        // Its title heading is the page title, so the body does not repeat it.
+        assert!(!ui.present("#body [data-slug='beta']"));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_long_concept_read_once_is_readable_whole_offline() {
+    let (server, _) = server_with_outline_limit(SHORT_OUTLINE).await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.wait_text("#body", "Two settings");
+        ui.poll_eval(&cached("systems/beta.md?full=true"));
+        let offline = ui.go_offline();
+        ui.reload_reader();
+        ui.wait_text("#body", "Two settings");
+        ui.wait_text("#offline-banner", "Offline. Synced");
+        drop(offline);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_long_concept_after_losing_the_grant_evicts_the_catalog() {
+    let (server, _) = server_with_outline_limit(SHORT_OUTLINE).await;
+    let runtime = tokio::runtime::Handle::current();
+    let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        lose_main(&runtime, &pool, &app);
+        ui.open_reader("/v/main/systems/beta.md");
+        // The refusal evicts the catalog and goes to the picker, naming it.
+        ui.wait_visible("#screen-catalogs");
+        assert_eq!(
+            ui.eval("() => location.hash", json!(null)),
+            json!("#/c?gone=main")
+        );
+        ui.wait_visible("#catalog-gone");
+        ui.poll_eval(NO_MAIN_CONTENT);
     })
     .await;
 }
@@ -434,69 +644,13 @@ async fn an_empty_concept_has_no_show_whole_button() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_whole_concept_is_not_available_offline_and_can_be_retried() {
+async fn a_late_concept_answer_does_not_touch_a_newer_screen() {
     let (server, _) = server_with_outline_limit(SHORT_OUTLINE).await;
     drive(server.base.clone(), move |ui| {
         ui.sign_in_reader("/me", EMAIL, PASSWORD);
         ui.wait_worker();
-        // Only the outline is cached: the whole body was never read.
-        ui.open_reader("/v/main/systems/beta.md");
-        ui.wait_visible("#show-full");
-        let offline = ui.go_offline();
-        ui.click("#show-full");
-        ui.wait_visible("#full-failed");
-        assert!(ui.page.is_enabled("#show-full").expect("enabled"));
-        drop(offline);
-        ui.click("#show-full");
-        ui.wait_text("#body", "Two settings");
-    })
-    .await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn show_the_whole_concept_after_losing_the_grant_evicts_the_catalog() {
-    let (server, _) = server_with_outline_limit(SHORT_OUTLINE).await;
-    let runtime = tokio::runtime::Handle::current();
-    let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
-    drive(server.base.clone(), move |ui| {
-        ui.sign_in_reader("/me", EMAIL, PASSWORD);
-        ui.wait_worker();
-        ui.open_reader("/v/main/systems/beta.md");
-        ui.wait_visible("#show-full");
-        runtime.block_on(crate::support::server::applied(&app, async {
-            ceiling::unentitle(&pool, "reader", "main", &AuditActor::cli(), Utc::now())
-                .await
-                .expect("unentitle");
-        }));
-        ui.click("#show-full");
-        // The refusal went through ctx.fail: the catalog is evicted and the
-        // reader goes to the picker, naming the catalog that is gone.
-        ui.wait_visible("#screen-catalogs");
-        assert_eq!(
-            ui.eval("() => location.hash", json!(null)),
-            json!("#/c?gone=main")
-        );
-        // The picker says so, rather than choosing the one catalog left.
-        ui.wait_visible("#catalog-gone");
-        let counts = ui.eval(
-            "async () => (await (await caches.open('read-content')).keys()) \
-             .filter(k => new URL(k.url).pathname.includes('/catalogs/main/')).length",
-            json!(null),
-        );
-        assert_eq!(counts, json!(0));
-    })
-    .await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_late_whole_concept_does_not_touch_a_newer_screen() {
-    let (server, _) = server_with_outline_limit(SHORT_OUTLINE).await;
-    drive(server.base.clone(), move |ui| {
-        ui.sign_in_reader("/me", EMAIL, PASSWORD);
-        ui.wait_worker();
-        ui.open_reader("/v/main/systems/beta.md");
-        ui.wait_visible("#show-full");
-        // The whole read answers late, as the worker's cached copy would
+        ui.wait_visible("#account-user");
+        // The concept read answers late, as the worker's cached copy would
         // (the offline header): held in the page until released.
         ui.eval(
             "() => { const real = window.fetch; window.lateRelease = null; \
@@ -509,7 +663,8 @@ async fn a_late_whole_concept_does_not_touch_a_newer_screen() {
                    'X-Read-Cached-At': new Date().toISOString() } })); }; }); }; }",
             json!(null),
         );
-        ui.click("#show-full");
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.poll_eval("() => typeof window.lateRelease === 'function'");
         // Leave for another screen, then let the answer through.
         ui.open_reader("/me");
         ui.wait_visible("#account-user");
@@ -527,7 +682,6 @@ async fn a_late_whole_concept_does_not_touch_a_newer_screen() {
     })
     .await;
 }
-
 /// Signs in and opens home for `main`. The catalog picker is a later task,
 /// so the catalog is chosen by opening its tree, which the reader then
 /// remembers.
@@ -992,28 +1146,48 @@ async fn a_failed_owner_record_write_keeps_no_copy_of_the_new_owners_reads() {
     .await;
 }
 
+/// A page function that is true once `read-content` holds a copy of
+/// `main`'s `suffix` (a concept path, with its query).
+fn cached(suffix: &str) -> String {
+    format!(
+        "async () => (await (await caches.open('read-content')).keys()) \
+         .some(k => {{ const u = new URL(k.url); return (u.pathname + u.search).endsWith('/catalogs/main/concepts/{suffix}'); }})"
+    )
+}
+
+/// Reads beta plainly (no `?full`) from the page, through the worker, as a
+/// reader before the polish milestone did; returns the status.
+const READ_BETA_PLAIN: &str = "async () => \
+    (await fetch('/api/v1/catalogs/main/concepts/systems/beta.md')).status";
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn offline_a_concept_opens_from_either_its_short_or_its_full_copy() {
+async fn offline_a_concept_opens_from_either_its_plain_or_its_full_copy() {
     let (server, _) = server().await;
     drive(server.base.clone(), move |ui| {
         ui.sign_in_reader("/me", EMAIL, PASSWORD);
         ui.wait_worker();
-        // Beta opened plainly (its whole body fits): cached without ?full.
-        ui.open_reader("/v/main/systems/beta.md");
-        ui.wait_text("#body", "Two settings");
-        // Alpha opened only through a section link: cached with ?full=true.
-        ui.open_reader("/v/main/systems/alpha.md?s=alpha");
-        ui.wait_text("#body", "marmalade");
-        let offline = ui.go_offline();
-        // Beta's outline link asks for ?full=true: the plain copy answers.
-        ui.open_reader("/v/main/systems/beta.md");
-        ui.wait_text("#concept-title", "Beta");
-        ui.click("#outline summary");
-        ui.click("#outline a");
-        ui.wait_text("#body", "Two settings");
-        // Alpha opened plainly: the full copy answers.
+        // A plain copy of beta, as an older reader kept it.
+        assert_eq!(ui.eval(READ_BETA_PLAIN, json!(null)), json!(200));
+        // Alpha opened in the reader: cached with ?full=true.
         ui.open_reader("/v/main/systems/alpha.md");
         ui.wait_text("#body", "marmalade");
+        // The worker stores a copy after it answers: offline only once both
+        // copies are kept, or the journey races the worker's cache write.
+        ui.poll_eval(&cached("systems/beta.md"));
+        ui.poll_eval(&cached("systems/alpha.md?full=true"));
+        let offline = ui.go_offline();
+        // The screen asks for ?full=true: beta's plain copy answers it.
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.wait_text("#body", "Two settings");
+        // A plain read of alpha: its full copy answers.
+        assert_eq!(
+            ui.eval(
+                "async () => { const answer = await fetch('/api/v1/catalogs/main/concepts/systems/alpha.md'); \
+                 return [answer.status, answer.headers.has('X-Read-Offline')]; }",
+                json!(null)
+            ),
+            json!([200, true])
+        );
         drop(offline);
     })
     .await;
@@ -1387,7 +1561,7 @@ async fn an_unlock_refusal_keeps_the_caches_and_points_at_the_console() {
         // that needs an unlock (the harness answers it in the page).
         ui.fail_next_kind(
             "GET",
-            "/concepts/systems/beta.md",
+            "/concepts/systems/beta.md?full=true",
             403,
             "UnlockRequired",
             "This catalog needs an unlock.",
@@ -1423,7 +1597,7 @@ async fn a_lost_grant_answered_after_navigating_away_still_evicts() {
         ui.open_reader("/v/main/systems/alpha.md");
         ui.wait_text("#body", "marmalade");
         // Beta's concept read waits in the page; its links read goes through.
-        ui.hold_next("GET", "/concepts/systems/beta.md");
+        ui.hold_next("GET", "/concepts/systems/beta.md?full=true");
         ui.open_reader("/v/main/systems/beta.md");
         wait_held(ui);
         // The links read answered while the grant held: only the held read
@@ -1517,7 +1691,7 @@ async fn a_late_401_after_an_ordinary_refusal_still_signs_out() {
         wait_held(ui);
         // The 404 has answered before the session ends, so the 401 is the
         // second refusal, not the first.
-        wait_answered(ui, "/concepts/systems/missing.md");
+        wait_answered(ui, "/concepts/systems/missing.md?full=true");
         revoke_sessions(&runtime, &pool, &user_id);
         // `release_held` would wait on a flag of the page the 401 leaves.
         ui.eval("() => window.releaseHeld()", json!(null));
@@ -1539,8 +1713,8 @@ async fn a_slow_success_cannot_put_back_an_evicted_catalog() {
         ui.wait_text("#body", "marmalade");
         // Beta's 200 is held in the worker after the server answered it,
         // and the page learns when the worker has finished with it.
-        let mut paused = ui.pause_worker_responses("*/concepts/systems/beta.md");
-        ui.hold_answer_later("GET", "/concepts/systems/beta.md");
+        let mut paused = ui.pause_worker_responses("*/concepts/systems/beta.md*");
+        ui.hold_answer_later("GET", "/concepts/systems/beta.md?full=true");
         ui.open_reader("/v/main/systems/beta.md");
         let request = paused.next_paused();
         // The grant goes, and a tree read makes the page evict main.
@@ -1614,7 +1788,6 @@ async fn an_outline_link_in_a_long_concept_keeps_the_whole_body() {
     let (server, _) = server_with_outline_limit(SHORT_OUTLINE).await;
     drive(server.base.clone(), move |ui| {
         ui.sign_in_reader("/v/main/systems/beta.md", EMAIL, PASSWORD);
-        ui.click("#show-full");
         ui.wait_text("#body", "Two settings");
         ui.click("#outline summary");
         ui.mark("#body");
@@ -1642,7 +1815,7 @@ async fn a_slow_success_cannot_put_back_a_deleted_concept() {
         ui.wait_worker();
         // Alpha's 200 waits in the worker; the page learns when it arrives.
         let mut paused = ui.pause_worker_responses("*/concepts/systems/alpha.md*");
-        ui.hold_answer_later("GET", "/concepts/systems/alpha.md");
+        ui.hold_answer_later("GET", "/concepts/systems/alpha.md?full=true");
         ui.open_reader("/v/main/systems/alpha.md");
         let old = paused.next_paused();
         runtime.block_on(publish(

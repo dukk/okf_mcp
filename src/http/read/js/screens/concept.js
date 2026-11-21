@@ -1,9 +1,19 @@
-// A concept: breadcrumbs, title, outline, body (or, when the server
-// shortened it, a button for the whole body) and what links to it.
+// A concept: breadcrumbs, its title, a meta row (type, up to three tags, the
+// last edit, reading time), its description as a lede, "On this page", the
+// body in the serif reading type, and what links to it, one row per
+// document. The reader always reads the whole body (?full=true): the
+// server's outline limit is meant for agents.
 import { h, fill } from '/ui/js/core/dom.js';
+import { ago } from '/ui/js/core/format.js';
 import { read, enc, encPath, KIND, ReadError } from '../api.js';
-import { hrefs, hrefFor } from '../route.js';
-import { crumbs, renderBody, message } from '../parts.js';
+import { hrefs, hrefFor, parentOf } from '../route.js';
+import { crumbs, lede, pageTitle, pill, renderBody, row, sectionHead } from '../parts.js';
+import { icon } from '../icons.js';
+import { sections, titleHeading } from '../outline.js';
+import { backlinkNote, dedupeBacklinks } from '../backlinks.js';
+import { fileName, readingMinutes } from '../text.js';
+
+const MAX_TAGS = 3;
 
 // The links read, or null when offline with no copy: the concept still shows.
 async function backlinks(base, path) {
@@ -15,12 +25,57 @@ async function backlinks(base, path) {
     }
 }
 
-function outline(catalog, path, headings) {
-    const below = (headings ?? []).filter(heading => heading.level >= 2);
-    if (!below.length) return null;
-    return h('details', { class: 'outline', id: 'outline' }, h('summary', {}, 'Outline'),
-        h('ul', {}, below.map(heading => h('li', { class: `level-${heading.level}` },
+// The newest revision ({ actor, actor_label, at }), or null. It is
+// optional: the concept never waits for it (render fills the meta row when
+// it comes), and the row does without it offline (the worker keeps no
+// history) or when the history is refused. A refusal that is true of every
+// read (a session that ended, a lost catalog) still acts through ctx.fail:
+// it wipes or evicts as any read's would. It never rejects with a ReadError.
+async function lastEdit(ctx, base, path) {
+    try {
+        const result = await read(`${base}/history/${encPath(path)}?limit=1`);
+        return result.data.revisions?.[0] ?? null;
+    } catch (error) {
+        if (!(error instanceof ReadError)) throw error;
+        if (error.kind === KIND.SIGNED_OUT || error.kind === KIND.CATALOG_GONE) await ctx.fail(error);
+        return null;
+    }
+}
+
+// The meta row: the type and tags as pills, the reading time, then `edited`
+// (the last edit's slot, hidden until the history answers).
+function metaRow(concept, edited) {
+    const fields = concept.frontmatter ?? {};
+    const tags = Array.isArray(fields.tags) ? fields.tags.filter(tag => typeof tag === 'string').slice(0, MAX_TAGS) : [];
+    return h('div', { class: 'meta', id: 'concept-meta' },
+        typeof fields.type === 'string' && fields.type ? pill(fields.type, 'type') : null,
+        tags.map(tag => pill(tag)),
+        h('span', { class: 'fact' }, `${readingMinutes(concept.chars)} min read`),
+        edited);
+}
+
+// "On this page": every heading but the page title, linking to its section.
+function onThisPage(catalog, path, listed) {
+    if (!listed.length) return null;
+    return h('details', { class: 'toc', id: 'outline' },
+        h('summary', {}, icon('list'), `On this page · ${listed.length} ${listed.length === 1 ? 'section' : 'sections'}`, icon('down', 'icon-end')),
+        h('ol', {}, listed.map(heading => h('li', { class: `depth-${Math.min(heading.depth, 3)}` },
             h('a', { href: hrefs.concept(catalog, path, heading.slug) }, heading.heading)))));
+}
+
+// "Linked from": one row per linking document, with its count.
+function linkedFrom(catalog, links, rootLabel) {
+    if (!links) return [sectionHead('Linked from'), h('p', { class: 'hint', id: 'backlinks' }, 'Links are not available offline.')];
+    const rows = dedupeBacklinks(links.data.backlinks);
+    if (!rows.length) return [sectionHead('Linked from'), h('p', { class: 'hint', id: 'backlinks' }, 'Nothing links here.')];
+    return [sectionHead('Linked from', { count: rows.length }), h('div', { class: 'rows', id: 'backlinks' }, rows.map(link => {
+        const name = fileName(link.path);
+        const folder = parentOf(link.path).split('/').pop() || rootLabel;
+        const title = name === 'log.md' ? 'Log' : link.title ?? (name === 'index.md' ? folder : name);
+        const glyph = name === 'log.md' ? 'log' : name === 'index.md' ? 'folder' : 'doc';
+        const note = backlinkNote(link);
+        return row({ href: hrefFor(catalog, link.path), glyph, title, end: note ? h('span', { class: 'r' }, note) : null });
+    }))];
 }
 
 function scrollTo(section) {
@@ -31,16 +86,16 @@ function scrollTo(section) {
 export async function render(view, ctx) {
     const { catalog, path, section } = ctx.route;
     const base = `/catalogs/${enc(catalog)}`;
-    const conceptUrl = `${base}/concepts/${encPath(path)}`;
-    // A section route asks for the whole body, as the console does: over
-    // concept_outline_chars the short answer has no body, so the heading to
-    // scroll to would be missing (every navigation renders afresh, an
-    // outline tap after "Show the whole concept" included).
-    const firstUrl = section ? `${conceptUrl}?full=true` : conceptUrl;
+    // The last edit is read beside the others but never awaited with them:
+    // the concept draws as soon as its own reads settle.
+    const edit = lastEdit(ctx, base, path);
     // Each read's refusal is acted on the moment it comes (ctx.settle: a
     // 401 wipes and signs in without waiting for the other read); what to
     // draw is decided once both have settled.
-    const settled = await Promise.allSettled([ctx.settle(read(firstUrl)), ctx.settle(backlinks(base, path))]);
+    const settled = await Promise.allSettled([
+        ctx.settle(read(`${base}/concepts/${encPath(path)}?full=true`)),
+        ctx.settle(backlinks(base, path)),
+    ]);
     const refused = settled.filter(outcome => outcome.status === 'rejected').map(outcome => outcome.reason);
     const unexpected = refused.find(reason => !(reason instanceof ReadError));
     if (unexpected) throw unexpected;
@@ -53,50 +108,29 @@ export async function render(view, ctx) {
     ctx.freshness(result);
     ctx.freshness(links);
     const concept = result.data;
-    const body = h('div', { id: 'body-slot' });
-    // fill, not append: the outline is null for a concept with no sub-headings.
+    const headings = concept.outline ?? [];
+    const article = renderBody(concept.body_html ?? '', { serif: true });
+    // The page title is drawn above: its heading in the body would repeat
+    // it. Only a level-1 first heading that reads as the frontmatter title
+    // goes; an untitled concept keeps its whole body.
+    const top = titleHeading(headings, concept.title);
+    if (top) article.querySelector(`h1[data-slug="${CSS.escape(top.slug)}"]`)?.remove();
+    const description = typeof concept.frontmatter?.description === 'string' ? concept.frontmatter.description : null;
+    const edited = h('span', { class: 'fact', id: 'concept-edited', hidden: true });
+    // fill, not append: the lede and the outline may be null.
     fill(view,
-        crumbs(catalog, path, false),
-        h('h1', { id: 'concept-title' }, concept.title ?? path),
-        outline(catalog, path, concept.outline),
-        body);
-    // Shortened means no body at all (null); an empty concept's body is "".
-    if (concept.body_html != null) {
-        body.append(renderBody(concept.body_html));
-        scrollTo(section);
-    } else {
-        const button = h('button', { type: 'button', id: 'show-full' }, 'Show the whole concept');
-        button.addEventListener('click', async () => {
-            button.disabled = true;
-            try {
-                const full = await read(`${conceptUrl}?full=true`);
-                // The user may have left while it loaded: a late answer must
-                // not touch the shared banner or a newer screen. (A refusal
-                // below still acts: ctx.fail's effects hold whichever screen shows.)
-                if (!ctx.live()) return;
-                ctx.freshness(full);
-                body.replaceChildren(renderBody(full.data.body_html));
-                scrollTo(section);
-            } catch (error) {
-                if (!(error instanceof ReadError)) throw error;
-                button.disabled = false;
-                if (error.kind === KIND.UNAVAILABLE) {
-                    body.append(message('The whole concept is not available offline.', null, 'full-failed'));
-                    return;
-                }
-                // A 401 or a lost grant here must wipe or evict like any other read.
-                await ctx.fail(error);
-            }
-        });
-        body.append(message('This concept is long; only its outline was loaded.', button, 'shortened'));
-    }
-    view.append(h('h2', {}, 'Linked from'));
-    if (!links) {
-        view.append(h('p', { class: 'hint', id: 'backlinks' }, 'Links are not available offline.'));
-    } else if (!links.data.backlinks.length) {
-        view.append(h('p', { class: 'hint', id: 'backlinks' }, 'Nothing links here.'));
-    } else {
-        view.append(h('ul', { class: 'list', id: 'backlinks' }, links.data.backlinks.map(link =>
-            h('li', {}, h('a', { href: hrefFor(catalog, link.path) }, link.title ?? link.path)))));
-    }
+        crumbs(catalog, path, false, { root: ctx.label(), titles: ctx.titles() }),
+        pageTitle(concept.title ?? fileName(path), 'concept-title'),
+        metaRow(concept, edited),
+        lede(description, 'concept-lede'),
+        onThisPage(catalog, path, sections(headings, concept.title)),
+        article,
+        linkedFrom(catalog, links, ctx.label()));
+    scrollTo(section);
+    // The edit line, when the history answers, on this screen only.
+    edit.then(found => {
+        if (!found || !ctx.live()) return;
+        edited.textContent = `Edited ${ago(found.at)} by ${found.actor_label ?? found.actor}`;
+        edited.hidden = false;
+    });
 }
