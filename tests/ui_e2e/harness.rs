@@ -48,7 +48,8 @@ const HOLD_NEXT: &str = "(arg) => {
 
 /// Answers the page's next request with method `arg.method` to a path
 /// ending in `arg.suffix` with status `arg.status` and the error body
-/// `{error, message: arg.message}`, without reaching the server (a refusal
+/// `{error: arg.kind ?? 'test', message: arg.message}`, without reaching
+/// the server (a refusal
 /// or an outage the console must survive). Later requests go through. The
 /// wrapper stays installed after it has answered (passing everything on),
 /// so several of them nest: each answers its own request once.
@@ -60,7 +61,7 @@ const FAIL_NEXT: &str = "(arg) => {
         if (!used && method === arg.method && String(input).endsWith(arg.suffix)) {
             used = true;
             return Promise.resolve(new Response(
-                JSON.stringify({ error: 'test', message: arg.message }),
+                JSON.stringify({ error: arg.kind ?? 'test', message: arg.message }),
                 { status: arg.status, headers: { 'Content-Type': 'application/json' } }));
         }
         return original(input, init);
@@ -147,6 +148,230 @@ impl Ui {
         self.wait_visible("#app");
         // `#whoami` reads "<user> - <level>" once the identity is loaded.
         self.wait_text("#whoami", " - ");
+    }
+
+    /// Navigates to the reader at `#<route>` (route like "/v/main/a.md";
+    /// "" for its home).
+    pub fn open_reader(&self, route: &str) {
+        self.page
+            .goto(
+                &format!("{}/read/#{route}", self.base),
+                GotoOptions::default(),
+            )
+            .expect("navigate to the reader");
+        // A hash-only navigation commits a moment after `goto` returns; a
+        // reload sent in that gap would reload the previous route. Give the
+        // hash a short time to settle (the reader may rewrite it, so a
+        // different hash is not an error).
+        let wanted = format!("#{route}");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline
+            && self
+                .page
+                .evaluate("() => location.hash", None, ActionOptions::default())
+                .ok()
+                != Some(serde_json::json!(wanted))
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Opens the reader at `#<route>` signed out, signs in on the page it
+    /// sends the browser to, and waits until the reader is back and shown.
+    pub fn sign_in_reader(&self, route: &str, email: &str, password: &str) {
+        self.open_reader(route);
+        self.wait_visible("#signin-email");
+        self.fill("#signin-email", email);
+        self.fill("#signin-password", password);
+        self.click("#signin-submit");
+        self.wait_visible("#reader");
+    }
+
+    /// Waits until the reader's service worker controls the page.
+    pub fn wait_worker(&self) {
+        self.poll("the reader's service worker", || {
+            self.eval(
+                "() => navigator.serviceWorker.controller !== null",
+                serde_json::json!(null),
+            ) == serde_json::json!(true)
+        });
+    }
+
+    /// Cuts the page and every service worker off the network (DevTools
+    /// network emulation on each target) while the returned value lives.
+    /// Dropping it sets `offline: false` on each target it changed before
+    /// the connection closes: closing alone does not reliably end the
+    /// emulation on a service-worker target.
+    ///
+    /// # Panics
+    /// If Chromium refuses a DevTools call.
+    pub fn go_offline(&self) -> DevTools {
+        let mut devtools = DevTools::connect(&self.browser);
+        let targets = devtools.call(None, "Target.getTargets", serde_json::json!({}));
+        let ids: Vec<String> = targets["targetInfos"]
+            .as_array()
+            .expect("targets")
+            .iter()
+            .filter(|target| target["type"] == "page" || target["type"] == "service_worker")
+            .filter_map(|target| target["targetId"].as_str().map(str::to_string))
+            .collect();
+        for id in ids {
+            let attached = devtools.call(
+                None,
+                "Target.attachToTarget",
+                serde_json::json!({ "targetId": id, "flatten": true }),
+            );
+            let session = attached["sessionId"]
+                .as_str()
+                .expect("a DevTools session")
+                .to_string();
+            devtools.call(Some(&session), "Network.enable", serde_json::json!({}));
+            devtools.set_offline(&session, true);
+            devtools.offline_sessions.push(session);
+        }
+        devtools
+    }
+
+    /// Sets this origin's storage quota to what it uses now (DevTools'
+    /// `Storage.overrideQuotaForOrigin`), so every further cache write is
+    /// refused with QuotaExceededError while the returned value lives.
+    ///
+    /// # Panics
+    /// If Chromium refuses a DevTools call.
+    pub fn limit_storage(&self) -> DevTools {
+        let used = self
+            .eval(
+                "async () => (await navigator.storage.estimate()).usage",
+                serde_json::json!(null),
+            )
+            .as_f64()
+            .expect("storage usage");
+        self.limit_storage_to(used)
+    }
+
+    /// [`Ui::limit_storage`] with the quota given in bytes. A quota below
+    /// what is used now stays exceeded even after the reader deletes some
+    /// of its copies, so a write of any size is refused.
+    ///
+    /// # Panics
+    /// If Chromium refuses a DevTools call.
+    pub fn limit_storage_to(&self, quota: f64) -> DevTools {
+        let mut devtools = DevTools::connect(&self.browser);
+        let attached = devtools.call(
+            None,
+            "Target.attachToTarget",
+            serde_json::json!({ "targetId": self.page.target_id(), "flatten": true }),
+        );
+        let session = attached["sessionId"]
+            .as_str()
+            .expect("a DevTools session")
+            .to_string();
+        devtools.call(
+            Some(&session),
+            "Storage.overrideQuotaForOrigin",
+            serde_json::json!({ "origin": self.base, "quotaSize": quota }),
+        );
+        devtools
+    }
+
+    /// Makes every `Cache.put` of a URL containing `needle` reject with
+    /// QuotaExceededError in every running service worker, while the
+    /// returned value lives (a full disk for that one write, while the
+    /// others succeed). The override is in the worker's memory only, so it
+    /// ends when that worker does.
+    ///
+    /// # Panics
+    /// If Chromium refuses a DevTools call.
+    pub fn refuse_cache_puts_of(&self, needle: &str) -> DevTools {
+        let source = format!(
+            "{{ const put = Cache.prototype.put; \
+               Cache.prototype.put = function (request, response) {{ \
+                 const url = typeof request === 'string' ? request : request.url; \
+                 if (url.includes({needle:?})) return Promise.reject(new DOMException('full', 'QuotaExceededError')); \
+                 return put.call(this, request, response); }}; }}"
+        );
+        let mut devtools = DevTools::connect(&self.browser);
+        let targets = devtools.call(None, "Target.getTargets", serde_json::json!({}));
+        let ids: Vec<String> = targets["targetInfos"]
+            .as_array()
+            .expect("targets")
+            .iter()
+            .filter(|target| target["type"] == "service_worker")
+            .filter_map(|target| target["targetId"].as_str().map(str::to_string))
+            .collect();
+        for id in ids {
+            let attached = devtools.call(
+                None,
+                "Target.attachToTarget",
+                serde_json::json!({ "targetId": id, "flatten": true }),
+            );
+            let session = attached["sessionId"]
+                .as_str()
+                .expect("a DevTools session")
+                .to_string();
+            devtools.call(
+                Some(&session),
+                "Runtime.evaluate",
+                serde_json::json!({ "expression": source }),
+            );
+        }
+        devtools
+    }
+
+    /// Makes every Cache Storage call reject with SecurityError, in the
+    /// page (now and on every later load) and in the reader's service
+    /// worker, while the returned value lives.
+    ///
+    /// # Panics
+    /// If Chromium refuses a DevTools call.
+    pub fn deny_cache_storage(&self) -> DevTools {
+        const DENY: &str = "for (const name of ['open', 'match', 'keys', 'delete', 'has']) { \
+            CacheStorage.prototype[name] = function () { \
+                return Promise.reject(new DOMException('denied', 'SecurityError')); }; }";
+        let mut devtools = DevTools::connect(&self.browser);
+        let targets = devtools.call(None, "Target.getTargets", serde_json::json!({}));
+        let infos: Vec<(String, String)> = targets["targetInfos"]
+            .as_array()
+            .expect("targets")
+            .iter()
+            .filter_map(|target| {
+                Some((
+                    target["type"].as_str()?.to_string(),
+                    target["targetId"].as_str()?.to_string(),
+                ))
+            })
+            .filter(|(kind, _)| kind == "page" || kind == "service_worker")
+            .collect();
+        for (kind, id) in infos {
+            let attached = devtools.call(
+                None,
+                "Target.attachToTarget",
+                serde_json::json!({ "targetId": id, "flatten": true }),
+            );
+            let session = attached["sessionId"]
+                .as_str()
+                .expect("a DevTools session")
+                .to_string();
+            if kind == "page" {
+                devtools.call(
+                    Some(&session),
+                    "Page.addScriptToEvaluateOnNewDocument",
+                    serde_json::json!({ "source": DENY }),
+                );
+            }
+            devtools.call(
+                Some(&session),
+                "Runtime.evaluate",
+                serde_json::json!({ "expression": DENY }),
+            );
+        }
+        devtools
+    }
+
+    /// Reloads the current page and waits for the reader to show again.
+    pub fn reload_reader(&self) {
+        self.page.reload(GotoOptions::default()).expect("reload");
+        self.wait_visible("#reader");
     }
 
     fn poll(&self, what: &str, mut done: impl FnMut() -> bool) {
@@ -346,6 +571,117 @@ impl Ui {
         );
     }
 
+    /// As [`Ui::fail_next`], with the error body's `error` kind set to
+    /// `kind` (such as `UnlockRequired`), which decides how the page reads
+    /// the refusal.
+    ///
+    /// # Arguments
+    /// * `method` - the HTTP method, upper case.
+    /// * `suffix` - the end of the request's URL.
+    /// * `status` - the status to answer.
+    /// * `kind` - the error body's `error`.
+    /// * `message` - the error body's `message`.
+    pub fn fail_next_kind(
+        &self,
+        method: &str,
+        suffix: &str,
+        status: u16,
+        kind: &str,
+        message: &str,
+    ) {
+        let armed = self.eval(
+            FAIL_NEXT,
+            serde_json::json!({
+                "method": method, "suffix": suffix, "status": status,
+                "kind": kind, "message": message,
+            }),
+        );
+        assert_eq!(armed, serde_json::json!(true));
+    }
+
+    /// Waits until the JS function `function` (no argument, may be async)
+    /// returns `true`.
+    ///
+    /// # Panics
+    /// When it has not within [`WAIT`].
+    pub fn poll_eval(&self, function: &str) {
+        self.poll(function, || {
+            self.eval(function, serde_json::json!(null)) == serde_json::json!(true)
+        });
+    }
+
+    /// Sends the page's next `method` request to a path ending in `suffix`
+    /// at once and holds only its answer in the page; `window.heldFetched`
+    /// turns true when the answer arrives (see [`HOLD_NEXT`]). Unlike
+    /// [`Ui::hold_answer`], it returns at once, so the answer can be held
+    /// elsewhere too (in the worker, [`Ui::pause_worker_responses`]).
+    ///
+    /// # Arguments
+    /// * `method` - the HTTP method, upper case.
+    /// * `suffix` - the end of the request's URL.
+    pub fn hold_answer_later(&self, method: &str, suffix: &str) {
+        self.eval(
+            HOLD_NEXT,
+            serde_json::json!({ "method": method, "suffix": suffix, "early": true }),
+        );
+    }
+
+    /// Pauses every response the reader's service worker gets for a URL
+    /// matching `pattern` (DevTools wildcards), after the server answered
+    /// and before the worker sees it (DevTools `Fetch` at the `Response`
+    /// stage, on the `service_worker` target).
+    ///
+    /// # Panics
+    /// When no service worker runs, or Chromium refuses a DevTools call.
+    pub fn pause_worker_responses(&self, pattern: &str) -> PausedResponses {
+        let mut devtools = DevTools::connect(&self.browser);
+        let targets = devtools.call(None, "Target.getTargets", serde_json::json!({}));
+        let worker = targets["targetInfos"]
+            .as_array()
+            .expect("targets")
+            .iter()
+            .find(|target| target["type"] == "service_worker")
+            .and_then(|target| target["targetId"].as_str())
+            .expect("the reader's service worker")
+            .to_string();
+        let attached = devtools.call(
+            None,
+            "Target.attachToTarget",
+            serde_json::json!({ "targetId": worker, "flatten": true }),
+        );
+        let session = attached["sessionId"]
+            .as_str()
+            .expect("a DevTools session")
+            .to_string();
+        devtools.call(
+            Some(&session),
+            "Fetch.enable",
+            serde_json::json!({ "patterns": [{ "urlPattern": pattern, "requestStage": "Response" }] }),
+        );
+        PausedResponses { devtools, session }
+    }
+
+    /// Runs `visit` on a second tab of the same browser (the default
+    /// context, so the same cookies), and closes the tab after.
+    pub fn in_second_tab(&self, visit: impl FnOnce(&Page)) {
+        let tab = self.browser.new_page().expect("open a second tab");
+        visit(&tab);
+        // rustwright closes a page's target when the page is dropped.
+        drop(tab);
+    }
+
+    /// While the returned guard lives, every service worker that starts
+    /// gets `body` (as CSS) instead of the server's answer for URLs matching
+    /// `pattern`: the files of another build. DevTools auto-attaches to each
+    /// new service worker paused before its script runs, enables `Fetch` on
+    /// it, then lets it run; a background thread answers the events.
+    ///
+    /// # Panics
+    /// If Chromium refuses the auto-attach.
+    pub fn tamper_new_workers(&self, pattern: &str, body: &str) -> Tamper {
+        Tamper::start(DevTools::connect(&self.browser), pattern, body)
+    }
+
     /// Clicks the element `selector` names twice in a row, in the page
     /// (a disabled button ignores both clicks).
     ///
@@ -513,12 +849,21 @@ impl Ui {
 }
 
 /// A DevTools connection of the harness's own, beside rustwright's: it holds
-/// a virtual authenticator ([`Ui::virtual_authenticator`]) or a download
-/// directory's behaviour ([`Ui::download`]); dropping it closes the
-/// connection, which removes what it set.
+/// a virtual authenticator ([`Ui::virtual_authenticator`]), a download
+/// directory's behaviour ([`Ui::download`]), network emulation
+/// ([`Ui::go_offline`]) or response interception ([`PausedResponses`],
+/// [`Tamper`]); dropping it closes the connection, which removes what it
+/// set.
 pub struct DevTools {
     socket: tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
     next_id: u64,
+    /// Sessions whose network emulation [`Ui::go_offline`] turned on;
+    /// dropping the connection turns it off again on each of them.
+    offline_sessions: Vec<String>,
+    /// Events that arrived while [`DevTools::try_call`] waited for its
+    /// answer, kept for [`DevTools::event`] (a paused response must not be
+    /// lost while another is released).
+    pending: std::collections::VecDeque<serde_json::Value>,
 }
 
 impl DevTools {
@@ -535,7 +880,29 @@ impl DevTools {
                 .set_read_timeout(Some(Duration::from_millis(200)))
                 .expect("set a read timeout");
         }
-        Self { socket, next_id: 0 }
+        Self {
+            socket,
+            next_id: 0,
+            offline_sessions: Vec::new(),
+            pending: std::collections::VecDeque::new(),
+        }
+    }
+
+    /// Turns network emulation on or off for one attached session.
+    ///
+    /// # Panics
+    /// If Chromium refuses the call.
+    fn set_offline(&mut self, session: &str, offline: bool) {
+        self.call(
+            Some(session),
+            "Network.emulateNetworkConditions",
+            serde_json::json!({
+                "offline": offline,
+                "latency": 0,
+                "downloadThroughput": -1,
+                "uploadThroughput": -1,
+            }),
+        );
     }
 
     /// The next JSON message, or `None` when the read timed out or the
@@ -561,7 +928,8 @@ impl DevTools {
     }
 
     /// Waits for the next `method` event whose params satisfy `wanted`,
-    /// skipping every other message.
+    /// skipping every other message (those kept while a call waited
+    /// first).
     ///
     /// # Returns
     /// The event's params.
@@ -574,6 +942,15 @@ impl DevTools {
         deadline: Instant,
         wanted: impl Fn(&serde_json::Value) -> bool,
     ) -> serde_json::Value {
+        let kept = self
+            .pending
+            .iter()
+            .position(|event| event["method"] == method && wanted(&event["params"]));
+        // `remove` hands back the owned event (an `Option`, like `list.pop(at)`).
+        if let Some(event) = kept.and_then(|at| self.pending.remove(at)) {
+            return event["params"].clone();
+        }
+        self.pending.clear();
         loop {
             assert!(Instant::now() < deadline, "no {method} event in time");
             let Some(event) = self.read_json() else {
@@ -585,8 +962,8 @@ impl DevTools {
         }
     }
 
-    /// Sends one DevTools command and waits for its answer, skipping the
-    /// events that arrive meanwhile.
+    /// Sends one DevTools command and waits for its answer, keeping the
+    /// events that arrive meanwhile for [`DevTools::event`].
     ///
     /// # Panics
     /// If the connection fails or Chromium answers with an error.
@@ -613,6 +990,35 @@ impl DevTools {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, serde_json::Value> {
+        let id = self.send(session, method, params);
+        let deadline = Instant::now() + WAIT;
+        loop {
+            assert!(Instant::now() < deadline, "no answer to {method} in time");
+            let Some(reply) = self.read_json() else {
+                continue;
+            };
+            if reply.get("method").is_some() {
+                self.pending.push_back(reply);
+                continue;
+            }
+            if reply["id"] == id {
+                return match reply.get("error") {
+                    Some(error) => Err(error.clone()),
+                    None => Ok(reply["result"].clone()),
+                };
+            }
+        }
+    }
+
+    /// Sends one DevTools command without waiting for its answer (for a
+    /// loop that reads answers and events itself, as [`Tamper`]'s does).
+    ///
+    /// # Returns
+    /// The command's id, which its answer carries.
+    ///
+    /// # Panics
+    /// If the connection fails.
+    fn send(&mut self, session: Option<&str>, method: &str, params: serde_json::Value) -> u64 {
         self.next_id += 1;
         let mut command =
             serde_json::json!({ "id": self.next_id, "method": method, "params": params });
@@ -622,17 +1028,200 @@ impl DevTools {
         self.socket
             .send(tungstenite::Message::text(command.to_string()))
             .expect("send a DevTools command");
+        self.next_id
+    }
+}
+
+/// Responses paused in the reader's service worker (see
+/// [`Ui::pause_worker_responses`]); dropping it closes its DevTools
+/// connection, which ends the pausing and lets any still paused through.
+pub struct PausedResponses {
+    devtools: DevTools,
+    session: String,
+}
+
+impl PausedResponses {
+    /// Waits for the next paused response.
+    ///
+    /// # Returns
+    /// Its DevTools request id, for [`PausedResponses::release`].
+    ///
+    /// # Panics
+    /// When none is paused within [`WAIT`].
+    pub fn next_paused(&mut self) -> String {
         let deadline = Instant::now() + WAIT;
-        loop {
-            assert!(Instant::now() < deadline, "no answer to {method} in time");
-            let Some(reply) = self.read_json() else {
-                continue;
-            };
-            if reply["id"] == self.next_id {
-                return match reply.get("error") {
-                    Some(error) => Err(error.clone()),
-                    None => Ok(reply["result"].clone()),
+        let params = self
+            .devtools
+            .event("Fetch.requestPaused", deadline, |_| true);
+        params["requestId"]
+            .as_str()
+            .expect("a request id")
+            .to_string()
+    }
+
+    /// Lets the paused response `request` through to the worker.
+    ///
+    /// # Panics
+    /// If Chromium refuses (no such paused response).
+    pub fn release(&mut self, request: &str) {
+        self.devtools.call(
+            Some(&self.session),
+            "Fetch.continueResponse",
+            serde_json::json!({ "requestId": request }),
+        );
+    }
+}
+
+/// Rewrites matching responses for every new service worker until dropped
+/// (see [`Ui::tamper_new_workers`]).
+pub struct Tamper {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    rewritten: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Tamper {
+    /// Turns on auto-attach to new service workers (paused until their
+    /// `Fetch` interception is on) on `devtools`, and starts the thread
+    /// that answers its events until the guard is dropped.
+    fn start(mut devtools: DevTools, pattern: &str, body: &str) -> Self {
+        use base64::Engine as _;
+        devtools.call(
+            None,
+            "Target.setAutoAttach",
+            serde_json::json!({
+                "autoAttach": true,
+                "waitForDebuggerOnStart": true,
+                "flatten": true,
+                "filter": [{ "type": "service_worker" }],
+            }),
+        );
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let rewritten = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // DevTools wants a fulfilled body in standard base64.
+        let (pattern, body) = (
+            pattern.to_string(),
+            base64::engine::general_purpose::STANDARD.encode(body.as_bytes()),
+        );
+        // Clones of the `Arc`s move into the thread; the guard keeps its own.
+        let (stopping, counting) = (
+            std::sync::Arc::clone(&stop),
+            std::sync::Arc::clone(&rewritten),
+        );
+        let thread = std::thread::spawn(move || {
+            while !stopping.load(std::sync::atomic::Ordering::Relaxed) {
+                let Some(event) = devtools.read_json() else {
+                    continue;
                 };
+                match event["method"].as_str() {
+                    Some("Target.attachedToTarget") => {
+                        let Some(worker) = event["params"]["sessionId"].as_str() else {
+                            continue;
+                        };
+                        let worker = worker.to_string();
+                        devtools.send(
+                            Some(&worker),
+                            "Fetch.enable",
+                            serde_json::json!({
+                                "patterns": [{ "urlPattern": pattern, "requestStage": "Response" }],
+                            }),
+                        );
+                        devtools.send(
+                            Some(&worker),
+                            "Runtime.runIfWaitingForDebugger",
+                            serde_json::json!({}),
+                        );
+                    }
+                    Some("Fetch.requestPaused") => {
+                        devtools.send(
+                            event["sessionId"].as_str(),
+                            "Fetch.fulfillRequest",
+                            serde_json::json!({
+                                "requestId": event["params"]["requestId"],
+                                "responseCode": 200,
+                                "responseHeaders": [
+                                    { "name": "Content-Type", "value": "text/css; charset=utf-8" },
+                                ],
+                                "body": body,
+                            }),
+                        );
+                        counting.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    _ => {}
+                }
+            }
+        });
+        Self {
+            stop,
+            rewritten,
+            thread: Some(thread),
+        }
+    }
+
+    /// How many responses it has rewritten so far.
+    pub fn rewritten(&self) -> usize {
+        self.rewritten.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+impl Drop for Tamper {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        // The thread sees `stop` within one read timeout (200 ms), then
+        // drops its connection, which detaches from every worker.
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for DevTools {
+    /// Restores the network on every session [`Ui::go_offline`] cut off.
+    /// A target that has gone away (a stopped worker) is skipped; nothing
+    /// here panics, since this can run while a journey is already failing.
+    fn drop(&mut self) {
+        for session in std::mem::take(&mut self.offline_sessions) {
+            let command = serde_json::json!({
+                "id": self.next_id + 1,
+                "method": "Network.emulateNetworkConditions",
+                "sessionId": session,
+                "params": {
+                    "offline": false,
+                    "latency": 0,
+                    "downloadThroughput": -1,
+                    "uploadThroughput": -1,
+                },
+            });
+            self.next_id += 1;
+            let id = self.next_id;
+            if self
+                .socket
+                .send(tungstenite::Message::text(command.to_string()))
+                .is_err()
+            {
+                return;
+            }
+            // Wait briefly for the answer so the command lands before close.
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < deadline {
+                match self.socket.read() {
+                    Ok(message) => {
+                        let answered = message
+                            .to_text()
+                            .ok()
+                            .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+                            .is_some_and(|reply| reply["id"] == id);
+                        if answered {
+                            break;
+                        }
+                    }
+                    Err(tungstenite::Error::Io(error))
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) => {}
+                    Err(_) => return,
+                }
             }
         }
     }

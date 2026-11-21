@@ -39,10 +39,12 @@
 | `src/http/read/js/cache.js` | Page-side cache upkeep: `wipe`, `evictCatalog`, `evictDocument`, `offlineDocuments`, and the invalidation marks it sends the worker. (The worker keeps the owner record.) |
 | `src/http/read/js/route.js` | Hash routes: `parse`, `hrefs`, `hrefFor`, `fromBrowse`, `parentOf`. |
 | `src/http/read/js/main.js` | Boot, session, worker registration, screen dispatch, freshness banner, failure handling, tabs. |
+| `src/http/read/js/refusals.js` | What a refused read does (effects, drawing, severity, `fail`/`settle`/`drawWorst`), without the DOM, so Node tests it. |
 | `src/http/read/js/parts.js` | Shared view parts: `searchForm`, `crumbs`, `renderBody`, `message`. |
 | `src/http/read/js/listing.js` | `folderListing`: one folder's subfolders, index and concepts from the tree. |
+| `tests/read_worker/*.test.mjs`, `storage.mjs`, `page.mjs`, `esm-hooks.mjs` | Node tests (`just test-worker`) of the worker and of the page modules without a DOM (api, cache, route, listing), with a shared in-memory Cache Storage. |
 | `src/http/read/js/screens/{home,catalogs,tree,search,concept,document,me}.js` | One screen each. |
-| `tests/ui_e2e/harness.rs` (modify) | `open_reader`, `sign_in_reader`, `wait_worker`, `go_offline`. |
+| `tests/ui_e2e/harness.rs` (modify) | `open_reader`, `sign_in_reader`, `wait_worker`, `go_offline`, `reload_reader`. |
 | `tests/ui_e2e/read.rs` (create), `tests/ui_e2e/main.rs` (modify) | The reader's browser journeys. |
 | `docs/reference/reader.md` (create), `README.md` (modify) | How to install and what works offline. |
 | `changelog/<timestamp>-mobile-reader.md` (create) | The change, per the project's changelog rule. |
@@ -55,7 +57,7 @@
 - Modify: `build.rs`
 - Modify: `src/http/ui.rs` (`asset`, `content_type`, tests)
 - Create: `src/http/read.rs`
-- Modify: `src/http/mod.rs:18` (module list) and `:413` (`open.merge(ui::routes())`)
+- Modify: `src/http/mod.rs` (the module list, and `open.merge(ui::routes())` near line 433)
 - Create: `src/http/read/index.html`, `src/http/read/manifest.webmanifest`, `src/http/read/icons/` (4 PNGs)
 
 - [ ] **Step 1: Generate the icons**
@@ -585,7 +587,9 @@ async fn worker() -> Response {
 
 - [ ] **Step 9: Register the module**
 
-In `src/http/mod.rs`, add `mod read;` beside `mod ui;` (line 18), and change `open.merge(ui::routes())` (line 413) to `open.merge(ui::routes()).merge(read::routes())`.
+> **Corrected (issue #808, 2026-11-20).** The plan's line numbers (`:18`, `:413`) were stale: `ui::routes()` is near line 433 of `src/http/mod.rs`. Fixed inline; no other task refers to them.
+
+In `src/http/mod.rs`, add `mod read;` beside `mod ui;` (rustfmt sorts it into the list), and change `open.merge(ui::routes())` (near line 433) to `open.merge(ui::routes()).merge(read::routes())`.
 
 - [ ] **Step 10: Run the tests to see them pass**
 
@@ -675,6 +679,14 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 - [ ] **Step 6: Tag every `/api/v1` answer with its account**
 
+> **Corrected (issue #809, 2026-11-20).** `account_tag` takes an `Account`
+> (`Account::User(&row.user_id)` for a session, `Account::Key(&principal.key_id)`
+> for a bearer credential) and hashes `okf-account:user:<id>` or
+> `okf-account:key:<id>`, so a key whose id happens to equal a user's id never
+> shares that user's tag. The code below is the shipped form. The header on
+> real answers, and its absence from the middleware's own 401 and 403, is
+> checked by `console_session::http_tests::api_answers_name_their_account_and_refusals_do_not`.
+
 The reader shares the console's cookie, so another tab can sign in as someone else while a reader tab stays open. Its service worker must know whose answer each response is, so it never files one account's answers under another's. In `src/http/console_session.rs`, add after the `CSRF_HEADER` constant:
 
 ```rust
@@ -683,17 +695,24 @@ The reader shares the console's cookie, so another tab can sign in as someone el
 /// mobile reader's worker never files one account's answers under another's.
 pub const ACCOUNT_HEADER: &str = "x-okf-account";
 
-/// An opaque, stable tag for the account `id`: 16 hex digits of SHA-256 of
-/// a prefixed id, so the header names no user and no key.
-///
-/// # Arguments
-/// * `id` - a user's id, or a key's id.
-///
-/// # Returns
-/// The header value.
+/// Whose answer an `/api/v1` response is, for [`account_tag`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Account<'a> {
+    /// A console session's user, by user id.
+    User(&'a str),
+    /// A bearer credential (API key or OAuth grant), by key id.
+    Key(&'a str),
+}
+
+/// An opaque, stable tag for `account`: 16 hex digits of SHA-256 of a
+/// prefixed id, so the header names no user and no key.
 #[tracing::instrument(level = "trace", skip_all)]
-pub(crate) fn account_tag(id: &str) -> HeaderValue {
-    let digest = Sha256::digest(format!("okf-account:{id}").as_bytes());
+pub(crate) fn account_tag(account: Account<'_>) -> HeaderValue {
+    let prefixed = match account {
+        Account::User(id) => format!("okf-account:user:{id}"),
+        Account::Key(id) => format!("okf-account:key:{id}"),
+    };
+    let digest = Sha256::digest(prefixed.as_bytes());
     let hex = digest.iter().take(8).fold(String::with_capacity(16), |mut hex, byte| {
         // `write!` into a String cannot fail; `let _` drops the Ok.
         let _ = write!(hex, "{byte:02x}");
@@ -706,7 +725,7 @@ pub(crate) fn account_tag(id: &str) -> HeaderValue {
 with `use std::fmt::Write as _;` and `use sha2::{Digest, Sha256};` among the imports. In `require_principal`, the bearer branch's `return next.run(request).await;` becomes:
 
 ```rust
-            let tag = account_tag(&principal.key_id);
+            let tag = account_tag(Account::Key(&principal.key_id));
             let mut response = next.run(request).await;
             response.headers_mut().insert(ACCOUNT_HEADER, tag);
             return response;
@@ -716,20 +735,21 @@ with `use std::fmt::Write as _;` and `use sha2::{Digest, Sha256};` among the imp
 
 ```rust
     let mut response = next.run(request).await;
-    response.headers_mut().insert(ACCOUNT_HEADER, account_tag(&row.user_id));
+    response.headers_mut().insert(ACCOUNT_HEADER, account_tag(Account::User(&row.user_id)));
     response
 ```
 
-(`row.user_id` is still in scope; if the borrow checker objects because `row` was partly moved into `ConsoleSession`, take `let tag = account_tag(&row.user_id);` before that insert.)
+(shipped: `let tag = account_tag(Account::User(&row.user_id));` is taken before the `ConsoleSession` insert, and the insert after `next.run` uses `tag`.)
 
 Add to the module's tests:
 
 ```rust
     #[test]
     fn account_tags_are_stable_opaque_and_distinct() {
-        let alice = account_tag("user-alice");
-        assert_eq!(alice, account_tag("user-alice"));
-        assert_ne!(alice, account_tag("user-bob"));
+        let alice = account_tag(Account::User("user-alice"));
+        assert_eq!(alice, account_tag(Account::User("user-alice")));
+        assert_ne!(alice, account_tag(Account::User("user-bob")));
+        assert_ne!(alice, account_tag(Account::Key("user-alice")));
         let text = alice.to_str().expect("ascii");
         assert_eq!(text.len(), 16);
         assert!(text.bytes().all(|byte| byte.is_ascii_hexdigit()));
@@ -740,7 +760,7 @@ Add to the module's tests:
 - [ ] **Step 7: Run it and commit**
 
 Run: `cargo test --lib http::console_session::tests::account_tags`
-Expected: PASS. (The header on real answers is checked by the two-account journey in Task 11.)
+Expected: PASS. (The header on real answers is checked by `http_tests::api_answers_name_their_account_and_refusals_do_not` here, and by the two-account journey in Task 11.)
 
 ```bash
 git add src/http/console_session.rs
@@ -799,11 +819,54 @@ self.READ_CACHES = Object.freeze({
     content: 'read-content',
     meta: 'read-meta',
     owner: 'read-owner',
+    // The one entry of `owner`: { tag }, the account whose copies are cached.
+    ownerKey: '/read/__owner',
     contentCap: 200,
 });
 ```
 
+> **Corrected (issue #812, 2026-11-20).** `ownerKey` was added so the page (`cache.js`,
+> `offlineDocuments`) and the worker name the owner record's key once; `sw.js`'s `OWNER_KEY` is now
+> `READ_CACHES.ownerKey`. The value is unchanged.
+
 - [ ] **Step 4: Write `src/http/read/sw.js`**
+
+> **Corrected (issue #810, 2026-11-20).** The listing below is the worker as shipped; it replaces
+> the earlier text, which never kept an answer that made an account the owner, nor any answer
+> on its way with it: the takeover set a `'*'` mark at its own time, which every request that
+> had already started (the first screen of a first visit, journeys 8m and 8q) then matched, and
+> the request-time `caches.open` handle wrote into a cache the takeover had just deleted. Now an
+> owner change bumps an `epoch` instead (a copy is kept only while the epoch it was admitted
+> under is current, checked before and after the write), `store` opens the cache at write time,
+> marks and `since` use the monotonic `performance.now()` (so `since` is not stored: a record
+> read from `read-owner` is `{ tag }`, and no request of the reading worker predates it), a
+> failed takeover disowns the copies, and a half-written shell cache is deleted. `remember` is
+> now `store(cacheName, key, response, { startedAt, held, capped })`; `admit` returns the epoch
+> or null. Nothing in a later task calls these: the page only deletes `read-owner`, and journey
+> 8q reads its `.tag`, which is unchanged.
+>
+> **Corrected (issue #810, 2026-11-20, review).** `takeOver` now deletes the old owner record with the old
+> copies and keeps the new account's answers only once its own record is written; if any of
+> that fails, it disowns and keeps nothing. Before, a failed record write left the old account's
+> record naming the new account's copies, which a restarted worker then served to the old account.
+> The worker is covered by `tests/read_worker/sw.test.mjs` (`just test-worker`, run by `just test`).
+>
+> **Corrected (issue #810, 2026-11-20, second review).** Offline answers go through `ownedCopy`:
+> a cached copy is served only when an account owns the copies (`currentOwner`, decided in turn
+> with takeovers, reading `read-owner` on first use) and the copy's own `X-OKF-Account` is that
+> owner's, checked again after the read and after the renewal (`stillOwned`: the epoch, the owner
+> and any mark since the request started). With no owner (no record, a wipe, a failed takeover),
+> nothing is served and `read-content` and `read-meta` are deleted (best effort); a copy for
+> another account is deleted. Only a checked copy is renewed. Task 5's `offlineDocuments` is
+> corrected to match.
+>
+> **Corrected (issue #858, 2026-11-21).** Any other API read (session, search, whoami) is no
+> longer left to the network: the fetch handler answers it with `passThrough`, which returns the
+> network's answer unchanged and never stores it, but runs a `2xx`'s `X-OKF-Account` through
+> `admit`, under the same ordering rules, before the page gets it. Before, only answers the
+> worker cached decided ownership, so boot's session check as a new account (another tab signed
+> in) left the old account the owner, and offline the worker served it its copies. In the
+> listing below, read the fetch handler's last branches and `passThrough` in `sw.js` as shipped.
 
 ```js
 // The reader's service worker (reader design, "Caching"). Its scope is
@@ -822,6 +885,13 @@ const META = [
     /^\/api\/v1\/catalogs\/[^/]+\/(tree|recent-changes)$/,
     /^\/api\/v1\/catalogs\/[^/]+\/links\//,
 ];
+const CATALOG = /^\/api\/v1\/catalogs\/([^/]+)\//;
+const OWNER_KEY = READ_CACHES.ownerKey;
+
+// The worker's own clock for ordering requests against marks and owner
+// changes. It is monotonic (a wall-clock change cannot reorder them) and
+// lives as long as this worker, as the marks and the in-memory owner do.
+const now = () => performance.now();
 
 // Installs only a shell that is entirely this build's: the listing must
 // carry this worker's version, and every file must hash as listed. A deploy
@@ -829,11 +899,19 @@ const META = [
 // browser keeps the worker it had and tries again on a later visit.
 self.addEventListener('install', event => {
     event.waitUntil((async () => {
-        const listing = await (await fetch('/read/shell.json', { cache: 'no-store' })).json();
+        const answer = await fetch('/read/shell.json', { cache: 'no-store' });
+        if (!answer.ok) throw new Error(`shell listing: HTTP ${answer.status}`);
+        const listing = await answer.json();
         if (listing.version !== VERSION) throw new Error('the shell listing is from another build');
         const responses = await Promise.all(listing.files.map(verified));
         const cache = await caches.open(SHELL);
-        await Promise.all(listing.files.map((file, at) => cache.put(file.url, responses[at])));
+        try {
+            await Promise.all(listing.files.map((file, at) => cache.put(file.url, responses[at])));
+        } catch (failure) {
+            // A half-written shell is never used; leave no copy of it.
+            await caches.delete(SHELL).catch(() => {});
+            throw failure;
+        }
         await self.skipWaiting();
     })());
 });
@@ -848,6 +926,16 @@ async function verified(file) {
     return response;
 }
 
+self.addEventListener('activate', event => {
+    event.waitUntil((async () => {
+        const names = await caches.keys().catch(() => []);
+        await Promise.all(names
+            .filter(name => name.startsWith(READ_CACHES.shellPrefix) && name !== SHELL)
+            .map(name => caches.delete(name).catch(() => false)));
+        await self.clients.claim();
+    })());
+});
+
 // Invalidation marks, in memory: the page sends one ('*' for a wipe, an
 // encoded catalog for a lost grant, or one document's API path for a
 // deleted document) and waits for the reply before it deletes anything.
@@ -855,25 +943,43 @@ async function verified(file) {
 // or before a matching mark, so a slow 2xx cannot put back what a 401 or a
 // lost grant removed. Memory needs no storage quota, and a request still on
 // its way keeps the worker alive, so the marks last as long as they matter.
+// (The Service Worker spec's Try Activate starts a new worker only once this
+// one has no events pending, skipWaiting or not, so one worker at a time
+// holds the marks that matter; a request the browser times out is the
+// exception, and its answer is then no longer this worker's to keep.)
 const marks = new Map();
 
+// The account the cached copies belong to, { tag, since }, read from
+// read-owner on first use (`undefined` until then). `tag` is null when no
+// account owns them; `since` is when the owner took over, on `now()`'s
+// clock (-Infinity for a record this worker read: no request of its own
+// predates it). The worker, which every reader tab shares, decides
+// ownership, so a sign-in as someone else in another tab cannot slip one
+// account's answers in among another's.
+let owner;
+// Bumped whenever the owner changes. A copy is kept only while the epoch it
+// was admitted under is current, so an answer admitted for the old owner
+// drops its copy when a new one takes over, without touching the new
+// owner's answers already on their way.
+let epoch = 0;
+// Ownership decisions run one at a time, in arrival order.
+let ownerQueue = Promise.resolve(null);
+
+// No account owns the copies from now on; answers to requests that started
+// before this are never kept.
+function disown() {
+    owner = { tag: null, since: now() };
+    epoch += 1;
+}
+
 self.addEventListener('message', event => {
-    if (event.data?.type !== 'invalidate') return;
-    marks.set(event.data.scope, Date.now());
+    const scope = event.data?.type === 'invalidate' ? event.data.scope : undefined;
+    if (typeof scope !== 'string') return;
+    marks.set(scope, now());
     // A wipe also deletes read-owner: the next account to answer owns the
     // copies afresh.
-    if (event.data.scope === '*') owner = null;
+    if (scope === '*') disown();
     event.ports[0]?.postMessage('ok');
-});
-
-self.addEventListener('activate', event => {
-    event.waitUntil((async () => {
-        const names = await caches.keys();
-        await Promise.all(names
-            .filter(name => name.startsWith(READ_CACHES.shellPrefix) && name !== SHELL)
-            .map(name => caches.delete(name)));
-        await self.clients.claim();
-    })());
 });
 
 self.addEventListener('fetch', event => {
@@ -890,10 +996,11 @@ self.addEventListener('fetch', event => {
     } else if (!url.pathname.startsWith('/api/')) {
         event.respondWith(fromShell(request, request));
     }
-    // Any other API read (session, search, whoami) goes to the network as is.
+    // Any other API read (session, search, me) goes to the network as is.
 });
 
 // The shell's copy of `key`, else the network's answer to `request`.
+// Storage that refuses to read means the network's answer.
 async function fromShell(key, request) {
     const cached = await caches.match(key, { cacheName: SHELL }).catch(() => undefined);
     return cached ?? fetch(request);
@@ -902,72 +1009,148 @@ async function fromShell(key, request) {
 // The network's answer, remembered when it is a 2xx; without a network,
 // the remembered copy marked X-Read-Offline. `capped` caches keep only the
 // newest READ_CACHES.contentCap entries. Remembering is best effort: a
-// failed write (a full disk, QuotaExceededError) never costs the page the
-// answer it already has.
+// failed write (a full disk, QuotaExceededError, storage that refuses to
+// open) never costs the page the answer it already has.
 async function networkFirst(request, cacheName, capped) {
-    // Storage that refuses to open (denied by browser settings) means no
-    // copies, never a lost answer: the network's answer still goes through.
-    const cache = await caches.open(cacheName).catch(() => null);
-    const startedAt = Date.now();
+    const startedAt = now();
     let response;
     try {
         response = await fetch(request);
     } catch (failure) {
-        const cached = cache ? await cachedCopy(cache, request).catch(() => null) : null;
+        const cached = await ownedCopy(cacheName, request, startedAt);
         if (!cached) throw failure;
-        // `capped: null`: a renewal, not a fresh answer, and never trimmed.
-        if (capped) await upkeep(() => remember(cache, cached.key, cached.response.clone(), startedAt, null));
+        // Re-put so the copy counts as recently viewed; a renewal, never trimmed.
+        if (capped) {
+            await upkeep(() => store(cacheName, cached.key, cached.response.clone(), { startedAt, held: cached.held, capped: false }));
+            // A wipe, an eviction or a takeover during the renewal: the copy
+            // is no longer the owner's to read (`store` already dropped it).
+            if (!stillOwned(cached, startedAt)) throw failure;
+        }
         return stamped(cached.response, 'X-Read-Offline', '1');
     }
-    if (response.ok && cache) {
+    if (response.ok) {
         const copy = stamped(response.clone(), 'X-Read-Cached-At', new Date().toISOString());
-        await upkeep(() => remember(cache, request, copy, startedAt, capped));
+        await upkeep(async () => {
+            if (invalidatedSince(request.url, startedAt)) return;
+            const held = await admit(response.headers.get('X-OKF-Account'), startedAt);
+            if (held !== null) await store(cacheName, request, copy, { startedAt, held, capped });
+        });
     }
     return response;
 }
 
-const CATALOG = /^\/api\/v1\/catalogs\/([^/]+)\//;
-const OWNER_KEY = '/read/__owner';
-
-// The account the cached copies belong to, { tag, since } (`since`: when it
-// became the owner), read from read-owner on first use; `undefined` until
-// then, null for none. The worker, which every reader tab shares, decides
-// ownership, so a sign-in as someone else in another tab cannot slip one
-// account's answers in among another's.
-let owner;
-// Ownership decisions run one at a time, in arrival order.
-let ownerQueue = Promise.resolve();
-
 async function loadOwner() {
     try {
         const stored = await (await caches.open(READ_CACHES.owner)).match(OWNER_KEY);
-        return stored ? await stored.json() : null;
+        const record = stored ? await stored.json() : null;
+        return { tag: typeof record?.tag === 'string' ? record.tag : null, since: -Infinity };
     } catch {
-        return null;
+        return { tag: null, since: -Infinity };
     }
 }
 
-// Whether an answer for account `tag`, to a request that started at
-// `startedAt`, may be cached. The first answer for a new account makes it
-// the owner: the copies are wiped first, and a '*' mark makes every answer
-// already on its way for the old account drop its copy (remember's second
-// check). An answer from before the current owner took over is never kept.
+// The epoch under which an answer for account `tag`, to a request that
+// started at `startedAt`, may be cached, or null when it may not. The first
+// answer for a new account makes it the owner (`takeOver`). An answer for
+// another account to a request from before the current owner took over is
+// never kept, so a late answer for the old account cannot take the copies
+// back.
 function admit(tag, startedAt) {
-    const decision = ownerQueue.then(async () => {
-        if (!tag) return false;
-        if (owner === undefined) owner = await loadOwner();
-        if (owner?.tag === tag) return true;
-        if (owner && startedAt <= owner.since) return false;
-        marks.set('*', Date.now());
-        await Promise.all([READ_CACHES.content, READ_CACHES.meta].map(name => caches.delete(name)));
-        owner = { tag, since: Date.now() };
-        await caches.open(READ_CACHES.owner)
-            .then(cache => cache.put(OWNER_KEY, new Response(JSON.stringify(owner))))
-            .catch(() => {});
-        return true;
+    return inTurn(async () => {
+        if (!tag) return null;
+        await knowOwner();
+        if (owner.tag === tag) return epoch;
+        if (startedAt <= owner.since) return null;
+        return takeOver(tag);
     });
-    ownerQueue = decision.catch(() => false);
-    return decision.catch(() => false);
+}
+
+// Runs `decide` after every ownership decision before it, and resolves to
+// its result (null if it throws).
+function inTurn(decide) {
+    const decision = ownerQueue.then(decide);
+    ownerQueue = decision.catch(() => null);
+    return ownerQueue;
+}
+
+// Reads the owner record on first use.
+async function knowOwner() {
+    if (owner !== undefined) return;
+    const stored = await loadOwner();
+    // A wipe may have disowned the copies while the record was read.
+    if (owner === undefined) owner = stored;
+}
+
+// The current owner, { tag, held } (`held`: the epoch it holds), decided in
+// turn with takeovers, so a takeover in progress finishes first. Null when
+// no account owns the copies (no record, a wipe, or a failed takeover):
+// then whatever read-content and read-meta still hold belongs to nobody,
+// and is deleted (best effort).
+function currentOwner() {
+    return inTurn(async () => {
+        await knowOwner();
+        if (owner.tag) return { tag: owner.tag, held: epoch };
+        await Promise.all([READ_CACHES.content, READ_CACHES.meta]
+            .map(name => caches.delete(name).catch(() => false)));
+        return null;
+    });
+}
+
+// The cached answer to `request` in `cacheName` (or its other form, see
+// `cachedCopy`), served only when it belongs to the current owner: its own
+// X-OKF-Account must be the owner's, and once the copy is read the owner
+// must still be the same and the page must not have invalidated it since
+// `startedAt`. Returns { key, response, held } or null. A copy made for
+// another account is deleted (best effort).
+async function ownedCopy(cacheName, request, startedAt) {
+    const current = await currentOwner();
+    if (!current) return null;
+    const cached = await caches.open(cacheName)
+        .then(cache => cachedCopy(cache, request))
+        .catch(() => null);
+    if (!cached) return null;
+    if (cached.response.headers.get('X-OKF-Account') !== current.tag) {
+        // Only while the owner it was checked against still owns the copies.
+        if (epoch === current.held) await upkeep(() => caches.open(cacheName).then(cache => cache.delete(cached.key)));
+        return null;
+    }
+    const owned = { ...cached, tag: current.tag, held: current.held };
+    return stillOwned(owned, startedAt) ? owned : null;
+}
+
+// Whether `copy` ({ key, tag, held }) still belongs to the owner it was
+// checked against, and the page has not invalidated it since `startedAt`.
+function stillOwned(copy, startedAt) {
+    return epoch === copy.held && owner?.tag === copy.tag
+        && !invalidatedSince(copy.key.url ?? copy.key, startedAt);
+}
+
+// Makes `tag` the owner. The epoch is bumped first, so the old owner's
+// copies still on their way drop themselves. Then the old owner's copies and
+// its record go, and only then is the new owner recorded; `tag`'s answers
+// are kept only once that record is written. So the durable record never
+// names an account other than the one whose copies are cached: at worst
+// there is no record, and a restarted worker then treats the next answer as
+// a new owner and wipes. Returns the new epoch, or null (keep nothing) when
+// the old state could not be deleted, the record could not be written, or a
+// wipe came meanwhile.
+async function takeOver(tag) {
+    owner = { tag, since: now() };
+    epoch += 1;
+    const mine = epoch;
+    try {
+        await Promise.all([READ_CACHES.content, READ_CACHES.meta, READ_CACHES.owner]
+            .map(name => caches.delete(name)));
+        if (epoch !== mine) return null;
+        const record = await caches.open(READ_CACHES.owner);
+        await record.put(OWNER_KEY, new Response(JSON.stringify({ tag })));
+    } catch {
+        // Whatever is left belongs to nobody, and this answer is not kept;
+        // the next request tries again.
+        if (epoch === mine) disown();
+        return null;
+    }
+    return epoch === mine ? mine : null;
 }
 
 // Whether the page wiped everything, or evicted `url`'s catalog or the
@@ -980,23 +1163,25 @@ function invalidatedSince(url, startedAt) {
         .some(at => at !== undefined && at >= startedAt);
 }
 
-// Stores `response` under `key` unless the page invalidated it since
-// `startedAt`. The check runs again after the write: the page's mark is in
-// place before it deletes, so an eviction that began meanwhile either finds
-// this entry and deletes it, or marked before this second check, which
-// deletes it.
-async function remember(cache, key, response, startedAt, capped) {
-    if (invalidatedSince(key.url ?? key, startedAt)) return;
-    // A fresh answer must belong to the current owner (or become it); a
-    // renewed offline copy already does.
-    if (capped !== null && !(await admit(response.headers.get('X-OKF-Account'), startedAt))) return;
-    if (invalidatedSince(key.url ?? key, startedAt)) return;
+// Stores `response` under `key` in `cacheName`, unless the page invalidated
+// it since `startedAt` or the owner changed since epoch `held`. The cache is
+// opened here, not when the request started: a takeover or a wipe deletes
+// the cache, and a handle from before would write where nobody reads. The
+// checks run again after the write: the page marks before it deletes, and a
+// takeover bumps the epoch before it deletes, so an eviction that began
+// meanwhile either finds this entry and deletes it, or changed the state
+// before this second check, which deletes it.
+async function store(cacheName, key, response, { startedAt, held, capped }) {
+    const url = key.url ?? key;
+    const current = () => epoch === held && !invalidatedSince(url, startedAt);
+    if (!current()) return;
+    const cache = await caches.open(cacheName);
     await renew(cache, key, response);
-    if (invalidatedSince(key.url ?? key, startedAt)) {
+    if (!current()) {
         await cache.delete(key);
         return;
     }
-    if (capped === true) await trim(cache);
+    if (capped) await trim(cache);
 }
 
 // The cached answer to `request`, or, for a concept, the other form of it
@@ -1024,7 +1209,7 @@ async function upkeep(write) {
     try {
         await write();
     } catch (error) {
-        console.warn('reader cache write failed:', error.name);
+        console.warn('reader cache write failed:', error?.name);
     }
 }
 
@@ -1217,6 +1402,17 @@ These are plain modules with no screen yet. They are exercised by the browser jo
 
 **Files:**
 - Create: `src/http/read/js/api.js`, `cache.js`, `route.js`, `listing.js`, `parts.js`
+- Create: `tests/read_worker/api.test.mjs`, `cache.test.mjs`, `route.test.mjs`, `page.mjs`, `esm-hooks.mjs`, `storage.mjs`
+- Modify: `src/http/read/js/names.js` (`ownerKey`), `src/http/read/sw.js` (`OWNER_KEY`), `tests/read_worker/sw.test.mjs` (its Cache Storage fake moved to `storage.mjs`)
+
+> **Corrected (issue #812, 2026-11-20).** The modules without a DOM are tested in Node
+> (`just test-worker`): `route.test.mjs` covers `route.js` and `listing.js`, `api.test.mjs` covers
+> `classify` (every row of the design's error table), `read`, `readAll` and `signOut` with a fake
+> `fetch`, and `cache.test.mjs` covers `cache.js` with the in-memory Cache Storage (`storage.mjs`,
+> shared with `sw.test.mjs`) and a fake `navigator.serviceWorker`. `page.mjs` loads the page
+> modules as ES modules through a load hook (`esm-hooks.mjs`), since the repository has no
+> `package.json`. `parts.js` needs a DOM (`h()` from `/ui/js/core/dom.js`), so it is left to the
+> browser journeys from Task 6 on.
 
 - [ ] **Step 1: Write `src/http/read/js/api.js`**
 
@@ -1272,9 +1468,18 @@ export async function read(path) {
     } catch {
         throw new ReadError(KIND.UNAVAILABLE, 'Not available offline.');
     }
-    const body = await response.json().catch(() => null);
     if (!response.ok) {
+        // A refusal's body is optional: without one, its status still decides.
+        const body = await response.json().catch(() => null);
         throw new ReadError(classify(response.status, body), body?.message ?? `HTTP ${response.status}`, body);
+    }
+    // A 2xx whose body cannot be read (the connection dropped after the
+    // headers, or it is not JSON) is a failed read, never empty data.
+    let body;
+    try {
+        body = await response.json();
+    } catch {
+        throw new ReadError(KIND.FAILED, 'The answer could not be read.');
     }
     return {
         data: body,
@@ -1292,6 +1497,7 @@ export async function readAll(path, field) {
     while (cursor !== null) {
         const page = await read(`${path}${path.includes('?') ? '&' : '?'}after=${enc(cursor)}`);
         items.push(...(page.data[field] ?? []));
+        // A cursor that does not move would never end: stop at it.
         const next = page.data.next ?? null;
         cursor = next === cursor ? null : next;
     }
@@ -1310,7 +1516,31 @@ export async function signOut(csrf) {
 }
 ```
 
+> **Corrected (issue #812, 2026-11-20, review).** The listing above is `api.js` as shipped. `read`
+> now throws a `ReadError` of kind `failed` for a 2xx whose body cannot be read (malformed JSON, or
+> a connection that drops after the headers) instead of answering `{ data: null }`, which made
+> `readAll` throw a bare `TypeError`. Only a refusal keeps the optional body.
+
 - [ ] **Step 2: Write `src/http/read/js/cache.js`**
+
+> **Corrected (issue #810, 2026-11-20).** `offlineDocuments` lists only copies whose `X-OKF-Account`
+> is the tag in `read-owner`, and nothing without a record, matching the worker's `ownedCopy`, which
+> serves an offline copy only to its recorded owner. A failed takeover can leave the old account's
+> copies behind with no record, and the list must not show their titles.
+>
+> **Corrected (issue #812, 2026-11-20).** The listing below is `cache.js` as shipped. `mark` no
+> longer posts once to `navigator.serviceWorker.controller`: it posts to every worker that may be
+> answering reads, the controller and the registration's active worker (`getRegistration()`), waits
+> for each to reply or for `MARK_WAIT_MS`, then looks the workers up again and marks any new one,
+> until none is new; only then does the deletion run. This closes the race from #810 where a new
+> build takes over as the page posts: the old worker, made redundant, may never answer, the page's
+> wait lapses, and the new worker, which holds no mark, could store a 2xx for a request that started before the
+> deletion. The successor is marked first now. It also marks the active worker of an uncontrolled
+> page (a hard reload), which other reader tabs share. What remains: a worker that is redundant
+> but still answering a request the browser let outlive it (sw.js, the comment above `marks`)
+> cannot be reached by any message, and the page still deletes after the wait, so revocation never
+> blocks on a worker. `offlineDocuments` reads the copies in parallel and keys the owner record by
+> `READ_CACHES.ownerKey`; the stray comment above `evict` is gone.
 
 ```js
 // The page's side of the reader's caches (reader design, "Caching"). The
@@ -1318,10 +1548,10 @@ export async function signOut(csrf) {
 // here, where the answers are classified; the worker only fills them.
 import { enc, encPath } from './api.js';
 
-// The owner record (read-owner) is kept by the worker (sw.js, `admit`);
-// the page only deletes it with the rest.
-const { content, meta, owner } = self.READ_CACHES;
-// How long to wait for the worker to confirm a mark before deleting anyway.
+// The owner record (read-owner, under `ownerKey`) is kept by the worker
+// (sw.js, `takeOver`); the page only reads it and deletes it with the rest.
+const { content, meta, owner, ownerKey } = self.READ_CACHES;
+// How long to wait for a worker to confirm a mark before deleting anyway.
 const MARK_WAIT_MS = 1000;
 // Without Cache Storage (an unusual private mode) the reader works online
 // and keeps nothing.
@@ -1335,24 +1565,59 @@ async function storage(work, fallback = undefined) {
     try {
         return await work();
     } catch (error) {
-        console.warn('reader cache unavailable:', error.name);
+        console.warn('reader cache unavailable:', error?.name);
         return fallback;
     }
 }
 
-// Tells the worker that `scope` ('*', an encoded catalog, or a document's
-// API path) is invalid from now on, and waits for it to confirm, so the mark is in place before the
-// deletion it announces (see sw.js). With no worker controlling the page,
-// no answer of the worker's can be on its way, so there is nothing to mark.
-function mark(scope) {
-    const worker = navigator.serviceWorker?.controller;
-    if (!worker) return Promise.resolve();
+// The workers that may be answering reads: the one controlling this page,
+// and the registration's active worker. They differ while a new build takes
+// over (it activates, then claims the page, and the page learns of its new
+// controller a moment later), and when this page is not controlled but
+// another reader tab is. Missing in an insecure context.
+async function workers() {
+    const container = navigator.serviceWorker;
+    if (!container) return [];
+    const registration = await container.getRegistration().catch(() => undefined);
+    return [...new Set([container.controller, registration?.active].filter(Boolean))];
+}
+
+// Posts the mark for `scope` to `worker` and resolves on its reply, or after
+// MARK_WAIT_MS without one (a worker made redundant may never answer).
+function post(worker, scope) {
     return new Promise(resolve => {
         const channel = new MessageChannel();
-        const timer = setTimeout(resolve, MARK_WAIT_MS);
-        channel.port1.onmessage = () => { clearTimeout(timer); resolve(); };
-        worker.postMessage({ type: 'invalidate', scope }, [channel.port2]);
+        const done = () => {
+            clearTimeout(timer);
+            channel.port1.close();
+            resolve();
+        };
+        const timer = setTimeout(done, MARK_WAIT_MS);
+        channel.port1.onmessage = done;
+        try {
+            worker.postMessage({ type: 'invalidate', scope }, [channel.port2]);
+        } catch {
+            done();
+        }
     });
+}
+
+// Tells the workers that `scope` ('*', an encoded catalog, or a document's
+// API path, as sw.js matches them) is invalid from now on, and waits for
+// them to confirm, so the mark is in place before the deletion it announces
+// (see sw.js). With no worker, no answer of a worker's can be on its way,
+// so there is nothing to mark. A worker that took over meanwhile is marked
+// too: after each round the workers are looked up again, until none is new,
+// so a mark the old controller never answered still reaches its successor
+// before anything is deleted.
+async function mark(scope) {
+    const marked = new Set();
+    for (;;) {
+        const fresh = (await workers()).filter(worker => !marked.has(worker));
+        if (fresh.length === 0) return;
+        for (const worker of fresh) marked.add(worker);
+        await Promise.all(fresh.map(worker => post(worker, scope)));
+    }
 }
 
 // Deletes every cached catalog read and the record of whose they were.
@@ -1362,16 +1627,13 @@ export async function wipe() {
     await storage(() => Promise.all([content, meta, owner].map(name => caches.delete(name))));
 }
 
-// Makes the caches `user`'s: wipes them when they were someone else's.
 // Deletes the entries of `cacheNames` whose URL path `matches`.
 function evict(cacheNames, matches) {
-    return storage(async () => {
-        await Promise.all(cacheNames.map(async name => {
-            const cache = await caches.open(name);
-            const keys = await cache.keys();
-            await Promise.all(keys.filter(key => matches(new URL(key.url).pathname)).map(key => cache.delete(key)));
-        }));
-    });
+    return storage(() => Promise.all(cacheNames.map(async name => {
+        const cache = await caches.open(name);
+        const keys = await cache.keys();
+        await Promise.all(keys.filter(key => matches(new URL(key.url).pathname)).map(key => cache.delete(key)));
+    })));
 }
 
 // Deletes everything cached for `catalog`, and keeps answers already on
@@ -1392,20 +1654,27 @@ export async function evictDocument(catalog, kind, path) {
 }
 
 // The concepts and documents of `catalog` readable offline, newest first,
-// one per path: [{ path, title, cachedAt }].
+// one per path: [{ path, title, cachedAt }]. Only the recorded owner's
+// copies count, as in the worker (sw.js, `ownedCopy`): with no owner
+// record, nothing is readable offline.
 export function offlineDocuments(catalog) {
     return storage(async () => {
+        const record = await (await caches.open(owner)).match(ownerKey);
+        const tag = record ? (await record.json().catch(() => null))?.tag : null;
+        if (typeof tag !== 'string') return [];
         const cache = await caches.open(content);
-        const keys = await cache.keys();
         const prefix = `/api/v1/catalogs/${enc(catalog)}/`;
-        const seen = new Map();
-        // Newest last in the cache, so walk backwards and keep the first of each path.
-        for (const key of keys.reverse()) {
-            if (!new URL(key.url).pathname.startsWith(prefix)) continue;
+        // Newest last in the cache, so reverse and keep the first of each path.
+        const keys = (await cache.keys()).filter(key => new URL(key.url).pathname.startsWith(prefix)).reverse();
+        const copies = await Promise.all(keys.map(async key => {
             const response = await cache.match(key);
+            if (response?.headers.get('X-OKF-Account') !== tag) return null;
             const body = await response.json().catch(() => null);
-            if (!body?.path || seen.has(body.path)) continue;
-            seen.set(body.path, { path: body.path, title: body.title ?? null, cachedAt: response.headers.get('X-Read-Cached-At') });
+            return body?.path ? { path: body.path, title: body.title ?? null, cachedAt: response.headers.get('X-Read-Cached-At') } : null;
+        }));
+        const seen = new Map();
+        for (const copy of copies) {
+            if (copy && !seen.has(copy.path)) seen.set(copy.path, copy);
         }
         return [...seen.values()];
     }, []);
@@ -1420,9 +1689,11 @@ export function offlineDocuments(catalog) {
 //   #/c[?gone=<catalog>]                  catalog picker
 //   #/t/<catalog>[/<folder>...]           a folder of the tree
 //   #/s/<catalog>[?q=<query>]             search
-//   #/v/<catalog>/<path>.md[/<section>]   a concept, optionally at a heading
+//   #/v/<catalog>/<path>.md[?s=<section>] a concept, optionally at a heading
 //   #/d/<catalog>/<path>                  a log.md or AGENTS.md (read as a document)
 //   #/me                                  account
+// A concept's path is every segment after the catalog (a folder may be
+// named 'x.md'), so its section travels as a parameter, never a segment.
 const dec = decodeURIComponent;
 const enc = encodeURIComponent;
 
@@ -1439,9 +1710,9 @@ export function parse(hash) {
         case 't': return { screen: 'tree', catalog, folder: rest.join('/') };
         case 's': return { screen: 'search', catalog, query: params.get('q') ?? '' };
         case 'v': {
-            const end = rest.findIndex(segment => segment.endsWith('.md'));
-            if (end < 0) return { screen: 'tree', catalog, folder: rest.join('/') };
-            return { screen: 'concept', catalog, path: rest.slice(0, end + 1).join('/'), section: rest[end + 1] ?? null };
+            const path = rest.join('/');
+            if (!path.endsWith('.md')) return { screen: 'tree', catalog, folder: path };
+            return { screen: 'concept', catalog, path, section: params.get('s') || null };
         }
         case 'd': return { screen: 'document', catalog, path: rest.join('/') };
         case 'me': return { screen: 'me' };
@@ -1455,7 +1726,7 @@ export const hrefs = Object.freeze({
     tree: (catalog, folder = '') => `#/t/${[catalog, ...segments(folder)].map(enc).join('/')}`,
     search: (catalog, query = '') => `#/s/${enc(catalog)}${query ? `?q=${enc(query)}` : ''}`,
     concept: (catalog, path, section = null) =>
-        `#/v/${[catalog, ...segments(path), ...(section ? [section] : [])].map(enc).join('/')}`,
+        `#/v/${[catalog, ...segments(path)].map(enc).join('/')}${section ? `?s=${enc(section)}` : ''}`,
     document: (catalog, path) => `#/d/${[catalog, ...segments(path)].map(enc).join('/')}`,
     me: () => '#/me',
 });
@@ -1483,14 +1754,34 @@ export function hrefFor(catalog, path, section = null) {
 
 // A link src/render.rs wrote ('#/browse/<catalog>/<path>[/<section>]', the
 // console's route) as the reader's route, or null for any other link.
+// render.rs links only to a path ending in '.md', plus at most one section
+// segment, so the document ends at the LAST segment ending in '.md' (a
+// folder before it may be named 'x.md'), and what follows is the section.
+// A heading's slug (src/okf/markdown.rs, `slugify`) keeps only letters,
+// digits, '_' and '-', so a section that reaches a heading never ends in
+// '.md'. Only a link whose #fragment ends in '.md', which reaches no
+// heading anyway, is read as a longer path.
 export function fromBrowse(href) {
     if (!href.startsWith('#/browse/')) return null;
     const [catalog, ...rest] = href.slice('#/browse/'.length).split('/').map(dec);
-    const end = rest.findIndex(segment => segment.endsWith('.md'));
+    const end = rest.findLastIndex(segment => segment.endsWith('.md'));
     if (end < 0) return hrefs.tree(catalog, rest.join('/'));
-    return hrefFor(catalog, rest.slice(0, end + 1).join('/'), rest[end + 1] ?? null);
+    return hrefFor(catalog, rest.slice(0, end + 1).join('/'), rest.slice(end + 1).join('/') || null);
 }
 ```
+
+> **Corrected (issue #812, 2026-11-20, review).** The listing above is `route.js` as shipped. A
+> folder may be named `x.md`, so a concept route's path is now every segment after the catalog,
+> and its section is a parameter: `#/v/<catalog>/<path>.md?s=<slug>` (it was a last segment,
+> `#/v/<catalog>/<path>.md/<slug>`, and the path ended at the first `.md` segment, so
+> `archive.md/topic.md` opened `archive.md`). `hrefs.concept` and `hrefFor` keep their signatures
+> and `parse` its result, so callers change nothing; only hard-coded section routes do (Task 8's
+> `#/v/main/systems/beta.md?s=settings`, Task 10's `/v/main/systems/alpha.md?s=alpha`).
+> `fromBrowse` reads render.rs's console links (`#/browse/<catalog>/<path>[/<slug>]`, whose
+> format cannot tell a folder from a section) by ending the document at the last segment ending
+> in `.md`: render.rs links only to `.md` paths, and a heading slug (`slugify`) has no `.`
+> (`okf::markdown::tests::slugify_output_has_no_dot`). The console's own `browse.js` still ends a
+> path at the first `.md` segment; issue #829 tracks that and render.rs's format.
 
 - [ ] **Step 4: Write `src/http/read/js/listing.js`**
 
@@ -1597,7 +1888,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 6: Boot, sign-in, account and sign-out
 
 **Files:**
-- Create: `src/http/read/js/main.js`, `src/http/read/js/screens/me.js`, and minimal `home.js`, `catalogs.js`, `tree.js`, `search.js`, `concept.js` (completed in Tasks 7 to 9)
+- Create: `src/http/read/js/main.js`, `src/http/read/js/refusals.js`, `tests/read_worker/refusals.test.mjs`, `src/http/read/js/screens/me.js`, and minimal `home.js`, `catalogs.js`, `tree.js`, `search.js`, `concept.js`, `document.js` (completed in Tasks 7 to 9)
 - Modify: `tests/ui_e2e/harness.rs`, `tests/ui_e2e/main.rs`
 - Create: `tests/ui_e2e/read.rs`
 
@@ -1637,7 +1928,7 @@ In `tests/ui_e2e/harness.rs`, add to `impl Ui`:
 
     /// Cuts the page and every service worker off the network (DevTools
     /// network emulation on each target) while the returned value lives;
-    /// dropping it closes the connection, which ends the emulation.
+    /// dropping it sets `offline: false` on each target it changed (issue #817).
     pub fn go_offline(&self) -> DevTools {
         let mut devtools = DevTools::connect(&self.browser);
         let targets = devtools.call(None, "Target.getTargets", serde_json::json!({}));
@@ -1694,7 +1985,6 @@ use okf_mcp::config::Config;
 use okf_mcp::store::audit::AuditActor;
 use okf_mcp::store::ceiling::{self, NewEntitlement};
 use okf_mcp::store::keys::Access;
-use okf_mcp::store::user_sessions;
 use serde_json::json;
 
 use crate::harness::drive;
@@ -1775,6 +2065,19 @@ async fn signing_in_returns_to_the_route_and_signing_out_wipes_the_caches() {
 }
 ```
 
+> **Corrected (issue #813, 2026-11-20).** The listing above is the starting point; the shipped
+> `tests/ui_e2e/read.rs` differs, so read it before appending. `use okf_mcp::store::user_sessions;`
+> is not imported (nothing in Task 6 uses it, and an unused import fails `lint`): Task 11, its first
+> user, adds it. The import is `use crate::harness::{drive, Ui};`. The journey first has the worker
+> cache alpha (`signed_in_with_a_copy`: `read-content` and `read-owner` must be non-empty), so it
+> fails when sign-out stops wiping (with nothing cached, the empty-cache check passed either way);
+> it also checks that sign-in returned to `#/me` and that the server ended the session
+> (`GET /api/v1/session` answers 401). A second journey,
+> `signing_out_without_a_connection_still_deletes_the_offline_copies`, signs out under `go_offline`:
+> the copies go, `#sign-out-failed` shows, the button is usable again, and once back online a
+> reload still shows the account (the session was kept). It is the first user of `go_offline` and
+> `reload_reader`, which would otherwise be dead code in this task.
+
 - [ ] **Step 3: Run it to see it fail**
 
 Run: `scripts/test-pg.sh run cargo test --test ui_e2e read:: -- --test-threads=2`
@@ -1783,13 +2086,16 @@ Expected: FAIL, timed out waiting for `#signin-email` (no `main.js` yet).
 - [ ] **Step 4: Write `src/http/read/js/main.js`**
 
 ```js
-// The reader's boot and router (reader design). It checks the session,
-// makes the caches this user's, registers the worker, then renders the
-// screen the hash names. Every ReadError a screen throws comes back here,
-// to fail(), the one place that decides what a refusal does.
+// The reader's boot and router (reader design). It registers the worker
+// and waits for it to control the page, checks the session, then renders
+// the screen the hash names. (Which account the cached copies belong to is
+// the worker's decision, sw.js `admit`.) Every ReadError a screen throws
+// comes back here, to a refusals.js handler, the one place that decides
+// what a refusal does.
 import { $, h, clear } from '/ui/js/core/dom.js';
 import { ago } from '/ui/js/core/format.js';
-import { read, ReadError, KIND } from './api.js';
+import { read, signOut, ReadError, KIND } from './api.js';
+import { refusals } from './refusals.js';
 import { wipe, evictCatalog, evictDocument } from './cache.js';
 import { parse, hrefs, parentOf } from './route.js';
 import { message } from './parts.js';
@@ -1809,18 +2115,28 @@ const CATALOG_KEY = 'okf.read.catalog';
 const state = { session: null, catalog: remembered() };
 // Bumped on every navigation, so a late answer never draws over a newer screen.
 let generation = 0;
+// True while the page is leaving this account (a sign-out under way, or a
+// 401 on its way to sign-in): no catalog is remembered meanwhile, so one
+// chosen during the wipe or the DELETE never outlives the account.
+let leaving = false;
 
 function remembered() {
     try { return localStorage.getItem(CATALOG_KEY); } catch { return null; }
 }
 
-// Makes `catalog` the current one (null forgets it).
-function choose(catalog) {
-    state.catalog = catalog;
+// Stores `catalog` as the remembered one (null deletes it).
+function remember(catalog) {
     try {
         if (catalog) localStorage.setItem(CATALOG_KEY, catalog);
         else localStorage.removeItem(CATALOG_KEY);
     } catch { /* storage blocked: the choice lasts for this visit only */ }
+}
+
+// Makes `catalog` the current one (null forgets it). While the page is
+// leaving the account it is current for this page only, never remembered.
+function choose(catalog) {
+    state.catalog = catalog;
+    remember(leaving ? null : catalog);
     tabs();
 }
 
@@ -1828,9 +2144,50 @@ function signInUrl() {
     return `/signin?return_to=${encodeURIComponent(`/read/${location.hash}`)}`;
 }
 
-async function signIn() {
+// Deletes everything this device keeps of the account: every offline copy
+// and the remembered catalog, so the next person to sign in here never sees
+// the last one's catalog name. Sign-out, "Delete offline copies" and a 401
+// all go through here.
+async function forget() {
+    choose(null);
     await wipe();
-    location.assign(signInUrl());
+}
+
+// Leaves the account for the sign-in page at `url`, deleting the offline
+// copies and the remembered catalog once more on the way out: a read the
+// worker admitted while the sign-out's DELETE was pending (the session
+// still held then) may have cached a copy, and owned it, after the first
+// wipe. Once the server has ended the session no later read is admitted,
+// and this wipe's mark drops any answer still on its way.
+async function leaveFor(url) {
+    await wipe();
+    remember(null);
+    location.assign(url);
+}
+
+async function signIn() {
+    leaving = true;
+    await forget();
+    await leaveFor(signInUrl());
+}
+
+// Signs out (the account screen's button): deletes the offline copies and
+// the remembered catalog, then ends the session and leaves for sign-in.
+// Returns false, keeping the session, when the server could not be reached
+// or refused; catalogs are remembered again from then on.
+async function endSession(csrf) {
+    leaving = true;
+    await forget();
+    try {
+        if (await signOut(csrf)) {
+            await leaveFor(`/signin?return_to=${encodeURIComponent('/read/')}`);
+            return true;
+        }
+    } catch (error) {
+        if (!(error instanceof ReadError)) throw error;
+    }
+    leaving = false;
+    return false;
 }
 
 // Shows the offline banner when `result` came from the worker's cache.
@@ -1854,37 +2211,10 @@ function tabs() {
     }
 }
 
-// What a refusal changes, whichever screen shows now: a 401 or a lost
-// grant is true even when the screen that asked has been left. Run as soon
-// as that one request is refused, never after its siblings.
-async function effects(route, error) {
+// Draws a refusal's notice on `view` (the screen at `route`); refusals.js
+// decides when, and which refusals draw something else.
+function paint(view, route, error) {
     switch (error.kind) {
-        case KIND.SIGNED_OUT:
-            await signIn();
-            return;
-        case KIND.CATALOG_GONE:
-            if (route.catalog) await evictCatalog(route.catalog);
-            if (route.catalog === state.catalog) choose(null);
-            return;
-        case KIND.CONCEPT_GONE:
-            await evictDocument(route.catalog, route.screen === 'document' ? 'documents' : 'concepts', route.path);
-            return;
-        case KIND.LOCKED:
-        case KIND.UNAVAILABLE:
-        case KIND.FAILED:
-            return;
-    }
-}
-
-// What a refusal shows, on the screen that asked, while it is still shown.
-function draw(view, route, error, live) {
-    if (!live()) return;
-    switch (error.kind) {
-        case KIND.SIGNED_OUT:
-            return; // effects() has already left for sign-in.
-        case KIND.CATALOG_GONE:
-            location.hash = hrefs.catalogs(route.catalog);
-            return;
         case KIND.CONCEPT_GONE:
             clear(view).append(message('This concept no longer exists.',
                 h('a', { href: hrefs.tree(route.catalog, parentOf(route.path)), id: 'gone-folder' }, 'Open its folder'), 'concept-gone'));
@@ -1897,18 +2227,9 @@ function draw(view, route, error, live) {
             clear(view).append(message('Not available offline.',
                 h('a', { href: hrefs.home(), id: 'offline-list-link' }, 'See what is available offline'), 'unavailable'));
             return;
-        case KIND.FAILED:
+        default:
             clear(view).append(message(error.message, null, 'failed'));
-            return;
     }
-}
-
-// The kinds from most to least serious: when several reads of one screen
-// are refused, the most serious one alone draws.
-const SEVERITY = [KIND.SIGNED_OUT, KIND.CATALOG_GONE, KIND.CONCEPT_GONE, KIND.LOCKED, KIND.FAILED, KIND.UNAVAILABLE];
-
-function worst(errors) {
-    return [...errors].sort((a, b) => SEVERITY.indexOf(a.kind) - SEVERITY.indexOf(b.kind))[0];
 }
 
 async function show() {
@@ -1927,30 +2248,28 @@ async function show() {
     const view = h('section', { class: 'screen', id: `screen-${route.screen}` });
     clear($('#reader')).append(view);
     const live = () => mine === generation;
+    const refusal = refusals(route, live, {
+        signIn, evictCatalog, evictDocument, choose,
+        current: () => state.catalog,
+        go: hash => { location.hash = hash; },
+        paint: error => paint(view, route, error),
+    });
     const ctx = {
-        state, route, choose, freshness, live,
-        // A single refused read (a screen's, or a button's later): its
-        // effects, then its drawing.
-        fail: async error => { await effects(route, error); draw(view, route, error, live); },
-        // For a screen that makes several reads at once: `settle` runs each
-        // read's refusal effects the moment it is refused (marking the
-        // error handled), and `drawWorst` draws once all have settled.
-        settle: promise => promise.catch(async error => {
-            if (error instanceof ReadError) {
-                error.handled = true;
-                await effects(route, error);
-            }
-            throw error;
-        }),
-        drawWorst: errors => draw(view, route, worst(errors), live),
+        state, route, choose, forget, signOut: endSession, freshness, live,
+        fail: refusal.fail,
+        settle: refusal.settle,
+        drawWorst: refusal.drawWorst,
     };
     try {
         await SCREENS[route.screen].render(view, ctx);
     } catch (error) {
-        if (!(error instanceof ReadError)) throw error;
-        if (error.handled) draw(view, route, error, live);
-        else await ctx.fail(error);
+        await refusal.caught(error);
     }
+}
+
+// A warning, not an error: the reader still works online.
+function registrationFailed(error) {
+    console.warn('the reader\'s worker could not be registered:', error?.message);
 }
 
 // How long a first visit waits for the new worker to take control.
@@ -1965,7 +2284,9 @@ function registerWorker() {
     if (!('serviceWorker' in navigator)) return Promise.resolve();
     const workers = navigator.serviceWorker;
     if (workers.controller) {
-        workers.register('/read/sw.js', { scope: '/read/' }).catch(() => {});
+        // Already controlled: this checks for a newer build in the
+        // background, and the worker it has keeps serving if that fails.
+        workers.register('/read/sw.js', { scope: '/read/' }).catch(registrationFailed);
         return Promise.resolve();
     }
     return new Promise(resolve => {
@@ -1975,7 +2296,7 @@ function registerWorker() {
         // takes this page over and fires controllerchange.
         workers.addEventListener('controllerchange', done, { once: true });
         workers.register('/read/sw.js', { scope: '/read/' }).catch(error => {
-            console.warn('offline reading is unavailable:', error.message);
+            registrationFailed(error);
             done();
         });
     });
@@ -2000,23 +2321,166 @@ async function boot() {
 boot();
 ```
 
+> **Corrected (issue #813, 2026-11-20, review).** The refusal handling is in its own module,
+> `src/http/read/js/refusals.js` (below), with no DOM, so `tests/read_worker/refusals.test.mjs`
+> runs it in Node with deferred reads: a late refusal of catalog A after moving to B evicts A
+> without forgetting B or navigating; a 401 signs in after the screen was left; `settle` acts on a
+> refusal while a sibling read is still out; `drawWorst` draws the most serious; a refusal `settle`
+> handled is drawn by `caught` but not acted on again. `show()` builds one handler per screen
+> (`refusals(route, live, actions)`) and passes `fail`, `settle` and `drawWorst` on as before; the
+> notices themselves are drawn by main.js's `paint`. `forget()` (in `ctx`) deletes the offline
+> copies **and the remembered catalog**; sign-out, "Delete offline copies" and a 401 (`signIn`) all
+> go through it, and the sign-out journey checks `localStorage.getItem('okf.read.catalog')` is null
+> afterwards. A failed registration warns on an already-controlled page too
+> (`registrationFailed`). The listings above and below are the shipped files.
+
+> **Corrected (issue #813, 2026-11-20, second review).** Sign-out lives in main.js as `ctx.signOut`
+> (`endSession`), and it and a 401 (`signIn`) set `leaving`: while it is set, `choose()` keeps a
+> catalog for the page only and never remembers it, so a catalog opened while the wipe or the
+> `DELETE` is pending does not outlive the account; `leaveFor` deletes the remembered catalog once
+> more right before the redirect. A failed sign-out clears `leaving`. The journey
+> `a_catalog_opened_while_signing_out_is_not_remembered` (since renamed, see below) holds the `DELETE` (`hold_next`), opens
+> `#/t/main`, releases it, and checks `okf.read.catalog` is null before and after the redirect.
+
+> **Corrected (issue #813, 2026-11-20, third review).** `leaveFor` wipes again (mark, then delete)
+> before it redirects: a read the worker admitted while the `DELETE` was pending (the session still
+> held) could otherwise own and refill `read-content` after the first wipe and survive sign-out. The
+> journey above, renamed `reads_and_catalogs_while_signing_out_do_not_outlive_it`, also reads alpha
+> while the `DELETE` is held and checks that no offline copy is left after the redirect.
+
+`src/http/read/js/refusals.js`:
+
+```js
+// What a refused read does (reader design, "Error handling"), apart from
+// the DOM: main.js builds one handler per screen it shows, and gives it the
+// actions that touch the session, the caches, the remembered catalog, the
+// hash and the view. Kept free of the DOM so tests/read_worker/ can run it
+// in Node, with deferred reads.
+import { KIND, ReadError } from './api.js';
+import { hrefs } from './route.js';
+
+// The kinds from most to least serious: when several reads of one screen
+// are refused, the most serious one alone draws.
+export const SEVERITY = Object.freeze([
+    KIND.SIGNED_OUT, KIND.CATALOG_GONE, KIND.CONCEPT_GONE, KIND.LOCKED, KIND.FAILED, KIND.UNAVAILABLE,
+]);
+
+// A kind's place in SEVERITY; one it does not list ranks last.
+function rank(error) {
+    const at = SEVERITY.indexOf(error?.kind);
+    return at < 0 ? SEVERITY.length : at;
+}
+
+// The most serious of `errors` (the first of equals).
+export function worst(errors) {
+    return [...errors].sort((a, b) => rank(a) - rank(b))[0];
+}
+
+// The refusal handler of one shown screen.
+//
+// `route` is the screen's route with its catalog fixed when it was shown,
+// so a refusal that answers after the user moved on acts on what was asked
+// about. `live()` says whether that screen still shows. `actions`:
+//   signIn()                   wipe and leave for sign-in
+//   evictCatalog(catalog)      delete a catalog's cached reads
+//   evictDocument(catalog, kind, path)  delete one document's copies
+//   current()                  the remembered catalog now
+//   choose(catalog)            remember a catalog (null forgets it)
+//   go(hash)                   navigate to a reader route
+//   paint(error)               draw the refusal's notice on the screen
+export function refusals(route, live, actions) {
+    // What a refusal changes, whichever screen shows now: a 401 or a lost
+    // grant is true even when the screen that asked has been left. Run as
+    // soon as that one request is refused, never after its siblings.
+    async function effects(error) {
+        switch (error.kind) {
+            case KIND.SIGNED_OUT:
+                await actions.signIn();
+                return;
+            case KIND.CATALOG_GONE:
+                if (route.catalog) await actions.evictCatalog(route.catalog);
+                // Forget it only while it is still the remembered one: a
+                // late refusal never undoes a newer choice.
+                if (route.catalog === actions.current()) actions.choose(null);
+                return;
+            case KIND.CONCEPT_GONE:
+                await actions.evictDocument(route.catalog, route.screen === 'document' ? 'documents' : 'concepts', route.path);
+                return;
+            case KIND.LOCKED:
+            case KIND.UNAVAILABLE:
+            case KIND.FAILED:
+                return;
+        }
+    }
+
+    // What a refusal shows, on the screen that asked, while it is still shown.
+    function draw(error) {
+        if (!live()) return;
+        switch (error.kind) {
+            case KIND.SIGNED_OUT:
+                return; // effects() has already left for sign-in.
+            case KIND.CATALOG_GONE:
+                actions.go(hrefs.catalogs(route.catalog));
+                return;
+            case KIND.CONCEPT_GONE:
+            case KIND.LOCKED:
+            case KIND.UNAVAILABLE:
+            case KIND.FAILED:
+                actions.paint(error);
+                return;
+        }
+    }
+
+    // A single refused read (a screen's, or a button's later): its effects,
+    // then its drawing.
+    async function fail(error) {
+        await effects(error);
+        draw(error);
+    }
+
+    return {
+        effects,
+        draw,
+        fail,
+        // For a screen that makes several reads at once: `settle` runs each
+        // read's refusal effects the moment it is refused (marking the error
+        // handled), and `drawWorst` draws once all have settled.
+        settle: promise => promise.catch(async error => {
+            if (error instanceof ReadError) {
+                error.handled = true;
+                await effects(error);
+            }
+            throw error;
+        }),
+        drawWorst: errors => draw(worst(errors)),
+        // What a screen's render threw: a refusal already handled by
+        // `settle` is drawn only; any other refusal fails; anything that is
+        // not a refusal is a bug, and is thrown on.
+        async caught(error) {
+            if (!(error instanceof ReadError)) throw error;
+            if (error.handled) draw(error);
+            else await fail(error);
+        },
+    };
+}
+```
+
 - [ ] **Step 5: Write `src/http/read/js/screens/me.js`**
 
 ```js
 // Account: who is signed in, until when, sign-out (which deletes every
-// offline copy first, even if the server cannot be reached), and a local
-// "Delete offline copies" that works with no connection at all.
+// offline copy and the remembered catalog first, even if the server cannot
+// be reached), and a local "Delete offline copies" that works with no
+// connection at all. Both delete through main.js (`ctx.signOut`, `ctx.forget`).
 import { h } from '/ui/js/core/dom.js';
 import { when } from '/ui/js/core/format.js';
-import { signOut, ReadError } from '../api.js';
-import { wipe } from '../cache.js';
 import { message } from '../parts.js';
 
-function deleteOffline(view) {
+function deleteOffline(view, ctx) {
     const button = h('button', { type: 'button', class: 'secondary', id: 'delete-offline' }, 'Delete offline copies');
     button.addEventListener('click', async () => {
         button.disabled = true;
-        await wipe();
+        await ctx.forget();
         view.append(message('Offline copies are deleted from this device.', null, 'offline-deleted'));
     });
     return button;
@@ -2026,21 +2490,14 @@ export async function render(view, ctx) {
     const session = ctx.state.session;
     view.append(h('h1', {}, 'Account'));
     if (!session) {
-        view.append(message('Account details and sign-out need a connection.', null, 'account-offline'), deleteOffline(view));
+        view.append(message('Account details and sign-out need a connection.', null, 'account-offline'), deleteOffline(view, ctx));
         return;
     }
     const button = h('button', { type: 'button', id: 'sign-out' }, 'Sign out');
     button.addEventListener('click', async () => {
         button.disabled = true;
-        await wipe();
-        try {
-            if (await signOut(session.csrf)) {
-                location.assign(`/signin?return_to=${encodeURIComponent('/read/')}`);
-                return;
-            }
-        } catch (error) {
-            if (!(error instanceof ReadError)) throw error;
-        }
+        // On success the page has left for sign-in.
+        if (await ctx.signOut(session.csrf)) return;
         button.disabled = false;
         view.append(message('The server could not be reached to end the session. Offline copies are deleted.', null, 'sign-out-failed'));
     });
@@ -2049,7 +2506,7 @@ export async function render(view, ctx) {
         session.email ? h('p', { class: 'hint' }, session.email) : null,
         h('p', { class: 'hint' }, `This session ends by ${when(session.expires_at)}.`),
         button,
-        deleteOffline(view));
+        deleteOffline(view, ctx));
 }
 ```
 
@@ -2076,7 +2533,7 @@ Expected: PASS.
 Run: `tools/agentic/gate.sh fmt`, `tools/agentic/gate.sh lint`. Expected: exit 0.
 
 ```bash
-git add src/http/read/js tests/ui_e2e/harness.rs tests/ui_e2e/main.rs tests/ui_e2e/read.rs
+git add src/http/read/js tests/read_worker/refusals.test.mjs tests/ui_e2e/harness.rs tests/ui_e2e/main.rs tests/ui_e2e/read.rs
 git commit -m "feat(read): boot, session sign-in, account and sign-out
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -2108,12 +2565,13 @@ async fn the_picker_and_the_tree_lead_from_a_catalog_to_its_concepts() {
         // The root folder: its index's body, then its folders.
         ui.wait_text("#body", "Main");
         ui.wait_text("#folders", "systems");
+        // The root's log.md is not a concept: the root lists none.
+        assert_eq!(ui.text("#concepts"), "", "logs are not listed");
         ui.click("#folders a");
         // systems/: its index body, and its two concepts by title.
         ui.wait_text("#body", "Systems");
         ui.wait_text("#concepts", "Alpha");
         ui.wait_text("#concepts", "Beta");
-        assert!(!ui.text("#concepts").contains("log"), "logs are not listed");
         ui.wait_text(".crumbs", "Contents");
     })
     .await;
@@ -2195,6 +2653,7 @@ export async function render(view, ctx) {
             if (error.kind === KIND.CONCEPT_GONE) await evictDocument(catalog, 'documents', listing.index.path);
             else if (error.kind !== KIND.UNAVAILABLE) throw error;
         }
+        if (!ctx.live()) return;
     }
     if (listing.folders.length) {
         view.append(h('h2', {}, 'Folders'), h('ul', { class: 'list', id: 'folders' }, listing.folders.map(name =>
@@ -2210,7 +2669,14 @@ export async function render(view, ctx) {
 - [ ] **Step 5: Run it to see it pass**
 
 Run: `scripts/test-pg.sh run cargo test --test ui_e2e read:: -- --test-threads=2`
-Expected: PASS (both journeys).
+Expected: PASS (all four `read::` journeys: the three of Task 6 and this one).
+
+> **Corrected (issue #814, 2026-11-20).** The journey is appended after the three shipped
+> Task 6 journeys (`tests/ui_e2e/read.rs` imports `crate::harness::{drive, Ui}`
+> and defines `server()`, `EMAIL` and `PASSWORD`; read it before appending).
+> `tree.js` also checks `ctx.live()` after the index read's `catch`, since the
+> eviction there awaits and the user may have left the folder meanwhile. The
+> shipped files are `src/http/read/js/screens/catalogs.js` and `tree.js`.
 
 - [ ] **Step 6: Commit**
 
@@ -2229,6 +2695,20 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify (replace): `src/http/read/js/screens/concept.js`
 - Modify: `tests/ui_e2e/read.rs`
 
+> **Corrected (issue #812, 2026-11-20).** A section travels as `?s=<slug>` (Task 5, `route.js`):
+> the rewritten link below is `#/v/main/systems/beta.md?s=settings`, no longer
+> `#/v/main/systems/beta.md/settings`. The outline's links (`hrefs.concept(catalog, path,
+> heading.slug)`) and `ctx.route.section` need no change.
+
+> **Corrected (issue #815, 2026-11-20).** Shipped: the "Show the whole concept" handler returns
+> before `ctx.freshness` and any DOM change when `!ctx.live()` (refusals still go through
+> `ctx.fail`), and a shortened concept is `body_html == null`, not falsy (an empty concept
+> renders `""` with no button). Task 8's commit does not touch `route.js`. Task 8 also lands the
+> journeys for that button: `the_whole_concept_replaces_the_outline_notice`, `an_empty_concept_has_no_show_whole_button`,
+> `the_whole_concept_is_not_available_offline_and_can_be_retried`, `a_late_whole_concept_does_not_touch_a_newer_screen`
+> and `show_the_whole_concept_after_losing_the_grant_evicts_the_catalog`. Task 11 (#818) must not
+> add that last one again.
+
 - [ ] **Step 1: Write the failing journey**
 
 ```rust
@@ -2245,7 +2725,7 @@ async fn a_concept_shows_its_body_follows_links_and_lists_backlinks() {
             "() => document.querySelector('#body a').getAttribute('href')",
             json!(null),
         );
-        assert_eq!(href, json!("#/v/main/systems/beta.md/settings"));
+        assert_eq!(href, json!("#/v/main/systems/beta.md?s=settings"));
         ui.click("#body a");
         ui.wait_text("#concept-title", "Beta");
         ui.wait_text("#outline", "Settings");
@@ -2406,7 +2886,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/http/read/js/screens/concept.js src/http/read/js/screens/document.js src/http/read/js/route.js tests/ui_e2e/read.rs
+git add src/http/read/js/screens/concept.js src/http/read/js/screens/document.js tests/ui_e2e/read.rs
 git commit -m "feat(read): concept view with outline, reader links and backlinks
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -2564,6 +3044,12 @@ export async function render(view, ctx) {
 }
 ```
 
+> **Corrected (issue #816, 2026-11-20).** `screens/home.js`, `screens/search.js` and `screens/me.js` shipped with these differences from the code above; read them for the final text.
+>
+> - Never pass a conditional child to the native `append` (it prints "null", issue #302): home draws `fill(view, installHint(), searchForm(catalog))`, and `me.js` (the same bug, issue #843) uses `fill`.
+> - After every await, home and search check `ctx.live()` before drawing, and the offline list is read before the check, so a late answer never draws over a newer screen or touches the banner.
+> - The two journeys above open home with a helper (`signed_in_at_home`: sign in at `#/t/main`, which remembers `main`, then open `#/`) instead of clicking `[data-catalog=main]`, so they do not depend on the picker (Task 7). Extra journeys cover home and search offline (`home_and_search_without_a_connection`, `home_lists_cached_recent_changes_and_viewed_concepts_offline`), the install hint (`the_install_hint_shows_on_an_iphone_browser_until_dismissed`, which imports the real `home.js` into the page) and `an_account_without_an_email_shows_no_null`.
+
 - [ ] **Step 5: Run it to see it pass**
 
 Run: `scripts/test-pg.sh run cargo test --test ui_e2e read:: -- --test-threads=2`
@@ -2581,6 +3067,39 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ---
 
 ### Task 10: Offline journeys (cache, cap, shell upgrade)
+
+> **Corrected (issue #817, 2026-11-20).** Task 10 shipped in `tests/ui_e2e/read.rs` and
+> `tests/ui_e2e/harness.rs`; read those, not the listings below, where they differ:
+>
+> - `limit_storage` and `deny_cache_storage` work as listed. Each storage-full and denied journey now proves its override
+>   first (a 1 MB `cache.put` rejects with `QuotaExceededError`; `caches.open` rejects with
+>   `SecurityError`), and the denied journey checks that the worker kept nothing while denied.
+> - `go_offline`'s guard now sets `offline: false` on every target it cut off before the connection
+>   closes (a `Drop` impl on `DevTools`), instead of relying on the close.
+> - `open_reader` waits up to 2 s for `location.hash` to settle: a reload sent right after a
+>   hash-only `goto` reloaded the previous route (seen as `#/me` instead of the concept).
+> - The journeys start from `sign_in_reader` at `/me`, a concept link or `/t/main` (the picker needs no click), and
+>   the first-visit journey calls `wait_worker` before going offline.
+> - Added `coming_back_online_reads_fresh_content_again`, which goes offline, drops the guard and
+>   reads fresh content (the home banner hides again).
+> - The 200-cap journey reads n000 again after n001..n199 and then adds n200, and asserts n000
+>   survives and n001 is evicted (a FIFO cache fails it; n001 re-read, as first written, did not tell
+>   LRU from FIFO).
+> - `with_storage_full_...` replaces the worker (unregister, reload) after deleting `read-owner`, so
+>   its first cacheable read is a takeover that must write the record, under `limit_storage_to(1.0)`
+>   (a quota below usage, so deleting copies does not free room for a write). Stopping workers
+>   through DevTools (`ServiceWorker.stopAllWorkers`, `Target.closeTarget`) left every fetch through
+>   the worker hanging, so it is not used. Because every write fails there, that journey cannot tell
+>   a failed record write from a failed copy write; `a_failed_owner_record_write_keeps_no_copy_of_the_new_owners_reads`
+>   refuses only the record's `Cache.put` (harness `refuse_cache_puts_of`) and fails if the worker
+>   keeps a copy after it.
+>
+> **Corrected (issue #858, 2026-11-21).** The session check now decides ownership too (Task 3), so
+> replacing the worker no longer leaves the takeover to the next concept read: boot's session read
+> takes over first, before the limit or the refusal is set. Both journeys now set
+> `limit_storage_to(1.0)` or `refuse_cache_puts_of("__owner")` first, then click "Delete offline
+> copies" on `#/me`, which leaves no owner (the `*` mark), so the next tagged answer is the takeover
+> under test. They no longer unregister the worker.
 
 **Files:**
 - Modify: `tests/ui_e2e/read.rs`
@@ -2803,7 +3322,8 @@ async fn offline_a_concept_opens_from_either_its_short_or_its_full_copy() {
         ui.open_reader("/v/main/systems/beta.md");
         ui.wait_text("#body", "Two settings");
         // Alpha opened only through a section link: cached with ?full=true.
-        ui.open_reader("/v/main/systems/alpha.md/alpha");
+        // (A section is `?s=<slug>`, Task 5's route.js; corrected for issue #812, 2026-11-20.)
+        ui.open_reader("/v/main/systems/alpha.md?s=alpha");
         ui.wait_text("#body", "marmalade");
         let offline = ui.go_offline();
         // Beta's outline link asks for ?full=true: the plain copy answers.
@@ -2908,6 +3428,51 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Files:**
 - Modify: `tests/ui_e2e/read.rs`
+
+> **Corrected (issue #813, 2026-11-20).** Task 6 does not import `user_sessions`; add
+> `use okf_mcp::store::user_sessions;` to `tests/ui_e2e/read.rs` with these journeys.
+
+> **Corrected (issue #818, 2026-11-21).** What shipped differs from the code below in these
+> ways; `tests/ui_e2e/read.rs` and `tests/ui_e2e/harness.rs` are the reference.
+> - The DevTools assumptions hold in the Playwright Chromium the harness finds: `Fetch` at the
+>   `Response` stage on the `service_worker` target pauses the worker's own fetches,
+>   `Target.setAutoAttach` from the browser session (filter `service_worker`,
+>   `waitForDebuggerOnStart`) pauses each new worker until `Runtime.runIfWaitingForDebugger`,
+>   and `Browser::new_page` opens the second tab in the default context, with the same cookies.
+> - `base64_encode` is not written: `Tamper` uses the `base64` crate (already a dependency).
+> - `DevTools::call` keeps the events that arrive while it waits (`pending`), and `event`
+>   looks there first, so a `Fetch.requestPaused` that lands during `release` is not lost.
+>   `DevTools::send` returns the command's id, and `try_call` sends through it.
+> - `Tamper` counts what it rewrote (`rewritten()`). The other-build journey waits, with a
+>   deadline, until it is at least 1, so the journey cannot pass without the tampering taking
+>   place. The account screen is no sign of that, because boot goes on after five seconds
+>   without the worker. It polls
+>   `!r || (!r.installing && !r.waiting)`, not `!!r && !r.installing`: a failed first install
+>   clears the registration, so the plan's condition never turns true. After the guard is
+>   dropped it also asserts that exactly one shell cache is installed.
+> - `in_second_tab`'s closure waits until the second tab reaches `/ui/` (the sign-in has set
+>   its cookie) before the tab closes.
+> - `#screen-concept` is an empty section while its reads are held, and an empty section is not
+>   "visible" to rustwright. The journeys that held a concept or links read wait for the held
+>   request instead (`wait_held`: `window.heldMatches >= 1`).
+> - `a_late_401_after_an_ordinary_refusal_still_signs_out` releases through
+>   `window.releaseHeld()`: `release_held` waits on a flag of the page the 401 leaves. It waits
+>   for the 404's Resource Timing entry (`wait_answered`) before revoking. Without that wait,
+>   the revocation could come first and make the 404 a 401, so the journey passed without
+>   `ctx.settle` on the links read. The lost-grant journey waits the same way for beta's links
+>   read before leaving.
+> - The outline journey marks `#body` before the outline click and waits for it to be redrawn
+>   (`wait_redrawn`). Before, it read the old whole body and passed with the section route
+>   asking for the short form.
+> - The revoked-session journeys check every account cache (`assert_no_offline_copies`) and
+>   the remembered catalog, not only `read-content`. The unlock journey checks that alpha's
+>   copy and the remembered catalog survive. The lost-grant and late-refusal journeys use the
+>   picker that Task 7 shipped (`#catalog-gone`).
+> - The outline journey uses `server_with_outline_limit(SHORT_OUTLINE)`. `publish` uses
+>   imports, and `main_files_without(path)` builds the file list.
+> - Issue #837 adds two boot journeys:
+>   `a_401_at_boot_deletes_the_copies_already_on_the_device` and
+>   `offline_at_boot_keeps_the_copies_and_says_the_account_needs_a_connection`.
 
 - [ ] **Step 1: Write the journeys**
 
@@ -3083,6 +3648,10 @@ The harness's `fail_next` answers with `{ error: 'test', message }`, and this jo
 ```
 
 Two more journeys, for refusals that arrive after the screen that asked has gone, and for a read a button makes:
+
+> **Superseded (issue #815, 2026-11-20).** The journey `show_the_whole_concept_after_losing_the_grant_evicts_the_catalog` in the block
+> below already landed in Task 8 (PR #842, `tests/ui_e2e/read.rs`) with the rest of the
+> "Show the whole concept" journeys. Do not add it again here; drop it from this step.
 
 ```rust
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -3682,6 +4251,23 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ---
 
 ### Task 12: Documentation and changelog
+
+> **Corrected (issue #819, 2026-11-21).** The shipped `docs/reference/reader.md` is written from the
+> code, not from the draft below, and differs from it as follows. It adds the route table (with
+> `?s=<slug>`, the `#/d/` document view and the picker's `?gone=`), "Show the whole concept", the iOS
+> install hint, the account screen's offline form, and the short/full fallback. Its offline section
+> says the 200 cap covers concepts and documents only (trees, recent changes and links are uncapped),
+> that an owning account alone is served offline, and lists when copies go: sign-out with its second
+> wipe, a `401`, a lost grant (that catalog), a deleted document (its copies), account change in
+> another tab through `X-OKF-Account`, and that the remembered catalog is forgotten on sign-out and a
+> `401`. It adds storage refusal, the verified install (`shell.json`) and the known limits the task
+> changelogs record. The maintainers section names `just test-worker` (Node 18.19+ or 20.6+),
+> `tests/read_worker/` and `tests/ui_e2e/read.rs`. The README link is in the Web console section and
+> the Layout list, not a "reference documents" list (there is none), and `docs/operations.md` gets a
+> `/read/` row in its web-console route table. The changelog is one milestone summary,
+> `changelog/2026-11-21T03-56-14Z-m19-mobile-reader.md`, linking the per-task files, and the commit
+> carries the Sonnet attribution. The draft's "Cached copies are wiped ... the concept's `404`" note
+> is now exact: a deleted document evicts its own copies only.
 
 **Files:**
 - Create: `docs/reference/reader.md`

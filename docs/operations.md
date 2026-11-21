@@ -2301,8 +2301,8 @@ route answers 404 (`POST /signin` included).
 - **one button per `[[auth.oidc]]` provider**;
 - **Use an API key instead**: the console's pasted-key card.
 
-It takes `return_to`, a same-origin path starting `/ui/` or
-`/oauth/authorize?`; anything else becomes `/ui/`. The console's card links
+It takes `return_to`, a same-origin path starting `/ui/`, `/read/` (the
+mobile reader) or `/oauth/authorize?`; anything else becomes `/ui/`. The console's card links
 to it with "Sign in with your account", carrying the page you were on.
 
 - **One refusal for everything.** Every refused password sign-in (a wrong
@@ -3403,6 +3403,7 @@ the same port as `/mcp`:
 | `GET /ui/*` | none | The console's static files, embedded in the binary at build time; an unknown file is 404 |
 | `GET /ui/manifest.json` | none | `{"pages": [...]}`: the console pages this build has |
 | `GET /ui/brand.json` | none | `{"product_name", "support_contact", "feedback_url", "docs_url", "feedback_form"}`: the [branding settings](#settings) (`null` when unset), which the console shows before anyone signs in, and `feedback_form`, `{"disclosure", "max_message_chars", "kinds"}` with a `[feedback]` table, else `null` (never the form id or the API key). `onboarding_url` is not in it |
+| `GET /read`, `GET /read/` | none | The [mobile reader](reference/reader.md), an installable read-only app for phones: `/read` redirects (308) to `/read/`. Its files (`GET /read/*`, `GET /read/sw.js`, and `GET /read/shell.json`, the worker's precache listing with a SHA-256 per file) are embedded in the binary, carry the console's security headers and hold no catalog data; the app reads `/api/v1` with the console's session cookie |
 | `/api/v1/*` | bearer key or console session | The JSON API; each endpoint checks the level it needs |
 | `GET /signin`, `POST /signin` | none | The sign-in page and its password form ([Signing in and self-service](#signing-in-and-self-service)). Without `public_url` the page offers only the pasted key and the POST is 404; with `password_sign_in` off the POST is 404 |
 | `GET /signin/forgot`, `POST /signin/forgot` | none | Ask for a reset link; only with `public_url` set |
@@ -3431,6 +3432,15 @@ same errors as the other routes: 401 without a valid key (plain text, with
 `WWW-Authenticate: Bearer`), and otherwise `{"error": ..., "message": ...}`
 with the statuses in the README's "Routes". An unknown `/api/v1` path is 404,
 key or not.
+
+Every answer a route gives a signed-in caller also carries `X-OKF-Account`:
+16 hex digits of SHA-256 of a prefixed id (the user's id for a console
+session, the key's id for a bearer key or grant). It is stable per account,
+differs between accounts, and names no user, key or secret; the mobile
+reader's service worker uses it to keep its copies to one account. The
+refusals given before a route runs (the 401 for a missing or bad
+credential, the 403 for a console write without `X-OKF-CSRF`, a 500 from
+the credential lookup) and the 404 for an unknown path do not carry it.
 
 The sign-in pages use the console's CSP (their scripts are static files
 under `/ui/js/signin/`), with `Cache-Control: no-store`. Sign-out is

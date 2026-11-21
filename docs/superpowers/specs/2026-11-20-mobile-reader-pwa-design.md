@@ -20,7 +20,7 @@ the web console, and reuses the console's session sign-in.
 | Screens | Catalog picker, home (search and recent changes), search results, concept view with backlinks, tree browse, account. |
 | Offline search | None. Offline, search says it needs a connection; home lists what is available offline. |
 | Styling | Independent of the console: Pico CSS plus the reader's own `read.css` and tokens. The console's `styles.css` is not loaded. System fonts. |
-| Cache cap | 200 concepts, least recently viewed evicted first. |
+| Cache cap | 200 entries in `read-content`, least recently viewed evicted first (a concept kept in both short and whole form counts twice; see Caching). |
 
 ## Out of scope (MVP)
 
@@ -80,6 +80,8 @@ sign-in (the reader is cookie-only).
   contract shared with the console's stylesheet.
 - `sw.js`: the service worker (caching, below).
 - `js/main.js`: hash router and screen dispatch; registers `sw.js`.
+- `js/refusals.js`: what a refused read does (effects, drawing, severity), without
+  the DOM, so it is tested in Node.
 - `js/api.js`: read-only client (below).
 - `js/names.js`: a classic script setting `self.READ_CACHES` (the cache
   names), loaded by `index.html` and by `sw.js` through `importScripts`, so
@@ -117,8 +119,11 @@ longer, the reader runs online without offline copies.
 
 Concept links in `body_html` are written by `src/render.rs` as
 `#/browse/{catalog}/{path segments}[/{section slug}]`. The reader rewrites
-them to `#/v/{catalog}/{path}[/{slug}]`, or to the folder's tree route for a
-link to an `index.md`. External links get `target="_blank" rel="noopener"`. `body_html`
+them to `#/v/{catalog}/{path}[?s={slug}]`, or to the folder's tree route for a
+link to an `index.md`. (Corrected for issue #812, 2026-11-20: a folder may be
+named `x.md`, so the reader's route carries the section as a parameter, and
+reads a console link's document as ending at its last `.md` segment, since a
+heading slug has no `.`.) External links get `target="_blank" rel="noopener"`. `body_html`
 is inserted with `innerHTML` exactly as the console does: it is produced and
 sanitised server-side by `render.rs`.
 
@@ -155,8 +160,11 @@ not store an answer to a request that started at or before a matching mark,
 and checks again after writing (deleting the entry if a mark appeared
 meanwhile), so a slow `2xx` can never put back what a `401` or a lost grant
 removed. A request on its way keeps the worker alive, so its marks last as
-long as they matter. Recording the cache owner is best effort: on a full
-disk the caches are wiped and the reader boots anyway. Without Cache Storage
+long as they matter. A takeover deletes the old copies and the old owner
+record before it writes the new record, and keeps the new account's answers
+only once that write succeeds, so the record never names an account other
+than the one whose copies are cached. On a full disk the caches are wiped,
+nothing is kept, and the reader boots anyway. Without Cache Storage
 at all, or when it refuses to open or read (denied by browser settings),
 the reader works online and keeps nothing: the worker passes answers
 through without copies, and the page's cache calls log and return empty
@@ -178,13 +186,32 @@ lets the fetch fail.
 
 Caches are tied to one account, decided by the worker, which every reader
 tab shares. Every `/api/v1` answer carries `X-OKF-Account`, an opaque tag
-(16 hex digits of SHA-256 of a prefixed user or key id). The first answer
-for a new account wipes `read-content` and `read-meta` (with a `*` mark, so
-answers still on their way for the old account drop their copies) and
-records the new owner in `read-owner`; an answer to a request that started
-before the current owner took over is never kept. So signing in as someone
+(16 hex digits of SHA-256 of a prefixed user or key id). The first `2xx`
+answer for a new account, cached or passed through uncached (the session,
+search, any other `GET /api/` read: the worker reads the tag, never the body),
+wipes `read-content` and `read-meta` (after starting a new
+ownership epoch, so answers still on their way for the old account drop
+their copies, while the new account's keep theirs) and records the new
+owner in `read-owner`; another account's answer to a request that started
+before the current owner took over (or before a wipe) never takes over. A
+passed-through tagged answer reaches the page only once the ownership
+decisions queued before it, and its own, are done (a takeover's deletes
+included), so boot's session check alone hands the device to the
+new account, for the page's "Available offline" list as well as the
+worker's offline answers. So signing in as someone
 else in another tab, with a reader tab left open, never mixes two accounts'
-copies. Sign-out wipes everything before calling `DELETE /api/v1/session`.
+copies. Offline, a cached copy is served only to the account that owns the
+copies: its own `X-OKF-Account` must be the owner's. With no owner (no
+record, a wipe, or a takeover that could not delete the old copies),
+nothing is served and the leftover copies are deleted, and the page's
+"Available offline" list shows only the recorded owner's copies.
+Sign-out wipes everything before calling `DELETE /api/v1/session`, and
+again once the server confirms it, so a read admitted while the `DELETE`
+was pending leaves nothing behind.
+Sign-out, "Delete offline copies" and a `401` also forget the remembered
+catalog, so the next person to sign in on the device never sees the last
+one's catalog name. While a sign-out (or a 401's way to sign-in) is under
+way, no catalog the user opens is remembered.
 
 The shell is installed only when it is entirely one build's:
 `/read/shell.json` lists each file with the SHA-256 of the bytes this build
@@ -210,7 +237,7 @@ draws.
 | Answer | Action |
 |---|---|
 | `2xx` | Render. With `X-Read-Offline`, show "Offline, synced <ago of X-Read-Cached-At>". |
-| `401` | Wipe `read-content` and `read-meta`; navigate to `/signin?return_to=/read/` plus the current hash. |
+| `401` | Wipe `read-content` and `read-meta` and forget the remembered catalog; navigate to `/signin?return_to=/read/` plus the current hash. |
 | `403` with body `error` `Forbidden`, or `404` with `CatalogNotSelected` or `UnknownName` (a catalog no longer reachable) | Evict that catalog's entries in both caches and the remembered catalog; go to the picker with a short note. |
 | `404` with `NotFound` on a concept | Evict that concept's entries; show "This concept no longer exists" and a link to its parent folder. |
 | `404` with `NotFound` on a folder's `index.md` | Evict that document's entry and show the folder's lists without it. |
@@ -241,7 +268,7 @@ Browser journeys (`tests/ui_e2e/read.rs`, rustwright headless Chromium):
 1. Signed out, `/read/` goes to sign-in and returns to the same route.
 2. Catalog picker, tree drill-down, concept, an internal link, "Linked from".
 3. Search renders results; offline, search says it needs a connection.
-4. View three concepts, go offline, reload: all three render with the synced
+4. View two concepts, go offline, reload: both render with the synced
    note; an unviewed concept shows "Not available offline".
 5. After viewing 201 concepts, the least recently viewed one is no longer
    cached and a re-viewed early one still is (no test hook: the journey

@@ -465,6 +465,10 @@ discarded at `/ui/#/changesets`.
 The routes, the security headers and the API reference are in
 [`docs/operations.md`](docs/operations.md#web-console).
 
+On a phone, the [mobile reader](docs/reference/reader.md) at `/read/` is an
+installable, read-only app for reading a catalog, offline included. It signs
+in with the same account.
+
 ## Writing
 
 ### Changesets
@@ -681,6 +685,8 @@ key's actor.
 - `Dockerfile`, `.github/workflows/image.yml` - the container image, built and
   pushed to GHCR on a `v*` tag.
 - `docs/operations.md` - the operator guide.
+- `docs/reference/` - the [tool reference](docs/reference/tools.md) and the
+  [mobile reader](docs/reference/reader.md).
 - `docs/superpowers/` - the design and the per-milestone plans.
 - `skills/` - Claude Code skills for daily catalog maintenance
   ([`skills/README.md`](skills/README.md)).
@@ -730,6 +736,7 @@ The report structs derive `serde::Serialize`; their JSON has the keys of
         cargo test --release --test smoke -- --ignored --nocapture   # timings
     UPDATE_GOLDEN=1 cargo test --test parity -- --ignored regenerate_goldens
     just test-ui                                 # the web console's browser journeys
+    just test-worker                             # the mobile reader's worker and page modules (Node)
 
 The database tests need Docker. Each test gets a throwaway database of its
 own, dropped when it is done, on the server `TEST_PG_URL` names (a
@@ -765,6 +772,14 @@ The browser journeys (`tests/ui_e2e`, run by `just test-ui` and by plain
 too, and find Chromium through `RUSTWRIGHT_CHROMIUM`, `CHROME`, `CHROMIUM`,
 the Playwright cache or `PATH`; without one, each journey prints a skip line
 and passes.
+
+The reader's Node tests (`tests/read_worker`, run by `just test-worker` and
+first in `just test`) load `src/http/read/sw.js` into a `node:vm` context
+with an in-memory Cache Storage and a fetch the test answers, and test the
+page modules in `src/http/read/js/` that need no DOM against the same fakes.
+They run under Node's built-in test runner (Node 18.19+ or 20.6+, no npm
+packages). Without `node` on `PATH`, or with an older one, the recipe prints
+a skip line and passes.
 
 Before a push, also run `cargo fmt --check`,
 `cargo clippy --all-targets -- -D warnings` and
