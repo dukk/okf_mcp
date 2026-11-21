@@ -415,6 +415,25 @@ test_watch_merge_state_error_never_retriggers() {
     ! grep -q '^pr comment' "$fx/calls.log" || die "re-triggered with the merge state unknown"
 }
 
+test_watch_ignores_an_earlier_rounds_out_of_date_notice() {
+    new_fixtures; good_pr "$head_a"
+    echo '[]' >"$fx/api/pulls_7_reviews.1.json"
+    # Posted at 600 s, before the watcher started at 1000 s.
+    printf '[{"user":{"login":"%s"},"created_at":"1970-01-01T00:10:00Z","body":"This PR is out of date with main"}]\n' \
+        "$bot" >"$fx/api/issues_7_comments.1.json"
+    run_watch
+    want_rc 2; want_out "TIMEOUT"; want_no_out "the bot says PR 7 is out of date"
+}
+
+test_watch_comments_api_error_is_retried_not_a_skip() {
+    new_fixtures; good_pr "$head_a"
+    echo '[]' >"$fx/api/pulls_7_reviews.1.json"
+    touch "$fx/api/issues_7_comments.fail"
+    run_watch
+    want_rc 2; want_out "could not read the comments on PR 7"; want_no_out "the bot says PR 7 is out of date"
+    [ "$(grep -c '^pr comment 7 .*--body /prrb' "$fx/calls.log")" = 1 ] || die "re-triggered other than once"
+}
+
 test_watch_exits_5_at_once_when_conflicting() {
     new_fixtures; good_pr "$head_a"
     echo '[]' >"$fx/api/pulls_7_reviews.1.json"
