@@ -36,6 +36,8 @@ let generation = 0;
 // 401 on its way to sign-in): no catalog is remembered meanwhile, so one
 // chosen during the wipe or the DELETE never outlives the account.
 let leaving = false;
+// True once a 401 has shown the signed-out screen: no screen is drawn after.
+let signedOut = false;
 
 function remembered() {
     try { return localStorage.getItem(CATALOG_KEY); } catch { return null; }
@@ -70,22 +72,46 @@ async function forget() {
     await wipe();
 }
 
-// Leaves the account for the sign-in page at `url`, deleting the offline
-// copies and the remembered catalog once more on the way out: a read the
-// worker admitted while the sign-out's DELETE was pending (the session
-// still held then) may have cached a copy, and owned it, after the first
-// wipe. Once the server has ended the session no later read is admitted,
-// and this wipe's mark drops any answer still on its way.
-async function leaveFor(url) {
+// Deletes the offline copies and the remembered catalog once more on the
+// way out of the account: a read the worker admitted while the sign-out's
+// DELETE was pending (the session still held then) may have cached a copy,
+// and owned it, after the first wipe. Once the server has ended the session
+// no later read is admitted, and this wipe's mark drops any answer still on
+// its way.
+async function wipeOnExit() {
     await wipe();
     remember(null);
+}
+
+// Leaves the account for the sign-in page at `url`.
+async function leaveFor(url) {
+    await wipeOnExit();
     location.assign(url);
 }
 
+// The session is gone (a 401): deletes what this device keeps of the
+// account, then shows the reader's own signed-out screen instead of
+// navigating away, so the page keeps its manifest and worker and stays
+// installable. Its button goes to the sign-in page.
 async function signIn() {
     leaving = true;
+    signedOut = true;
+    generation += 1;
     await forget();
-    await leaveFor(signInUrl());
+    await wipeOnExit();
+    showSignedOut();
+}
+
+// Draws the signed-out screen: no header or tabs, a notice and a "Sign in"
+// link that returns to the reader's current address.
+function showSignedOut() {
+    document.body.classList.add('signed-out');
+    $('#offline-banner').hidden = true;
+    clear($('#reader')).append(h('section', { class: 'screen', id: 'screen-signed-out' },
+        message('You are signed out.',
+            h('a', { href: signInUrl(), id: 'signed-out-signin', role: 'button' }, 'Sign in'),
+            'signed-out')));
+    $('#reader').hidden = false;
 }
 
 // Signs out (the account screen's button): deletes the offline copies and
@@ -190,6 +216,7 @@ function paint(view, route, error) {
 }
 
 async function show() {
+    if (signedOut) return;
     const parsed = parse(location.hash);
     const mine = ++generation;
     if ((parsed.catalog ?? null) !== null && parsed.catalog !== state.catalog) choose(parsed.catalog);

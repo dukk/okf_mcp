@@ -2,22 +2,29 @@
 //! "Serving"), embedded at build time by `build.rs`, served with the
 //! console's security headers. They hold no catalog data, so they need no
 //! credential; the page reads `/api/v1` with the session cookie.
+//!
+//! Two files carry the product name (`index.html` and the manifest), so
+//! they are rendered per request from the settings, and the shell version
+//! and the precache listing follow the name: a rename reaches installed
+//! copies on their next launch.
 
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use sha2::{Digest, Sha256};
 
-use axum::extract::Path;
+use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
 use axum::middleware;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 
-use crate::http::ui::{asset, console_file, security_headers};
+use crate::app::App;
+use crate::http::pages::escape;
+use crate::http::ui::{asset, console_file, content_type, security_headers};
 
 // Pastes build.rs's generated `READ_ASSETS` here, as if written in this
 // file (like a C `#include`).
@@ -57,12 +64,17 @@ fn shared_bytes(url: &str) -> &'static [u8] {
         .unwrap_or_default()
 }
 
-/// The shell's version: a hash of every file the worker precaches, the
-/// reader's own and the shared console files, so a change to any of them
+/// The placeholder in `index.html` and the manifest that the product name
+/// replaces, escaped for the file's own syntax.
+const PRODUCT_PLACEHOLDER: &str = "__PRODUCT__";
+
+/// A hash of every file the worker precaches, the reader's own (templates
+/// as written) and the shared console files, so a change to any of them
 /// changes the worker's bytes and installed apps update. Computed once on
 /// first use (`LazyLock` is like a module-level value computed on first
-/// access).
-static SHELL_VERSION: LazyLock<String> = LazyLock::new(|| {
+/// access). The served version also covers the product name
+/// ([`shell_version_for`]).
+static BUILD_VERSION: LazyLock<String> = LazyLock::new(|| {
     shell_version(
         READ_ASSETS.iter().copied().chain(
             SHARED_CONSOLE_FILES
@@ -72,15 +84,55 @@ static SHELL_VERSION: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
-/// The worker's source with its version filled in, built once on first use.
-static WORKER: LazyLock<String> = LazyLock::new(|| {
-    let source = READ_ASSETS
+/// One embedded reader file's bytes by name, as UTF-8 text (empty when the
+/// build lacks it, which a test catches).
+#[tracing::instrument(level = "trace", skip_all)]
+fn template(name: &str) -> String {
+    READ_ASSETS
         .iter()
-        .find(|(name, _)| *name == "sw.js")
+        .find(|(file, _)| *file == name)
         .map(|(_, body)| String::from_utf8_lossy(body).into_owned())
-        .unwrap_or_default();
-    source.replace("__SHELL_VERSION__", &SHELL_VERSION)
-});
+        .unwrap_or_default()
+}
+
+/// The shell's version for `product`: the build's hash and the name, so
+/// renaming the product changes it.
+#[tracing::instrument(level = "trace", skip_all)]
+fn shell_version_for(product: &str) -> String {
+    shell_version([
+        ("build", BUILD_VERSION.as_bytes()),
+        ("product", product.as_bytes()),
+    ])
+}
+
+/// `index.html` for `product`: the tab title, and the label under the home
+/// screen icon on iOS.
+#[tracing::instrument(level = "trace", skip_all)]
+fn render_index(product: &str) -> String {
+    template("index.html").replace(PRODUCT_PLACEHOLDER, &escape(product))
+}
+
+/// The manifest for `product`: its name is "<product> Reader", its short
+/// name the product alone.
+#[tracing::instrument(level = "trace", skip_all)]
+fn render_manifest(product: &str) -> String {
+    // A JSON string's content, without its two delimiting quotes: the
+    // placeholder sits inside the template's quotes. Exactly one quote is
+    // removed from each end (`trim_matches` would also eat an escaped quote
+    // that ends the name, leaving a dangling backslash).
+    let quoted = serde_json::Value::String(product.to_string()).to_string();
+    let content = quoted
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .expect("a JSON string is wrapped in quotes");
+    template("manifest.webmanifest").replace(PRODUCT_PLACEHOLDER, content)
+}
+
+/// The worker's source with `version` filled in.
+#[tracing::instrument(level = "trace", skip_all)]
+fn render_worker(version: &str) -> String {
+    template("sw.js").replace("__SHELL_VERSION__", version)
+}
 
 /// The reader's routes.
 #[cfg_attr(
@@ -90,20 +142,52 @@ static WORKER: LazyLock<String> = LazyLock::new(|| {
         reason = "router builder: runs once at startup, outside any request, so a span would be an orphan root"
     )
 )]
-pub(crate) fn routes<S>() -> Router<S>
-where
-    S: Clone + Send + Sync + 'static,
-{
+pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/read", get(|| async { Redirect::permanent("/read/") }))
-        .route("/read/", get(|| async { asset(READ_ASSETS, "index.html") }))
+        .route("/read/", get(index))
         .route("/read/shell.json", get(shell))
         .route("/read/sw.js", get(worker))
-        .route(
-            "/read/{*path}",
-            get(|Path(path): Path<String>| async move { asset(READ_ASSETS, &path) }),
-        )
+        .route("/read/{*path}", get(file))
         .layer(middleware::map_response(security_headers))
+}
+
+/// The product name now (the settings reload it, so a rename shows
+/// without a restart).
+#[tracing::instrument(level = "trace", skip_all)]
+fn product_name(app: &App) -> String {
+    app.settings().brand().product_name
+}
+
+/// `body` served with the media type of the file `name`, revalidated on every
+/// load.
+#[tracing::instrument(level = "trace", skip_all)]
+fn rendered(name: &str, body: String) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, content_type(name)),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+/// `GET /read/`: the page, named for the product.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn index(State(app): State<Arc<App>>) -> Response {
+    rendered("index.html", render_index(&product_name(&app)))
+}
+
+/// `GET /read/{*path}`: an embedded file; the two templated ones are
+/// rendered for the product.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn file(State(app): State<Arc<App>>, Path(path): Path<String>) -> Response {
+    match path.as_str() {
+        "index.html" => rendered(&path, render_index(&product_name(&app))),
+        "manifest.webmanifest" => rendered(&path, render_manifest(&product_name(&app))),
+        _ => asset(READ_ASSETS, &path),
+    }
 }
 
 /// `bytes`' SHA-256 as 64 lowercase hex digits, as the worker computes it
@@ -119,45 +203,50 @@ fn sha256_hex(bytes: &[u8]) -> String {
         })
 }
 
-/// The worker's precache listing, built once: the shell version and each
+/// The worker's precache listing for `product`: the shell version and each
 /// file's URL with the SHA-256 of the bytes this build serves for it. The
 /// worker installs only when the listing's version is its own and every file
-/// it fetched hashes as listed, so a deploy between its requests (or a mix
-/// of replicas on two builds) fails the install instead of caching a mix.
-/// `index.html` is listed as `/read/`, the URL the page is opened at.
-static SHELL_LISTING: LazyLock<serde_json::Value> = LazyLock::new(|| {
+/// it fetched hashes as listed, so a deploy or a rename between its requests
+/// (or a mix of replicas on two builds) fails the install instead of caching
+/// a mix. `index.html` is listed as `/read/`, the URL the page is opened at.
+#[tracing::instrument(level = "trace", skip_all)]
+fn shell_listing(product: &str) -> serde_json::Value {
+    let version = shell_version_for(product);
     let reader = READ_ASSETS.iter().map(|(name, body)| {
         let url = match *name {
             "index.html" => "/read/".to_string(),
-            "sw.js" => "/read/sw.js".to_string(),
             other => format!("/read/{other}"),
         };
-        // The worker's own bytes as served (version filled in).
-        let bytes: &[u8] = if *name == "sw.js" {
-            WORKER.as_bytes()
-        } else {
-            body
+        // The bytes as served: the templated files and the worker rendered.
+        let rendered_bytes = match *name {
+            "index.html" => Some(render_index(product)),
+            "manifest.webmanifest" => Some(render_manifest(product)),
+            "sw.js" => Some(render_worker(&version)),
+            _ => None,
         };
-        serde_json::json!({ "url": url, "sha256": sha256_hex(bytes) })
+        let sha256 =
+            rendered_bytes.map_or_else(|| sha256_hex(body), |text| sha256_hex(text.as_bytes()));
+        serde_json::json!({ "url": url, "sha256": sha256 })
     });
     let shared = SHARED_CONSOLE_FILES
         .iter()
         .map(|url| serde_json::json!({ "url": url, "sha256": sha256_hex(shared_bytes(url)) }));
-    serde_json::json!({ "version": SHELL_VERSION.as_str(), "files": reader.chain(shared).collect::<Vec<_>>() })
-});
+    serde_json::json!({ "version": version, "files": reader.chain(shared).collect::<Vec<_>>() })
+}
 
 /// `GET /read/shell.json`: `{"version": ..., "files": [{"url", "sha256"}]}`,
 /// what the worker precaches and how to check it.
 #[tracing::instrument(level = "debug", skip_all)]
-async fn shell() -> Json<serde_json::Value> {
-    Json(SHELL_LISTING.clone())
+async fn shell(State(app): State<Arc<App>>) -> Json<serde_json::Value> {
+    Json(shell_listing(&product_name(&app)))
 }
 
 /// `GET /read/sw.js`: the worker, with its version, revalidated on every
-/// load so a deploy reaches installed apps on their next launch.
+/// load so a deploy or a rename reaches installed apps on their next launch.
 #[tracing::instrument(level = "debug", skip_all)]
-async fn worker() -> Response {
-    if WORKER.is_empty() {
+async fn worker(State(app): State<Arc<App>>) -> Response {
+    let source = render_worker(&shell_version_for(&product_name(&app)));
+    if source.is_empty() {
         return StatusCode::NOT_FOUND.into_response();
     }
     (
@@ -165,7 +254,7 @@ async fn worker() -> Response {
             (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
             (header::CACHE_CONTROL, "no-cache"),
         ],
-        WORKER.as_str(),
+        source,
     )
         .into_response()
 }
@@ -306,7 +395,10 @@ mod tests {
         let response = get("/read/shell.json").await;
         assert_eq!(response.status(), StatusCode::OK);
         let listing: serde_json::Value = serde_json::from_str(&text(response).await).expect("json");
-        assert_eq!(listing["version"], SHELL_VERSION.as_str());
+        assert_eq!(
+            listing["version"],
+            shell_version_for(crate::store::settings::DEFAULT_PRODUCT_NAME)
+        );
         let entries = listing["files"].as_array().expect("files");
         let files: Vec<&str> = entries
             .iter()
@@ -342,13 +434,160 @@ mod tests {
             "text/javascript; charset=utf-8"
         );
         let source = text(response).await;
-        assert!(source.contains(SHELL_VERSION.as_str()));
+        assert!(source.contains(&shell_version_for(
+            crate::store::settings::DEFAULT_PRODUCT_NAME
+        )));
         assert!(!source.contains("__SHELL_VERSION__"));
     }
 
     #[tokio::test]
     async fn the_console_does_not_serve_the_reader_worker() {
         assert_eq!(get("/ui/sw.js").await.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn the_manifest_is_named_after_the_product() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(&render_manifest("Acme Notes")).expect("json");
+        assert_eq!(manifest["name"], "Acme Notes Reader");
+        assert_eq!(manifest["short_name"], "Acme Notes");
+        assert_eq!(manifest["start_url"], "/read/");
+        let default: serde_json::Value = serde_json::from_str(&render_manifest(
+            crate::store::settings::DEFAULT_PRODUCT_NAME,
+        ))
+        .expect("json");
+        assert_eq!(default["name"], "okf Reader");
+        assert_eq!(default["short_name"], "okf");
+    }
+
+    #[test]
+    fn the_manifest_escapes_the_name_for_json() {
+        let product = "Acme \"Notes\" \\ <b>";
+        let manifest: serde_json::Value =
+            serde_json::from_str(&render_manifest(product)).expect("still valid json");
+        assert_eq!(manifest["name"], format!("{product} Reader"));
+        assert_eq!(manifest["short_name"], product);
+    }
+
+    #[test]
+    fn a_name_that_starts_or_ends_with_a_quote_round_trips_in_the_manifest() {
+        for product in ["Acme \"Notes\"", "\"Acme\"", "Acme\\", "\\\"", "\""] {
+            let manifest: serde_json::Value = serde_json::from_str(&render_manifest(product))
+                .unwrap_or_else(|error| panic!("{product:?}: {error}"));
+            assert_eq!(manifest["name"], format!("{product} Reader"), "{product:?}");
+            assert_eq!(manifest["short_name"], product, "{product:?}");
+        }
+    }
+
+    #[test]
+    fn quotes_angle_brackets_and_ampersands_stay_correct_in_the_page() {
+        let page = render_index(r#"Q "x" <b> & 'y'"#);
+        let escaped = "Q &quot;x&quot; &lt;b&gt; &amp; &#39;y&#39;";
+        assert!(page.contains(&format!("<title>{escaped} Reader</title>")));
+        assert!(page.contains(&format!(
+            r#"name="apple-mobile-web-app-title" content="{escaped}""#
+        )));
+    }
+
+    #[test]
+    fn the_page_is_named_after_the_product_and_escapes_it() {
+        let page = render_index("Acme Notes");
+        assert!(page.contains("<title>Acme Notes Reader</title>"));
+        assert!(page.contains(r#"name="apple-mobile-web-app-title" content="Acme Notes""#));
+        assert!(!page.contains(PRODUCT_PLACEHOLDER));
+        let hostile = render_index(r#""><script>alert(1)</script>"#);
+        assert!(!hostile.contains("<script>alert"));
+        assert!(hostile.contains("&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"));
+        // The page keeps its manifest link and no inline script.
+        assert!(page.contains(r#"<link rel="manifest" href="/read/manifest.webmanifest">"#));
+        assert!(!page.contains("<script>"));
+    }
+
+    #[test]
+    fn a_rename_changes_the_shell_version_and_the_listing() {
+        assert_ne!(shell_version_for("Acme Notes"), shell_version_for("Other"));
+        assert_eq!(
+            shell_version_for("Acme Notes"),
+            shell_version_for("Acme Notes")
+        );
+        let before = shell_listing("Acme Notes");
+        let after = shell_listing("Other");
+        assert_ne!(before["version"], after["version"]);
+        let hash = |listing: &serde_json::Value, url: &str| {
+            listing["files"]
+                .as_array()
+                .expect("files")
+                .iter()
+                .find(|entry| entry["url"] == url)
+                .map(|entry| entry["sha256"].clone())
+        };
+        for url in ["/read/", "/read/manifest.webmanifest", "/read/sw.js"] {
+            assert_ne!(hash(&before, url), hash(&after, url), "{url}");
+        }
+        // A file that does not carry the name keeps its hash.
+        assert_eq!(
+            hash(&before, "/read/icons.svg"),
+            hash(&after, "/read/icons.svg")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_served_files_follow_a_rename_made_at_run_time() {
+        use crate::store::audit::AuditActor;
+        use crate::store::settings::{self, SettingKey};
+        // A short `credential_ttl` makes each request recheck the settings.
+        let test = crate::mcp::testing::app_with(
+            &[],
+            crate::config::Config {
+                credential_ttl: std::time::Duration::from_millis(100),
+                ..crate::config::Config::default()
+            },
+        )
+        .await;
+        let served = || async {
+            let router = crate::http::router(
+                std::sync::Arc::clone(&test.app),
+                &tokio_util::sync::CancellationToken::new(),
+            );
+            let mut bodies = Vec::new();
+            for path in ["/read/", "/read/manifest.webmanifest", "/read/shell.json"] {
+                let response = router
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(path)
+                            .body(Body::empty())
+                            .expect("request"),
+                    )
+                    .await
+                    .expect("response");
+                bodies.push(text(response).await);
+            }
+            bodies
+        };
+        let before = served().await;
+        assert!(before[1].contains("okf Reader"));
+        settings::set(
+            test.app.pool(),
+            SettingKey::ProductName,
+            "Acme Notes",
+            &AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .expect("rename");
+        // The settings reload on their own clock; wait for the new name.
+        let mut after = served().await;
+        for _ in 0..50 {
+            if after[1].contains("Acme Notes Reader") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            after = served().await;
+        }
+        assert!(after[0].contains("<title>Acme Notes Reader</title>"));
+        assert!(after[1].contains("Acme Notes Reader"));
+        assert_ne!(before[2], after[2], "the listing's version moved");
     }
 
     #[test]
@@ -362,7 +601,7 @@ mod tests {
     #[test]
     fn the_served_version_covers_the_shared_console_files() {
         let reader_only = shell_version(READ_ASSETS.iter().copied());
-        assert_ne!(*SHELL_VERSION, reader_only);
+        assert_ne!(*BUILD_VERSION, reader_only);
         for url in SHARED_CONSOLE_FILES {
             assert!(!shared_bytes(url).is_empty(), "{url} is embedded");
         }

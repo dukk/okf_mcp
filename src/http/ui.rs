@@ -69,7 +69,7 @@ async fn manifest() -> Json<serde_json::Value> {
 
 /// The media type for an embedded file, by extension.
 #[tracing::instrument(level = "trace", skip_all)]
-fn content_type(path: &str) -> &'static str {
+pub(crate) fn content_type(path: &str) -> &'static str {
     match path.rsplit_once('.').map(|(_, extension)| extension) {
         Some("html") => "text/html; charset=utf-8",
         Some("css") => "text/css; charset=utf-8",

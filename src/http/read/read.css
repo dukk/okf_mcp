@@ -219,6 +219,10 @@ h1.page { margin: 6px 0; font-size: 28px; font-weight: 700; line-height: 1.2; le
 }
 .chip[aria-pressed="true"] { background: var(--text); color: var(--bg); }
 
+/* The signed-out screen has no catalog to head or navigate. */
+.signed-out .top, .signed-out .tabs { display: none; }
+#screen-signed-out { padding-top: 24px; }
+
 /* ---------- Home ---------- */
 .day { margin: 20px 4px 2px; color: var(--text); font-size: 13px; font-weight: 600; }
 .group { margin: 12px 0 4px; }
