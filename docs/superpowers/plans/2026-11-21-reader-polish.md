@@ -1112,9 +1112,10 @@ In `src/http/ui.rs` `content_type`, after the `webmanifest` arm:
 # INTER_DIR     the unpacked Inter 4.1 release archive (Inter-4.1.zip from
 #               the Inter project's releases), holding InterVariable.ttf
 #               and LICENSE.txt.
-# LITERATA_DIR  the unpacked Literata family download from Google Fonts,
-#               holding Literata-VariableFont_opsz,wght.ttf,
-#               Literata-Italic-VariableFont_opsz,wght.ttf and OFL.txt.
+# LITERATA_DIR  the unpacked Literata 3.103 release archive (from the
+#               Literata project's releases), holding OFL.txt and
+#               fonts/variable/Literata[opsz,wght].ttf and
+#               fonts/variable/Literata-Italic[opsz,wght].ttf.
 #
 # It pins the axes the reader uses (Inter 400 to 700, Literata 400 to 600,
 # both at their default optical size), keeps the Latin range only, refuses a
@@ -1137,8 +1138,8 @@ command -v uvx >/dev/null || { echo "$0: needs uv (uvx)" >&2; exit 2; }
 inter_dir=$1
 literata_dir=$2
 inter=$inter_dir/InterVariable.ttf
-literata=$literata_dir/Literata-VariableFont_opsz,wght.ttf
-literata_italic=$literata_dir/Literata-Italic-VariableFont_opsz,wght.ttf
+literata=$literata_dir/fonts/variable/Literata[opsz,wght].ttf
+literata_italic=$literata_dir/fonts/variable/Literata-Italic[opsz,wght].ttf
 for file in "$inter" "$inter_dir/LICENSE.txt" "$literata" "$literata_italic" "$literata_dir/OFL.txt"; do
     [ -f "$file" ] || { echo "$0: missing $file" >&2; exit 2; }
 done
@@ -1181,6 +1182,8 @@ Download the two releases by hand into a new, empty directory in the session scr
 ```bash
 scripts/subset-reader-fonts.sh "$SCRATCH/fonts/Inter-4.1" "$SCRATCH/fonts/Literata"
 ```
+
+> **Corrected (issue #864).** 2026-11-21: Literata's official release archive (3.103) has no Google Fonts file names; the script reads `fonts/variable/Literata[opsz,wght].ttf` and the italic twin, as shown above. fonttools 4.55.3 and `opsz=drop` worked unchanged. The outputs are far smaller than estimated (Inter 32720, Literata 33384, Literata italic 35104 bytes, about 98 KB in all), because the optical-size axis is dropped.
 
 Expected: three lines `src/http/read/fonts/<name>.woff2: <N> bytes`, each under 153600. Estimates: Inter about 70 to 95 KB, each Literata file about 60 to 95 KB, so about 250 KB precached in all. Then the inputs' SHA-256. Copy the input hashes into this task's changelog entry. Check: `sha256sum -c scripts/reader-fonts.sha256` prints `OK` for all five files. Open each `OFL-*.txt` and check it is the SIL Open Font License 1.1 text with the font's copyright line.
 
