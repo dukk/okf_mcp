@@ -12,6 +12,11 @@
         try { return localStorage.getItem(KEY); } catch { return null; }
     }
 
+    // The choice in force on this page: read once from storage, then set by
+    // every choose(), so current() agrees with the applied theme even when
+    // storage refuses the write.
+    let active = (value => (value === 'light' || value === 'dark' ? value : 'system'))(stored());
+
     // Sets data-theme and the theme-color metas for `choice` (anything but
     // 'light' or 'dark' means the system's).
     function apply(choice) {
@@ -28,11 +33,9 @@
     self.READ_THEME = Object.freeze({
         CHOICES,
         // 'system', 'light' or 'dark'.
-        current() {
-            const choice = stored();
-            return choice === 'light' || choice === 'dark' ? choice : 'system';
-        },
+        current() { return active; },
         choose(choice) {
+            active = choice === 'light' || choice === 'dark' ? choice : 'system';
             try {
                 if (choice === 'light' || choice === 'dark') localStorage.setItem(KEY, choice);
                 else localStorage.removeItem(KEY);
@@ -40,5 +43,5 @@
             apply(choice);
         },
     });
-    apply(stored());
+    apply(active);
 })();
