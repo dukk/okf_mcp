@@ -238,6 +238,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_shell_precaches_the_fonts_the_sprite_and_their_licenses() {
+        let response = get("/read/shell.json").await;
+        let listing: serde_json::Value = serde_json::from_str(&text(response).await).expect("json");
+        let files: Vec<&str> = listing["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .filter_map(|entry| entry["url"].as_str())
+            .collect();
+        for url in [
+            "/read/icons.svg",
+            "/read/fonts/inter-latin.woff2",
+            "/read/fonts/literata-latin.woff2",
+            "/read/fonts/literata-italic-latin.woff2",
+            "/read/fonts/OFL-Inter.txt",
+            "/read/fonts/OFL-Literata.txt",
+        ] {
+            assert!(files.contains(&url), "{url} in {files:?}");
+        }
+        assert_eq!(
+            get("/read/fonts/inter-latin.woff2").await.headers()["content-type"],
+            "font/woff2"
+        );
+        assert_eq!(
+            get("/read/icons.svg").await.headers()["content-type"],
+            "image/svg+xml"
+        );
+        assert_eq!(
+            get("/read/fonts/OFL-Inter.txt").await.headers()["content-type"],
+            "text/plain; charset=utf-8"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_system_bars_follow_the_theme() {
+        let page = text(get("/read/").await).await;
+        assert!(page.contains(
+            r##"<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">"##
+        ));
+        assert!(page.contains(
+            r##"<meta name="theme-color" content="#191919" media="(prefers-color-scheme: dark)">"##
+        ));
+        let manifest: serde_json::Value =
+            serde_json::from_str(&text(get("/read/manifest.webmanifest").await).await)
+                .expect("json");
+        // Neutral, so no colour of the old accent shows in a system bar.
+        assert_eq!(manifest["theme_color"], "#ffffff");
+        assert_eq!(manifest["background_color"], "#ffffff");
+    }
+
+    #[tokio::test]
     async fn the_reader_and_the_console_never_serve_each_others_files() {
         assert_eq!(
             get("/read/styles.css").await.status(),

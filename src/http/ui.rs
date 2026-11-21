@@ -78,6 +78,7 @@ fn content_type(path: &str) -> &'static str {
         Some("woff2") => "font/woff2",
         Some("png") => "image/png",
         Some("webmanifest") => "application/manifest+json",
+        Some("txt") => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
     }
 }
@@ -226,6 +227,7 @@ mod tests {
             content_type("manifest.webmanifest"),
             "application/manifest+json"
         );
+        assert_eq!(content_type("fonts/OFL.txt"), "text/plain; charset=utf-8");
     }
 
     /// The reader's self-hosted fonts load under the shared policy, which
