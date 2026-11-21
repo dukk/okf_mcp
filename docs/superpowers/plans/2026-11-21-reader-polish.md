@@ -51,9 +51,10 @@ These follow from the shipped code or from project rules; the spec's intent is k
 7. **The concept's title heading is removed from the body,** since the page title shows it (the mockup shows no repeat).
 8. **Home reads 50 changes a page** (was 20), the server's default, so a first screen holds a few groups.
 9. **Task 0 adds a `worker` gate** to `gate.sh`, so the Node tests have a bounded runner of their own (brief-common: never run tests outside `gate.sh`).
-10. **`snippet_text` is built from the source, not from `snippet`** (PR #860 review). `snippet` is a raw line already cut to 160 characters, so stripping its syntax afterwards would leave a stray `**`, `[` or backtick wherever a span crosses the cut. Instead the search parses the body with the renderer's parser, takes the text of the block holding the matched line from that line on, and only then cuts it, with an ellipsis. Reference links and fenced code read as text too. Round 2: the line is mapped to the block whose range overlaps it (one holding the whole line first, then the innermost), not the one holding its first byte, so a quote (`> `), a nested list item or a table row is found. When none overlaps, the line is read without markdown, and as a last resort given as written, so a visible match always has a plain snippet. This settles the stray-delimiter risk. The work runs only for the web API (`SearchQuery::plain_snippets`) and travels in a skipped field, so the MCP tool's output does not change.
+10. **`snippet_text` is built from the source, not from `snippet`** (PR #860 review). `snippet` is a raw line already cut to 160 characters, so stripping its syntax afterwards would leave a stray `**`, `[` or backtick wherever a span crosses the cut. Instead the search parses the body with the renderer's parser, takes the text of the block holding the matched line from that line on, and only then cuts it, with an ellipsis. Reference links and fenced code read as text too. Round 2: the line is mapped to the block whose range overlaps it (one holding the whole line first, then the innermost), not the one holding its first byte, so a quote (`> `), a nested list item or a table row is found. When none overlaps, the line is read without markdown, and as a last resort given as written, so a visible match always has a plain snippet. Round 3: a text event that began on an earlier line (a code block's text can be one event) is clipped to start at the matched line, so the snippet starts there. This settles the stray-delimiter risk. The work runs only for the web API (`SearchQuery::plain_snippets`) and travels in a skipped field, so the MCP tool's output does not change.
 11. **The title heading is recognised only by the frontmatter title** (PR #860 review). The API's `concept.title` is the frontmatter's, not the first heading. The first heading is dropped from "On this page" and from the body only when it is level 1 and reads as that title. An untitled concept keeps every heading and its whole body.
 12. **"Show more" replaces the list** (PR #860 review). Two requests may see different snapshots: a document published between them can move the ranking. So "Show more" draws the larger answer in place of the old one (keeping the scroll position), and the count is that answer's.
+13. **Catalog labels arrive without blocking** (PR #860 review, round 3). Screens never wait for `GET /catalogs`: the breadcrumbs' root is marked `data-catalog-label="<name>"`, and `main.js` `relabel()` updates every marked element and the header in one place when the list settles. A screen drawn after that reads the label from the cache (`ctx.label()`).
 
 ---
 
@@ -487,6 +488,21 @@ In `src/render.rs`'s test module, add:
         assert_eq!(block_text(body, line_of(body, "ntp-time")), "ntp-time --serve --port 123");
     }
 
+    /// A code block's text may come as one event over several lines: the
+    /// snippet starts at the matched line, not at the event's start.
+    #[test]
+    fn block_text_starts_a_code_block_at_the_matched_line() {
+        let body = "```sh\nunrelated setup\nmarmalade --serve\n```\n";
+        let text = block_text(body, line_of(body, "marmalade"));
+        assert_eq!(text, "marmalade --serve");
+        assert!(!text.contains("unrelated setup"), "{text}");
+        // A long earlier line would otherwise push the match past the cut.
+        let long = format!("```\n{}\nmarmalade --serve\n```\n", "y".repeat(200));
+        let text = block_text(&long, line_of(&long, "marmalade"));
+        assert!(text.starts_with("marmalade --serve"), "{text}");
+        assert!(excerpt(&text, 160).contains("marmalade"));
+    }
+
     #[test]
     fn block_text_falls_back_to_the_line_when_no_block_overlaps_it() {
         // A reference definition renders nothing, alone or in its body:
@@ -602,11 +618,25 @@ pub fn block_text(body: &str, line: Range<usize>) -> String {
         // then the shortest (innermost).
         .min_by_key(|range| (!holds_line(range), range.len()));
     if let Some(block) = block {
-        // Only this block, and only what ends after the line starts.
-        let from_line = text_of(events.iter().filter_map(|(event, range)| {
-            (range.start >= block.start && range.end <= block.end && range.end > line.start)
-                .then_some(event)
-        }));
+        // Only this block, and only what ends after the line starts. A text
+        // event that began on an earlier line (a code block's text can be
+        // one event over several lines) is clipped to start at the line,
+        // when its text is its source verbatim; text the parser rewrote
+        // (an escape, an entity) is kept whole, as the offsets would not map.
+        let clipped: Vec<Event<'_>> = events
+            .iter()
+            .filter(|(_, range)| {
+                range.start >= block.start && range.end <= block.end && range.end > line.start
+            })
+            .map(|(event, range)| match event {
+                Event::Text(part) if range.start < line.start && **part == body[range.clone()] => {
+                    Event::Text(CowStr::Borrowed(&body[line.start..range.end]))
+                }
+                // `clone` copies the event's (usually borrowed) text.
+                other => other.clone(),
+            })
+            .collect();
+        let from_line = text_of(&clipped);
         if !from_line.is_empty() {
             return from_line;
         }
@@ -699,6 +729,13 @@ In `src/okf/search.rs`'s tests, add:
         let fenced = plain_hit("Intro.\n\n```sh\nmarmalade --serve\n```\n", "marmalade");
         assert_eq!(fenced.snippet.as_deref(), Some("marmalade --serve"));
         assert_eq!(fenced.snippet_text.as_deref(), Some("marmalade --serve"));
+        // The match on a later line of the fence starts the plain snippet,
+        // even after a line long enough to fill the cut on its own.
+        let later = plain_hit(
+            &format!("```sh\nunrelated setup {}\nmarmalade --serve\n```\n", "z".repeat(200)),
+            "marmalade",
+        );
+        assert_eq!(later.snippet_text.as_deref(), Some("marmalade --serve"));
     }
 
     #[test]
@@ -2223,10 +2260,39 @@ async fn every_screen_change_starts_at_the_top() {
     })
     .await;
 }
+
+/// The breadcrumbs' root (the catalog's name until its label is known).
+const CRUMB_ROOT: &str = ".crumbs [data-catalog-label]";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn breadcrumbs_take_the_catalog_label_when_the_list_answers_late() {
+    let (server, _) = server().await;
+    server.set_catalog_label("main", "Example Notes").await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/t/main", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.wait_text(CRUMB_ROOT, "Example Notes");
+        // Boot reads the catalog list before any page-side override could
+        // be installed, so the answer is held in the worker (DevTools
+        // pauses survive the reload) rather than with `hold_next`.
+        let mut paused = ui.pause_worker_responses("*/api/v1/catalogs");
+        ui.reload_reader();
+        let held = paused.next_paused();
+        // The tree draws without waiting for the list: its crumb names the catalog.
+        ui.wait_visible("#folders");
+        assert_eq!(ui.text(CRUMB_ROOT), "main");
+        assert_eq!(ui.text("#bar-label"), "main");
+        paused.release(&held);
+        // One update, in place, once the list answers.
+        ui.wait_text(CRUMB_ROOT, "Example Notes");
+        ui.wait_text("#bar-label", "Example Notes");
+    })
+    .await;
+}
 ```
 
-Run (with `TEST_PG_URL` set): `tools/agentic/gate.sh narrow --test ui_e2e -- read::the_header read::every_screen --test-threads=2`
-Expected: FAIL: `#bar-label` does not exist; the scroll stays where it was.
+Run (with `TEST_PG_URL` set): `tools/agentic/gate.sh narrow --test ui_e2e -- read::the_header read::every_screen read::breadcrumbs_take --test-threads=2`
+Expected: FAIL: `#bar-label` and `[data-catalog-label]` do not exist; the scroll stays where it was.
 
 - [ ] **Step 2: Write the failing sprite test**
 
@@ -2349,7 +2415,9 @@ export function searchForm(catalog, query = '', placeholder = 'Search') {
 export function crumbs(catalog, path, isFolder, { root = catalog, titles = null } = {}) {
     const parts = String(path ?? '').split('/').filter(Boolean);
     const folders = isFolder ? parts : parts.slice(0, -1);
-    const items = [h('li', {}, h('a', { href: hrefs.tree(catalog) }, root))];
+    // Marked with its catalog's name, so main.js relabels it if the catalog
+    // list is read after this screen is drawn.
+    const items = [h('li', {}, h('a', { href: hrefs.tree(catalog), 'data-catalog-label': catalog }, root))];
     folders.forEach((name, at) => {
         const folder = folders.slice(0, at + 1).join('/');
         items.push(h('li', {}, h('a', { href: hrefs.tree(catalog, folder) }, titles?.get(folder) ?? name)));
@@ -2501,7 +2569,7 @@ Add after `freshness`:
 function catalogList() {
     catalogRead ??= readAll('/catalogs', 'catalogs').then(result => {
         state.known = new Map(result.data.map(found => [found.name, found]));
-        header();
+        relabel();
         return state.known;
     }, error => {
         catalogRead = null;
@@ -2509,6 +2577,19 @@ function catalogList() {
         throw error;
     });
     return catalogRead;
+}
+
+// Shows the catalogs' labels wherever the page names a catalog: the header,
+// and every element a screen marked data-catalog-label="<name>" (the
+// breadcrumbs' root) while the list was still being read. The one place
+// that updates them; screens drawn later read the labels from state.known
+// (ctx.label()). Never blocks a screen.
+function relabel() {
+    header();
+    for (const element of document.querySelectorAll('[data-catalog-label]')) {
+        const label = state.known?.get(element.dataset.catalogLabel)?.label;
+        if (label) element.textContent = label;
+    }
 }
 
 // The header: the current catalog's mark and label, and where its search
@@ -2532,7 +2613,15 @@ In `show()`, after `clear($('#reader')).append(view);` add:
     window.scrollTo(0, 0);
 ```
 
-and extend `ctx` with:
+and, in its `try`, after `await SCREENS[route.screen].render(view, ctx);`:
+
+```js
+        // A screen drawn after the list was read may still name its catalog
+        // by name (a crumb without `root`): relabel it now.
+        if (state.known && live()) relabel();
+```
+
+Then extend `ctx` with:
 
 ```js
         // The current catalog's entry of GET /catalogs ({ label, concepts, ... }), or null.
@@ -2584,7 +2673,8 @@ Run `fmt`, `lint`, `test`, `test-ui`, `dylint`. Expected: exit 0.
   label and folder titles; the serif body), and `icons.js` draws icons from
   the sprite.
 - `main.js` reads the catalog list once per page load, for labels and page
-  counts.
+  counts, without blocking any screen: when it answers, the header and every
+  breadcrumb drawn meanwhile (marked `data-catalog-label`) take the label.
 
 ## Fixed
 - The scroll position carried over between screens: every screen change now
@@ -2592,7 +2682,9 @@ Run `fmt`, `lint`, `test`, `test-ui`, `dylint`. Expected: exit 0.
 
 ## Tests
 - Journeys: the header shows the catalog label and opens the picker; a tab
-  change after scrolling starts at the top. A unit test checks that every
+  change after scrolling starts at the top; with the catalog list held in
+  the worker, the tree draws with the catalog's name in its breadcrumb,
+  which takes the label once the list answers. A unit test checks that every
   icon the reader names is in the sprite.
 ```
 
