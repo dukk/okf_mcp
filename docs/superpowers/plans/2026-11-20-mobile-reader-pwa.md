@@ -3093,6 +3093,13 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 >   a failed record write from a failed copy write; `a_failed_owner_record_write_keeps_no_copy_of_the_new_owners_reads`
 >   refuses only the record's `Cache.put` (harness `refuse_cache_puts_of`) and fails if the worker
 >   keeps a copy after it.
+>
+> **Corrected (issue #858, 2026-11-21).** The session check now decides ownership too (Task 3), so
+> replacing the worker no longer leaves the takeover to the next concept read: boot's session read
+> takes over first, before the limit or the refusal is set. Both journeys now set
+> `limit_storage_to(1.0)` or `refuse_cache_puts_of("__owner")` first, then click "Delete offline
+> copies" on `#/me`, which leaves no owner (the `*` mark), so the next tagged answer is the takeover
+> under test. They no longer unregister the worker.
 
 **Files:**
 - Modify: `tests/ui_e2e/read.rs`
