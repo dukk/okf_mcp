@@ -367,4 +367,38 @@ mod tests {
             assert!(!shared_bytes(url).is_empty(), "{url} is embedded");
         }
     }
+
+    /// Every icon the reader's page and scripts name by a literal
+    /// (`icons.svg#i-NAME` in markup, `icon('NAME'` in a script) is a
+    /// symbol of the sprite, so no icon draws empty.
+    #[test]
+    fn every_icon_the_reader_names_is_in_its_sprite() {
+        let sprite = READ_ASSETS
+            .iter()
+            .find(|(name, _)| *name == "icons.svg")
+            .map(|(_, body)| String::from_utf8_lossy(body).into_owned())
+            .expect("icons.svg is embedded");
+        let named =
+            regex::Regex::new(r"icons\.svg#i-([a-z-]+)|icon\('([a-z-]+)'").expect("valid regex");
+        let mut seen = 0;
+        for (name, body) in READ_ASSETS {
+            if !(name.ends_with(".js") || name.ends_with(".html")) {
+                continue;
+            }
+            let text = String::from_utf8_lossy(body);
+            for found in named.captures_iter(&text) {
+                let icon = found
+                    .get(1)
+                    .or_else(|| found.get(2))
+                    .map(|group| group.as_str())
+                    .expect("one group matched");
+                seen += 1;
+                assert!(
+                    sprite.contains(&format!("id=\"i-{icon}\"")),
+                    "{name} names i-{icon}, which icons.svg lacks"
+                );
+            }
+        }
+        assert!(seen > 0, "the reader names no icon");
+    }
 }

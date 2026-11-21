@@ -19,16 +19,24 @@
     <script type="module" src="/read/js/main.js"></script>
 </head>
 <body>
-    <header class="bar">
-        <a href="#/c" id="bar-catalog" class="bar-catalog">Reader</a>
+    <header class="top" id="top">
+        <a href="#/c" id="bar-catalog" class="catalog">
+            <span class="mark" id="bar-mark" aria-hidden="true">R</span>
+            <span class="label" id="bar-label">Reader</span>
+            <svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="/read/icons.svg#i-down"/></svg>
+        </a>
+        <span class="spacer"></span>
+        <a href="#/c" id="bar-search" class="iconbtn" aria-label="Search">
+            <svg class="icon" aria-hidden="true" focusable="false"><use href="/read/icons.svg#i-search"/></svg>
+        </a>
     </header>
     <p id="offline-banner" class="banner" role="status" hidden></p>
     <main id="reader" class="reader" hidden></main>
     <nav class="tabs" aria-label="Reader">
-        <a id="tab-home" href="#/">Home</a>
-        <a id="tab-browse" href="#/c">Browse</a>
-        <a id="tab-search" href="#/c">Search</a>
-        <a id="tab-me" href="#/me">Account</a>
+        <a id="tab-home" href="#/"><svg class="icon" aria-hidden="true" focusable="false"><use href="/read/icons.svg#i-home"/></svg><span>Home</span></a>
+        <a id="tab-browse" href="#/c"><svg class="icon" aria-hidden="true" focusable="false"><use href="/read/icons.svg#i-folder"/></svg><span>Browse</span></a>
+        <a id="tab-search" href="#/c"><svg class="icon" aria-hidden="true" focusable="false"><use href="/read/icons.svg#i-search"/></svg><span>Search</span></a>
+        <a id="tab-me" href="#/me"><svg class="icon" aria-hidden="true" focusable="false"><use href="/read/icons.svg#i-user"/></svg><span>Account</span></a>
     </nav>
     <noscript>The reader needs JavaScript.</noscript>
 </body>
