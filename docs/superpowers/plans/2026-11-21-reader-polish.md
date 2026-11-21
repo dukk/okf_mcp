@@ -42,7 +42,7 @@
 
 These follow from the shipped code or from project rules; the spec's intent is kept.
 
-1. **Search "Show more" asks again with a larger `limit`.** `GET /search` has no paging cursor (`src/mcp/search.rs`: one ranked list, capped at `MAX_LIMIT` 200). Its order is total (rank, catalog, path), so the first N hits of a larger request are the N already shown: "Show more" re-reads with `limit` + 50 and appends only the new hits. At 200 the count reads "200+ results" and asks to refine the search. Adding a cursor to the search tool is out of scope.
+1. **Search "Show more" asks again with a larger `limit`.** `GET /search` has no paging cursor (`src/mcp/search.rs`: one ranked list, capped at `MAX_LIMIT` 200). "Show more" re-reads with `limit` + 50 and draws that whole answer in place of the list (see 12: two requests may rank differently). At 200 the count reads "200+ results" and asks to refine the search. Adding a cursor to the search tool is out of scope.
 2. **"Edited 1 h ago by Name"** comes from the existing history route (`GET /catalogs/{c}/history/{path}?limit=1`), not a new field. That route is not cached by the worker, so offline the meta row leaves the edit out.
 3. **Fonts are built from local release files, not a pinned URL.** The no-hostnames rule keeps download URLs out of the repository: `scripts/subset-reader-fonts.sh` takes the unpacked upstream release folders as arguments, and `scripts/reader-fonts.sha256` records the outputs so a rebuild can be checked.
 4. **A theme choice on Account** (System, Light, Dark). The project's front-end rule asks for adaptive themes with a toggle; the spec is silent. The choice sets `data-theme` on `<html>` (the mockup's tokens already support it) and the `theme-color` metas.
@@ -51,6 +51,9 @@ These follow from the shipped code or from project rules; the spec's intent is k
 7. **The concept's title heading is removed from the body,** since the page title shows it (the mockup shows no repeat).
 8. **Home reads 50 changes a page** (was 20), the server's default, so a first screen holds a few groups.
 9. **Task 0 adds a `worker` gate** to `gate.sh`, so the Node tests have a bounded runner of their own (brief-common: never run tests outside `gate.sh`).
+10. **`snippet_text` is built from the source, not from `snippet`** (PR #860 review). `snippet` is a raw line already cut to 160 characters, so stripping its syntax afterwards would leave a stray `**`, `[` or backtick wherever a span crosses the cut. Instead the search parses the body with the renderer's parser, takes the text of the block holding the matched line from that line on, and only then cuts it, with an ellipsis. Reference links and fenced code read as text too. This settles the stray-delimiter risk. The work runs only for the web API (`SearchQuery::plain_snippets`) and travels in a skipped field, so the MCP tool's output does not change.
+11. **The title heading is recognised only by the frontmatter title** (PR #860 review). The API's `concept.title` is the frontmatter's, not the first heading. The first heading is dropped from "On this page" and from the body only when it is level 1 and reads as that title. An untitled concept keeps every heading and its whole body.
+12. **"Show more" replaces the list** (PR #860 review). Two requests may see different snapshots: a document published between them can move the ranking. So "Show more" draws the larger answer in place of the old one (keeping the scroll position), and the count is that answer's.
 
 ---
 
@@ -61,7 +64,8 @@ These follow from the shipped code or from project rules; the spec's intent is k
 | `tools/agentic/gate.sh`, `tools/agentic/tests/run.sh`, `tools/agentic/README.md`, `tools/agentic/brief-common.md` (modify) | 0 | The `worker` gate (`just test-worker`, 5 min, no lock). |
 | `src/mcp/documents.rs` (modify) | 1 | `text_field` becomes `pub(crate)`, for the browse routes. |
 | `src/http/api/browse.rs` (modify) | 1 | `TreeDocument.description`; `RecentChange.title` and `.description` from the snapshot (null when deleted or missing). |
-| `src/render.rs` (modify) | 1 | `to_text`: markdown reduced to plain text by the same parser and options as `to_html`. |
+| `src/render.rs` (modify) | 1 | `block_text` (the plain text of the block holding a line, from the parser and options of `to_html`) and `excerpt` (a cut on a character boundary with an ellipsis). |
+| `src/okf/search.rs`, `src/mcp/search.rs` (modify) | 1 | `SearchQuery::plain_snippets` and the skipped `SearchHit::snippet_text`, built from the body before any cut; `run_with` for the web API, `run` unchanged for the tool. |
 | `src/http/api/search.rs` (modify) | 1 | `GET /search` answers `WebSearch`: each hit plus `snippet_text`. |
 | `src/http/ui.rs` (modify) | 1, 2 | Task 1: `font-src 'self'` in the shared CSP. Task 2: `txt` content type. |
 | `docs/operations.md` (modify) | 1 | The API table rows for tree, recent-changes and search. |
@@ -208,7 +212,9 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 **Files:**
 - Modify: `src/mcp/documents.rs:167` (`text_field` visibility)
 - Modify: `src/http/api/browse.rs` (`TreeDocument`, `tree`, `RecentChange`, `recent_changes`, tests)
-- Modify: `src/render.rs` (add `to_text` after `to_html`, tests)
+- Modify: `src/render.rs` (add `block_text` and `excerpt` after `to_html`, tests)
+- Modify: `src/okf/search.rs` (`SearchQuery::plain_snippets`, `SearchHit::snippet_text`, `matched_line`, tests)
+- Modify: `src/mcp/search.rs` (`run_with`; `run` keeps its signature)
 - Modify: `src/http/api/search.rs` (answer type, tests)
 - Modify: `src/http/ui.rs:18-21` (CSP) and its tests
 - Modify: `docs/operations.md:3879,3885,3886`
@@ -429,77 +435,131 @@ In `recent_changes`, replace the `let changes = page ... .collect();` statement 
 Run: `tools/agentic/gate.sh narrow --lib -- http::api::browse`
 Expected: PASS (every browse test, the three new or changed ones included).
 
-- [ ] **Step 9: Write the failing `to_text` tests**
+- [ ] **Step 9: Write the failing `block_text` tests**
+
+`snippet_text` is never derived from `snippet`. `snippet` is a raw body line already cut to 160 characters (`src/okf/search.rs`, `snippet` and `cut`), so an emphasis span or a link that crosses the cut, a reference link whose definition is elsewhere, or a line inside a fenced code block would keep its syntax however the cut text is parsed. Corrected (PR #860 review): the plain snippet is built from the source. The whole body is parsed once with the renderer's parser and options. The text of the innermost block holding the matched line is taken, from that line on. Only then is it cut to length, on a character boundary, with an ellipsis. `snippet` is unchanged.
 
 In `src/render.rs`'s test module, add:
 
 ```rust
-    #[test]
-    fn to_text_keeps_only_the_text_of_inline_markdown() {
-        assert_eq!(
-            to_text("Alpha runs [Beta](beta.md) with **two** `keys` and _one_ ~~old~~ note."),
-            "Alpha runs Beta with two keys and one old note."
-        );
-        // An image keeps its alt text; raw HTML stays text, as to_html shows it.
-        assert_eq!(to_text("See ![the map](map.png) <b>now</b>"), "See the map <b>now</b>");
+    /// The byte offset of the line of `body` that starts with `start`.
+    fn line_at(body: &str, start: &str) -> usize {
+        body.find(&format!("\n{start}"))
+            .map(|at| at + 1)
+            .or_else(|| body.starts_with(start).then_some(0))
+            .expect("the line is in the body")
     }
 
     #[test]
-    fn to_text_turns_block_structure_into_single_spaces() {
-        assert_eq!(to_text("## Config"), "Config");
-        assert_eq!(to_text("- one\n- two"), "one two");
-        assert_eq!(to_text("> quoted\nline"), "quoted line");
-        assert_eq!(to_text("first\n\n\nsecond   third"), "first second third");
-        assert_eq!(to_text(""), "");
+    fn block_text_reads_the_matched_block_from_its_line_on() {
+        let body = "# Title\n\nFirst line of a paragraph\nruns [Beta](beta.md) with **two** `keys`.\n";
+        assert_eq!(
+            block_text(body, line_at(body, "runs")).as_deref(),
+            Some("runs Beta with two keys.")
+        );
+        // The heading is a block of its own.
+        assert_eq!(block_text(body, 0).as_deref(), Some("Title"));
+    }
+
+    #[test]
+    fn block_text_resolves_a_reference_link_defined_elsewhere() {
+        let body = "See [the guide][g] for the time.\n\nMore.\n\n[g]: guide.md\n";
+        assert_eq!(block_text(body, 0).as_deref(), Some("See the guide for the time."));
+    }
+
+    #[test]
+    fn block_text_reads_a_fenced_code_block_without_its_fences() {
+        let body = "Intro.\n\n```sh\nntp-time --serve\n--port 123\n```\n";
+        assert_eq!(
+            block_text(body, line_at(body, "ntp-time")).as_deref(),
+            Some("ntp-time --serve --port 123")
+        );
+    }
+
+    #[test]
+    fn block_text_has_nothing_for_a_line_outside_every_block() {
+        // A reference definition renders nothing.
+        let body = "Text [x][g].\n\n[g]: guide.md\n";
+        assert_eq!(block_text(body, line_at(body, "[g]:")), None);
+    }
+
+    #[test]
+    fn excerpt_cuts_on_a_character_boundary_with_an_ellipsis() {
+        assert_eq!(excerpt("short", 160), "short");
+        let long = "\u{e9}".repeat(200);
+        let cut = excerpt(&long, 160);
+        assert_eq!(cut.chars().count(), 160);
+        assert!(cut.ends_with('\u{2026}'), "{cut}");
     }
 ```
 
-Run: `tools/agentic/gate.sh narrow --lib -- render::tests::to_text`
-Expected: FAIL to compile: `cannot find function to_text`.
+Run: `tools/agentic/gate.sh narrow --lib -- render::tests`
+Expected: FAIL to compile: `cannot find function block_text` and `excerpt`.
 
-- [ ] **Step 10: Write `to_text`**
+- [ ] **Step 10: Write `block_text` and `excerpt`**
 
-In `src/render.rs`, after `to_html`:
+In `src/render.rs`, add `use std::ops::Range;` to the imports, and after `to_html`:
 
 ```rust
-/// Markdown reduced to plain text, for a one-line preview such as a search
-/// snippet: the text the rendered HTML would show, with no markup and no
-/// markdown syntax. It parses with the same options as [`to_html`]. Links
-/// keep their text, images their alt text, code its content, and raw HTML
-/// stays text (as [`to_html`] shows it); line breaks and the ends of
-/// paragraphs, headings, list items, quotes and table cells become spaces,
-/// and every run of whitespace becomes one space.
+/// The plain text of the innermost block of `body` (a paragraph, heading,
+/// list item, code block, table cell or HTML block) holding the byte offset
+/// `line`, from that line on: what the rendered HTML shows there, with no
+/// markup and no markdown syntax. The whole body is parsed with the options
+/// of [`to_html`], so emphasis or a link that runs past the line, and a
+/// reference link defined elsewhere, read as their text. Line breaks and
+/// nested block ends become spaces; every run of whitespace becomes one.
 ///
 /// # Arguments
-/// * `markdown` - a line or a body; frontmatter is not split off.
+/// * `body` - a document's body (frontmatter already split off).
+/// * `line` - the byte offset of a line's start in `body`.
 ///
 /// # Returns
-/// The text, trimmed.
+/// The text, trimmed; `None` when no block holds the line (a blank line, a
+/// reference definition) or the block has no text from that line on.
 ///
 /// # Examples
 /// ```
-/// use okf_mcp::render::to_text;
-/// assert_eq!(to_text("Runs [Beta](beta.md) with **two** `keys`."), "Runs Beta with two keys.");
+/// use okf_mcp::render::block_text;
+/// let body = "Runs [Beta](beta.md) with **two** `keys`.\n";
+/// assert_eq!(block_text(body, 0).as_deref(), Some("Runs Beta with two keys."));
 /// ```
 #[tracing::instrument(level = "trace", skip_all)]
-pub fn to_text(markdown: &str) -> String {
-    let mut text = String::with_capacity(markdown.len());
-    for event in Parser::new_ext(markdown, options()) {
+pub fn block_text(body: &str, line: usize) -> Option<String> {
+    // Each event with the byte range of the source it came from.
+    let events: Vec<(Event<'_>, Range<usize>)> =
+        Parser::new_ext(body, options()).into_offset_iter().collect();
+    // The innermost block holding the line: the shortest range among the
+    // blocks that contain it.
+    let block = events
+        .iter()
+        .filter_map(|(event, range)| match event {
+            Event::Start(
+                Tag::Paragraph
+                | Tag::Heading { .. }
+                | Tag::Item
+                | Tag::CodeBlock(_)
+                | Tag::TableCell
+                | Tag::HtmlBlock,
+            ) if range.contains(&line) => Some(range.clone()),
+            // Any other event opens no block of its own.
+            _ => None,
+        })
+        .min_by_key(|range| range.len())?;
+    let mut text = String::new();
+    for (event, range) in &events {
+        // Only this block, and only what ends after the line starts.
+        if range.start < block.start || range.end > block.end || range.end <= line {
+            continue;
+        }
         match event {
             Event::Text(part) | Event::Code(part) | Event::Html(part) | Event::InlineHtml(part) => {
-                text.push_str(&part);
+                text.push_str(part);
             }
             Event::SoftBreak
             | Event::HardBreak
-            | Event::Rule
-            | Event::End(
-                TagEnd::Paragraph
-                | TagEnd::Heading(_)
-                | TagEnd::Item
-                | TagEnd::BlockQuote(_)
-                | TagEnd::CodeBlock
-                | TagEnd::TableCell,
-            ) => text.push(' '),
+            | Event::End(TagEnd::Paragraph | TagEnd::Heading(_) | TagEnd::Item | TagEnd::TableCell) => {
+                text.push(' ');
+            }
             // Start tags, other end tags, footnote references, task list
             // markers and math add no text of their own. A catch-all,
             // because pulldown-cmark's `Event` has many more variants and
@@ -509,39 +569,199 @@ pub fn to_text(markdown: &str) -> String {
     }
     // `split_whitespace` drops every run of whitespace, so joining with one
     // space collapses them and trims both ends.
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!text.is_empty()).then_some(text)
+}
+
+/// `text` cut to at most `most` characters (not bytes), ending in an
+/// ellipsis when it was cut.
+///
+/// # Arguments
+/// * `text` - the text.
+/// * `most` - the most characters kept, the ellipsis included (at least 1).
+///
+/// # Returns
+/// `text` itself when it fits.
+#[tracing::instrument(level = "trace", skip_all)]
+pub fn excerpt(text: &str, most: usize) -> String {
+    // `char_indices().nth(n)` is the byte offset of the n-th character, so
+    // the cut never splits a multi-byte UTF-8 character.
+    match text.char_indices().nth(most) {
+        None => text.to_string(),
+        Some(_) => {
+            let keep = text
+                .char_indices()
+                .nth(most.saturating_sub(1))
+                .map_or(text.len(), |(end, _)| end);
+            format!("{}\u{2026}", text[..keep].trim_end())
+        }
+    }
 }
 ```
 
-Run: `tools/agentic/gate.sh narrow --lib -- render::tests::to_text`
-Expected: PASS (2 tests). Then `tools/agentic/gate.sh narrow --doc -- render::to_text`: PASS.
+Run: `tools/agentic/gate.sh narrow --lib -- render::tests` and `tools/agentic/gate.sh narrow --doc -- render::block_text`
+Expected: PASS.
 
-- [ ] **Step 11: Write the failing search test**
+(`excerpt` trims trailing space before the ellipsis, so a cut text can be shorter than `most`. The test's text has no spaces, so it is exactly 160.)
+
+- [ ] **Step 11: Write the failing search tests**
+
+The plain snippet is built where the body and the matched line are at hand: in `src/okf/search.rs`, during the search. It runs only when the caller asks (`SearchQuery::plain_snippets`), so MCP `search` does no extra work, and it travels in a skipped field (`#[serde(skip)]`, like `rank`), so the tool's JSON and output schema do not change.
+
+In `src/okf/search.rs`'s tests, add:
+
+```rust
+    /// The hit for `body` (the one concept of a catalog) searched for
+    /// `query` with plain snippets.
+    fn plain_hit(body: &str, query: &str) -> SearchHit {
+        let snapshot = Snapshot::build(&MemWorkspace::from_files([(
+            "a.md",
+            format!("---\ntitle: A\n---\n{body}").as_str(),
+        )]))
+        .expect("snapshot");
+        let mut search_query = SearchQuery::new(query);
+        search_query.plain_snippets = true;
+        search(&snapshot, &search_query).remove(0)
+    }
+
+    #[test]
+    fn a_plain_snippet_reads_emphasis_that_crosses_the_cut() {
+        let line = format!("{} **bold words that run past the cut** marmalade", "x".repeat(150));
+        let hit = plain_hit(&format!("{line}\n"), "marmalade");
+        // The raw snippet is unchanged: the line cut at 160 characters, mid-span.
+        assert_eq!(hit.snippet.as_deref(), Some(&line[..160]));
+        let plain = hit.snippet_text.expect("a plain snippet");
+        assert!(!plain.contains('*'), "{plain}");
+        assert!(plain.starts_with(&"x".repeat(150)), "{plain}");
+        assert!(plain.ends_with('\u{2026}') && plain.chars().count() <= SNIPPET_LEN, "{plain}");
+    }
+
+    #[test]
+    fn a_plain_snippet_reads_a_link_that_crosses_the_cut() {
+        let line = format!("{} [a link whose text runs past the cut](b.md) marmalade", "y".repeat(150));
+        let plain = plain_hit(&format!("{line}\n"), "marmalade").snippet_text.expect("a plain snippet");
+        assert!(!plain.contains('[') && !plain.contains("]("), "{plain}");
+        assert!(plain.contains("a link"), "{plain}");
+    }
+
+    #[test]
+    fn a_plain_snippet_resolves_a_reference_link_and_drops_code_fences() {
+        let reference = plain_hit("Read [the guide][g] for marmalade.\n\n[g]: guide.md\n", "marmalade");
+        assert_eq!(reference.snippet_text.as_deref(), Some("Read the guide for marmalade."));
+        let fenced = plain_hit("Intro.\n\n```sh\nmarmalade --serve\n```\n", "marmalade");
+        assert_eq!(fenced.snippet.as_deref(), Some("marmalade --serve"));
+        assert_eq!(fenced.snippet_text.as_deref(), Some("marmalade --serve"));
+    }
+
+    #[test]
+    fn plain_snippets_are_made_only_when_asked_for() {
+        let hits = search(&snapshot(), &SearchQuery::new("time server"));
+        assert!(hits.iter().all(|hit| hit.snippet_text.is_none()));
+    }
+```
 
 In `src/http/api/search.rs`, in `search_finds_a_concept_with_its_catalog_and_snippet`, after the `snippet` assertion:
 
 ```rust
-        // The same snippet without its markdown syntax, for the reader.
+        // The same text without its markdown syntax, for the reader.
         assert_eq!(found["hits"][0]["snippet_text"], "Alpha runs Beta.");
         // An empty query has no snippet, so no plain one either.
         assert_eq!(limited["hits"][0]["snippet_text"], serde_json::Value::Null);
 ```
 
-Run: `tools/agentic/gate.sh narrow --lib -- http::api::search::tests::search_finds`
-Expected: FAIL: `snippet_text` is absent (`Null` against `"Alpha runs Beta."`).
+Run: `tools/agentic/gate.sh narrow --lib -- okf::search` and `tools/agentic/gate.sh narrow --lib -- http::api::search::tests::search_finds`
+Expected: FAIL to compile (`plain_snippets` and `snippet_text` do not exist), then FAIL on `snippet_text`.
 
-- [ ] **Step 12: Answer with plain snippets**
+- [ ] **Step 12: Build plain snippets during the search**
 
-In `src/http/api/search.rs`, change the imports:
+In `src/okf/search.rs`:
+
+Add `use crate::render::{block_text, excerpt};`.
+
+In `SearchQuery`, after `limit`:
 
 ```rust
-use serde::{Deserialize, Serialize};
-
-use crate::mcp::search::{run, LabeledHit, SearchParams, SearchResult, SkippedCatalog};
-use crate::render::to_text;
+    /// Also make each hit's [`SearchHit::snippet_text`] (the web API's
+    /// reader asks for it; the MCP tool does not).
+    pub plain_snippets: bool,
 ```
 
-Add after `SearchArgs`:
+and set `plain_snippets: false` in `SearchQuery::new`.
+
+In `SearchHit`, after `snippet`:
+
+```rust
+    /// The snippet's text without markdown syntax, with `plain_snippets`:
+    /// the text of the block holding the snippet's line, from that line on,
+    /// cut to [`SNIPPET_LEN`] characters with an ellipsis. Not serialized:
+    /// the web API copies it into its own answer.
+    #[serde(skip)]
+    pub snippet_text: Option<String>,
+```
+
+Replace `snippet` with a function that also says where the line starts, and keep `snippet`'s result as it was:
+
+```rust
+/// The first body line holding the phrase, else the first holding any term,
+/// with the byte offset where it starts in `body`.
+///
+/// `lowered` is `body.to_lowercase()`. Lowercasing never adds or removes a
+/// `\n`, so the two split into the same lines and can be zipped, which avoids
+/// lowercasing the body again. The offsets are `body`'s (the original
+/// lines' lengths), never `lowered`'s.
+#[tracing::instrument(level = "trace", skip_all)]
+fn matched_line<'a>(body: &'a str, lowered: &str, query: &Prepared) -> Option<(usize, &'a str)> {
+    if query.terms.is_empty() {
+        return None;
+    }
+    let mut first_term_line = None;
+    let mut start = 0;
+    for (line, lower) in body.split('\n').zip(lowered.split('\n')) {
+        if lower.contains(query.phrase.as_str()) {
+            return Some((start, line));
+        }
+        if first_term_line.is_none() && query.terms.iter().any(|t| lower.contains(t.as_str())) {
+            first_term_line = Some((start, line));
+        }
+        // The next line starts after this one and its `\n`.
+        start += line.len() + 1;
+    }
+    first_term_line
+}
+```
+
+In `hit`, give it the flag (`fn hit(doc, fields, rank, query: &Prepared, plain: bool)`, and pass `query.plain_snippets` from `search`'s last `map`) and build both snippets from the one match:
+
+```rust
+    let body = split_frontmatter(text).1;
+    let matched = matched_line(body, &fields.body, query);
+    let snippet = matched.map(|(_, line)| cut(line));
+    // `bool::then` runs the closure only when asked; `flatten` turns the
+    // `Option<Option<_>>` into one.
+    let snippet_text = plain
+        .then(|| matched.and_then(|(start, _)| block_text(body, start)))
+        .flatten()
+        .map(|text| excerpt(&text, SNIPPET_LEN));
+```
+
+and set `snippet, snippet_text,` in the `SearchHit`. `fields.body` is the lowercased body of the same split, as `snippet` already assumed.
+
+In `src/mcp/search.rs`, rename `run` to `run_with` with a third argument, and keep `run` for the tool:
+
+```rust
+/// Runs a search for the MCP tool: as [`run_with`] without plain snippets.
+///
+/// # Errors
+/// As [`run_with`].
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) async fn run(ctx: &ToolContext, params: SearchParams) -> Result<SearchResult, OkfError> {
+    run_with(ctx, params, false).await
+}
+```
+
+`run_with` is the old `run` (same doc comment, plus `* plain_snippets - also make each hit's snippet_text`), with `plain_snippets` set in its `SearchQuery`.
+
+In `src/http/api/search.rs`, import `run_with` instead of `run`, plus `LabeledHit`, `SearchResult` and `SkippedCatalog`, and `Serialize`. Add after `SearchArgs`:
 
 ```rust
 /// One hit as `GET /search` answers it: the `search` tool's hit, plus its
@@ -551,9 +771,9 @@ pub(crate) struct WebHit {
     /// The tool's hit; `flatten` writes its fields beside `snippet_text`.
     #[serde(flatten)]
     pub hit: LabeledHit,
-    /// `snippet` with its markdown syntax removed ([`to_text`]), for a
-    /// client that shows it as text (the mobile reader); null without a
-    /// snippet.
+    /// The snippet's text without markdown syntax
+    /// ([`crate::okf::search::SearchHit::snippet_text`]), for a client that
+    /// shows it as text (the mobile reader); null without a snippet.
     pub snippet_text: Option<String>,
 }
 
@@ -566,21 +786,22 @@ pub(crate) struct WebSearch {
     pub skipped: Vec<SkippedCatalog>,
 }
 
-/// The tool's result with each snippet also as plain text.
+/// The tool's result with each hit's plain snippet moved beside it.
 ///
 /// # Arguments
-/// * `result` - the `search` tool's result.
+/// * `result` - the search's result, made with plain snippets.
 ///
 /// # Returns
-/// The same hits, in the same order, each with `snippet_text`.
+/// The same hits, in the same order.
 #[tracing::instrument(level = "trace", skip_all)]
 fn with_plain_snippets(result: SearchResult) -> WebSearch {
     let hits = result
         .hits
         .into_iter()
-        .map(|hit| {
-            // `hit.hit.hit` is the LabeledHit's CatalogHit's SearchHit.
-            let snippet_text = hit.hit.hit.snippet.as_deref().map(to_text);
+        .map(|mut hit| {
+            // `hit.hit.hit` is the LabeledHit's CatalogHit's SearchHit;
+            // `take` moves the text out, leaving `None` (it is not serialized there).
+            let snippet_text = hit.hit.hit.snippet_text.take();
             WebHit { hit, snippet_text }
         })
         .collect();
@@ -591,16 +812,10 @@ fn with_plain_snippets(result: SearchResult) -> WebSearch {
 }
 ```
 
-and in `search`, change the return type to `Result<Json<WebSearch>, AppError>` and the last line to:
+In `search`, call `run_with(&ctx, SearchParams { ... }, true)`, change the return type to `Result<Json<WebSearch>, AppError>`, and return `Ok(Json(with_plain_snippets(result)))`. The parse runs inside the search's blocking closure (`search_catalogs` on rayon), at most once per returned hit of each catalog.
 
-```rust
-    Ok(Json(with_plain_snippets(result)))
-```
-
-Each snippet is at most 160 characters and a call returns at most 200 hits, so this stays on the async thread.
-
-Run: `tools/agentic/gate.sh narrow --lib -- http::api::search`
-Expected: PASS.
+Run: `tools/agentic/gate.sh narrow --lib -- okf::search`, `tools/agentic/gate.sh narrow --lib -- mcp::search`, `tools/agentic/gate.sh narrow --lib -- http::api::search`
+Expected: PASS. The exact-JSON hit test in `okf::search` (`r#"{"path":"/infra/old-ntp.md",...}"#`) and the tool's output-schema test still pass: `snippet_text` is skipped like `rank`.
 
 - [ ] **Step 13: Write the failing CSP test**
 
@@ -648,7 +863,7 @@ Expected: PASS (the other tests compare against the constant, so they follow it)
 In `docs/operations.md`:
 - line 3879 (tree): "`path`, `kind`, `title`" becomes "`path`, `kind`, `title`, `description` (the frontmatter's, when it is a string; else null)".
 - line 3885 (recent-changes): "each change `{path, revision, op, actor, actor_label, message, at}`" becomes "each change `{path, title, description, revision, op, actor, actor_label, message, at}` (`title` and `description` as the catalog has the document now; null for a deletion or a document gone since)".
-- line 3886 (search): append "Each hit also has `snippet_text`, the snippet with its markdown syntax removed (null without a snippet)."
+- line 3886 (search): append "Each hit also has `snippet_text`: the text of the snippet's block from its line on, without markdown syntax, cut to 160 characters with an ellipsis (null without a snippet)."
 
 - [ ] **Step 16: Gates**
 
@@ -667,9 +882,12 @@ Expected: each exits 0. (`test-ui` too if time allows: the console journeys read
   `description`, read from the published snapshot at request time; both are
   null for a deletion or a document that is gone since.
 - `GET /api/v1/catalogs/{c}/tree`: each document has `description`.
-- `GET /api/v1/search`: each hit has `snippet_text`, the snippet with its
-  markdown syntax removed (`render::to_text`, the console renderer's parser
-  reduced to text). `snippet` is unchanged.
+- `GET /api/v1/search`: each hit has `snippet_text`: the text of the block
+  holding the snippet's line, from that line on, read from the whole body
+  with the console renderer's parser (`render::block_text`), then cut to
+  160 characters with an ellipsis. It is built before any cut, so emphasis
+  or a link crossing the cut, a reference link and a fenced code block all
+  read as text. `snippet` and the MCP tool's output are unchanged.
 
 ## Changed
 - The shared Content-Security-Policy allows fonts from the server's own
@@ -678,7 +896,9 @@ Expected: each exits 0. (`test-ui` too if time allows: the console journeys read
 
 ## Tests
 - Tree descriptions; recent-changes titles and descriptions, null for a
-  deletion; `to_text`; `snippet_text`; the policy on `/ui/` and `/read/`.
+  deletion; `block_text` and `excerpt`; plain snippets for emphasis and a
+  link crossing the cut, a reference link and a fenced code block;
+  `snippet_text` on `/search`; the policy on `/ui/` and `/read/`.
 
 ## Docs
 - `docs/operations.md`'s API table.
@@ -1684,9 +1904,19 @@ test('a concept made of level-1 sections lists every one of them', () => {
     assert.deepEqual(sections(outline, 'Parts').map(entry => [entry.heading, entry.depth]), [['One', 0], ['Two', 0]]);
 });
 
-test('the title heading is recognised whatever its case, or when the concept has no title', () => {
+test('the title heading is recognised whatever its case and surrounding spaces', () => {
     assert.equal(sections([heading('alpha ', 1), heading('One', 1)], 'Alpha').length, 1);
-    assert.equal(sections([heading('Alpha', 1), heading('One', 1)], null).length, 1);
+    assert.equal(sections([heading('Kubernetes  cluster', 1), heading('Nodes', 2)], ' kubernetes cluster').length, 1);
+});
+
+// concept.title is the frontmatter's (src/okf/snapshot.rs `title`), never the
+// first heading: without one, nothing proves a heading is the title.
+test('an untitled concept keeps every heading, its first level-1 one included', () => {
+    const outline = [heading('One', 1), heading('Two', 1)];
+    for (const title of [null, undefined, '']) {
+        assert.equal(titleHeading(outline, title), null, String(title));
+        assert.deepEqual(sections(outline, title).map(entry => entry.heading), ['One', 'Two'], String(title));
+    }
 });
 
 test('a first heading below level 1 is never the title', () => {
@@ -1737,18 +1967,25 @@ Expected: FAIL: `outline.js` and `backlinks.js` are not found.
 
 ```js
 // "On this page" (reader polish design, "Concept"): every heading of the
-// concept's outline except the page title, whatever the levels. The title
-// heading is the first heading when it is level 1 and reads as the title
-// (or the concept has no title), so a concept written as "# Title" then
-// "## Parts" lists its parts, and one made only of "#" sections lists them
-// all. No DOM, so Node tests it.
+// concept's outline except the page title, whatever the levels. The API's
+// title is the frontmatter's (src/okf/snapshot.rs), not a heading, so the
+// first heading counts as the title only when it is level 1 and reads as
+// that title (ignoring case and runs of spaces). A concept written as
+// "# Title" then "## Parts" lists its parts; one made only of "#" sections,
+// or with no title at all, lists every heading. No DOM, so Node tests it.
 
-// The outline entry that is the page title, or null.
+// `text` compared loosely: trimmed, spaces collapsed, lowercased.
+function loose(text) {
+    return String(text).trim().split(/\s+/).join(' ').toLowerCase();
+}
+
+// The outline entry that is the page title (`title`: the frontmatter
+// title, or null), or null. The concept screen drops this heading from the
+// outline and from the body; any other is kept.
 export function titleHeading(headings, title) {
     const first = headings?.[0];
-    if (!first || first.level !== 1) return null;
-    const same = !title || first.heading.trim().toLowerCase() === String(title).trim().toLowerCase();
-    return same ? first : null;
+    if (!first || first.level !== 1 || !title) return null;
+    return loose(first.heading) === loose(title) ? first : null;
 }
 
 // The headings to list, each with `depth` (0 for the shallowest listed).
@@ -3122,7 +3359,8 @@ After `a_concept_shows_its_body_follows_links_and_lists_backlinks`:
 
 ```rust
 /// A catalog whose concept `sections.md` is made of level-1 sections only,
-/// with a description and tags, linked three times by `links.md`.
+/// with a description and tags, linked three times by `links.md`, and whose
+/// `untitled.md` has no frontmatter title and starts with a `# One` section.
 fn sectioned() -> Vec<(String, String)> {
     [
         ("index.md", "# Deep\n"),
@@ -3130,6 +3368,10 @@ fn sectioned() -> Vec<(String, String)> {
             "sections.md",
             "---\ntype: system\ntitle: Sections\ndescription: Two parts, no title heading.\n\
              tags: [infra, k8s]\n---\n# One\n\nFirst `code` part.\n\n# Two\n\nSecond part.\n",
+        ),
+        (
+            "untitled.md",
+            "---\ntype: note\n---\n# One\n\nFirst part.\n\n# Two\n\nSecond part.\n",
         ),
         (
             "links.md",
@@ -3161,6 +3403,27 @@ async fn a_concept_of_level_one_sections_has_an_outline_and_a_meta_row() {
         assert_eq!(
             ui.eval("() => document.querySelector('#body').classList.contains('serif')", json!(null)),
             json!(true)
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_untitled_concept_keeps_its_first_heading_in_the_body_and_the_outline() {
+    let server = server_with_catalog("deep", &sectioned()).await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/deep/untitled.md", EMAIL, PASSWORD);
+        // No frontmatter title: the page is named by its file, and `# One`
+        // is a section, not the title.
+        ui.wait_text("#concept-title", "untitled.md");
+        ui.wait_text("#outline summary", "2 sections");
+        assert!(ui.text("#outline").contains("One") && ui.text("#outline").contains("Two"));
+        assert_eq!(
+            ui.eval(
+                "() => [...document.querySelectorAll('#body h1')].map(h => h.textContent)",
+                json!(null)
+            ),
+            json!(["One", "Two"])
         );
     })
     .await;
@@ -3449,7 +3712,9 @@ export async function render(view, ctx) {
     const concept = result.data;
     const headings = concept.outline ?? [];
     const article = renderBody(concept.body_html ?? '', { serif: true });
-    // The page title is drawn above: its heading in the body would repeat it.
+    // The page title is drawn above: its heading in the body would repeat
+    // it. Only a level-1 first heading that reads as the frontmatter title
+    // goes; an untitled concept keeps its whole body.
     const top = titleHeading(headings, concept.title);
     if (top) article.querySelector(`h1[data-slug="${CSS.escape(top.slug)}"]`)?.remove();
     const description = typeof concept.frontmatter?.description === 'string' ? concept.frontmatter.description : null;
@@ -3493,14 +3758,16 @@ At a phone width, in both schemes, against the mockup's Pages direction, Concept
   when it links more than once; a log shows as "Log" with its entries.
 
 ## Fixed
-- A concept made of level-1 sections had an empty outline: only the title
-  heading is dropped now.
+- A concept made of level-1 sections had an empty outline: only a level-1
+  first heading that reads as the frontmatter title is dropped now (from the
+  outline and the body); an untitled concept keeps every heading.
 - A document that linked several times was listed once per link.
 - A long concept stopped behind "Show the whole concept": the reader always
   reads the whole body (`?full=true`). The button and its notices are gone.
 
 ## Tests
-- Journeys: level-1 sections and the meta row; three links shown once with a
+- Journeys: level-1 sections and the meta row; an untitled concept keeps
+  `# One` and `# Two` in its body and its outline; three links shown once with a
   count; a long concept whole without a button, offline too, and after a
   lost grant; a late answer leaves a newer screen alone. The journeys that
   held or failed the concept read by URL now name `?full=true`.
@@ -3518,11 +3785,11 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Files:**
 - Rewrite: `src/http/read/js/screens/search.js`
-- Modify: `tests/ui_e2e/read.rs` (new journey after `home_and_search_without_a_connection`)
+- Modify: `tests/ui_e2e/read.rs` (two new journeys after `home_and_search_without_a_connection`)
 
 **Depends on:** Tasks 1 (`snippet_text`), 4 (parts, `notes`, `server_with_catalog`).
 
-`GET /search` has no cursor (spec change 1): "Show more" reads again with `limit` 50 higher, up to the server's 200, and appends the hits past those shown. The order is total (rank, catalog order, path), so a larger answer starts with the hits already drawn.
+`GET /search` has no cursor (spec change 1): "Show more" reads again with `limit` 50 higher, up to the server's 200. Corrected (PR #860 review): the order is total only within one snapshot, and a document published between the two reads can move the ranking. So the larger answer replaces the whole list rather than being appended by position (spec change 12). The scroll position is kept, the "Show more" button stays in place (so it keeps focus), and the count is the new answer's.
 
 - [ ] **Step 1: Write the failing journey**
 
@@ -3544,7 +3811,7 @@ async fn search_shows_more_past_fifty_with_plain_snippets() {
         ui.wait_text("#search-count", "60 results");
         assert_eq!(ui.eval(shown, json!(null)), json!(60));
         ui.wait_hidden("#search-more");
-        // The first fifty were kept, not drawn again.
+        // Each hit once: the list was redrawn from the larger answer.
         assert_eq!(
             ui.eval(
                 "() => new Set([...document.querySelectorAll('#hits a.row')].map(a => a.getAttribute('href'))).size",
@@ -3555,9 +3822,53 @@ async fn search_shows_more_past_fifty_with_plain_snippets() {
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn show_more_after_a_new_match_is_published_skips_and_repeats_nothing() {
+    let entries = notes(60, "A plain note.");
+    let server = server_with_catalog("many", &entries).await;
+    let runtime = tokio::runtime::Handle::current();
+    let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/s/many?q=note", EMAIL, PASSWORD);
+        ui.wait_text("#search-count", "50+ results");
+        // Between the two reads, a match that ranks first (the query is in
+        // its title, the others have it in their body) is published.
+        let mut published = entries.clone();
+        published.push((
+            "top.md".to_string(),
+            "---\ntitle: Top note\n---\n# Top note\n\nFirst.\n".to_string(),
+        ));
+        let borrowed: Vec<(&str, &str)> = published
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        runtime.block_on(publish(&pool, &app, "many", files(&borrowed)));
+        ui.click("#search-more");
+        ui.wait_text("#search-count", "61 results");
+        let shown = ui.eval(
+            "() => [...document.querySelectorAll('#hits a.row')].map(a => a.getAttribute('href'))",
+            json!(null),
+        );
+        let shown: Vec<&str> = shown
+            .as_array()
+            .expect("hrefs")
+            .iter()
+            .filter_map(|href| href.as_str())
+            .collect();
+        // Appending the larger answer by position would show N49 twice and
+        // never show the new match.
+        assert_eq!(shown.len(), 61, "{shown:?}");
+        let unique: std::collections::BTreeSet<&str> = shown.iter().copied().collect();
+        assert_eq!(unique.len(), 61, "a hit is repeated: {shown:?}");
+        assert_eq!(shown[0], "#/v/many/top.md");
+        assert!(shown.contains(&"#/v/many/notes/n059.md"), "a hit is skipped: {shown:?}");
+    })
+    .await;
+}
 ```
 
-Run: `tools/agentic/gate.sh narrow --test ui_e2e -- read::search_shows_more --test-threads=2`
+Run: `tools/agentic/gate.sh narrow --test ui_e2e -- read::search_shows_more read::show_more_after --test-threads=2`
 Expected: FAIL: the count reads "50 hits" and there is no `#search-more`.
 
 - [ ] **Step 2: Rewrite `search.js`**
@@ -3565,9 +3876,11 @@ Expected: FAIL: the count reads "50 hits" and there is no `#search-more`.
 ```js
 // Search in the current catalog: the title, folder and a plain-text snippet
 // of each hit, "Show more" when a page fills the limit, and the count
-// ("50+ results" while there may be more). It needs the server: offline it
-// says so and points at what is available offline.
-import { h } from '/ui/js/core/dom.js';
+// ("50+ results" while there may be more). Each answer replaces the list:
+// two reads may see different snapshots, so their hits are never joined by
+// position. It needs the server: offline it says so and points at what is
+// available offline.
+import { h, fill } from '/ui/js/core/dom.js';
 import { read, enc, KIND, ReadError } from '../api.js';
 import { hrefs, hrefFor } from '../route.js';
 import { searchForm, message, row } from '../parts.js';
@@ -3611,12 +3924,14 @@ export async function render(view, ctx) {
     const hits = h('div', { class: 'rows', id: 'hits' });
     const more = h('button', { type: 'button', class: 'more-button', id: 'search-more' }, 'Show more');
     const capped = message('Refine the search to see results past these.', null, 'search-capped');
-    let shown = 0;
-    // Draws the hits of `answer` past those shown, and what may come next.
+    // Draws `answer` in place of the list, keeping the scroll position (the
+    // "Show more" button is not redrawn, so it keeps focus), and what may
+    // come next. The count is this answer's.
     const draw = answer => {
         const found = answer.data.hits;
-        hits.append(...found.slice(shown).map(hitRow));
-        shown = found.length;
+        const scrolled = window.scrollY;
+        fill(hits, found.map(hitRow));
+        window.scrollTo(0, scrolled);
         const full = found.length >= limit;
         count.textContent = counted(found.length, full);
         more.hidden = !full || limit >= MOST;
@@ -3666,7 +3981,9 @@ Run `fmt`, `lint`, `test`, `test-ui`, `dylint` (exit 0).
 - Each hit shows a document icon, its title, its folder and a plain-text
   snippet (the server's `snippet_text`).
 - A page that fills the limit offers "Show more", which reads again with 50
-  more (up to the server's 200, then a hint to refine the search), and the
+  more (up to the server's 200, then a hint to refine the search) and draws
+  that answer in place of the list, keeping the scroll position, so a
+  document published between the reads is neither repeated nor skipped. The
   count reads "50+ results" rather than a flat "50 hits".
 
 ## Fixed
@@ -3674,8 +3991,9 @@ Run `fmt`, `lint`, `test`, `test-ui`, `dylint` (exit 0).
 - Search stopped silently at 50 hits.
 
 ## Tests
-- Journey: 60 matching notes show 50 with "50+ results", then all 60 after
-  Show more, each once, with no markdown in the snippets.
+- Journeys: 60 matching notes show 50 with "50+ results", then all 60 after
+  Show more, each once, with no markdown in the snippets; a new top match
+  published between the reads shows first, with no hit repeated or skipped.
 ```
 
 ```bash
