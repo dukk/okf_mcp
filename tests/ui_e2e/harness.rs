@@ -158,6 +158,21 @@ impl Ui {
                 GotoOptions::default(),
             )
             .expect("navigate to the reader");
+        // A hash-only navigation commits a moment after `goto` returns; a
+        // reload sent in that gap would reload the previous route. Give the
+        // hash a short time to settle (the reader may rewrite it, so a
+        // different hash is not an error).
+        let wanted = format!("#{route}");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline
+            && self
+                .page
+                .evaluate("() => location.hash", None, ActionOptions::default())
+                .ok()
+                != Some(serde_json::json!(wanted))
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     /// Opens the reader at `#<route>` signed out, signs in on the page it
@@ -182,8 +197,10 @@ impl Ui {
     }
 
     /// Cuts the page and every service worker off the network (DevTools
-    /// network emulation on each target) while the returned value lives;
-    /// dropping it closes the connection, which ends the emulation.
+    /// network emulation on each target) while the returned value lives.
+    /// Dropping it sets `offline: false` on each target it changed before
+    /// the connection closes: closing alone does not reliably end the
+    /// emulation on a service-worker target.
     ///
     /// # Panics
     /// If Chromium refuses a DevTools call.
@@ -208,15 +225,89 @@ impl Ui {
                 .expect("a DevTools session")
                 .to_string();
             devtools.call(Some(&session), "Network.enable", serde_json::json!({}));
+            devtools.set_offline(&session, true);
+            devtools.offline_sessions.push(session);
+        }
+        devtools
+    }
+
+    /// Sets this origin's storage quota to what it uses now (DevTools'
+    /// `Storage.overrideQuotaForOrigin`), so every further cache write is
+    /// refused with QuotaExceededError while the returned value lives.
+    ///
+    /// # Panics
+    /// If Chromium refuses a DevTools call.
+    pub fn limit_storage(&self) -> DevTools {
+        let used = self
+            .eval(
+                "async () => (await navigator.storage.estimate()).usage",
+                serde_json::json!(null),
+            )
+            .as_f64()
+            .expect("storage usage");
+        let mut devtools = DevTools::connect(&self.browser);
+        let attached = devtools.call(
+            None,
+            "Target.attachToTarget",
+            serde_json::json!({ "targetId": self.page.target_id(), "flatten": true }),
+        );
+        let session = attached["sessionId"]
+            .as_str()
+            .expect("a DevTools session")
+            .to_string();
+        devtools.call(
+            Some(&session),
+            "Storage.overrideQuotaForOrigin",
+            serde_json::json!({ "origin": self.base, "quotaSize": used }),
+        );
+        devtools
+    }
+
+    /// Makes every Cache Storage call reject with SecurityError, in the
+    /// page (now and on every later load) and in the reader's service
+    /// worker, while the returned value lives.
+    ///
+    /// # Panics
+    /// If Chromium refuses a DevTools call.
+    pub fn deny_cache_storage(&self) -> DevTools {
+        const DENY: &str = "for (const name of ['open', 'match', 'keys', 'delete', 'has']) { \
+            CacheStorage.prototype[name] = function () { \
+                return Promise.reject(new DOMException('denied', 'SecurityError')); }; }";
+        let mut devtools = DevTools::connect(&self.browser);
+        let targets = devtools.call(None, "Target.getTargets", serde_json::json!({}));
+        let infos: Vec<(String, String)> = targets["targetInfos"]
+            .as_array()
+            .expect("targets")
+            .iter()
+            .filter_map(|target| {
+                Some((
+                    target["type"].as_str()?.to_string(),
+                    target["targetId"].as_str()?.to_string(),
+                ))
+            })
+            .filter(|(kind, _)| kind == "page" || kind == "service_worker")
+            .collect();
+        for (kind, id) in infos {
+            let attached = devtools.call(
+                None,
+                "Target.attachToTarget",
+                serde_json::json!({ "targetId": id, "flatten": true }),
+            );
+            let session = attached["sessionId"]
+                .as_str()
+                .expect("a DevTools session")
+                .to_string();
+            if kind == "page" {
+                devtools.call(
+                    Some(&session),
+                    "Page.addScriptToEvaluateOnNewDocument",
+                    serde_json::json!({ "source": DENY }),
+                );
+            }
             devtools.call(
                 Some(&session),
-                "Network.emulateNetworkConditions",
-                serde_json::json!({
-                    "offline": true,
-                    "latency": 0,
-                    "downloadThroughput": -1,
-                    "uploadThroughput": -1,
-                }),
+                "Runtime.evaluate",
+                serde_json::json!({ "expression": DENY }),
             );
         }
         devtools
@@ -598,6 +689,9 @@ impl Ui {
 pub struct DevTools {
     socket: tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
     next_id: u64,
+    /// Sessions whose network emulation [`Ui::go_offline`] turned on;
+    /// dropping the connection turns it off again on each of them.
+    offline_sessions: Vec<String>,
 }
 
 impl DevTools {
@@ -614,7 +708,28 @@ impl DevTools {
                 .set_read_timeout(Some(Duration::from_millis(200)))
                 .expect("set a read timeout");
         }
-        Self { socket, next_id: 0 }
+        Self {
+            socket,
+            next_id: 0,
+            offline_sessions: Vec::new(),
+        }
+    }
+
+    /// Turns network emulation on or off for one attached session.
+    ///
+    /// # Panics
+    /// If Chromium refuses the call.
+    fn set_offline(&mut self, session: &str, offline: bool) {
+        self.call(
+            Some(session),
+            "Network.emulateNetworkConditions",
+            serde_json::json!({
+                "offline": offline,
+                "latency": 0,
+                "downloadThroughput": -1,
+                "uploadThroughput": -1,
+            }),
+        );
     }
 
     /// The next JSON message, or `None` when the read timed out or the
@@ -712,6 +827,58 @@ impl DevTools {
                     Some(error) => Err(error.clone()),
                     None => Ok(reply["result"].clone()),
                 };
+            }
+        }
+    }
+}
+
+impl Drop for DevTools {
+    /// Restores the network on every session [`Ui::go_offline`] cut off.
+    /// A target that has gone away (a stopped worker) is skipped; nothing
+    /// here panics, since this can run while a journey is already failing.
+    fn drop(&mut self) {
+        for session in std::mem::take(&mut self.offline_sessions) {
+            let command = serde_json::json!({
+                "id": self.next_id + 1,
+                "method": "Network.emulateNetworkConditions",
+                "sessionId": session,
+                "params": {
+                    "offline": false,
+                    "latency": 0,
+                    "downloadThroughput": -1,
+                    "uploadThroughput": -1,
+                },
+            });
+            self.next_id += 1;
+            let id = self.next_id;
+            if self
+                .socket
+                .send(tungstenite::Message::text(command.to_string()))
+                .is_err()
+            {
+                return;
+            }
+            // Wait briefly for the answer so the command lands before close.
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < deadline {
+                match self.socket.read() {
+                    Ok(message) => {
+                        let answered = message
+                            .to_text()
+                            .ok()
+                            .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+                            .is_some_and(|reply| reply["id"] == id);
+                        if answered {
+                            break;
+                        }
+                    }
+                    Err(tungstenite::Error::Io(error))
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) => {}
+                    Err(_) => return,
+                }
             }
         }
     }

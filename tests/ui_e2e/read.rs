@@ -239,7 +239,6 @@ async fn the_picker_and_the_tree_lead_from_a_catalog_to_its_concepts() {
     .await;
 }
 
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_concept_shows_its_body_follows_links_and_lists_backlinks() {
     let (server, _) = server().await;
@@ -484,8 +483,7 @@ async fn home_and_search_without_a_connection() {
         // show and nothing viewed: the list says so.
         let offline = ui.go_offline();
         ui.open_reader("/");
-        ui.wait_visible("#reader");
-        let shown = ui.text("#reader");
+        let shown = ui.wait_text("#reader", "Nothing yet");
         assert!(shown.contains("Nothing yet"), "home shows: {shown}");
         assert!(!ui.present("#recent"));
         // Search needs the server and says so, with a way to the list.
@@ -579,6 +577,306 @@ async fn an_account_without_an_email_shows_no_null() {
         let drawn = drawn.as_str().unwrap_or("");
         assert!(drawn.contains("Signed in as reader"), "not drawn: {drawn}");
         assert!(!drawn.contains("null"), "stray text: {drawn}");
+    })
+    .await;
+}
+
+/// Tries to write 1 MB into a cache and answers the error's name.
+const PROBE_WRITE: &str = "async () => { try { \
+    await (await caches.open('probe')).put('/probe', new Response('y'.repeat(1e6))); return 'written'; \
+    } catch (e) { return e.name; } }";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn coming_back_online_reads_fresh_content_again() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        signed_in_at_home(ui);
+        ui.wait_worker();
+        ui.wait_visible("#recent");
+        let offline = ui.go_offline();
+        ui.reload_reader();
+        ui.wait_text("#offline-banner", "Offline. Synced");
+        drop(offline);
+        // Both the page and the worker are back on the network: a fresh
+        // load shows home from the server, without the banner.
+        ui.reload_reader();
+        ui.wait_visible("#recent");
+        ui.wait_hidden("#offline-banner");
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.wait_text("#body", "Two settings");
+        ui.wait_hidden("#offline-banner");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn viewed_concepts_are_readable_offline_and_unviewed_ones_say_so() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/t/main", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.wait_text("#concept-title", "Beta");
+        ui.open_reader("/");
+        ui.wait_visible("#recent");
+        let offline = ui.go_offline();
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.reload_reader();
+        ui.wait_text("#concept-title", "Beta");
+        ui.wait_text("#offline-banner", "Offline. Synced");
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        // Never opened: other's notes.
+        ui.open_reader("/v/other/notes.md");
+        ui.wait_visible("#unavailable");
+        // Search needs the network.
+        ui.open_reader("/s/main?q=marmalade");
+        ui.wait_visible("#search-offline");
+        // Home lists what can be read.
+        ui.open_reader("/");
+        ui.wait_text("#offline-list", "Alpha");
+        drop(offline);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_first_concept_a_first_visit_opens_is_readable_offline() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        // A direct link on a first visit, read once, never revisited online.
+        ui.sign_in_reader("/v/main/systems/alpha.md", EMAIL, PASSWORD);
+        ui.wait_text("#body", "marmalade");
+        // The worker takes control only after the first load; the concept
+        // is kept once it does and the page reads it again.
+        ui.wait_worker();
+        let offline = ui.go_offline();
+        ui.reload_reader();
+        ui.wait_text("#body", "marmalade");
+        ui.wait_text("#offline-banner", "Offline. Synced");
+        drop(offline);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_content_cache_keeps_the_most_recently_viewed_two_hundred() {
+    let notes: Vec<(String, String)> = (0..201)
+        .map(|n| {
+            (
+                format!("notes/n{n:03}.md"),
+                format!("---\ntitle: N{n}\n---\n# N{n}\n"),
+            )
+        })
+        .collect();
+    let mut entries: Vec<(&str, &str)> = vec![("index.md", "# Many\n")];
+    entries.extend(
+        notes
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str())),
+    );
+    let server = TestServer::start_with(vec![("many", files(&entries))], |base| Config {
+        public_url: Some(base.to_string()),
+        ..Config::default()
+    })
+    .await;
+    server.user_with_password("reader", EMAIL, PASSWORD).await;
+    crate::support::server::applied(&server.app, async {
+        ceiling::entitle(
+            &server.db.pool,
+            &NewEntitlement {
+                user: "reader",
+                catalog: "many",
+                access: Access::Read,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("entitle");
+    })
+    .await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        // Read n000 and n001 first, then n001 again after 198 others, so
+        // n000 is the least recently viewed when the 201st arrives.
+        let fetched = ui.eval(
+            "async () => { const get = n => fetch(`/api/v1/catalogs/many/concepts/notes/n${String(n).padStart(3, '0')}.md`); \
+             await get(0); await get(1); for (let n = 2; n <= 199; n++) await get(n); await get(1); await get(200); \
+             const cache = await caches.open('read-content'); const keys = (await cache.keys()).map(k => new URL(k.url).pathname); \
+             return { size: keys.length, has0: keys.some(p => p.endsWith('n000.md')), has1: keys.some(p => p.endsWith('n001.md')) }; }",
+            json!(null),
+        );
+        assert_eq!(fetched, json!({ "size": 200, "has0": false, "has1": true }));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_new_worker_drops_shell_caches_of_other_versions() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        // Before the worker exists: a shell cache left by an older build.
+        ui.page
+            .goto(
+                &format!("{}/read/shell.json", ui.base),
+                rustwright::GotoOptions::default(),
+            )
+            .expect("open the origin");
+        ui.eval(
+            "async () => { await caches.open('read-shell-0000000000000000'); return true; }",
+            json!(null),
+        );
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        let names = ui.eval("async () => await caches.keys()", json!(null));
+        let names: Vec<&str> = names
+            .as_array()
+            .expect("names")
+            .iter()
+            .filter_map(|n| n.as_str())
+            .collect();
+        assert!(!names.contains(&"read-shell-0000000000000000"), "{names:?}");
+        assert_eq!(
+            names
+                .iter()
+                .filter(|n| n.starts_with("read-shell-"))
+                .count(),
+            1,
+            "{names:?}"
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn offline_copies_can_be_deleted_without_a_connection() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        let offline = ui.go_offline();
+        ui.open_reader("/me");
+        ui.reload_reader();
+        ui.wait_visible("#account-offline");
+        ui.click("#delete-offline");
+        ui.wait_visible("#offline-deleted");
+        let counts = ui.eval(CACHE_COUNTS, json!(null));
+        assert!(counts.get("read-content").is_none(), "{counts}");
+        drop(offline);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_full_cache_still_shows_what_the_server_sent() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        // No room left: every cache write from now on fails.
+        let full = ui.limit_storage();
+        // The override really refuses writes, or this journey proves nothing.
+        assert_eq!(
+            ui.eval(PROBE_WRITE, json!(null)),
+            json!("QuotaExceededError")
+        );
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        drop(full);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn with_storage_full_the_reader_boots_and_still_deletes_its_copies() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        // The owner record goes too, so the worker must write it again on
+        // the next answer, and cannot.
+        ui.eval(
+            "async () => { await caches.delete('read-owner'); return true; }",
+            json!(null),
+        );
+        let full = ui.limit_storage();
+        ui.open_reader("/me");
+        ui.reload_reader();
+        ui.wait_visible("#account-user");
+        ui.click("#delete-offline");
+        ui.wait_visible("#offline-deleted");
+        let counts = ui.eval(CACHE_COUNTS, json!(null));
+        assert!(counts.get("read-content").is_none(), "{counts}");
+        ui.click("#sign-out");
+        ui.wait_visible("#signin-email");
+        drop(full);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn offline_a_concept_opens_from_either_its_short_or_its_full_copy() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        // Beta opened plainly (its whole body fits): cached without ?full.
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.wait_text("#body", "Two settings");
+        // Alpha opened only through a section link: cached with ?full=true.
+        ui.open_reader("/v/main/systems/alpha.md?s=alpha");
+        ui.wait_text("#body", "marmalade");
+        let offline = ui.go_offline();
+        // Beta's outline link asks for ?full=true: the plain copy answers.
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.wait_text("#concept-title", "Beta");
+        ui.click("#outline summary");
+        ui.click("#outline a");
+        ui.wait_text("#body", "Two settings");
+        // Alpha opened plainly: the full copy answers.
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        drop(offline);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn with_cache_storage_denied_the_reader_still_reads_online() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        let denied = ui.deny_cache_storage();
+        assert_eq!(
+            ui.eval("async () => { try { await caches.open('x'); return 'opened'; } catch (e) { return e.name; } }", json!(null)),
+            json!("SecurityError")
+        );
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.reload_reader();
+        ui.wait_text("#body", "marmalade");
+        // The worker was denied too: what it answered while denied is not kept.
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.wait_text("#body", "Two settings");
+        ui.open_reader("/");
+        ui.wait_visible("#recent");
+        ui.open_reader("/me");
+        ui.click("#delete-offline");
+        ui.wait_visible("#offline-deleted");
+        drop(denied);
+        let kept = ui.eval(
+            "async () => (await (await caches.open('read-content')).keys()).map(k => new URL(k.url).pathname)",
+            json!(null),
+        );
+        assert_eq!(kept, json!([]), "the denied worker kept copies");
     })
     .await;
 }
