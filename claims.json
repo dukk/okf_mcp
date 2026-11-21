@@ -26228,7 +26228,8 @@
       ],
       "tags": [
         "rescan-2026-11-21",
-        "area:small-docs"
+        "area:small-docs",
+        "issue:903"
       ],
       "status": {
         "state": "active"
@@ -26331,10 +26332,10 @@
         }
       ],
       "created_at": "2026-11-21T21:26:48.100711693Z",
-      "updated_at": "2026-11-21T23:08:23.781361320Z",
+      "updated_at": "2026-11-21T23:09:51.331411467Z",
       "seal": {
         "by": "server",
-        "mac": "4d5a632770b2f860240c00108ff835d5fe800f86e111185a78b683d677b449b5"
+        "mac": "a728a6f74a5a2cbc2676b1f84d0b9b4f4b59e05a33eba9f85f00832092a63554"
       }
     },
     {
