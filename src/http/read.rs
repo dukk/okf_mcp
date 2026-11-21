@@ -116,10 +116,15 @@ fn render_index(product: &str) -> String {
 /// name the product alone.
 #[tracing::instrument(level = "trace", skip_all)]
 fn render_manifest(product: &str) -> String {
-    // A JSON string's content, without its quotes: the placeholder sits
-    // inside the template's quotes.
+    // A JSON string's content, without its two delimiting quotes: the
+    // placeholder sits inside the template's quotes. Exactly one quote is
+    // removed from each end (`trim_matches` would also eat an escaped quote
+    // that ends the name, leaving a dangling backslash).
     let quoted = serde_json::Value::String(product.to_string()).to_string();
-    let content = quoted.trim_matches('"');
+    let content = quoted
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .expect("a JSON string is wrapped in quotes");
     template("manifest.webmanifest").replace(PRODUCT_PLACEHOLDER, content)
 }
 
@@ -462,6 +467,26 @@ mod tests {
             serde_json::from_str(&render_manifest(product)).expect("still valid json");
         assert_eq!(manifest["name"], format!("{product} Reader"));
         assert_eq!(manifest["short_name"], product);
+    }
+
+    #[test]
+    fn a_name_that_starts_or_ends_with_a_quote_round_trips_in_the_manifest() {
+        for product in ["Acme \"Notes\"", "\"Acme\"", "Acme\\", "\\\"", "\""] {
+            let manifest: serde_json::Value = serde_json::from_str(&render_manifest(product))
+                .unwrap_or_else(|error| panic!("{product:?}: {error}"));
+            assert_eq!(manifest["name"], format!("{product} Reader"), "{product:?}");
+            assert_eq!(manifest["short_name"], product, "{product:?}");
+        }
+    }
+
+    #[test]
+    fn quotes_angle_brackets_and_ampersands_stay_correct_in_the_page() {
+        let page = render_index(r#"Q "x" <b> & 'y'"#);
+        let escaped = "Q &quot;x&quot; &lt;b&gt; &amp; &#39;y&#39;";
+        assert!(page.contains(&format!("<title>{escaped} Reader</title>")));
+        assert!(page.contains(&format!(
+            r#"name="apple-mobile-web-app-title" content="{escaped}""#
+        )));
     }
 
     #[test]
