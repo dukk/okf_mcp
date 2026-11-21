@@ -39,9 +39,12 @@ changed, because no journey found a bug.
 
 - `DevTools::call` keeps the events that arrive while it waits for an answer, and
   `DevTools::event` looks at those first. Before, they were dropped.
-- `home_and_search_without_a_connection` waits for "Nothing yet" instead of reading `#reader`
-  once. The list is drawn only after home's read fails, and the journey failed once in a
-  parallel run because it read too early.
+- `home_and_search_without_a_connection` used to remember `main` by opening its tree. The
+  tree reads the root `index.md`. When the worker kept that copy, home listed it as available
+  offline, so "Nothing yet" never appeared. Which happened depended on timing: the journey
+  failed in `test-ui` and in 3 of 3 small parallel runs. It now opens `#/s/main`, which
+  remembers `main` without reading anything, and it waits for "Nothing yet" instead of reading
+  `#reader` once.
 
 ## Decisions
 

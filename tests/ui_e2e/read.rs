@@ -478,9 +478,12 @@ async fn a_log_in_recent_changes_opens_as_a_document() {
 async fn home_and_search_without_a_connection() {
     let (server, _) = server().await;
     drive(server.base.clone(), move |ui| {
-        // Opening the tree makes `main` the remembered catalog.
-        ui.sign_in_reader("/t/main", EMAIL, PASSWORD);
+        // Opening search with no query makes `main` the remembered catalog
+        // and reads nothing. (The tree would read the root index.md, and a
+        // copy the worker kept would be listed as available offline.)
+        ui.sign_in_reader("/s/main", EMAIL, PASSWORD);
         ui.wait_worker();
+        assert_eq!(ui.eval(REMEMBERED_CATALOG, json!(null)), json!("main"));
         // Home was never read online, so there are no recent changes to
         // show and nothing viewed: the list says so.
         let offline = ui.go_offline();
