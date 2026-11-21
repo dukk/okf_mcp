@@ -192,10 +192,16 @@ button.row { width: 100%; margin: 0; border: 0; background: none; color: var(--t
 .avatar-5 { background: #2f8f8f; }
 .avatar-6 { background: #c14c8a; }
 .avatar-7 { background: #6b7280; }
-.crumbs ol { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 2px 2px; padding: 0; color: var(--muted); font-size: 13px; }
-.crumbs li { margin: 0; list-style: none; }
+.crumbs { margin: 0; }
+/* Pico styles a nav's lists and links (element spacing, negative margins); the
+ * crumbs are plain text, so those are undone. */
+.crumbs ol, .crumbs ol:first-of-type, .crumbs ol:last-of-type {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 2px 2px; padding: 0;
+    color: var(--muted); font-size: 13px;
+}
+.crumbs li { margin: 0; padding: 0; list-style: none; }
 .crumbs li + li::before { content: "\203A"; margin-right: 6px; color: var(--faint); }
-.crumbs a { color: var(--muted); }
+.crumbs a, .crumbs li a { margin: 0; padding: 0; color: var(--muted); }
 h1.page { margin: 6px 0; font-size: 28px; font-weight: 700; line-height: 1.2; letter-spacing: -.01em; }
 .lede { margin: 0 0 12px; color: var(--muted); font-size: 15px; }
 .hint { color: var(--muted); font-size: 14px; }
