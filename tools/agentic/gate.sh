@@ -14,6 +14,7 @@
 #   test-ui  just test-ui                 60m
 #   narrow   cargo test <args...>         15m  (no lock; for iterating)
 #   dylint   just dylint                  45m  (the first run builds the lint library)
+#   worker   just test-worker             5m   (no lock; the reader's Node tests, also run by test)
 #
 # The limit counts time spent waiting for the lock (flock -w), so a gate stuck
 # behind a hung holder also fails instead of waiting forever.
@@ -38,7 +39,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source-path=SCRIPTDIR source=lib.sh
 source "$here/lib.sh"
 
-gate=${1:?usage: gate.sh fmt|lint|test|test-ui|dylint|narrow [args...]}
+gate=${1:?usage: gate.sh fmt|lint|test|test-ui|dylint|worker|narrow [args...]}
 shift
 
 # Build against the committed sqlx query data, as the justfile does, so a
@@ -56,6 +57,7 @@ case "$gate" in
     test)    limit=${AGENTIC_TIMEOUT_TEST:-75m};   locked=1; cmd=(just test "$@") ;;
     test-ui) limit=${AGENTIC_TIMEOUT_TEST_UI:-60m}; locked=1; cmd=(just test-ui "$@") ;;
     dylint)  limit=${AGENTIC_TIMEOUT_DYLINT:-45m};  locked=1; cmd=(just dylint "$@") ;;
+    worker)  limit=${AGENTIC_TIMEOUT_WORKER:-5m};  locked=0; cmd=(just test-worker "$@") ;;
     narrow)  limit=${AGENTIC_TIMEOUT_NARROW:-15m}; locked=0; cmd=(cargo test "$@") ;;
     *) echo "gate.sh: unknown gate '$gate'" >&2; exit 2 ;;
 esac
