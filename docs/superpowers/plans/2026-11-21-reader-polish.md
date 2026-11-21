@@ -4462,6 +4462,14 @@ The journeys check behaviour; this task checks the look against the mockup, on a
 > from a local web server over `adb reverse` as readily as from Files (a browser
 > will not open `file://` from a VIEW intent). The phone's browser opens every
 > `am start` URL in a new tab, so close the tabs afterwards.
+>
+> **Corrected (issue #872, 2026-11-21, review).** Creating the catalog records its
+> first two pages under the operating-system user (`AuditActor::cli()`), so that
+> login showed on Home. The serve test now rewrites every actor but the
+> placeholders `tester`, `sam` and `alex` to `owner` and asserts it, so a run
+> never shows a real login. Browser journeys now pin the Pico overrides with
+> computed styles (`read::a_concept_body_is_plain_text_not_a_card` and three
+> more).
 
 - [ ] **Step 1: A sample catalog to look at**
 

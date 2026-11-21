@@ -2422,6 +2422,7 @@ fn visual_sample() -> Vec<(String, String)> {
 async fn serve_a_sample_catalog_for_the_visual_check() {
     let server = server_with_catalog("notes", &visual_sample()).await;
     server.set_catalog_label("notes", "Example Notes").await;
+    pin_the_seed_actor(&server).await;
     let mut entries = visual_sample();
     if let Some((_, text)) = entries
         .iter_mut()
@@ -2440,6 +2441,16 @@ async fn serve_a_sample_catalog_for_the_visual_check() {
         .filter(|(path, _)| *path != "infra/old-vpn.md")
         .collect();
     publish_as(&server, "alex", files(&kept)).await;
+    let actors: Vec<String> =
+        sqlx::query_scalar("SELECT DISTINCT actor FROM revisions ORDER BY actor")
+            .fetch_all(&server.db.pool)
+            .await
+            .expect("read the actors");
+    assert_eq!(
+        actors,
+        ["alex", "owner", "sam", "tester"],
+        "a real login would show on Home"
+    );
     let minutes = std::env::var("READER_VISUAL_MINUTES")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
@@ -2449,6 +2460,25 @@ async fn serve_a_sample_catalog_for_the_visual_check() {
         server.base
     );
     tokio::time::sleep(Duration::from_secs(minutes * 60)).await;
+}
+
+/// Names `owner` as the actor of every change the server's own setup made
+/// (creating the catalog is recorded under the operating-system user, whose
+/// login would show on Home), leaving the rounds by `sam` and `alex` and the
+/// seed import's `tester` as they are.
+///
+/// # Panics
+/// If the update fails.
+async fn pin_the_seed_actor(server: &TestServer) {
+    for statement in [
+        "UPDATE documents SET updated_by = 'owner' WHERE updated_by NOT IN ('tester', 'sam', 'alex')",
+        "UPDATE revisions SET actor = 'owner' WHERE actor NOT IN ('tester', 'sam', 'alex')",
+    ] {
+        sqlx::query(statement)
+            .execute(&server.db.pool)
+            .await
+            .expect("pin the seed actor");
+    }
 }
 
 /// Imports `entries` over the `notes` catalog as `actor`, as a publish would.
@@ -2466,6 +2496,112 @@ async fn publish_as(server: &TestServer, actor: &str, entries: okf_mcp::archive:
         import(&server.db.pool, "notes", entries, &options)
             .await
             .expect("import");
+    })
+    .await;
+}
+
+/// The computed style of the first element matching `selector`, for each
+/// property in `properties` (camelCase names), as an object.
+fn computed(ui: &Ui, selector: &str, properties: &[&str]) -> serde_json::Value {
+    ui.eval(
+        "([selector, properties]) => { const style = getComputedStyle(document.querySelector(selector)); \
+         return Object.fromEntries(properties.map(name => [name, style[name]])); }",
+        json!([selector, properties]),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_concept_body_is_plain_text_not_a_card() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/main/systems/beta.md", EMAIL, PASSWORD);
+        ui.wait_text("#concept-title", "Beta");
+        // Pico draws an <article> as a card; the body must have none of it.
+        let body = computed(
+            ui,
+            "#body",
+            &["paddingTop", "paddingLeft", "backgroundColor", "boxShadow"],
+        );
+        assert_eq!(body["paddingTop"], json!("0px"), "{body}");
+        assert_eq!(body["paddingLeft"], json!("0px"), "{body}");
+        assert_eq!(body["backgroundColor"], json!("rgba(0, 0, 0, 0)"), "{body}");
+        assert_eq!(body["boxShadow"], json!("none"), "{body}");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_outline_opens_without_picos_gaps_and_stays_muted_when_focused() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/main/systems/beta.md", EMAIL, PASSWORD);
+        ui.wait_text("#concept-title", "Beta");
+        ui.click("details.toc summary");
+        // Pico colours a summary that matches :focus-visible (a keyboard or
+        // touch focus); a mouse click alone does not, so press a key on it.
+        ui.page
+            .press_key(Some("details.toc summary"), "Shift")
+            .expect("press a key on the summary");
+        let focused = ui.eval(
+            "() => document.querySelector('details.toc summary').matches(':focus-visible')",
+            json!(null),
+        );
+        assert_eq!(focused, json!(true), "the summary must show a focus ring");
+        // Pico fades a summary's colour; read the settled one.
+        ui.eval(
+            "() => { document.querySelector('details.toc summary').style.transition = 'none'; }",
+            json!(null),
+        );
+        let summary = computed(ui, "details.toc summary", &["marginBottom", "color"]);
+        let item = computed(
+            ui,
+            "details.toc li",
+            &["marginTop", "marginBottom", "color"],
+        );
+        // Pico leaves a gap under an open summary and margins on list items.
+        assert_eq!(summary["marginBottom"], json!("0px"), "{summary}");
+        assert_eq!(item["marginTop"], json!("0px"), "{item}");
+        assert_eq!(item["marginBottom"], json!("0px"), "{item}");
+        // The clicked summary has focus; Pico would turn it to its accent.
+        assert_eq!(summary["color"], item["color"], "{summary} {item}");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_breadcrumbs_have_no_pico_nav_spacing() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/main/systems/beta.md", EMAIL, PASSWORD);
+        ui.wait_text("#concept-title", "Beta");
+        let items = ui.eval(
+            "() => [...document.querySelectorAll('.crumbs li, .crumbs a')].map(element => { \
+             const style = getComputedStyle(element); \
+             return [style.paddingTop, style.paddingLeft, style.marginTop, style.marginLeft].join(' '); })",
+            json!(null),
+        );
+        let items = items.as_array().expect("an array");
+        assert!(!items.is_empty(), "no breadcrumb items");
+        for item in items {
+            assert_eq!(item, &json!("0px 0px 0px 0px"), "{items:?}");
+        }
+        let list = computed(ui, ".crumbs ol", &["marginLeft"]);
+        assert_eq!(list["marginLeft"], json!("2px"), "{list}");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_home_search_box_has_no_margin() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/t/main", EMAIL, PASSWORD);
+        ui.wait_visible("#screen-tree");
+        ui.eval("() => { location.hash = '#/'; }", json!(null));
+        ui.wait_visible("#search-form");
+        let form = computed(ui, "#search-form", &["marginTop", "marginBottom"]);
+        assert_eq!(form["marginTop"], json!("0px"), "{form}");
+        assert_eq!(form["marginBottom"], json!("0px"), "{form}");
     })
     .await;
 }
