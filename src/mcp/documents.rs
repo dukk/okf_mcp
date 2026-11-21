@@ -164,7 +164,7 @@ pub struct Document {
 /// # Returns
 /// The value, when the frontmatter parses and `key` holds a string.
 #[tracing::instrument(level = "trace", skip_all)]
-fn text_field(doc: &SnapshotDoc, key: &str) -> Option<String> {
+pub(crate) fn text_field(doc: &SnapshotDoc, key: &str) -> Option<String> {
     // `?` on an `Option` returns `None` at once, like a Python early return.
     let data = doc.frontmatter().data()?;
     data.get(key).and_then(Value::as_str).map(str::to_string)
