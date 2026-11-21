@@ -354,6 +354,110 @@ pub fn search_catalogs(catalogs: &[(&str, &Snapshot)], query: &SearchQuery) -> V
         .collect()
 }
 
+/// What a `sources` entry must match to count as citing a source
+/// (issue #761). It knows nothing of the `cited_by` tool's arguments, so a
+/// `sources` filter on `search` can build one from its own.
+///
+/// `id` matches case-insensitively and `resource` case-sensitively, both
+/// exactly (no substring). With both set, one entry must match both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceMatch {
+    /// The entry's `id`, lowercased; `None` leaves the id unconstrained.
+    id: Option<String>,
+    /// The entry's `resource`, as given; `None` leaves it unconstrained.
+    resource: Option<String>,
+}
+
+impl SourceMatch {
+    /// Builds a matcher.
+    ///
+    /// # Arguments
+    /// * `id` - the entry id to match, case-insensitively.
+    /// * `resource` - the resource to match, exactly.
+    ///
+    /// # Returns
+    /// The matcher, or `None` when neither is given (it would match every
+    /// entry).
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn new(id: Option<&str>, resource: Option<&str>) -> Option<Self> {
+        if id.is_none() && resource.is_none() {
+            return None;
+        }
+        Some(Self {
+            id: id.map(str::to_lowercase),
+            resource: resource.map(str::to_string),
+        })
+    }
+
+    /// The entry this `sources` item is, if it matches.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "per-element predicate or scanner called in a hot loop (parser or analysis)"
+        )
+    )]
+    fn entry(&self, item: &Value) -> Option<CitedEntry> {
+        let Value::Map(map) = item else { return None };
+        let text = |key: &str| map.get(key).and_then(Value::as_str);
+        let id = text("id");
+        let resource = text("resource");
+        let id_matches = self
+            .id
+            .as_ref()
+            .is_none_or(|wanted| id.is_some_and(|id| id.to_lowercase() == *wanted));
+        let resource_matches = self
+            .resource
+            .as_ref()
+            .is_none_or(|wanted| resource == Some(wanted.as_str()));
+        (id_matches && resource_matches).then(|| CitedEntry {
+            id: id.map(str::to_string),
+            resource: resource.map(str::to_string),
+            title: text("title").map(str::to_string),
+            author: text("author").map(str::to_string),
+        })
+    }
+}
+
+/// One `sources` entry that matched, as a hit shows it. A `search` hit could
+/// carry a list of these as an optional field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+pub struct CitedEntry {
+    /// The entry's id, unique within its concept.
+    pub id: Option<String>,
+    /// What was consulted: a URI, a path or a description.
+    pub resource: Option<String>,
+    /// The entry's title, if it has one.
+    pub title: Option<String>,
+    /// The entry's author, if it has one.
+    pub author: Option<String>,
+}
+
+/// The concepts of a snapshot that cite a source.
+///
+/// # Arguments
+/// * `snapshot` - the catalog.
+/// * `wanted` - what an entry must match.
+///
+/// # Returns
+/// Each citing concept's path with its matching entries (at least one), in
+/// snapshot order; a caller that needs a fixed order sorts by path. A
+/// concept whose `sources` is not a list cites nothing.
+#[tracing::instrument(level = "debug", skip_all)]
+pub fn cites<'a>(
+    snapshot: &'a Snapshot,
+    wanted: &'a SourceMatch,
+) -> impl Iterator<Item = (&'a str, Vec<CitedEntry>)> + 'a {
+    snapshot.concepts().filter_map(move |doc| {
+        let Some(Value::Seq(items)) = doc.frontmatter().data().and_then(|d| d.get("sources"))
+        else {
+            return None;
+        };
+        let matched: Vec<CitedEntry> = items.iter().filter_map(|item| wanted.entry(item)).collect();
+        (!matched.is_empty()).then(|| (doc.path(), matched))
+    })
+}
+
 /// The tier, or `None` when some term occurs in no field.
 #[tracing::instrument(level = "trace", skip_all)]
 fn tier(fields: &SearchFields, query: &Prepared) -> Option<u8> {
@@ -698,5 +802,30 @@ mod tests {
         let json = serde_json::to_value(&all[0]).unwrap();
         assert_eq!(json["catalog"], "work");
         assert_eq!(json["path"], "/z.md");
+    }
+
+    #[test]
+    fn cites_matches_entries_exactly_and_ignores_odd_sources() {
+        let snapshot = Snapshot::build(&MemWorkspace::from_files([
+            (
+                "a.md",
+                "---\ntype: Note\nsources:\n  - id: Diary\n    resource: R1\n  - id: x\n    resource: R2\n---\n",
+            ),
+            ("b.md", "---\ntype: Note\nsources: Diary\n---\n"),
+            ("c.md", "---\ntype: Note\nsources:\n  - Diary\n---\n"),
+        ]))
+        .unwrap();
+        let found = |id, resource| -> Vec<(String, usize)> {
+            let wanted = SourceMatch::new(id, resource).unwrap();
+            cites(&snapshot, &wanted)
+                .map(|(path, entries)| (path.to_string(), entries.len()))
+                .collect()
+        };
+
+        assert_eq!(found(Some("diary"), None), [("a.md".to_string(), 1)]);
+        assert_eq!(found(None, Some("R2")), [("a.md".to_string(), 1)]);
+        assert!(found(Some("diary"), Some("R2")).is_empty());
+        assert!(found(None, Some("r1")).is_empty());
+        assert!(SourceMatch::new(None, None).is_none());
     }
 }

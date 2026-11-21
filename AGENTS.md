@@ -16,6 +16,7 @@ Shared tooling for agent-driven work lives in [`tools/agentic/`](tools/agentic/R
 | Waiting for the review bot on a PR | `tools/agentic/watch-review.sh <pr>` | polling loops or `sleep` |
 | Merging a reviewed PR | `tools/agentic/merge-reviewed.sh <pr>` (checks the review, thread replies and merge state) | `gh pr merge` directly |
 | Detecting hung test or gate processes while coordinating | `tools/agentic/watchdog.sh` in the background | waiting on an agent's report |
+| Noticing an agent that went quiet while you wait for its report | `tools/agentic/expect.sh start <worktree> [label]` when you start it or send it back, `done` when it reports; the watchdog flags an idle worktree | waiting on an agent that has silently stopped |
 | Briefing an implementation agent | a short task brief plus [`tools/agentic/brief-common.md`](tools/agentic/brief-common.md) | rewriting the shared rules into each brief |
 | Avoiding known classes of bugs | [`tools/agentic/lessons.md`](tools/agentic/lessons.md); add a rule when a review finds a new class | relearning them in review |
 

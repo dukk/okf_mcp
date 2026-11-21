@@ -34,6 +34,7 @@ A tool is one of five kinds:
 | Tool | Title | Kind |
 |---|---|---|
 | [`add_source`](#add_source) | Add Source | staged |
+| [`cited_by`](#cited_by) | Find Citations | read-only |
 | [`create_concept`](#create_concept) | Create Concept | staged |
 | [`delete_concept`](#delete_concept) | Delete Concept | destructive |
 | [`discard`](#discard) | Discard Changeset Entries | destructive |
@@ -82,7 +83,7 @@ A tool is one of five kinds:
 
 **Add Source** (staged)
 
-Append an entry (id, resource, title, author) to a concept's `sources`, refusing a duplicate id, in the changeset `changeset` names (open one with open_changeset). Write access.
+Append an entry (id, resource, title, author) to a concept's `sources`, refusing a duplicate id, in the changeset `changeset` names (open one with open_changeset); `cited_by` finds a source's citations. Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -92,6 +93,20 @@ Append an entry (id, resource, title, author) to a concept's `sources`, refusing
 | `title` | string | no | Its title. |
 | `author` | string | no | Its author, e.g. `human:alice`. |
 | `changeset` | string | yes | The changeset to write to: the handle `open_changeset` returned. |
+
+## `cited_by`
+
+**Find Citations** (read-only)
+
+List the concepts that cite a source, exactly: `source_id` (case-insensitive) and/or `resource` (case-sensitive); both must match one entry. Returns catalog, path, title and the matching `sources` entries, by catalog then path, at most `limit` (default and maximum 200; `truncated` says more exist). `catalogs` and `changeset` as in `search`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `source_id` | string | no | A source entry's `id`, matched exactly but ignoring case. Ids are unique only within a concept; use `resource` to find one source across concepts. |
+| `resource` | string | no | A source entry's `resource`, matched exactly (case-sensitive). |
+| `catalogs` | array of string | no | The catalog ids to search (default: this connection's selection). |
+| `limit` | integer | no | At most this many hits (default and maximum 200). |
+| `changeset` | string | no | Read through this changeset's drafts (its handle); its catalog must be one this call reads. |
 
 ## `create_concept`
 
@@ -476,7 +491,7 @@ Read the raw text of an index.md (default /index.md), log.md or AGENTS.md. Witho
 
 **Remove Source** (staged)
 
-Remove the entry with `id` from a concept's `sources`, deleting the key when none are left, in the changeset `changeset` names (open one with open_changeset). Refused while a footnote in the body still cites it (its label is the id, or its definition names the id, title or resource): remove the citation first. Write access.
+Remove the entry with `id` from a concept's `sources`, deleting the key when none are left, in the changeset `changeset` names (open one with open_changeset). Refused while a footnote in the body still cites it (its label is the id, or its definition names the id, title or resource): remove the citation first. `cited_by` finds a source's citations. Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|

@@ -613,8 +613,7 @@ pub fn error_page(status: StatusCode, message: &str, brand: &Brand) -> Response 
     page(status, "Cannot connect", &error_page_html(message), brand)
 }
 
-/// The forwarding page's HTML: a zero-delay refresh to `target` and a link
-/// to it for a browser that does not follow refreshes.
+/// The forwarding page's HTML ([`pages::forward_body`]).
 ///
 /// # Arguments
 /// * `target` - the client's redirect URI with the answer added.
@@ -623,15 +622,7 @@ pub fn error_page(status: StatusCode, message: &str, brand: &Brand) -> Response 
 /// The page body (no form).
 #[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn forward_page_html(target: &str) -> String {
-    // A `<meta>` in the body is still processed: the HTML parser applies a
-    // refresh wherever the element appears. The URL is unquoted after
-    // `url=`; it starts with its scheme, so it never begins with a quote.
-    format!(
-        r#"        <meta http-equiv="refresh" content="0;url={target}">
-        <h1>Returning to your client</h1>
-        <p class="muted">If nothing happens, <a id="consent-forward" href="{target}">continue</a>.</p>"#,
-        target = escape(target)
-    )
+    pages::forward_body("Returning to your client", "consent-forward", target)
 }
 
 /// The answer to a consent form's Approve or Deny: a page that sends the
