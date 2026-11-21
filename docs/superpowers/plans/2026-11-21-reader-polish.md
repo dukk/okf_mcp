@@ -43,7 +43,7 @@
 These follow from the shipped code or from project rules; the spec's intent is kept.
 
 1. **Search "Show more" asks again with a larger `limit`.** `GET /search` has no paging cursor (`src/mcp/search.rs`: one ranked list, capped at `MAX_LIMIT` 200). "Show more" re-reads with `limit` + 50 and draws that whole answer in place of the list (see 12: two requests may rank differently). At 200 the count reads "200+ results" and asks to refine the search. Adding a cursor to the search tool is out of scope.
-2. **"Edited 1 h ago by Name"** comes from the existing history route (`GET /catalogs/{c}/history/{path}?limit=1`), not a new field. That route is not cached by the worker, so offline the meta row leaves the edit out.
+2. **"Edited 1 h ago by Name"** comes from the existing history route (`GET /catalogs/{c}/history/{path}?limit=1`), not a new field. That route is not cached by the worker, so offline the meta row leaves the edit out. Corrected (PR #860 review, round 2): the history read is optional and never holds up the concept. The concept and its backlinks draw as soon as their own reads settle, and the edit line fills in when the history answers, on that screen only (`ctx.live()`). A 401 or a lost catalog on it still wipes or evicts through `ctx.fail`; any other refusal only leaves the line out. No timeout: `api.js` `read` takes no abort signal, and with nothing waiting on it a slow answer costs nothing but the line.
 3. **Fonts are built from local release files, not a pinned URL.** The no-hostnames rule keeps download URLs out of the repository: `scripts/subset-reader-fonts.sh` takes the unpacked upstream release folders as arguments, and `scripts/reader-fonts.sha256` records the outputs so a rebuild can be checked.
 4. **A theme choice on Account** (System, Light, Dark). The project's front-end rule asks for adaptive themes with a toggle; the spec is silent. The choice sets `data-theme` on `<html>` (the mockup's tokens already support it) and the `theme-color` metas.
 5. **The folder screen no longer reads `index.md`.** Its lede is the index's `description` from the tree, and the About row opens the index as a document (`#/d/<catalog>/<folder>/index.md`). So the two journeys that deleted a folder's index under the folder screen now do it under the About screen, and `tree.test.mjs`'s index-read tests are replaced by tests of what the folder draws from the tree.
@@ -51,7 +51,7 @@ These follow from the shipped code or from project rules; the spec's intent is k
 7. **The concept's title heading is removed from the body,** since the page title shows it (the mockup shows no repeat).
 8. **Home reads 50 changes a page** (was 20), the server's default, so a first screen holds a few groups.
 9. **Task 0 adds a `worker` gate** to `gate.sh`, so the Node tests have a bounded runner of their own (brief-common: never run tests outside `gate.sh`).
-10. **`snippet_text` is built from the source, not from `snippet`** (PR #860 review). `snippet` is a raw line already cut to 160 characters, so stripping its syntax afterwards would leave a stray `**`, `[` or backtick wherever a span crosses the cut. Instead the search parses the body with the renderer's parser, takes the text of the block holding the matched line from that line on, and only then cuts it, with an ellipsis. Reference links and fenced code read as text too. This settles the stray-delimiter risk. The work runs only for the web API (`SearchQuery::plain_snippets`) and travels in a skipped field, so the MCP tool's output does not change.
+10. **`snippet_text` is built from the source, not from `snippet`** (PR #860 review). `snippet` is a raw line already cut to 160 characters, so stripping its syntax afterwards would leave a stray `**`, `[` or backtick wherever a span crosses the cut. Instead the search parses the body with the renderer's parser, takes the text of the block holding the matched line from that line on, and only then cuts it, with an ellipsis. Reference links and fenced code read as text too. Round 2: the line is mapped to the block whose range overlaps it (one holding the whole line first, then the innermost), not the one holding its first byte, so a quote (`> `), a nested list item or a table row is found. When none overlaps, the line is read without markdown, and as a last resort given as written, so a visible match always has a plain snippet. This settles the stray-delimiter risk. The work runs only for the web API (`SearchQuery::plain_snippets`) and travels in a skipped field, so the MCP tool's output does not change.
 11. **The title heading is recognised only by the frontmatter title** (PR #860 review). The API's `concept.title` is the frontmatter's, not the first heading. The first heading is dropped from "On this page" and from the body only when it is level 1 and reads as that title. An untitled concept keeps every heading and its whole body.
 12. **"Show more" replaces the list** (PR #860 review). Two requests may see different snapshots: a document published between them can move the ranking. So "Show more" draws the larger answer in place of the old one (keeping the scroll position), and the count is that answer's.
 
@@ -437,50 +437,62 @@ Expected: PASS (every browse test, the three new or changed ones included).
 
 - [ ] **Step 9: Write the failing `block_text` tests**
 
-`snippet_text` is never derived from `snippet`. `snippet` is a raw body line already cut to 160 characters (`src/okf/search.rs`, `snippet` and `cut`), so an emphasis span or a link that crosses the cut, a reference link whose definition is elsewhere, or a line inside a fenced code block would keep its syntax however the cut text is parsed. Corrected (PR #860 review): the plain snippet is built from the source. The whole body is parsed once with the renderer's parser and options. The text of the innermost block holding the matched line is taken, from that line on. Only then is it cut to length, on a character boundary, with an ellipsis. `snippet` is unchanged.
+`snippet_text` is never derived from `snippet`. `snippet` is a raw body line already cut to 160 characters (`src/okf/search.rs`, `snippet` and `cut`), so an emphasis span or a link that crosses the cut, a reference link whose definition is elsewhere, or a line inside a fenced code block would keep its syntax however the cut text is parsed. Corrected (PR #860 review): the plain snippet is built from the source. The whole body is parsed once with the renderer's parser and options. The matched line's byte range is mapped to a block, and that block's text is taken from the line on. Only then is it cut to length, on a character boundary, with an ellipsis. `snippet` is unchanged.
+
+Corrected (PR #860 review, round 2): a block may start after a prefix on the line (`> `, a list marker, a table row's `|`), so a block is found by its range overlapping the line's range, never by holding the line's first byte. Among the blocks that overlap the line, one holding the whole line wins, then the innermost (shortest). The candidates are paragraphs, headings, block quotes, list items, code blocks, table heads, rows and cells, and HTML blocks. When no block overlaps (a reference definition) or the block has no text from the line on, the line itself is read with markdown removed. If even that is empty, the line is returned as written, with its whitespace collapsed. So a visible match always has a plain snippet.
 
 In `src/render.rs`'s test module, add:
 
 ```rust
-    /// The byte offset of the line of `body` that starts with `start`.
-    fn line_at(body: &str, start: &str) -> usize {
-        body.find(&format!("\n{start}"))
+    /// The byte range of the line of `body` that starts with `start`, without its `\n`.
+    fn line_of(body: &str, start: &str) -> std::ops::Range<usize> {
+        let from = body
+            .find(&format!("\n{start}"))
             .map(|at| at + 1)
             .or_else(|| body.starts_with(start).then_some(0))
-            .expect("the line is in the body")
+            .expect("the line is in the body");
+        let to = body[from..].find('\n').map_or(body.len(), |end| from + end);
+        from..to
     }
 
     #[test]
     fn block_text_reads_the_matched_block_from_its_line_on() {
         let body = "# Title\n\nFirst line of a paragraph\nruns [Beta](beta.md) with **two** `keys`.\n";
-        assert_eq!(
-            block_text(body, line_at(body, "runs")).as_deref(),
-            Some("runs Beta with two keys.")
-        );
-        // The heading is a block of its own.
-        assert_eq!(block_text(body, 0).as_deref(), Some("Title"));
+        assert_eq!(block_text(body, line_of(body, "runs")), "runs Beta with two keys.");
+        // A heading is a block of its own.
+        assert_eq!(block_text(body, line_of(body, "# Title")), "Title");
+    }
+
+    #[test]
+    fn block_text_reads_blocks_that_start_after_a_prefix_on_the_line() {
+        let quote = "Intro.\n\n> marmalade on toast\n> and more\n";
+        assert_eq!(block_text(quote, line_of(quote, "> marmalade")), "marmalade on toast and more");
+        let nested = "- parent item\n  - child marmalade\n- sibling\n";
+        assert_eq!(block_text(nested, line_of(nested, "  - child")), "child marmalade");
+        let table = "| name | note |\n|---|---|\n| jam | marmalade |\n";
+        assert_eq!(block_text(table, line_of(table, "| jam")), "jam marmalade");
+        let heading = "Intro.\n\n## Marmalade **notes**\n\nText.\n";
+        assert_eq!(block_text(heading, line_of(heading, "## Marmalade")), "Marmalade notes");
     }
 
     #[test]
     fn block_text_resolves_a_reference_link_defined_elsewhere() {
         let body = "See [the guide][g] for the time.\n\nMore.\n\n[g]: guide.md\n";
-        assert_eq!(block_text(body, 0).as_deref(), Some("See the guide for the time."));
+        assert_eq!(block_text(body, line_of(body, "See")), "See the guide for the time.");
     }
 
     #[test]
     fn block_text_reads_a_fenced_code_block_without_its_fences() {
         let body = "Intro.\n\n```sh\nntp-time --serve\n--port 123\n```\n";
-        assert_eq!(
-            block_text(body, line_at(body, "ntp-time")).as_deref(),
-            Some("ntp-time --serve --port 123")
-        );
+        assert_eq!(block_text(body, line_of(body, "ntp-time")), "ntp-time --serve --port 123");
     }
 
     #[test]
-    fn block_text_has_nothing_for_a_line_outside_every_block() {
-        // A reference definition renders nothing.
-        let body = "Text [x][g].\n\n[g]: guide.md\n";
-        assert_eq!(block_text(body, line_at(body, "[g]:")), None);
+    fn block_text_falls_back_to_the_line_when_no_block_overlaps_it() {
+        // A reference definition renders nothing, alone or in its body:
+        // the line is given as written rather than no snippet at all.
+        let body = "Text [x][g].\n\n[g]: marmalade.md\n";
+        assert_eq!(block_text(body, line_of(body, "[g]:")), "[g]: marmalade.md");
     }
 
     #[test]
@@ -501,56 +513,21 @@ Expected: FAIL to compile: `cannot find function block_text` and `excerpt`.
 In `src/render.rs`, add `use std::ops::Range;` to the imports, and after `to_html`:
 
 ```rust
-/// The plain text of the innermost block of `body` (a paragraph, heading,
-/// list item, code block, table cell or HTML block) holding the byte offset
-/// `line`, from that line on: what the rendered HTML shows there, with no
-/// markup and no markdown syntax. The whole body is parsed with the options
-/// of [`to_html`], so emphasis or a link that runs past the line, and a
-/// reference link defined elsewhere, read as their text. Line breaks and
-/// nested block ends become spaces; every run of whitespace becomes one.
+/// The text of `events` as the rendered HTML would show it, with no markup
+/// and no markdown syntax: text, code and raw HTML (shown as text, as
+/// [`to_html`] shows it), with line breaks and the ends of paragraphs,
+/// headings, items and table cells as spaces, and every run of whitespace
+/// collapsed to one space.
 ///
 /// # Arguments
-/// * `body` - a document's body (frontmatter already split off).
-/// * `line` - the byte offset of a line's start in `body`.
+/// * `events` - parser events, in order.
 ///
 /// # Returns
-/// The text, trimmed; `None` when no block holds the line (a blank line, a
-/// reference definition) or the block has no text from that line on.
-///
-/// # Examples
-/// ```
-/// use okf_mcp::render::block_text;
-/// let body = "Runs [Beta](beta.md) with **two** `keys`.\n";
-/// assert_eq!(block_text(body, 0).as_deref(), Some("Runs Beta with two keys."));
-/// ```
+/// The text, trimmed (empty when there is none).
 #[tracing::instrument(level = "trace", skip_all)]
-pub fn block_text(body: &str, line: usize) -> Option<String> {
-    // Each event with the byte range of the source it came from.
-    let events: Vec<(Event<'_>, Range<usize>)> =
-        Parser::new_ext(body, options()).into_offset_iter().collect();
-    // The innermost block holding the line: the shortest range among the
-    // blocks that contain it.
-    let block = events
-        .iter()
-        .filter_map(|(event, range)| match event {
-            Event::Start(
-                Tag::Paragraph
-                | Tag::Heading { .. }
-                | Tag::Item
-                | Tag::CodeBlock(_)
-                | Tag::TableCell
-                | Tag::HtmlBlock,
-            ) if range.contains(&line) => Some(range.clone()),
-            // Any other event opens no block of its own.
-            _ => None,
-        })
-        .min_by_key(|range| range.len())?;
+fn text_of<'e>(events: impl IntoIterator<Item = &'e Event<'e>>) -> String {
     let mut text = String::new();
-    for (event, range) in &events {
-        // Only this block, and only what ends after the line starts.
-        if range.start < block.start || range.end > block.end || range.end <= line {
-            continue;
-        }
+    for event in events {
         match event {
             Event::Text(part) | Event::Code(part) | Event::Html(part) | Event::InlineHtml(part) => {
                 text.push_str(part);
@@ -569,8 +546,79 @@ pub fn block_text(body: &str, line: usize) -> Option<String> {
     }
     // `split_whitespace` drops every run of whitespace, so joining with one
     // space collapses them and trims both ends.
-    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    (!text.is_empty()).then_some(text)
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The plain text of the block of `body` the line at `line` belongs to,
+/// from that line on: what the rendered HTML shows there, without markdown
+/// syntax. The whole body is parsed with the options of [`to_html`], so
+/// emphasis or a link that runs past the line, and a reference link defined
+/// elsewhere, read as their text.
+///
+/// The block is the one whose source range overlaps the line's, preferring
+/// one that holds the whole line, then the innermost: a block may start
+/// after a prefix on its line (`> `, a list marker, a table row's `|`).
+/// When no block overlaps the line, or the block has no text from the line
+/// on, the line alone is read without markdown, and if that is empty too
+/// (a reference definition), the line is given as written.
+///
+/// # Arguments
+/// * `body` - a document's body (frontmatter already split off).
+/// * `line` - the byte range of one line of `body`, without its `\n`.
+///
+/// # Returns
+/// The text, trimmed; empty only for a line with no visible characters.
+///
+/// # Examples
+/// ```
+/// use okf_mcp::render::block_text;
+/// let body = "> Runs [Beta](beta.md) with **two** `keys`.\n";
+/// assert_eq!(block_text(body, 0..body.len() - 1), "Runs Beta with two keys.");
+/// ```
+#[tracing::instrument(level = "trace", skip_all)]
+pub fn block_text(body: &str, line: Range<usize>) -> String {
+    // Each event with the byte range of the source it came from.
+    let events: Vec<(Event<'_>, Range<usize>)> =
+        Parser::new_ext(body, options()).into_offset_iter().collect();
+    let holds_line = |range: &Range<usize>| range.start <= line.start && line.end <= range.end;
+    let block = events
+        .iter()
+        .filter_map(|(event, range)| match event {
+            Event::Start(
+                Tag::Paragraph
+                | Tag::Heading { .. }
+                | Tag::BlockQuote(_)
+                | Tag::Item
+                | Tag::CodeBlock(_)
+                | Tag::TableHead
+                | Tag::TableRow
+                | Tag::TableCell
+                | Tag::HtmlBlock,
+            ) if range.start < line.end && line.start < range.end => Some(range.clone()),
+            // Any other event opens no block of its own.
+            _ => None,
+        })
+        // `false` sorts before `true`: a block holding the whole line first,
+        // then the shortest (innermost).
+        .min_by_key(|range| (!holds_line(range), range.len()));
+    if let Some(block) = block {
+        // Only this block, and only what ends after the line starts.
+        let from_line = text_of(events.iter().filter_map(|(event, range)| {
+            (range.start >= block.start && range.end <= block.end && range.end > line.start)
+                .then_some(event)
+        }));
+        if !from_line.is_empty() {
+            return from_line;
+        }
+    }
+    let source = &body[line];
+    let alone: Vec<Event<'_>> = Parser::new_ext(source, options()).collect();
+    let text = text_of(&alone);
+    if text.is_empty() {
+        source.split_whitespace().collect::<Vec<_>>().join(" ")
+    } else {
+        text
+    }
 }
 
 /// `text` cut to at most `most` characters (not bytes), ending in an
@@ -600,7 +648,7 @@ pub fn excerpt(text: &str, most: usize) -> String {
 ```
 
 Run: `tools/agentic/gate.sh narrow --lib -- render::tests` and `tools/agentic/gate.sh narrow --doc -- render::block_text`
-Expected: PASS.
+Expected: PASS. (In the nested list, the inner item starts after the line's indent and only overlaps it, while the outer item holds the whole line and wins; the parent's text ends before the line starts, so it is left out. In the table, the row holds the whole line and each cell only part of it, so the row wins and its cells are read with a space between them.)
 
 (`excerpt` trims trailing space before the ellipsis, so a cut text can be shorter than `most`. The test's text has no spaces, so it is exactly 160.)
 
@@ -651,6 +699,18 @@ In `src/okf/search.rs`'s tests, add:
         let fenced = plain_hit("Intro.\n\n```sh\nmarmalade --serve\n```\n", "marmalade");
         assert_eq!(fenced.snippet.as_deref(), Some("marmalade --serve"));
         assert_eq!(fenced.snippet_text.as_deref(), Some("marmalade --serve"));
+    }
+
+    #[test]
+    fn a_plain_snippet_reads_a_quote_a_list_item_and_a_table_row() {
+        for (body, plain) in [
+            ("> marmalade on toast\n", "marmalade on toast"),
+            ("- parent\n  - **child** marmalade\n", "child marmalade"),
+            ("| name | note |\n|---|---|\n| jam | marmalade |\n", "jam marmalade"),
+        ] {
+            let hit = plain_hit(body, "marmalade");
+            assert_eq!(hit.snippet_text.as_deref(), Some(plain), "{body}");
+        }
     }
 
     #[test]
@@ -737,10 +797,12 @@ In `hit`, give it the flag (`fn hit(doc, fields, rank, query: &Prepared, plain: 
     let matched = matched_line(body, &fields.body, query);
     let snippet = matched.map(|(_, line)| cut(line));
     // `bool::then` runs the closure only when asked; `flatten` turns the
-    // `Option<Option<_>>` into one.
+    // `Option<Option<_>>` into one. The line's byte range is `start` up to
+    // its length (its `\n` excluded).
     let snippet_text = plain
-        .then(|| matched.and_then(|(start, _)| block_text(body, start)))
+        .then(|| matched.map(|(start, line)| block_text(body, start..start + line.len())))
         .flatten()
+        .filter(|text| !text.is_empty())
         .map(|text| excerpt(&text, SNIPPET_LEN));
 ```
 
@@ -897,8 +959,9 @@ Expected: each exits 0. (`test-ui` too if time allows: the console journeys read
 ## Tests
 - Tree descriptions; recent-changes titles and descriptions, null for a
   deletion; `block_text` and `excerpt`; plain snippets for emphasis and a
-  link crossing the cut, a reference link and a fenced code block;
-  `snippet_text` on `/search`; the policy on `/ui/` and `/read/`.
+  link crossing the cut, a reference link, a fenced code block, a quote, a
+  nested list item, a table row and a heading, and the fallback to the line
+  itself; `snippet_text` on `/search`; the policy on `/ui/` and `/read/`.
 
 ## Docs
 - `docs/operations.md`'s API table.
@@ -3409,6 +3472,30 @@ async fn a_concept_of_level_one_sections_has_an_outline_and_a_meta_row() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_concept_draws_before_its_history_answers() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_visible("#account-user");
+        // The history read waits in the page; the concept and its links do not.
+        ui.hold_next("GET", "/history/systems/alpha.md?limit=1");
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        ui.wait_visible("#backlinks");
+        wait_held(ui);
+        assert_eq!(
+            ui.eval("() => document.querySelector('#concept-edited').hidden", json!(null)),
+            json!(true),
+            "the edit line waits for the history"
+        );
+        ui.release_held();
+        ui.wait_visible("#concept-edited");
+        ui.wait_text("#concept-edited", "Edited");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_untitled_concept_keeps_its_first_heading_in_the_body_and_the_outline() {
     let server = server_with_catalog("deep", &sectioned()).await;
     drive(server.base.clone(), move |ui| {
@@ -3631,30 +3718,33 @@ async function backlinks(base, path) {
     }
 }
 
-// The newest revision ({ actor, actor_label, at }), or null: the meta row
-// does without it offline (the worker keeps no history) or when the history
-// cannot be read. A refusal that matters refuses the concept's read too,
-// which acts on it.
-async function lastEdit(base, path) {
+// The newest revision ({ actor, actor_label, at }), or null. It is
+// optional: the concept never waits for it (render fills the meta row when
+// it comes), and the row does without it offline (the worker keeps no
+// history) or when the history is refused. A refusal that is true of every
+// read (a session that ended, a lost catalog) still acts through ctx.fail:
+// it wipes or evicts as any read's would. It never rejects with a ReadError.
+async function lastEdit(ctx, base, path) {
     try {
         const result = await read(`${base}/history/${encPath(path)}?limit=1`);
         return result.data.revisions?.[0] ?? null;
     } catch (error) {
-        if (error instanceof ReadError) return null;
-        throw error;
+        if (!(error instanceof ReadError)) throw error;
+        if (error.kind === KIND.SIGNED_OUT || error.kind === KIND.CATALOG_GONE) await ctx.fail(error);
+        return null;
     }
 }
 
-// The meta row: the type and tags as pills, then the last edit and the
-// reading time.
-function metaRow(concept, edit) {
+// The meta row: the type and tags as pills, the reading time, then `edited`
+// (the last edit's slot, hidden until the history answers).
+function metaRow(concept, edited) {
     const fields = concept.frontmatter ?? {};
     const tags = Array.isArray(fields.tags) ? fields.tags.filter(tag => typeof tag === 'string').slice(0, MAX_TAGS) : [];
     return h('div', { class: 'meta', id: 'concept-meta' },
         typeof fields.type === 'string' && fields.type ? pill(fields.type, 'type') : null,
         tags.map(tag => pill(tag)),
-        edit ? h('span', { class: 'fact' }, `Edited ${ago(edit.at)} by ${edit.actor_label ?? edit.actor}`) : null,
-        h('span', { class: 'fact' }, `${readingMinutes(concept.chars)} min read`));
+        h('span', { class: 'fact' }, `${readingMinutes(concept.chars)} min read`),
+        edited);
 }
 
 // "On this page": every heading but the page title, linking to its section.
@@ -3689,14 +3779,15 @@ function scrollTo(section) {
 export async function render(view, ctx) {
     const { catalog, path, section } = ctx.route;
     const base = `/catalogs/${enc(catalog)}`;
+    // The last edit is read beside the others but never awaited with them:
+    // the concept draws as soon as its own reads settle.
+    const edit = lastEdit(ctx, base, path);
     // Each read's refusal is acted on the moment it comes (ctx.settle: a
-    // 401 wipes and signs in without waiting for the other reads); what to
-    // draw is decided once all have settled. lastEdit never rejects with a
-    // ReadError.
+    // 401 wipes and signs in without waiting for the other read); what to
+    // draw is decided once both have settled.
     const settled = await Promise.allSettled([
         ctx.settle(read(`${base}/concepts/${encPath(path)}?full=true`)),
         ctx.settle(backlinks(base, path)),
-        lastEdit(base, path),
     ]);
     const refused = settled.filter(outcome => outcome.status === 'rejected').map(outcome => outcome.reason);
     const unexpected = refused.find(reason => !(reason instanceof ReadError));
@@ -3705,7 +3796,7 @@ export async function render(view, ctx) {
         ctx.drawWorst(refused);
         return;
     }
-    const [result, links, edit] = settled.map(outcome => outcome.value);
+    const [result, links] = settled.map(outcome => outcome.value);
     if (!ctx.live()) return;
     ctx.freshness(result);
     ctx.freshness(links);
@@ -3718,16 +3809,23 @@ export async function render(view, ctx) {
     const top = titleHeading(headings, concept.title);
     if (top) article.querySelector(`h1[data-slug="${CSS.escape(top.slug)}"]`)?.remove();
     const description = typeof concept.frontmatter?.description === 'string' ? concept.frontmatter.description : null;
+    const edited = h('span', { class: 'fact', id: 'concept-edited', hidden: true });
     // fill, not append: the lede and the outline may be null.
     fill(view,
         crumbs(catalog, path, false, { root: ctx.label(), titles: ctx.titles() }),
         pageTitle(concept.title ?? fileName(path), 'concept-title'),
-        metaRow(concept, edit),
+        metaRow(concept, edited),
         lede(description, 'concept-lede'),
         onThisPage(catalog, path, sections(headings, concept.title)),
         article,
         linkedFrom(catalog, links, ctx.label()));
     scrollTo(section);
+    // The edit line, when the history answers, on this screen only.
+    edit.then(found => {
+        if (!found || !ctx.live()) return;
+        edited.textContent = `Edited ${ago(found.at)} by ${found.actor_label ?? found.actor}`;
+        edited.hidden = false;
+    });
 }
 ```
 
@@ -3748,7 +3846,8 @@ At a phone width, in both schemes, against the mockup's Pages direction, Concept
 ## Changed
 - Below the title, a meta row: the `type` and up to three `tags` as pills,
   "Edited 1 h ago by Name" (from the history route; left out offline) and
-  the reading time. The frontmatter `description` is a serif lede.
+  the reading time. The frontmatter `description` is a serif lede. The edit
+  line fills in when the history answers; the concept never waits for it.
 - "On this page" lists every heading but the page title, with the section
   count, whatever the levels.
 - The body is set in Literata at 17.5 px with headings in Inter; inline code
@@ -3766,7 +3865,8 @@ At a phone width, in both schemes, against the mockup's Pages direction, Concept
   reads the whole body (`?full=true`). The button and its notices are gone.
 
 ## Tests
-- Journeys: level-1 sections and the meta row; an untitled concept keeps
+- Journeys: level-1 sections and the meta row; the concept draws while its
+  history is held, and the edit line follows; an untitled concept keeps
   `# One` and `# Two` in its body and its outline; three links shown once with a
   count; a long concept whole without a button, offline too, and after a
   lost grant; a late answer leaves a newer screen alone. The journeys that
