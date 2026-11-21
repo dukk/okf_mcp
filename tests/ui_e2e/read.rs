@@ -620,6 +620,80 @@ async fn home_and_search_without_a_connection() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn search_shows_more_past_fifty_with_plain_snippets() {
+    let server = server_with_catalog("many", &notes(60, "A **bold** note with `code`.")).await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/s/many?q=note", EMAIL, PASSWORD);
+        ui.wait_text("#search-count", "50+ results");
+        let shown = "() => document.querySelectorAll('#hits a.row').length";
+        assert_eq!(ui.eval(shown, json!(null)), json!(50));
+        // The snippet is text: no markdown syntax.
+        let hits = ui.wait_text("#hits", "A bold note with code.");
+        assert!(!hits.contains("**") && !hits.contains('`'), "{hits}");
+        ui.click("#search-more");
+        ui.wait_text("#search-count", "60 results");
+        assert_eq!(ui.eval(shown, json!(null)), json!(60));
+        ui.wait_hidden("#search-more");
+        // Each hit once: the list was redrawn from the larger answer.
+        assert_eq!(
+            ui.eval(
+                "() => new Set([...document.querySelectorAll('#hits a.row')].map(a => a.getAttribute('href'))).size",
+                json!(null)
+            ),
+            json!(60)
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn show_more_after_a_new_match_is_published_skips_and_repeats_nothing() {
+    let entries = notes(60, "A plain note.");
+    let server = server_with_catalog("many", &entries).await;
+    let runtime = tokio::runtime::Handle::current();
+    let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/s/many?q=note", EMAIL, PASSWORD);
+        ui.wait_text("#search-count", "50+ results");
+        // Between the two reads, a match that ranks first (the query is in
+        // its title, the others have it in their body) is published.
+        let mut published = entries.clone();
+        published.push((
+            "top.md".to_string(),
+            "---\ntitle: Top note\n---\n# Top note\n\nFirst.\n".to_string(),
+        ));
+        let borrowed: Vec<(&str, &str)> = published
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect();
+        runtime.block_on(publish(&pool, &app, "many", files(&borrowed)));
+        ui.click("#search-more");
+        ui.wait_text("#search-count", "61 results");
+        let shown = ui.eval(
+            "() => [...document.querySelectorAll('#hits a.row')].map(a => a.getAttribute('href'))",
+            json!(null),
+        );
+        let shown: Vec<&str> = shown
+            .as_array()
+            .expect("hrefs")
+            .iter()
+            .filter_map(|href| href.as_str())
+            .collect();
+        // Appending the larger answer by position would show N49 twice and
+        // never show the new match.
+        assert_eq!(shown.len(), 61, "{shown:?}");
+        let unique: std::collections::BTreeSet<&str> = shown.iter().copied().collect();
+        assert_eq!(unique.len(), 61, "a hit is repeated: {shown:?}");
+        assert_eq!(shown[0], "#/v/many/top.md");
+        assert!(
+            shown.contains(&"#/v/many/notes/n059.md"),
+            "a hit is skipped: {shown:?}"
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn home_lists_cached_recent_changes_and_viewed_concepts_offline() {
     let (server, _) = server().await;
     drive(server.base.clone(), move |ui| {
