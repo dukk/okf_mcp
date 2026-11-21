@@ -223,13 +223,16 @@ worker deletes the shell caches of other versions.
     or denied storage, revoked sessions and grants, unlock refusals, late
     answers and two accounts, and the polish: the header label, scroll reset,
     the timeline, Show older and Show more, Jump back in, the concept's meta
-    row and outline, and the theme choice. Four journeys pin the style
+    row and outline, and the theme choice. Five journeys pin the style
     overrides that Pico's rules would otherwise undo (the plain concept body,
     the outline's gaps and focus colour, the breadcrumbs, the Home search
-    box), by reading computed styles.
+    box, and the meta separator that trails a fact and never leads one), by
+    reading computed styles.
   - `serve_a_sample_catalog_for_the_visual_check` in the same file is
     ignored: it serves a sample catalog of placeholder content for the
-    visual check below, for `READER_VISUAL_MINUTES` (30 by default).
+    visual check below, for `READER_VISUAL_MINUTES` (30 by default). The
+    actors it shows are `tester`, `sam`, `alex` and `owner`, never a real
+    login.
 - **Manual checks before a release** (a phone and a deployed build): install
   on an iPhone (Safari, Share, Add to Home Screen) and on Android (Chrome's
   install prompt); the app opens standalone; content clears the notch and home
