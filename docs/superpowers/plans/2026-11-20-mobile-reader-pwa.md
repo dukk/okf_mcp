@@ -1920,7 +1920,7 @@ In `tests/ui_e2e/harness.rs`, add to `impl Ui`:
 
     /// Cuts the page and every service worker off the network (DevTools
     /// network emulation on each target) while the returned value lives;
-    /// dropping it closes the connection, which ends the emulation.
+    /// dropping it sets `offline: false` on each target it changed (issue #817).
     pub fn go_offline(&self) -> DevTools {
         let mut devtools = DevTools::connect(&self.browser);
         let targets = devtools.call(None, "Target.getTargets", serde_json::json!({}));
@@ -3059,6 +3059,32 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ---
 
 ### Task 10: Offline journeys (cache, cap, shell upgrade)
+
+> **Corrected (issue #817, 2026-11-20).** Task 10 shipped in `tests/ui_e2e/read.rs` and
+> `tests/ui_e2e/harness.rs`; read those, not the listings below, where they differ:
+>
+> - `limit_storage` and `deny_cache_storage` work as listed. Each storage-full and denied journey now proves its override
+>   first (a 1 MB `cache.put` rejects with `QuotaExceededError`; `caches.open` rejects with
+>   `SecurityError`), and the denied journey checks that the worker kept nothing while denied.
+> - `go_offline`'s guard now sets `offline: false` on every target it cut off before the connection
+>   closes (a `Drop` impl on `DevTools`), instead of relying on the close.
+> - `open_reader` waits up to 2 s for `location.hash` to settle: a reload sent right after a
+>   hash-only `goto` reloaded the previous route (seen as `#/me` instead of the concept).
+> - The journeys start from `sign_in_reader` at `/me`, a concept link or `/t/main` (the picker needs no click), and
+>   the first-visit journey calls `wait_worker` before going offline.
+> - Added `coming_back_online_reads_fresh_content_again`, which goes offline, drops the guard and
+>   reads fresh content (the home banner hides again).
+> - The 200-cap journey reads n000 again after n001..n199 and then adds n200, and asserts n000
+>   survives and n001 is evicted (a FIFO cache fails it; n001 re-read, as first written, did not tell
+>   LRU from FIFO).
+> - `with_storage_full_...` replaces the worker (unregister, reload) after deleting `read-owner`, so
+>   its first cacheable read is a takeover that must write the record, under `limit_storage_to(1.0)`
+>   (a quota below usage, so deleting copies does not free room for a write). Stopping workers
+>   through DevTools (`ServiceWorker.stopAllWorkers`, `Target.closeTarget`) left every fetch through
+>   the worker hanging, so it is not used. Because every write fails there, that journey cannot tell
+>   a failed record write from a failed copy write; `a_failed_owner_record_write_keeps_no_copy_of_the_new_owners_reads`
+>   refuses only the record's `Cache.put` (harness `refuse_cache_puts_of`) and fails if the worker
+>   keeps a copy after it.
 
 **Files:**
 - Modify: `tests/ui_e2e/read.rs`
