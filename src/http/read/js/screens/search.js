@@ -67,6 +67,7 @@ export async function render(view, ctx) {
         try {
             const answer = await read(url(limit));
             if (!ctx.live()) return;
+            document.getElementById('more-offline')?.remove();
             draw(answer);
         } catch (error) {
             if (!(error instanceof ReadError)) throw error;

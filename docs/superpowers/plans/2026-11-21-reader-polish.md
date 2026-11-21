@@ -3980,6 +3980,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ---
 ### Task 8: Search: plain snippets, Show more, "50+ results"
 
+> **Corrected (issue #870, 2026-11-21).** Review of PR #880: a successful "Show more" after an offline attempt left the `#more-offline` notice in place, so the click handler removes it before drawing the answer (Step 2's code below has the line). Three more journeys cover it: `show_more_offline_keeps_the_rows_and_a_retry_clears_the_notice`, `a_refused_show_more_replaces_the_results_with_the_refusal` and `show_more_stops_at_two_hundred_and_says_to_refine`.
+
 **Files:**
 - Rewrite: `src/http/read/js/screens/search.js`
 - Modify: `tests/ui_e2e/read.rs` (two new journeys after `home_and_search_without_a_connection`)
@@ -4140,6 +4142,7 @@ export async function render(view, ctx) {
         try {
             const answer = await read(url(limit));
             if (!ctx.live()) return;
+            document.getElementById('more-offline')?.remove();
             draw(answer);
         } catch (error) {
             if (!(error instanceof ReadError)) throw error;

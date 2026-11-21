@@ -693,6 +693,77 @@ async fn show_more_after_a_new_match_is_published_skips_and_repeats_nothing() {
     .await;
 }
 
+/// How many hits the search screen draws now.
+const SHOWN_HITS: &str = "() => document.querySelectorAll('#hits a.row').length";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn show_more_offline_keeps_the_rows_and_a_retry_clears_the_notice() {
+    let server = server_with_catalog("many", &notes(60, "A plain note.")).await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/s/many?q=note", EMAIL, PASSWORD);
+        ui.wait_text("#search-count", "50+ results");
+        let offline = ui.go_offline();
+        ui.click("#search-more");
+        ui.wait_visible("#more-offline");
+        // The failed attempt keeps the rows and the count, and the button
+        // works again.
+        assert_eq!(ui.eval(SHOWN_HITS, json!(null)), json!(50));
+        ui.wait_text("#search-count", "50+ results");
+        assert_eq!(
+            ui.eval(
+                "() => !document.querySelector('#search-more').disabled",
+                json!(null)
+            ),
+            json!(true)
+        );
+        drop(offline);
+        ui.click("#search-more");
+        ui.wait_text("#search-count", "60 results");
+        assert_eq!(ui.eval(SHOWN_HITS, json!(null)), json!(60));
+        // The notice is gone once a read succeeds.
+        assert!(!ui.present("#more-offline"));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_refused_show_more_replaces_the_results_with_the_refusal() {
+    let server = server_with_catalog("many", &notes(60, "A plain note.")).await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/s/many?q=note", EMAIL, PASSWORD);
+        ui.wait_text("#search-count", "50+ results");
+        ui.fail_next_kind(
+            "GET",
+            "&limit=100",
+            403,
+            "UnlockRequired",
+            "This catalog needs an unlock.",
+        );
+        ui.click("#search-more");
+        ui.wait_visible("#locked");
+        assert!(!ui.present("#hits"));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn show_more_stops_at_two_hundred_and_says_to_refine() {
+    let server = server_with_catalog("many", &notes(210, "A plain note.")).await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/s/many?q=note", EMAIL, PASSWORD);
+        ui.wait_text("#search-count", "50+ results");
+        for shown in ["100+ results", "150+ results", "200+ results"] {
+            ui.click("#search-more");
+            ui.wait_text("#search-count", shown);
+        }
+        assert_eq!(ui.eval(SHOWN_HITS, json!(null)), json!(200));
+        ui.wait_hidden("#search-more");
+        ui.wait_text("#search-capped", "Refine the search");
+        ui.wait_visible("#search-capped");
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn home_lists_cached_recent_changes_and_viewed_concepts_offline() {
     let (server, _) = server().await;
