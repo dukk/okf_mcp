@@ -30,7 +30,7 @@ Account.
 
 | Route | Screen |
 |---|---|
-| `#/` | Home: the install hint (iPhone and iPad browsers only), a search box that counts the catalog's pages ("Search 1,284 pages"), "Jump back in" (the three concepts and documents this device holds that it synced last, each with its folder and "Synced 2 h ago"), and the Activity timeline: filter chips (All, Created, Edited, Deleted, By me), day headings, and changes grouped by actor and batch (the same actor and message, less than 2 minutes apart), with "+N more" and "Show older". When the server cannot be reached or the worker answered from its copy, every offline copy is listed under "Available offline" instead of "Jump back in", and the timeline, when the worker holds recent changes, is drawn from that copy |
+| `#/` | Home: the install hint (iPhone and iPad browsers only), a search box that counts the catalog's pages ("Search 1,284 pages"), "Jump back in" (the three concepts and documents this device viewed last, from its cached copies, each with its folder and "Synced 2 h ago"), and the Activity timeline: filter chips (All, Created, Edited, Deleted, By me), day headings, and changes grouped by actor and batch (the same actor and message, less than 2 minutes apart), with "+N more" and "Show older". When the server cannot be reached or the worker answered from its copy, every offline copy is listed under "Available offline" instead of "Jump back in", and the timeline, when the worker holds recent changes, is drawn from that copy |
 | `#/c` | The catalog picker: each catalog with its mark, label, description and page count. With exactly one reachable catalog and none chosen, it chooses that one and opens Home. `#/c?gone=<catalog>` says you can no longer read that catalog and its offline copies are deleted |
 | `#/t/<catalog>[/<folder>...]` | One folder: breadcrumbs (the catalog's label, then folder titles), its title and description, an About row that opens its `index.md`, its subfolders (description and page count), its concepts (description) under "Pages", and a Log row for its `log.md`. Logs and machinery files are not listed among the pages |
 | `#/s/<catalog>[?q=<query>]` | Search results in that catalog: title, folder and a plain-text snippet. "Show more" adds 50 more, up to 200; "50+ results" means there may be more, and at 200 the screen says to refine the search |
@@ -59,7 +59,9 @@ Details worth knowing:
   estimated from the length of the text (1,200 characters a minute).
 - "Synced 2 h ago" on Home is the time of the last network read of that
   copy. Reading a copy offline does not change it, so it says when the
-  copy was synced, not when it was read.
+  copy was synced, not when it was read. The order is by viewing, not by
+  that time: opening a copy offline moves it to the front without changing
+  its "Synced" time.
 - Search needs a connection. Offline it says so and links to Home's offline
   list.
 - Account shows who is signed in (with an avatar) and when the session
@@ -99,8 +101,8 @@ cache-first. Catalog reads go through the service worker, which is scoped to
   whole body (it was not shortened), so copies kept by an earlier version of
   the reader stay readable.
 - **Home offline.** "Available offline" lists the concepts and documents of the
-  current catalog that this device holds, newest first, each with when it was
-  synced. Online, "Jump back in" shows the newest three of the same list. A
+  current catalog that this device holds, most recently viewed first, each
+  with when it was synced. Online, "Jump back in" shows the first three of the same list. A
   concept you never opened says "Not available offline." and links there.
   When the worker answers Home from its copy of recent changes, the
   Activity timeline is drawn below the list as it was last read; "Show
