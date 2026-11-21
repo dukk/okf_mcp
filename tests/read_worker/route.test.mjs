@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { page } from './page.mjs';
 
 const { DOCUMENTS, fromBrowse, hrefFor, hrefs, parentOf, parse } = await page('route.js');
-const { folderListing } = await page('listing.js');
+const { folderListing, folderTitles } = await page('listing.js');
 
 test('parse reads every screen', () => {
     assert.deepEqual(parse(''), { screen: 'home' });
@@ -135,32 +135,46 @@ const TREE = [
     { path: '/AGENTS.md', kind: 'agents', title: null },
     { path: '/zeta.md', kind: 'concept', title: 'Zeta' },
     { path: '/alpha.md', kind: 'concept', title: null },
-    { path: '/systems/index.md', kind: 'index', title: 'Systems' },
+    { path: '/systems/index.md', kind: 'index', title: 'Systems', description: 'What runs where.' },
     { path: '/systems/beta.md', kind: 'concept', title: 'Beta' },
     { path: '/systems/deep/gamma.md', kind: 'concept', title: 'Gamma' },
     { path: '/people/x.md', kind: 'concept', title: 'X' },
     { path: '/systemsx/y.md', kind: 'concept', title: 'Y' },
 ];
 
-test('folderListing lists the root\'s folders, index and concepts by label, without logs', () => {
+test('folderListing lists the root\'s folders, index, log and concepts by label', () => {
     const listing = folderListing(TREE, '');
-    assert.deepEqual(listing.folders, ['people', 'systems', 'systemsx']);
+    assert.deepEqual(listing.folders.map(entry => entry.name), ['people', 'systems', 'systemsx']);
     assert.equal(listing.index.path, '/index.md');
+    assert.equal(listing.log.path, '/log.md');
     assert.deepEqual(listing.concepts.map(doc => doc.path), ['/alpha.md', '/zeta.md']);
     // Without a title, a concept is labelled by its file name.
     assert.equal(listing.label(listing.concepts[0]), 'alpha.md');
     assert.equal(listing.label(listing.concepts[1]), 'Zeta');
 });
 
+test('folderListing gives each subfolder its index title and description and its page count', () => {
+    const systems = folderListing(TREE, '').folders.find(entry => entry.name === 'systems');
+    // beta.md and deep/gamma.md: nested concepts count too.
+    assert.deepEqual(systems, { name: 'systems', path: 'systems', title: 'Systems', description: 'What runs where.', pages: 2 });
+    const [deep] = folderListing(TREE, 'systems').folders;
+    assert.deepEqual(deep, { name: 'deep', path: 'systems/deep', title: null, description: null, pages: 1 });
+});
+
 test('folderListing lists one folder and none of its namesakes', () => {
     const listing = folderListing(TREE, 'systems');
-    assert.deepEqual(listing.folders, ['deep']);
+    assert.deepEqual(listing.folders.map(entry => entry.name), ['deep']);
     assert.equal(listing.index.path, '/systems/index.md');
+    assert.equal(listing.log, null);
     assert.deepEqual(listing.concepts.map(doc => doc.path), ['/systems/beta.md']);
 });
 
 test('folderListing of a folder without an index or documents is empty', () => {
     assert.deepEqual(folderListing(TREE, 'systems/deep').index, null);
     const empty = folderListing(TREE, 'nowhere');
-    assert.deepEqual([empty.folders, empty.index, empty.concepts], [[], null, []]);
+    assert.deepEqual([empty.folders, empty.index, empty.log, empty.concepts], [[], null, null, []]);
+});
+
+test('folderTitles names every folder whose index has a title', () => {
+    assert.deepEqual([...folderTitles(TREE)], [['systems', 'Systems']]);
 });
