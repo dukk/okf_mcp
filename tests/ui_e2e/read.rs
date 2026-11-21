@@ -2376,7 +2376,7 @@ async fn offline_at_boot_keeps_the_copies_and_says_the_account_needs_a_connectio
 /// quotes, code and links, several actors and kinds of change).
 fn visual_sample() -> Vec<(String, String)> {
     let mut long = String::from(
-        "---\ntype: system\ntitle: Kubernetes cluster\ndescription: The home cluster: three control-plane nodes and five workers, deployed from git.\n\
+        "---\ntype: system\ntitle: Kubernetes cluster\ndescription: \"The home cluster: three control-plane nodes and five workers, deployed from git.\"\n\
          tags: [k8s, infra, platform]\n---\n# Kubernetes cluster\n\n\
          > This is the test cluster. Production runs separately: see [Production deployment](production.md).\n\n\
          The cluster runs three control-plane nodes and five workers. Workloads are deployed from the `infra` repository.\n\n",
