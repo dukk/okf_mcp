@@ -5,10 +5,10 @@
     "by": "server",
     "mac": "a4a4ed61e7ebf243bf1927f4fed3e01aa77f402da3b1f3c1d45dc005c09c0022"
   },
-  "next_evidence_seq": 416,
+  "next_evidence_seq": 419,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "b0bd03df084b02bda466bddb24068f01ba419c28ce69585f7790060617e03702"
+    "mac": "d7fed6454a6449578d868b8d74c888e9a3d32acd4051fb9d57e9007a0b638dd1"
   },
   "claims": [
     {
@@ -305,6 +305,18 @@
             "by": "server",
             "mac": "9aa6747f1ab76486574d2ffe3dedb6b69c83bfcc9d4123fbb55c85b53027f7fc"
           }
+        },
+        {
+          "id": "EVD-0418",
+          "kind": "analysis",
+          "locator": "children of CLM-0005",
+          "summary": "Refuted children are now CLM-0043, CLM-0044, CLM-0051 and CLM-0330 (the reader's offline Account view holds only when the reader boots offline, found in review on PR #901).",
+          "stance": "refutes",
+          "recorded_at": "2026-11-21T23:08:27.797067062Z",
+          "seal": {
+            "by": "server",
+            "mac": "f8ea36c7b4a562b00a4757a006cd300b3107df7c00ddda973040b725e21806dc"
+          }
         }
       ],
       "verdicts": [
@@ -333,13 +345,26 @@
             "by": "server",
             "mac": "5a514e73650ce72bc93febd58c081362bfca67ccd1e0c119e263ae81846b4e62"
           }
+        },
+        {
+          "verdict": "refuted",
+          "rationale": "Four children are refuted: CLM-0043, CLM-0044, CLM-0051 and CLM-0330. Fix: resolve each child as tracked in its issue, then re-judge this parent.",
+          "auditor": "claude-opus-5-5",
+          "evidence_ids": [
+            "EVD-0418"
+          ],
+          "recorded_at": "2026-11-21T23:08:34.467320885Z",
+          "seal": {
+            "by": "server",
+            "mac": "9fa473053118a11875ac4e84d9c99bf5b61ab344b5521c50ac5098f2f4574cf1"
+          }
         }
       ],
       "created_at": "2026-11-21T19:04:12.375208519Z",
-      "updated_at": "2026-11-21T21:35:59.457346327Z",
+      "updated_at": "2026-11-21T23:08:34.467320885Z",
       "seal": {
         "by": "server",
-        "mac": "04db400469b8e517ffe8aed29738dafcfa8bbb28e70a9860464f2bec2d51044c"
+        "mac": "c8492aa8ffc79144d1825555c07f85a6d16cccf01b77d804a255f68295646046"
       }
     },
     {
@@ -26230,6 +26255,50 @@
             "by": "server",
             "mac": "52b29612c39b1b9c6dad4927a9693d9ce99ac4cd2873965f9e426f01875cc263"
           }
+        },
+        {
+          "id": "EVD-0416",
+          "kind": "inspection",
+          "locator": "src/http/read/js/main.js:282-291",
+          "summary": "state.session is set only once, in boot(), from GET /session; when that read fails offline it stays unset. Nothing else in the reader assigns or clears state.session (grep: the only assignment is main.js:286), so losing the connection after an online boot leaves the session in place.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/http/read/js/main.js",
+              "lines": {
+                "start": 282,
+                "end": 291
+              },
+              "commit": "02ec26361ba5f7e94527dcce764a2262403356c9"
+            }
+          },
+          "recorded_at": "2026-11-21T23:08:15.250757819Z",
+          "seal": {
+            "by": "server",
+            "mac": "af2ea485aaeee51c3cfbb661ff3227adbbd7072e601f3690384d9a9c1cf92cce"
+          }
+        },
+        {
+          "id": "EVD-0417",
+          "kind": "inspection",
+          "locator": "src/http/read/js/screens/me.js:37-64",
+          "summary": "render() takes the reduced branch (Appearance and Delete offline copies only) only when ctx.state.session is absent; with a session it renders the account card, session expiry and Sign out whatever the connection. Sign out offline then shows 'The server could not be reached to end the session.' So after an online boot followed by loss of connection, Account shows the details and Sign out, contrary to the unconditional \"Offline it shows...\" in reader.md:70-72. The cited ui_e2e test covers only offline at boot.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/http/read/js/screens/me.js",
+              "lines": {
+                "start": 37,
+                "end": 64
+              },
+              "commit": "02ec26361ba5f7e94527dcce764a2262403356c9"
+            }
+          },
+          "recorded_at": "2026-11-21T23:08:15.332902353Z",
+          "seal": {
+            "by": "server",
+            "mac": "8347f45d9574b4f4673847d4e12429fd9ac16562612f183f7c6afede245b4920"
+          }
         }
       ],
       "verdicts": [
@@ -26245,13 +26314,27 @@
             "by": "server",
             "mac": "af848595dafa3b5551b943bed85dbec2e4584004a070f435ee14c4a1f96a9da7"
           }
+        },
+        {
+          "verdict": "refuted",
+          "rationale": "The reduced Account view depends on state.session being absent, which happens only when the reader boots offline; the session is never re-read or cleared, so a reader that loses its connection after an online boot still shows the account details and Sign out. The earlier supported verdict rested on a test of the offline-at-boot case only (raised in review on PR #901). Fix: either qualify docs/reference/reader.md:70-72 to \"When the reader starts offline, Account shows...\" or change src/http/read/js/screens/me.js to take the reduced branch whenever the server cannot be reached (e.g. re-read /session on opening Account), with a ui_e2e test that goes offline after an online boot.",
+          "auditor": "claude-opus-5-5",
+          "evidence_ids": [
+            "EVD-0416",
+            "EVD-0417"
+          ],
+          "recorded_at": "2026-11-21T23:08:23.781361320Z",
+          "seal": {
+            "by": "server",
+            "mac": "9f777e4f79f9ed520dbc06b0e3b1fb1b867bb661d479edbaa3ccce39c83c608a"
+          }
         }
       ],
       "created_at": "2026-11-21T21:26:48.100711693Z",
-      "updated_at": "2026-11-21T21:31:19.208203040Z",
+      "updated_at": "2026-11-21T23:08:23.781361320Z",
       "seal": {
         "by": "server",
-        "mac": "2066ff03c17c7cd013cbd633ba75b2ad184ffeb7c23de4bd7657ac3dc00276f4"
+        "mac": "4d5a632770b2f860240c00108ff835d5fe800f86e111185a78b683d677b449b5"
       }
     },
     {
