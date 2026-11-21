@@ -2,7 +2,7 @@
 // offline copy and the remembered catalog first, even if the server cannot
 // be reached), and a local "Delete offline copies" that works with no
 // connection at all. Both delete through main.js (`ctx.signOut`, `ctx.forget`).
-import { h } from '/ui/js/core/dom.js';
+import { h, fill } from '/ui/js/core/dom.js';
 import { when } from '/ui/js/core/format.js';
 import { message } from '../parts.js';
 
@@ -18,9 +18,8 @@ function deleteOffline(view, ctx) {
 
 export async function render(view, ctx) {
     const session = ctx.state.session;
-    view.append(h('h1', {}, 'Account'));
     if (!session) {
-        view.append(message('Account details and sign-out need a connection.', null, 'account-offline'), deleteOffline(view, ctx));
+        view.append(h('h1', {}, 'Account'), message('Account details and sign-out need a connection.', null, 'account-offline'), deleteOffline(view, ctx));
         return;
     }
     const button = h('button', { type: 'button', id: 'sign-out' }, 'Sign out');
@@ -31,7 +30,9 @@ export async function render(view, ctx) {
         button.disabled = false;
         view.append(message('The server could not be reached to end the session. Offline copies are deleted.', null, 'sign-out-failed'));
     });
-    view.append(
+    // fill, not append: the email is null for an account without one.
+    fill(view,
+        h('h1', {}, 'Account'),
         h('p', {}, 'Signed in as ', h('strong', { id: 'account-user' }, session.user)),
         session.email ? h('p', { class: 'hint' }, session.email) : null,
         h('p', { class: 'hint' }, `This session ends by ${when(session.expires_at)}.`),
