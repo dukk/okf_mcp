@@ -104,8 +104,7 @@ cache-first. Catalog reads go through the service worker, which is scoped to
   concept you never opened says "Not available offline." and links there.
   When the worker answers Home from its copy of recent changes, the
   Activity timeline is drawn below the list as it was last read; "Show
-  older" and "Show more" then say they need a connection and keep what is
-  drawn.
+  older" then says it needs a connection and keeps what is drawn.
 - **One account.** Every answer an `/api/v1` route gives a signed-in caller
   carries `X-OKF-Account`, an opaque tag of the account it was made for ([operations](../operations.md#web-console)).
   The worker keeps one recorded owner for all copies. The first successful
