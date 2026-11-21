@@ -3407,6 +3407,48 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 > **Corrected (issue #813, 2026-11-20).** Task 6 does not import `user_sessions`; add
 > `use okf_mcp::store::user_sessions;` to `tests/ui_e2e/read.rs` with these journeys.
 
+> **Corrected (issue #818, 2026-11-21).** What shipped differs from the code below in these
+> ways; `tests/ui_e2e/read.rs` and `tests/ui_e2e/harness.rs` are the reference.
+> - The DevTools assumptions hold in the Playwright Chromium the harness finds: `Fetch` at the
+>   `Response` stage on the `service_worker` target pauses the worker's own fetches,
+>   `Target.setAutoAttach` from the browser session (filter `service_worker`,
+>   `waitForDebuggerOnStart`) pauses each new worker until `Runtime.runIfWaitingForDebugger`,
+>   and `Browser::new_page` opens the second tab in the default context, with the same cookies.
+> - `base64_encode` is not written: `Tamper` uses the `base64` crate (already a dependency).
+> - `DevTools::call` keeps the events that arrive while it waits (`pending`), and `event`
+>   looks there first, so a `Fetch.requestPaused` that lands during `release` is not lost.
+>   `DevTools::send` returns the command's id, and `try_call` sends through it.
+> - `Tamper` counts what it rewrote (`rewritten()`). The other-build journey waits, with a
+>   deadline, until it is at least 1, so the journey cannot pass without the tampering taking
+>   place. The account screen is no sign of that, because boot goes on after five seconds
+>   without the worker. It polls
+>   `!r || (!r.installing && !r.waiting)`, not `!!r && !r.installing`: a failed first install
+>   clears the registration, so the plan's condition never turns true. After the guard is
+>   dropped it also asserts that exactly one shell cache is installed.
+> - `in_second_tab`'s closure waits until the second tab reaches `/ui/` (the sign-in has set
+>   its cookie) before the tab closes.
+> - `#screen-concept` is an empty section while its reads are held, and an empty section is not
+>   "visible" to rustwright. The journeys that held a concept or links read wait for the held
+>   request instead (`wait_held`: `window.heldMatches >= 1`).
+> - `a_late_401_after_an_ordinary_refusal_still_signs_out` releases through
+>   `window.releaseHeld()`: `release_held` waits on a flag of the page the 401 leaves. It waits
+>   for the 404's Resource Timing entry (`wait_answered`) before revoking. Without that wait,
+>   the revocation could come first and make the 404 a 401, so the journey passed without
+>   `ctx.settle` on the links read. The lost-grant journey waits the same way for beta's links
+>   read before leaving.
+> - The outline journey marks `#body` before the outline click and waits for it to be redrawn
+>   (`wait_redrawn`). Before, it read the old whole body and passed with the section route
+>   asking for the short form.
+> - The revoked-session journeys check every account cache (`assert_no_offline_copies`) and
+>   the remembered catalog, not only `read-content`. The unlock journey checks that alpha's
+>   copy and the remembered catalog survive. The lost-grant and late-refusal journeys use the
+>   picker that Task 7 shipped (`#catalog-gone`).
+> - The outline journey uses `server_with_outline_limit(SHORT_OUTLINE)`. `publish` uses
+>   imports, and `main_files_without(path)` builds the file list.
+> - Issue #837 adds two boot journeys:
+>   `a_401_at_boot_deletes_the_copies_already_on_the_device` and
+>   `offline_at_boot_keeps_the_copies_and_says_the_account_needs_a_connection`.
+
 - [ ] **Step 1: Write the journeys**
 
 ```rust

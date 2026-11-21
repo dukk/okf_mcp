@@ -9,7 +9,9 @@ use chrono::Utc;
 use okf_mcp::config::Config;
 use okf_mcp::store::audit::AuditActor;
 use okf_mcp::store::ceiling::{self, NewEntitlement};
+use okf_mcp::store::import::{import, ImportOptions, ImportScope};
 use okf_mcp::store::keys::Access;
+use okf_mcp::store::user_sessions;
 use serde_json::json;
 
 use crate::harness::{drive, Ui};
@@ -476,16 +478,18 @@ async fn a_log_in_recent_changes_opens_as_a_document() {
 async fn home_and_search_without_a_connection() {
     let (server, _) = server().await;
     drive(server.base.clone(), move |ui| {
-        // Opening the search screen makes `main` the remembered catalog
-        // without reading (and so caching) anything.
+        // Opening search with no query makes `main` the remembered catalog
+        // and reads nothing. (The tree would read the root index.md, and a
+        // copy the worker kept would be listed as available offline.)
         ui.sign_in_reader("/s/main", EMAIL, PASSWORD);
         ui.wait_worker();
+        assert_eq!(ui.eval(REMEMBERED_CATALOG, json!(null)), json!("main"));
         // Home was never read online, so there are no recent changes to
         // show and nothing viewed: the list says so.
         let offline = ui.go_offline();
         ui.open_reader("/");
-        let shown = ui.wait_text("#reader", "Nothing yet");
-        assert!(shown.contains("Nothing yet"), "home shows: {shown}");
+        // Home draws the list once its read has failed: wait for it.
+        ui.wait_text("#reader", "Nothing yet");
         assert!(!ui.present("#recent"));
         // Search needs the server and says so, with a way to the list.
         ui.open_reader("/s/main?q=marmalade");
@@ -886,6 +890,649 @@ async fn with_cache_storage_denied_the_reader_still_reads_online() {
         // The delete above could not run while denied, so an empty cache
         // means the denied worker never kept a copy.
         assert_eq!(kept, json!([]), "the denied worker kept copies");
+    })
+    .await;
+}
+
+/// The account tag (`X-OKF-Account`) the server answers the page with now.
+const ACCOUNT_TAG: &str =
+    "async () => (await fetch('/api/v1/session')).headers.get('x-okf-account')";
+
+/// The URL paths `read-content` holds.
+const CONTENT_PATHS: &str = "async () => (await (await caches.open('read-content')).keys()) \
+    .map(k => new URL(k.url).pathname)";
+
+/// [`CONTENT_PATHS`], read in the page.
+fn content_paths(ui: &Ui) -> Vec<String> {
+    ui.eval(CONTENT_PATHS, json!(null))
+        .as_array()
+        .expect("paths")
+        .iter()
+        .filter_map(|path| path.as_str().map(str::to_string))
+        .collect()
+}
+
+/// True in the page once `read-content` holds nothing of `main`.
+const NO_MAIN_CONTENT: &str = "async () => (await (await caches.open('read-content')).keys()) \
+    .every(k => !new URL(k.url).pathname.includes('/catalogs/main/'))";
+
+/// Ends every session of the user `user_id` in the database, as an admin
+/// or a password reset would.
+fn revoke_sessions(runtime: &tokio::runtime::Handle, pool: &sqlx::PgPool, user_id: &str) {
+    runtime.block_on(async {
+        user_sessions::revoke_all(pool, user_id, None)
+            .await
+            .expect("revoke");
+    });
+}
+
+/// Takes the reader's grant on `main` away, and waits until the server
+/// applies it.
+fn lose_main(
+    runtime: &tokio::runtime::Handle,
+    pool: &sqlx::PgPool,
+    app: &std::sync::Arc<okf_mcp::app::App>,
+) {
+    runtime.block_on(crate::support::server::applied(app, async {
+        ceiling::unentitle(pool, "reader", "main", &AuditActor::cli(), Utc::now())
+            .await
+            .expect("unentitle");
+    }));
+}
+
+/// Imports `entries` over everything `catalog` holds and waits until the
+/// server applies it, as a publish would.
+async fn publish(
+    pool: &sqlx::PgPool,
+    app: &std::sync::Arc<okf_mcp::app::App>,
+    catalog: &str,
+    entries: okf_mcp::archive::Files,
+) {
+    let options = ImportOptions {
+        replace: true,
+        scope: ImportScope::Everything,
+        expect_generation: None,
+        expect_catalog_id: None,
+        actor: "editor",
+        audit: &AuditActor::cli(),
+        now: Utc::now(),
+    };
+    crate::support::server::applied(app, async {
+        import(pool, catalog, entries, &options)
+            .await
+            .expect("import");
+    })
+    .await;
+}
+
+/// Waits until the page has sent the read [`Ui::hold_next`] holds (the
+/// screen that asked for it is shown, though it draws nothing yet).
+fn wait_held(ui: &Ui) {
+    ui.poll_eval("() => window.heldMatches >= 1");
+}
+
+/// Waits until the page has had a whole answer to a request whose URL ends
+/// in `suffix` (its Resource Timing entry is recorded when it ends).
+fn wait_answered(ui: &Ui, suffix: &str) {
+    let answered = ui.eval(
+        "(suffix) => new Promise(resolve => { const deadline = Date.now() + 10000;          const check = () => {            const done = performance.getEntriesByType('resource').some(e => e.name.endsWith(suffix));            if (done || Date.now() > deadline) resolve(done); else setTimeout(check, 50); };          check(); })",
+        json!(suffix),
+    );
+    assert_eq!(answered, json!(true), "no answer to {suffix}");
+}
+
+/// [`main_files`] without `path`.
+fn main_files_without(path: &str) -> okf_mcp::archive::Files {
+    let mut entries = main_files();
+    assert!(entries.remove(path).is_some(), "no {path} in main");
+    entries
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn signing_in_as_someone_else_in_another_tab_never_mixes_their_copies() {
+    let (server, _) = server().await;
+    server
+        .user_with_password("second", "second@example.com", PASSWORD)
+        .await;
+    crate::support::server::applied(&server.app, async {
+        ceiling::entitle(
+            &server.db.pool,
+            &NewEntitlement {
+                user: "second",
+                catalog: "main",
+                access: Access::Read,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("entitle");
+    })
+    .await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        let first = ui.eval(ACCOUNT_TAG, json!(null));
+        assert!(content_paths(ui).iter().any(|path| path.ends_with("/alpha.md")));
+        // Another tab signs in as `second` (the same cookies); this reader
+        // tab stays open.
+        ui.in_second_tab(|tab| {
+            tab.goto(&format!("{}/signin", ui.base), rustwright::GotoOptions::default())
+                .expect("open the sign-in page");
+            let options = rustwright::ActionOptions::default;
+            tab.fill("#signin-email", "second@example.com", options())
+                .expect("email");
+            tab.fill("#signin-password", PASSWORD, options())
+                .expect("password");
+            tab.click("#signin-submit", options()).expect("submit");
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !tab.url().contains("/ui/") {
+                assert!(Instant::now() < deadline, "the second sign-in never finished");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let second = ui.eval(ACCOUNT_TAG, json!(null));
+        assert!(second.is_string() && first.is_string(), "{first} {second}");
+        assert_ne!(first, second, "the tag names the account");
+        // The open tab reads beta, now as `second`: the worker wipes the
+        // first account's copies before keeping this one.
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.wait_text("#concept-title", "Beta");
+        let paths = content_paths(ui);
+        assert!(paths.iter().all(|path| !path.ends_with("/alpha.md")), "{paths:?}");
+        assert!(paths.iter().any(|path| path.ends_with("/beta.md")), "{paths:?}");
+        let recorded = ui.eval(
+            "async () => (await (await (await caches.open('read-owner')).match('/read/__owner')).json()).tag",
+            json!(null),
+        );
+        assert_eq!(recorded, second);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_shell_from_another_build_is_not_installed() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        // As if a deploy landed between the worker's requests: every new
+        // worker gets a read.css that is not the one its listing names.
+        let tamper = ui.tamper_new_workers("*/read/read.css", "/* another build */");
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_text("#account-user", "reader");
+        // Boot goes on without the worker after five seconds, so the
+        // account screen says nothing about the install: wait for the
+        // install's read.css fetch itself, then for the install to settle.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while tamper.rewritten() == 0 {
+            assert!(Instant::now() < deadline, "no worker fetched read.css");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        ui.poll_eval(
+            "async () => { const r = await navigator.serviceWorker.getRegistration('/read/'); \
+             return !r || (!r.installing && !r.waiting); }",
+        );
+        let installed = ui.eval(
+            "async () => ({ controlled: navigator.serviceWorker.controller !== null, \
+             shells: (await caches.keys()).filter(n => n.startsWith('read-shell-')).length })",
+            json!(null),
+        );
+        assert_eq!(installed, json!({ "controlled": false, "shells": 0 }));
+        // The reader still works online.
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        // The next build's files are consistent again: the install goes through.
+        drop(tamper);
+        ui.reload_reader();
+        ui.wait_worker();
+        let shells = ui.eval(
+            "async () => (await caches.keys()).filter(n => n.startsWith('read-shell-')).length",
+            json!(null),
+        );
+        assert_eq!(shells, json!(1));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_revoked_session_wipes_the_caches_on_the_next_answer() {
+    let (server, user_id) = server().await;
+    let runtime = tokio::runtime::Handle::current();
+    let pool = server.db.pool.clone();
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/main/systems/alpha.md", EMAIL, PASSWORD);
+        ui.wait_text("#body", "marmalade");
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.wait_text("#concept-title", "Beta");
+        assert!(!content_paths(ui).is_empty());
+        revoke_sessions(&runtime, &pool, &user_id);
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_visible("#signin-email");
+        assert_no_offline_copies(ui);
+        assert_eq!(ui.eval(REMEMBERED_CATALOG, json!(null)), json!(null));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_removed_grant_evicts_that_catalog_only() {
+    let (server, _) = server().await;
+    let runtime = tokio::runtime::Handle::current();
+    let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/other/notes.md", EMAIL, PASSWORD);
+        ui.wait_text("#concept-title", "Notes");
+        ui.wait_worker();
+        // Again, now that the worker controls the page and caches reads.
+        ui.open_reader("/v/other/notes.md");
+        ui.wait_text("#concept-title", "Notes");
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        lose_main(&runtime, &pool, &app);
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.wait_visible("#catalog-gone");
+        let paths = content_paths(ui);
+        assert!(
+            paths.iter().all(|path| !path.contains("/catalogs/main/")),
+            "{paths:?}"
+        );
+        assert!(
+            paths.iter().any(|path| path.contains("/catalogs/other/")),
+            "{paths:?}"
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unlock_refusal_keeps_the_caches_and_points_at_the_console() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/main/systems/alpha.md", EMAIL, PASSWORD);
+        ui.wait_text("#body", "marmalade");
+        ui.wait_worker();
+        // Again, now that the worker controls the page and caches reads.
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        // The next concept read is refused as the server refuses a catalog
+        // that needs an unlock (the harness answers it in the page).
+        ui.fail_next_kind(
+            "GET",
+            "/concepts/systems/beta.md",
+            403,
+            "UnlockRequired",
+            "This catalog needs an unlock.",
+        );
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.wait_visible("#locked");
+        let href = ui.eval(
+            "() => document.querySelector('#unlock-link')?.getAttribute('href')",
+            json!(null),
+        );
+        assert_eq!(href, json!("/ui/"));
+        // Nothing is evicted, and the catalog is still the remembered one.
+        let paths = content_paths(ui);
+        assert!(
+            paths.iter().any(|path| path.ends_with("/alpha.md")),
+            "{paths:?}"
+        );
+        assert_eq!(ui.eval(REMEMBERED_CATALOG, json!(null)), json!("main"));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lost_grant_answered_after_navigating_away_still_evicts() {
+    let (server, _) = server().await;
+    let runtime = tokio::runtime::Handle::current();
+    let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/main/systems/alpha.md", EMAIL, PASSWORD);
+        ui.wait_text("#body", "marmalade");
+        ui.wait_worker();
+        // Again, now that the worker controls the page and caches reads.
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        // Beta's concept read waits in the page; its links read goes through.
+        ui.hold_next("GET", "/concepts/systems/beta.md");
+        ui.open_reader("/v/main/systems/beta.md");
+        wait_held(ui);
+        // The links read answered while the grant held: only the held read
+        // can be refused.
+        wait_answered(ui, "/links/systems/beta.md");
+        // Leave for a screen that reads nothing, then lose the grant.
+        ui.open_reader("/me");
+        ui.wait_visible("#account-user");
+        lose_main(&runtime, &pool, &app);
+        ui.release_held();
+        ui.poll_eval(NO_MAIN_CONTENT);
+        // The account screen stays: only the eviction happened.
+        assert!(ui.present("#account-user"));
+        assert_eq!(ui.eval("() => location.hash", json!(null)), json!("#/me"));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_late_refusal_from_home_evicts_the_catalog_it_asked_about() {
+    let (server, _) = server().await;
+    let runtime = tokio::runtime::Handle::current();
+    let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        ui.open_reader("/v/other/notes.md");
+        ui.wait_text("#concept-title", "Notes");
+        // Home for main, whose recent changes wait in the page.
+        ui.open_reader("/c");
+        ui.hold_next("GET", "/catalogs/main/recent-changes?limit=20");
+        ui.click("[data-catalog=main]");
+        ui.wait_visible("#screen-home");
+        wait_held(ui);
+        // Switch to other, then lose main, then let main's answer through.
+        ui.open_reader("/c");
+        ui.click("[data-catalog=other]");
+        ui.wait_visible("#recent");
+        lose_main(&runtime, &pool, &app);
+        ui.release_held();
+        ui.poll_eval(NO_MAIN_CONTENT);
+        let kept = ui.eval(
+            "async () => ({ other: (await (await caches.open('read-content')).keys()) \
+             .some(k => new URL(k.url).pathname.includes('/catalogs/other/')), \
+             chosen: localStorage.getItem('okf.read.catalog') })",
+            json!(null),
+        );
+        assert_eq!(kept, json!({ "other": true, "chosen": "other" }));
+        // Home for other still shows: the late refusal drew nothing.
+        assert!(ui.present("#recent"));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_401_signs_out_without_waiting_for_a_sibling_read() {
+    let (server, user_id) = server().await;
+    let runtime = tokio::runtime::Handle::current();
+    let pool = server.db.pool.clone();
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        revoke_sessions(&runtime, &pool, &user_id);
+        // Beta's links read waits in the page and is never released; its
+        // concept read answers 401 at once.
+        ui.hold_next("GET", "/links/systems/beta.md");
+        ui.open_reader("/v/main/systems/beta.md");
+        ui.wait_visible("#signin-email");
+        assert_no_offline_copies(ui);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_late_401_after_an_ordinary_refusal_still_signs_out() {
+    let (server, user_id) = server().await;
+    let runtime = tokio::runtime::Handle::current();
+    let pool = server.db.pool.clone();
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        // A concept that is not there (404 at once) whose links read waits.
+        ui.hold_next("GET", "/links/systems/missing.md");
+        ui.open_reader("/v/main/systems/missing.md");
+        wait_held(ui);
+        // The 404 has answered before the session ends, so the 401 is the
+        // second refusal, not the first.
+        wait_answered(ui, "/concepts/systems/missing.md");
+        revoke_sessions(&runtime, &pool, &user_id);
+        // `release_held` would wait on a flag of the page the 401 leaves.
+        ui.eval("() => window.releaseHeld()", json!(null));
+        ui.wait_visible("#signin-email");
+        assert_no_offline_copies(ui);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_slow_success_cannot_put_back_an_evicted_catalog() {
+    let (server, _) = server().await;
+    let runtime = tokio::runtime::Handle::current();
+    let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        // Beta's 200 is held in the worker after the server answered it,
+        // and the page learns when the worker has finished with it.
+        let mut paused = ui.pause_worker_responses("*/concepts/systems/beta.md");
+        ui.hold_answer_later("GET", "/concepts/systems/beta.md");
+        ui.open_reader("/v/main/systems/beta.md");
+        let request = paused.next_paused();
+        // The grant goes, and a tree read makes the page evict main.
+        lose_main(&runtime, &pool, &app);
+        ui.open_reader("/t/main");
+        ui.wait_visible("#catalog-gone");
+        ui.poll_eval(NO_MAIN_CONTENT);
+        // Now the old 200 reaches the worker.
+        paused.release(&request);
+        ui.poll_eval("() => window.heldFetched === true");
+        let paths = content_paths(ui);
+        assert!(
+            paths.iter().all(|path| !path.contains("/catalogs/main/")),
+            "{paths:?}"
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_folder_whose_index_is_deleted_meanwhile_still_lists_its_concepts() {
+    let (server, _) = server().await;
+    let runtime = tokio::runtime::Handle::current();
+    let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        ui.open_reader("/t/main/systems");
+        ui.wait_text("#body", "Systems");
+        let paths = content_paths(ui);
+        assert!(
+            paths
+                .iter()
+                .any(|path| path.ends_with("/documents/systems/index.md")),
+            "{paths:?}"
+        );
+        // Again: the tree is read, the index read waits, the index goes.
+        ui.hold_next("GET", "/documents/systems/index.md");
+        ui.open_reader("/t/main");
+        ui.wait_visible("#folders");
+        ui.open_reader("/t/main/systems");
+        ui.wait_visible("#screen-tree");
+        // The index read is out (held), so the old tree asked for it.
+        wait_held(ui);
+        runtime.block_on(publish(
+            &pool,
+            &app,
+            "main",
+            main_files_without("systems/index.md"),
+        ));
+        ui.release_held();
+        ui.wait_text("#concepts", "Alpha");
+        assert!(!ui.present("#body"), "no index body");
+        assert!(
+            !ui.present("#concept-gone"),
+            "not treated as a missing concept"
+        );
+        let paths = content_paths(ui);
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.ends_with("/documents/systems/index.md")),
+            "{paths:?}"
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_outline_link_in_a_long_concept_keeps_the_whole_body() {
+    let (server, _) = server_with_outline_limit(SHORT_OUTLINE).await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/main/systems/beta.md", EMAIL, PASSWORD);
+        ui.click("#show-full");
+        ui.wait_text("#body", "Two settings");
+        ui.click("#outline summary");
+        ui.mark("#body");
+        ui.click("#outline a");
+        // The section route draws afresh, asking for the whole body again.
+        ui.poll_eval("() => location.hash.endsWith('?s=settings')");
+        ui.wait_redrawn("#body");
+        ui.wait_text("#body", "Two settings");
+        assert!(!ui.present("#show-full") && !ui.present("#shortened"));
+        ui.poll_eval(
+            "() => { const heading = document.querySelector('[data-slug=\"settings\"]'); \
+             return !!heading && heading.getBoundingClientRect().top < innerHeight; }",
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_slow_success_cannot_put_back_a_deleted_concept() {
+    let (server, _) = server().await;
+    let runtime = tokio::runtime::Handle::current();
+    let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        // Alpha's 200 waits in the worker; the page learns when it arrives.
+        let mut paused = ui.pause_worker_responses("*/concepts/systems/alpha.md*");
+        ui.hold_answer_later("GET", "/concepts/systems/alpha.md");
+        ui.open_reader("/v/main/systems/alpha.md");
+        let old = paused.next_paused();
+        runtime.block_on(publish(
+            &pool,
+            &app,
+            "main",
+            main_files_without("systems/alpha.md"),
+        ));
+        // A second read of alpha gets the 404, and the page evicts alpha.
+        ui.open_reader("/me");
+        ui.wait_visible("#account-user");
+        ui.open_reader("/v/main/systems/alpha.md");
+        let fresh = paused.next_paused();
+        paused.release(&fresh);
+        ui.wait_visible("#concept-gone");
+        // Now the old 200 reaches the worker.
+        paused.release(&old);
+        ui.poll_eval("() => window.heldFetched === true");
+        let paths = content_paths(ui);
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.ends_with("/concepts/systems/alpha.md")),
+            "{paths:?}"
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_slow_success_cannot_put_back_a_deleted_folder_index() {
+    let (server, _) = server().await;
+    let runtime = tokio::runtime::Handle::current();
+    let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/me", EMAIL, PASSWORD);
+        ui.wait_worker();
+        let mut paused = ui.pause_worker_responses("*/documents/systems/index.md*");
+        ui.hold_answer_later("GET", "/documents/systems/index.md");
+        ui.open_reader("/t/main/systems");
+        let old = paused.next_paused();
+        runtime.block_on(publish(
+            &pool,
+            &app,
+            "main",
+            main_files_without("systems/index.md"),
+        ));
+        // A fresh tree no longer lists the index, so the folder screen would
+        // not read it again: make the eviction tree.js makes on its 404
+        // (journey `a_folder_whose_index_is_deleted_meanwhile...`) directly.
+        ui.eval(
+            "async () => { await (await import('/read/js/cache.js')) \
+             .evictDocument('main', 'documents', '/systems/index.md'); return true; }",
+            json!(null),
+        );
+        paused.release(&old);
+        ui.poll_eval("() => window.heldFetched === true");
+        let paths = content_paths(ui);
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.ends_with("/documents/systems/index.md")),
+            "{paths:?}"
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_401_at_boot_deletes_the_copies_already_on_the_device() {
+    let (server, user_id) = server().await;
+    let runtime = tokio::runtime::Handle::current();
+    let pool = server.db.pool.clone();
+    drive(server.base.clone(), move |ui| {
+        signed_in_with_a_copy(ui);
+        // Opening a catalog's tree remembers it.
+        ui.eval("() => { location.hash = '#/t/main'; }", json!(null));
+        ui.wait_visible("#screen-tree");
+        assert_eq!(ui.eval(REMEMBERED_CATALOG, json!(null)), json!("main"));
+        // The session ends elsewhere; the next start of the reader is
+        // refused at boot, before any screen reads.
+        revoke_sessions(&runtime, &pool, &user_id);
+        ui.page
+            .reload(rustwright::GotoOptions::default())
+            .expect("reload");
+        ui.wait_visible("#signin-email");
+        assert!(ui.eval("() => location.pathname", json!(null)) == json!("/signin"));
+        assert_no_offline_copies(ui);
+        assert_eq!(ui.eval(REMEMBERED_CATALOG, json!(null)), json!(null));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn offline_at_boot_keeps_the_copies_and_says_the_account_needs_a_connection() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        signed_in_with_a_copy(ui);
+        ui.eval("() => { location.hash = '#/t/main'; }", json!(null));
+        ui.wait_visible("#screen-tree");
+        assert_eq!(ui.eval(REMEMBERED_CATALOG, json!(null)), json!("main"));
+        let offline = ui.go_offline();
+        ui.reload_reader();
+        ui.eval("() => { location.hash = '#/me'; }", json!(null));
+        ui.wait_visible("#account-offline");
+        let counts = ui.eval(CACHE_COUNTS, json!(null));
+        for name in ["read-content", "read-owner"] {
+            assert!(
+                counts.get(name).is_some_and(|count| count != 0),
+                "{name} is gone after an offline boot: {counts}"
+            );
+        }
+        assert!(content_paths(ui)
+            .iter()
+            .any(|path| path.ends_with("/alpha.md")));
+        assert_eq!(ui.eval(REMEMBERED_CATALOG, json!(null)), json!("main"));
+        drop(offline);
     })
     .await;
 }
