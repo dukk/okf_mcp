@@ -176,10 +176,13 @@ impl Ui {
         }
     }
 
-    /// Opens the reader at `#<route>` signed out, signs in on the page it
-    /// sends the browser to, and waits until the reader is back and shown.
+    /// Opens the reader at `#<route>` signed out, follows the signed-out
+    /// screen's "Sign in" to the sign-in page, signs in there, and waits
+    /// until the reader is back and shown.
     pub fn sign_in_reader(&self, route: &str, email: &str, password: &str) {
         self.open_reader(route);
+        self.wait_visible("#signed-out-signin");
+        self.click("#signed-out-signin");
         self.wait_visible("#signin-email");
         self.fill("#signin-email", email);
         self.fill("#signin-password", password);

@@ -199,6 +199,76 @@ fn assert_no_offline_copies(ui: &Ui) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_signed_out_reader_stays_on_the_reader_and_can_be_installed() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.open_reader("/");
+        ui.wait_visible("#signed-out-signin");
+        // No navigation away: still the reader, with the sign-in button.
+        assert_eq!(
+            ui.eval("() => location.pathname", json!(null)),
+            json!("/read/")
+        );
+        assert_eq!(
+            ui.eval(
+                "() => document.querySelector('link[rel=manifest]')?.getAttribute('href')",
+                json!(null)
+            ),
+            json!("/read/manifest.webmanifest")
+        );
+        // The manifest and the worker are what make Chrome offer to install.
+        ui.wait_worker();
+        let manifest = ui.eval(
+            "async () => (await fetch('/read/manifest.webmanifest')).json()",
+            json!(null),
+        );
+        assert_eq!(manifest["name"], json!("okf Reader"));
+        assert_eq!(manifest["short_name"], json!("okf"));
+        assert_eq!(
+            ui.eval("() => document.title", json!(null)),
+            json!("okf Reader")
+        );
+        // The chrome of a signed-in reader is not offered.
+        ui.wait_hidden("#top");
+        ui.wait_hidden(".tabs");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sign_in_from_the_signed_out_screen_returns_to_the_same_route() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.open_reader("/t/main");
+        ui.wait_visible("#signed-out-signin");
+        ui.click("#signed-out-signin");
+        ui.wait_visible("#signin-email");
+        assert_eq!(
+            ui.eval("() => location.pathname", json!(null)),
+            json!("/signin")
+        );
+        let search = ui.eval(
+            "() => new URLSearchParams(location.search).get('return_to')",
+            json!(null),
+        );
+        assert_eq!(search, json!("/read/#/t/main"));
+        ui.fill("#signin-email", EMAIL);
+        ui.fill("#signin-password", PASSWORD);
+        ui.click("#signin-submit");
+        ui.wait_visible("#screen-tree");
+        assert_eq!(
+            ui.eval("() => location.pathname", json!(null)),
+            json!("/read/")
+        );
+        assert_eq!(
+            ui.eval("() => location.hash", json!(null)),
+            json!("#/t/main")
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn signing_in_returns_to_the_route_and_signing_out_wipes_the_caches() {
     let (server, _) = server().await;
     drive(server.base.clone(), move |ui| {
@@ -1108,7 +1178,7 @@ async fn show_older_with_a_401_signs_out() {
         many_at_home(ui);
         revoke_sessions(&runtime, &pool, &user_id);
         ui.click("#recent-older");
-        ui.wait_visible("#signin-email");
+        ui.wait_visible("#signed-out-signin");
         assert_no_offline_copies(ui);
     })
     .await;
@@ -1952,7 +2022,7 @@ async fn a_revoked_session_wipes_the_caches_on_the_next_answer() {
         assert!(!content_paths(ui).is_empty());
         revoke_sessions(&runtime, &pool, &user_id);
         ui.open_reader("/v/main/systems/alpha.md");
-        ui.wait_visible("#signin-email");
+        ui.wait_visible("#signed-out-signin");
         assert_no_offline_copies(ui);
         assert_eq!(ui.eval(REMEMBERED_CATALOG, json!(null)), json!(null));
     })
@@ -2111,7 +2181,7 @@ async fn a_401_signs_out_without_waiting_for_a_sibling_read() {
         // concept read answers 401 at once.
         ui.hold_next("GET", "/links/systems/beta.md");
         ui.open_reader("/v/main/systems/beta.md");
-        ui.wait_visible("#signin-email");
+        ui.wait_visible("#signed-out-signin");
         assert_no_offline_copies(ui);
     })
     .await;
@@ -2137,7 +2207,7 @@ async fn a_late_401_after_an_ordinary_refusal_still_signs_out() {
         revoke_sessions(&runtime, &pool, &user_id);
         // `release_held` would wait on a flag of the page the 401 leaves.
         ui.eval("() => window.releaseHeld()", json!(null));
-        ui.wait_visible("#signin-email");
+        ui.wait_visible("#signed-out-signin");
         assert_no_offline_copies(ui);
     })
     .await;
@@ -2337,8 +2407,8 @@ async fn a_401_at_boot_deletes_the_copies_already_on_the_device() {
         ui.page
             .reload(rustwright::GotoOptions::default())
             .expect("reload");
-        ui.wait_visible("#signin-email");
-        assert!(ui.eval("() => location.pathname", json!(null)) == json!("/signin"));
+        ui.wait_visible("#signed-out-signin");
+        assert!(ui.eval("() => location.pathname", json!(null)) == json!("/read/"));
         assert_no_offline_copies(ui);
         assert_eq!(ui.eval(REMEMBERED_CATALOG, json!(null)), json!(null));
     })

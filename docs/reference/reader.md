@@ -18,9 +18,21 @@ address.
 - **Android:** open the same address in Chrome and accept the install prompt,
   or install it from Chrome's menu.
 
-Visiting `/read/` while signed out goes to the sign-in page and comes back to
-the same screen afterwards (`return_to`, which accepts same-origin `/read/`
-paths).
+Visiting `/read/` while signed out stays on the reader: it shows its own
+"You are signed out" screen with a **Sign in** button. The page keeps its
+manifest and worker there, so Chrome offers to install it before anyone has
+signed in. The button goes to the sign-in page and comes back to the same
+screen afterwards (`return_to`, which accepts same-origin `/read/` paths).
+
+### Name
+
+The installed app is named after the server's `product_name` setting
+([Settings](../operations.md#settings); the config file's `[auth] product_name`
+until it is set there): the manifest's `name` is "Acme Notes Reader", its
+`short_name` (the home-screen label) is "Acme Notes", and the tab title and the
+iOS home-screen title follow the same rule. `/read/` and
+`/read/manifest.webmanifest` are rendered per request from the current setting
+(escaped for HTML and JSON), so a rename needs no restart.
 
 ## Screens and routes
 
@@ -123,7 +135,7 @@ cache-first. Catalog reads go through the service worker, which is scoped to
 |---|---|
 | You sign out | Deletes every offline copy and the remembered catalog first, then ends the session, and deletes them a second time once the server has confirmed it (a read admitted while the request was pending cannot leave a copy behind). If the server cannot be reached, the session is kept, the copies are already gone, and the screen says so. |
 | **Delete offline copies** | Deletes every copy and the remembered catalog. It works with no connection. |
-| A `401` anywhere (session expired, revoked, account removed) | The same wipe, then sign-in. It acts at once, even when the screen that asked has been left or a sibling read is still pending. |
+| A `401` anywhere (session expired, revoked, account removed), at boot or later | The same wipe, then the signed-out screen with its **Sign in** button (the page does not navigate away). It acts at once, even when the screen that asked has been left or a sibling read is still pending. |
 | You lose your grant to a catalog (`403 Forbidden`, or `404` for a catalog not selected or unknown) | Deletes that catalog's copies only and forgets it if it is the remembered one. If the screen that asked is still showing, it opens the picker with a notice. |
 | A concept or document is deleted (`404 NotFound`) | Deletes that document's copies (short and full) and says "This concept no longer exists." with a link to its folder. |
 | The catalog needs an unlock, or its team is suspended (`403 UnlockRequired`, `Suspended`) | Keeps the copies. The screen says why, and for an unlock links to the console. |
@@ -146,9 +158,11 @@ account screen then says it needs a connection.
 ## Updates and the verified install
 
 The worker's version is a hash of every file it precaches: the reader's own
-and the console's Pico CSS, `dom.js` and `format.js`. Any change to them
-changes `/read/sw.js` (served with `Cache-Control: no-cache`), and installed
-apps update on their next launch.
+and the console's Pico CSS, `dom.js` and `format.js`, and the product name
+(which `index.html` and the manifest carry). Any change to them changes
+`/read/sw.js` (served with `Cache-Control: no-cache`), and installed apps
+update on their next launch; a rename made in Settings reaches them the same
+way. The listing is built per request, so it always names the current product.
 
 `GET /read/shell.json` lists the version and each file with the SHA-256 of
 the bytes this build serves:

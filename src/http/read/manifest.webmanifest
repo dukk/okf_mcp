@@ -1,6 +1,6 @@
 {
-    "name": "Catalog Reader",
-    "short_name": "Reader",
+    "name": "__PRODUCT__ Reader",
+    "short_name": "__PRODUCT__",
     "description": "Read your knowledge catalog on the go.",
     "start_url": "/read/",
     "scope": "/read/",

@@ -28,7 +28,7 @@ export function worst(errors) {
 // `route` is the screen's route with its catalog fixed when it was shown,
 // so a refusal that answers after the user moved on acts on what was asked
 // about. `live()` says whether that screen still shows. `actions`:
-//   signIn()                   wipe and leave for sign-in
+//   signIn()                   wipe, then show the signed-out screen
 //   evictCatalog(catalog)      delete a catalog's cached reads
 //   evictDocument(catalog, kind, path)  delete one document's copies
 //   current()                  the remembered catalog now
