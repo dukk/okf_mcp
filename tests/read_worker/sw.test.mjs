@@ -374,6 +374,39 @@ test('a passed-through answer for a new account takes over and wipes before the 
     await assert.rejects(worker.get('/api/v1/catalogs'));
 });
 
+test('a passed-through answer for an owner still taking over waits for the wipe', async () => {
+    const storage = new Storage();
+    // Once `holding`, every cache delete waits until the test releases it.
+    let holding = false;
+    let release;
+    const released = new Promise(resolve => { release = resolve; });
+    const api = storage.api.bind(storage);
+    storage.api = () => {
+        const caches = api();
+        const remove = caches.delete;
+        return { ...caches, delete: async name => { if (holding) await released; return remove(name); } };
+    };
+    const worker = startWorker(storage);
+    await readAll(worker, [concept('alpha')], 'A');
+    holding = true;
+    const first = passedThrough(worker, SESSION);
+    const second = passedThrough(worker, '/api/v1/search');
+    await worker.waitHeld(2);
+    worker.answer(SESSION, 'B');
+    const turns = async () => { for (let turn = 0; turn < 20; turn += 1) await new Promise(resolve => setImmediate(resolve)); };
+    // B's takeover has named the new owner and is deleting.
+    await turns();
+    worker.answer('/api/v1/search', 'B');
+    let answered = false;
+    second.then(() => { answered = true; });
+    await turns();
+    assert.equal(answered, false, 'not before the old copies are deleted');
+    release();
+    await Promise.all([first, second]);
+    assert.deepEqual(storage.paths('read-content'), []);
+    assert.equal(await storage.ownerTag(), 'B');
+});
+
 test('a late passed-through answer for the old account after a takeover changes nothing', async () => {
     const storage = new Storage();
     const worker = startWorker(storage);

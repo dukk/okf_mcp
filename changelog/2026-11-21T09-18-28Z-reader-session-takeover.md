@@ -13,16 +13,20 @@ Issue #858, found in review of the M19 milestone PR.
   the network's answer unchanged and the body is never stored, but a `2xx`'s
   tag goes through `admit`, under the same ordering rules (no takeover by an
   answer to a request that started before the current owner took over, or
-  before a wipe). A takeover finishes before the page gets the answer, so the
-  page's own "Available offline" list (`offlineDocuments`, which reads Cache
-  Storage directly) never lists the old account's copies after it; the
-  worker's offline answers already wait for it in the owner queue. An answer
-  for the current owner, without a tag, or not a `2xx` changes nothing and is
-  not held.
+  before a wipe). A tagged answer waits in the owner queue, so the page gets
+  it only once any takeover it or an earlier answer started has deleted the
+  old copies: the page's own "Available offline" list (`offlineDocuments`,
+  which reads Cache Storage directly) never lists the old account's copies
+  after it, and the worker's offline answers already wait in the same queue.
+  This holds for an answer for the new owner too, which may arrive while
+  another answer's takeover is still deleting. An answer for the current
+  owner, without a tag, or not a `2xx` changes nothing; one without a tag or
+  not a `2xx` is not held at all.
 
 ## Tests
 - `tests/read_worker/sw.test.mjs`: a passed-through answer for a new account
-  takes over and wipes before the page has it; a late one for the old account,
+  takes over and wipes before the page has it; one for an owner whose
+  takeover is still deleting waits for the wipe; a late one for the old account,
   or one that started before a wipe, changes nothing; one without a tag, for
   the current owner, or not a `2xx` changes nothing.
 - `tests/ui_e2e/read.rs`: a new journey caches as the first account, signs in

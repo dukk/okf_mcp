@@ -178,18 +178,19 @@ async function networkFirst(request, cacheName, capped) {
 // old copies and takes over, so a session check alone hands the device to a
 // new account. The page gets the answer once that decision is made: when
 // boot's session check resolves, the old owner's copies are gone for the
-// page's own reads of Cache Storage too (cache.js, `offlineDocuments`). Only
-// a takeover waits, once per account change; an answer for the current owner
-// or without a tag goes straight back and changes nothing. The worker's own
-// offline reads could not overtake it anyway: `ownedCopy` decides in turn
-// (`currentOwner`), after every ownership decision queued before it.
+// page's own reads of Cache Storage too (cache.js, `offlineDocuments`). The
+// decision waits in turn even for the current owner's answer: `takeOver`
+// names the new owner before it deletes, so an answer for that owner that
+// skipped the queue could reach the page mid-wipe. Only a takeover takes
+// long, once per account change; an answer without a tag, or not a 2xx,
+// goes straight back. Either way nothing changes unless the tag is new. The
+// worker's own offline reads cannot overtake a takeover either: `ownedCopy`
+// decides in turn (`currentOwner`), after every decision queued before it.
 async function passThrough(request) {
     const startedAt = now();
     const response = await fetch(request);
     const tag = response.ok ? response.headers.get('X-OKF-Account') : null;
-    // `owner` is checked outside the queue: the same tag means `admit` could
-    // only keep it, or refuse an answer older than a takeover queued ahead.
-    if (tag && owner?.tag !== tag) await admit(tag, startedAt);
+    if (tag) await admit(tag, startedAt);
     return response;
 }
 
