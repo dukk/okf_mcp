@@ -73,11 +73,22 @@ pub const DEFAULT_USER_CACHE_ENTRIES: u64 = 100_000;
 /// served before it is read again.
 pub const DEFAULT_CREDENTIAL_TTL: Duration = Duration::from_secs(10);
 
-/// The default lifetime of an OAuth access token.
-pub const DEFAULT_ACCESS_TOKEN_TTL: Duration = Duration::from_secs(60 * 60);
+/// The default lifetime of an OAuth access token. Access tokens stay
+/// revocable at once (the access-token cache and its revocation counter),
+/// so a long one costs little; each refresh is a chance for a client's
+/// processes to race (`oauth.refresh_reuse_grace`).
+pub const DEFAULT_ACCESS_TOKEN_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// The default lifetime of an OAuth refresh token (restarted by each rotation).
 pub const DEFAULT_REFRESH_TOKEN_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
+/// The default window in which a used refresh token rotates again instead of
+/// revoking its family.
+pub const DEFAULT_REFRESH_REUSE_GRACE: Duration = Duration::from_secs(60);
+
+/// The longest `oauth.refresh_reuse_grace` may be: past this, a copied
+/// refresh token used soon after the real one would go unnoticed for too long.
+pub const MAX_REFRESH_REUSE_GRACE: Duration = Duration::from_secs(10 * 60);
 
 /// The default idle period after which housekeeping revokes an OAuth grant
 /// that holds no live token.
@@ -115,6 +126,12 @@ pub struct OAuthConfig {
     /// each rotation issues a new one, so the lifetime slides.
     #[serde(with = "humantime_serde")]
     pub refresh_token_ttl: Duration,
+    /// How long after its first use a refresh token presented again rotates
+    /// again instead of revoking its family (`"60s"`; `"0s"` turns it off).
+    /// Processes of one client that share a credential refresh at once;
+    /// only one can win, and the rest would otherwise sign it out.
+    #[serde(with = "humantime_serde")]
+    pub refresh_reuse_grace: Duration,
     /// How long an OAuth grant may go without a token being issued for it
     /// before housekeeping revokes it (`"30d"`). A grant that still holds
     /// a live token is never revoked, whatever this says.
@@ -142,6 +159,7 @@ impl Default for OAuthConfig {
         Self {
             access_token_ttl: DEFAULT_ACCESS_TOKEN_TTL,
             refresh_token_ttl: DEFAULT_REFRESH_TOKEN_TTL,
+            refresh_reuse_grace: DEFAULT_REFRESH_REUSE_GRACE,
             idle_grant_revoke_after: DEFAULT_IDLE_GRANT_REVOKE_AFTER,
             code_max_expiry: DEFAULT_CODE_MAX_EXPIRY,
             dcr_enabled: true,
@@ -1325,6 +1343,9 @@ impl Config {
         ] {
             check_auth_duration(name, value)?;
         }
+        if self.oauth.refresh_reuse_grace > MAX_REFRESH_REUSE_GRACE {
+            return Err("oauth.refresh_reuse_grace must be at most 10 minutes".to_string());
+        }
         self.auth.validate()?;
         self.mail.validate()?;
         self.telemetry.validate()?;
@@ -1838,11 +1859,15 @@ mod tests {
         let config = Config::default();
 
         assert_eq!(config.public_url, None);
-        assert_eq!(config.oauth.access_token_ttl, Duration::from_secs(60 * 60));
+        assert_eq!(
+            config.oauth.access_token_ttl,
+            Duration::from_secs(24 * 60 * 60)
+        );
         assert_eq!(
             config.oauth.refresh_token_ttl,
             Duration::from_secs(30 * 24 * 60 * 60)
         );
+        assert_eq!(config.oauth.refresh_reuse_grace, Duration::from_secs(60));
         assert_eq!(
             config.oauth.idle_grant_revoke_after,
             Duration::from_secs(30 * 24 * 60 * 60)
@@ -1863,6 +1888,7 @@ mod tests {
                     [oauth]\n\
                     access_token_ttl = \"15m\"\n\
                     refresh_token_ttl = \"7d\"\n\
+                    refresh_reuse_grace = \"5s\"\n\
                     idle_grant_revoke_after = \"60d\"\n\
                     code_max_expiry = \"2d\"\n\
                     dcr_enabled = false\n\
@@ -1879,6 +1905,7 @@ mod tests {
             config.oauth.refresh_token_ttl,
             Duration::from_secs(7 * 24 * 60 * 60)
         );
+        assert_eq!(config.oauth.refresh_reuse_grace, Duration::from_secs(5));
         assert_eq!(
             config.oauth.idle_grant_revoke_after,
             Duration::from_secs(60 * 24 * 60 * 60)
@@ -1964,6 +1991,22 @@ mod tests {
 
             assert!(error.contains("more than zero"), "{error}");
         }
+    }
+
+    /// Issue #884: zero turns the reuse grace window off; past ten minutes
+    /// a copied refresh token would go unnoticed too long.
+    #[test]
+    fn the_refresh_reuse_grace_may_be_zero_and_at_most_ten_minutes() {
+        let with = |grace: Duration| {
+            let mut config = Config::default();
+            config.oauth.refresh_reuse_grace = grace;
+            config.validate()
+        };
+
+        assert_eq!(with(Duration::ZERO), Ok(()));
+        assert_eq!(with(MAX_REFRESH_REUSE_GRACE), Ok(()));
+        let error = with(MAX_REFRESH_REUSE_GRACE + Duration::from_secs(1)).expect_err("refused");
+        assert!(error.contains("oauth.refresh_reuse_grace"), "{error}");
     }
 
     #[test]

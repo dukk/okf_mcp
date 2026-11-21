@@ -121,8 +121,9 @@ unknown keys are ignored, so one file serves every version.
 | `database_max_connections` | `16` | The most database connections one process opens (`serve` and every subcommand). Writers queued on one changeset wait without one; the writer whose turn it is, a publish, and a read that builds an overlay each hold one |
 | `overlay_cache_bytes` | `"256MiB"` | The most memory the changeset overlays (an open changeset's view of its catalog) may take, estimated like a catalog snapshot (a fixed cost per file plus a multiple of the stored size, over the overlay's whole workspace, so many empty files count). Past it, an overlay is dropped and rebuilt on its next read; one larger than the whole budget is served but not kept. An overlay unused for `session_idle_timeout` is dropped too. `overlay_cache_size` is deprecated and ignored (a warning at start-up) |
 | `public_url` | none | The server's public origin, such as `"https://okf-mcp.example.com"` (no path, query or user info; a trailing `/` is dropped). Setting it turns on OAuth ("OAuth connectors") and console sign-in by account ("Signing in and self-service"); without it the OAuth and sign-in routes are 404. It must be `https`, except on a loopback host (such as `localhost`, `127.0.0.1` or `::1`) for local testing, and its host must be in `allowed_hosts` |
-| `oauth.access_token_ttl` | `"1h"` | How long an OAuth access token works |
+| `oauth.access_token_ttl` | `"24h"` | How long an OAuth access token works. A revoked one stops working at once whatever its lifetime, so the long default costs little; each refresh is a chance for a client's processes to race (`oauth.refresh_reuse_grace`) |
 | `oauth.refresh_token_ttl` | `"30d"` | How long a refresh token works. Each refresh issues a new one with a fresh lifetime, so a connection used within this stays signed in |
+| `oauth.refresh_reuse_grace` | `"60s"` | How long after its first use a refresh token presented again by the same client is rotated again instead of ending the connection ([Concurrent refreshes](#concurrent-refreshes)). `"0s"` turns it off; at most 10 minutes |
 | `oauth.idle_grant_revoke_after` | `"30d"` | The hourly `prune_oauth` housekeeping job revokes an OAuth grant that has had no token issued for this long and holds no live token ([Idle grants](#idle-grants)). At most 10 years; zero is refused |
 | `oauth.code_max_expiry` | `"7d"` | The longest expiry a sign-in code may be given (`oauth code create --expires`, the console's expiry) |
 | `oauth.dcr_enabled` | `true` | Accept dynamic client registration (RFC 7591) at `/oauth/register`. Clients that publish a Client ID Metadata Document work either way |
@@ -240,8 +241,9 @@ overlay_cache_bytes = "256MiB"
 public_url = "https://okf-mcp.example.com"   # turns on OAuth; see "OAuth connectors"
 
 [oauth]
-access_token_ttl = "1h"
+access_token_ttl = "24h"
 refresh_token_ttl = "30d"
+refresh_reuse_grace = "60s"
 idle_grant_revoke_after = "30d"
 code_max_expiry = "7d"
 dcr_enabled = true
@@ -1372,7 +1374,7 @@ on its own task), so find a call by its tool span, not by the request's trace.
 | `okf.clock.check` | `okf.outcome`, `okf.clock.offset` (seconds) |
 | `okf.archive.export` and `okf.archive.import` | `okf.catalog` (only for a catalog that exists), `okf.archive.size` (bytes, on success), `okf.outcome` |
 | `okf.mail.job` | `okf.mail.template`, `okf.mail.provider`, `okf.outcome`. Never the address |
-| `okf.oauth.token` | `okf.oauth.grant` |
+| `okf.oauth.token` | `okf.grant` (`authorization_code` or `refresh_token`), `outcome` (`ok` or `failed`), `okf.error` (the RFC 6749 error code, on failure), `okf.refresh` for a refresh (`rotated`, `grace`, `reused` or `unknown`; [Concurrent refreshes](#concurrent-refreshes)). No key holds `auth` or `token`, which trace backends' default scrubbers hide. Never a code, token or client id |
 | Redis calls: `connect` and `subscribe` (at `info`), then `publish`, `admits`, `bind`, `release`, `load_state`, `store_state`, `delete_state`, `run_counter`, the rate limits' `take` (operation `limit`) and the stored-state operations (at `debug`, off by default) | `db.system.name` (`redis`), `db.operation.name` (the same set as `okf_redis_errors_total`'s `operation`, except `decode`, which is a metric label only). Never a key name, a session or flow id, a value or the URL |
 | Everything else (store, handlers) | Function spans at `debug` and `trace`, off by default; they carry safe ids only |
 
@@ -4221,6 +4223,25 @@ The client renews its access itself: access tokens last
 `oauth.refresh_token_ttl` from its last use. A connection used at least that
 often stays connected.
 
+#### Concurrent refreshes
+
+Each refresh token can be used once: a refresh issues a new pair, and a used
+token presented again is taken for a copied one, which ends the connection
+(every token of the sign-in is revoked). A client that runs several
+processes on one stored credential, such as Claude Code with parallel
+sessions, sends the same refresh token from each process when the access
+token expires, and only one can win. Within `oauth.refresh_reuse_grace` of
+a token's first use (60 seconds by default), a second use by the same
+client is rotated again instead: each process gets a pair of its own, and
+the connection stays. The window starts at the first use and does not
+slide. It never revives a revoked connection, and another client presenting
+the token is refused as before. Past the window, a reuse ends the
+connection as before.
+
+The `okf.oauth.token` span records each refresh's `okf.refresh`: `rotated`,
+`grace` (rotated again within the window), `reused` (the connection ended)
+or `unknown`, and `okf.error` on failure.
+
 #### Idle grants
 
 A grant's **last activity** is when its newest token was issued: the
@@ -4922,6 +4943,6 @@ curl -sf -H "Authorization: Bearer $OKF_MCP_KEY" -o notes.tar.gz \
 | The consent page says the redirect URI is not one the client registered | The client sent a `redirect_uri` that is not, character for character, one of those it declared. Fix the client's registration or metadata document |
 | The consent page refuses a sign-in code | The code is mistyped, expired, already redeemed or revoked (the page does not say which, on purpose). `okf-mcp oauth code list` shows its state; mint a new one |
 | The consent page says "This sign-in request has expired or is not valid." or "Too many wrong sign-in codes." | The sign-in took longer than 10 minutes, the server restarted, or a code was refused five times. Start the connection again in the client |
-| An OAuth client was connected but now gets 401 and asks to sign in | Its grant was revoked (by an operator, or by the housekeeping job once idle: the audit actor is then `system:idle-grant-revocation`), it was unused for longer than `oauth.refresh_token_ttl`, the client revoked its refresh token, or a used refresh token was presented again (a sign of a copied token), which ends the connection's tokens. Mint a new code and reconnect |
+| An OAuth client was connected but now gets 401 and asks to sign in | Its grant was revoked (by an operator, or by the housekeeping job once idle: the audit actor is then `system:idle-grant-revocation`), it was unused for longer than `oauth.refresh_token_ttl`, the client revoked its refresh token, or a used refresh token was presented again past `oauth.refresh_reuse_grace` (a sign of a copied token, or a client process holding a stale one), which ends the connection's tokens: its `okf.oauth.token` span shows `okf.refresh` `reused`. Mint a new code and reconnect |
 | Approve shows "Returning to your client" but the client never connects | The browser did not follow the refresh. Click Continue on the page; if that also fails, the client is not listening on its redirect URI (a native client's loopback port closed) |
 | `/oauth/register` or `/oauth/token` answers 429 `slow_down` | The global rate limit, or 500 registered clients without a grant (each is deleted 24 hours after registration). Wait and retry; look for a client registering in a loop |
