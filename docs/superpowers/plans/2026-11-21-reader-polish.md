@@ -2854,7 +2854,7 @@ function installHint() {
 
 // One offline copy ({ path, title, cachedAt }) as a row.
 function copyRow(catalog, copy) {
-    const where = [folderTrail(copy.path), `read ${ago(copy.cachedAt)}`].filter(Boolean).join(' · ');
+    const where = [folderTrail(copy.path), `Synced ${ago(copy.cachedAt)}`].filter(Boolean).join(' · ');
     return row({ href: hrefFor(catalog, copy.path), glyph: 'doc', title: docLabel(copy), sub: where, end: icon('offline', 'chev') });
 }
 
@@ -3000,7 +3000,7 @@ export async function render(view, ctx) {
 }
 ```
 
-> **Corrected (issue #867).** 2026-11-21: `Show older` removes the `#older-offline` notice once a later page read succeeds (review of PR #881), and `tests/ui_e2e/read.rs` has journeys for the paging failure paths: `show_older_keeps_its_rows_and_clears_its_notice_when_a_retry_works`, `show_older_with_a_lost_grant_evicts_the_catalog`, `show_older_with_a_401_signs_out` and `a_late_show_older_answer_leaves_the_newer_screen_alone`.
+> **Corrected (issue #867).** 2026-11-21: `Show older` removes the `#older-offline` notice once a later page read succeeds (review of PR #881), and `tests/ui_e2e/read.rs` has journeys for the paging failure paths: `show_older_keeps_its_rows_and_clears_its_notice_when_a_retry_works`, `show_older_with_a_lost_grant_evicts_the_catalog`, `show_older_with_a_401_signs_out` and `a_late_show_older_answer_leaves_the_newer_screen_alone`. Also: a "Jump back in" row says "Synced N ago", not "read N ago". `X-Read-Cached-At` is the last network-cache time and the worker keeps it unchanged on an offline read (`sw.js`), so it cannot say when a copy was read; the design's "read 2 h ago" would need a separate reading time stored per copy, which was not built. The journey `jump_back_in_says_when_a_copy_was_synced_not_when_it_was_read` pins it with a week-old copy reopened offline. In the journey list and in the changelog, "read 2 h ago" is read as "Synced 2 h ago".
 
 - [ ] **Step 3: Run the journeys**
 

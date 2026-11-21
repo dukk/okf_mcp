@@ -3,7 +3,10 @@
 ## Changed
 - Home's search box counts the catalog's pages ("Search 1,284 pages").
 - "Jump back in" lists the three concepts read last (from the offline
-  copies), each with its folder, when it was read and an offline mark.
+  copies), each with its folder, when it was synced ("Synced 2 h ago") and an
+  offline mark. The design's "read 2 h ago" is not shown: the copy's time
+  is the last network read, which an offline read does not change, so
+  "read" would be false.
 - "Recent changes" became an activity timeline: filter chips (All, Created,
   Edited, Deleted, By me), day headings, and groups by actor and batch (the
   same actor and message, less than 2 minutes apart) with an avatar,

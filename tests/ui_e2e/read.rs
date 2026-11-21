@@ -997,7 +997,7 @@ async fn jump_back_in_lists_the_concepts_read_last() {
         ui.wait_text("#body", "marmalade");
         ui.open_reader("/");
         ui.wait_text("#jump-back", "Alpha");
-        ui.wait_text("#jump-back", "read ");
+        ui.wait_text("#jump-back", "Synced ");
         // Online, the offline list is not drawn: Jump back in stands for it.
         assert!(!ui.present("#offline-list"));
         // A search box that counts the catalog's pages.
@@ -1005,6 +1005,41 @@ async fn jump_back_in_lists_the_concepts_read_last() {
             "() => document.querySelector('#search-input').placeholder.startsWith('Search ') \
              && document.querySelector('#search-input').placeholder.endsWith('pages')",
         );
+    })
+    .await;
+}
+
+/// Moves the cached copy of alpha's concept read to `days` days ago, as
+/// its `X-Read-Cached-At` says (the time of the last network read).
+const AGE_ALPHA_COPY: &str = "async (days) => { \
+    const cache = await caches.open('read-content'); \
+    const key = (await cache.keys()).find(k => k.url.includes('/concepts/systems/alpha.md')); \
+    const old = await cache.match(key, { ignoreVary: true }); \
+    const headers = new Headers(old.headers); \
+    headers.set('X-Read-Cached-At', new Date(Date.now() - days * 86400000).toISOString()); \
+    await cache.put(key, new Response(await old.blob(), { status: old.status, headers })); \
+    return true; }";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jump_back_in_says_when_a_copy_was_synced_not_when_it_was_read() {
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        signed_in_at_home(ui);
+        ui.wait_worker();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        ui.eval(AGE_ALPHA_COPY, json!(7));
+        // Read it again with no connection: the worker keeps the week-old
+        // time, so the row must not claim it was read just now.
+        let offline = ui.go_offline();
+        ui.open_reader("/v/main/systems/alpha.md");
+        ui.wait_text("#body", "marmalade");
+        drop(offline);
+        ui.open_reader("/");
+        ui.wait_text("#jump-back", "Alpha");
+        let row = ui.text("#jump-back");
+        assert!(row.contains("Synced 7 d ago"), "{row}");
+        assert!(!row.contains("read "), "{row}");
     })
     .await;
 }

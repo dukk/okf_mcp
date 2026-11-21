@@ -40,7 +40,7 @@ function installHint() {
 
 // One offline copy ({ path, title, cachedAt }) as a row.
 function copyRow(catalog, copy) {
-    const where = [folderTrail(copy.path), `read ${ago(copy.cachedAt)}`].filter(Boolean).join(' · ');
+    const where = [folderTrail(copy.path), `Synced ${ago(copy.cachedAt)}`].filter(Boolean).join(' · ');
     return row({ href: hrefFor(catalog, copy.path), glyph: 'doc', title: docLabel(copy), sub: where, end: icon('offline', 'chev') });
 }
 
