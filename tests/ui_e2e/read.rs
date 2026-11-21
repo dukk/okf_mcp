@@ -122,6 +122,14 @@ async fn server_with_outline_limit(outline_chars: usize) -> (TestServer, String)
 /// * `name` - the catalog.
 /// * `entries` - `(path, text)` of each file.
 async fn server_with_catalog(name: &str, entries: &[(String, String)]) -> TestServer {
+    server_with_catalog_and_reader(name, entries).await.0
+}
+
+/// [`server_with_catalog`], and the reader's user id as well.
+async fn server_with_catalog_and_reader(
+    name: &str,
+    entries: &[(String, String)],
+) -> (TestServer, String) {
     let borrowed: Vec<(&str, &str)> = entries
         .iter()
         .map(|(path, text)| (path.as_str(), text.as_str()))
@@ -131,7 +139,7 @@ async fn server_with_catalog(name: &str, entries: &[(String, String)]) -> TestSe
         ..Config::default()
     })
     .await;
-    server.user_with_password("reader", EMAIL, PASSWORD).await;
+    let id = server.user_with_password("reader", EMAIL, PASSWORD).await;
     crate::support::server::applied(&server.app, async {
         ceiling::entitle(
             &server.db.pool,
@@ -147,7 +155,7 @@ async fn server_with_catalog(name: &str, entries: &[(String, String)]) -> TestSe
         .expect("entitle");
     })
     .await;
-    server
+    (server, id)
 }
 
 /// A root index and `count` notes, `notes/n000.md` on, titled `N0` on,
@@ -697,6 +705,120 @@ async fn show_older_reads_the_next_page_of_changes() {
     .await;
 }
 
+/// The cursor of the second page of `many`'s recent changes, as the
+/// `after=` query value the page sends for "Show older".
+const OLDER_CURSOR: &str = "async () => { \
+    const page = await (await fetch('/api/v1/catalogs/many/recent-changes?limit=50')).json(); \
+    return `&after=${encodeURIComponent(page.next_after)}`; }";
+
+/// True in the page once `read-content` holds nothing of `many`.
+const NO_MANY_CONTENT: &str = "async () => (await (await caches.open('read-content')).keys()) \
+    .every(k => !new URL(k.url).pathname.includes('/catalogs/many/'))";
+
+/// True in the page once `read-content` holds something of `many`.
+const HAS_MANY_CONTENT: &str = "async () => (await (await caches.open('read-content')).keys()) \
+    .some(k => new URL(k.url).pathname.includes('/catalogs/many/'))";
+
+/// How many rows and group heads of `#recent` are drawn.
+const RECENT_ROWS: &str =
+    "() => document.querySelectorAll('#recent .row, #recent a.group-head').length";
+
+/// Home of `many` (more changes than one page), signed in and with the
+/// worker caching reads, "Show older" showing.
+fn many_at_home(ui: &Ui) {
+    ui.sign_in_reader("/t/many", EMAIL, PASSWORD);
+    ui.wait_worker();
+    ui.open_reader("/");
+    ui.wait_visible("#recent-older");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn show_older_keeps_its_rows_and_clears_its_notice_when_a_retry_works() {
+    let server = server_with_catalog("many", &notes(60, "Body.")).await;
+    drive(server.base.clone(), move |ui| {
+        many_at_home(ui);
+        let first = ui.eval(RECENT_ROWS, json!(null));
+        // Offline, the next page cannot be read: the notice shows, the rows
+        // stay and the button works again.
+        let offline = ui.go_offline();
+        ui.click("#recent-older");
+        ui.wait_visible("#older-offline");
+        assert_eq!(ui.eval(RECENT_ROWS, json!(null)), first);
+        ui.poll_eval("() => document.querySelector('#recent-older').disabled === false");
+        // Asking again offline adds no second notice.
+        ui.click("#recent-older");
+        ui.poll_eval("() => document.querySelector('#recent-older').disabled === false");
+        assert_eq!(
+            ui.eval(
+                "() => document.querySelectorAll('#older-offline').length",
+                json!(null)
+            ),
+            json!(1)
+        );
+        drop(offline);
+        // The connection is back: the retry reads the page, and the notice goes.
+        ui.click("#recent-older");
+        ui.wait_hidden("#recent-older");
+        assert!(!ui.present("#older-offline"));
+        let all = ui.eval(RECENT_ROWS, json!(null));
+        assert!(all.as_u64() > first.as_u64(), "{first} then {all}");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn show_older_with_a_lost_grant_evicts_the_catalog() {
+    let (server, _) = server_with_catalog_and_reader("many", &notes(60, "Body.")).await;
+    let runtime = tokio::runtime::Handle::current();
+    let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
+    drive(server.base.clone(), move |ui| {
+        many_at_home(ui);
+        // The first page was cached by the worker.
+        ui.poll_eval(HAS_MANY_CONTENT);
+        lose_catalog(&runtime, &pool, &app, "many");
+        ui.click("#recent-older");
+        ui.poll_eval(NO_MANY_CONTENT);
+        ui.poll_eval("() => location.hash.startsWith('#/c')");
+        assert_eq!(ui.eval(REMEMBERED_CATALOG, json!(null)), json!(null));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn show_older_with_a_401_signs_out() {
+    let (server, user_id) = server_with_catalog_and_reader("many", &notes(60, "Body.")).await;
+    let runtime = tokio::runtime::Handle::current();
+    let pool = server.db.pool.clone();
+    drive(server.base.clone(), move |ui| {
+        many_at_home(ui);
+        revoke_sessions(&runtime, &pool, &user_id);
+        ui.click("#recent-older");
+        ui.wait_visible("#signin-email");
+        assert_no_offline_copies(ui);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_late_show_older_answer_leaves_the_newer_screen_alone() {
+    let server = server_with_catalog("many", &notes(60, "Body.")).await;
+    drive(server.base.clone(), move |ui| {
+        many_at_home(ui);
+        let suffix = ui.eval(OLDER_CURSOR, json!(null));
+        ui.hold_next("GET", suffix.as_str().expect("cursor"));
+        ui.click("#recent-older");
+        wait_held(ui);
+        // Leave for the account screen, then let the page of changes arrive.
+        ui.open_reader("/me");
+        ui.wait_visible("#account-user");
+        ui.release_held();
+        assert!(ui.present("#account-user"));
+        assert!(!ui.present("#recent"));
+        assert!(!ui.present("#older-offline"));
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn jump_back_in_lists_the_concepts_read_last() {
     let (server, _) = server().await;
@@ -1171,8 +1293,19 @@ fn lose_main(
     pool: &sqlx::PgPool,
     app: &std::sync::Arc<okf_mcp::app::App>,
 ) {
+    lose_catalog(runtime, pool, app, "main");
+}
+
+/// Takes the reader's grant on `catalog` away, and waits until the server
+/// applies it.
+fn lose_catalog(
+    runtime: &tokio::runtime::Handle,
+    pool: &sqlx::PgPool,
+    app: &std::sync::Arc<okf_mcp::app::App>,
+    catalog: &str,
+) {
     runtime.block_on(crate::support::server::applied(app, async {
-        ceiling::unentitle(pool, "reader", "main", &AuditActor::cli(), Utc::now())
+        ceiling::unentitle(pool, "reader", catalog, &AuditActor::cli(), Utc::now())
             .await
             .expect("unentitle");
     }));

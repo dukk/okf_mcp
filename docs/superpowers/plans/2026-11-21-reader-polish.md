@@ -2946,6 +2946,8 @@ function drawActivity(view, ctx, catalog, first) {
             // The user may have left meanwhile: touch neither the banner nor a newer screen.
             if (!ctx.live()) return;
             ctx.freshness(page);
+            // A retry that works makes the earlier "needs a connection" stale.
+            view.querySelector('#older-offline')?.remove();
             loaded.changes.push(...page.data.changes);
             const next = page.data.next_after ?? null;
             // A cursor that does not move would never end: stop at it.
@@ -2997,6 +2999,8 @@ export async function render(view, ctx) {
     drawActivity(view, ctx, catalog, result);
 }
 ```
+
+> **Corrected (issue #867).** 2026-11-21: `Show older` removes the `#older-offline` notice once a later page read succeeds (review of PR #881), and `tests/ui_e2e/read.rs` has journeys for the paging failure paths: `show_older_keeps_its_rows_and_clears_its_notice_when_a_retry_works`, `show_older_with_a_lost_grant_evicts_the_catalog`, `show_older_with_a_401_signs_out` and `a_late_show_older_answer_leaves_the_newer_screen_alone`.
 
 - [ ] **Step 3: Run the journeys**
 

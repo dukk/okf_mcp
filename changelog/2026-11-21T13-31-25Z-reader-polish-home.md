@@ -20,3 +20,10 @@
 - Journeys: an import is one group that expands; a chip filters; Show
   older reads the next page; Jump back in lists the concept read last; the
   search box counts pages. Updated: the journeys that read `#recent`.
+
+## Fixed (review of the PR)
+- "Show older" removes its "needs a connection" notice once a later page
+  read works.
+- Journeys for its failure paths: an unavailable read keeps the rows and
+  re-enables the button, and a retry clears the notice; a lost grant evicts
+  the catalog; a 401 signs out; a late answer after leaving changes nothing.

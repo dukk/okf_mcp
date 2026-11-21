@@ -132,6 +132,8 @@ function drawActivity(view, ctx, catalog, first) {
             // The user may have left meanwhile: touch neither the banner nor a newer screen.
             if (!ctx.live()) return;
             ctx.freshness(page);
+            // A retry that works makes the earlier "needs a connection" stale.
+            view.querySelector('#older-offline')?.remove();
             loaded.changes.push(...page.data.changes);
             const next = page.data.next_after ?? null;
             // A cursor that does not move would never end: stop at it.
