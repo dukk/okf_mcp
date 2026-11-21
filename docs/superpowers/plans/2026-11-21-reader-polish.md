@@ -3520,6 +3520,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Depends on:** Tasks 3 (`outline.js`, `backlinks.js`, `text.js`), 4 (parts, `ctx.label`, `ctx.titles`).
 
+> **Corrected (issue #869, 2026-11-21).** Three additions to Step 1's journeys, from review lessons on the sibling PRs: `a_concept_offline_has_no_edit_line` (offline, the history read is unavailable: the concept shows, the edit line stays hidden, no notice) and `a_lost_grant_answered_to_the_history_read_still_evicts` (a refusal of the held history read goes through `ctx.fail`), both after `a_concept_draws_before_its_history_answers`; and the offline journeys (`a_long_concept_read_once_is_readable_whole_offline`, `offline_a_concept_opens_from_either_its_plain_or_its_full_copy`) poll the `cached(...)` helper until the worker has stored the copies before `go_offline()`, since the worker caches after it answers. `concept.js` is otherwise as written below.
+
 The screen always reads `?full=true`: `concept_outline_chars` exists so MCP agents do not pull a large body into context, and the reader shows the whole body anyway. The "Show the whole concept" button, its notices (`#shortened`, `#show-full`, `#full-failed`) and their journeys go. The worker's two-way copy matching (`sw.js` `cachedCopy`) stays: a plain copy cached before this milestone still answers the `?full=true` read offline.
 
 - [ ] **Step 1: Write the failing journeys**
