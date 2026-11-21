@@ -1112,9 +1112,10 @@ In `src/http/ui.rs` `content_type`, after the `webmanifest` arm:
 # INTER_DIR     the unpacked Inter 4.1 release archive (Inter-4.1.zip from
 #               the Inter project's releases), holding InterVariable.ttf
 #               and LICENSE.txt.
-# LITERATA_DIR  the unpacked Literata family download from Google Fonts,
-#               holding Literata-VariableFont_opsz,wght.ttf,
-#               Literata-Italic-VariableFont_opsz,wght.ttf and OFL.txt.
+# LITERATA_DIR  the unpacked Literata 3.103 release archive (from the
+#               Literata project's releases), holding OFL.txt and
+#               fonts/variable/Literata[opsz,wght].ttf and
+#               fonts/variable/Literata-Italic[opsz,wght].ttf.
 #
 # It pins the axes the reader uses (Inter 400 to 700, Literata 400 to 600,
 # both at their default optical size), keeps the Latin range only, refuses a
@@ -1137,8 +1138,8 @@ command -v uvx >/dev/null || { echo "$0: needs uv (uvx)" >&2; exit 2; }
 inter_dir=$1
 literata_dir=$2
 inter=$inter_dir/InterVariable.ttf
-literata=$literata_dir/Literata-VariableFont_opsz,wght.ttf
-literata_italic=$literata_dir/Literata-Italic-VariableFont_opsz,wght.ttf
+literata=$literata_dir/fonts/variable/Literata[opsz,wght].ttf
+literata_italic=$literata_dir/fonts/variable/Literata-Italic[opsz,wght].ttf
 for file in "$inter" "$inter_dir/LICENSE.txt" "$literata" "$literata_italic" "$literata_dir/OFL.txt"; do
     [ -f "$file" ] || { echo "$0: missing $file" >&2; exit 2; }
 done
@@ -1181,6 +1182,8 @@ Download the two releases by hand into a new, empty directory in the session scr
 ```bash
 scripts/subset-reader-fonts.sh "$SCRATCH/fonts/Inter-4.1" "$SCRATCH/fonts/Literata"
 ```
+
+> **Corrected (issue #864).** 2026-11-21: Literata's official release archive (3.103) has no Google Fonts file names; the script reads `fonts/variable/Literata[opsz,wght].ttf` and the italic twin, as shown above. fonttools 4.55.3 and `opsz=drop` worked unchanged. The outputs are far smaller than estimated (Inter 32720, Literata 33384, Literata italic 35104 bytes, about 98 KB in all), because the optical-size axis is dropped.
 
 Expected: three lines `src/http/read/fonts/<name>.woff2: <N> bytes`, each under 153600. Estimates: Inter about 70 to 95 KB, each Literata file about 60 to 95 KB, so about 250 KB precached in all. Then the inputs' SHA-256. Copy the input hashes into this task's changelog entry. Check: `sha256sum -c scripts/reader-fonts.sha256` prints `OK` for all five files. Open each `OFL-*.txt` and check it is the SIL Open Font License 1.1 text with the font's copyright line.
 
@@ -2650,6 +2653,8 @@ In `boot()`, after the session `try`/`catch` and before `$('#reader').hidden = f
     catalogList();
 ```
 
+> **Corrected (issue #866, 2026-11-21).** Two existing journeys needed a change the step did not list. (1) `the_picker_and_the_tree_lead_from_a_catalog_to_its_concepts` waited for the breadcrumb root `Contents`; the root is now the catalog's label, so the journey sets the label (`server.set_catalog_label("main", "Main")`) and waits for `Main`. (2) Task 2's `.meta` (a flex row with margins) made the interim search hit's snippet span unclickable at the link's centre (`NotReceivingEvents`), so the interim `search.js` uses `class: 'hint'` for the snippet until Task 8 rewrites it. Task 5 and 8 take note: `.meta` is the concept meta row, not a snippet or a sub-line inside an `<a>`; the interim `home.js` and `catalogs.js` spans use it too, and their rewrites (Tasks 5 and 9) replace them.
+
 - [ ] **Step 8: Run the tests**
 
 Run: `tools/agentic/gate.sh narrow --lib -- http::read::tests::every_icon` (PASS), `tools/agentic/gate.sh worker` (PASS: `tree.test.mjs` and `catalogs.test.mjs` still pass with the new doubles), then `tools/agentic/gate.sh narrow --test ui_e2e -- read:: --test-threads=2`
@@ -2849,7 +2854,7 @@ function installHint() {
 
 // One offline copy ({ path, title, cachedAt }) as a row.
 function copyRow(catalog, copy) {
-    const where = [folderTrail(copy.path), `read ${ago(copy.cachedAt)}`].filter(Boolean).join(' · ');
+    const where = [folderTrail(copy.path), `Synced ${ago(copy.cachedAt)}`].filter(Boolean).join(' · ');
     return row({ href: hrefFor(catalog, copy.path), glyph: 'doc', title: docLabel(copy), sub: where, end: icon('offline', 'chev') });
 }
 
@@ -2941,6 +2946,8 @@ function drawActivity(view, ctx, catalog, first) {
             // The user may have left meanwhile: touch neither the banner nor a newer screen.
             if (!ctx.live()) return;
             ctx.freshness(page);
+            // A retry that works makes the earlier "needs a connection" stale.
+            view.querySelector('#older-offline')?.remove();
             loaded.changes.push(...page.data.changes);
             const next = page.data.next_after ?? null;
             // A cursor that does not move would never end: stop at it.
@@ -2992,6 +2999,8 @@ export async function render(view, ctx) {
     drawActivity(view, ctx, catalog, result);
 }
 ```
+
+> **Corrected (issue #867).** 2026-11-21: `Show older` removes the `#older-offline` notice once a later page read succeeds (review of PR #881), and `tests/ui_e2e/read.rs` has journeys for the paging failure paths: `show_older_keeps_its_rows_and_clears_its_notice_when_a_retry_works`, `show_older_with_a_lost_grant_evicts_the_catalog`, `show_older_with_a_401_signs_out` and `a_late_show_older_answer_leaves_the_newer_screen_alone`. Also: a "Jump back in" row says "Synced N ago", not "read N ago". `X-Read-Cached-At` is the last network-cache time and the worker keeps it unchanged on an offline read (`sw.js`), so it cannot say when a copy was read; the design's "read 2 h ago" would need a separate reading time stored per copy, which was not built. The journey `jump_back_in_says_when_a_copy_was_synced_not_when_it_was_read` pins it with a week-old copy reopened offline. In the journey list and in the changelog, "read 2 h ago" is read as "Synced 2 h ago".
 
 - [ ] **Step 3: Run the journeys**
 
@@ -3051,6 +3060,11 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 **Depends on:** Tasks 1 (`description` in the tree), 4 (parts, `ctx.label`, `ctx.rememberTitles`).
 
 The folder screen reads only the tree now (spec change 5): the index's title and description head the page, and its body opens behind "About" as a document (`#/d/<catalog>/<folder>/index.md`, which the document screen and the refusal handler already serve and evict). A deleted index is therefore handled by the document screen's refusal (`KIND.CONCEPT_GONE` evicts `documents/<path>`), and the tree screen has no index read to test.
+
+> **Corrected (issue #868).** 2026-11-21: in the picker journey the catalog's label is
+> "Main" (the journey calls `server.set_catalog_label("main", "Main")`), so it
+> asserts `"Main"` and needs no `UNTITLED_CATALOG` import; drop that import
+> from Step 6. Nothing else differs.
 
 - [ ] **Step 1: Write the failing listing tests**
 
@@ -3383,7 +3397,7 @@ export async function render(view, ctx) {
 
 - [ ] **Step 6: Update the journeys**
 
-Add `use okf_mcp::labels::UNTITLED_CATALOG;` to the imports of `tests/ui_e2e/read.rs`. In `a_log_opens_as_a_document` and `a_log_in_recent_changes_opens_as_a_document`, `ui.wait_text("#document-title", "log.md");` becomes `ui.wait_text("#document-title", "Log");`.
+In `a_log_opens_as_a_document` and `a_log_in_recent_changes_opens_as_a_document`, `ui.wait_text("#document-title", "log.md");` becomes `ui.wait_text("#document-title", "Log");`.
 
 Replace the body of `the_picker_and_the_tree_lead_from_a_catalog_to_its_concepts` after `ui.click("#tab-browse");` with:
 
@@ -3397,13 +3411,13 @@ Replace the body of `the_picker_and_the_tree_lead_from_a_catalog_to_its_concepts
         assert_eq!(ui.text("#concepts"), "", "logs are not listed as concepts");
         ui.wait_visible("#folder-log");
         // The catalog list has been read: breadcrumbs name the catalog by its label.
-        ui.wait_text("#bar-label", UNTITLED_CATALOG);
+        ui.wait_text("#bar-label", "Main");
         ui.click("#folders a");
         // systems/: its two concepts by title, under the catalog's label.
         ui.wait_text("#concepts", "Alpha");
         ui.wait_text("#concepts", "Beta");
         ui.wait_text("#folder-title", "systems");
-        ui.wait_text(".crumbs", UNTITLED_CATALOG);
+        ui.wait_text(".crumbs", "Main");
         // About opens the index's text.
         ui.click("#about");
         ui.wait_text("#document-title", "About");
@@ -3505,6 +3519,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify: `tests/ui_e2e/read.rs`: the five `SHORT_OUTLINE` journeys, `offline_a_concept_opens_from_either_its_short_or_its_full_copy`, the concept-read suffixes in `an_unlock_refusal_keeps_the_caches_and_points_at_the_console`, `a_lost_grant_answered_after_navigating_away_still_evicts`, `a_late_401_after_an_ordinary_refusal_still_signs_out`, `a_slow_success_cannot_put_back_an_evicted_catalog`, `a_slow_success_cannot_put_back_a_deleted_concept`; new journeys after `a_concept_shows_its_body_follows_links_and_lists_backlinks`
 
 **Depends on:** Tasks 3 (`outline.js`, `backlinks.js`, `text.js`), 4 (parts, `ctx.label`, `ctx.titles`).
+
+> **Corrected (issue #869, 2026-11-21).** Three additions to Step 1's journeys, from review lessons on the sibling PRs: `a_concept_offline_has_no_edit_line` (offline, the history read is unavailable: the concept shows, the edit line stays hidden, no notice) and `a_lost_grant_answered_to_the_history_read_still_evicts` (a refusal of the held history read goes through `ctx.fail`), both after `a_concept_draws_before_its_history_answers`; and the offline journeys (`a_long_concept_read_once_is_readable_whole_offline`, `offline_a_concept_opens_from_either_its_plain_or_its_full_copy`) poll the `cached(...)` helper until the worker has stored the copies before `go_offline()`, since the worker caches after it answers. `concept.js` is otherwise as written below.
 
 The screen always reads `?full=true`: `concept_outline_chars` exists so MCP agents do not pull a large body into context, and the reader shows the whole body anyway. The "Show the whole concept" button, its notices (`#shortened`, `#show-full`, `#full-failed`) and their journeys go. The worker's two-way copy matching (`sw.js` `cachedCopy`) stays: a plain copy cached before this milestone still answers the `?full=true` read offline.
 
@@ -3975,6 +3991,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ---
 ### Task 8: Search: plain snippets, Show more, "50+ results"
 
+> **Corrected (issue #870, 2026-11-21).** Review of PR #880: a successful "Show more" after an offline attempt left the `#more-offline` notice in place, so the click handler removes it before drawing the answer (Step 2's code below has the line). Three more journeys cover it: `show_more_offline_keeps_the_rows_and_a_retry_clears_the_notice`, `a_refused_show_more_replaces_the_results_with_the_refusal` and `show_more_stops_at_two_hundred_and_says_to_refine`.
+
 **Files:**
 - Rewrite: `src/http/read/js/screens/search.js`
 - Modify: `tests/ui_e2e/read.rs` (two new journeys after `home_and_search_without_a_connection`)
@@ -4135,6 +4153,7 @@ export async function render(view, ctx) {
         try {
             const answer = await read(url(limit));
             if (!ctx.live()) return;
+            document.getElementById('more-offline')?.remove();
             draw(answer);
         } catch (error) {
             if (!(error instanceof ReadError)) throw error;
@@ -4436,6 +4455,22 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 The journeys check behaviour; this task checks the look against the mockup, on a real phone, in both themes, and produces a page with each screen before and after for the review. Screenshots are working files: keep them in the session scratchpad, never in the repository.
 
+> **Corrected (issue #872, 2026-11-21).** The sample's Kubernetes description holds a
+> colon and a space, which is not valid unquoted YAML: the front matter failed to
+> parse and the concept showed no type, tags or lede. It is quoted below. The
+> device can be on wireless adb (`adb reverse` works the same); the mockup opens
+> from a local web server over `adb reverse` as readily as from Files (a browser
+> will not open `file://` from a VIEW intent). The phone's browser opens every
+> `am start` URL in a new tab, so close the tabs afterwards.
+>
+> **Corrected (issue #872, 2026-11-21, review).** Creating the catalog records its
+> first two pages under the operating-system user (`AuditActor::cli()`), so that
+> login showed on Home. The serve test now rewrites every actor but the
+> placeholders `tester`, `sam` and `alex` to `owner` and asserts it, so a run
+> never shows a real login. Browser journeys now pin the Pico overrides with
+> computed styles (`read::a_concept_body_is_plain_text_not_a_card` and three
+> more).
+
 - [ ] **Step 1: A sample catalog to look at**
 
 At the end of `tests/ui_e2e/read.rs`:
@@ -4446,7 +4481,7 @@ At the end of `tests/ui_e2e/read.rs`:
 /// quotes, code and links, several actors and kinds of change).
 fn visual_sample() -> Vec<(String, String)> {
     let mut long = String::from(
-        "---\ntype: system\ntitle: Kubernetes cluster\ndescription: The home cluster: three control-plane nodes and five workers, deployed from git.\n\
+        "---\ntype: system\ntitle: Kubernetes cluster\ndescription: \"The home cluster: three control-plane nodes and five workers, deployed from git.\"\n\
          tags: [k8s, infra, platform]\n---\n# Kubernetes cluster\n\n\
          > This is the test cluster. Production runs separately: see [Production deployment](production.md).\n\n\
          The cluster runs three control-plane nodes and five workers. Workloads are deployed from the `infra` repository.\n\n",

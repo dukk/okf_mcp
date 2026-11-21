@@ -26,6 +26,7 @@ use crate::okf::markdown::split_frontmatter;
 use crate::okf::pystr::py_strip;
 use crate::okf::snapshot::{Snapshot, SnapshotDoc};
 use crate::okf::yaml::Value;
+use crate::render::{block_text, excerpt};
 
 /// Snippets are cut to this many characters.
 const SNIPPET_LEN: usize = 160;
@@ -160,6 +161,9 @@ pub struct SearchQuery {
     pub status: Option<String>,
     /// At most this many hits.
     pub limit: usize,
+    /// Also make each hit's [`SearchHit::snippet_text`] (the web API's
+    /// reader asks for it; the MCP tool does not).
+    pub plain_snippets: bool,
 }
 
 impl SearchQuery {
@@ -178,6 +182,7 @@ impl SearchQuery {
             tags: Vec::new(),
             status: None,
             limit: 20,
+            plain_snippets: false,
         }
     }
 }
@@ -208,6 +213,12 @@ pub struct SearchHit {
     /// any term, stripped and cut to 160 characters; `None` for an empty
     /// query or when no body line matches.
     pub snippet: Option<String>,
+    /// The snippet's text without markdown syntax, with `plain_snippets`:
+    /// the text of the block holding the snippet's line, from that line on,
+    /// cut to 160 characters with an ellipsis. Not serialized:
+    /// the web API copies it into its own answer.
+    #[serde(skip)]
+    pub snippet_text: Option<String>,
     /// Lines in the concept's whole file, frontmatter included: about what
     /// a `get_concept` or `read_document` of it puts in context. A last line
     /// without a trailing newline counts; an empty file has 0.
@@ -297,7 +308,7 @@ pub fn search(snapshot: &Snapshot, query: &SearchQuery) -> Vec<SearchHit> {
     ranked.sort_unstable_by(order);
     ranked
         .into_iter()
-        .map(|(rank, doc, fields)| hit(doc, fields, rank, &prepared))
+        .map(|(rank, doc, fields)| hit(doc, fields, rank, &prepared, query.plain_snippets))
         .collect()
 }
 
@@ -483,7 +494,13 @@ fn tier(fields: &SearchFields, query: &Prepared) -> Option<u8> {
 
 /// Builds the result for a ranked concept.
 #[tracing::instrument(level = "trace", skip_all)]
-fn hit(doc: &SnapshotDoc, fields: &SearchFields, rank: SearchRank, query: &Prepared) -> SearchHit {
+fn hit(
+    doc: &SnapshotDoc,
+    fields: &SearchFields,
+    rank: SearchRank,
+    query: &Prepared,
+    plain: bool,
+) -> SearchHit {
     let description = doc
         .frontmatter()
         .data()
@@ -491,11 +508,23 @@ fn hit(doc: &SnapshotDoc, fields: &SearchFields, rank: SearchRank, query: &Prepa
         .and_then(Value::as_str)
         .map(str::to_string);
     let text = doc.text();
+    let body = split_frontmatter(text).1;
+    let matched = matched_line(body, &fields.body, query);
+    let snippet = matched.map(|(_, line)| cut(line));
+    // `bool::then` runs the closure only when asked; `flatten` turns the
+    // `Option<Option<_>>` into one. The line's byte range is `start` up to
+    // its length (its `\n` excluded).
+    let snippet_text = plain
+        .then(|| matched.map(|(start, line)| block_text(body, start..start + line.len())))
+        .flatten()
+        .filter(|text| !text.is_empty())
+        .map(|text| excerpt(&text, SNIPPET_LEN));
     SearchHit {
         path: format!("/{}", doc.path()),
         title: doc.title().map(str::to_string),
         description,
-        snippet: snippet(split_frontmatter(text).1, &fields.body, query),
+        snippet,
+        snippet_text,
         // Measured only for this catalog's (at most `limit`) hits, not every
         // match; `search_catalogs` merges several catalogs' hits and then cuts
         // to `limit`, so it measures at most catalogs x limit documents.
@@ -507,26 +536,31 @@ fn hit(doc: &SnapshotDoc, fields: &SearchFields, rank: SearchRank, query: &Prepa
     }
 }
 
-/// The first body line holding the phrase, else the first holding any term.
+/// The first body line holding the phrase, else the first holding any term,
+/// with the byte offset where it starts in `body`.
 ///
 /// `lowered` is `body.to_lowercase()`. Lowercasing never adds or removes a
 /// `\n`, so the two split into the same lines and can be zipped, which avoids
-/// lowercasing the body again.
+/// lowercasing the body again. The offsets are `body`'s (the original
+/// lines' lengths), never `lowered`'s.
 #[tracing::instrument(level = "trace", skip_all)]
-fn snippet(body: &str, lowered: &str, query: &Prepared) -> Option<String> {
+fn matched_line<'a>(body: &'a str, lowered: &str, query: &Prepared) -> Option<(usize, &'a str)> {
     if query.terms.is_empty() {
         return None;
     }
     let mut first_term_line = None;
+    let mut start = 0;
     for (line, lower) in body.split('\n').zip(lowered.split('\n')) {
         if lower.contains(query.phrase.as_str()) {
-            return Some(cut(line));
+            return Some((start, line));
         }
         if first_term_line.is_none() && query.terms.iter().any(|t| lower.contains(t.as_str())) {
-            first_term_line = Some(line);
+            first_term_line = Some((start, line));
         }
+        // The next line starts after this one and its `\n`.
+        start += line.len() + 1;
     }
-    first_term_line.map(cut)
+    first_term_line
 }
 
 /// A line stripped and cut to [`SNIPPET_LEN`] characters (not bytes).
@@ -827,5 +861,95 @@ mod tests {
         assert!(found(Some("diary"), Some("R2")).is_empty());
         assert!(found(None, Some("r1")).is_empty());
         assert!(SourceMatch::new(None, None).is_none());
+    }
+
+    /// The hit for `body` (the one concept of a catalog) searched for
+    /// `query` with plain snippets.
+    fn plain_hit(body: &str, query: &str) -> SearchHit {
+        let snapshot = Snapshot::build(&MemWorkspace::from_files([(
+            "a.md",
+            format!("---\ntitle: A\n---\n{body}").as_str(),
+        )]))
+        .expect("snapshot");
+        let mut search_query = SearchQuery::new(query);
+        search_query.plain_snippets = true;
+        search(&snapshot, &search_query).remove(0)
+    }
+
+    #[test]
+    fn a_plain_snippet_reads_emphasis_that_crosses_the_cut() {
+        let line = format!(
+            "{} **bold words that run past the cut** marmalade",
+            "x".repeat(150)
+        );
+        let hit = plain_hit(&format!("{line}\n"), "marmalade");
+        // The raw snippet is unchanged: the line cut at 160 characters, mid-span.
+        assert_eq!(hit.snippet.as_deref(), Some(&line[..160]));
+        let plain = hit.snippet_text.expect("a plain snippet");
+        assert!(!plain.contains('*'), "{plain}");
+        assert!(plain.starts_with(&"x".repeat(150)), "{plain}");
+        assert!(
+            plain.ends_with('\u{2026}') && plain.chars().count() <= SNIPPET_LEN,
+            "{plain}"
+        );
+    }
+
+    #[test]
+    fn a_plain_snippet_reads_a_link_that_crosses_the_cut() {
+        let line = format!(
+            "{} [a link whose text runs past the cut](b.md) marmalade",
+            "y".repeat(150)
+        );
+        let plain = plain_hit(&format!("{line}\n"), "marmalade")
+            .snippet_text
+            .expect("a plain snippet");
+        assert!(!plain.contains('[') && !plain.contains("]("), "{plain}");
+        assert!(plain.contains("a link"), "{plain}");
+    }
+
+    #[test]
+    fn a_plain_snippet_resolves_a_reference_link_and_drops_code_fences() {
+        let reference = plain_hit(
+            "Read [the guide][g] for marmalade.\n\n[g]: guide.md\n",
+            "marmalade",
+        );
+        assert_eq!(
+            reference.snippet_text.as_deref(),
+            Some("Read the guide for marmalade.")
+        );
+        let fenced = plain_hit("Intro.\n\n```sh\nmarmalade --serve\n```\n", "marmalade");
+        assert_eq!(fenced.snippet.as_deref(), Some("marmalade --serve"));
+        assert_eq!(fenced.snippet_text.as_deref(), Some("marmalade --serve"));
+        // The match on a later line of the fence starts the plain snippet,
+        // even after a line long enough to fill the cut on its own.
+        let later = plain_hit(
+            &format!(
+                "```sh\nunrelated setup {}\nmarmalade --serve\n```\n",
+                "z".repeat(200)
+            ),
+            "marmalade",
+        );
+        assert_eq!(later.snippet_text.as_deref(), Some("marmalade --serve"));
+    }
+
+    #[test]
+    fn a_plain_snippet_reads_a_quote_a_list_item_and_a_table_row() {
+        for (body, plain) in [
+            ("> marmalade on toast\n", "marmalade on toast"),
+            ("- parent\n  - **child** marmalade\n", "child marmalade"),
+            (
+                "| name | note |\n|---|---|\n| jam | marmalade |\n",
+                "jam marmalade",
+            ),
+        ] {
+            let hit = plain_hit(body, "marmalade");
+            assert_eq!(hit.snippet_text.as_deref(), Some(plain), "{body}");
+        }
+    }
+
+    #[test]
+    fn plain_snippets_are_made_only_when_asked_for() {
+        let hits = search(&snapshot(), &SearchQuery::new("time server"));
+        assert!(hits.iter().all(|hit| hit.snippet_text.is_none()));
     }
 }

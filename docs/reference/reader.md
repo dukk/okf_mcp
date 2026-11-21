@@ -30,12 +30,12 @@ Account.
 
 | Route | Screen |
 |---|---|
-| `#/` | Home: the install hint (iPhone and iPad browsers only), a search box, recent changes in the current catalog, and, when the server cannot be reached or the worker answered from its copy, "Available offline" |
-| `#/c` | The catalog picker. With exactly one reachable catalog and none chosen, it chooses that one and opens Home. `#/c?gone=<catalog>` says you can no longer read that catalog and its offline copies are deleted |
-| `#/t/<catalog>[/<folder>...]` | One folder of the tree: its `index.md` first (when it has one), then its subfolders and its concepts by title. Logs and machinery files are not listed |
-| `#/s/<catalog>[?q=<query>]` | Search results in that catalog: title and snippet |
-| `#/v/<catalog>/<path>.md[?s=<slug>]` | A concept: breadcrumbs, title, a collapsible Outline of its sub-headings, the body, and "Linked from" (backlinks). `?s=<slug>` scrolls to a heading and asks for the whole body, so an Outline link in a long concept always finds it |
-| `#/d/<catalog>/<path>` | A `log.md` or `AGENTS.md`, read as a document |
+| `#/` | Home: the install hint (iPhone and iPad browsers only), a search box that counts the catalog's pages ("Search 1,284 pages"), "Jump back in" (the three concepts and documents this device viewed last, from its cached copies, each with its folder and "Synced 2 h ago"), and the Activity timeline: filter chips (All, Created, Edited, Deleted, By me), day headings, and changes grouped by actor and batch (the same actor and message, less than 2 minutes apart), with "+N more" and "Show older". When the server cannot be reached or the worker answered from its copy, every offline copy is listed under "Available offline" instead of "Jump back in", and the timeline, when the worker holds recent changes, is drawn from that copy |
+| `#/c` | The catalog picker: each catalog with its mark, label, description and page count. With exactly one reachable catalog and none chosen, it chooses that one and opens Home. `#/c?gone=<catalog>` says you can no longer read that catalog and its offline copies are deleted |
+| `#/t/<catalog>[/<folder>...]` | One folder: breadcrumbs (the catalog's label, then folder titles), its title and description, an About row that opens its `index.md`, its subfolders (description and page count), its concepts (description) under "Pages", and a Log row for its `log.md`. Logs and machinery files are not listed among the pages |
+| `#/s/<catalog>[?q=<query>]` | Search results in that catalog: title, folder and a plain-text snippet. "Show more" adds 50 more, up to 200; "50+ results" means there may be more, and at 200 the screen says to refine the search |
+| `#/v/<catalog>/<path>.md[?s=<slug>]` | A concept: breadcrumbs, title, a meta row (its `type` and up to three `tags` as pills, the reading time, and "Edited 1 h ago by Name"), its description as a lede, "On this page" (a collapsible list of every heading but the title), the body in the serif reading type, and "Linked from" with one row per linking document. The reader always reads the whole body. `?s=<slug>` scrolls to a heading |
+| `#/d/<catalog>/<path>` | A folder's `index.md` (shown as About), a `log.md` (Log) or `AGENTS.md`, read as a document |
 | `#/me` | Account |
 
 Details worth knowing:
@@ -47,16 +47,36 @@ Details worth knowing:
   `index.md` opens that folder, a `log.md` or `AGENTS.md` the document view,
   anything else the concept view. Links to the console's browse routes in a
   body are rewritten to reader routes; web links open outside the app.
-- When the server shortens a long concept, the screen shows its Outline and
-  "This concept is long; only its outline was loaded." with a "Show the whole
-  concept" button. An empty concept has no such button.
+- A concept is always read whole (`?full=true`): there is no "Show the whole
+  concept" button. The page title is not repeated in the body, and the
+  outline lists every other heading whatever its level. A concept whose
+  first level-1 heading is not its title keeps that heading.
+- "Linked from" lists each linking document once: "N links" when it links
+  more than once, "N entries" for a `log.md`, which shows as Log.
+- The edit line ("Edited 1 h ago by Name") comes from the history route and
+  fills in when it answers; the concept never waits for it. Offline, or when
+  the history is refused, the line is left out. The reading time is
+  estimated from the length of the text (1,200 characters a minute).
+- "Synced 2 h ago" on Home is the time of the last network read of that
+  copy. Reading a copy offline does not change it, so it says when the
+  copy was synced, not when it was read. The order is by viewing, not by
+  that time: opening a copy offline moves it to the front without changing
+  its "Synced" time.
 - Search needs a connection. Offline it says so and links to Home's offline
   list.
-- Account shows who is signed in and when the session ends, a **Sign out**
-  button and a **Delete offline copies** button. Offline it shows only the
-  latter, because the account details and sign-out need the server.
+- Account shows who is signed in (with an avatar) and when the session
+  ends, an Appearance choice (System, Light, Dark; kept on the device and
+  applied before the first paint, and it also sets the colour of the system
+  bars), a **Sign out** button and a **Delete offline copies** button.
+  Offline it shows the Appearance choice and the latter button, because the
+  account details and sign-out need the server. The choice survives signing
+  out.
+- The header shows the current catalog's label (its name until the catalog
+  list has been read) after a mark with its first letter, opens the picker,
+  and has a search icon; the bottom tabs have icons. Every screen change
+  starts at the top of the page.
 - The chosen catalog is remembered in the browser's `localStorage` (the
-  install-hint dismissal too). Where storage is blocked, the choice lasts for
+  install-hint dismissal and the Appearance choice too). Where storage is blocked, the choice lasts for
   that visit.
 
 ## Offline
@@ -75,15 +95,18 @@ cache-first. Catalog reads go through the service worker, which is scoped to
   reading a copy offline counts as viewing it. The catalog list, each tree,
   recent changes and each concept's links are kept too, uncapped. Search,
   the session and the account screen are never cached.
-- **Short and full.** Offline, a concept's plain copy answers a request for
-  the whole concept when it holds the whole body (it was not shortened), and
-  a whole-body copy answers a plain request. If only the outline was kept,
-  "Show the whole concept" says "The whole concept is not available offline."
-  and can be tried again.
+- **Short and full.** The reader asks for the whole body, so it keeps whole
+  copies. Offline, the worker still lets a whole-body copy answer a plain
+  request, and a plain copy answer a whole-body request when it holds the
+  whole body (it was not shortened), so copies kept by an earlier version of
+  the reader stay readable.
 - **Home offline.** "Available offline" lists the concepts and documents of the
-  current catalog that this device holds, newest first, each with when it was
-  synced. A concept you never opened says "Not available offline." and links
-  there.
+  current catalog that this device holds, most recently viewed first, each
+  with when it was synced. Online, "Jump back in" shows the first three of the same list. A
+  concept you never opened says "Not available offline." and links there.
+  When the worker answers Home from its copy of recent changes, the
+  Activity timeline is drawn below the list as it was last read; "Show
+  older" then says it needs a connection and keeps what is drawn.
 - **One account.** Every answer an `/api/v1` route gives a signed-in caller
   carries `X-OKF-Account`, an opaque tag of the account it was made for ([operations](../operations.md#web-console)).
   The worker keeps one recorded owner for all copies. The first successful
@@ -163,32 +186,65 @@ worker deletes the shell caches of other versions.
 
 - **Files.** `src/http/read/` is embedded by `build.rs` as `READ_ASSETS` and
   served by `src/http/read.rs` with the console's security headers.
-  `index.html`, `manifest.webmanifest`, `icons/`, `read.css`, `sw.js`, and
-  `js/`: `main.js` (boot, router, sign-out), `refusals.js` (what a refused
-  read does, without the DOM), `api.js`, `cache.js` (the page's side of the
-  caches), `names.js` (the cache names and the 200 cap, shared by page and
-  worker), `route.js`, `listing.js`, `parts.js` and `screens/*.js`. The reader
-  imports only `dom.js` and `format.js` from the console.
+  `index.html`, `manifest.webmanifest`, `icons/` (the install icons),
+  `icons.svg` (the sprite the screens draw from), `fonts/` (Inter and
+  Literata, Latin subsets, with their SIL Open Font License files),
+  `read.css`, `sw.js`, and `js/`: `main.js` (boot, router, header, sign-out),
+  `refusals.js` (what a refused read does, without the DOM), `api.js`,
+  `cache.js` (the page's side of the caches), `names.js` (the cache names and
+  the 200 cap, shared by page and worker), `route.js`, `listing.js`,
+  `parts.js` (the parts more than one screen draws), `icons.js`, `theme.js`
+  (a classic script that applies the Appearance choice before the first
+  paint), the display modules `text.js`, `timeline.js`, `outline.js`,
+  `backlinks.js` and `avatar.js` (pure, no DOM), and `screens/*.js`. The
+  reader imports only `dom.js` and `format.js` from the console.
 - **Styling.** `read.css` sits on Pico CSS and is independent of the console's
-  `styles.css`; only Pico is shared. Both style the HTML `src/render.rs` writes
-  into `body_html`, which is the one contract between them. Light and dark
-  follow the system.
+  `styles.css`; only Pico is shared. It holds the design tokens (light, dark
+  from the system, and an explicit `data-theme` from Account), maps Pico's
+  variables onto them, and has a section for the shared parts and one per
+  screen. It has no inline styles (the content security policy forbids them):
+  every variant is a class. Both stylesheets style the HTML `src/render.rs`
+  writes into `body_html`, which is the one contract between them. The fonts
+  are served from the server's own origin (`font-src 'self'`). They are built
+  by `scripts/subset-reader-fonts.sh` from the upstream release files; check
+  the outputs with `sha256sum -c scripts/reader-fonts.sha256`.
 - **Tests.**
-  - `just test-worker` runs `tests/read_worker/` under Node's built-in test
+  - `just test-worker` (or `tools/agentic/gate.sh worker`, which adds a
+    5 minute limit) runs `tests/read_worker/` under Node's built-in test
     runner with no npm packages: the worker in a `node:vm` context against an
-    in-memory Cache Storage, and the DOM-free page modules. It needs Node
+    in-memory Cache Storage, and the DOM-free page modules (`api`, `cache`,
+    `refusals`, `route`, `catalogs`, `tree` and `theme`, and the display
+    modules' `text`, `timeline`, `outline`, `backlinks` and `avatar`). It needs Node
     18.19+ (or 20.6+) and skips with a message without `node` or with an older
     one. `just test` and `tools/agentic/gate.sh test` run it first.
-  - The Rust unit tests in `src/http/read.rs` cover the routes, the headers and
-    `shell.json`.
+  - The Rust unit tests in `src/http/read.rs` cover the routes, the headers,
+    the theme colours and `shell.json`.
   - The browser journeys are in `tests/ui_e2e/read.rs` (`just test-ui`): sign-in
     and sign-out, the screens, offline reading, the cap, shell upgrades, full
     or denied storage, revoked sessions and grants, unlock refusals, late
-    answers and two accounts.
+    answers and two accounts, and the polish: the header label, scroll reset,
+    the timeline, Show older and Show more, Jump back in, the concept's meta
+    row and outline, and the theme choice. Five journeys pin the style
+    overrides that Pico's rules would otherwise undo (the plain concept body,
+    the outline's gaps and focus colour, the breadcrumbs, the Home search
+    box, and the meta separator that trails a fact and never leads one), by
+    reading computed styles.
+  - `serve_a_sample_catalog_for_the_visual_check` in the same file is
+    ignored: it serves a sample catalog of placeholder content for the
+    visual check below, for `READER_VISUAL_MINUTES` (30 by default). The
+    actors it shows are `tester`, `sam`, `alex` and `owner`, never a real
+    login.
 - **Manual checks before a release** (a phone and a deployed build): install
   on an iPhone (Safari, Share, Add to Home Screen) and on Android (Chrome's
   install prompt); the app opens standalone; content clears the notch and home
   indicator; light and dark follow the system; open three concepts, switch on
-  airplane mode, relaunch and read them with the offline banner.
-- The design is in
-  [`docs/superpowers/specs/2026-11-20-mobile-reader-pwa-design.md`](../superpowers/specs/2026-11-20-mobile-reader-pwa-design.md).
+  airplane mode, relaunch and read them with the offline banner. Also run the
+  visual check on a phone, in light and dark: serve the sample catalog and
+  compare each screen with the design (Task 10 of
+  [`docs/superpowers/plans/2026-11-21-reader-polish.md`](../superpowers/plans/2026-11-21-reader-polish.md)).
+  The system navigation bar's colour (the page's `theme-color` metas) can
+  only be judged in the installed app.
+- The designs are in
+  [`docs/superpowers/specs/2026-11-20-mobile-reader-pwa-design.md`](../superpowers/specs/2026-11-20-mobile-reader-pwa-design.md)
+  and
+  [`docs/superpowers/specs/2026-11-21-reader-polish-design.md`](../superpowers/specs/2026-11-21-reader-polish-design.md).

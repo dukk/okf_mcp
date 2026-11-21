@@ -13,10 +13,12 @@ use axum::{Json, Router};
 // written in this file (like a C `#include`).
 include!(concat!(env!("OUT_DIR"), "/ui_assets.rs"));
 
-/// The console's Content-Security-Policy: scripts and styles only from this
-/// origin (Google Fonts' stylesheet and fonts excepted), no framing.
+/// The console's Content-Security-Policy, shared by the sign-in pages and
+/// the reader: scripts and styles only from this origin (Google Fonts'
+/// stylesheet excepted), fonts from this origin (the reader's) or Google
+/// Fonts (the console's), no framing.
 pub(crate) const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self'; \
-    style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; \
+    style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; \
     img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; \
     form-action 'self'";
 
@@ -76,6 +78,7 @@ fn content_type(path: &str) -> &'static str {
         Some("woff2") => "font/woff2",
         Some("png") => "image/png",
         Some("webmanifest") => "application/manifest+json",
+        Some("txt") => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
     }
 }
@@ -224,5 +227,22 @@ mod tests {
             content_type("manifest.webmanifest"),
             "application/manifest+json"
         );
+        assert_eq!(content_type("fonts/OFL.txt"), "text/plain; charset=utf-8");
+    }
+
+    /// The reader's self-hosted fonts load under the shared policy, which
+    /// still allows Google Fonts for the console.
+    #[tokio::test]
+    async fn the_policy_lets_pages_load_fonts_from_their_own_origin() {
+        for path in ["/ui/", "/read/"] {
+            let response = get(path).await;
+            let policy = response.headers()["content-security-policy"]
+                .to_str()
+                .expect("an ASCII header");
+            assert!(
+                policy.contains("font-src 'self' https://fonts.gstatic.com;"),
+                "{path}: {policy}"
+            );
+        }
     }
 }
