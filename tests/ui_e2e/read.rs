@@ -344,17 +344,26 @@ async fn the_picker_and_the_tree_lead_from_a_catalog_to_its_concepts() {
         ui.click("[data-catalog=main]");
         ui.wait_visible("#screen-home");
         ui.click("#tab-browse");
-        // The root folder: its index's body, then its folders.
-        ui.wait_text("#body", "Main");
+        // The root folder: an About row for its index (whose text is no
+        // longer drawn above the lists), its folders, and its log on a row
+        // of its own, not among the concepts (the root has none).
         ui.wait_text("#folders", "systems");
-        // The root's log.md is not a concept: the root lists none.
-        assert_eq!(ui.text("#concepts"), "", "logs are not listed");
+        ui.wait_visible("#about");
+        assert!(!ui.present("#body"), "the index's text is behind About");
+        assert_eq!(ui.text("#concepts"), "", "logs are not listed as concepts");
+        ui.wait_visible("#folder-log");
+        // The catalog list has been read: breadcrumbs name the catalog by its label.
+        ui.wait_text("#bar-label", "Main");
         ui.click("#folders a");
-        // systems/: its index body, and its two concepts by title.
-        ui.wait_text("#body", "Systems");
+        // systems/: its two concepts by title, under the catalog's label.
         ui.wait_text("#concepts", "Alpha");
         ui.wait_text("#concepts", "Beta");
+        ui.wait_text("#folder-title", "systems");
         ui.wait_text(".crumbs", "Main");
+        // About opens the index's text.
+        ui.click("#about");
+        ui.wait_text("#document-title", "About");
+        ui.wait_text("#body", "Systems");
     })
     .await;
 }
@@ -565,7 +574,7 @@ async fn a_log_opens_as_a_document() {
     let (server, _) = server().await;
     drive(server.base.clone(), move |ui| {
         ui.sign_in_reader("/d/main/log.md", EMAIL, PASSWORD);
-        ui.wait_text("#document-title", "log.md");
+        ui.wait_text("#document-title", "Log");
         ui.wait_text("#body", "Log");
         assert!(!ui.present("#concept-gone") && !ui.present("#failed"));
     })
@@ -741,7 +750,7 @@ async fn a_log_in_recent_changes_opens_as_a_document() {
             "() => { document.querySelector(\"#recent a[href='#/d/main/log.md']\").click(); return true; }",
             json!(null),
         );
-        ui.wait_text("#document-title", "log.md");
+        ui.wait_text("#document-title", "Log");
     })
     .await;
 }
@@ -1735,14 +1744,14 @@ async fn a_slow_success_cannot_put_back_an_evicted_catalog() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_folder_whose_index_is_deleted_meanwhile_still_lists_its_concepts() {
+async fn a_deleted_folder_index_drops_its_about_copy_and_the_folder_still_lists() {
     let (server, _) = server().await;
     let runtime = tokio::runtime::Handle::current();
     let (pool, app) = (server.db.pool.clone(), std::sync::Arc::clone(&server.app));
     drive(server.base.clone(), move |ui| {
         ui.sign_in_reader("/me", EMAIL, PASSWORD);
         ui.wait_worker();
-        ui.open_reader("/t/main/systems");
+        ui.open_reader("/d/main/systems/index.md");
         ui.wait_text("#body", "Systems");
         let paths = content_paths(ui);
         assert!(
@@ -1751,27 +1760,17 @@ async fn a_folder_whose_index_is_deleted_meanwhile_still_lists_its_concepts() {
                 .any(|path| path.ends_with("/documents/systems/index.md")),
             "{paths:?}"
         );
-        // Again: the tree is read, the index read waits, the index goes.
-        ui.hold_next("GET", "/documents/systems/index.md");
-        ui.open_reader("/t/main");
-        ui.wait_visible("#folders");
-        ui.open_reader("/t/main/systems");
-        ui.wait_visible("#screen-tree");
-        // The index read is out (held), so the old tree asked for it.
-        wait_held(ui);
         runtime.block_on(publish(
             &pool,
             &app,
             "main",
             main_files_without("systems/index.md"),
         ));
-        ui.release_held();
-        ui.wait_text("#concepts", "Alpha");
-        assert!(!ui.present("#body"), "no index body");
-        assert!(
-            !ui.present("#concept-gone"),
-            "not treated as a missing concept"
-        );
+        // About again: the index is gone, so its copy goes and the screen says so.
+        ui.open_reader("/me");
+        ui.wait_visible("#account-user");
+        ui.open_reader("/d/main/systems/index.md");
+        ui.wait_visible("#concept-gone");
         let paths = content_paths(ui);
         assert!(
             paths
@@ -1779,6 +1778,10 @@ async fn a_folder_whose_index_is_deleted_meanwhile_still_lists_its_concepts() {
                 .all(|path| !path.ends_with("/documents/systems/index.md")),
             "{paths:?}"
         );
+        // Its folder still lists its concepts, now without an About row.
+        ui.click("#gone-folder");
+        ui.wait_text("#concepts", "Alpha");
+        assert!(!ui.present("#about"));
     })
     .await;
 }
@@ -1855,7 +1858,7 @@ async fn a_slow_success_cannot_put_back_a_deleted_folder_index() {
         ui.wait_worker();
         let mut paused = ui.pause_worker_responses("*/documents/systems/index.md*");
         ui.hold_answer_later("GET", "/documents/systems/index.md");
-        ui.open_reader("/t/main/systems");
+        ui.open_reader("/d/main/systems/index.md");
         let old = paused.next_paused();
         runtime.block_on(publish(
             &pool,
@@ -1863,9 +1866,9 @@ async fn a_slow_success_cannot_put_back_a_deleted_folder_index() {
             "main",
             main_files_without("systems/index.md"),
         ));
-        // A fresh tree no longer lists the index, so the folder screen would
-        // not read it again: make the eviction tree.js makes on its 404
-        // (journey `a_folder_whose_index_is_deleted_meanwhile...`) directly.
+        // A fresh read of the About page would get the 404 and evict (journey
+        // `a_deleted_folder_index_drops_its_about_copy...`): make that
+        // eviction directly, while the old 200 is still held.
         ui.eval(
             "async () => { await (await import('/read/js/cache.js')) \
              .evictDocument('main', 'documents', '/systems/index.md'); return true; }",
