@@ -2605,3 +2605,52 @@ async fn the_home_search_box_has_no_margin() {
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_meta_separator_trails_a_fact_and_never_leads_one() {
+    // Per visible `.fact`: whether its ::before and ::after hold the dot.
+    const SEPARATORS: &str = "() => [...document.querySelectorAll('#concept-meta .fact')] \
+        .filter(fact => !fact.hidden) \
+        .map(fact => [fact.id || 'reading', \
+            getComputedStyle(fact, '::before').content.includes('\\u00B7'), \
+            getComputedStyle(fact, '::after').content.includes('\\u00B7')])";
+    let (server, _) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.sign_in_reader("/v/main/systems/beta.md", EMAIL, PASSWORD);
+        ui.wait_text("#concept-title", "Beta");
+        // The edit fact starts hidden and is revealed once the history answers.
+        ui.wait_visible("#concept-edited");
+        // Shown: the reading time trails a dot, the last fact has none, and
+        // no fact leads with one.
+        assert_eq!(
+            ui.eval(SEPARATORS, json!(null)),
+            json!([["reading", false, true], ["concept-edited", false, false]])
+        );
+        // Hidden again: the reading time is now the last visible fact.
+        ui.eval(
+            "() => { document.querySelector('#concept-edited').hidden = true; }",
+            json!(null),
+        );
+        assert_eq!(
+            ui.eval(SEPARATORS, json!(null)),
+            json!([["reading", false, false]])
+        );
+        // Wrapped onto a second line, the edit fact starts the line with no dot.
+        ui.eval(
+            "() => { document.querySelector('#concept-edited').hidden = false; \
+             document.querySelector('#concept-meta').style.width = '120px'; }",
+            json!(null),
+        );
+        let wrapped = ui.eval(
+            "() => document.querySelector('#concept-edited').offsetTop \
+             > document.querySelector('#concept-meta .fact').offsetTop",
+            json!(null),
+        );
+        assert_eq!(wrapped, json!(true), "the row did not wrap");
+        assert_eq!(
+            ui.eval(SEPARATORS, json!(null)),
+            json!([["reading", false, true], ["concept-edited", false, false]])
+        );
+    })
+    .await;
+}

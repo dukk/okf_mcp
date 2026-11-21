@@ -9,8 +9,10 @@
   actors it shows.
 - Journeys `a_concept_body_is_plain_text_not_a_card`,
   `the_outline_opens_without_picos_gaps_and_stays_muted_when_focused`,
-  `the_breadcrumbs_have_no_pico_nav_spacing` and
-  `the_home_search_box_has_no_margin`: computed-style checks that fail with
+  `the_breadcrumbs_have_no_pico_nav_spacing`,
+  `the_home_search_box_has_no_margin` and
+  `the_meta_separator_trails_a_fact_and_never_leads_one` (the dot trails each
+  visible fact, none leads one, the last has none, hidden and wrapped): computed-style checks that fail with
   Pico's defaults.
 
 ## Changed
