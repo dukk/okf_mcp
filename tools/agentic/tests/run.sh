@@ -386,8 +386,9 @@ test_watch_ignores_prefix_sharing_reaction() {
 test_watch_bot_reaction_delays_retrigger() {
     new_fixtures; good_pr "$head_a"
     echo '[]' >"$fx/api/pulls_7_reviews.1.json"
-    printf '[{"user":{"login":"%s"},"content":"eyes"}]\n' "$bot" \
-        >"$fx/api/issues_7_reactions.1.json"
+    # Reacted at 1000 s, as the watcher starts: this push's reaction.
+    printf '[{"user":{"login":"%s"},"content":"eyes","created_at":"1970-01-01T00:16:40Z"}]\n' \
+        "$bot" >"$fx/api/issues_7_reactions.1.json"
     run_watch
     [ "$(cat "$fx/comment-times" 2>/dev/null)" = 1330 ] \
         || die "re-triggered at $(cat "$fx/comment-times" 2>/dev/null), want 1330"
