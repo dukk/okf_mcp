@@ -5,10 +5,10 @@
     "by": "server",
     "mac": "832704121b3a2ebdcb8335564c65b957ab2777810568a3cc7d8dbc438524ba2c"
   },
-  "next_evidence_seq": 668,
+  "next_evidence_seq": 669,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "2b6ec3d9637911ddb49287c1f29772a45940da4df57340dd872eca554ee9250c"
+    "mac": "eb7681afde2fdf6981642bfe9eaf40a361948792cd508eff63b0a65aa3fcee04"
   },
   "claims": [
     {
@@ -41635,6 +41635,28 @@
             "by": "server",
             "mac": "5151f9c3ec4f3ab9138e0f90467339dc8416773c4f6aa581d72ecf97a5f80201"
           }
+        },
+        {
+          "id": "EVD-0668",
+          "kind": "inspection",
+          "locator": "src/investigator/client_tests.rs:112-125,157-205",
+          "summary": "At 83423ec the held second page waits on page_gate (a Semaphore with no permits, 60 s bound only for a stuck test), and the test adds the permit only after the select, so the setup future is dropped first. The 300 ms deadline still counts from the moment the second list is in flight and the elapsed assertion is gone. investigator_client_paginated passed 5 runs in a row.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/investigator/client_tests.rs",
+              "lines": {
+                "start": 157,
+                "end": 205
+              },
+              "commit": "83423ecdc1628051c66a142b10e3001882972e33"
+            }
+          },
+          "recorded_at": "2026-11-22T23:29:55.635374740Z",
+          "seal": {
+            "by": "server",
+            "mac": "51593507856c00dae44068b131996d3c6128106f4de566f98d6c45ff2e2d5036"
+          }
         }
       ],
       "verdicts": [
@@ -41650,13 +41672,26 @@
             "by": "server",
             "mac": "502c9818a4f03f087f8af19a061588857cbfc514e24aa9c2d25b93de29909005"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at 83423ec after the review: the response is released by an explicit permit after the setup future is dropped, in addition to the deadline counting from the second list.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0668"
+          ],
+          "recorded_at": "2026-11-22T23:30:00.689765536Z",
+          "seal": {
+            "by": "server",
+            "mac": "82ac5e2868b501e950bc28fd81b0aae791b0964cd344f4ae12cb9b449684333f"
+          }
         }
       ],
       "created_at": "2026-11-22T23:04:49.663095956Z",
-      "updated_at": "2026-11-22T23:05:58.747526352Z",
+      "updated_at": "2026-11-22T23:30:00.689765536Z",
       "seal": {
         "by": "server",
-        "mac": "0b535f8ce6934deffeacab4aa8fabd9a7a654c50cb7c6b31f5d1a64b6b59abe7"
+        "mac": "c6ac2a54981560d0fa3b54a28282f2f93cca5fa420f7a4aeaef46c1c46b39e87"
       }
     },
     {
