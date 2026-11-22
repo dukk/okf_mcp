@@ -177,29 +177,6 @@ async fn verify_full_refuses_a_server_another_ca_signed() {
     );
 }
 
-/// Whether `error` is the kind a start with a zero-length timeout can
-/// legitimately end in: the wait stage's own `StartupTimeout`, or, when the
-/// machine is loaded enough that an earlier stage (pull, create, copy) runs
-/// out of time first, a Docker client, I/O or wrapped error that says it timed
-/// out. Any other error (a refusal, a missing image, a bad request) is not.
-fn is_timeout_class(error: &testcontainers_modules::testcontainers::TestcontainersError) -> bool {
-    use testcontainers_modules::testcontainers::core::error::WaitContainerError;
-    use testcontainers_modules::testcontainers::TestcontainersError;
-
-    match error {
-        TestcontainersError::WaitContainer(WaitContainerError::StartupTimeout) => true,
-        TestcontainersError::Io(io) => io.kind() == std::io::ErrorKind::TimedOut,
-        TestcontainersError::Client(_) | TestcontainersError::Other(_) => {
-            let text = error.to_string().to_lowercase();
-            text.contains("timed out") || text.contains("timeout")
-        }
-        TestcontainersError::WaitContainer(_)
-        | TestcontainersError::PortNotExposed { .. }
-        | TestcontainersError::MissingInfo(_)
-        | TestcontainersError::Exec(_) => false,
-    }
-}
-
 /// A customized start (copied files, a command) that times out leaves no
 /// container behind: Docker created it and copied the files before the
 /// timeout fired, so without the cleanup it would leak.
@@ -220,7 +197,7 @@ async fn a_timed_out_tls_start_leaves_no_container() {
     // `.err()` keeps the error and drops the container, which has no `Debug`.
     let error = started.err();
     assert!(
-        error.as_ref().is_some_and(is_timeout_class),
+        error.as_ref().is_some_and(pg::is_timeout_class),
         "the start did not fail with a timeout-class error: {error:?}"
     );
     assert!(pg::labelled_containers(&label).await.unwrap().is_empty());
@@ -235,20 +212,20 @@ fn only_timeout_class_errors_pass_the_zero_timeout_check() {
 
     let timed_out = |message: &str| TestcontainersError::other(message.to_string());
 
-    assert!(is_timeout_class(&TestcontainersError::WaitContainer(
+    assert!(pg::is_timeout_class(&TestcontainersError::WaitContainer(
         WaitContainerError::StartupTimeout
     )));
-    assert!(is_timeout_class(&TestcontainersError::Io(
+    assert!(pg::is_timeout_class(&TestcontainersError::Io(
         std::io::ErrorKind::TimedOut.into()
     )));
-    assert!(is_timeout_class(&timed_out(
+    assert!(pg::is_timeout_class(&timed_out(
         "request timed out; removing its container also failed: gone"
     )));
-    assert!(!is_timeout_class(&TestcontainersError::Io(
+    assert!(!pg::is_timeout_class(&TestcontainersError::Io(
         std::io::ErrorKind::NotFound.into()
     )));
-    assert!(!is_timeout_class(&TestcontainersError::WaitContainer(
+    assert!(!pg::is_timeout_class(&TestcontainersError::WaitContainer(
         WaitContainerError::Unhealthy
     )));
-    assert!(!is_timeout_class(&timed_out("no such image")));
+    assert!(!pg::is_timeout_class(&timed_out("no such image")));
 }

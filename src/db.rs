@@ -1821,26 +1821,48 @@ mod tests {
         );
     }
 
-    /// The leak behind issue #187, made deterministic: a zero startup timeout
-    /// expires after Docker created the container but before testcontainers
-    /// returned a handle, so testcontainers alone leaves it behind.
+    /// The leak behind issue #187: a zero startup timeout expires after
+    /// Docker created the container but before testcontainers returned a
+    /// handle, so testcontainers alone leaves it behind.
+    ///
+    /// Whether the container exists when the budget runs out depends on how
+    /// fast Docker is: on a loaded machine an earlier stage (pull, create)
+    /// can run the zero budget out first, and nothing leaks (issue #500).
+    /// So the start is tried again, under a fresh label, until one leaks; an
+    /// attempt that failed for any reason but a timeout still fails the test.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_timed_out_start_leaks_without_cleanup_and_remove_labelled_reaps_it() {
         use testcontainers_modules::testcontainers::runners::AsyncRunner;
         use testcontainers_modules::testcontainers::ImageExt;
 
-        let label = pg_support::unique_start_label();
-        let started = pg_support::postgres_17()
-            .with_label(pg_support::START_LABEL, &label)
-            .with_startup_timeout(std::time::Duration::ZERO)
-            .start()
-            .await;
+        const ATTEMPTS: usize = 10;
+        let mut leaked = None;
+        for _ in 0..ATTEMPTS {
+            let label = pg_support::unique_start_label();
+            let started = pg_support::postgres_17()
+                .with_label(pg_support::START_LABEL, &label)
+                .with_startup_timeout(std::time::Duration::ZERO)
+                .start()
+                .await;
 
-        assert!(started.is_err(), "a zero startup timeout must fail");
-        assert_eq!(
-            pg_support::labelled_containers(&label).await.unwrap().len(),
-            1
-        );
+            // `.err()` keeps the error and drops the container, which has
+            // no `Debug`.
+            let error = started.err();
+            assert!(
+                error.as_ref().is_some_and(pg_support::is_timeout_class),
+                "a zero startup timeout must fail with a timeout: {error:?}"
+            );
+            let found = pg_support::labelled_containers(&label).await.unwrap();
+            if found.is_empty() {
+                continue;
+            }
+            leaked = Some((label, found.len()));
+            break;
+        }
+
+        let (label, count) =
+            leaked.unwrap_or_else(|| panic!("no start of {ATTEMPTS} left a container behind"));
+        assert_eq!(count, 1);
         assert_eq!(pg_support::remove_labelled(&label).await.unwrap(), 1);
         assert!(pg_support::labelled_containers(&label)
             .await
@@ -1848,22 +1870,24 @@ mod tests {
             .is_empty());
     }
 
+    /// A zero timeout can end the start in any stage; whichever it was, the
+    /// labelled start leaves no container (issue #500: it asserted the wait
+    /// stage's `StartupTimeout` alone, which a loaded Docker does not reach).
     #[tokio::test(flavor = "multi_thread")]
     async fn a_timed_out_start_labelled_leaves_no_container() {
-        use testcontainers_modules::testcontainers::core::error::WaitContainerError;
-        use testcontainers_modules::testcontainers::{ImageExt, TestcontainersError};
+        use testcontainers_modules::testcontainers::ImageExt;
 
         let label = pg_support::unique_start_label();
         let request = pg_support::postgres_17().with_startup_timeout(std::time::Duration::ZERO);
 
         let started = pg_support::start_labelled(request, &label).await;
 
-        assert!(matches!(
-            started,
-            Err(TestcontainersError::WaitContainer(
-                WaitContainerError::StartupTimeout
-            ))
-        ));
+        // `.err()` keeps the error and drops the container, which has no `Debug`.
+        let error = started.err();
+        assert!(
+            error.as_ref().is_some_and(pg_support::is_timeout_class),
+            "the start did not fail with a timeout-class error: {error:?}"
+        );
         assert!(pg_support::labelled_containers(&label)
             .await
             .unwrap()

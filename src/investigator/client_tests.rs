@@ -30,6 +30,9 @@ struct FakeState {
     redirect: Mutex<Option<String>>,
     pagination: Mutex<&'static str>,
     page_delay: Mutex<bool>,
+    /// Holds every page list after the first while `page_delay` is set, until
+    /// a test adds a permit (issue #500: a timed hold raced the test's deadline).
+    page_gate: tokio::sync::Semaphore,
     lists: AtomicUsize,
     credentials: AtomicUsize,
     delay: Mutex<bool>,
@@ -51,6 +54,7 @@ impl Fake {
             redirect: Mutex::new(None),
             pagination: Mutex::new("none"),
             page_delay: Mutex::new(false),
+            page_gate: tokio::sync::Semaphore::new(0),
             lists: AtomicUsize::new(0),
             credentials: AtomicUsize::new(0),
             delay: Mutex::new(false),
@@ -108,7 +112,18 @@ async fn handle(
         "tools/list" => {
             let index = state.lists.fetch_add(1, Ordering::SeqCst);
             let delay = *state.page_delay.lock().unwrap();
-            if delay && index > 0 { tokio::time::sleep(std::time::Duration::from_secs(4)).await; }
+            if delay && index > 0 {
+                // Held until the test releases it; the outer bound only ends a
+                // stuck test.
+                if let Ok(Ok(permit)) = tokio::time::timeout(
+                    std::time::Duration::from_secs(60),
+                    state.page_gate.acquire(),
+                )
+                .await
+                {
+                    permit.forget();
+                }
+            }
             let tools = OkfServer::tools().list_all();
             match *state.pagination.lock().unwrap() {
                 "pages" if index == 0 => json!({"tools":&tools[..20],"nextCursor":"next"}),
@@ -146,21 +161,38 @@ async fn investigator_client_paginated_setup_can_be_dropped_at_deadline_or_cance
         *fake.state.page_delay.lock().unwrap() = true;
         let cancel = tokio_util::sync::CancellationToken::new();
         let signal = cancel.clone();
+        // Set once the second page list is in flight: the deadline below
+        // counts from here, not from the start, so a loaded machine that is
+        // slow to reach it neither fires the deadline before the cancel nor
+        // before the second list (issue #500).
+        let reached = tokio_util::sync::CancellationToken::new();
+        let reached_signal = reached.clone();
         let state = fake.state.clone();
         let trigger = tokio::spawn(async move {
             while state.lists.load(Ordering::SeqCst) < 2 {
                 tokio::task::yield_now().await;
             }
+            reached_signal.cancel();
             if cancelled {
                 signal.cancel();
             }
         });
-        let start = tokio::time::Instant::now();
+        let deadline = async {
+            reached.cancelled().await;
+            if cancelled {
+                // The cancel decides this round; the deadline never fires.
+                std::future::pending::<()>().await;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        };
         let result = tokio::select! {
             _ = cancel.cancelled() => Err(RunnerError::Cancelled),
-            _ = tokio::time::sleep(std::time::Duration::from_millis(300)) => Err(RunnerError::Budget),
+            () = deadline => Err(RunnerError::Budget),
             result = fake.client() => result.map(|_| ()),
         };
+        // The setup future is dropped; only now may the held page answer, so
+        // it can never win against the deadline or the cancel.
+        fake.state.page_gate.add_permits(1);
         assert_eq!(
             result,
             Err(if cancelled {
@@ -169,7 +201,6 @@ async fn investigator_client_paginated_setup_can_be_dropped_at_deadline_or_cance
                 RunnerError::Budget
             })
         );
-        assert!(start.elapsed() < std::time::Duration::from_secs(1));
         assert_eq!(fake.state.lists.load(Ordering::SeqCst), 2);
         assert!(fake.state.calls.lock().unwrap().is_empty());
         tokio::time::timeout(std::time::Duration::from_secs(1), trigger)
