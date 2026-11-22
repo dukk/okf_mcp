@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 419,
+  "next_claim_seq": 432,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "56bbc5a629dc8a5604a33ecb4d12b0cd77f43724b9fb5e1c8ef36e654609f909"
+    "mac": "f22dd597f1bd5455f04e77887e9925aa4191ec78a071362207c5ba074625e056"
   },
-  "next_evidence_seq": 499,
+  "next_evidence_seq": 516,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "2859de75d6064088092def442b3037b5f6494febc745fe1f9a28db03fa1b512a"
+    "mac": "a202f97f9779237f7a1bcef4c18aba3429b5884aa28409ee29c893b393e21daa"
   },
   "claims": [
     {
@@ -257,6 +257,28 @@
             "by": "server",
             "mac": "1e7e3dcc85d0536a953ac171fb9cc59ff55d5a08b4454f2091d60a5b71a36fd8"
           }
+        },
+        {
+          "id": "EVD-0513",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib mcp::reference (4 passed) on head 2468193",
+          "summary": "The reference pin tests pass on head with the get_concept paragraph changed; the diff to tools.md is one sentence on line 171.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/reference/tools.md",
+              "lines": {
+                "start": 171,
+                "end": 171
+              },
+              "commit": "2468193368cfe1cd36f7f5a4ff17b6260e6095b4"
+            }
+          },
+          "recorded_at": "2026-11-22T17:58:14.945652573Z",
+          "seal": {
+            "by": "server",
+            "mac": "1ef7ad94f0a295b4d8cc616b2b35ee4a0cf7a1bbb7aae30d8a0e8e2a61153807"
+          }
         }
       ],
       "verdicts": [
@@ -298,13 +320,26 @@
             "by": "server",
             "mac": "9fe41941e2dc287a051132bcb25df5824b3e6ee9b45e1122e64ebae755c0d885"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audit on 2468193: reference pin tests pass; the only change is the get_concept sentence.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0513"
+          ],
+          "recorded_at": "2026-11-22T17:58:19.927594967Z",
+          "seal": {
+            "by": "server",
+            "mac": "1f946812087f9ed0fee3797fc5ccbc14369e247075287345871a89c569dbea76"
+          }
         }
       ],
       "created_at": "2026-11-21T19:04:12.375208519Z",
-      "updated_at": "2026-11-22T17:23:29.110529185Z",
+      "updated_at": "2026-11-22T17:58:19.927594967Z",
       "seal": {
         "by": "server",
-        "mac": "6030d01fb6f689f784d8f30872a9ee1b072968e73dbe58342f22dfb3856a0521"
+        "mac": "87fc9b5597ffc41bba9d37e65fb50659a54ff5453129c955187de19a048056b1"
       }
     },
     {
@@ -23234,6 +23269,28 @@
             "by": "server",
             "mac": "8ceb1fcbe0924383ebca482eb19452f9d41e256889ca34f011414a03a86560f5"
           }
+        },
+        {
+          "id": "EVD-0514",
+          "kind": "test",
+          "locator": "cargo test mcp::documents a_body_at_the_limit_is_whole_and_one_character_over_is_outlined (passed on 2468193); src/mcp/documents.rs:231-262",
+          "summary": "With no `section`, the over-limit branch is unchanged: outline returned, body None, truncated = !within. tools.md line 171 still states the outline/truncated rule.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/documents.rs",
+              "lines": {
+                "start": 231,
+                "end": 262
+              },
+              "commit": "2468193368cfe1cd36f7f5a4ff17b6260e6095b4"
+            }
+          },
+          "recorded_at": "2026-11-22T17:58:14.989883083Z",
+          "seal": {
+            "by": "server",
+            "mac": "f730c1c565bd9a61d61ef1039b423a27bc4eaa2872d0d3293136f51342473e24"
+          }
         }
       ],
       "verdicts": [
@@ -23249,13 +23306,26 @@
             "by": "server",
             "mac": "a93f47bdf1c37990aabb41b973573cab833b035a58976c24d0733accb6f934f4"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audit on 2468193: no-section over-limit behaviour unchanged and tested.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0514"
+          ],
+          "recorded_at": "2026-11-22T17:58:19.958175644Z",
+          "seal": {
+            "by": "server",
+            "mac": "a8895d7fd9a790da60c7eddd7d9ba005526aa4cf0a09968da3881635e750f008"
+          }
         }
       ],
       "created_at": "2026-11-21T19:08:08.066114433Z",
-      "updated_at": "2026-11-21T19:10:02.081024711Z",
+      "updated_at": "2026-11-22T17:58:19.958175644Z",
       "seal": {
         "by": "server",
-        "mac": "be09ce4f57fb631aec518e3143f6f54c15aad718167f2b1827f520f3ef3a901a"
+        "mac": "d034bed568b8bc356bae0926230ba46559b5418f16fd9b7c360653a6c32d70ed"
       }
     },
     {
@@ -24529,6 +24599,28 @@
             "by": "server",
             "mac": "040cf8e54634de5622c462e5185ec7ce758e417da0149daadd9fff63377f8b74"
           }
+        },
+        {
+          "id": "EVD-0515",
+          "kind": "inspection",
+          "locator": "docs/reference/tools.md:424, 628; src/mcp/reports.rs",
+          "summary": "The oldest and sprawl `n` rows still say default 5 (the range changed only by the 3-line shift upstream of it); reports.rs is not in the diff.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/reference/tools.md",
+              "lines": {
+                "start": 424,
+                "end": 424
+              },
+              "commit": "2468193368cfe1cd36f7f5a4ff17b6260e6095b4"
+            }
+          },
+          "recorded_at": "2026-11-22T17:58:15.020969422Z",
+          "seal": {
+            "by": "server",
+            "mac": "b1c87ee8f474c079534af325c98e15ff5ad98f8f3db0e474bd8c5cd96efd8f04"
+          }
         }
       ],
       "verdicts": [
@@ -24557,13 +24649,26 @@
             "by": "server",
             "mac": "c134b778df6a8472e8b26348301dfe4129b4d3265d443db36d10b79ff3c0d7bf"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audit on 2468193: defaults unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0515"
+          ],
+          "recorded_at": "2026-11-22T17:58:19.985506479Z",
+          "seal": {
+            "by": "server",
+            "mac": "cdfcb9d7f4574e116eb2c3bf9ba6d17f424c90f25198cf2540d8c5fe4583bfe8"
+          }
         }
       ],
       "created_at": "2026-11-21T19:08:08.066114433Z",
-      "updated_at": "2026-11-22T16:55:40.409721182Z",
+      "updated_at": "2026-11-22T17:58:19.985506479Z",
       "seal": {
         "by": "server",
-        "mac": "a5e0914a8b173e32de4ebb9fc948d04c872a94c4b4b6177792da4549b11faa69"
+        "mac": "a324365eaf57058fe001ca9da9d57c7c6e5fed3de3d86159da2a0a255e48e024"
       }
     },
     {
@@ -33223,6 +33328,862 @@
       "seal": {
         "by": "server",
         "mac": "68da1599d0b61d9ebf7b82e5577ad9b671b40635aba1d9975102a979eb6a80d2"
+      }
+    },
+    {
+      "id": "CLM-0419",
+      "statement": "Issue #907 is delivered: get_concept answers a missing or ambiguous section with a normal result, not a tool error.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/907",
+      "derived_from": [],
+      "artifacts": [
+        "src/mcp/documents.rs"
+      ],
+      "tags": [
+        "from-issue:907"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0512",
+          "kind": "analysis",
+          "locator": "children of CLM-0419",
+          "summary": "All issue requirement children (CLM-0420 to CLM-0425) are supported, so the issue is delivered. The only open child is a PR-description claim about the full gate counts, which does not bear on the issue's requirements.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T17:57:50.530647012Z",
+          "seal": {
+            "by": "server",
+            "mac": "c22df1676f507720ef99e6bc21b604e776726191fdbe14ab24e9f355600ca92d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Every issue-requirement child is supported (CLM-0420..0425); the open child CLM-0431 is a PR-description claim, not an issue requirement.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0512"
+          ],
+          "recorded_at": "2026-11-22T17:57:54.316869884Z",
+          "seal": {
+            "by": "server",
+            "mac": "bcbd27cab6c38521e7369352cea2760bbaddcc26bbec9ccff44e4b7a326f0741"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T17:56:57.913391914Z",
+      "updated_at": "2026-11-22T17:57:54.316869884Z",
+      "seal": {
+        "by": "server",
+        "mac": "1754443c217221baa1b541257e9d91157667a6a4110d527bcbf48d34c1578830"
+      }
+    },
+    {
+      "id": "CLM-0420",
+      "statement": "get_concept with a `section` matching no heading returns Ok with section_found false, the full outline, and a note naming the requested heading.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/907: 'returns Ok with section_found: false, the full outline, and a note naming the requested heading'",
+      "derived_from": [
+        "CLM-0419"
+      ],
+      "artifacts": [
+        "src/mcp/documents.rs"
+      ],
+      "tags": [
+        "from-issue:907"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0499",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib mcp::documents (14 passed); src/mcp/documents.rs:857-876",
+          "summary": "Test calls get_concept with section \"Nowhere\": unwrap() succeeds, section_found == Some(false), outline has >2 entries, body None, note contains \"no heading 'Nowhere'\" and not the heading list. Code at documents.rs:235-246 catches Refused and returns the outline.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/documents.rs",
+              "lines": {
+                "start": 232,
+                "end": 250
+              },
+              "commit": "2468193368cfe1cd36f7f5a4ff17b6260e6095b4"
+            }
+          },
+          "recorded_at": "2026-11-22T17:57:28.981757019Z",
+          "seal": {
+            "by": "server",
+            "mac": "9bf5f19ad85bb1760c84df46d75496b28457ae1c6c4d4fa7f91dcb9ecbb16fab"
+          }
+        },
+        {
+          "id": "EVD-0500",
+          "kind": "test",
+          "locator": "src/mcp/documents.rs:897-917 a_missing_section_within_the_limit_is_still_a_result_with_the_outline",
+          "summary": "Within the size limit with raw: true, a miss still gives section_found false, body None, a non-empty outline and a note containing \"no heading 'Hosting'\". Passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/documents.rs",
+              "lines": {
+                "start": 896,
+                "end": 916
+              },
+              "commit": "2468193368cfe1cd36f7f5a4ff17b6260e6095b4"
+            }
+          },
+          "recorded_at": "2026-11-22T17:57:29.009164534Z",
+          "seal": {
+            "by": "server",
+            "mac": "7d547c3b7a67bcad2d3426b3967130683c912ee9549da62fe5e3b4c440928410"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code and passing tests show Ok with section_found false, outline and a note naming the heading.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0499",
+            "EVD-0500"
+          ],
+          "recorded_at": "2026-11-22T17:57:50.216274114Z",
+          "seal": {
+            "by": "server",
+            "mac": "6bb15fc1ed202f5b76428c948e5a4ab3bd9204f3d9a73527fe3bc488086ffa45"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T17:56:57.913391914Z",
+      "updated_at": "2026-11-22T17:57:50.216274114Z",
+      "seal": {
+        "by": "server",
+        "mac": "6886017a0b7a250dee16ced150e0c22b49a2b612a97e963470270447f9be1f45"
+      }
+    },
+    {
+      "id": "CLM-0421",
+      "statement": "get_concept with ambiguous section text returns Ok, with the matching slugs in the note.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/907: 'Ambiguous section text returns Ok, with the matching slugs in the note'",
+      "derived_from": [
+        "CLM-0419"
+      ],
+      "artifacts": [
+        "src/mcp/documents.rs"
+      ],
+      "tags": [
+        "from-issue:907"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0501",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib mcp::documents (14 passed); src/mcp/documents.rs:857-870",
+          "summary": "Test calls get_concept with section \"Notes\" (two matching headings): unwrap() succeeds, section_found Some(false), note contains \"pass the anchor slug instead: notes, notes-1\". missing_section_note keeps the text when \"; headings are:\" is absent (documents.rs:331-336).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/documents.rs",
+              "lines": {
+                "start": 328,
+                "end": 337
+              },
+              "commit": "2468193368cfe1cd36f7f5a4ff17b6260e6095b4"
+            }
+          },
+          "recorded_at": "2026-11-22T17:57:29.037161262Z",
+          "seal": {
+            "by": "server",
+            "mac": "f8bb233fe91cadffe240471483d4d776b7a08c129ecd4acfa56476896d5d9f84"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test asserts Ok and the slugs notes, notes-1 in the note.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0501"
+          ],
+          "recorded_at": "2026-11-22T17:57:50.243019897Z",
+          "seal": {
+            "by": "server",
+            "mac": "b62d6a47451ef18a49eb2b54b34237b0de9cab3c0a01babc0a71a444cff7c86e"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T17:56:57.913391914Z",
+      "updated_at": "2026-11-22T17:57:50.243019897Z",
+      "seal": {
+        "by": "server",
+        "mac": "73cb761d374f6d8cf139f8ad793a1b3dfb4f2415de401c78c6379c09e6ab56f7"
+      }
+    },
+    {
+      "id": "CLM-0422",
+      "statement": "split_concept on an unknown heading still returns Refused because Outline::section still returns Refused.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/907: 'split_concept on an unknown heading still returns Refused (Outline::section keeps returning Refused)'",
+      "derived_from": [
+        "CLM-0419"
+      ],
+      "artifacts": [
+        "src/okf/outline.rs",
+        "src/okf/ops/split.rs"
+      ],
+      "tags": [
+        "from-issue:907"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0502",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib okf::outline (6 passed), --lib okf::ops::split (11 passed); git diff origin/main..HEAD --stat shows no src/okf change",
+          "summary": "src/okf is untouched by the diff. outline.rs:281-286 asserts Outline::section(\"Nowhere\") is Err with kind \"Refused\"; split.rs:981-999 asserts split_concept on \"Nope\" errors with \"no heading 'Nope'; headings are: ...\". Both pass.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/ops/split.rs",
+              "lines": {
+                "start": 978,
+                "end": 1000
+              },
+              "commit": "2468193368cfe1cd36f7f5a4ff17b6260e6095b4"
+            }
+          },
+          "recorded_at": "2026-11-22T17:57:29.062840830Z",
+          "seal": {
+            "by": "server",
+            "mac": "e3f9c0d5f20214c2f0aa3b8de876d8eae814f046342e6289cbaa3446b19bf039"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "src/okf is unchanged; Outline::section and split_concept tests still expect refusal and pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0502"
+          ],
+          "recorded_at": "2026-11-22T17:57:50.269585999Z",
+          "seal": {
+            "by": "server",
+            "mac": "4bc4cf253b5d7400b848ea3cdaca66320dad4d79ed479465f5101480f8198e4b"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T17:56:57.913391914Z",
+      "updated_at": "2026-11-22T17:57:50.269585999Z",
+      "seal": {
+        "by": "server",
+        "mac": "51078316eddfc60ba22c4c66a8a2480f40ab9a990d96cf113de2dc0ec252b435"
+      }
+    },
+    {
+      "id": "CLM-0423",
+      "statement": "The unwrap_err expectation for the repeated `Notes` heading in src/mcp/documents.rs is updated to expect Ok.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/907: 'existing unwrap_err expectation for the repeated Notes heading is updated'",
+      "derived_from": [
+        "CLM-0419"
+      ],
+      "artifacts": [
+        "src/mcp/documents.rs"
+      ],
+      "tags": [
+        "from-issue:907"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0503",
+          "kind": "inspection",
+          "locator": "src/mcp/documents.rs:840-876",
+          "summary": "The repeated \"Notes\" call now uses .unwrap() (line 843) and its assertion checks the note for the slugs; no unwrap_err remains in this test.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/documents.rs",
+              "lines": {
+                "start": 840,
+                "end": 876
+              },
+              "commit": "2468193368cfe1cd36f7f5a4ff17b6260e6095b4"
+            }
+          },
+          "recorded_at": "2026-11-22T17:57:29.087800416Z",
+          "seal": {
+            "by": "server",
+            "mac": "8178ca7ac27a6d35844d9d8fe922708c4adbd86328576e959138d62453dd178a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test now unwraps the repeated Notes call.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0503"
+          ],
+          "recorded_at": "2026-11-22T17:57:50.295786090Z",
+          "seal": {
+            "by": "server",
+            "mac": "966cfa4c225bff4b0a524248c49182e43453f1cae2f9a3ad2777467c1e1e0ae2"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T17:56:57.913391914Z",
+      "updated_at": "2026-11-22T17:57:50.295786090Z",
+      "seal": {
+        "by": "server",
+        "mac": "f8a634dcc4c74f7037d9e722f2c1e6e848851d02eb51a0cf2baac1473fe4d788"
+      }
+    },
+    {
+      "id": "CLM-0424",
+      "statement": "docs/reference/tools.md#get_concept describes the new result (section_found false, the outline and a note for a section matching no heading or several).",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/907: 'docs/reference/tools.md#get_concept describes the new result'",
+      "derived_from": [
+        "CLM-0419"
+      ],
+      "artifacts": [
+        "docs/reference/tools.md"
+      ],
+      "tags": [
+        "from-issue:907"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0504",
+          "kind": "inspection",
+          "locator": "docs/reference/tools.md:171",
+          "summary": "The get_concept section says a `section` that matches no heading, or several, is not an error: the result has `section_found: false`, the `outline` and a `note`.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/reference/tools.md",
+              "lines": {
+                "start": 171,
+                "end": 171
+              },
+              "commit": "2468193368cfe1cd36f7f5a4ff17b6260e6095b4"
+            }
+          },
+          "recorded_at": "2026-11-22T17:57:29.112586971Z",
+          "seal": {
+            "by": "server",
+            "mac": "03fedd45836a11b351af86ab320b9f91e90719d23abf8b05334dafb2a44fd390"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "docs line 171 describes the new result.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0504"
+          ],
+          "recorded_at": "2026-11-22T17:57:50.322056611Z",
+          "seal": {
+            "by": "server",
+            "mac": "0cb2abe0b4c29d2d713d8f0d4f5a47ac0ab2fa31c0a917385dbeaf2ef61f4b23"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T17:56:57.913391914Z",
+      "updated_at": "2026-11-22T17:57:50.322056611Z",
+      "seal": {
+        "by": "server",
+        "mac": "a70f8f9eb4e14aa3844d0d1df8ae32578769bf623fcfa62dc7edcbf8e8ee32cb"
+      }
+    },
+    {
+      "id": "CLM-0425",
+      "statement": "read_document, get_concept on a missing path, and history are unchanged by the diff.",
+      "kind": "constraint",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/907: 'Out of scope: read_document, get_concept on a missing path, history (must be unchanged)'",
+      "derived_from": [
+        "CLM-0419"
+      ],
+      "artifacts": [
+        "src/mcp/documents.rs",
+        "src/mcp/history.rs"
+      ],
+      "tags": [
+        "from-issue:907"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0505",
+          "kind": "analysis",
+          "locator": "git diff origin/main..HEAD -- src/mcp/documents.rs; src/mcp/history.rs not in diff",
+          "summary": "The documents.rs diff touches only Concept, concept(), missing_section_note, the get_concept description and tests; read_document and the missing-path lookup are not changed, and history.rs is not in the diff stat.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/documents.rs",
+              "lines": {
+                "start": 213,
+                "end": 337
+              },
+              "commit": "2468193368cfe1cd36f7f5a4ff17b6260e6095b4"
+            }
+          },
+          "recorded_at": "2026-11-22T17:57:29.137369286Z",
+          "seal": {
+            "by": "server",
+            "mac": "aa93ed264fa6fbd15a5fd25eea46863475b94ffa03e6e9bb2cc4a107324933b9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The diff does not touch those code paths.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0505"
+          ],
+          "recorded_at": "2026-11-22T17:57:50.348067871Z",
+          "seal": {
+            "by": "server",
+            "mac": "a6b00dc8fa63aa863343dad90e85bbf3e5f7df0e497dfdceb65c93857f6dc9ab"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T17:56:57.913391914Z",
+      "updated_at": "2026-11-22T17:57:50.348067871Z",
+      "seal": {
+        "by": "server",
+        "mac": "2460b52650cc88b46bd616af3f4b27e2349b2fc06613a66198f6655329db2e0e"
+      }
+    },
+    {
+      "id": "CLM-0426",
+      "statement": "The result's `truncated` is true on a section miss because no body is returned.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'truncated is true on a miss because no body is returned'",
+      "derived_from": [
+        "CLM-0419"
+      ],
+      "artifacts": [
+        "src/mcp/documents.rs"
+      ],
+      "tags": [
+        "from-issue:907"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0506",
+          "kind": "test",
+          "locator": "src/mcp/documents.rs:311 and :861-863",
+          "summary": "truncated is `!within || section_found == Some(false)`; the test asserts miss.truncated with body None for both the repeated and unknown cases. Passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/documents.rs",
+              "lines": {
+                "start": 309,
+                "end": 313
+              },
+              "commit": "2468193368cfe1cd36f7f5a4ff17b6260e6095b4"
+            }
+          },
+          "recorded_at": "2026-11-22T17:57:29.168114254Z",
+          "seal": {
+            "by": "server",
+            "mac": "30cc1060e4c92d615908244031fc458e1e0f284ff7175ae48f41f04c479dacda"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code and test assertion agree.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0506"
+          ],
+          "recorded_at": "2026-11-22T17:57:50.374373532Z",
+          "seal": {
+            "by": "server",
+            "mac": "8f83fa67f8d8ebf732565d5b19e24c33ab2f9f2f80dddcb25519b1c5e05d2d37"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T17:56:57.913391914Z",
+      "updated_at": "2026-11-22T17:57:50.374373532Z",
+      "seal": {
+        "by": "server",
+        "mac": "5cbf96785e0effd5e47ab17c53abad010db4a6d21a14b5656224449530e41d93"
+      }
+    },
+    {
+      "id": "CLM-0427",
+      "statement": "section_found is true on a hit, false on a miss, and absent without `section`.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'new section_found field on the result (true on a hit, false on a miss, absent without section)'",
+      "derived_from": [
+        "CLM-0419"
+      ],
+      "artifacts": [
+        "src/mcp/documents.rs"
+      ],
+      "tags": [
+        "from-issue:907"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0507",
+          "kind": "test",
+          "locator": "src/mcp/documents.rs:119-126, 233-246, 861-866",
+          "summary": "Field is Option<bool> with skip_serializing_if is_none, initialised None and set only inside the section branch. Tests assert Some(true) on a slug hit and Some(false) on the misses. Absence without `section` rests on the code, not a test assertion.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/documents.rs",
+              "lines": {
+                "start": 119,
+                "end": 126
+              },
+              "commit": "2468193368cfe1cd36f7f5a4ff17b6260e6095b4"
+            }
+          },
+          "recorded_at": "2026-11-22T17:57:29.199893386Z",
+          "seal": {
+            "by": "server",
+            "mac": "4c92d6ef16a30ac9fdb644b4f15672579a261fc6f36f238815cdaae6a97c9ed2"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code and tests cover true and false; absence follows from the None default plus skip_serializing_if (not test-asserted).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0507"
+          ],
+          "recorded_at": "2026-11-22T17:57:50.400562582Z",
+          "seal": {
+            "by": "server",
+            "mac": "f37ee22245c9bfa36cff5a810dbbb75170f5742650a0409dfcd8b72e97bf6d1e"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T17:56:57.913391914Z",
+      "updated_at": "2026-11-22T17:57:50.400562582Z",
+      "seal": {
+        "by": "server",
+        "mac": "b6902e7718866850df5ba043d497d88697c1409f960f4801f0a6f3f6aa100d2c"
+      }
+    },
+    {
+      "id": "CLM-0428",
+      "statement": "src/investigator/contract_tools.json is regenerated to carry the new section_found output field and the tool description, and also refreshes exactly three stale `catalog` parameter descriptions.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: 'contract_tools.json regenerated, because the investigator pins the get_concept output schema... also refreshed three stale catalog parameter descriptions'",
+      "derived_from": [
+        "CLM-0419"
+      ],
+      "artifacts": [
+        "src/investigator/contract_tools.json"
+      ],
+      "tags": [
+        "from-issue:907"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0508",
+          "kind": "inspection",
+          "locator": "git diff origin/main..HEAD -- src/investigator/contract_tools.json; cargo test --lib investigator (126 passed)",
+          "summary": "Diff adds the section_found schema entry, the new description text, and exactly three catalog/catalogs description changes (get_concept.catalog, history.catalog, search.catalogs). The same text already exists in src/mcp/documents.rs and history.rs on origin/main while the JSON on main had 0 copies, so the three were stale. Investigator tests pass.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/investigator/contract_tools.json",
+              "lines": {
+                "start": 262,
+                "end": 276
+              },
+              "commit": "2468193368cfe1cd36f7f5a4ff17b6260e6095b4"
+            }
+          },
+          "recorded_at": "2026-11-22T17:57:29.229784401Z",
+          "seal": {
+            "by": "server",
+            "mac": "958bf4a6393f49d51eb929836466adb1c2bae5202c291484db36f5e059102c65"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Diff shows the new field and exactly three catalog description refreshes; investigator tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0508"
+          ],
+          "recorded_at": "2026-11-22T17:57:50.426068610Z",
+          "seal": {
+            "by": "server",
+            "mac": "79095b99df4e4935cea020d6c1a8719b4c524f620bac4dcf95e4715048af513f"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T17:56:57.913391914Z",
+      "updated_at": "2026-11-22T17:57:50.426068610Z",
+      "seal": {
+        "by": "server",
+        "mac": "aac3536f48c6ac2b351da288443d73cd8bf32128437c260691b5727bcf74bbc4"
+      }
+    },
+    {
+      "id": "CLM-0429",
+      "statement": "A changelog file changelog/2026-11-22T17-35-00Z-missing-section-is-a-result.md exists.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: 'changelog/2026-11-22T17-35-00Z-missing-section-is-a-result.md'",
+      "derived_from": [
+        "CLM-0419"
+      ],
+      "artifacts": [
+        "changelog/2026-11-22T17-35-00Z-missing-section-is-a-result.md"
+      ],
+      "tags": [
+        "from-issue:907"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0509",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-22T17-35-00Z-missing-section-is-a-result.md",
+          "summary": "The file exists in the commit and describes the change.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-22T17-35-00Z-missing-section-is-a-result.md",
+              "commit": "2468193368cfe1cd36f7f5a4ff17b6260e6095b4"
+            }
+          },
+          "recorded_at": "2026-11-22T17:57:29.260912451Z",
+          "seal": {
+            "by": "server",
+            "mac": "2c2cf6acf2a310e8c84b50cf3defa71522f294e97cce840f674b34a051c737dc"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "File exists at that path.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0509"
+          ],
+          "recorded_at": "2026-11-22T17:57:50.452090670Z",
+          "seal": {
+            "by": "server",
+            "mac": "f595dec2e25da430548fd1008ac5f9b4b6e4b9eb8247788782dfbeb9371860d1"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T17:56:57.913391914Z",
+      "updated_at": "2026-11-22T17:57:50.452090670Z",
+      "seal": {
+        "by": "server",
+        "mac": "2a4d6d74de1a5665e9b3bd04f7db26274f7196bb0539c604e3718ea1ee370cd6"
+      }
+    },
+    {
+      "id": "CLM-0430",
+      "statement": "The PR's test statements hold: the repeated and unknown `section` cases expect Ok, a new test covers a miss within the size limit, and the existing split_concept test still expects Refused for an unknown heading.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body Validation: 'the repeated and unknown section cases expect Ok; new test for a miss within the size limit; existing split_concept test still expects Refused for an unknown heading'",
+      "derived_from": [
+        "CLM-0419"
+      ],
+      "artifacts": [
+        "src/mcp/documents.rs",
+        "src/okf/ops/split.rs"
+      ],
+      "tags": [
+        "from-issue:907"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0510",
+          "kind": "test",
+          "locator": "src/mcp/documents.rs:843-844, 897; src/okf/ops/split.rs:981-999 (mcp::documents 14 passed, okf::ops::split 11 passed)",
+          "summary": "Repeated and unknown cases use .unwrap(); new test a_missing_section_within_the_limit_is_still_a_result_with_the_outline exists; the split_concept test still unwraps an error for \"Nope\" and is unchanged by the diff.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/documents.rs",
+              "lines": {
+                "start": 840,
+                "end": 876
+              },
+              "commit": "2468193368cfe1cd36f7f5a4ff17b6260e6095b4"
+            }
+          },
+          "recorded_at": "2026-11-22T17:57:29.287916635Z",
+          "seal": {
+            "by": "server",
+            "mac": "9f6260307f75a3fb97d1e0da001a79fcbab7bdf810dfd96c59a381f1dd44807d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All three test statements verified by reading and running the tests.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0510"
+          ],
+          "recorded_at": "2026-11-22T17:57:50.478363131Z",
+          "seal": {
+            "by": "server",
+            "mac": "241de37458c195b2b0752fb9f3d18e3d7b46e6044a3002a52a826856d5d812a6"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T17:56:57.913391914Z",
+      "updated_at": "2026-11-22T17:57:50.478363131Z",
+      "seal": {
+        "by": "server",
+        "mac": "0daccd075630810576745e0e133bda7d04aaf3b12df1659c14abcccdd2aca30c"
+      }
+    },
+    {
+      "id": "CLM-0431",
+      "statement": "The full gates (fmt, lint, dylint, test) are green with 3282 tests passed and 0 failed.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body Validation: 'fmt, lint, dylint, test through tools/agentic/gate.sh: green (3282 passed, 0 failed)'",
+      "derived_from": [
+        "CLM-0419"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:907"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0511",
+          "kind": "analysis",
+          "locator": "tools/agentic/gate.sh narrow (mcp::documents 14, okf::outline 6, okf::ops::split 11, investigator 126, mcp::annotations 7 passed)",
+          "summary": "The full suite was not run by the auditor (instructed not to). Only narrow runs on the changed area were repeated, all passing; they cannot confirm the 3282 total, the fmt/lint/dylint results, or the reported flake.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-22T17:57:29.311334054Z",
+          "seal": {
+            "by": "server",
+            "mac": "381ab91b12a590621ea914a140c9e3d4e98c8528ddd43349a7654e6c4ef58ab1"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "The auditor did not run the full gates, only narrow tests, so the 3282 count and the flake account are unconfirmed. Fix: run tools/agentic/gate.sh test on the head commit and record the printed pass/fail counts, or drop the number from the PR description.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0511"
+          ],
+          "recorded_at": "2026-11-22T17:57:50.504312301Z",
+          "seal": {
+            "by": "server",
+            "mac": "30724fbdc2565ee05b5a1f7f69fef18ecc41f268d20e79406060d3ffa35d9da6"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T17:56:57.913391914Z",
+      "updated_at": "2026-11-22T17:57:50.504312301Z",
+      "seal": {
+        "by": "server",
+        "mac": "3d456c75f0a45991207ec42417321dd2b6963798c9c108b3d15736fad10dc35a"
       }
     }
   ]
