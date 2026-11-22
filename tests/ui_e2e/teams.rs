@@ -401,6 +401,76 @@ async fn a_team_is_suspended_with_a_notice_shown_on_its_catalogs_then_lifted() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_suspended_teams_notice_is_edited_without_lifting_the_suspension() {
+    let server = server().await;
+    let admin = server.key("console-admin", Access::Admin, &[], None).await;
+    let reader = server
+        .key("member-reader", Access::Read, &["main"], Some("main"))
+        .await;
+    // Suspended an hour ago, so a reset `suspended_at` would show.
+    let since = Utc::now() - TimeDelta::hours(1);
+    crate::support::server::applied(&server.app, async {
+        teams::suspend(
+            &server.db.pool,
+            OWNER,
+            Some("Paused for review."),
+            &okf_mcp::store::audit::AuditActor::cli(),
+            since,
+        )
+        .await
+        .expect("suspend the owner team");
+    })
+    .await;
+    let before = teams::find(&server.db.pool, OWNER)
+        .await
+        .expect("read the team")
+        .suspension
+        .expect("suspended");
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/teams");
+        ui.click(&format!("[data-test=team-{OWNER}]"));
+        ui.wait_visible("#team-notice-save:not([disabled])");
+        // The textarea starts with the current notice.
+        assert_eq!(
+            ui.eval(
+                "() => document.querySelector('#team-notice-form textarea').value",
+                json!(null)
+            ),
+            json!("Paused for review.")
+        );
+        ui.fill("#team-notice-form textarea", "Back on Monday.");
+        ui.click("#team-notice-save");
+        ui.wait_text("#toasts", &format!("Saved the notice of team {OWNER}."));
+        ui.wait_text("#team-suspension-notice", "Back on Monday.");
+        // Still suspended: Lift is offered, not Suspend.
+        ui.wait_visible("#team-unsuspend:not([disabled])");
+        ui.wait_hidden("#team-suspend-form");
+        ui.wait_visible(&format!("[data-test=team-suspended-{OWNER}]"));
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let after = teams::find(&server.db.pool, OWNER)
+        .await
+        .expect("read the team")
+        .suspension
+        .expect("still suspended");
+    assert_eq!(after.notice.as_deref(), Some("Back on Monday."));
+    assert_eq!(after.since, before.since, "suspended_at was reset");
+    // A member is still refused, now with the new notice.
+    drive(server.base.clone(), move |ui| {
+        ui.login(&reader);
+        ui.open("/browse/main");
+        ui.wait_visible("#browse-suspended");
+        ui.wait_text("#browse-suspended", "Back on Monday.");
+        ui.wait_text("#toasts", "is suspended");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_member_sees_the_notice_on_browse_with_a_link_to_export() {
     let server = server().await;
     let reader = server

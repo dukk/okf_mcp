@@ -303,11 +303,23 @@ export async function render(main) {
             const lift = guard(h('button', { type: 'button', id: 'team-unsuspend' }, 'Lift suspension'), key, manager);
             lift.addEventListener('click',
                 write({ suspended: false }, `Lifted the suspension of team ${team.name}.`));
+            // Saving a new notice keeps the team suspended and its original
+            // `suspended_at`: lifting and suspending again would reopen the
+            // catalogs to members for a moment and reset the date.
+            const notice = guard(h('textarea', { name: 'notice', maxlength: 2000, rows: 3,
+                'aria-label': 'Notice for its members' }, team.suspension_notice), key, manager);
+            const saveNotice = guard(h('button', { type: 'submit', id: 'team-notice-save' }, 'Save notice'), key, manager);
+            const noticeForm = h('form', { id: 'team-notice-form' }, notice, saveNotice);
+            noticeForm.addEventListener('submit', event => {
+                event.preventDefault();
+                return write({ suspended: true, notice: notice.value }, `Saved the notice of team ${team.name}.`)();
+            });
             return h('section', { id: 'team-suspension' }, heading,
                 h('p', {}, `Suspended since ${when(team.suspended_at)}. Its catalogs refuse everyone but admins, except export.`),
                 team.suspension_notice
                     ? h('p', { class: 'muted', id: 'team-suspension-notice' }, team.suspension_notice)
                     : null,
+                noticeForm,
                 lift,
                 error);
         }
