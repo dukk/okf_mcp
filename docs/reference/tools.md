@@ -83,7 +83,7 @@ A tool is one of five kinds:
 
 **Add Source** (staged)
 
-Append an entry (id, resource, title, author) to a concept's `sources`, refusing a duplicate id, in the changeset `changeset` names (open one with open_changeset); `cited_by` finds a source's citations. Write access.
+Append an entry (id, resource, title, author) to a concept's `sources`, refusing a duplicate id, in the changeset `changeset` names (open one with open_changeset); `cited_by` finds a source's citations. Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result). Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -456,7 +456,7 @@ The unpublished changeset `changeset` names: each changed path (create, update o
 
 **Publish Changeset** (destructive)
 
-Publish the changeset `changeset` names: its edits become the published documents, each with a new revision carrying `message`. Refused with Conflict when a document changed since this changeset read it (log.md and index.md bookkeeping is replayed onto the new text instead), or with LintFailed when a changed file has lint errors; the changeset then stays open. Lint errors elsewhere come back as warnings. When every edit already matches the published text, the changeset is closed with published: true and no revisions. Write access.
+Publish the changeset `changeset` names: its edits become the published documents, each with a new revision carrying `message`. Refused with Conflict when a document changed since this changeset read it (log.md and index.md bookkeeping, and the stamp, review, question, unquestion, add_source and remove_source edits of a concept, are replayed onto the new text instead; a replay that can no longer apply is refused with its reason), or with LintFailed when a changed file has lint errors; the changeset then stays open. Lint errors elsewhere come back as warnings. When every edit already matches the published text, the changeset is closed with published: true and no revisions. Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -467,7 +467,7 @@ Publish the changeset `changeset` names: its edits become the published document
 
 **Add Question** (staged)
 
-Queue one question in a concept's open_questions without recording a review, in the changeset `changeset` names (open one with open_changeset). Write access.
+Queue one question in a concept's open_questions without recording a review, in the changeset `changeset` names (open one with open_changeset). Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result). Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -491,7 +491,7 @@ Read the raw text of an index.md (default /index.md), log.md or AGENTS.md. Witho
 
 **Remove Source** (staged)
 
-Remove the entry with `id` from a concept's `sources`, deleting the key when none are left, in the changeset `changeset` names (open one with open_changeset). Refused while a footnote in the body still cites it (its label is the id, or its definition names the id, title or resource): remove the citation first. `cited_by` finds a source's citations. Write access.
+Remove the entry with `id` from a concept's `sources`, deleting the key when none are left, in the changeset `changeset` names (open one with open_changeset). Refused while a footnote in the body still cites it (its label is the id, or its definition names the id, title or resource): remove the citation first. `cited_by` finds a source's citations. Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result). Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -537,7 +537,7 @@ Add a document's content at an earlier revision (from `history`), or its deletio
 
 **Record Review** (staged)
 
-Replace a concept's `reviewed` with { by, at: now, outcome, note } and queue any `questions` in open_questions, in the changeset `changeset` names (open one with open_changeset). `by` defaults to the key's actor. Write access.
+Replace a concept's `reviewed` with { by, at: now, outcome, note } and queue any `questions` in open_questions, in the changeset `changeset` names (open one with open_changeset). `by` defaults to the key's actor. Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result). Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -628,7 +628,7 @@ Sprawl scores: which concepts have grown too long or volatile, with sections and
 
 **Stamp Concept** (staged)
 
-Set a concept's `generated` (content written) or append to its `verified` (checked against the real system) with { by, at: now }, in the changeset `changeset` names (open one with open_changeset). `by` defaults to the key's actor. Write access.
+Set a concept's `generated` (content written) or append to its `verified` (checked against the real system) with { by, at: now }, in the changeset `changeset` names (open one with open_changeset). `by` defaults to the key's actor. Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result). Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -641,7 +641,7 @@ Set a concept's `generated` (content written) or append to its `verified` (check
 
 **Resolve Question** (staged)
 
-Remove one queued question, by its 1-based number in open_questions or its exact text, deleting the key when none are left, in the changeset `changeset` names (open one with open_changeset). Write access.
+Remove one queued question, by its 1-based number in open_questions or its exact text, deleting the key when none are left, in the changeset `changeset` names (open one with open_changeset). Write access. Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result).
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|

@@ -754,7 +754,8 @@ impl OkfServer {
         description = "Set a concept's `generated` (content written) or append to \
                        its `verified` (checked against the real system) with { by, at: now }, in \
                        the changeset `changeset` names (open one with open_changeset). `by` \
-                       defaults to the key's actor. Write access.",
+                       defaults to the key's actor. Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result). \
+                       Write access.",
         annotations(
             title = "Stamp Concept",
             read_only_hint = false,
@@ -778,7 +779,8 @@ impl OkfServer {
         description = "Replace a concept's `reviewed` with { by, at: now, outcome, \
                        note } and queue any `questions` in open_questions, in the changeset \
                        `changeset` names (open one with open_changeset). `by` defaults to the \
-                       key's actor. Write access.",
+                       key's actor. Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result). \
+                       Write access.",
         annotations(
             title = "Record Review",
             read_only_hint = false,
@@ -801,7 +803,8 @@ impl OkfServer {
         title = "Add Question",
         description = "Queue one question in a concept's open_questions without \
                        recording a review, in the changeset `changeset` names (open one with \
-                       open_changeset). Write access.",
+                       open_changeset). Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result). \
+                       Write access.",
         annotations(
             title = "Add Question",
             read_only_hint = false,
@@ -825,7 +828,7 @@ impl OkfServer {
         description = "Remove one queued question, by its 1-based number in \
                        open_questions or its exact text, deleting the key when none are left, in \
                        the changeset `changeset` names (open one with open_changeset). Write \
-                       access.",
+                       access. Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result).",
         annotations(
             title = "Resolve Question",
             read_only_hint = false,
@@ -848,8 +851,8 @@ impl OkfServer {
         title = "Add Source",
         description = "Append an entry (id, resource, title, author) to a \
                        concept's `sources`, refusing a duplicate id, in the changeset `changeset` \
-                       names (open one with open_changeset); `cited_by` finds a source's citations. Write \
-                       access.",
+                       names (open one with open_changeset); `cited_by` finds a source's citations. Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result). \
+                       Write access.",
         annotations(
             title = "Add Source",
             read_only_hint = false,
@@ -874,8 +877,8 @@ impl OkfServer {
                        when none are left, in the changeset `changeset` names (open one with \
                        open_changeset). Refused while a footnote in the body still cites it (its \
                        label is the id, or its definition names the id, title or resource): \
-                       remove the citation first. `cited_by` finds a source's citations. Write \
-                       access.",
+                       remove the citation first. `cited_by` finds a source's citations. Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result). \
+                       Write access.",
         annotations(
             title = "Remove Source",
             read_only_hint = false,
@@ -1327,7 +1330,7 @@ mod bookkeeping_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn the_concept_commands_edit_frontmatter_as_free_edits() {
+    async fn the_concept_commands_edit_frontmatter_as_replayable_edits() {
         let test = pg().await;
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
@@ -1419,9 +1422,29 @@ mod bookkeeping_tests {
         );
         assert!(text.contains("https://example.com/runbook"), "{text}");
         assert!(!text.contains("spare"), "{text}");
-        // Frontmatter edits carry no replay: they conflict on a stale base.
+        // Frontmatter edits are stored as replayable operations (issue #830).
         assert_eq!(last.touched, ["/a.md"]);
-        assert_eq!(entry(&test, &last.changeset, "a.md").await.replay, None);
+        let stored = entry(&test, &last.changeset, "a.md").await.replay;
+        let ops: Vec<&str> = stored
+            .as_ref()
+            .and_then(|ops| ops.as_array())
+            .expect("the frontmatter edits are replayable")
+            .iter()
+            .map(|op| op["op"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            ops,
+            [
+                "stamp",
+                "add_question",
+                "add_question",
+                "remove_question",
+                "set_reviewed",
+                "add_source",
+                "add_source",
+                "remove_source"
+            ]
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2527,5 +2550,285 @@ mod set_frontmatter_value_schema_tests {
             json!({"path": "/a", "key": "k", "changeset": "c"}),
         );
         assert!(missing.is_err());
+    }
+}
+
+/// Issue #830: the frontmatter bookkeeping tools (`stamp`, `review`,
+/// `question`, `unquestion`, `add_source`, `remove_source`) replay onto
+/// text another changeset published since, instead of forcing a discard.
+#[cfg(test)]
+mod frontmatter_replay_tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::mcp::changesets::{pending_changes, publish, PendingParams, PublishParams};
+    use crate::mcp::testing::{app_with, open, writer, TestApp};
+
+    const NTP: &str = concat!(
+        "---\ntype: System\ntitle: NTP\ndescription: Hosts sync.\n",
+        "sources:\n  - id: s0\n    resource: https://example.com/ntp\n",
+        "open_questions:\n  - \"Old?\"\n---\n# NTP\n",
+    );
+
+    async fn pg() -> TestApp {
+        app_with(&[("pg", &[("infra/ntp.md", NTP)])], Config::default()).await
+    }
+
+    /// Two writers with a changeset each, both on `/infra/ntp.md`'s revision 1.
+    async fn two(test: &TestApp) -> (ToolContext, String, ToolContext, String) {
+        let first = writer(test, "writer-a", "pg").await;
+        let second = writer(test, "writer-b", "pg").await;
+        let (a, b) = (open(&first).await, open(&second).await);
+        (first, a, second, b)
+    }
+
+    async fn publish_as(
+        ctx: &ToolContext,
+        handle: &str,
+    ) -> Result<crate::mcp::changesets::Published, OkfError> {
+        let params = PublishParams {
+            message: "m".to_string(),
+            changeset: handle.to_string(),
+        };
+        publish(ctx, params).await
+    }
+
+    async fn published_ntp(test: &TestApp) -> String {
+        let loaded = test.app.catalog("pg").await.unwrap().unwrap().current();
+        loaded
+            .snapshot()
+            .get("infra/ntp.md")
+            .map(|doc| doc.text().to_string())
+            .unwrap()
+    }
+
+    async fn add(ctx: &ToolContext, handle: &str, id: &str) {
+        let params = AddSourceParams {
+            path: "/infra/ntp.md".to_string(),
+            id: id.to_string(),
+            resource: format!("https://example.com/{id}"),
+            title: None,
+            author: None,
+            changeset: handle.to_string(),
+        };
+        add_source(ctx, params).await.unwrap();
+    }
+
+    async fn stamp_verified(ctx: &ToolContext, handle: &str) {
+        let params = StampParams {
+            path: "/infra/ntp.md".to_string(),
+            field: StampField::Verified,
+            by: Some("other".to_string()),
+            changeset: handle.to_string(),
+        };
+        stamp(ctx, params).await.unwrap();
+    }
+
+    /// `ctx`'s pending entry for the concept: (stale, replayable, replayed, error).
+    async fn shown(ctx: &ToolContext, handle: &str) -> crate::mcp::changesets::PendingFile {
+        let params = PendingParams {
+            changeset: handle.to_string(),
+        };
+        let mut files = pending_changes(ctx, params).await.unwrap().files;
+        assert_eq!(files.len(), 1, "{files:?}");
+        files.remove(0)
+    }
+
+    /// Checks a stale entry replays (shown and published), and returns the
+    /// published text, which then holds the other writer's stamp too.
+    async fn replays(test: &TestApp, first: &ToolContext, a: &str) -> String {
+        let file = shown(first, a).await;
+        assert_eq!(
+            (
+                file.stale,
+                file.replayable,
+                file.replayed,
+                file.replay_error.as_deref()
+            ),
+            (true, true, true, None),
+            "{}",
+            file.diff
+        );
+        let published = publish_as(first, a).await.unwrap();
+        assert_eq!(published.report.replayed, ["/infra/ntp.md"]);
+        let text = published_ntp(test).await;
+        assert!(text.contains("by: other"), "{text}");
+        text
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn add_source_replays_over_a_concurrent_stamp() {
+        let test = pg().await;
+        let (first, a, second, b) = two(&test).await;
+        add(&first, &a, "s1").await;
+        add(&first, &a, "s2").await;
+        stamp_verified(&second, &b).await;
+        publish_as(&second, &b).await.unwrap();
+
+        let text = replays(&test, &first, &a).await;
+
+        assert!(text.contains("id: s1") && text.contains("id: s2"), "{text}");
+        assert!(text.contains("id: s0"), "{text}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remove_source_replays_over_a_concurrent_stamp() {
+        let test = pg().await;
+        let (first, a, second, b) = two(&test).await;
+        let params = RemoveSourceParams {
+            path: "/infra/ntp.md".to_string(),
+            id: "s0".to_string(),
+            changeset: a.clone(),
+        };
+        remove_source(&first, params).await.unwrap();
+        stamp_verified(&second, &b).await;
+        publish_as(&second, &b).await.unwrap();
+
+        let text = replays(&test, &first, &a).await;
+
+        assert!(!text.contains("sources"), "{text}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn question_and_unquestion_replay_over_a_concurrent_stamp() {
+        let test = pg().await;
+        let (first, a, second, b) = two(&test).await;
+        let question_params = QuestionParams {
+            path: "/infra/ntp.md".to_string(),
+            question: "New?".to_string(),
+            changeset: a.clone(),
+        };
+        question(&first, question_params).await.unwrap();
+        let unquestion_params = UnquestionParams {
+            path: "/infra/ntp.md".to_string(),
+            question: QuestionRef::Number(1),
+            changeset: a.clone(),
+        };
+        unquestion(&first, unquestion_params).await.unwrap();
+        stamp_verified(&second, &b).await;
+        publish_as(&second, &b).await.unwrap();
+
+        let text = replays(&test, &first, &a).await;
+
+        assert!(
+            text.contains("\"New?\"") && !text.contains("Old?"),
+            "{text}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stamp_and_review_replay_over_a_concurrent_source() {
+        let test = pg().await;
+        let (first, a, second, b) = two(&test).await;
+        let review_params = ReviewParams {
+            path: "/infra/ntp.md".to_string(),
+            outcome: "verified".to_string(),
+            note: "Checked it.".to_string(),
+            questions: Some(vec!["Why?".to_string()]),
+            by: Some("reviewer".to_string()),
+            changeset: a.clone(),
+        };
+        review(&first, review_params).await.unwrap();
+        let stamp_params = StampParams {
+            path: "/infra/ntp.md".to_string(),
+            field: StampField::Generated,
+            by: Some("stamper".to_string()),
+            changeset: a.clone(),
+        };
+        stamp(&first, stamp_params).await.unwrap();
+        add(&second, &b, "s9").await;
+        publish_as(&second, &b).await.unwrap();
+
+        let file = shown(&first, &a).await;
+        assert_eq!(
+            (file.stale, file.replayable, file.replayed),
+            (true, true, true),
+            "{}",
+            file.diff
+        );
+        publish_as(&first, &a).await.unwrap();
+
+        let text = published_ntp(&test).await;
+        assert!(text.contains("id: s9"), "{text}");
+        assert!(
+            text.contains("by: reviewer") && text.contains("by: stamper"),
+            "{text}"
+        );
+        assert!(
+            text.contains("\"Why?\"") && text.contains("\"Old?\""),
+            "{text}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_same_source_id_on_both_sides_is_a_replay_error() {
+        let test = pg().await;
+        let (first, a, second, b) = two(&test).await;
+        add(&first, &a, "s1").await;
+        add(&second, &b, "s1").await;
+        publish_as(&second, &b).await.unwrap();
+
+        let file = shown(&first, &a).await;
+
+        assert_eq!(
+            (file.stale, file.replayable, file.replayed),
+            (true, true, false)
+        );
+        let reason = file.replay_error.as_deref().unwrap();
+        assert!(
+            reason.contains("already has a source with id 's1'"),
+            "{reason}"
+        );
+        let error = publish_as(&first, &a).await.unwrap_err();
+        assert_eq!(error.to_string(), reason);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_source_now_cited_cannot_be_removed_on_replay() {
+        let test = pg().await;
+        let (first, a, second, b) = two(&test).await;
+        let params = RemoveSourceParams {
+            path: "/infra/ntp.md".to_string(),
+            id: "s0".to_string(),
+            changeset: a.clone(),
+        };
+        remove_source(&first, params).await.unwrap();
+        let edit = EditDocumentParams {
+            path: "/infra/ntp.md".to_string(),
+            old_str: "# NTP\n".to_string(),
+            new_str: "# NTP\n\nSyncs.[^s0]\n\n[^s0]: s0\n".to_string(),
+            replace_all: false,
+            changeset: b.clone(),
+        };
+        edit_document(&second, edit).await.unwrap();
+        publish_as(&second, &b).await.unwrap();
+
+        let file = shown(&first, &a).await;
+
+        assert_eq!((file.replayable, file.replayed), (true, false));
+        let reason = file.replay_error.as_deref().unwrap();
+        assert!(reason.contains("still cites source 's0'"), "{reason}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_free_edit_on_the_path_still_makes_the_entry_a_conflict() {
+        let test = pg().await;
+        let (first, a, second, b) = two(&test).await;
+        add(&first, &a, "s1").await;
+        let edit = EditDocumentParams {
+            path: "/infra/ntp.md".to_string(),
+            old_str: "# NTP\n".to_string(),
+            new_str: "# NTP\n\nMine.\n".to_string(),
+            replace_all: false,
+            changeset: a.clone(),
+        };
+        edit_document(&first, edit).await.unwrap();
+        stamp_verified(&second, &b).await;
+        publish_as(&second, &b).await.unwrap();
+
+        let file = shown(&first, &a).await;
+        let error = publish_as(&first, &a).await.unwrap_err();
+
+        assert_eq!((file.stale, file.replayable), (true, false));
+        assert!(matches!(error, OkfError::Conflict { .. }), "{error:?}");
     }
 }
