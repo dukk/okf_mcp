@@ -119,6 +119,11 @@ pub struct Concept {
     /// The section returned (with `section`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub section: Option<OutlineHeading>,
+    /// Whether `section` named exactly one heading; absent without `section`.
+    /// When false the concept itself was read, but no body is returned: the
+    /// `outline` and a `note` say what to pass instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section_found: Option<bool>,
     /// The file verbatim (with `raw`, within the limit or with `full`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw: Option<String>,
@@ -208,8 +213,8 @@ fn frontmatter_json(doc: &SnapshotDoc) -> (serde_json::Value, Option<String>) {
 /// `full`; with `section`, the body is that section at any size.
 ///
 /// # Errors
-/// [`OkfError::Refused`] if `section` names no heading (the message lists
-/// them) or several (it lists their slugs).
+/// None for a `section` that names no heading or several: that is a result
+/// with `section_found: false`, the outline and a `note`, not an error.
 #[tracing::instrument(level = "trace", skip_all)]
 fn concept(
     catalog: &str,
@@ -224,27 +229,41 @@ fn concept(
     // `str::lines`, as `search` counts: a final unterminated line counts.
     let lines = whole.lines().count();
     let within = params.full || chars <= limit;
+    let mut section_note = None;
+    let mut section_found = None;
     let (body, section, outline) = match params.section.as_deref() {
-        Some(want) => {
-            let (entry, text) = Outline::of(doc.text()).section(want)?;
-            (Some(text), Some(entry), None)
-        }
+        Some(want) => match Outline::of(doc.text()).section(want) {
+            Ok((entry, text)) => {
+                section_found = Some(true);
+                (Some(text), Some(entry), None)
+            }
+            // A read that finds no one section is an answer, not a failed
+            // call: return the outline so the caller can pick a slug.
+            Err(OkfError::Refused { reason }) => {
+                section_found = Some(false);
+                section_note = Some(missing_section_note(&reason));
+                (None, None, Some(Outline::of(doc.text()).entries()))
+            }
+            Err(other) => return Err(other),
+        },
         None if within => (Some(whole), None, None),
         None => (None, None, Some(Outline::of(doc.text()).entries())),
     };
-    let note = (!within).then(|| {
-        let returned = if section.is_some() {
-            "only the section is returned"
-        } else {
-            "only its outline is returned"
-        };
-        format!(
-            "The body is {chars} characters, over this server's limit of {limit}, so \
+    let note = section_note.or_else(|| {
+        (!within).then(|| {
+            let returned = if section.is_some() {
+                "only the section is returned"
+            } else {
+                "only its outline is returned"
+            };
+            format!(
+                "The body is {chars} characters, over this server's limit of {limit}, so \
              {returned}, without `raw`. Pass `section` (a heading's text or slug from the \
              outline) to read one section, or `full: true` for the whole body. To add to it, \
              edit_document with an `old_str` anchored on a heading. A concept this large may \
              be worth splitting (split_concept)."
-        )
+            )
+        })
     });
     let (frontmatter, frontmatter_error) = frontmatter_json(doc);
     // `bool::then(closure)` is `Some(closure())` when true, else `None`, so
@@ -288,8 +307,10 @@ fn concept(
         frontmatter_error,
         lines,
         chars,
-        truncated: !within,
+        // A missed `section` returns no body, so the body is not whole.
+        truncated: !within || section_found == Some(false),
         note,
+        section_found,
         body,
         outline,
         section,
@@ -297,6 +318,21 @@ fn concept(
         links,
         backlinks,
     })
+}
+
+/// The `note` for a `section` that matched no heading or several.
+///
+/// # Arguments
+/// * `reason` - the [`OkfError::Refused`] reason `Outline::section` gave.
+///
+/// # Returns
+/// The reason, without its heading list (the `outline` carries that).
+#[tracing::instrument(level = "trace", skip_all)]
+fn missing_section_note(reason: &str) -> String {
+    match reason.split_once("; headings are:") {
+        Some((head, _)) => format!("{head}; read one of the outline's sections by its slug"),
+        None => reason.to_string(),
+    }
 }
 
 /// Finds a concept in the read set.
@@ -507,6 +543,8 @@ impl OkfServer {
                        and a `note`: each heading's text, slug, level, line and section size. \
                        `section` (a heading's slug, which wins, or its text) returns just that \
                        section with its subsections, at any size; `full: true` returns the whole body anyway. \
+                       A `section` that matches no heading, or several, is not an error: the result \
+                       has `section_found: false`, the `outline` and a `note`. \
                        With `links`, its resolved outbound links (target, title, description, \
                        broken) and its backlinks; with `raw`, the file verbatim, but only \
                        within the limit or with `full`. Without `catalog`, the first selected \
@@ -802,8 +840,8 @@ mod tests {
         let by_slug = get_concept(&ctx, section("notes")).await.unwrap();
         let second = get_concept(&ctx, section("#notes-1")).await.unwrap();
         let by_text = get_concept(&ctx, section("## LAST")).await.unwrap();
-        let repeated = get_concept(&ctx, section("Notes")).await.unwrap_err();
-        let unknown = get_concept(&ctx, section("Nowhere")).await.unwrap_err();
+        let repeated = get_concept(&ctx, section("Notes")).await.unwrap();
+        let unknown = get_concept(&ctx, section("Nowhere")).await.unwrap();
 
         assert_eq!(
             by_slug.body.as_deref(),
@@ -819,18 +857,22 @@ mod tests {
             .contains("only the section is returned"));
         assert_eq!(second.body.as_deref(), Some("## Notes\nSecond.\n"));
         assert_eq!(by_text.body.as_deref(), Some("## Last\nEnd.\n"));
-        assert_eq!(repeated.kind(), "Refused");
+        for miss in [&repeated, &unknown] {
+            assert_eq!(miss.section_found, Some(false));
+            assert!(miss.truncated && miss.body.is_none() && miss.raw.is_none());
+            assert!(miss.section.is_none());
+            assert!(miss.outline.as_ref().is_some_and(|o| o.len() > 2));
+        }
+        assert_eq!(by_slug.section_found, Some(true));
+        let note = repeated.note.as_deref().unwrap();
         assert!(
-            repeated
-                .to_string()
-                .contains("pass the anchor slug instead: notes, notes-1"),
-            "{repeated}"
+            note.contains("pass the anchor slug instead: notes, notes-1"),
+            "{note}"
         );
-        assert_eq!(unknown.kind(), "Refused");
-        let listed = unknown.to_string();
+        let note = unknown.note.as_deref().unwrap();
         assert!(
-            listed.contains("no heading 'Nowhere'") && listed.contains("### Detail"),
-            "{listed}"
+            note.contains("no heading 'Nowhere'") && !note.contains("### Detail"),
+            "{note}"
         );
     }
 
@@ -849,6 +891,27 @@ mod tests {
         assert_eq!(concept.body.as_deref(), Some("## Last\nEnd.\n"));
         assert_eq!(concept.raw, Some(format!("{BIG_HEAD}{BIG_BODY}")));
         assert!(!concept.truncated && concept.note.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_missing_section_within_the_limit_is_still_a_result_with_the_outline() {
+        let test = big_server(BIG_BODY.len()).await;
+        let ctx = context(&test, principal(&[], Some("pg")), None);
+        let params = GetConceptParams {
+            section: Some("Hosting".to_string()),
+            raw: true,
+            ..concept_params("big")
+        };
+
+        let concept = get_concept(&ctx, params).await.unwrap();
+
+        assert_eq!(concept.section_found, Some(false));
+        // `raw` is the file as asked, within the limit; the body is not returned.
+        assert!(concept.body.is_none() && concept.raw.is_some());
+        assert!(concept.outline.is_some_and(|outline| !outline.is_empty()));
+        assert!(concept
+            .note
+            .is_some_and(|note| note.contains("no heading 'Hosting'")));
     }
 
     #[tokio::test(flavor = "multi_thread")]
