@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 492,
+  "next_claim_seq": 507,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "19b305f241957700f937cbbf760f74397f4041d5f405a40d062d6159a3a7a8a0"
+    "mac": "5fc27a88dfcbad85a08b588cfca3ef3533e8378fab1f9643cd6baa3c816b804e"
   },
-  "next_evidence_seq": 629,
+  "next_evidence_seq": 648,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "b40cdff770e960a0f87b6ccdd9cd3c7f24711c1a698ecd1bb4ba3030dbbbf01e"
+    "mac": "063ad68c9c867cec1d49f1104cf6f7c4dc9f773e73a8b78da59b95535dfd1adc"
   },
   "claims": [
     {
@@ -39477,6 +39477,1137 @@
       "seal": {
         "by": "server",
         "mac": "e9b457b64e102eee5ef268b5b6e470514b8a63f91f3d4516a5fbbf206c44d5f8"
+      }
+    },
+    {
+      "id": "CLM-0492",
+      "statement": "Issue #499 is resolved: the `mcp <tool>` span nests under the POST /mcp request span, the request span stays a root with the inbound traceparent as a link only, and docs/operations.md and the design's MCP row say so.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/499 'Nest mcp <tool> spans under the POST /mcp request span'",
+      "derived_from": [],
+      "artifacts": [
+        "docs/operations.md",
+        "docs/superpowers/specs/2026-11-15-okf-observability-design.md",
+        "src/mcp/mod.rs",
+        "src/http/mod.rs"
+      ],
+      "tags": [
+        "from-issue:499"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0644",
+          "kind": "analysis",
+          "locator": "children of CLM-0492",
+          "summary": "Behaviour and acceptance criteria (nesting, root plus link-only, rmcp extensions, privacy test untouched, design row) are supported. Two wording children are refuted: CLM-0503 (initialize/tools/list traces 'request span alone' is true only at info) and CLM-0506 (the M15 plan still holds the old 'own root trace' note). Both are documentation-precision findings in our change/description, not behaviour.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-22T22:24:24.287915079Z",
+          "seal": {
+            "by": "server",
+            "mac": "891a0fc0ee422c5aca1639720b52634832ba70e2d1f8c104d69afb583233f57f"
+          }
+        },
+        {
+          "id": "EVD-0647",
+          "kind": "analysis",
+          "locator": "children of CLM-0492",
+          "summary": "After commit 1ad56d9 every active child is supported: the code and acceptance items, the doc statements (including the info-filter scoping) and the PR-description statements. The two earlier refutations are resolved.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T22:25:33.511468110Z",
+          "seal": {
+            "by": "server",
+            "mac": "2d5cc59179d14664df4c5f1a0200a1ae7511394b5b6e1599eeaabc93682f0077"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "Per roll-up, two children are refuted (CLM-0503, CLM-0506), both documentation-wording precision; the issue's behavioural and acceptance items are supported. Fix: qualify the 'request span alone' sentence in docs/operations.md to the default info filter, and either annotate the M15 plan note at line 1594 or reword the PR Summary's 'only the documentation'.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0644"
+          ],
+          "recorded_at": "2026-11-22T22:24:29.981516136Z",
+          "seal": {
+            "by": "server",
+            "mac": "6f102ef39a50cb471dc7dd09a95750c1dc0708e1da391b8dcd0263a88a110a70"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "All children are supported at 1ad56d9; the issue's nesting, root-plus-link and doc requirements hold.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0647"
+          ],
+          "recorded_at": "2026-11-22T22:25:36.976603506Z",
+          "seal": {
+            "by": "server",
+            "mac": "f10e48368c55e58f1bdf480bdc630259af491591d922adae9d8ad34409d08b8f"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T22:23:12.638921607Z",
+      "updated_at": "2026-11-22T22:25:36.976603506Z",
+      "seal": {
+        "by": "server",
+        "mac": "c9fe790b0de904e6e3b93c481f42a8f038625cfa2ab83931bfb6ccdb0541044a"
+      }
+    },
+    {
+      "id": "CLM-0493",
+      "statement": "In OkfServer::call_tool the `mcp <tool>` span is opened with the POST /mcp request span (taken from http::RequestSpan in the HTTP request Parts held in the MCP request extensions) as its explicit parent, so one trace holds the request span and the tool span.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #499 acceptance (1): 'a captured POST /mcp tools/call yields one trace: the request span is the parent of mcp <tool>'",
+      "derived_from": [
+        "CLM-0492"
+      ],
+      "artifacts": [
+        "src/mcp/mod.rs",
+        "src/mcp/telemetry_tests.rs"
+      ],
+      "tags": [
+        "from-issue:499"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0629",
+          "kind": "inspection",
+          "locator": "src/mcp/mod.rs:286-300, 478-484",
+          "summary": "call_tool computes parent = tool_span_parent(&context.extensions) and passes `parent: parent` to info_span!(\"mcp\"). tool_span_parent reads Parts from the extensions, then Parts.extensions.get::<http::RequestSpan>().0.id(), falling back to Span::current().id(). request_telemetry (src/http/mod.rs:692) inserts RequestSpan(Span::current()) inside the request span.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/mod.rs",
+              "lines": {
+                "start": 286,
+                "end": 300
+              },
+              "commit": "74399e7a047548ce03382fa870783838a3832d6a"
+            }
+          },
+          "recorded_at": "2026-11-22T22:23:51.645613691Z",
+          "seal": {
+            "by": "server",
+            "mac": "1f96d5b6f1b7e4e35a775f15b1aafe236a5bdd5c7949461bbdad87817ea04b83"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "call_tool passes an explicit parent derived from the RequestSpan in the request extensions, so the tool span is in the request's trace. Code read at head (shipped in 695979b, unchanged by this diff); the end-to-end behaviour is covered by CLM-0494's test, which I read but did not run.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0629"
+          ],
+          "recorded_at": "2026-11-22T22:24:19.628141622Z",
+          "seal": {
+            "by": "server",
+            "mac": "6ca3221dafeb2039787b75cc79ad8ca2aab135042d9e4814e137f4dab8f4ff74"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T22:23:12.638921607Z",
+      "updated_at": "2026-11-22T22:24:19.628141622Z",
+      "seal": {
+        "by": "server",
+        "mac": "4c39ffe643825b4c5dc69ac15665b621886da46c29b330e477a1ba5d51664eae"
+      }
+    },
+    {
+      "id": "CLM-0494",
+      "statement": "The test mcp::telemetry_tests::the_tool_span_is_a_child_of_the_request_span asserts, over a real MCP session at the info and trace filters, that the exported parent of `mcp get_concept` is named `POST /mcp` and shares its trace id.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #499 acceptance (1)",
+      "derived_from": [
+        "CLM-0493"
+      ],
+      "artifacts": [
+        "src/mcp/telemetry_tests.rs"
+      ],
+      "tags": [
+        "from-issue:499"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0630",
+          "kind": "inspection",
+          "locator": "src/mcp/telemetry_tests.rs:343-384",
+          "summary": "Read the test: for each of FILTERS [info, trace] it opens a real McpProbe session, calls get_concept, finds the exported parent of `mcp get_concept` by parent_span_id, asserts parent.name == \"POST /mcp\" and equal trace ids; at trace it also asserts children of the tool span > 0. Not run by me (caller runs the suite); the test landed with 695979b.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/telemetry_tests.rs",
+              "lines": {
+                "start": 343,
+                "end": 384
+              },
+              "commit": "74399e7a047548ce03382fa870783838a3832d6a"
+            }
+          },
+          "recorded_at": "2026-11-22T22:23:51.703804257Z",
+          "seal": {
+            "by": "server",
+            "mac": "f0a30a08992049fcdb8f876419ee8771a3e7ed83e68aabff82904938e9ea95a6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The assertions I read check parent name, trace id equality at info and trace, over a real session. This is a statement about what the test asserts, which holds; I did not run it.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0630"
+          ],
+          "recorded_at": "2026-11-22T22:24:19.661443012Z",
+          "seal": {
+            "by": "server",
+            "mac": "386c4d5e71373446c42b42d870e472986bc68b8a5060bbe2b999d10846cf681a"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T22:23:12.638921607Z",
+      "updated_at": "2026-11-22T22:24:19.661443012Z",
+      "seal": {
+        "by": "server",
+        "mac": "de37ba93cf811668131368a3dacd96e89d233f427355bc65696476f356509217"
+      }
+    },
+    {
+      "id": "CLM-0495",
+      "statement": "The request span is created with `parent: None` (a root) and an inbound traceparent is added only as a span link, never as the parent; the test a_forged_traceparent_is_a_link_not_the_parent asserts a root with one link.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #499: 'the request span stays parent: None and the inbound traceparent stays a link only'",
+      "derived_from": [
+        "CLM-0492"
+      ],
+      "artifacts": [
+        "src/http/mod.rs",
+        "src/http/telemetry_tests.rs"
+      ],
+      "tags": [
+        "from-issue:499"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0631",
+          "kind": "inspection",
+          "locator": "src/http/mod.rs:596-615",
+          "summary": "request_span uses info_span!(parent: None, \"request\", ...) and only calls span.add_link(link) for a valid inbound traceparent; no set_parent anywhere in src/http or src/telemetry (grep). The diff does not touch this code.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/mod.rs",
+              "lines": {
+                "start": 596,
+                "end": 615
+              },
+              "commit": "74399e7a047548ce03382fa870783838a3832d6a"
+            }
+          },
+          "recorded_at": "2026-11-22T22:23:51.737233397Z",
+          "seal": {
+            "by": "server",
+            "mac": "a6f83bbfff442c66b3ce8949c074f3c8433ffba45b53c31433df2a96fe72d2bc"
+          }
+        },
+        {
+          "id": "EVD-0632",
+          "kind": "inspection",
+          "locator": "src/http/telemetry_tests.rs:162-181",
+          "summary": "a_forged_traceparent_is_a_link_not_the_parent asserts, at both filters, that the span's trace id differs from the forged one, parent_span_id == SpanId::INVALID, and exactly one link carrying the forged trace id. (Exercises GET /healthz, same request_span builder.)",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/telemetry_tests.rs",
+              "lines": {
+                "start": 162,
+                "end": 181
+              },
+              "commit": "74399e7a047548ce03382fa870783838a3832d6a"
+            }
+          },
+          "recorded_at": "2026-11-22T22:23:51.766336521Z",
+          "seal": {
+            "by": "server",
+            "mac": "5a5a3d1e8d3be34c3391e1b86dd33d8d49b4ff8a87b40de5f363cacde638f918"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "request_span is parent: None with link-only traceparent, and a test asserts a root plus one link at both filters. The test uses /healthz, not /mcp, but both routes share the request_span builder.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0631",
+            "EVD-0632"
+          ],
+          "recorded_at": "2026-11-22T22:24:19.696630388Z",
+          "seal": {
+            "by": "server",
+            "mac": "1b18289d62caddf21fe5272dc647416341ca943480e61facc2b4e995c1bbf991"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T22:23:12.638921607Z",
+      "updated_at": "2026-11-22T22:24:19.696630388Z",
+      "seal": {
+        "by": "server",
+        "mac": "e796107cd01b3e30143e86ba12856860e1137b9f4e35482e461bc8ad96da605f"
+      }
+    },
+    {
+      "id": "CLM-0496",
+      "statement": "In rmcp 3.8.0 (the version in Cargo.lock) the streamable HTTP server inserts the request's http::request::Parts into the MCP request's extensions, and those extensions reach call_tool as RequestContext::extensions.",
+      "kind": "interface",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #499: 'check in rmcp's source that request extensions reach call_tool'",
+      "derived_from": [
+        "CLM-0492"
+      ],
+      "artifacts": [
+        "Cargo.lock"
+      ],
+      "tags": [
+        "from-issue:499"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0633",
+          "kind": "inspection",
+          "locator": "~/.cargo/registry/src/*/rmcp-3.8.0/src/transport/streamable_http_server/tower.rs:2066-2070, 2153-2154, 2275; src/service.rs:1574-1585; Cargo.lock:4043-4044",
+          "summary": "Cargo.lock pins rmcp 3.8.0. In tower.rs the POST handler does `req.request.extensions_mut().insert(part)` (http Parts) for requests (stateful, initialize, stateless paths). service.rs:1574-1585 swaps the request's extensions into the RequestContext handed to the handler (`extensions`), so call_tool sees Parts via context.extensions, as tool_span_parent expects. The extension flow is read in source, not run.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T22:23:51.800058142Z",
+          "seal": {
+            "by": "server",
+            "mac": "d549dc2880e2f1eb54f44a37e85b0ad4c86333a061ecaab149900f43316a6c84"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The rmcp 3.8.0 source (the Cargo.lock version) inserts the HTTP Parts into the request extensions on the stateful, initialize and stateless paths, and service.rs moves those extensions into the RequestContext. Source reading only.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0633"
+          ],
+          "recorded_at": "2026-11-22T22:24:19.730471360Z",
+          "seal": {
+            "by": "server",
+            "mac": "1ee7ddf79357e250d12830754f38dc9b08b84885339e928ef1aec4f0d39d323f"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T22:23:12.638921607Z",
+      "updated_at": "2026-11-22T22:24:19.730471360Z",
+      "seal": {
+        "by": "server",
+        "mac": "5b401a237160cadf38c24d388396bacebac4228b1283fa788aa8bfa0ab640d29"
+      }
+    },
+    {
+      "id": "CLM-0497",
+      "statement": "tests/telemetry_privacy.rs is unaffected by this change: the diff origin/main..HEAD touches only docs and a changelog file, and the test reads none of them.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Issue #499 acceptance (2): 'tests/telemetry_privacy.rs still passes'",
+      "derived_from": [
+        "CLM-0492"
+      ],
+      "artifacts": [
+        "tests/telemetry_privacy.rs"
+      ],
+      "tags": [
+        "from-issue:499"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0634",
+          "kind": "analysis",
+          "locator": "git diff --name-only origin/main..HEAD; grep -n 'include_str|docs/' tests/telemetry_privacy.rs",
+          "summary": "The diff touches only changelog/2026-11-22T22-30-00Z-issue-499-nest-tool-spans-docs.md, docs/operations.md and the design doc. tests/telemetry_privacy.rs has no include_str and no reference to docs/ (grep: no hits), so a docs-only diff cannot change its result. I did not run it (the caller is running the suite), so a pass is inferred, not observed.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "include_str|include_bytes|docs/|operations\\.md",
+              "scope": [
+                "tests/telemetry_privacy.rs"
+              ],
+              "hits": 0,
+              "commit": "74399e7a047548ce03382fa870783838a3832d6a"
+            }
+          },
+          "recorded_at": "2026-11-22T22:23:51.839163614Z",
+          "seal": {
+            "by": "server",
+            "mac": "c763d0a56917faa316cefb9ff4ee3c8e15a4c67e9922149428c11b87c53c83cf"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "A docs-only diff and a test with no reference to docs files cannot change its outcome. The pass itself is inferred, not observed; the caller's test run is the observation.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0634"
+          ],
+          "recorded_at": "2026-11-22T22:24:19.764522692Z",
+          "seal": {
+            "by": "server",
+            "mac": "fc6298145a64554979959472aa1d31c30056d33e3eca4c5e5fcacdbf9ddef04b"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T22:23:12.638921607Z",
+      "updated_at": "2026-11-22T22:24:19.764522692Z",
+      "seal": {
+        "by": "server",
+        "mac": "071bb3da97d428f84c670d3e6ab8570de0ea981939c1a87734f399af36014268"
+      }
+    },
+    {
+      "id": "CLM-0498",
+      "statement": "docs/operations.md 'Span reference' says an `mcp <tool>` span is a child of its `POST /mcp` request span in the same trace.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Issue #499 acceptance (3); PR body: 'the tool span is a child of the request span in one trace'",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 1402,
+          "end": 1412
+        },
+        "commit": "74399e7a047548ce03382fa870783838a3832d6a"
+      },
+      "derived_from": [
+        "CLM-0492"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:499"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0635",
+          "kind": "inspection",
+          "locator": "docs/operations.md:1402-1412; src/mcp/telemetry_tests.rs:343-384",
+          "summary": "The paragraph now reads \"A tool call's `mcp <tool>` span is a child of its `POST /mcp` request span, in the same trace\"; the old \"trace of its own\" wording is gone. Matches CLM-0493/0494.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 1402,
+                "end": 1412
+              },
+              "commit": "74399e7a047548ce03382fa870783838a3832d6a"
+            }
+          },
+          "recorded_at": "2026-11-22T22:23:51.870591686Z",
+          "seal": {
+            "by": "server",
+            "mac": "735c643b86877a4d24470d4941f11a31c727ead66ed07c76d6e7cc252d21fbeb"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The text at head says child, same trace, and matches the code and test.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0635"
+          ],
+          "recorded_at": "2026-11-22T22:24:19.798130593Z",
+          "seal": {
+            "by": "server",
+            "mac": "a8b5f7894f7c4aefb88c349405d4e2534eff1c550008b14d8a0e50e0da853285"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T22:23:12.638921607Z",
+      "updated_at": "2026-11-22T22:24:19.798130593Z",
+      "seal": {
+        "by": "server",
+        "mac": "5b567cc738218ccafcfc9992a840a3494bc244cc7624079293627600e7f26caa"
+      }
+    },
+    {
+      "id": "CLM-0499",
+      "statement": "docs/operations.md says the HTTP layer hands the request span over in the request's extensions because rmcp runs the call on its own task.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR doc text: 'rmcp runs the call on its own task, so the HTTP layer hands the request span over in the request's extensions'",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 1404,
+          "end": 1407
+        },
+        "commit": "74399e7a047548ce03382fa870783838a3832d6a"
+      },
+      "derived_from": [
+        "CLM-0492"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:499"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0636",
+          "kind": "inspection",
+          "locator": "src/http/mod.rs:688-692; src/mcp/mod.rs:458-484; rmcp-3.8.0 tower.rs:2069",
+          "summary": "request_telemetry inserts RequestSpan(Span::current()) into request extensions; rmcp copies the request Parts into the MCP request extensions; tool_span_parent reads it. The code comment at src/mcp/mod.rs:458 says the stateful session runs the handler on its worker task, so Span::current() is empty there, which matches \"rmcp runs the call on its own task\" (stated in the code comment and commit 695979b, not independently run).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/mod.rs",
+              "lines": {
+                "start": 688,
+                "end": 693
+              },
+              "commit": "74399e7a047548ce03382fa870783838a3832d6a"
+            }
+          },
+          "recorded_at": "2026-11-22T22:23:51.907922541Z",
+          "seal": {
+            "by": "server",
+            "mac": "70ea83d73d7565e75000351b6f23b1e2f89a4c5a3938ae7e3a0f164750a6987b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The request span handover in extensions is verified in code; the worker-task reason is the code's own comment and the fix commit, consistent with rmcp's design.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0636"
+          ],
+          "recorded_at": "2026-11-22T22:24:19.832461347Z",
+          "seal": {
+            "by": "server",
+            "mac": "fe31bb86875aadd025cca04f83b67e6d99b0f44843315042bdf9cf43d4ce7f73"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T22:23:12.638921607Z",
+      "updated_at": "2026-11-22T22:24:19.832461347Z",
+      "seal": {
+        "by": "server",
+        "mac": "7285ab650a4d486e39c083df5f5defc6638d3845ec6bf6e6963c7c9fec3a0d66"
+      }
+    },
+    {
+      "id": "CLM-0500",
+      "statement": "docs/operations.md says that with a raised traces_filter one trace also shows the tool's own spans; at the trace filter spans nest under the `mcp <tool>` span in the request's trace.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "docs/operations.md: 'One trace shows the request, the tool call and, with a raised traces_filter, the tool's own spans.'",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 1407,
+          "end": 1409
+        },
+        "commit": "74399e7a047548ce03382fa870783838a3832d6a"
+      },
+      "derived_from": [
+        "CLM-0492"
+      ],
+      "artifacts": [
+        "docs/operations.md",
+        "src/mcp/telemetry_tests.rs"
+      ],
+      "tags": [
+        "from-issue:499"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0637",
+          "kind": "inspection",
+          "locator": "src/mcp/telemetry_tests.rs:372-382",
+          "summary": "At filter \"trace\" the test asserts at least one exported span has the tool span as parent; the debug/trace tool-method spans (tracing::instrument) are the children. The request, tool call and nested spans share one trace id by the parent chain.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/telemetry_tests.rs",
+              "lines": {
+                "start": 372,
+                "end": 382
+              },
+              "commit": "74399e7a047548ce03382fa870783838a3832d6a"
+            }
+          },
+          "recorded_at": "2026-11-22T22:23:51.945188056Z",
+          "seal": {
+            "by": "server",
+            "mac": "0eec5a659114efe0bd21aa226746652ffcf8344194d4420f005bed8bd66c2975"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The trace-filter test asserts children exist under the tool span in that same trace.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0637"
+          ],
+          "recorded_at": "2026-11-22T22:24:19.866512669Z",
+          "seal": {
+            "by": "server",
+            "mac": "726274894287fd732254a48817db373ec48fa87ad711f67a47b3888cdf256cb5"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T22:23:12.638921607Z",
+      "updated_at": "2026-11-22T22:24:19.866512669Z",
+      "seal": {
+        "by": "server",
+        "mac": "70d8ade08bcfb72700ebb004e4470f978a257d56e087a076b8e5e4c531f01ef1"
+      }
+    },
+    {
+      "id": "CLM-0501",
+      "statement": "docs/operations.md says the request span stays a root and the caller's traceparent is a link only, which matches request_span.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR Changes: 'the request span stays a root with the inbound traceparent as a link only'",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 1409,
+          "end": 1410
+        },
+        "commit": "74399e7a047548ce03382fa870783838a3832d6a"
+      },
+      "derived_from": [
+        "CLM-0492"
+      ],
+      "artifacts": [
+        "docs/operations.md",
+        "src/http/mod.rs"
+      ],
+      "tags": [
+        "from-issue:499"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0638",
+          "kind": "inspection",
+          "locator": "src/http/mod.rs:596-615; docs/operations.md:1409-1410",
+          "summary": "Doc says the request span stays a root and traceparent is a link only; request_span has parent: None and add_link only.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/mod.rs",
+              "lines": {
+                "start": 596,
+                "end": 615
+              },
+              "commit": "74399e7a047548ce03382fa870783838a3832d6a"
+            }
+          },
+          "recorded_at": "2026-11-22T22:23:51.976367468Z",
+          "seal": {
+            "by": "server",
+            "mac": "4f31a2a44d53a90366b72df4b726feab545f8655f3daf9e589ea17a2be7b9cd3"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Doc matches request_span (parent: None, link only), backed by the forged-traceparent test.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0638"
+          ],
+          "recorded_at": "2026-11-22T22:24:19.899620078Z",
+          "seal": {
+            "by": "server",
+            "mac": "91b061c7791654ff455e78b7c63f4e1319f915e4479c56467901ee4e70c8ce88"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T22:23:12.638921607Z",
+      "updated_at": "2026-11-22T22:24:19.899620078Z",
+      "seal": {
+        "by": "server",
+        "mac": "f487113219a760f0b00d288204900faf21ac6a735652a88ae1266eb1f4b7a6ea"
+      }
+    },
+    {
+      "id": "CLM-0502",
+      "statement": "docs/operations.md says the request span's exported duration can cover the tool call; a span with a live child keeps its parent open, so the parent closes after the tool span does.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "docs/operations.md: 'The request span's exported duration can cover the tool call.'",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 1410,
+          "end": 1411
+        },
+        "commit": "74399e7a047548ce03382fa870783838a3832d6a"
+      },
+      "derived_from": [
+        "CLM-0492"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:499"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0639",
+          "kind": "analysis",
+          "locator": "tracing-subscriber src/registry/sharded.rs:239-244, 489-510",
+          "summary": "Registry::new_span calls clone_span on an explicit parent id, and DataInner holds that reference \"keeping the parent span open until all its children have closed\". The tool span has an explicit parent (src/mcp/mod.rs:293-296), so the request span closes, and is exported, after the tool span; its duration can therefore include the tool call. The doc says \"can\", which is accurate. No test asserts the duration.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T22:23:52.005180310Z",
+          "seal": {
+            "by": "server",
+            "mac": "275bb80c996fc6d84ab148b622694960f6ceafa2ae42e5b17207435c180bb723"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "tracing-subscriber's registry keeps a parent open while a child span holds a reference to it, so the request span ends after the tool span. The doc's \"can cover\" is correct; no test measures the duration.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0639"
+          ],
+          "recorded_at": "2026-11-22T22:24:19.932521736Z",
+          "seal": {
+            "by": "server",
+            "mac": "a2fdc9bb035f47220aa2fb8d1bf4051dc8e971b4e59676f54a9da853d1a2fe0e"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T22:23:12.638921607Z",
+      "updated_at": "2026-11-22T22:24:19.932521736Z",
+      "seal": {
+        "by": "server",
+        "mac": "45de6abf1d3cd7d211aead38b3de087a39f03ff503265fc0f72108d65ecce8a9"
+      }
+    },
+    {
+      "id": "CLM-0503",
+      "statement": "docs/operations.md says `initialize`, `tools/list` and notifications never reach a tool, so their traces hold the request span alone.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "docs/operations.md: 'initialize, tools/list and notifications never reach a tool, so their traces hold the request span alone.'",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 1411,
+          "end": 1412
+        },
+        "commit": "74399e7a047548ce03382fa870783838a3832d6a"
+      },
+      "derived_from": [
+        "CLM-0492"
+      ],
+      "artifacts": [
+        "docs/operations.md",
+        "src/auth.rs"
+      ],
+      "tags": [
+        "from-issue:499"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0640",
+          "kind": "inspection",
+          "locator": "src/mcp/mod.rs:286-300 (only info_span \"mcp\"); src/auth.rs:332,1092-1093,1144 (trace-level spans)",
+          "summary": "Only call_tool opens an `mcp <tool>` span, so initialize, tools/list and notifications get none (grep: info_span only at src/mcp/mod.rs:294). At the default info filter such a trace is the request span alone. But record_on_request_span is `#[instrument(level = \"trace\")]` and runs in require_key (auth.rs:1144) for every authenticated request, and other auth helpers are debug spans, so at a raised traces_filter those traces also hold helper spans under the request span. The sentence is unqualified, and the same paragraph discusses raised filters.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/auth.rs",
+              "lines": {
+                "start": 1092,
+                "end": 1093
+              },
+              "commit": "74399e7a047548ce03382fa870783838a3832d6a"
+            }
+          },
+          "recorded_at": "2026-11-22T22:23:52.043436359Z",
+          "seal": {
+            "by": "server",
+            "mac": "598e634d4bbfbe0fb274434a89c361468a56c6f381fb02dc6e460be2828b8255"
+          }
+        },
+        {
+          "id": "EVD-0645",
+          "kind": "inspection",
+          "locator": "docs/operations.md:1410-1411 at 1ad56d9",
+          "summary": "The sentence now reads \"so at the default `info` filter their traces hold the request span alone\", which is the scope the earlier evidence (trace/debug auth spans at raised filters) showed to be true.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 1410,
+                "end": 1411
+              },
+              "commit": "1ad56d982a083c12a02af03444dc4b3241cfad3b"
+            }
+          },
+          "recorded_at": "2026-11-22T22:25:26.042846581Z",
+          "seal": {
+            "by": "server",
+            "mac": "7947e95ff8eea92832d3609edb7e404d27a1381d6f1e0759f67fa1b5c43d132d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "Right that none of these reach call_tool and get no `mcp` span. But \"their traces hold the request span alone\" is false when traces_filter is raised: record_on_request_span (a trace-level span) and other debug auth spans run under the request span of every authenticated /mcp request, initialize included. True only at the default info filter, which the sentence does not say. Minor wording issue in our change. Fix: in docs/operations.md change the sentence to \"so at the default `info` filter their traces hold the request span alone\" (or drop \"alone\").",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0640"
+          ],
+          "recorded_at": "2026-11-22T22:24:19.965666935Z",
+          "seal": {
+            "by": "server",
+            "mac": "5cdb57707e9b8373e8771f319c193bc94109311ada205080bd9825abbf8e1abd"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The sentence is now scoped to the default info filter, where the trace holds only the request span. The earlier refutation applied to the unqualified wording.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0645",
+            "EVD-0640"
+          ],
+          "recorded_at": "2026-11-22T22:25:30.762600558Z",
+          "seal": {
+            "by": "server",
+            "mac": "850f25a4e7cb0c10e75c1d1c9a58ae03fae6f89de9e82af3a5f4bacd3af0d7c6"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T22:23:12.638921607Z",
+      "updated_at": "2026-11-22T22:25:30.762600558Z",
+      "seal": {
+        "by": "server",
+        "mac": "75e60f8cfa3a23d7242202c52dd4be8e0be63f0dfc667a0d6bee9305d5b8c266"
+      }
+    },
+    {
+      "id": "CLM-0504",
+      "statement": "The design's MCP row says the tool span is opened in OkfServer::call_tool as a child of the POST /mcp request span, stored by the HTTP layer in the request's extensions as http::RequestSpan, and that it was a root until issue #523's fix.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Issue #499 acceptance (3): 'the design's MCP row [is] updated'",
+      "source_anchor": {
+        "path": "docs/superpowers/specs/2026-11-15-okf-observability-design.md",
+        "lines": {
+          "start": 275,
+          "end": 275
+        },
+        "commit": "74399e7a047548ce03382fa870783838a3832d6a"
+      },
+      "derived_from": [
+        "CLM-0492"
+      ],
+      "artifacts": [
+        "docs/superpowers/specs/2026-11-15-okf-observability-design.md"
+      ],
+      "tags": [
+        "from-issue:499"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0641",
+          "kind": "inspection",
+          "locator": "docs/superpowers/specs/2026-11-15-okf-observability-design.md:275; src/mcp/mod.rs:286-300; commit 695979b",
+          "summary": "Row states opened in call_tool, child of POST /mcp, via http::RequestSpan in the request extensions, previously a root until #523's fix. Matches code and 695979b (dated 2026-11-16, fixed #523). Note the row calls it a child of 'the POST /mcp request span' while the span's otel.name is \"POST /mcp\" - consistent.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/specs/2026-11-15-okf-observability-design.md",
+              "lines": {
+                "start": 275,
+                "end": 275
+              },
+              "commit": "74399e7a047548ce03382fa870783838a3832d6a"
+            }
+          },
+          "recorded_at": "2026-11-22T22:23:52.080343962Z",
+          "seal": {
+            "by": "server",
+            "mac": "eccaba7acfb168bd886aebfd935f5ea403f2d15a02605ed2e2dbf5d5775df661"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Each element of the row matches the code and the history of 695979b.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0641"
+          ],
+          "recorded_at": "2026-11-22T22:24:19.999291356Z",
+          "seal": {
+            "by": "server",
+            "mac": "8bfa4332e3a6021e27f13721aa815bd130be824678e3de9cfb9046ab729371d4"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T22:23:12.638921607Z",
+      "updated_at": "2026-11-22T22:24:19.999291356Z",
+      "seal": {
+        "by": "server",
+        "mac": "cffeeb04a48ba613e3be043688835d12399174de4cbbff0b04a4fa05e4dae592"
+      }
+    },
+    {
+      "id": "CLM-0505",
+      "statement": "The change is documentation only: origin/main..HEAD adds one changelog file and edits docs/operations.md and the design doc, with no change under src/ or tests/.",
+      "kind": "constraint",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: 'No code changes.'",
+      "derived_from": [
+        "CLM-0492"
+      ],
+      "artifacts": [
+        "changelog/2026-11-22T22-30-00Z-issue-499-nest-tool-spans-docs.md"
+      ],
+      "tags": [
+        "from-issue:499"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0642",
+          "kind": "inspection",
+          "locator": "git diff --name-only origin/main..HEAD",
+          "summary": "Exactly three paths: the new changelog file, docs/operations.md, and the design doc; nothing under src/ or tests/.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T22:23:52.115373228Z",
+          "seal": {
+            "by": "server",
+            "mac": "8db9f3b64d9461695fc254a457e42bbb9becd04b8cffa9656cda4b7957e729fb"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The diff name list has no src/ or tests/ path.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0642"
+          ],
+          "recorded_at": "2026-11-22T22:24:20.029076922Z",
+          "seal": {
+            "by": "server",
+            "mac": "3ff2eac97ccb137cce14595b04e1f5cd45aeb5f0149dae1f91b65a74300823e0"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T22:23:12.638921607Z",
+      "updated_at": "2026-11-22T22:24:20.029076922Z",
+      "seal": {
+        "by": "server",
+        "mac": "ba46d478f9f3476cadc9f0ac3c08544abcad27f68efc89c129d8b896986bbdf8"
+      }
+    },
+    {
+      "id": "CLM-0506",
+      "statement": "Only docs/operations.md and the design's MCP row still said the tool span is a separate trace; no other doc in the repository says so.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "PR body Summary: 'only the documentation still said it was a separate trace'",
+      "derived_from": [
+        "CLM-0492"
+      ],
+      "artifacts": [
+        "docs"
+      ],
+      "tags": [
+        "from-issue:499"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0643",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-15-okf-mcp-m15-observability.md:1594",
+          "summary": "The M15 plan still says \"The `mcp <tool>` span is its own root trace, not a child of the `POST /mcp` request span (rmcp runs the call on its own task), so a tool call's trace_id on stderr is found on the tool span\". It is a historical dated 'Corrected (issue #476, 2026-11-16)' note; the same day's #523 fix superseded it. No other doc (docs/, README.md) says it (grep).",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-15-okf-mcp-m15-observability.md",
+              "lines": {
+                "start": 1594,
+                "end": 1594
+              },
+              "commit": "74399e7a047548ce03382fa870783838a3832d6a"
+            }
+          },
+          "recorded_at": "2026-11-22T22:23:52.153452817Z",
+          "seal": {
+            "by": "server",
+            "mac": "40eeaf7612f86712bc81d4bfcc30733ab810c778860a9413f8248a42a6ef1f7b"
+          }
+        },
+        {
+          "id": "EVD-0646",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-15-okf-mcp-m15-observability.md:1594 at 1ad56d9",
+          "summary": "The old note now carries \"(Superseded, issues #523 and #499: the tool span is now a child of the request span, in one trace.)\". No doc presents the separate-trace behaviour as current.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-15-okf-mcp-m15-observability.md",
+              "lines": {
+                "start": 1594,
+                "end": 1594
+              },
+              "commit": "1ad56d982a083c12a02af03444dc4b3241cfad3b"
+            }
+          },
+          "recorded_at": "2026-11-22T22:25:26.093657310Z",
+          "seal": {
+            "by": "server",
+            "mac": "2ff9d176c1d78c1a66169dff296d8cf23f1df213f8834a2cafc5542e33f71eb1"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "The M15 plan (docs/superpowers/plans/2026-11-15-okf-mcp-m15-observability.md:1594) still states the tool span is its own root trace. It is a dated historical correction note and was superseded the same day, so leaving it may be intended, but the PR's \"only the documentation still said\" is then inexact. Fix: either append a one-line \"superseded by #523/#499, see the design row\" to that plan note, or reword the PR Summary to say the plan's dated historical note is left as a record.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0643"
+          ],
+          "recorded_at": "2026-11-22T22:24:20.056835940Z",
+          "seal": {
+            "by": "server",
+            "mac": "663b5878ba4cb5cf06cd05eee80c0c5ecaf03b39a0d7135993900c5bbe369dbd"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The only remaining old statement is explicitly marked superseded in the plan, so no doc presents it as current.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0646"
+          ],
+          "recorded_at": "2026-11-22T22:25:30.797087943Z",
+          "seal": {
+            "by": "server",
+            "mac": "1a9b33e4aef5bc06f56e93fbe772603240616a91c773acbdc9a6a4ed89f5794b"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T22:23:12.638921607Z",
+      "updated_at": "2026-11-22T22:25:30.797087943Z",
+      "seal": {
+        "by": "server",
+        "mac": "6af4b02e794ab401b77661f2b534d3af52ba41d7e585a01ce4ca587159f0c9ee"
       }
     }
   ]

@@ -1591,7 +1591,7 @@ Build the image locally (or `cargo run -- serve`) with `[telemetry]` pointed at 
 
 Record the commands and trimmed output in the milestone changelog.
 
-> **Corrected (issue #476, 2026-11-16).** Two results differ from the step's text. The `mcp <tool>` span is its own root trace, not a child of the `POST /mcp` request span (rmcp runs the call on its own task), so a tool call's `trace_id` on stderr is found on the tool span, and the request's on the request span; the changelog records both. Sign-in needs `public_url`, a user with an email, `okf-mcp user invite` and the `log` mail provider (the setup link is in the log), then `POST /account/setup` and `POST /signin` with `Sec-Fetch-Site: same-origin`. The run used `serve`, not an image.
+> **Corrected (issue #476, 2026-11-16).** Two results differ from the step's text. The `mcp <tool>` span is its own root trace, not a child of the `POST /mcp` request span (rmcp runs the call on its own task), so a tool call's `trace_id` on stderr is found on the tool span, and the request's on the request span; the changelog records both. (Superseded, issues #523 and #499: the tool span is now a child of the request span, in one trace.) Sign-in needs `public_url`, a user with an email, `okf-mcp user invite` and the `log` mail provider (the setup link is in the log), then `POST /account/setup` and `POST /signin` with `Sec-Fetch-Site: same-origin`. The run used `serve`, not an image.
 
 - [ ] **Step 5: README and changelog**
 
