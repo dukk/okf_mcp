@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 465,
+  "next_claim_seq": 466,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "94d820604e2c217f4f5cd2a0f9da192cb303cfa29def03d0284afa91716a0e6a"
+    "mac": "df016a1f6b7cb74821b2eb829a38ce7cf717b6fa835151d59b247e75779ffadc"
   },
-  "next_evidence_seq": 563,
+  "next_evidence_seq": 577,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "350851707e95b0cd199d227353125cf83c66e5d44352fec9e0d25798311c223b"
+    "mac": "1cca2d32081158b0823e8e1aa459ddcdeb3ff9378c9dbd5124a8f8c80d94adb7"
   },
   "claims": [
     {
@@ -35689,6 +35689,28 @@
             "by": "server",
             "mac": "358a8fd5e6a1bec3559d7fdebbce4babff8554ca37a212e0bbf79a744926d1b3"
           }
+        },
+        {
+          "id": "EVD-0563",
+          "kind": "inspection",
+          "locator": "src/http/api/provisioner_tests.rs:556-697 an_email_lookup_is_audited_with_the_outcome_and_never_the_address (read, not run)",
+          "summary": "At HEAD 11df84b the test does one found and one not-found GET /users?email= with a provisioner key and asserts two user.looked_up entries: outcome found with person alice and target_kind user, and not_found with target 'GET /api/v1/users'; actor label 'api key', source api, requests Some(1), and the actor credential equals the key's key_id. Read only; not run (needs a database).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/provisioner_tests.rs",
+              "lines": {
+                "start": 556,
+                "end": 697
+              },
+              "commit": "11df84b26a34c397d48b0a291a22e15b8dd8e060"
+            }
+          },
+          "recorded_at": "2026-11-22T20:26:09.561561953Z",
+          "seal": {
+            "by": "server",
+            "mac": "f19254b28d53a4491707f267e611c12994c3725ad93b4900015e92113b68b1e4"
+          }
         }
       ],
       "verdicts": [
@@ -35705,13 +35727,26 @@
             "by": "server",
             "mac": "74d9569ff4aebf5ea6637434f2193d4c9a603214bda905a1e90456868510dc4f"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at HEAD; test and code still show it.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0563"
+          ],
+          "recorded_at": "2026-11-22T20:26:44.154585578Z",
+          "seal": {
+            "by": "server",
+            "mac": "500966dfa322356549b2f2072bd82f394448d9408836060ddc2d95b9608802f5"
+          }
         }
       ],
       "created_at": "2026-11-22T19:44:34.392205800Z",
-      "updated_at": "2026-11-22T19:46:00.246269885Z",
+      "updated_at": "2026-11-22T20:26:44.154585578Z",
       "seal": {
         "by": "server",
-        "mac": "72ea68a931f13595598f02ed201d5e03a048d70358b56fd831a84d2bab837d0e"
+        "mac": "945e1ad96118038f876a0347bfe977ba3a5323872114cb5f856491fb9ed73c53"
       }
     },
     {
@@ -35780,6 +35815,28 @@
             "by": "server",
             "mac": "70842780fe2c36e4f28803e375a3a6a06255b37ebcc4e5254e3935678eff673c"
           }
+        },
+        {
+          "id": "EVD-0564",
+          "kind": "inspection",
+          "locator": "src/store/audit.rs:1310-1326; src/http/api/people.rs:577-587",
+          "summary": "At HEAD, ProvisionerEvent::Lookup carries only the matched user id (people.rs passes records.first().id); shape() builds the bucket key from outcome plus matched id, target_name the constant 'GET /api/v1/users', details {outcome}. The email is never passed to ProvisionerUse, so neither it nor a hash can be stored. Inspection only; not run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit.rs",
+              "lines": {
+                "start": 1310,
+                "end": 1326
+              },
+              "commit": "11df84b26a34c397d48b0a291a22e15b8dd8e060"
+            }
+          },
+          "recorded_at": "2026-11-22T20:26:09.594160292Z",
+          "seal": {
+            "by": "server",
+            "mac": "daa06454496571c6f76455bbc9344b211b8a0ea75929fc0fcc4a076896a6877f"
+          }
         }
       ],
       "verdicts": [
@@ -35796,13 +35853,26 @@
             "by": "server",
             "mac": "f8a0aba704ea9723a700e4ab3d6c20d19cd0e80fbfc208b82aaee4c25b3673f0"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at HEAD; email never reaches ProvisionerUse.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0564"
+          ],
+          "recorded_at": "2026-11-22T20:26:44.182984013Z",
+          "seal": {
+            "by": "server",
+            "mac": "ef13fff9bca230fd39fdc3c2a58f6fd2c2bab2b5700a06edaba3a0f74c6de143"
+          }
         }
       ],
       "created_at": "2026-11-22T19:44:34.392205800Z",
-      "updated_at": "2026-11-22T19:46:00.278881220Z",
+      "updated_at": "2026-11-22T20:26:44.182984013Z",
       "seal": {
         "by": "server",
-        "mac": "850ba5d6fd3f41c0338cf3e4908340c028c055ff32a0e7d65afab6de27d260bc"
+        "mac": "09fca6cc2af626918bb0be87c93a6fa6d133d93f0151e2a24161970bef66d85c"
       }
     },
     {
@@ -35848,6 +35918,28 @@
             "by": "server",
             "mac": "bdf612706b838d2b97fe094148cbddd03db62e23239ff108576486c1ba13f55c"
           }
+        },
+        {
+          "id": "EVD-0565",
+          "kind": "inspection",
+          "locator": "src/http/api/provisioner_tests.rs:823-862 an_owner_of_the_users_team_never_sees_provisioner_lookups_or_refusals (read, not run); src/store/audit.rs:1408-1432",
+          "summary": "At HEAD the entry INSERT in record_provisioner_use sets no teams column (actor_operator is the literal true), so a team owner's scoped view cannot match it. The test, after one lookup and one refusal, lists as Viewer::Owner and asserts no entry is user.looked_up or provisioner.refused. The admin/provisioner-key view is asserted in the lookup test at 556-697. Read only; not run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/provisioner_tests.rs",
+              "lines": {
+                "start": 823,
+                "end": 862
+              },
+              "commit": "11df84b26a34c397d48b0a291a22e15b8dd8e060"
+            }
+          },
+          "recorded_at": "2026-11-22T20:26:09.626602801Z",
+          "seal": {
+            "by": "server",
+            "mac": "e87e0752a7fc997229264091bd436052a788383b00c5c98679dad8a2edbcb6d0"
+          }
         }
       ],
       "verdicts": [
@@ -35863,13 +35955,26 @@
             "by": "server",
             "mac": "c54418c5ad8e3f75b682f291be587f759073d30128b5c1c380c1683017c5c787"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at HEAD; no teams on insert, owner test asserts invisibility.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0565"
+          ],
+          "recorded_at": "2026-11-22T20:26:44.210990647Z",
+          "seal": {
+            "by": "server",
+            "mac": "bfe0bf6a39b2ef43b8f21d46b53b6531e03cf0ec47d1fe81b8b44ebd105aa081"
+          }
         }
       ],
       "created_at": "2026-11-22T19:44:34.392205800Z",
-      "updated_at": "2026-11-22T19:46:00.309645497Z",
+      "updated_at": "2026-11-22T20:26:44.210990647Z",
       "seal": {
         "by": "server",
-        "mac": "88e0ff6c05d74a1a49d27020b35eea8666fbf7060601603c541e84e944b166fe"
+        "mac": "4b46d6cb68fd0396d73c69bf33b172febbb3343724571ab57acd586da4222b40"
       }
     },
     {
@@ -35938,6 +36043,28 @@
             "by": "server",
             "mac": "5700f1207731d5b4a5a40847d267a098d068a1ced846f0d117474b43c6834927"
           }
+        },
+        {
+          "id": "EVD-0566",
+          "kind": "inspection",
+          "locator": "src/http/api/mod.rs:327-373 provisioner_gate; src/http/api/provisioner_tests.rs:699-749 a_refused_route_is_audited_by_template_method_and_a_stable_code (read, not run)",
+          "summary": "At HEAD the gate takes the route template from MatchedPath and the method via standard_method (nine standard names else OTHER), records RouteNotAllowed for a non-allowed route and Forbidden when an allowed route answers 403; only method, template and the code reach ProvisionerEvent::Refused. The test asserts details exactly {method GET, route template, reason route_not_allowed, hour} and reason forbidden for GET /users without email, and that 'hunter2' and '/catalogs/main' are absent. No test sends a non-standard method. Read only; not run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/mod.rs",
+              "lines": {
+                "start": 327,
+                "end": 373
+              },
+              "commit": "11df84b26a34c397d48b0a291a22e15b8dd8e060"
+            }
+          },
+          "recorded_at": "2026-11-22T20:26:09.660600345Z",
+          "seal": {
+            "by": "server",
+            "mac": "4b1b303609361c71985d59cb312465c521ccd90748f9a7c9ef72348fdf9d202d"
+          }
         }
       ],
       "verdicts": [
@@ -35954,13 +36081,26 @@
             "by": "server",
             "mac": "3e631058461fa92ec060f40185a5b1a02a2ba21a82e1d2c545aed8f71f413c4c"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at HEAD; gate records both reasons with only method, template, code.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0566"
+          ],
+          "recorded_at": "2026-11-22T20:26:44.239552092Z",
+          "seal": {
+            "by": "server",
+            "mac": "0fa6a6f0d4091131a1cfe1d950674af2c96fe77c27f2821585b708c5a6e41cb2"
+          }
         }
       ],
       "created_at": "2026-11-22T19:44:34.392205800Z",
-      "updated_at": "2026-11-22T19:46:00.339912143Z",
+      "updated_at": "2026-11-22T20:26:44.239552092Z",
       "seal": {
         "by": "server",
-        "mac": "7a89317baa7fcd1f0504784454de15454118403a75c82a5b6789a46057e4d2dd"
+        "mac": "8d8d9b7ac0cf51e95b9a0e11976bee395b8d8055c0eb19513599fa6cd7621205"
       }
     },
     {
@@ -36005,6 +36145,28 @@
             "by": "server",
             "mac": "9ceebe4d01aa562eec19eb8c20b2f1b1c2bd6000c7abc5bf41165069392cf211"
           }
+        },
+        {
+          "id": "EVD-0567",
+          "kind": "inspection",
+          "locator": "src/store/audit.rs:1160-1171 count_bucket, 1364-1437 record_provisioner_use; test 3215-3262 (read, not run); provisioner_tests.rs:751-759",
+          "summary": "At HEAD count_bucket upserts (bucket, requests=1) ON CONFLICT requests+1 RETURNING entry_id, requests, so concurrent first requests serialise on the row and only the one that sees entry_id None inserts the entry and links it. The unit test fires 20 concurrent refusals and expects one entry with count 20, a next-hour one with 1 and a different reason with 1; the API test sends 25 identical refusals and expects one entry with requests 25. Read only; not run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit.rs",
+              "lines": {
+                "start": 1160,
+                "end": 1171
+              },
+              "commit": "11df84b26a34c397d48b0a291a22e15b8dd8e060"
+            }
+          },
+          "recorded_at": "2026-11-22T20:26:09.694897870Z",
+          "seal": {
+            "by": "server",
+            "mac": "633ffb2869c63933b5e8f617857908ab7dddd5838404908c37a6c189ffc499cf"
+          }
         }
       ],
       "verdicts": [
@@ -36020,13 +36182,26 @@
             "by": "server",
             "mac": "6946266c54b4b3b1c0de1fc85b9900538d476639a6b9f60d8f8b5c4fcfdbf21a"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at HEAD; row-serialised upsert gives exact counts.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0567"
+          ],
+          "recorded_at": "2026-11-22T20:26:44.267708036Z",
+          "seal": {
+            "by": "server",
+            "mac": "013afc830c3a2ec4a5b7c34b761cf2da3b6dd47198db219503ec5ec2901fdae7"
+          }
         }
       ],
       "created_at": "2026-11-22T19:44:34.392205800Z",
-      "updated_at": "2026-11-22T19:46:00.369712317Z",
+      "updated_at": "2026-11-22T20:26:44.267708036Z",
       "seal": {
         "by": "server",
-        "mac": "b2bd16ecef26de2a2dd68435479de9884aeb09a5bfe6f23e26180587ab28cc82"
+        "mac": "879f0436d79303c02f6d869b960f1ab979ec01da7faee2214b70ea2a095650c8"
       }
     },
     {
@@ -36071,6 +36246,28 @@
             "by": "server",
             "mac": "2d915fe174ea7c2cc35b92b11ab0a27cb6bba57358ff6af4a685c3c3caaffbe8"
           }
+        },
+        {
+          "id": "EVD-0568",
+          "kind": "inspection",
+          "locator": "src/store/audit.rs:1371-1401 (cap logic), 1206; test a_key_opens_a_bounded_number_of_entries... at ~3264-3300 (read, not run)",
+          "summary": "At HEAD a bucket that does not exist counts against a per-key-hour 'provcap' row; when used exceeds PROVISIONER_ENTRIES_PER_HOUR (50) it becomes a 'provov' bucket (one per action), target '*', matched None, details {overflow}. An existing bucket skips the budget and keeps counting. Bound: 50 regular entries per key-hour shared by both actions plus up to 2 overflow entries (one per action), so up to 52 rows; the claim and docs state this as 'one overflow entry per action'. The test checks 50 routes plus one overflow with count 7, route-0 count 2, and 3 lookups overflowing into their own '*' entry. Read only; not run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit.rs",
+              "lines": {
+                "start": 1371,
+                "end": 1401
+              },
+              "commit": "11df84b26a34c397d48b0a291a22e15b8dd8e060"
+            }
+          },
+          "recorded_at": "2026-11-22T20:26:09.728629004Z",
+          "seal": {
+            "by": "server",
+            "mac": "4d489288d6835de0bfd67146f34f3593f298aff2f7158bdc840d508992840f81"
+          }
         }
       ],
       "verdicts": [
@@ -36086,13 +36283,26 @@
             "by": "server",
             "mac": "6175bb76d3d96305365ee605bb7289a270468321c52637d0c5d0490a7d85a18b"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at HEAD; cap logic matches (50 plus overflow per action).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0568"
+          ],
+          "recorded_at": "2026-11-22T20:26:44.296060670Z",
+          "seal": {
+            "by": "server",
+            "mac": "986a0e245c6be5670214fe06b1f803e78e2e497dd42106bc54c7531f4c417a7d"
+          }
         }
       ],
       "created_at": "2026-11-22T19:44:34.392205800Z",
-      "updated_at": "2026-11-22T19:46:00.401951690Z",
+      "updated_at": "2026-11-22T20:26:44.296060670Z",
       "seal": {
         "by": "server",
-        "mac": "af6cde77da7f016eea1895b102a744a3b68b1ca65cc81d179e90ca600840f8c3"
+        "mac": "25183821abc894c695dbb2d20b101a9198451ee7c8398efba1a98d6acca19786"
       }
     },
     {
@@ -36160,6 +36370,28 @@
             "by": "server",
             "mac": "135f6079b449ba80cd96c4433e8e3dac5c6ede164747f59f3198a610b0d5efe6"
           }
+        },
+        {
+          "id": "EVD-0569",
+          "kind": "inspection",
+          "locator": "src/app.rs:43,381-383,446-475; src/http/api/provisioner_tests.rs:864-940 a_flood_past_the_pending_write_limit_loses_the_overflow_and_recovers (read, not run)",
+          "summary": "At HEAD provisioner_writes is a Semaphore of MAX_PENDING_PROVISIONER_WRITES=32; note_provisioner_use does try_acquire_owned and on failure logs at debug and returns without spawning; the permit moves into the spawned task and drops when it ends. A test now exists: it holds every write, submits 33 uses, and expects a recorded request sum of 32 (the 33rd dropped), then a later use recorded (33). Read only; not run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/app.rs",
+              "lines": {
+                "start": 446,
+                "end": 475
+              },
+              "commit": "11df84b26a34c397d48b0a291a22e15b8dd8e060"
+            }
+          },
+          "recorded_at": "2026-11-22T20:26:09.761008632Z",
+          "seal": {
+            "by": "server",
+            "mac": "0ba5cffa6bf0167f345d5db3c5cc46e97a92b4ee742704d996cc4f902eba62bb"
+          }
         }
       ],
       "verdicts": [
@@ -36175,13 +36407,26 @@
             "by": "server",
             "mac": "b8dc33b25b91e72dc88637dc6d71ca262306c14a15cb53ec9e8efc45a21da6a5"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Semaphore of 32, try_acquire drop with debug event, now with a test (not run).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0569"
+          ],
+          "recorded_at": "2026-11-22T20:26:44.324395835Z",
+          "seal": {
+            "by": "server",
+            "mac": "aad0a9d2202c2341bacf64f7a0b83797fee41b5d92f9b4571512bfcdebb8f5f1"
+          }
         }
       ],
       "created_at": "2026-11-22T19:44:34.392205800Z",
-      "updated_at": "2026-11-22T19:46:00.433512910Z",
+      "updated_at": "2026-11-22T20:26:44.324395835Z",
       "seal": {
         "by": "server",
-        "mac": "59bcbbd396951ccd89f87be7e2d263b757e5631122f607fce5b9d6b3b34bd131"
+        "mac": "055ad44fdd7eaf7aa8cd304d7bc88fe5792f8ce66fe633a236c0b78ccb40669a"
       }
     },
     {
@@ -36296,6 +36541,28 @@
             "by": "server",
             "mac": "e719f5c6a6f032300f1af377d322f7d63114a03988a1803fe78e2167ecc3ba39"
           }
+        },
+        {
+          "id": "EVD-0570",
+          "kind": "inspection",
+          "locator": "src/http/api/mod.rs:327-373; src/http/api/provisioner_tests.rs:768-821 (read, not run)",
+          "summary": "At HEAD note_provisioner_use has two non-test call sites: the gate (403s only) and list_users (only with an email). The test: POST /users adds exactly one entry; after POST /teams, GETs of users/alice, teams/acme, teams and a no-op PATCH leave the entry count unchanged and user.looked_up empty. Read only; not run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/provisioner_tests.rs",
+              "lines": {
+                "start": 768,
+                "end": 821
+              },
+              "commit": "11df84b26a34c397d48b0a291a22e15b8dd8e060"
+            }
+          },
+          "recorded_at": "2026-11-22T20:26:09.793700502Z",
+          "seal": {
+            "by": "server",
+            "mac": "adcf4c99a2e5578dbaedaf90c55024d3760c818cc1fe2b5f26b3010ad93a7371"
+          }
         }
       ],
       "verdicts": [
@@ -36311,13 +36578,26 @@
             "by": "server",
             "mac": "0125db01db8a7343a0e02501714b3e7eb1dfeace01dfc5c3abb2e3921f8d07c4"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at HEAD; only 403s and email lookups write.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0570"
+          ],
+          "recorded_at": "2026-11-22T20:26:44.352579579Z",
+          "seal": {
+            "by": "server",
+            "mac": "209bae86a72301ce462c0205a8ca4286df68b23cd0a064c1794c26c53ba24037"
+          }
         }
       ],
       "created_at": "2026-11-22T19:44:34.392205800Z",
-      "updated_at": "2026-11-22T19:46:00.493004808Z",
+      "updated_at": "2026-11-22T20:26:44.352579579Z",
       "seal": {
         "by": "server",
-        "mac": "a25d74404937b85342cfde341a7b3872cce87bc7c6639e84ad2e27390c648088"
+        "mac": "8af2fac96f56dda9a21b2b841eec5b75136a76eda0ecae463b1c73f0f127a75d"
       }
     },
     {
@@ -36495,6 +36775,28 @@
             "by": "server",
             "mac": "bacd1cde64a3a39b9ef5faaf217600eac9675868eab2bf7f14d809c6ec53fdcc"
           }
+        },
+        {
+          "id": "EVD-0576",
+          "kind": "inspection",
+          "locator": "docs/operations.md:2139-2140, 2157-2175 vs src/store/audit.rs:963-1000, src/housekeeping.rs:596-615, src/app.rs:43",
+          "summary": "Table rows for user.looked_up (2139) and provisioner.refused (2140) match the code (outcome, hour, method/route/reason, overflow, no address). The bounds text matches: collapse per key/kind/hour, 50 entries an hour with an overflow entry per action (target '*', details.overflow), 32 pending writes with a debug event, and the budget's counter rows removed by the daily prune_audit once their hour ended over an hour before (grace for a lagging clock), not kept for retention. That is what prune_budget_counters and prune_audit do. Inspection; not run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 2157,
+                "end": 2175
+              },
+              "commit": "11df84b26a34c397d48b0a291a22e15b8dd8e060"
+            }
+          },
+          "recorded_at": "2026-11-22T20:26:27.694832909Z",
+          "seal": {
+            "by": "server",
+            "mac": "cb6c970e50fb0f58fe5adada3cedd4070bb46103dc843bbdc7ddbe32749bbc4f"
+          }
         }
       ],
       "verdicts": [
@@ -36510,13 +36812,26 @@
             "by": "server",
             "mac": "7c60f371463e97f4f605ab904a45a0a0ffb1d50677815433db4de5db935701c2"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Table rows and bounds text incl. counter cleanup match code at HEAD.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0576"
+          ],
+          "recorded_at": "2026-11-22T20:26:44.125257170Z",
+          "seal": {
+            "by": "server",
+            "mac": "ea24b58d2c8ca899aa607eca3732c11b217420806db038894bad9a89fc1ecf0e"
+          }
         }
       ],
       "created_at": "2026-11-22T19:44:34.392205800Z",
-      "updated_at": "2026-11-22T19:46:00.579898400Z",
+      "updated_at": "2026-11-22T20:26:44.125257170Z",
       "seal": {
         "by": "server",
-        "mac": "dcf94c742be80b326eeafff48feae7ac202e771ca0ff208a356c48476e33fd43"
+        "mac": "0c7bd9ec02a7e341eed0397c26604bf253801af77ef609466f37c2fa4af92689"
       }
     },
     {
@@ -36629,6 +36944,28 @@
             "by": "server",
             "mac": "1b0b602271fc213cf03908ac24962b6582a606628a816df5eb2ff08c33b9cb98"
           }
+        },
+        {
+          "id": "EVD-0571",
+          "kind": "inspection",
+          "locator": "migrations/0031_provisioner_audit.sql:12-15",
+          "summary": "At HEAD 0031 drops audit_entries_target_kind_check and re-adds it with user, team, catalog, key, grant, code, setting, unlock plus 'route', marked NOT VALID (a superset of 0012's eight). Comment notes 0032 validates it separately. Inspection only; the 0012 set was checked at the earlier audit.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/0031_provisioner_audit.sql",
+              "lines": {
+                "start": 12,
+                "end": 15
+              },
+              "commit": "11df84b26a34c397d48b0a291a22e15b8dd8e060"
+            }
+          },
+          "recorded_at": "2026-11-22T20:26:09.826577732Z",
+          "seal": {
+            "by": "server",
+            "mac": "59d4d26e0362159ac713e9478af8301f26880d9e41005eb7a180ca0ba3e0e3db"
+          }
         }
       ],
       "verdicts": [
@@ -36644,13 +36981,26 @@
             "by": "server",
             "mac": "1dfd093042b55314ff534fa6e2c1056b386301283864944966060acb53d8b55c"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Migration re-adds the check with route, NOT VALID, a superset.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0571"
+          ],
+          "recorded_at": "2026-11-22T20:26:44.381679476Z",
+          "seal": {
+            "by": "server",
+            "mac": "07007e8689491a1bedc28d5a063b3d745016a513e69149bf3fde0d77794a4ab0"
+          }
         }
       ],
       "created_at": "2026-11-22T19:44:34.392205800Z",
-      "updated_at": "2026-11-22T19:46:00.635565632Z",
+      "updated_at": "2026-11-22T20:26:44.381679476Z",
       "seal": {
         "by": "server",
-        "mac": "1b5cc490da31aef655f0130b43d8c5663bf48482868b8ad599b4579c92f9165a"
+        "mac": "5e91ce25f661f579a28f6b0cd8a9476f8662bafc307335ded04cc74d9e50ae6b"
       }
     },
     {
@@ -36672,7 +37022,9 @@
         "from-issue:423"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "Review round 3 of PR #916: the budget counters no longer go at the audit retention cut-off in audit::prune; audit::prune_budget_counters removes them once their hour ended over an hour before. Replaced by a new claim.",
+        "retired_at": "2026-11-22T20:24:26.092662059Z"
       },
       "evidence": [
         {
@@ -36714,10 +37066,155 @@
         }
       ],
       "created_at": "2026-11-22T19:44:34.392205800Z",
-      "updated_at": "2026-11-22T19:46:00.664022521Z",
+      "updated_at": "2026-11-22T20:24:26.092662059Z",
       "seal": {
         "by": "server",
-        "mac": "11c5a992fe39e00941183fabe490cd6fbff56d40b291898371c02b0047417c76"
+        "mac": "7e7696c21930a32a0dcc26698c275a96504a1fce317f58bf181e2d1d41cd2656"
+      }
+    },
+    {
+      "id": "CLM-0465",
+      "statement": "The daily prune_audit job calls audit::prune_budget_counters with the server clock, which deletes the provisioner hourly budget counter rows (audit_access_counts rows with no entry) whose hour ended over an hour before that clock, independent of the audit retention cut-off; audit::prune no longer deletes them; and the Console Audit page shows the request count for user.looked_up and provisioner.refused.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR #916 review 6014308116 (docs/operations.md budget counter cleanup); docs/operations.md provisioner bounds",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 2165,
+          "end": 2171
+        },
+        "commit": "11df84b26a34c397d48b0a291a22e15b8dd8e060"
+      },
+      "derived_from": [
+        "CLM-0449"
+      ],
+      "artifacts": [
+        "src/store/audit.rs",
+        "src/housekeeping.rs",
+        "src/http/ui/js/pages/audit.js"
+      ],
+      "tags": [
+        "from-issue:423"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0572",
+          "kind": "inspection",
+          "locator": "src/store/audit.rs:963-1000 prune_budget_counters; src/store/audit.rs:953-958 prune",
+          "summary": "prune_budget_counters(pool, now) computes before = now - (1 + BUDGET_COUNTER_GRACE_HOURS(1)) hours and runs DELETE FROM audit_access_counts WHERE entry_id IS NULL AND (provcap bucket's third part, its hour start in Unix seconds) < before; hour start < now-2h is the same as hour end < now-1h. The CASE keeps the bigint cast to provcap rows. Rows with an entry (including provov overflow buckets) are untouched. prune() now runs only DELETE FROM audit_entries WHERE at < $1, with no counter deletion. Inspection; not run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit.rs",
+              "lines": {
+                "start": 963,
+                "end": 1000
+              },
+              "commit": "11df84b26a34c397d48b0a291a22e15b8dd8e060"
+            }
+          },
+          "recorded_at": "2026-11-22T20:26:27.578617161Z",
+          "seal": {
+            "by": "server",
+            "mac": "cf55428a6a39503d7827efd2d4ab76d76285fbd543fc4cd9fb04c79acbe8ae10"
+          }
+        },
+        {
+          "id": "EVD-0573",
+          "kind": "inspection",
+          "locator": "src/housekeeping.rs:596-615 prune_audit; Task::PruneAudit interval 24h at :167",
+          "summary": "prune_audit reads now = app.clock().now(), calls audit::prune with a retention cut-off (days plus margin) and, as a separate step, audit::prune_budget_counters(app.pool(), now), using the server clock and not the retention cut-off. Task::PruneAudit runs every 24 hours. Inspection; not run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping.rs",
+              "lines": {
+                "start": 596,
+                "end": 615
+              },
+              "commit": "11df84b26a34c397d48b0a291a22e15b8dd8e060"
+            }
+          },
+          "recorded_at": "2026-11-22T20:26:27.610071676Z",
+          "seal": {
+            "by": "server",
+            "mac": "38a4d15fe7b4dd6a28bfdd33cf3306ba44a9abe4568c1a40afd4e96925e5bf7e"
+          }
+        },
+        {
+          "id": "EVD-0574",
+          "kind": "inspection",
+          "locator": "src/store/audit.rs:3398-3462 (budget_counters_go_once_their_hour_ended_over_the_grace_before, the_retention_prune_leaves_budget_counters_alone); src/housekeeping.rs:1524-1585 prune_audit_deletes_entries_past_the_retention_setting (read, not run)",
+          "summary": "The first test records counters for hours 10, 11, 12 at clock 12:30, calls prune_budget_counters, expects 1 removed (hour 10 only), hours 11 and 12 kept, and the three entries kept. The second records a 2024 refusal, prunes entries by retention, expects 1 entry removed and the counter still present ('prune_budget_counters owns them'). The housekeeping test inserts a provcap counter three hours old, runs Task::PruneAudit, and expects the old setting.cleared entry gone, the newer one kept, and 0 counters. I traced the arithmetic by hand and it matches. Read only; not run (database needed).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit.rs",
+              "lines": {
+                "start": 3398,
+                "end": 3462
+              },
+              "commit": "11df84b26a34c397d48b0a291a22e15b8dd8e060"
+            }
+          },
+          "recorded_at": "2026-11-22T20:26:27.638310800Z",
+          "seal": {
+            "by": "server",
+            "mac": "fe96ff357eb70a91006d45cf61f98e846e5da545e7b2c891a8240655f62d1508"
+          }
+        },
+        {
+          "id": "EVD-0575",
+          "kind": "inspection",
+          "locator": "src/http/ui/js/pages/audit.js:64-78",
+          "summary": "COUNTED = ['catalog.admin_read', 'user.looked_up', 'provisioner.refused']; detailsCell shows count(entry.requests ?? 0, 'request') for any action in COUNTED. The API list query joins audit_access_counts and returns requests (src/store/audit.rs:1844, 1901). Inspection; not run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/ui/js/pages/audit.js",
+              "lines": {
+                "start": 64,
+                "end": 78
+              },
+              "commit": "11df84b26a34c397d48b0a291a22e15b8dd8e060"
+            }
+          },
+          "recorded_at": "2026-11-22T20:26:27.666379194Z",
+          "seal": {
+            "by": "server",
+            "mac": "b040857ee05f1eaaec13690466424eda43249c0336f3a700861bb58e343666c9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code, caller, tests and audit.js all match the claim at HEAD (inspection; tests not run).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0572",
+            "EVD-0573",
+            "EVD-0574",
+            "EVD-0575"
+          ],
+          "recorded_at": "2026-11-22T20:26:44.095506641Z",
+          "seal": {
+            "by": "server",
+            "mac": "dea1f123d07e86f8cde4205a77d621c77ab883cd1223ee01a0d9607b39f306e1"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T20:24:26.126081250Z",
+      "updated_at": "2026-11-22T20:26:44.095506641Z",
+      "seal": {
+        "by": "server",
+        "mac": "6d4cbe0b56afdd32e1982afad6626723c0d20bb58b2ec3d1267a54405193dbf9"
       }
     }
   ]
