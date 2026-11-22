@@ -746,22 +746,145 @@ pub struct CatalogEntitlement {
     pub access: Access,
 }
 
-/// What the catalog drawer shows of who reaches a catalog through its
-/// owning team: [`team_access`]'s answer.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TeamAccess {
-    /// What the team's members get through the team.
-    pub member_access: MemberAccess,
-    /// The owning team's members, sorted by user name (empty for an
-    /// unassigned catalog).
-    pub members: Vec<TeamMember>,
-    /// The catalog's entitlements, sorted by user name. For an owner, only
-    /// those of the team's members: another tenant's names stay hidden.
-    pub entitlements: Vec<CatalogEntitlement>,
+/// The most rows of each list one [`team_access`] page holds, and the
+/// default (issue #352 review: a large team's drawer reads a page at a
+/// time).
+pub const TEAM_PAGE_MAX: i64 = 1000;
+
+/// Which lists [`team_access`] reads: a continuation of one list skips the
+/// other's query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TeamLists {
+    /// Both lists (the drawer's first read).
+    Both,
+    /// Only the members.
+    Members,
+    /// Only the entitlements.
+    Entitlements,
 }
 
-/// A catalog's member access, its owning team's members and its
-/// entitlements, in one transaction (issue #352).
+/// Which page of each list [`team_access`] reads: the rows after a user name
+/// (byte order; `""` for the first page), at most `limit` of each list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TeamPage<'a> {
+    /// The last member of the previous page of members (`""`: the first).
+    pub members_after: &'a str,
+    /// The last user of the previous page of entitlements (`""`: the first).
+    pub entitlements_after: &'a str,
+    /// The most rows of each list; clamped to `1..=`[`TEAM_PAGE_MAX`].
+    pub limit: i64,
+    /// The lists to read; the other comes back empty with no cursor.
+    pub lists: TeamLists,
+}
+
+/// What the catalog drawer shows of who reaches a catalog through its
+/// owning team: one page of [`team_access`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TeamAccess {
+    /// The owning team's members after the cursor, sorted by user name in
+    /// byte order (empty for an unassigned catalog).
+    pub members: Vec<TeamMember>,
+    /// The last member of this page when more follow (send it back as
+    /// `members_after`); `None` on the last page.
+    pub members_next: Option<String>,
+    /// The catalog's entitlements after the cursor, sorted like the members.
+    /// For an owner, only those of the team's members: another tenant's
+    /// names stay hidden.
+    pub entitlements: Vec<CatalogEntitlement>,
+    /// As `members_next`, for the entitlements.
+    pub entitlements_next: Option<String>,
+}
+
+/// Locks the owner (when there is one) and the catalog row under a share
+/// lock, and reads what both pages and the scalar need.
+///
+/// # Returns
+/// The catalog's id, its member access and its owner team's id, and the
+/// owner's team when `owner` is `Some`.
+///
+/// # Errors
+/// As [`team_access`].
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.read_catalog_locked"))]
+async fn read_catalog_locked(
+    conn: &mut PgConnection,
+    catalog: &str,
+    owner: Option<&str>,
+) -> Result<(i64, MemberAccess, Option<String>, Option<String>), OkfError> {
+    let not_found = || match owner {
+        Some(_) => not_team_owner(),
+        None => unknown_catalog(catalog),
+    };
+    if !catalogs::is_valid_name(catalog) {
+        return Err(not_found());
+    }
+    let team = match owner {
+        Some(user_id) => {
+            Some(catalogs::lock_shared_team_owner(conn, catalog, user_id, not_team_owner).await?)
+        }
+        None => None,
+    };
+    let row: Option<(i64, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, member_access, owner_team_id FROM catalogs WHERE name = $1 FOR SHARE",
+    )
+    .bind(catalog)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let (catalog_id, member_access, owner_team) = row.ok_or_else(not_found)?;
+    // A catalog moved to another team after the membership was read.
+    if team.is_some() && team != owner_team {
+        return Err(not_team_owner());
+    }
+    let member_access =
+        MemberAccess::parse(&member_access).expect("the schema checks catalogs.member_access");
+    Ok((catalog_id, member_access, owner_team, team))
+}
+
+/// A catalog's member access for an owner of its shared team, checked under
+/// the owner's membership row lock: the scalar read, with no list (issue
+/// #352).
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `catalog` - the catalog's name.
+/// * `owner` - `users.id` of the caller.
+///
+/// # Errors
+/// [`OkfError::Forbidden`] when the owner check fails (a personal team's
+/// owner, and an unknown catalog, included); [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.member_access_as_owner"))]
+pub async fn member_access_as_owner(
+    pool: &PgPool,
+    catalog: &str,
+    owner: &str,
+) -> Result<MemberAccess, OkfError> {
+    let mut tx = pool.begin().await?;
+    let (_, access, _, _) = read_catalog_locked(&mut tx, catalog, Some(owner)).await?;
+    tx.commit().await?;
+    Ok(access)
+}
+
+/// Cuts `rows` (fetched one past `limit`) to a page, and names the cursor
+/// of the page after it.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: maps a value, no I/O"
+    )
+)]
+fn cut_page<T>(mut rows: Vec<T>, limit: i64, key: impl Fn(&T) -> &str) -> (Vec<T>, Option<String>) {
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+    if rows.len() <= limit {
+        return (rows, None);
+    }
+    rows.truncate(limit);
+    let next = rows.last().map(|row| key(row).to_string());
+    (rows, next)
+}
+
+/// One page of a catalog's owning team's members and of its entitlements,
+/// in one transaction (issue #352). Each list is read with a keyset cursor
+/// and a limit, so a large team costs one page, never the whole team.
 ///
 /// # Arguments
 /// * `pool` - the database.
@@ -770,9 +893,10 @@ pub struct TeamAccess {
 ///   of the catalog's shared team (a console session that is not an admin):
 ///   checked under the owner's membership row lock. `None` for a caller
 ///   that is already allowed.
+/// * `page` - the cursors and the page size.
 ///
 /// # Returns
-/// The view.
+/// The page.
 ///
 /// # Errors
 /// [`OkfError::CatalogNotSelected`] for an unknown or malformed catalog
@@ -784,66 +908,65 @@ pub async fn team_access(
     pool: &PgPool,
     catalog: &str,
     owner: Option<&str>,
+    page: &TeamPage<'_>,
 ) -> Result<TeamAccess, OkfError> {
-    let not_found = || match owner {
-        Some(_) => not_team_owner(),
-        None => unknown_catalog(catalog),
-    };
-    if !catalogs::is_valid_name(catalog) {
-        return Err(not_found());
-    }
+    let limit = page.limit.clamp(1, TEAM_PAGE_MAX);
     let mut tx = pool.begin().await?;
-    let team = match owner {
-        Some(user_id) => {
-            Some(catalogs::lock_shared_team_owner(&mut tx, catalog, user_id, not_team_owner).await?)
-        }
-        None => None,
+    let (catalog_id, _, owner_team, team) = read_catalog_locked(&mut tx, catalog, owner).await?;
+    // One row past the page says whether another follows. `COLLATE "C"` is
+    // byte order, which the cursor compares in.
+    let members: Vec<(String, String)> = if page.lists == TeamLists::Entitlements {
+        Vec::new()
+    } else {
+        sqlx::query_as(
+            "SELECT u.name, m.role FROM team_members m JOIN users u ON u.id = m.user_id \
+             WHERE m.team_id = $1 AND u.name COLLATE \"C\" > $2 \
+             ORDER BY u.name COLLATE \"C\" LIMIT $3",
+        )
+        .bind(&owner_team)
+        .bind(page.members_after)
+        .bind(limit + 1)
+        .fetch_all(&mut *tx)
+        .await?
     };
-    let row: Option<(i64, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, member_access, owner_team_id FROM catalogs WHERE name = $1 FOR SHARE",
-    )
-    .bind(catalog)
-    .fetch_optional(&mut *tx)
-    .await?;
-    let (catalog_id, member_access, owner_team) = row.ok_or_else(not_found)?;
-    // A catalog moved to another team after the membership was read.
-    if team.is_some() && team != owner_team {
-        return Err(not_team_owner());
-    }
-    let members: Vec<(String, String)> = sqlx::query_as(
-        "SELECT u.name, m.role FROM team_members m JOIN users u ON u.id = m.user_id \
-         WHERE m.team_id = $1 ORDER BY u.name",
-    )
-    .bind(&owner_team)
-    .fetch_all(&mut *tx)
-    .await?;
     // `$2` is the owner's team, or NULL for an admin, who sees every user.
-    let entitlements: Vec<(String, String)> = sqlx::query_as(
-        "SELECT u.name, e.access FROM user_catalogs e JOIN users u ON u.id = e.user_id \
-         WHERE e.catalog_id = $1 \
-           AND ($2::text IS NULL \
-                OR e.user_id IN (SELECT user_id FROM team_members WHERE team_id = $2)) \
-         ORDER BY u.name",
-    )
-    .bind(catalog_id)
-    .bind(&team)
-    .fetch_all(&mut *tx)
-    .await?;
+    let entitlements: Vec<(String, String)> = if page.lists == TeamLists::Members {
+        Vec::new()
+    } else {
+        sqlx::query_as(
+            "SELECT u.name, e.access FROM user_catalogs e JOIN users u ON u.id = e.user_id \
+             WHERE e.catalog_id = $1 \
+               AND ($2::text IS NULL \
+                    OR e.user_id IN (SELECT user_id FROM team_members WHERE team_id = $2)) \
+               AND u.name COLLATE \"C\" > $3 \
+             ORDER BY u.name COLLATE \"C\" LIMIT $4",
+        )
+        .bind(catalog_id)
+        .bind(&team)
+        .bind(page.entitlements_after)
+        .bind(limit + 1)
+        .fetch_all(&mut *tx)
+        .await?
+    };
     tx.commit().await?;
+    let members: Vec<TeamMember> = members
+        .into_iter()
+        .map(|(user, role)| TeamMember { user, role })
+        .collect();
+    let entitlements: Vec<CatalogEntitlement> = entitlements
+        .into_iter()
+        .map(|(user, access)| CatalogEntitlement {
+            user,
+            access: Access::parse(&access).expect("the schema checks user_catalogs.access"),
+        })
+        .collect();
+    let (members, members_next) = cut_page(members, limit, |member| &member.user);
+    let (entitlements, entitlements_next) = cut_page(entitlements, limit, |entry| &entry.user);
     Ok(TeamAccess {
-        member_access: MemberAccess::parse(&member_access)
-            .expect("the schema checks catalogs.member_access"),
-        members: members
-            .into_iter()
-            .map(|(user, role)| TeamMember { user, role })
-            .collect(),
-        entitlements: entitlements
-            .into_iter()
-            .map(|(user, access)| CatalogEntitlement {
-                user,
-                access: Access::parse(&access).expect("the schema checks user_catalogs.access"),
-            })
-            .collect(),
+        members,
+        members_next,
+        entitlements,
+        entitlements_next,
     })
 }
 
@@ -2482,10 +2605,20 @@ mod tests {
         }
 
         // Act
-        let owner = team_access(&db.pool, "shared", Some(&alice)).await.unwrap();
-        let admin = team_access(&db.pool, "shared", None).await.unwrap();
-        let personal = team_access(&db.pool, "solo", Some(&alice)).await;
-        let stranger = team_access(&db.pool, "nowhere", Some(&alice)).await;
+        let first = TeamPage {
+            members_after: "",
+            entitlements_after: "",
+            limit: 100,
+            lists: TeamLists::Both,
+        };
+        let owner = team_access(&db.pool, "shared", Some(&alice), &first)
+            .await
+            .unwrap();
+        let admin = team_access(&db.pool, "shared", None, &first).await.unwrap();
+        let personal = team_access(&db.pool, "solo", Some(&alice), &first).await;
+        let stranger = team_access(&db.pool, "nowhere", Some(&alice), &first).await;
+        let scalar = member_access_as_owner(&db.pool, "shared", &alice).await;
+        let scalar_personal = member_access_as_owner(&db.pool, "solo", &alice).await;
 
         // Assert
         let users = |view: &TeamAccess| {
@@ -2494,7 +2627,11 @@ mod tests {
                 .map(|e| e.user.clone())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(owner.member_access, MemberAccess::Write);
+        assert_eq!(scalar.unwrap(), MemberAccess::Write);
+        assert!(
+            matches!(scalar_personal, Err(OkfError::Forbidden { .. })),
+            "{scalar_personal:?}"
+        );
         assert_eq!(
             owner
                 .members
@@ -2513,6 +2650,76 @@ mod tests {
             matches!(stranger, Err(OkfError::Forbidden { .. })),
             "{stranger:?}"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_members_and_entitlements_come_a_page_at_a_time_with_a_cursor() {
+        // Arrange: family has alice and bob; add five more members, all
+        // entitled to `shared`.
+        let db = test_db().await;
+        family(&db.pool).await;
+        let alice = id(&db.pool, "alice").await;
+        for name in ["c1", "c2", "c3", "c4", "c5"] {
+            users::create(
+                &db.pool,
+                &NewUser {
+                    name,
+                    display_name: &crate::labels::DisplayName::default(),
+                },
+                &AuditActor::cli(),
+                now(),
+            )
+            .await
+            .unwrap();
+            let membership = crate::store::teams::Membership {
+                team: "family",
+                user: name,
+                role: Role::Member,
+            };
+            teams::set_member(&db.pool, &membership, &AuditActor::cli(), now())
+                .await
+                .unwrap();
+            let new = NewEntitlement {
+                user: name,
+                catalog: "shared",
+                access: Access::Read,
+            };
+            entitle(&db.pool, &new, &AuditActor::cli(), now())
+                .await
+                .unwrap();
+        }
+
+        // Act: walk both lists, three rows at a time, through the cursors.
+        let mut members = Vec::new();
+        let mut entitled = Vec::new();
+        let (mut after_member, mut after_entitled) = (String::new(), String::new());
+        let mut pages = 0;
+        loop {
+            let page = TeamPage {
+                members_after: &after_member,
+                entitlements_after: &after_entitled,
+                limit: 3,
+                lists: TeamLists::Both,
+            };
+            let got = team_access(&db.pool, "shared", Some(&alice), &page)
+                .await
+                .unwrap();
+            assert!(got.members.len() <= 3 && got.entitlements.len() <= 3);
+            members.extend(got.members.iter().map(|m| m.user.clone()));
+            entitled.extend(got.entitlements.iter().map(|e| e.user.clone()));
+            pages += 1;
+            if got.members_next.is_none() && got.entitlements_next.is_none() {
+                break;
+            }
+            after_member = got.members_next.unwrap_or_else(|| "~".to_string());
+            after_entitled = got.entitlements_next.unwrap_or_else(|| "~".to_string());
+            assert!(pages < 10, "the cursors never end");
+        }
+
+        // Assert: seven members in three pages, each row once, in order.
+        assert_eq!(members, ["alice", "bob", "c1", "c2", "c3", "c4", "c5"]);
+        assert_eq!(entitled, ["c1", "c2", "c3", "c4", "c5"]);
+        assert_eq!(pages, 3);
     }
 
     /// Demotes `user` of `family` to a plain member, as an admin does.

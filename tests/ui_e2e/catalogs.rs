@@ -923,6 +923,56 @@ async fn a_team_owner_sets_member_access_and_entitles_a_member_from_the_drawer()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_large_team_is_picked_from_a_page_at_a_time_with_load_more() {
+    let server = login_server().await;
+    crate::account::acme_with_owner_and_member(&server).await;
+    // 102 members in all: bob, carol and 100 more, past the page of 100.
+    let pool = &server.db.pool;
+    for number in 0..100 {
+        let name = format!("m{number:03}");
+        okf_mcp::store::users::create(
+            pool,
+            &okf_mcp::store::users::NewUser {
+                name: &name,
+                display_name: &okf_mcp::labels::DisplayName::default(),
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("create a member");
+        teams::set_member(
+            pool,
+            &teams::Membership {
+                team: "acme",
+                user: &name,
+                role: Role::Member,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("add the member");
+    }
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password("bob@example.com", PASSWORD);
+        ui.open("/catalogs");
+        ui.click("[data-catalog=acme-notes]");
+        ui.wait_visible("#catalog-entitle-user:not([disabled])");
+        // The first page holds 100 of the 102: the last names wait.
+        ui.wait_visible("#catalog-members-more");
+        ui.click("#catalog-members-more");
+        ui.wait_hidden("#catalog-members-more");
+        // Picked from the continued page.
+        ui.select("#catalog-entitle-user", "m099");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_entitle_in_flight_is_sent_once_and_a_refusal_shows_its_reason() {
     let server = login_server().await;
     crate::account::acme_with_owner_and_member(&server).await;

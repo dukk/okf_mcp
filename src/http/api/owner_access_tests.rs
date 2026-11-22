@@ -519,3 +519,106 @@ async fn an_owner_cannot_entitle_at_admin_and_the_admin_routes_are_unchanged() {
     assert_eq!(set, StatusCode::OK, "{answer}");
     assert_eq!(stored_member_access(&world).await, "none");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_team_lists_come_a_page_at_a_time_and_a_continuation_reads_one_list() {
+    // Arrange: staff has five members (olive, mia, u1 to u3); mia and the
+    // three new ones are entitled to `docs`.
+    let world = world().await;
+    for user in ["u1", "u2", "u3"] {
+        for (method, uri, body) in [
+            ("POST", "/api/v1/users".to_string(), json!({ "name": user })),
+            (
+                "PUT",
+                format!("/api/v1/teams/staff/members/{user}"),
+                json!({ "role": "member" }),
+            ),
+        ] {
+            let (status, answer) =
+                send(&world.test, method, &uri, Some(&world.root), Some(body)).await;
+            assert!(status.is_success(), "{answer}");
+        }
+    }
+    for user in ["mia", "u1", "u2", "u3"] {
+        let (status, answer) = send(
+            &world.test,
+            "PUT",
+            &format!("/api/v1/users/{user}/entitlements/docs"),
+            Some(&world.root),
+            Some(json!({"access": "read"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{answer}");
+    }
+    let mut olive = Browser::session_for(&world.test, "olive").await;
+    let names = |view: &Value, list: &str| -> Vec<String> {
+        view[list]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .map(|row| row["user"].as_str().expect("a user").to_string())
+            .collect()
+    };
+
+    // Act
+    let (status, first) = as_session(
+        &mut olive,
+        &world,
+        "GET",
+        &format!("{TEAM_ENTITLEMENTS}?limit=2"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let members_next = first["members_next"]
+        .as_str()
+        .expect("more members")
+        .to_string();
+    let (_, members_only) = as_session(
+        &mut olive,
+        &world,
+        "GET",
+        &format!("{TEAM_ENTITLEMENTS}?limit=2&list=members&members_after={members_next}"),
+        None,
+    )
+    .await;
+    let given_next = first["entitlements_next"]
+        .as_str()
+        .expect("more entitlements")
+        .to_string();
+    let (_, given_only) = as_session(
+        &mut olive,
+        &world,
+        "GET",
+        &format!("{TEAM_ENTITLEMENTS}?limit=2&list=entitlements&entitlements_after={given_next}"),
+        None,
+    )
+    .await;
+    let (bad, _) = as_session(
+        &mut olive,
+        &world,
+        "GET",
+        &format!("{TEAM_ENTITLEMENTS}?list=everything"),
+        None,
+    )
+    .await;
+
+    // Assert: two rows a page, in byte order, each row once.
+    assert_eq!(names(&first, "members"), ["mia", "olive"]);
+    assert_eq!(names(&first, "entitlements"), ["mia", "u1"]);
+    assert_eq!(names(&members_only, "members"), ["u1", "u2"]);
+    assert_eq!(
+        members_only["entitlements"],
+        json!([]),
+        "only the members were read"
+    );
+    assert_eq!(members_only["entitlements_next"], Value::Null);
+    assert_eq!(names(&given_only, "entitlements"), ["u2", "u3"]);
+    assert_eq!(
+        given_only["entitlements_next"],
+        Value::Null,
+        "the last page"
+    );
+    assert_eq!(given_only["members"], json!([]));
+    assert_eq!(bad, StatusCode::BAD_REQUEST);
+}

@@ -417,8 +417,13 @@ function entitlements(row, ticket) {
     const removeKey = user => `catalog:${name}:unentitle:${user}`;
     let loaded = false;
     let stale = false;
-    let members = [];   // [{user, label, role}] the owning team's members
-    let given = [];     // [{user, label, access}] this catalog's entitlements
+    let members = [];   // [{user, label, role}] the owning team's members drawn so far
+    let given = [];     // [{user, label, access}] this catalog's entitlements drawn so far
+    // The cursors that continue each list (null: no more), kept with the rows
+    // they continue and replaced only when a first page draws.
+    let membersNext = null;
+    let givenNext = null;
+    let continuing = false;   // a continuation read is pending
 
     const who = guard(h('select', { id: 'catalog-entitle-user', 'aria-label': 'Team member' }),
         writeKey, () => loaded && members.length > 0);
@@ -431,6 +436,10 @@ function entitlements(row, ticket) {
     const note = h('p', { id: 'catalog-entitlements-stale', class: 'muted small', role: 'status', hidden: true },
         'Could not be read again; this may be out of date.');
     const refusal = h('p', { id: 'catalog-entitlements-error', class: 'error small', role: 'alert', hidden: true });
+    const moreMembers = h('button', { type: 'button', id: 'catalog-members-more', class: 'secondary small', hidden: true,
+                                      onclick: () => more('members') }, 'Load more members');
+    const moreGiven = h('button', { type: 'button', id: 'catalog-entitlements-more', class: 'secondary small', hidden: true,
+                                    onclick: () => more('entitlements') }, 'Load more entitlements');
 
     const labelOf = user => members.find(member => member.user === user)?.label ?? user;
     const optionText = member => (member.label === member.user ? member.user : `${member.label} (${member.user})`);
@@ -449,6 +458,10 @@ function entitlements(row, ticket) {
                     removeKey(entry.user), () => loaded)))
             : [h('li', { class: 'muted' }, loaded ? 'No one is entitled beyond the team\'s member access.' : '...')]));
         note.hidden = !stale;
+        // A continuation shows only while the rows drawn have a cursor and no
+        // continuation is pending (a second click would append twice).
+        moreMembers.hidden = membersNext === null || continuing;
+        moreGiven.hidden = givenNext === null || continuing;
         recheck(who); recheck(level); recheck(add);
     }
 
@@ -463,6 +476,36 @@ function entitlements(row, ticket) {
         if (answer !== null) {
             members = answer.members;
             given = answer.entitlements;
+            membersNext = answer.members_next ?? null;
+            givenNext = answer.entitlements_next ?? null;
+        }
+        continuing = false;
+        draw();
+    }
+
+    // The page after the rows drawn of one list, appended; dropped when a
+    // newer read has started since (it replaces the rows and cursors). A
+    // failure keeps the cursor for a retry and marks the rows possibly out
+    // of date.
+    async function more(which) {
+        const cursor = which === 'members' ? membersNext : givenNext;
+        if (cursor === null || continuing) return;
+        const mine = reads;
+        continuing = true;
+        draw();
+        const query = new URLSearchParams({ list: which, [`${which === 'members' ? 'members' : 'entitlements'}_after`]: cursor });
+        let answer = null;
+        try { answer = await api.get(`${path}?${query}`); } catch { /* toasted */ }
+        if (mine !== reads || !ticket.current()) return;
+        continuing = false;
+        if (answer === null) {
+            stale = true;
+        } else if (which === 'members') {
+            members = members.concat(answer.members);
+            membersNext = answer.members_next ?? null;
+        } else {
+            given = given.concat(answer.entitlements);
+            givenNext = answer.entitlements_next ?? null;
         }
         draw();
     }
@@ -471,6 +514,7 @@ function entitlements(row, ticket) {
     // null for a refusal) and cancels any read that started before it.
     const take = apply => {
         reads++;
+        continuing = false;
         if (apply !== null) {
             given = apply(given);
             stale = false;
@@ -530,7 +574,9 @@ function entitlements(row, ticket) {
             `Raise a member of ${row.owner_team_label ?? row.owner_team ?? 'the owner team'} above the team's member access, `
             + 'at read or write. Only members of the team can be entitled.'),
         list,
+        moreGiven,
         h('div', { class: 'inline-form' }, who, level, add),
+        moreMembers,
         note,
         refusal);
     draw();

@@ -16,18 +16,21 @@ Time: see the file name (UTC).
 - `store::ceiling`: `change_member_access` (with `MemberAccessChange.owner`),
   `entitle_as_owner`, `unentitle_as_owner` and the read `team_access`. The owner is
   checked in the write's transaction under its membership row lock
-  (`catalogs::lock_shared_team_owner`, which refuses a personal team), then the catalog
-  row, then, for an entitlement, the target's membership row. Lock order is the
+  (`catalogs::lock_shared_team_owner`, which refuses a personal team), then, for an
+  entitlement, the target's membership row, then the catalog row. Lock order is the
   documented one (users, teams, catalogs, `server_state`). Ceiling writes still bump
   `admin_generation` and send the same invalidations; entries are audited with the owner
   as actor. `set_member_access`, `entitle` and `unentitle` (admins, the CLI) are unchanged.
 - API: `PUT|GET /catalogs/{c}/member-access` and `PUT|DELETE /users/{u}/entitlements/{c}`
   accept an owner's console session (`api::owner_session`); keys and OAuth grants keep
   the admin-only refusal. New `GET /catalogs/{c}/entitlements` (the owning team's members
-  and the catalog's entitlements, an owner sees its members' only). An owner's entitlement
+  and the catalog's entitlements, an owner sees its members' only), paged with keyset cursors
+  (`members_after`, `entitlements_after`, `limit`, `list`); the owner's `GET member-access`
+  reads the scalar only (`member_access_as_owner`). An owner's entitlement
   answer holds only the entitlement on that catalog; an admin's still holds all of them.
 - Console: the owner drawer of a shared team shows Team member access and Entitlements
-  (`pages/catalogs.js`), as pending writes keyed by catalog and user.
+  (`pages/catalogs.js`), as pending writes keyed by catalog and user, with Load more
+  for the members and the entitlements.
 - Docs: `docs/operations.md` ("The ceiling and member access", the API reference and the
   parity table) and the user-login spec's Future work item 1.
 

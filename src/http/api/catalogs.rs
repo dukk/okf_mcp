@@ -685,12 +685,10 @@ async fn member_access(
     let unreached = is_unreached(&admin);
     let access = match owner_session(&principal, admin)? {
         None => ceiling::member_access(app.pool(), &catalog).await?,
-        Some(owner) => {
-            ceiling::team_access(app.pool(), &catalog, Some(owner))
-                .await
-                .map_err(|refusal| keep_not_found(refusal, unreached, &catalog))?
-                .member_access
-        }
+        // The scalar only: no member or entitlement list is read for it.
+        Some(owner) => ceiling::member_access_as_owner(app.pool(), &catalog, owner)
+            .await
+            .map_err(|refusal| keep_not_found(refusal, unreached, &catalog))?,
     };
     Ok(Json(MemberAccessView {
         name: catalog,
@@ -782,8 +780,30 @@ pub(crate) struct TeamEntitlementsView {
     pub name: String,
     /// The owning team's members, the only users an owner may entitle.
     pub members: Vec<TeamMemberView>,
+    /// The last member of this page when more follow: send it back as
+    /// `members_after`; `null` on the last page.
+    pub members_next: Option<String>,
     /// The entitlements to the catalog (an owner sees its members' only).
     pub entitlements: Vec<CatalogEntitlementView>,
+    /// As `members_next`, for `entitlements_after`.
+    pub entitlements_next: Option<String>,
+}
+
+/// `GET /catalogs/{catalog}/entitlements`' query: the cursors of the two
+/// lists, the page size and which list to read.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TeamEntitlementsQuery {
+    /// The `members_next` of the previous page; absent for the first.
+    members_after: Option<String>,
+    /// The `entitlements_next` of the previous page; absent for the first.
+    entitlements_after: Option<String>,
+    /// The page size of each list: default 100, at most 1000 (a larger one
+    /// is cut).
+    limit: Option<u32>,
+    /// `members` or `entitlements` to read only that list (a continuation);
+    /// absent for both.
+    list: Option<String>,
 }
 
 /// `GET /catalogs/{catalog}/entitlements`: the owning team's members and the
@@ -798,13 +818,32 @@ async fn team_entitlements(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
     Path(catalog): Path<String>,
+    Query(query): Query<TeamEntitlementsQuery>,
 ) -> Result<Json<TeamEntitlementsView>, AppError> {
+    let lists = match query.list.as_deref() {
+        None => ceiling::TeamLists::Both,
+        Some("members") => ceiling::TeamLists::Members,
+        Some("entitlements") => ceiling::TeamLists::Entitlements,
+        Some(other) => {
+            return Err(OkfError::InvalidPath {
+                path: "list".to_string(),
+                reason: format!("must be members or entitlements, not {other:?}"),
+            }
+            .into())
+        }
+    };
+    let page = ceiling::TeamPage {
+        members_after: query.members_after.as_deref().unwrap_or(""),
+        entitlements_after: query.entitlements_after.as_deref().unwrap_or(""),
+        limit: i64::from(query.limit.filter(|limit| *limit > 0).unwrap_or(100)),
+        lists,
+    };
     let admin = principal
         .require_in(app.directory(), Access::Admin, &catalog)
         .await;
     let unreached = is_unreached(&admin);
     let owner = owner_session(&principal, admin)?;
-    let access = ceiling::team_access(app.pool(), &catalog, owner)
+    let access = ceiling::team_access(app.pool(), &catalog, owner, &page)
         .await
         .map_err(|refusal| keep_not_found(refusal, unreached, &catalog))?;
     let mut wanted = Wanted::default();
@@ -837,6 +876,8 @@ async fn team_entitlements(
                 access: entitlement.access.as_str(),
             })
             .collect(),
+        members_next: access.members_next,
+        entitlements_next: access.entitlements_next,
     }))
 }
 
