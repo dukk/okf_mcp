@@ -8,6 +8,7 @@ pub mod limits;
 pub mod sessions;
 
 use std::fmt::Write as _;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -106,6 +107,9 @@ pub struct Redis {
     // `{<key_prefix>}`: the one hash tag every key and channel carries.
     prefix: Arc<str>,
     metrics: Metrics,
+    // Whether the shared rate limiter's last Redis call failed (issue #832):
+    // `/healthz` reports it. Shared by every clone of this handle.
+    limits_degraded: Arc<AtomicBool>,
 }
 
 // Hand-written: the client holds the URL, which may carry a password.
@@ -206,7 +210,52 @@ impl Redis {
             connection,
             prefix: Arc::from(format!("{{{}}}", config.key_prefix)),
             metrics: metrics.clone(),
+            limits_degraded: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    /// Whether the shared rate limiter's last Redis call failed, so every
+    /// limit is being decided by this replica's own bucket (`/healthz`'s
+    /// `rate_limits`).
+    ///
+    /// # Returns
+    /// `true` after a failed call, until a later one succeeds.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line accessor or key formatter: a span would record nothing"
+        )
+    )]
+    pub fn limits_degraded(&self) -> bool {
+        self.limits_degraded.load(Ordering::Relaxed)
+    }
+
+    /// Records whether the shared rate limiter's last Redis call failed.
+    ///
+    /// # Arguments
+    /// * `degraded` - `true` after a failed call, `false` after a good one.
+    ///
+    /// # Returns
+    /// What the flag was before.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "one-line accessor or key formatter: a span would record nothing"
+        )
+    )]
+    pub fn set_limits_degraded(&self, degraded: bool) -> bool {
+        self.limits_degraded.swap(degraded, Ordering::Relaxed)
+    }
+
+    /// Counts one rate-limit decision made by a replica's own bucket.
+    ///
+    /// # Arguments
+    /// * `limiter` - which limiter fell back.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn count_fallback(&self, limiter: crate::telemetry::metrics::Limiter) {
+        self.metrics.rate_limit_fallback(limiter);
     }
 
     /// The full key of `id` in `space` (`{<prefix>}<space>:<id>`): the braces

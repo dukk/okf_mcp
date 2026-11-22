@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 382,
+  "next_claim_seq": 400,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "43e6ecb48be4dee9071989d7e4c3fbd6f7ebec5fff7e139b27c6878bb8275ae7"
+    "mac": "d26159e68880b93173b763d3024ed2c3ffa651dd96c8dc7558ba01ee234aeb17"
   },
-  "next_evidence_seq": 446,
+  "next_evidence_seq": 473,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "3aa658aa5c88a86e4a4dca5ec2f2066703d220f2781d7b8f0c07c359030cefeb"
+    "mac": "58ffdffb55e516b265b339963f562acb34872182f7209e086032fa9ed0d27f37"
   },
   "claims": [
     {
@@ -1730,6 +1730,28 @@
             "by": "server",
             "mac": "3255197ee8c60669b0c3958f06080d4c39a9f9b7902c8cc618ecc3cb2bbb5f1c"
           }
+        },
+        {
+          "id": "EVD-0471",
+          "kind": "analysis",
+          "locator": "grep of ^| `okf_ names in docs/operations.md vs string literals of Metrics::ALL_FAMILIES (src/telemetry/metrics.rs:267-)",
+          "summary": "Re-audit on head: 32 names each side, diff empty; okf_ratelimit_fallbacks_total is in both. (The earlier record says 34 names; my extraction differs but both sides agree.) The head commit changed no metric text.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/telemetry/metrics.rs",
+              "lines": {
+                "start": 267,
+                "end": 310
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:25:56.272746001Z",
+          "seal": {
+            "by": "server",
+            "mac": "3fa21da9b0579f7d648346207b9ca5d31412704abed42cc5bfb08929faeea931"
+          }
         }
       ],
       "verdicts": [
@@ -1745,13 +1767,26 @@
             "by": "server",
             "mac": "9350d8a1cfa3c5f6e2d01a83f5901aa512322e9f72e7053f3a568db021298dcf"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on head: docs table and family list match with the new family on both sides.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0471"
+          ],
+          "recorded_at": "2026-11-22T16:26:06.902334915Z",
+          "seal": {
+            "by": "server",
+            "mac": "3d62a11215921ab4ae84b74df6edc8599f39cb5ca03bf8cfedc53d7b411c59bf"
+          }
         }
       ],
       "created_at": "2026-11-21T19:06:29.655947925Z",
-      "updated_at": "2026-11-21T19:08:01.262337193Z",
+      "updated_at": "2026-11-22T16:26:06.902334915Z",
       "seal": {
         "by": "server",
-        "mac": "70f5fee368802295bb484fea24698f9d105c425c5c727095eb73f8a9683897ed"
+        "mac": "32473cb2225eea38db03e20e9004c5393e96c76d6472e4d95f2fe47d2745ac7b"
       }
     },
     {
@@ -1805,6 +1840,28 @@
             "by": "server",
             "mac": "d4fb9c1812e66f1fabea08265a3b9f62bbae247dbaa059f5856337fd9c0beb64"
           }
+        },
+        {
+          "id": "EVD-0472",
+          "kind": "inspection",
+          "locator": "src/telemetry/metrics.rs:808-837",
+          "summary": "Re-audit on head: Limiter::as_str is unchanged (seven labels as documented); the new event_name is separate and metric labels still use as_str (metrics.rs:1035,1047).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/telemetry/metrics.rs",
+              "lines": {
+                "start": 808,
+                "end": 837
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:25:56.316893717Z",
+          "seal": {
+            "by": "server",
+            "mac": "2a21f2bc388e89da9cd76f81708fde0f69d23f1150ac32226ed34783a4681fda"
+          }
         }
       ],
       "verdicts": [
@@ -1820,13 +1877,26 @@
             "by": "server",
             "mac": "d9061368b9823a2272b0a9afc14ac7392da9d03eb4b87d14a886431b5468d3d5"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on head: as_str values unchanged; labels still use them.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0472"
+          ],
+          "recorded_at": "2026-11-22T16:26:06.931787355Z",
+          "seal": {
+            "by": "server",
+            "mac": "a5cea96e75953b18b79da459d9d61b3d94ab088e2f71589cc7273b4d7916f5dc"
+          }
         }
       ],
       "created_at": "2026-11-21T19:06:29.655947925Z",
-      "updated_at": "2026-11-21T19:08:01.275453714Z",
+      "updated_at": "2026-11-22T16:26:06.931787355Z",
       "seal": {
         "by": "server",
-        "mac": "d5ae473cc338b7197afe20c67df591b492c226f18d7b68f9d5dcb81b3e0d9a99"
+        "mac": "1ec3d70733c624466d3a2042e0e10c9ba89dbb979a17e1227da2d228ea3e5e45"
       }
     },
     {
@@ -9255,6 +9325,28 @@
             "by": "server",
             "mac": "fe18c1163140bdef5b855ea99111bc04727703ed15e3d5fcdbf370d4e85a861d"
           }
+        },
+        {
+          "id": "EVD-0467",
+          "kind": "inspection",
+          "locator": "src/http/mod.rs:219-262",
+          "summary": "Re-audit on head: status derives from database reachability only (200 or 503); the new rate_limits field is only in the body. The degraded-limiter test asserts 200.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/mod.rs",
+              "lines": {
+                "start": 219,
+                "end": 262
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:25:56.099762464Z",
+          "seal": {
+            "by": "server",
+            "mac": "2d783b87a21995d5cabb498d061efc5ef70367bc178907f1c1e32971a32874de"
+          }
         }
       ],
       "verdicts": [
@@ -9270,13 +9362,26 @@
             "by": "server",
             "mac": "317b7b57cb9d55e8e399beac37ec8e0df904bd44b57ea6ae454b1b1275ae59a5"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on head: status derivation is unchanged by the new field.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0467"
+          ],
+          "recorded_at": "2026-11-22T16:26:06.759220060Z",
+          "seal": {
+            "by": "server",
+            "mac": "352569b104a883a5d2eb8e1982b1d232b2d3eef03d7152518b36f198f880cee3"
+          }
         }
       ],
       "created_at": "2026-11-21T19:06:56.236553050Z",
-      "updated_at": "2026-11-21T19:10:46.011139842Z",
+      "updated_at": "2026-11-22T16:26:06.759220060Z",
       "seal": {
         "by": "server",
-        "mac": "e9759058c1d8af551e1526eba1a948dabca11ea5c0eb63dca15bf71d66a7396b"
+        "mac": "a2cbd48e5762211244a1972fabd2e1eabba72412c4e1c9244f458d5b96d60460"
       }
     },
     {
@@ -9330,6 +9435,28 @@
             "by": "server",
             "mac": "b33d19e8fc259b831f6c640beeffd082bc3d16741578aa8911215164ad44e2a1"
           }
+        },
+        {
+          "id": "EVD-0468",
+          "kind": "test",
+          "locator": "src/http/mod.rs:1625-1650 (healthz_reports_a_degraded_rate_limiter_without_changing_its_status, ok); healthz_follows_redis not run",
+          "summary": "Re-audit on head: the redis field is untouched; the new test asserts redis stays ok while rate_limits is degraded and status is 200. The diff only added a rate_limits key to expected bodies.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/mod.rs",
+              "lines": {
+                "start": 1625,
+                "end": 1650
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:25:56.145861228Z",
+          "seal": {
+            "by": "server",
+            "mac": "67b05821cbc3adec7c4ee257b3e681ad12e0422479dc31a12d1b2b29e6dc301f"
+          }
         }
       ],
       "verdicts": [
@@ -9345,13 +9472,26 @@
             "by": "server",
             "mac": "51e8cfb410cc004d8988338c54b7d9cad209f609f3c036ef79e6ca69ef9d1e1e"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on head: the redis field and status independence are unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0468"
+          ],
+          "recorded_at": "2026-11-22T16:26:06.805693416Z",
+          "seal": {
+            "by": "server",
+            "mac": "f740477d52ea2cab3170be24199657b2b9522f4051a7bd15c8bfbbde15e7a77c"
+          }
         }
       ],
       "created_at": "2026-11-21T19:06:56.236553050Z",
-      "updated_at": "2026-11-21T19:10:46.031794640Z",
+      "updated_at": "2026-11-22T16:26:06.805693416Z",
       "seal": {
         "by": "server",
-        "mac": "ebd5d2890821fccf75c041da2dc482f31844742f4b1f3b46111a3ba8d5146022"
+        "mac": "7d242c9200bf7412baa1010cfc3850b5c4fe606cc028f6f364733fcad17fa1e9"
       }
     },
     {
@@ -16204,6 +16344,28 @@
             "by": "server",
             "mac": "320b9df47b296bff4e0b6fea703015264e340915fde3ffcd3de69155984da25f"
           }
+        },
+        {
+          "id": "EVD-0469",
+          "kind": "inspection",
+          "locator": "src/http/mod.rs:195-262",
+          "summary": "Re-audit on head: 503 only on a database failure within 2 s; the redis field is unchanged and outside the status expression; the added rate_limits key does not alter the statement.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/mod.rs",
+              "lines": {
+                "start": 195,
+                "end": 262
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:25:56.188997300Z",
+          "seal": {
+            "by": "server",
+            "mac": "4a2fcc9d1ca0916bb91b89508902046e9e777fbf30dd016b57c9fadaf627f9e6"
+          }
         }
       ],
       "verdicts": [
@@ -16219,13 +16381,26 @@
             "by": "server",
             "mac": "45b79e803d265195f3f80897f8e69120011abe61e05f962a03f8086c676559cf"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on head: status and redis field behave as stated.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0469"
+          ],
+          "recorded_at": "2026-11-22T16:26:06.840148648Z",
+          "seal": {
+            "by": "server",
+            "mac": "7a140d6ce32b6c92e41339db55e051c86d988b3c8caaea84d6071cb9ed13b3b0"
+          }
         }
       ],
       "created_at": "2026-11-21T19:07:17.608189865Z",
-      "updated_at": "2026-11-21T19:10:10.296144171Z",
+      "updated_at": "2026-11-22T16:26:06.840148648Z",
       "seal": {
         "by": "server",
-        "mac": "3d5551c9990c162ecb8601ea70d310d511e3b4a547c00c3b0722f46eb8b47403"
+        "mac": "ee26f112d02c97f4d837f974bc7e85c2862716021543bb704e36edc06bba18c7"
       }
     },
     {
@@ -21393,6 +21568,28 @@
             "by": "server",
             "mac": "6064654f44c065db9eeb9ba74ad6b830d5e51e096dfa550839145659bf7fb0da"
           }
+        },
+        {
+          "id": "EVD-0470",
+          "kind": "inspection",
+          "locator": "src/http/mod.rs:1592-1606; tests/server.rs:55",
+          "summary": "Re-audit on head: the 503 test expects {database unreachable, cached_catalogs 0, clock null, redis null, rate_limits null} with status 503; tests/server.rs:55 expects the same key for the 200 body. Status behaviour is unchanged. I did not run tests/server.rs.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/mod.rs",
+              "lines": {
+                "start": 1592,
+                "end": 1606
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:25:56.234639152Z",
+          "seal": {
+            "by": "server",
+            "mac": "655f331af5f98b14f090fa6ec8a75f97c83a871d44334f9d883ffdb82ccff69f"
+          }
         }
       ],
       "verdicts": [
@@ -21408,13 +21605,26 @@
             "by": "server",
             "mac": "f4784df7f0929c813e40d2c228826fa01d116fe58cb1409e22474535795e7cbb"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on head: status behaviour unchanged; body tests now include rate_limits.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0470"
+          ],
+          "recorded_at": "2026-11-22T16:26:06.873152005Z",
+          "seal": {
+            "by": "server",
+            "mac": "ed0fc26fc35e8a3fd69e073e645e08205499d5e27913787144bc97cc6da770af"
+          }
         }
       ],
       "created_at": "2026-11-21T19:07:50.360239770Z",
-      "updated_at": "2026-11-21T19:12:15.270918140Z",
+      "updated_at": "2026-11-22T16:26:06.873152005Z",
       "seal": {
         "by": "server",
-        "mac": "c3e4e191558e93c96919ea4af8f111f7fc78c151a361301e52bf147dc7a7c1cc"
+        "mac": "fe2cc81918a3da9728076510ea51ea7f98a286c4476fdf6a5dedcf0e7958770f"
       }
     },
     {
@@ -22101,6 +22311,28 @@
             "by": "server",
             "mac": "66a080bdcc5530f3cb495b2f6e3f7bc65825b4c0e0dfa302b46413799f1c4d88"
           }
+        },
+        {
+          "id": "EVD-0466",
+          "kind": "test",
+          "locator": "src/shared/limits.rs:180-203; a_failed_redis_call_falls_back_to_this_replicas_own_bucket_and_is_counted, a_stopped_redis_falls_back_to_this_replicas_own_bucket (ok)",
+          "summary": "Re-audit on 6b6d323 (code unchanged since the 9f25ec5 test run): on Err take_or still counts, then returns local(), the replica's own bucket (never unlimited); the two existing fallback tests pass. The 503 rows of the claim were not touched.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/limits.rs",
+              "lines": {
+                "start": 180,
+                "end": 203
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:25:56.052667495Z",
+          "seal": {
+            "by": "server",
+            "mac": "0e7efb88d360776d3e0689366553b7362079622935b688703b77431290db0010"
+          }
         }
       ],
       "verdicts": [
@@ -22116,13 +22348,26 @@
             "by": "server",
             "mac": "95b58a6cbe653135276a3a646ad701342124fc6cd83f769db47f46b959cfd229"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on head: fallback to the local bucket is unchanged and its tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0466"
+          ],
+          "recorded_at": "2026-11-22T16:26:06.720603678Z",
+          "seal": {
+            "by": "server",
+            "mac": "57950b60c1ef742a2ca392b64922c6a1e98135c3e96c97a9b194a266d3d3a164"
+          }
         }
       ],
       "created_at": "2026-11-21T19:07:50.360239770Z",
-      "updated_at": "2026-11-21T19:12:15.430929760Z",
+      "updated_at": "2026-11-22T16:26:06.720603678Z",
       "seal": {
         "by": "server",
-        "mac": "7acade19bda7c764a16d41d6b978197ef2fdbdf349444aeeb516983fb8f129b0"
+        "mac": "956f80e8375d0bcb5ce14ea8c771fcd8e72a65b6feb1069dd8b424a03024a38b"
       }
     },
     {
@@ -30321,6 +30566,1246 @@
       "seal": {
         "by": "server",
         "mac": "2fbf2582435db3c6f2e745a0304dde3e7392f45b3fcb7a60dd8acd2e6388654a"
+      }
+    },
+    {
+      "id": "CLM-0382",
+      "statement": "The code half of issue #832 is delivered: start-up check of the TAKE script, ACL docs, throttled fallback warning with a fallback metric, a limiter name that survives Sentry scrubbing, and a regression test against a restricted Redis user.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/832 (code half)",
+      "derived_from": [],
+      "artifacts": [
+        "src/shared/limits.rs",
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:832"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0465",
+          "kind": "analysis",
+          "locator": "children of CLM-0382",
+          "summary": "Every code child (check, wiring, log, healthz, flag, counter, throttle, event name, regression tests) and the ACL documentation child (CLM-0392) are supported on 6b6d323. The Sentry observation (CLM-0399) rests on the issue's report alone and is not_enough_info; it is a reported fact, not a requirement.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T16:25:11.855322725Z",
+          "seal": {
+            "by": "server",
+            "mac": "6588df067dee1a01096a2df286e5f394f59c98a369ff3d7b86038cbb3d5c16f3"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All code and documentation children are supported on 6b6d323; the one not_enough_info child (CLM-0399) is a reported observation, not a requirement. Test-gap notes are on CLM-0384, CLM-0387 and CLM-0389.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0465"
+          ],
+          "recorded_at": "2026-11-22T16:25:39.324476079Z",
+          "seal": {
+            "by": "server",
+            "mac": "249a6c25b5cb913e0d8edbe63dc2da59ce9b58d4ed2eb0b0642996b8711ec4a2"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:24:25.990171574Z",
+      "updated_at": "2026-11-22T16:25:39.324476079Z",
+      "seal": {
+        "by": "server",
+        "mac": "cf363f745f2c3a59312630b8872bc0e9db2ee39c5241ea2e65382f37350a5f7d"
+      }
+    },
+    {
+      "id": "CLM-0383",
+      "statement": "shared::limits::check runs the TAKE script once and, when Redis refuses it (a user denied TIME), returns false, counts okf_redis_errors_total{operation=\"limit\"} and sets the Redis handle's degraded flag.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #832: 'a start-up check of the TAKE script against Redis'",
+      "derived_from": [
+        "CLM-0382"
+      ],
+      "artifacts": [
+        "src/shared/limits.rs"
+      ],
+      "tags": [
+        "from-issue:832"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0446",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- shared::limits healthz_reports_a_degraded (16 passed, 0 failed, run on 9f25ec5); shared::limits::tests::a_redis_user_without_time_is_found_at_startup_and_falls_back",
+          "summary": "The test connects as a user without TIME and asserts check() false, limits_degraded() true, limit error counter 4 (1 from check + 3 takes). Code in src/ and tests/ is byte-identical between 9f25ec5 and head 6b6d323 (the only later diff is docs/operations.md), so the run still describes head.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/limits.rs",
+              "lines": {
+                "start": 669,
+                "end": 698
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:24:56.433541300Z",
+          "seal": {
+            "by": "server",
+            "mac": "161c3784492c27dfe7b81a26739c0a2137eaa862a34402114e60f5f50809e3d7"
+          }
+        },
+        {
+          "id": "EVD-0463",
+          "kind": "analysis",
+          "locator": "children of CLM-0383",
+          "summary": "The one child (probe key, one token, 1 s TTL) is supported, so the check is a bounded probe and its failure path is the one the test exercises.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T16:25:11.799232696Z",
+          "seal": {
+            "by": "server",
+            "mac": "2a8b2789b14d955741647844d66e860510a246d433cdaaf86177fb1a15ddc544"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The TIME-less-user test asserts check false, flag set and the limit counter at 4; the child is supported.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0446",
+            "EVD-0463"
+          ],
+          "recorded_at": "2026-11-22T16:25:38.311823562Z",
+          "seal": {
+            "by": "server",
+            "mac": "7e26c8076f9e17994247ddabf4890d9b745a3a1b3be6015d96f31f7bc604cb34"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:24:25.990171574Z",
+      "updated_at": "2026-11-22T16:25:38.311823562Z",
+      "seal": {
+        "by": "server",
+        "mac": "c45ba8c59ea2b181b865e76e32943981911443c38349ee92ef605d4414497c5b"
+      }
+    },
+    {
+      "id": "CLM-0384",
+      "statement": "App::load_with_metrics calls shared::limits::check right after connecting to Redis and ignores its result, so a failing check never stops start-up.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: 'runs the TAKE script once ... when App::load_with_metrics connects to Redis ... It never stops start-up'",
+      "derived_from": [
+        "CLM-0382"
+      ],
+      "artifacts": [
+        "src/app.rs"
+      ],
+      "tags": [
+        "from-issue:832"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0447",
+          "kind": "inspection",
+          "locator": "src/app.rs:223-236",
+          "summary": "After Redis::connect(...).await?, the Some(table) arm calls shared::limits::check(&redis).await, drops the bool and returns Some(redis); no `?` or branch on it. No test drives App::load_with_metrics through a failing check (the tests call check() directly): a test gap, not a refutation.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/app.rs",
+              "lines": {
+                "start": 223,
+                "end": 236
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:24:56.479851036Z",
+          "seal": {
+            "by": "server",
+            "mac": "3e5b3dea114e75f28e1ed0dc5d4f1687331871f5846f5cc4abc86ddf18061411"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The wiring calls check after connect and drops the result. Supported by code reading only; no test drives App::load_with_metrics through a failing check.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0447"
+          ],
+          "recorded_at": "2026-11-22T16:25:38.388355624Z",
+          "seal": {
+            "by": "server",
+            "mac": "839bd3afa733f375f52fe4a361b31ed353ec75bd9bc60295b4fa9bdc1469aa0e"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:24:25.990171574Z",
+      "updated_at": "2026-11-22T16:25:38.388355624Z",
+      "seal": {
+        "by": "server",
+        "mac": "89584e66aa35ea592cdce470066c85d8d74cf0f63e2310370a1872e8bbc8968f"
+      }
+    },
+    {
+      "id": "CLM-0385",
+      "statement": "When the check fails it logs at error level a message that names the ACL problem and points to docs/operations.md.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "Issue #832: 'error log naming the ACL problem'",
+      "derived_from": [
+        "CLM-0382"
+      ],
+      "artifacts": [
+        "src/shared/limits.rs"
+      ],
+      "tags": [
+        "from-issue:832"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0448",
+          "kind": "inspection",
+          "locator": "src/shared/limits.rs:230-246",
+          "summary": "The Err arm emits split_event!(error, ...) with: 'the shared rate limiter's script cannot run on Redis (usually the Redis user's ACL lacks a command it calls, such as TIME; see docs/operations.md, Redis); every rate limit is decided by each replica's own bucket'. No test asserts the log line.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/limits.rs",
+              "lines": {
+                "start": 230,
+                "end": 246
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:24:56.542318305Z",
+          "seal": {
+            "by": "server",
+            "mac": "d9388d2c3cff172575550e6538b9431893e31a753500579e9157395e0252e361"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The error-level event text names the Redis user's ACL and TIME and points to the docs.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0448"
+          ],
+          "recorded_at": "2026-11-22T16:25:38.460618566Z",
+          "seal": {
+            "by": "server",
+            "mac": "84225c93e1e17f0b287817fc9d5bd3fbaeff8aa98ce394b7ecca567b86307ea3"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:24:25.990171574Z",
+      "updated_at": "2026-11-22T16:25:38.460618566Z",
+      "seal": {
+        "by": "server",
+        "mac": "21fbb66f405307c6a83496cd2eb4f3e5e6ecdf801cdbe704ed31534ddd1ac64e"
+      }
+    },
+    {
+      "id": "CLM-0386",
+      "statement": "GET /healthz carries a rate_limits field: \"shared\", \"degraded\" once the flag is set, null without [redis], and the status code does not change when it is degraded.",
+      "kind": "interface",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: 'GET /healthz has a new rate_limits field: \"shared\", \"degraded\" or null without [redis]. The status code is unchanged.'",
+      "derived_from": [
+        "CLM-0382"
+      ],
+      "artifacts": [
+        "src/http/mod.rs",
+        "tests/server.rs"
+      ],
+      "tags": [
+        "from-issue:832"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0449",
+          "kind": "test",
+          "locator": "http::tests::healthz_reports_a_degraded_rate_limiter_without_changing_its_status (ok, in the 16-test run); src/http/mod.rs:1602, 1629-1648; tests/server.rs:55",
+          "summary": "The test reads rate_limits 'shared', sets the flag, then asserts status 200, 'degraded' and redis 'ok'. The 503 body test asserts rate_limits null without Redis. tests/server.rs:55 also expects rate_limits null (I did not run that integration test). Status derives from the database probe only.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/mod.rs",
+              "lines": {
+                "start": 1629,
+                "end": 1648
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:24:56.593033251Z",
+          "seal": {
+            "by": "server",
+            "mac": "389595aa05bad2b448ee600fd1ad7424c3fcb0a36bdd6334e5d3947b5ec5578b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The degraded-limiter test asserts shared, then degraded with status 200; the 503 body test asserts null without Redis.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0449"
+          ],
+          "recorded_at": "2026-11-22T16:25:38.524481901Z",
+          "seal": {
+            "by": "server",
+            "mac": "c6655138f04823e70bfd6b47e359fbca02586e85e76bd85cd6659b19d2932349"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:24:25.990171574Z",
+      "updated_at": "2026-11-22T16:25:38.524481901Z",
+      "seal": {
+        "by": "server",
+        "mac": "5cd90b3f8f709490d2556112bcc793d1a65380604cf0365257660a071603ba48"
+      }
+    },
+    {
+      "id": "CLM-0387",
+      "statement": "The degraded flag follows every later limiter call: take_or clears it after a successful Redis call and sets it after a failed one.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: 'The flag follows every later limiter call (a failure sets it, a success clears it).'",
+      "derived_from": [
+        "CLM-0382"
+      ],
+      "artifacts": [
+        "src/shared/limits.rs"
+      ],
+      "tags": [
+        "from-issue:832"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0450",
+          "kind": "inspection",
+          "locator": "src/shared/limits.rs:180-203",
+          "summary": "take_or: Ok arm calls set_limits_degraded(false); Err arm counts, count_fallback, set_limits_degraded(true). The flag is one AtomicBool on the Redis handle shared by all limiters, so one limiter's success clears another's failure (not claimed by the PR). No test drives failure-then-success through take_or.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/limits.rs",
+              "lines": {
+                "start": 180,
+                "end": 203
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:24:56.646212278Z",
+          "seal": {
+            "by": "server",
+            "mac": "b137537cf5f5dbc380f0581fc3deb50fcc969f63e1713117b407bf461f211aa9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "take_or clears the flag on Ok and sets it on Err. By code reading only; no failure-then-success test, and the flag is shared by all limiters.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0450"
+          ],
+          "recorded_at": "2026-11-22T16:25:38.658280047Z",
+          "seal": {
+            "by": "server",
+            "mac": "8dc386b7d49d8b575e3109a735be315b0f7f3a7922533d04a98fe8d64fe943e8"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:24:25.990171574Z",
+      "updated_at": "2026-11-22T16:25:38.658280047Z",
+      "seal": {
+        "by": "server",
+        "mac": "71aa8f02379cb2f2659e711e5c1c01d9ded197588a351d0be3ced5aca264e608"
+      }
+    },
+    {
+      "id": "CLM-0388",
+      "statement": "The counter okf_ratelimit_fallbacks_total{limiter} is incremented once for every decision a replica's own bucket made because the shared bucket failed.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: 'New counter okf_ratelimit_fallbacks_total{limiter}: decisions a replica's own bucket made because the shared one failed.'",
+      "derived_from": [
+        "CLM-0382"
+      ],
+      "artifacts": [
+        "src/shared/limits.rs",
+        "src/telemetry/metrics.rs"
+      ],
+      "tags": [
+        "from-issue:832"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0451",
+          "kind": "test",
+          "locator": "a_redis_user_without_time_is_found_at_startup_and_falls_back (passed); src/shared/limits.rs:686-695; src/telemetry/metrics.rs:1044",
+          "summary": "Three takes decided by the local bucket leave rendered metrics containing okf_ratelimit_fallbacks_total{limiter=\\\"oauth_token\\\"} 3 (the check's own failure is not a fallback). take_or increments once per Err.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/limits.rs",
+              "lines": {
+                "start": 686,
+                "end": 695
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:24:56.691543041Z",
+          "seal": {
+            "by": "server",
+            "mac": "69ad8ed927e7bbb35049167315b65a4f240bdee629aeb2a111ffc492539d76e6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The rendered metrics show the fallback counter at exactly 3 after three fallbacks.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0451"
+          ],
+          "recorded_at": "2026-11-22T16:25:38.711350304Z",
+          "seal": {
+            "by": "server",
+            "mac": "1219913b2fd9ad4a04f89fc7143fbe0c7ecb1cf4384bf9b20412f4ddcbb2a9c5"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:24:25.990171574Z",
+      "updated_at": "2026-11-22T16:25:38.711350304Z",
+      "seal": {
+        "by": "server",
+        "mac": "8acb72792eb272a6b1cf8b54108d161e7a017fdca5b9027fd7b3124e627eec3e"
+      }
+    },
+    {
+      "id": "CLM-0389",
+      "statement": "The fallback warning is logged at most once a minute per limiter, while every fallback is still counted.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'The fallback warning is logged at most once a minute per limiter (every fallback is still counted).'",
+      "derived_from": [
+        "CLM-0382"
+      ],
+      "artifacts": [
+        "src/shared/limits.rs"
+      ],
+      "tags": [
+        "from-issue:832"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0452",
+          "kind": "test",
+          "locator": "the_fallback_warning_is_due_once_a_minute (passed); src/shared/limits.rs:120-137, 188-197",
+          "summary": "warning_due is true first, false within 60 s, true again after 61 s (asserted). take_or counts and sets the flag before the warning_due gate, so every fallback is counted. One SharedBuckets per limiter holds the timestamp. The test calls warning_due directly; no test asserts take_or suppresses the log line.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/limits.rs",
+              "lines": {
+                "start": 120,
+                "end": 137
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:24:56.744530307Z",
+          "seal": {
+            "by": "server",
+            "mac": "9471b2b8500676d5141ef377c912919afb0a9cd82a55925e2f1fef0c875ea157"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "warning_due throttles to once per 60 s and take_or counts before the gate; the test pins the throttle, not the log call.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0452"
+          ],
+          "recorded_at": "2026-11-22T16:25:38.757835362Z",
+          "seal": {
+            "by": "server",
+            "mac": "7220df6232e4c30c5343d520b787a31d938daefebca3cce896fd418e387c739f"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:24:25.990171574Z",
+      "updated_at": "2026-11-22T16:25:38.757835362Z",
+      "seal": {
+        "by": "server",
+        "mac": "ac51200f5f26c940149dbc47e6cda9ff7b84da9084f19034a4be51e917341535"
+      }
+    },
+    {
+      "id": "CLM-0390",
+      "statement": "Limiter::event_name maps oauth_token to oauth-tok and every other limiter to its label, the exported fallback warning uses it, and metric labels and Redis keys still use as_str.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'The exported event names the limiter through Limiter::event_name, which maps oauth_token to oauth-tok ... Metric labels and Redis keys are unchanged.'",
+      "derived_from": [
+        "CLM-0382"
+      ],
+      "artifacts": [
+        "src/telemetry/metrics.rs",
+        "src/shared/limits.rs"
+      ],
+      "tags": [
+        "from-issue:832"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0453",
+          "kind": "test",
+          "locator": "an_exported_limiter_name_survives_sentrys_scrubbing (passed); src/telemetry/metrics.rs:826-836; src/shared/limits.rs:148,193",
+          "summary": "event_name maps OauthToken to 'oauth-tok', others to as_str. The test asserts no event_name contains 'token' and OauthToken.as_str() is still 'oauth_token'. take_or's warning uses event_name (line 193); the Redis key (148) and metric labels (metrics.rs:1035,1047) use as_str. No other event uses a limiter name.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/telemetry/metrics.rs",
+              "lines": {
+                "start": 826,
+                "end": 836
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:24:56.794390459Z",
+          "seal": {
+            "by": "server",
+            "mac": "a3b581809c62eb4a63f5246bdd523aefbc385819da70adc29ee3b2aa1fc4739c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "event_name, its use in the event, and the unchanged as_str use for key and labels are shown; the test covers the mapping.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0453"
+          ],
+          "recorded_at": "2026-11-22T16:25:38.808054405Z",
+          "seal": {
+            "by": "server",
+            "mac": "cd26b00a620d8971f953f428d22a3688fefaf2dd27df14f7101ce079526706af"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:24:25.990171574Z",
+      "updated_at": "2026-11-22T16:25:38.808054405Z",
+      "seal": {
+        "by": "server",
+        "mac": "8225550be2ba5dc47ff2aab2025045e73d046942c829f188d966e35ba8934957"
+      }
+    },
+    {
+      "id": "CLM-0391",
+      "statement": "A regression test connects as a Redis user with the production ACL categories (-@all +@read +@write +@keyspace +@connection +@transaction +@scripting +@pubsub -@dangerous), asserts the check fails and the limiter falls back, and a second test with +time asserts the check passes and Redis decides.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #832: 'a regression test against a Redis user with the production ACL string'",
+      "derived_from": [
+        "CLM-0382"
+      ],
+      "artifacts": [
+        "src/shared/limits.rs",
+        "tests/support/redis.rs"
+      ],
+      "tags": [
+        "from-issue:832"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0454",
+          "kind": "test",
+          "locator": "a_redis_user_without_time_is_found_at_startup_and_falls_back and granting_time_makes_the_check_pass_and_the_limiter_share (both passed); src/shared/limits.rs:655-725",
+          "summary": "PRODUCTION_ACL is the issue's categories with -@all prepended and ~* &* appended. Test 1: check false, degraded, takes [true,true,false] from the local bucket, counters 4 and 3. Test 2 (+time): check true, flag clear, takes [true,true,false]. Caveat: key and channel patterns are ~* and &*, not the doc's {okf:} patterns (I checked the doc string by hand on redis:7.4-alpine).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/limits.rs",
+              "lines": {
+                "start": 655,
+                "end": 725
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:24:56.851105272Z",
+          "seal": {
+            "by": "server",
+            "mac": "ddb60472f00c042f95737cf0e275fab2e1fab8e40e2cab4297b2bb05ea6eb428"
+          }
+        },
+        {
+          "id": "EVD-0464",
+          "kind": "analysis",
+          "locator": "children of CLM-0391",
+          "summary": "Both children are supported: the 4 and 3 the PR quotes hold, and url_for_user, which the regression tests rely on, does what it says.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T16:25:11.825812644Z",
+          "seal": {
+            "by": "server",
+            "mac": "2a3e88c327a4bc82a66dc5a653b85f1b928ca1dc39137ba848665a55c6805b45"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both tests ran against real restricted users and passed; both children are supported.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0454",
+            "EVD-0464"
+          ],
+          "recorded_at": "2026-11-22T16:25:38.856729033Z",
+          "seal": {
+            "by": "server",
+            "mac": "eafbfebeb245ba90fd1bc48773f91e0ed6f43024fef0fd60871f6b7d52e3acbd"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:24:25.990171574Z",
+      "updated_at": "2026-11-22T16:25:38.856729033Z",
+      "seal": {
+        "by": "server",
+        "mac": "296d7706b2da2cc16d40174a8bac5dbcbdcbdb671d74bc4a95813c0327922d22"
+      }
+    },
+    {
+      "id": "CLM-0392",
+      "statement": "docs/operations.md documents the Redis commands and ACL the server needs, naming TIME and +time and giving a working access string.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Issue #832: 'document the Redis commands/ACL needed in docs/operations.md'",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 451,
+          "end": 490
+        },
+        "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+      },
+      "derived_from": [
+        "CLM-0382"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:832"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0462",
+          "kind": "analysis",
+          "locator": "children of CLM-0392",
+          "summary": "All three children are supported on 6b6d323: the command list is complete (CLM-0393), the access string works for standalone and, with +cluster|slots, passes the cluster discovery command (CLM-0394), and the other added text matches the code (CLM-0395). The section names TIME and +time and gives the string.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T16:25:11.772260315Z",
+          "seal": {
+            "by": "server",
+            "mac": "71473e2343a82a405e1562e96a129517ceb6b6434312b037a636cb019d5eadea"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All three children are supported on 6b6d323; rolled up.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0462"
+          ],
+          "recorded_at": "2026-11-22T16:25:39.238101483Z",
+          "seal": {
+            "by": "server",
+            "mac": "0e7ef62fa8386e9d6747e2d28bd8756b8303c3ab6dbd99ee429c24fdca9cd52e"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:24:25.990171574Z",
+      "updated_at": "2026-11-22T16:25:39.238101483Z",
+      "seal": {
+        "by": "server",
+        "mac": "4df8947dd3df29b333ff70a5abe1e16d07e940f1da5a6bee0bb697395be18bb9"
+      }
+    },
+    {
+      "id": "CLM-0393",
+      "statement": "The command list in docs/operations.md's 'The Redis user's permissions' names every Redis command the server runs outside tests.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Task: check the docs text against the code",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 451,
+          "end": 468
+        },
+        "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+      },
+      "derived_from": [
+        "CLM-0392"
+      ],
+      "artifacts": [
+        "docs/operations.md",
+        "src/shared/sessions.rs"
+      ],
+      "tags": [
+        "from-issue:832"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0460",
+          "kind": "inspection",
+          "locator": "docs/operations.md:453-466 vs production redis::cmd/script uses in src/shared/{sessions,ephemeral,announce,limits,mod}.rs, src/oauth/access.rs, src/http/mod.rs",
+          "summary": "Re-audit on 6b6d323: the keys line now reads GET, MGET, SET, GETDEL, DEL, EXISTS, PEXPIRE, PTTL, INCR, which covers sessions.rs:244 MGET. Remaining production commands (HMGET, HSET, PEXPIRE, TIME in limits.rs; PUBLISH/SUBSCRIBE; PING; EVAL/EVALSHA/SCRIPT LOAD; SET with PX and GET) are all listed; PUBSUB, TYPE, HGETALL, KEYS, CLIENT KILL and ACL appear only in test modules. CLUSTER SLOTS is added for cluster mode.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 453,
+                "end": 466
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:25:11.707863738Z",
+          "seal": {
+            "by": "server",
+            "mac": "ee81b349b8a4392734c27bf64002be957ce446229d70688e71e42c0dccf04475"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "MGET (the one omission found earlier) is now in the list and every other production command is listed; test-only commands are excluded. Earlier verdicts on this claim were refuted at 9f25ec5 (MGET missing); the fix landed in 6b6d323.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0460"
+          ],
+          "recorded_at": "2026-11-22T16:25:39.140900850Z",
+          "seal": {
+            "by": "server",
+            "mac": "6fda061432389710e85a4373bd3c18a0b9ce4fb6057f80cc0bd7d3ea58feed17"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:24:25.990171574Z",
+      "updated_at": "2026-11-22T16:25:39.140900850Z",
+      "seal": {
+        "by": "server",
+        "mac": "239ae99b51297e82d485765c63731be3a76d2f2f73ce2184bd2321500cd94225"
+      }
+    },
+    {
+      "id": "CLM-0394",
+      "statement": "The access string in docs/operations.md grants every command the server runs in both modes: standalone and cluster.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "demonstration",
+      "source": "docs/operations.md: 'must grant it every command the server runs' and 'A working access string is ...'",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 451,
+          "end": 476
+        },
+        "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+      },
+      "derived_from": [
+        "CLM-0392"
+      ],
+      "artifacts": [
+        "docs/operations.md",
+        "src/shared/mod.rs"
+      ],
+      "tags": [
+        "from-issue:832"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0461",
+          "kind": "demonstration",
+          "locator": "docker run redis:7.4-alpine; ACL SETUSER doc on >pw ~{okf:}* &{okf:}* -@all +@read +@write +@keyspace +@connection +@transaction +@scripting +@pubsub +time -@dangerous +cluster|slots; AUTH doc pw; CLUSTER SLOTS / CLUSTER NODES",
+          "summary": "With the doc's string plus +cluster|slots, CLUSTER SLOTS is no longer NOPERM (the standalone test server answers 'ERR This instance has cluster support disabled', which is not an ACL refusal); CLUSTER NODES is still NOPERM, so only the one subcommand is granted. The redis crate's cluster client discovers topology with CLUSTER SLOTS (redis-1.8.2 cluster_handling/mod.rs slot_cmd). I did not run against a real cluster, so other commands a managed cluster might need are unverified. Standalone commands worked earlier on the same string; docs/operations.md:464-465 and 474-475 now name +cluster|slots.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 463,
+                "end": 476
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:25:11.742246251Z",
+          "seal": {
+            "by": "server",
+            "mac": "73d44bf3dfead9a93787b1e42a0604b2b7c54dd48978f2874f81f331f898b7d0"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The string with +cluster|slots passes CLUSTER SLOTS and the docs now say to add it for cluster mode. Limit: cluster mode was judged from the crate source and a standalone ACL check, not run against a real cluster. At 9f25ec5 this claim was refuted on that gap.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0461"
+          ],
+          "recorded_at": "2026-11-22T16:25:39.190724122Z",
+          "seal": {
+            "by": "server",
+            "mac": "6b7428b8685632954d91aa39ffe47fa2841b422462656a974e26710d45ba9cb6"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:24:25.990171574Z",
+      "updated_at": "2026-11-22T16:25:39.190724122Z",
+      "seal": {
+        "by": "server",
+        "mac": "86ff12e5744bf7b288dc9bf3f26e8b25f38d4c0a0a7d6e46e28cee7f63ee6ee7"
+      }
+    },
+    {
+      "id": "CLM-0395",
+      "statement": "The other text this change adds to docs/operations.md matches the code: the /healthz rate_limits semantics, the okf_ratelimit_fallbacks_total row, the oauth-tok naming, the once-a-minute warning, the start-up error, and that TIME stays in the script.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: 'docs/operations.md: ... the new /healthz field and the new metric'; 'the module and operations docs say so'",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 472,
+          "end": 492
+        },
+        "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+      },
+      "derived_from": [
+        "CLM-0392"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:832"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0458",
+          "kind": "inspection",
+          "locator": "docs/operations.md:472-495, 1388, 4490-4498 vs src/http/mod.rs:205-246, src/shared/limits.rs:218-246, src/telemetry/metrics.rs:831; docs metric names vs Metrics::ALL_FAMILIES",
+          "summary": "The doc says rate_limits is shared/degraded/null and never changes status; start-up logs an error and the server still starts; fallbacks are counted per limiter and warned at most once a minute; oauth_token is exported as oauth-tok; labels unchanged; TIME kept: each matches the code. Doc and code metric names are both 32 with an empty diff. '(section 7)' resolves to '## 7. Health and time'.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 472,
+                "end": 492
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:24:57.073346263Z",
+          "seal": {
+            "by": "server",
+            "mac": "d7967a76f64e1b5311325ae13aa8fc5d7ee693126c1286744391f36dd3401cb3"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Each other added doc statement was checked against the handler, the check, the throttle, event_name and the metric family list; all match.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0458"
+          ],
+          "recorded_at": "2026-11-22T16:25:39.086895319Z",
+          "seal": {
+            "by": "server",
+            "mac": "5c4bf816a72ca2c2a1f328607ff1fb8bdbf0ddee499c72904a6c85b416d1ed90"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:24:25.990171574Z",
+      "updated_at": "2026-11-22T16:25:39.086895319Z",
+      "seal": {
+        "by": "server",
+        "mac": "21607d149c9a1bbd2b5c9364882a33cb50fc9afdba1207b62dee371a25924a49"
+      }
+    },
+    {
+      "id": "CLM-0396",
+      "statement": "The start-up check runs the TAKE script against a throwaway key with one token and a 1 s TTL.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: 'against a throwaway key (one token, 1 s TTL)'",
+      "derived_from": [
+        "CLM-0383"
+      ],
+      "artifacts": [
+        "src/shared/limits.rs"
+      ],
+      "tags": [
+        "from-issue:832"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0455",
+          "kind": "analysis",
+          "locator": "src/shared/limits.rs:216-232, 29-66",
+          "summary": "check passes key redis.key(\\\"ratelimit:startup_check\\\", \\\"probe\\\"), ARGV[1]=1 and ARGV[2]=1000 ms. The script starts a missing bucket at capacity (1 token), takes it and PEXPIREs the key to per=1000 ms, so it lives 1 s. A second replica seeing an empty bucket gets 0, not an error, so the check still passes.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/limits.rs",
+              "lines": {
+                "start": 216,
+                "end": 232
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:24:56.908127026Z",
+          "seal": {
+            "by": "server",
+            "mac": "449ab9a2eaf5a31993e720bf7af45094d6c3358ca8fd90a12fb9a8aa9d6e7221"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "check passes capacity 1 and a 1000 ms window, and the script PEXPIREs the key to that window.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0455"
+          ],
+          "recorded_at": "2026-11-22T16:25:38.906329614Z",
+          "seal": {
+            "by": "server",
+            "mac": "51b16118b293d4432e89927b2468437a17c7960c9b8febf72d96f0d1e9cbce61"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:24:25.990171574Z",
+      "updated_at": "2026-11-22T16:25:38.906329614Z",
+      "seal": {
+        "by": "server",
+        "mac": "846e74df492a98138ed09876c99450a2815e2add266c23cbd4f7d0187e24f7d1"
+      }
+    },
+    {
+      "id": "CLM-0397",
+      "statement": "The a_redis_user_without_time test ends with the limit error counter at 4 and okf_ratelimit_fallbacks_total{limiter=\"oauth_token\"} at 3.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'the limit error and fallback counters read 4 and 3'",
+      "derived_from": [
+        "CLM-0391"
+      ],
+      "artifacts": [
+        "src/shared/limits.rs"
+      ],
+      "tags": [
+        "from-issue:832"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0456",
+          "kind": "test",
+          "locator": "a_redis_user_without_time_is_found_at_startup_and_falls_back (passed); src/shared/limits.rs:688-695",
+          "summary": "The test asserts error_count(&rendered, \\\"limit\\\") == 4 and the fallback line `... 3`; it passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/limits.rs",
+              "lines": {
+                "start": 688,
+                "end": 695
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:24:56.962143527Z",
+          "seal": {
+            "by": "server",
+            "mac": "002ee6333d8c07f65eb247ea2b2c878bf44fe95ddc1260c94e1656a1077c4714"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test asserts 4 and 3 and passed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0456"
+          ],
+          "recorded_at": "2026-11-22T16:25:38.984012750Z",
+          "seal": {
+            "by": "server",
+            "mac": "0b7f9d951bfe7dd93479a5d6df977179382d0bdb0d981c1d921daaf3f3bac106"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:24:25.990171574Z",
+      "updated_at": "2026-11-22T16:25:38.984012750Z",
+      "seal": {
+        "by": "server",
+        "mac": "f5fc423b6510bb28a11b0be59735076f06c66b61134515a452a17e10c5086861"
+      }
+    },
+    {
+      "id": "CLM-0398",
+      "statement": "TestRedis::url_for_user in tests/support/redis.rs creates a Redis ACL user from a rule list and returns a URL that signs in as it, and the limiter tests use it.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 1,
+      "verification_method": "test",
+      "source": "PR body: 'TestRedis::url_for_user creates an ACL user and returns its URL'",
+      "derived_from": [
+        "CLM-0391"
+      ],
+      "artifacts": [
+        "tests/support/redis.rs"
+      ],
+      "tags": [
+        "from-issue:832"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0457",
+          "kind": "test",
+          "locator": "tests/support/redis.rs:143-184; src/db.rs:16 (#[path] include); the two limits tests (passed)",
+          "summary": "url_for_user runs ACL SETUSER <random user> on >pw <rules...> and returns redis://user:pw@host from the original URL. src/db.rs includes the file via #[path], so lib tests use it; both limiter tests that call it passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/support/redis.rs",
+              "lines": {
+                "start": 143,
+                "end": 184
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:24:57.018048937Z",
+          "seal": {
+            "by": "server",
+            "mac": "0ea663b9813aeff707a9565226b4c0ec55a8fb68167b6fe658048dc358d28b84"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The helper creates and returns the user's URL and both tests that use it passed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0457"
+          ],
+          "recorded_at": "2026-11-22T16:25:39.034102363Z",
+          "seal": {
+            "by": "server",
+            "mac": "5c0b311b2bc5682713ed5d23531b12da61d95185c7aaf7561b3ac686c0993717"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:24:25.990171574Z",
+      "updated_at": "2026-11-22T16:25:39.034102363Z",
+      "seal": {
+        "by": "server",
+        "mac": "77cc90bcb71ef0c68763b3ad17914a2816cd49383d3dac8e7b16e5b3f703bd12"
+      }
+    },
+    {
+      "id": "CLM-0399",
+      "statement": "Sentry's scrubbing was seen replacing the value oauth_token with [Filtered] in exported events (the reason the exported limiter name is shortened).",
+      "kind": "non_functional",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "Issue #832 and docs/operations.md: 'Sentry's scrubbing was seen replacing the value oauth_token with [Filtered]'",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 482,
+          "end": 485
+        },
+        "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+      },
+      "derived_from": [
+        "CLM-0382"
+      ],
+      "artifacts": [
+        "docs/operations.md",
+        "src/telemetry/metrics.rs"
+      ],
+      "tags": [
+        "from-issue:832"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0459",
+          "kind": "analysis",
+          "locator": "issue #832 body; docs/operations.md:482-485; src/shared/limits.rs:744-765",
+          "summary": "The doc now says only what the issue reported (the value was seen replaced). The issue is the sole source; nothing in the repository reproduces Sentry's scrubber and I did not query Sentry. The test shows only that no event name contains 'token'.",
+          "stance": "neutral",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 482,
+                "end": 485
+              },
+              "commit": "6b6d323038666e6bd9fc2e9f3c35c7edbab2349d"
+            }
+          },
+          "recorded_at": "2026-11-22T16:24:57.119965161Z",
+          "seal": {
+            "by": "server",
+            "mac": "90a64cf90179b5c1c138889854c470e6b682a7dc45da0e6e6abf443426843713"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "The doc now states only that the scrubbing was seen replacing oauth_token, which matches the issue's report, but nothing in the repo or reachable here reproduces or confirms it. Fix: attach a captured Sentry event (or the project's data-scrubber settings) showing oauth_token rendered as [Filtered] to issue #832, or accept the issue's report as the source.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0459"
+          ],
+          "recorded_at": "2026-11-22T16:25:39.280822464Z",
+          "seal": {
+            "by": "server",
+            "mac": "e4320c1e508b98b315c98f4ea055530b8a39b4330cfe8bbbf44836af0b985e78"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:24:25.990171574Z",
+      "updated_at": "2026-11-22T16:25:39.280822464Z",
+      "seal": {
+        "by": "server",
+        "mac": "bb3d50f7a19c0db86727e938cf342d89ec07668b145cb32e63f68e9c1c855611"
       }
     }
   ]

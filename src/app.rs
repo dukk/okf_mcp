@@ -223,9 +223,15 @@ impl App {
         // `[redis]` set: connect now, so a bad URL or an unreachable Redis
         // refuses start-up. The URL comes from the named variable only.
         let redis = match &config.redis {
-            Some(table) => Some(
-                shared::Redis::connect(table, &|name| std::env::var(name).ok(), &metrics).await?,
-            ),
+            Some(table) => {
+                let redis =
+                    shared::Redis::connect(table, &|name| std::env::var(name).ok(), &metrics)
+                        .await?;
+                // Finds a Redis user that may not run the rate limiter's
+                // script now, not on the first request (issue #832).
+                shared::limits::check(&redis).await;
+                Some(redis)
+            }
             None => None,
         };
         // Boxed so this future holds a pointer, not the whole of the load's

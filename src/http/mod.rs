@@ -205,6 +205,11 @@ struct Health {
     /// `"ok"` or `"unavailable"`; `null` without `[redis]`. It never changes
     /// the status, and it never names the Redis URL or host.
     redis: Option<&'static str>,
+    /// `"shared"` or `"degraded"`; `null` without `[redis]`. `"degraded"`
+    /// means the last shared rate-limit call failed (usually the Redis user's
+    /// ACL, issue #832), so each replica counts its own buckets. It never
+    /// changes the status.
+    rate_limits: Option<&'static str>,
 }
 
 /// `GET /healthz`: 200 while the database answers within
@@ -232,6 +237,13 @@ async fn healthz(State(app): State<Arc<App>>) -> Response {
         cached_catalogs: app.catalog_cache().cached(),
         clock: app.clock_status(),
         redis,
+        rate_limits: app.redis().map(|shared| {
+            if shared.limits_degraded() {
+                "degraded"
+            } else {
+                "shared"
+            }
+        }),
     };
     let status = if reachable {
         StatusCode::OK
@@ -1587,7 +1599,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
             json_body(response).await,
-            serde_json::json!({"database": "unreachable", "cached_catalogs": 0, "clock": null, "redis": null})
+            serde_json::json!({"database": "unreachable", "cached_catalogs": 0, "clock": null, "redis": null, "rate_limits": null})
         );
     }
 
@@ -1612,6 +1624,27 @@ mod tests {
     async fn healthz_reports_redis_without_changing_its_status() {
         let (test, redis) = app_with_redis(Config::default()).await;
         healthz_follows_redis(test, redis).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn healthz_reports_a_degraded_rate_limiter_without_changing_its_status() {
+        let (test, _redis) = app_with_redis(Config::default()).await;
+        let router = router(Arc::clone(&test.app), &CancellationToken::new());
+        let get = || {
+            Request::get("/healthz")
+                .body(Body::empty())
+                .expect("request")
+        };
+        let shared = json_body(router.clone().oneshot(get()).await.unwrap()).await;
+        assert_eq!(shared["rate_limits"], "shared");
+
+        test.app.redis().expect("redis").set_limits_degraded(true);
+        let response = router.oneshot(get()).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let degraded = json_body(response).await;
+        assert_eq!(degraded["rate_limits"], "degraded");
+        assert_eq!(degraded["redis"], "ok", "Redis itself answers");
     }
 
     #[tokio::test(flavor = "multi_thread")]

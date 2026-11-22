@@ -52,7 +52,7 @@ async fn healthz_answers_without_a_key() {
     let body: serde_json::Value = response.json().await.unwrap();
     assert_eq!(
         body,
-        serde_json::json!({"database": "ok", "cached_catalogs": 0, "clock": null, "redis": null})
+        serde_json::json!({"database": "ok", "cached_catalogs": 0, "clock": null, "redis": null, "rate_limits": null})
     );
 }
 
