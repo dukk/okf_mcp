@@ -5,10 +5,10 @@
     "by": "server",
     "mac": "a8b409b5732a0b512b7df7c78a2d3e413e718d5c80d3ef187e0a675f2e834d62"
   },
-  "next_evidence_seq": 541,
+  "next_evidence_seq": 543,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "714f613640a6e72d6b7a2928e55ccd0fb33f2905d980c84e6294d6634e1db99c"
+    "mac": "5a2d361ca0a61dd9c6a7e212243120ad9e4c23911a4e88e76c0d9ba8ba1e4e3d"
   },
   "claims": [
     {
@@ -34677,6 +34677,28 @@
             "by": "server",
             "mac": "1fb822f55209489ce61ba269ce77f2f1eb0fe953ee7f9403a63a365bac3d07c9"
           }
+        },
+        {
+          "id": "EVD-0541",
+          "kind": "test",
+          "locator": "http::api::owner_access_tests::the_team_lists_come_a_page_at_a_time_and_a_continuation_reads_one_list; store::ceiling::tests::the_members_and_entitlements_come_a_page_at_a_time_with_a_cursor",
+          "summary": "After 49a9575 GET /catalogs/{c}/entitlements pages both lists with keyset cursors and a list selector, and the owner's GET member-access reads the scalar only (member_access_as_owner). Tests exceed one page and pass (gate.sh test: 3303 passed, 0 failed).",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "pub async fn member_access_as_owner|pub async fn team_access",
+              "scope": [
+                "src/store/ceiling.rs"
+              ],
+              "hits": 2,
+              "commit": "49a95758a3f7ebc62bf588b0fe0cdd4e28ce1480"
+            }
+          },
+          "recorded_at": "2026-11-22T19:13:32.249493557Z",
+          "seal": {
+            "by": "server",
+            "mac": "41e983bd61b8e9935c33e60d48ba6bae75078a66bc16184b2093532ca8f46141"
+          }
         }
       ],
       "verdicts": [
@@ -34693,13 +34715,26 @@
             "by": "server",
             "mac": "c1b464e75c107fdecf4333edcc4a31be1d108f1c35c7eab27cd3859bf1c1d22b"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-checked after the review fix; paging and scalar read are tested.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0541"
+          ],
+          "recorded_at": "2026-11-22T19:13:37.989507716Z",
+          "seal": {
+            "by": "server",
+            "mac": "2929b1428d55e72bd2b81f4408b1e6a9e7108e373d34d15899de32673ff233c5"
+          }
         }
       ],
       "created_at": "2026-11-22T18:31:53.062287178Z",
-      "updated_at": "2026-11-22T18:33:28.062776038Z",
+      "updated_at": "2026-11-22T19:13:37.989507716Z",
       "seal": {
         "by": "server",
-        "mac": "bede8cfc82895dae8a7b9acb241ac8457a8378460b358f3297ed4378faf283d1"
+        "mac": "787b63ea0c75d69fdc5bcbbac042158ef59b8c522d361e523a1188aff93ffc71"
       }
     },
     {
@@ -34856,6 +34891,28 @@
             "by": "server",
             "mac": "a3e8ec4edba28948a6c25381638d1e3b94bc74808c17cd5a89c22ef4abe05680"
           }
+        },
+        {
+          "id": "EVD-0542",
+          "kind": "inspection",
+          "locator": "src/store/ceiling.rs begin_entitlement, read_catalog_locked",
+          "summary": "The entitlement write order is unchanged by 49a9575 (owner row, target row, catalog row). The new reads lock the owner row then the catalog row FOR SHARE and take no other lock.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "async fn read_catalog_locked",
+              "scope": [
+                "src/store/ceiling.rs"
+              ],
+              "hits": 1,
+              "commit": "49a95758a3f7ebc62bf588b0fe0cdd4e28ce1480"
+            }
+          },
+          "recorded_at": "2026-11-22T19:13:32.280078937Z",
+          "seal": {
+            "by": "server",
+            "mac": "336382d4a6cf5e57a03dbff0d9db4b7f4a9483b877cc994ca3e929a70a3bb308"
+          }
         }
       ],
       "verdicts": [
@@ -34882,13 +34939,26 @@
             "by": "server",
             "mac": "787131ca271b08c5d8b7668c76b539919ce4f1ec19bc3cbdeb196f7b7ec496be"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Lock order unchanged by the review fix.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0542"
+          ],
+          "recorded_at": "2026-11-22T19:13:38.016035951Z",
+          "seal": {
+            "by": "server",
+            "mac": "27393d0bd31345316b37bed094b8fca5f139be38a058f743d45755e4e316e10f"
+          }
         }
       ],
       "created_at": "2026-11-22T18:31:53.062287178Z",
-      "updated_at": "2026-11-22T18:52:51.582272618Z",
+      "updated_at": "2026-11-22T19:13:38.016035951Z",
       "seal": {
         "by": "server",
-        "mac": "9e4d29894fcd50bf5e141e8c07467873249901bfde0cf62deec213bad4866b57"
+        "mac": "3d9fe61b04c72bc913bd14a3f97fe6823dd3a55b77093c8aaa477b394082ec6d"
       }
     },
     {
