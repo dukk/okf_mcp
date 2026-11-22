@@ -340,7 +340,7 @@ test_watch_gives_up_when_pr_view_keeps_failing() {
         >"$fx/api/issues_7_comments.1.json"
     run_watch
     want_rc 2; want_out "TIMEOUT"; want_out "out of date with main"
-    [ "$clock" -ge 2800 ] && [ "$clock" -le 2830 ] || die "gave up at $clock, want 2800..2830"
+    [ "$clock" -ge 1900 ] && [ "$clock" -le 1930 ] || die "gave up at $clock, want 1900..1930"
 }
 
 test_watch_retrigger_keeps_overall_deadline() {
@@ -349,7 +349,7 @@ test_watch_retrigger_keeps_overall_deadline() {
     run_watch
     want_rc 2; want_out "posted /prrb on PR 7"; want_out "TIMEOUT"
     [ "$(grep -c '^pr comment 7 .*--body /prrb' "$fx/calls.log")" = 1 ] || die "re-triggered more than once"
-    [ "$clock" -ge 2800 ] && [ "$clock" -le 2830 ] || die "gave up at $clock, want 2800..2830"
+    [ "$clock" -ge 1900 ] && [ "$clock" -le 1930 ] || die "gave up at $clock, want 1900..1930"
 }
 
 # --- watchdog.sh ---
@@ -359,7 +359,7 @@ test_watch_reviews_api_error_never_retriggers() {
     run_watch
     want_rc 2; want_out "TIMEOUT"; want_out "could not read the reviews"
     ! grep -q '^pr comment' "$fx/calls.log" || die "re-triggered with the round count unknown"
-    [ "$clock" -ge 2800 ] && [ "$clock" -le 2830 ] || die "gave up at $clock, want 2800..2830"
+    [ "$clock" -ge 1900 ] && [ "$clock" -le 1930 ] || die "gave up at $clock, want 1900..1930"
 }
 
 test_watch_reactions_api_error_never_retriggers() {
@@ -378,7 +378,7 @@ test_watch_ignores_prefix_sharing_reaction() {
         >"$fx/api/issues_7_reactions.1.json"
     run_watch
     # The bot hasn't reacted, so the re-trigger is due after ~90 s (the first
-    # poll past 90 s is at 1120), not the ~6 min it waits after a bot reaction.
+    # poll past 90 s is at 1120), not the ~5 min it waits after a bot reaction.
     [ "$(cat "$fx/comment-times" 2>/dev/null)" = 1120 ] \
         || die "re-triggered at $(cat "$fx/comment-times" 2>/dev/null), want 1120"
 }
@@ -386,11 +386,73 @@ test_watch_ignores_prefix_sharing_reaction() {
 test_watch_bot_reaction_delays_retrigger() {
     new_fixtures; good_pr "$head_a"
     echo '[]' >"$fx/api/pulls_7_reviews.1.json"
-    printf '[{"user":{"login":"%s"},"content":"eyes"}]\n' "$bot" \
-        >"$fx/api/issues_7_reactions.1.json"
+    # Reacted at 1000 s, as the watcher starts: this push's reaction.
+    printf '[{"user":{"login":"%s"},"content":"eyes","created_at":"1970-01-01T00:16:40Z"}]\n' \
+        "$bot" >"$fx/api/issues_7_reactions.1.json"
     run_watch
-    [ "$(cat "$fx/comment-times" 2>/dev/null)" = 1390 ] \
-        || die "re-triggered at $(cat "$fx/comment-times" 2>/dev/null), want 1390"
+    [ "$(cat "$fx/comment-times" 2>/dev/null)" = 1330 ] \
+        || die "re-triggered at $(cat "$fx/comment-times" 2>/dev/null), want 1330"
+}
+
+test_watch_earlier_rounds_reaction_does_not_delay_retrigger() {
+    new_fixtures; good_pr "$head_a"
+    echo '[]' >"$fx/api/pulls_7_reviews.1.json"
+    # Reacted at 600 s, before the watcher started at 1000 s: an earlier
+    # round's, so the re-trigger is due after ~90 s as if there were none.
+    printf '[{"user":{"login":"%s"},"content":"eyes","created_at":"1970-01-01T00:10:00Z"}]\n' \
+        "$bot" >"$fx/api/issues_7_reactions.1.json"
+    run_watch
+    [ "$(cat "$fx/comment-times" 2>/dev/null)" = 1120 ] \
+        || die "re-triggered at $(cat "$fx/comment-times" 2>/dev/null), want 1120"
+}
+
+test_watch_merge_state_error_never_retriggers() {
+    new_fixtures; good_pr "$head_a"
+    echo '[]' >"$fx/api/pulls_7_reviews.1.json"
+    touch "$fx/merge-state.fail"
+    run_watch
+    want_rc 2; want_out "could not read the merge state"
+    ! grep -q '^pr comment' "$fx/calls.log" || die "re-triggered with the merge state unknown"
+}
+
+test_watch_ignores_an_earlier_rounds_out_of_date_notice() {
+    new_fixtures; good_pr "$head_a"
+    echo '[]' >"$fx/api/pulls_7_reviews.1.json"
+    # Posted at 600 s, before the watcher started at 1000 s.
+    printf '[{"user":{"login":"%s"},"created_at":"1970-01-01T00:10:00Z","body":"This PR is out of date with main"}]\n' \
+        "$bot" >"$fx/api/issues_7_comments.1.json"
+    run_watch
+    want_rc 2; want_out "TIMEOUT"; want_no_out "the bot says PR 7 is out of date"
+}
+
+test_watch_comments_api_error_is_retried_not_a_skip() {
+    new_fixtures; good_pr "$head_a"
+    echo '[]' >"$fx/api/pulls_7_reviews.1.json"
+    touch "$fx/api/issues_7_comments.fail"
+    run_watch
+    want_rc 2; want_out "could not read the comments on PR 7"; want_no_out "the bot says PR 7 is out of date"
+    [ "$(grep -c '^pr comment 7 .*--body /prrb' "$fx/calls.log")" = 1 ] || die "re-triggered other than once"
+}
+
+test_watch_exits_5_at_once_when_conflicting() {
+    new_fixtures; good_pr "$head_a"
+    echo '[]' >"$fx/api/pulls_7_reviews.1.json"
+    printf '{"headRefOid":"%s","mergeStateStatus":"DIRTY"}\n' "$head_a" >"$fx/pr-view.json"
+    run_watch
+    want_rc 5; want_out "DIRTY against main"
+    [ "$clock" = 1000 ] || die "waited until $clock instead of exiting at once"
+    ! grep -q '^pr comment' "$fx/calls.log" || die "re-triggered a conflicting PR"
+}
+
+test_watch_exits_5_on_out_of_date_notice_after_retrigger() {
+    new_fixtures; good_pr "$head_a"
+    echo '[]' >"$fx/api/pulls_7_reviews.1.json"
+    # The bot answers the re-trigger (posted at 1120) with a skip notice.
+    printf '[{"user":{"login":"%s"},"created_at":"1970-01-01T00:20:00Z","body":"This PR is out of date with main"}]\n' \
+        "$bot" >"$fx/api/issues_7_comments.1.json"
+    run_watch
+    want_rc 5; want_out "out of date with main"
+    [ "$clock" -le 1180 ] || die "kept waiting until $clock after the notice"
 }
 
 test_watch_never_retriggers_while_behind_main() {
@@ -398,7 +460,8 @@ test_watch_never_retriggers_while_behind_main() {
     echo '[]' >"$fx/api/pulls_7_reviews.1.json"
     printf '{"headRefOid":"%s","mergeStateStatus":"BEHIND"}\n' "$head_a" >"$fx/pr-view.json"
     run_watch
-    want_rc 2; want_out "behind main: merge origin/main and push"
+    want_rc 5; want_out "BEHIND against main: merge origin/main"
+    [ "$clock" = 1000 ] || die "waited until $clock instead of exiting at once"
     ! grep -q '^pr comment' "$fx/calls.log" || die "re-triggered while behind main"
 }
 
