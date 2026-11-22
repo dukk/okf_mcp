@@ -953,10 +953,12 @@ pub async fn forget_person(conn: &mut PgConnection, user_id: &str) -> Result<(),
 pub async fn prune(pool: &PgPool, before: DateTime<Utc>) -> Result<u64, OkfError> {
     // The hourly budget counters of provisioner entries are rows with no
     // entry to cascade from; they go once their hour is before the cut-off.
+    // The `CASE` keeps the cast to the counters' numeric third part: Postgres
+    // may evaluate `AND` terms in any order.
     sqlx::query(
         "DELETE FROM audit_access_counts WHERE entry_id IS NULL \
-           AND split_part(bucket, chr(31), 1) = 'provcap' \
-           AND split_part(bucket, chr(31), 3)::bigint < $1",
+           AND CASE WHEN split_part(bucket, chr(31), 1) = 'provcap' \
+                    THEN split_part(bucket, chr(31), 3)::bigint < $1 END",
     )
     .bind(before.timestamp())
     .execute(pool)
