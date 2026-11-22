@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 412,
+  "next_claim_seq": 419,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "d7552efcb8e6a3e495a23aed8b6725a9e335440907e52acf3f93a5519f16395e"
+    "mac": "56bbc5a629dc8a5604a33ecb4d12b0cd77f43724b9fb5e1c8ef36e654609f909"
   },
-  "next_evidence_seq": 488,
+  "next_evidence_seq": 499,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "e9f558df8a1a3a85f8af99828710789b9a0e6019721490f9e5db61fa5ee2d566"
+    "mac": "2859de75d6064088092def442b3037b5f6494febc745fe1f9a28db03fa1b512a"
   },
   "claims": [
     {
@@ -245,6 +245,18 @@
             "by": "server",
             "mac": "f722e63b85b56803d7767549c86cc7a9ddc594e973b27289f9c5bd4b117c44df"
           }
+        },
+        {
+          "id": "EVD-0497",
+          "kind": "test",
+          "locator": "target/i831-logs/test.log:1360 mcp::reference::the_checked_in_tool_reference_matches_the_tool_list (head 7d4edb2)",
+          "summary": "On head 7d4edb2 the generated-reference pin test passes, so tools.md with the new remember bullet still matches the tool list. The diff to tools.md adds only that three-line bullet.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T17:23:23.304913342Z",
+          "seal": {
+            "by": "server",
+            "mac": "1e7e3dcc85d0536a953ac171fb9cc59ff55d5a08b4454f2091d60a5b71a36fd8"
+          }
         }
       ],
       "verdicts": [
@@ -273,13 +285,26 @@
             "by": "server",
             "mac": "b4253c9a12d2bf83793c5db715c790763058ad6c559aa533e35753efa505c79d"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audit on 7d4edb2: pin test passes with the new bullet, and the children's coverage is unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0497"
+          ],
+          "recorded_at": "2026-11-22T17:23:29.110529185Z",
+          "seal": {
+            "by": "server",
+            "mac": "9fe41941e2dc287a051132bcb25df5824b3e6ee9b45e1122e64ebae755c0d885"
+          }
         }
       ],
       "created_at": "2026-11-21T19:04:12.375208519Z",
-      "updated_at": "2026-11-22T16:55:40.383117230Z",
+      "updated_at": "2026-11-22T17:23:29.110529185Z",
       "seal": {
         "by": "server",
-        "mac": "bcad0256ac8e633cb6a6fdcc6c3888d1e10e288222a636beed78a898b850cdf1"
+        "mac": "6030d01fb6f689f784d8f30872a9ee1b072968e73dbe58342f22dfb3856a0521"
       }
     },
     {
@@ -32658,6 +32683,546 @@
       "seal": {
         "by": "server",
         "mac": "35551e10ab02cf1f71203d3e97d8d1d924457ec3e2b3d1c9e9f4cbea178b9712"
+      }
+    },
+    {
+      "id": "CLM-0412",
+      "statement": "Issue #831 is addressed: clients are told that an explicit remember request means saving to the catalog, without pushing unrequested saves.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/831",
+      "derived_from": [],
+      "artifacts": [
+        "src/mcp/mod.rs",
+        "src/mcp/reference.rs",
+        "docs/reference/tools.md"
+      ],
+      "tags": [
+        "from-issue:831"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0494",
+          "kind": "analysis",
+          "locator": "children of CLM-0412",
+          "summary": "Requirements 1 to 3 are each supported by their children (CLM-0413, 0414, 0415, 0416), but requirement 4 (CLM-0417, regeneration test passes) is not_enough_info because the test was not run in this audit.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-22T17:14:39.009761074Z",
+          "seal": {
+            "by": "server",
+            "mac": "aab9a299f4088495c32cecaea78d56cd96bf8f57421e53b45b893b40ebc0f255"
+          }
+        },
+        {
+          "id": "EVD-0498",
+          "kind": "analysis",
+          "locator": "children of CLM-0412",
+          "summary": "All six children (CLM-0413 to CLM-0418) are now supported, covering issue requirements 1 to 4.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T17:23:29.137021941Z",
+          "seal": {
+            "by": "server",
+            "mac": "43861d81e89fa496ba729e74c46d61341feac4d4f4298a978c69196deed75b05"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Content requirements hold; the regeneration test result is undecided. Fix: run cargo test --lib mcp::reference and mcp::tests::the_instructions on head, then re-audit CLM-0417 and this parent.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0494"
+          ],
+          "recorded_at": "2026-11-22T17:14:41.330670986Z",
+          "seal": {
+            "by": "server",
+            "mac": "f60ee690d30ab19f671a7bd248abab35794f4795506398bbda7a74f3cc508af3"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "All children are supported, including the regeneration test, so requirements 1 to 4 hold.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0498"
+          ],
+          "recorded_at": "2026-11-22T17:23:31.929665562Z",
+          "seal": {
+            "by": "server",
+            "mac": "e0ead4e20292ca93803ac2d591ea0ffaa5695d8d3c8f6905c9383fb7cabde150"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T17:14:04.239695477Z",
+      "updated_at": "2026-11-22T17:23:31.929665562Z",
+      "seal": {
+        "by": "server",
+        "mac": "01a8253fdf2370ce3b120e4d239b2278edcac2a9f162ecb8fab021c91269e147"
+      }
+    },
+    {
+      "id": "CLM-0413",
+      "statement": "INSTRUCTIONS in src/mcp/mod.rs says that when the person asks you to remember something, you save it to the catalog rather than only in the conversation.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "Issue #831 requirement 1",
+      "derived_from": [
+        "CLM-0412"
+      ],
+      "artifacts": [
+        "src/mcp/mod.rs"
+      ],
+      "tags": [
+        "from-issue:831"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0488",
+          "kind": "inspection",
+          "locator": "src/mcp/mod.rs:72-75",
+          "summary": "INSTRUCTIONS ends with \"When the person asks you to remember something, save it to the catalog (under a fitting folder) rather than only in the conversation; asking is their consent, so don't ask again.\"",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/mod.rs",
+              "lines": {
+                "start": 72,
+                "end": 75
+              },
+              "commit": "c82306b9c030b88ba8a55edf1637464878ee24cb"
+            }
+          },
+          "recorded_at": "2026-11-22T17:14:17.337125739Z",
+          "seal": {
+            "by": "server",
+            "mac": "d2494dccb5765c4ba9db5e2c1f646869bb66bd8a915f080e1776a06acf5250bb"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The constant text says so directly.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0488"
+          ],
+          "recorded_at": "2026-11-22T17:14:26.790385761Z",
+          "seal": {
+            "by": "server",
+            "mac": "b6cc47ffc72193217da552a70a17a6438d5d1452af78054243d6cbe1ea8c9d67"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T17:14:04.239695477Z",
+      "updated_at": "2026-11-22T17:14:26.790385761Z",
+      "seal": {
+        "by": "server",
+        "mac": "0f92e82c71c160308666b9a8cdfcaa3a9f915e7de231b460a3bbb543e9b3510b"
+      }
+    },
+    {
+      "id": "CLM-0414",
+      "statement": "The tool reference source (src/mcp/reference.rs) and the checked-in docs/reference/tools.md carry the same remember-means-save text.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "Issue #831 requirement 1",
+      "derived_from": [
+        "CLM-0412"
+      ],
+      "artifacts": [
+        "src/mcp/reference.rs",
+        "docs/reference/tools.md"
+      ],
+      "tags": [
+        "from-issue:831"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0489",
+          "kind": "inspection",
+          "locator": "src/mcp/reference.rs:42-44 and docs/reference/tools.md:23-25",
+          "summary": "Both files carry the identical three-line bullet; git diff origin/main..HEAD shows the same added lines in each. Whether the generated output equals the file is decided by the regeneration test (separate claim).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/reference/tools.md",
+              "lines": {
+                "start": 23,
+                "end": 25
+              },
+              "commit": "c82306b9c030b88ba8a55edf1637464878ee24cb"
+            }
+          },
+          "recorded_at": "2026-11-22T17:14:17.365971854Z",
+          "seal": {
+            "by": "server",
+            "mac": "e62b1501a3961be95acd0b1b5283bfd98027733ed18d11a52b519dfdb2db0484"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The two files carry identical bullets in the diff.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0489"
+          ],
+          "recorded_at": "2026-11-22T17:14:26.823914263Z",
+          "seal": {
+            "by": "server",
+            "mac": "a0babbd79687c4c5297d935523b149748315240376389fee88af47bf31a78166"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T17:14:04.239695477Z",
+      "updated_at": "2026-11-22T17:14:26.823914263Z",
+      "seal": {
+        "by": "server",
+        "mac": "996a82f759e2c39529ebd8ac20ad31d4720dadec1eb7b2dfb42d74386146a890"
+      }
+    },
+    {
+      "id": "CLM-0415",
+      "statement": "The send_feedback instruction, including the caution to ask the user before including catalog content or personal details, is unchanged.",
+      "kind": "security",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "inspection",
+      "source": "Issue #831 requirement 2; PR body: \"The `send_feedback` instruction and its privacy caution are unchanged.\"",
+      "derived_from": [
+        "CLM-0412"
+      ],
+      "artifacts": [
+        "src/mcp/mod.rs"
+      ],
+      "tags": [
+        "from-issue:831"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0490",
+          "kind": "inspection",
+          "locator": "src/mcp/mod.rs:91-97; git diff origin/main..HEAD -- src/mcp/mod.rs",
+          "summary": "feedback_instructions still reads \"(it goes through a third-party form service; ask the user before including catalog content or personal details)\". The diff has hunks only at INSTRUCTIONS (line 69) and the tests module (line 487); none touches feedback_instructions.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/mod.rs",
+              "lines": {
+                "start": 91,
+                "end": 97
+              },
+              "commit": "c82306b9c030b88ba8a55edf1637464878ee24cb"
+            }
+          },
+          "recorded_at": "2026-11-22T17:14:17.391771618Z",
+          "seal": {
+            "by": "server",
+            "mac": "5566f1eefa90ece3f55f5d910f932852121f77038544797bbed60b1e8618744a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The function is untouched by the diff and still holds the caution.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0490"
+          ],
+          "recorded_at": "2026-11-22T17:14:26.852142436Z",
+          "seal": {
+            "by": "server",
+            "mac": "d5984ad661e14eb03f513a7dcc9d3780eed182b0d7f0f6b6c90abd910ee81ed5"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T17:14:04.239695477Z",
+      "updated_at": "2026-11-22T17:14:26.852142436Z",
+      "seal": {
+        "by": "server",
+        "mac": "e4d44977442da66a538dbaa4809b34db52a04384119ea6d7c732356d4f9b9a2c"
+      }
+    },
+    {
+      "id": "CLM-0416",
+      "statement": "The new text does not tell the model to save things the person did not ask to keep; it says not to save them.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "Issue #831 requirement 3",
+      "derived_from": [
+        "CLM-0412"
+      ],
+      "artifacts": [
+        "src/mcp/mod.rs",
+        "src/mcp/reference.rs"
+      ],
+      "tags": [
+        "from-issue:831"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0491",
+          "kind": "inspection",
+          "locator": "src/mcp/mod.rs:73-75; src/mcp/reference.rs:42-44",
+          "summary": "The save instruction is conditioned on \"When the person asks you to remember something\", and the next sentence says \"Don't save what they didn't ask you to keep.\" No sentence tells the model to save proactively.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/mod.rs",
+              "lines": {
+                "start": 72,
+                "end": 75
+              },
+              "commit": "c82306b9c030b88ba8a55edf1637464878ee24cb"
+            }
+          },
+          "recorded_at": "2026-11-22T17:14:17.419743519Z",
+          "seal": {
+            "by": "server",
+            "mac": "1735fec8a48e7e02d48aabd430e6ed085350f8bb0e61fb08c82a9c5dd88c9f57"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Save is conditional on an explicit request and an explicit prohibition follows.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0491"
+          ],
+          "recorded_at": "2026-11-22T17:14:26.879661776Z",
+          "seal": {
+            "by": "server",
+            "mac": "d7a50e5c043cfacc6f0ddd6802ad729109522828d88f527f7d3743bf3e8919ec"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T17:14:04.239695477Z",
+      "updated_at": "2026-11-22T17:14:26.879661776Z",
+      "seal": {
+        "by": "server",
+        "mac": "7019145333a905c241ada446e74038135d00a6001bbcd318f0eaf686915c4a0c"
+      }
+    },
+    {
+      "id": "CLM-0417",
+      "statement": "The reference regeneration test (mcp::reference::the_checked_in_tool_reference_matches_the_tool_list) passes at head.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #831 requirement 4",
+      "derived_from": [
+        "CLM-0412"
+      ],
+      "artifacts": [
+        "docs/reference/tools.md"
+      ],
+      "tags": [
+        "from-issue:831"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0492",
+          "kind": "inspection",
+          "locator": "src/mcp/reference.rs:386-400",
+          "summary": "The test exists and compares the checked-in docs/reference/tools.md to render(). Not run: other cargo processes were running, so the lock rule forbade it. The static check that reference.rs and tools.md carry identical new lines is consistent with a pass but does not prove it (the intro text may be assembled differently).",
+          "stance": "neutral",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/reference.rs",
+              "lines": {
+                "start": 386,
+                "end": 400
+              },
+              "commit": "c82306b9c030b88ba8a55edf1637464878ee24cb"
+            }
+          },
+          "recorded_at": "2026-11-22T17:14:17.448901865Z",
+          "seal": {
+            "by": "server",
+            "mac": "a056ab7485561254786c99f1eced753a0dd8a7dbdf96538898667e2d31ab51f8"
+          }
+        },
+        {
+          "id": "EVD-0495",
+          "kind": "test",
+          "locator": "target/i831-logs/test.log:1360 (head 7d4edb2; log written 12:23, commit 12:15)",
+          "summary": "\"test mcp::reference::the_checked_in_tool_reference_matches_the_tool_list ... ok\"; lib suite \"2791 passed; 0 failed; 2 ignored\" (log line 2924). I read the log; I did not run cargo.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T17:23:23.242613625Z",
+          "seal": {
+            "by": "server",
+            "mac": "1ef97d68ccc0ab653504f6ee5c21d12950d596ba236307622209a253f0b85708"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "The test was not run (other cargo jobs held the build lock). Fix: run `cargo test --lib mcp::reference::the_checked_in_tool_reference_matches_the_tool_list` on head (the author's gate run) and cite the pass count.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0492"
+          ],
+          "recorded_at": "2026-11-22T17:14:26.908985583Z",
+          "seal": {
+            "by": "server",
+            "mac": "14f19217434ca594ad6f2cab0c982e49913de33397e32a766555346b06095220"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The gate log written after the head commit shows the pin test ok.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0495"
+          ],
+          "recorded_at": "2026-11-22T17:23:28.950626093Z",
+          "seal": {
+            "by": "server",
+            "mac": "d14b607416ed0a36d188ea9f77baa3aeab358816d6612c4ea0cb5502df3f3530"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T17:14:04.239695477Z",
+      "updated_at": "2026-11-22T17:23:28.950626093Z",
+      "seal": {
+        "by": "server",
+        "mac": "fb74e65b046b676f13e5a503759bdf7c2b922acd0997ac1e723907e16a731dbf"
+      }
+    },
+    {
+      "id": "CLM-0418",
+      "statement": "The new test the_instructions_tell_a_remember_request_to_save_to_the_catalog asserts both new sentences are in INSTRUCTIONS.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: new test `the_instructions_tell_a_remember_request_to_save_to_the_catalog`",
+      "derived_from": [
+        "CLM-0412"
+      ],
+      "artifacts": [
+        "src/mcp/mod.rs"
+      ],
+      "tags": [
+        "from-issue:831"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0493",
+          "kind": "inspection",
+          "locator": "src/mcp/mod.rs:493-501",
+          "summary": "The test asserts INSTRUCTIONS contains \"When the person asks you to remember something, save it to the catalog\" and \"Don't save what they didn't ask you to keep.\" Both strings occur in the constant at lines 73-75, so it would pass; it was not run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/mod.rs",
+              "lines": {
+                "start": 493,
+                "end": 501
+              },
+              "commit": "c82306b9c030b88ba8a55edf1637464878ee24cb"
+            }
+          },
+          "recorded_at": "2026-11-22T17:14:17.477182588Z",
+          "seal": {
+            "by": "server",
+            "mac": "d4f7f6c7dcd3a257b492282f1cd24eb8418d7fd3c57314161795de5e51a26ffb"
+          }
+        },
+        {
+          "id": "EVD-0496",
+          "kind": "test",
+          "locator": "target/i831-logs/test.log:1397 (head 7d4edb2); src/mcp/mod.rs:496-500",
+          "summary": "\"test mcp::tests::the_instructions_tell_a_remember_request_to_save_to_the_catalog ... ok\". The reformatted body (mod.rs:496-500) still asserts both sentences.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/mod.rs",
+              "lines": {
+                "start": 496,
+                "end": 500
+              },
+              "commit": "7d4edb2cb4f40fda0d185ec65a7861cc7607a8ab"
+            }
+          },
+          "recorded_at": "2026-11-22T17:23:23.276947410Z",
+          "seal": {
+            "by": "server",
+            "mac": "e7d5d233c74c83e54d10bdcd8007358354113c9750785d99a4096ba72529285a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The assertions name both sentences, which are present verbatim in the constant (static reading; not run).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0493"
+          ],
+          "recorded_at": "2026-11-22T17:14:26.938846841Z",
+          "seal": {
+            "by": "server",
+            "mac": "83bfaa081d7d1170d5039e8b4bb10b189da9bd47291d068d841e696ec875deaf"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audit on 7d4edb2: test body asserts both sentences and the log shows it passing.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0493",
+            "EVD-0496"
+          ],
+          "recorded_at": "2026-11-22T17:23:29.084193959Z",
+          "seal": {
+            "by": "server",
+            "mac": "2eede155fc07f7b40c1d6771fea4e10482e9c738402c0adcaeb7d6de228a1212"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T17:14:04.239695477Z",
+      "updated_at": "2026-11-22T17:23:29.084193959Z",
+      "seal": {
+        "by": "server",
+        "mac": "68da1599d0b61d9ebf7b82e5577ad9b671b40635aba1d9975102a979eb6a80d2"
       }
     }
   ]

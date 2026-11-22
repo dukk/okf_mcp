@@ -39,6 +39,9 @@ How a session usually goes:
 - To write, call `open_changeset` first and pass the handle it returns as `changeset` to every
   edit, `publish`, `discard`, `revert` and `pending_changes`. Reads take it too, to see the
   drafts. Nothing is visible to others until `publish`.
+- When the person asks you to remember something, save it to the catalog (under a fitting
+  folder) rather than only in the conversation; asking is their consent, so don't ask again.
+  Don't save what they didn't ask you to keep.
 
 A tool is one of five kinds:
 
