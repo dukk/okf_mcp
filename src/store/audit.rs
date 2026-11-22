@@ -964,7 +964,7 @@ const BUDGET_COUNTER_GRACE_HOURS: i64 = 1;
 
 /// Deletes the hourly budget counters of provisioner entries (rows of
 /// `audit_access_counts` with no entry to cascade from) once their hour
-/// ended over [`BUDGET_COUNTER_GRACE_HOURS`] before `now`. A counter only
+/// ended over an hour (a grace for a lagging replica clock) before `now`. A counter only
 /// gates the entries opened within its own hour and records nothing itself
 /// (the entries carry the counts), so it is not kept for the retention
 /// period.
