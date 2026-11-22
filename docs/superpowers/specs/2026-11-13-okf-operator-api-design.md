@@ -631,7 +631,8 @@ are the places where what shipped is narrower, wider or more exact.
   the actor; other reads and no-op requests appear in request traces and
   metrics. State changes are recorded in the change's transaction (PR #422
   and the recording tasks). Email lookups (`user.looked_up`) and refusals
-  (`provisioner.refused`, from the gate or a handler's 403, with the route
+  (`provisioner.refused`, from the API's gate, from MCP's and the archive
+  routes' refusal of a provisioner key, or a handler's 403, with the route
   template, method and a stable reason code) are written in the background
   with the actor fixed at admission, collapsed to one entry per key, kind
   and clock hour with an exact count, capped at 50 entries per key per hour

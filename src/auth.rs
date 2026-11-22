@@ -1123,10 +1123,17 @@ pub async fn require_key(
         None => Ok(None),
     };
     match found {
-        Ok(Some(principal)) if principal.provisioner => AppError(OkfError::Forbidden {
-            reason: "a provisioner key is not an MCP or archive credential".to_string(),
-        })
-        .into_response(),
+        Ok(Some(principal)) if principal.provisioner => {
+            // Audited as the API's provisioner gate does: the key, the
+            // method and the matched template, never the literal URI.
+            crate::http::console_session::insert_client_ip(&app, &mut request);
+            crate::http::api::AdmittedRefusal::of(&app, &principal, &request)
+                .note(&app, crate::store::audit::RefusalReason::RouteNotAllowed);
+            AppError(OkfError::Forbidden {
+                reason: "a provisioner key is not an MCP or archive credential".to_string(),
+            })
+            .into_response()
+        }
         Ok(Some(principal)) => {
             split_event!(
                 debug,

@@ -748,6 +748,64 @@ async fn a_refused_route_is_audited_by_template_method_and_a_stable_code() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_refusal_on_mcp_or_an_archive_route_is_audited_like_an_api_one() {
+    let test = app().await;
+    let key = provisioner(&test).await;
+    let p = Some(key.as_str());
+
+    let (export, _) = send(
+        &test,
+        "GET",
+        "/catalogs/main/export?secret=hunter2",
+        p,
+        None,
+    )
+    .await;
+    let (import, _) = send(&test, "POST", "/catalogs/main/import", p, None).await;
+    let (mcp, _) = send(
+        &test,
+        "POST",
+        "/mcp",
+        p,
+        Some(json!({"jsonrpc": "2.0", "id": 1, "method": "initialize"})),
+    )
+    .await;
+
+    assert_eq!(
+        (export.as_u16(), import.as_u16(), mcp.as_u16()),
+        (403, 403, 403)
+    );
+    let stored = everything_stored(&test).await;
+    assert!(!stored.contains("hunter2"), "{stored}");
+    assert!(
+        !stored.contains("/catalogs/main"),
+        "no literal path: {stored}"
+    );
+    let mut entries =
+        crate::store::audit::testing::entries(test.app.pool(), "provisioner.refused").await;
+    // Background writes: find each entry by its target, not by id order.
+    entries.sort_by_key(|entry| entry.target.clone());
+    let targets: Vec<_> = entries
+        .iter()
+        .map(|entry| entry.target.as_deref())
+        .collect();
+    assert_eq!(
+        targets,
+        [
+            Some("GET /catalogs/{name}/export"),
+            Some("POST /catalogs/{name}/import"),
+            Some("POST /mcp"),
+        ]
+    );
+    assert!(entries.iter().all(|entry| {
+        entry.details["reason"] == "route_not_allowed"
+            && entry.requests == Some(1)
+            && entry.actor_operator
+            && entry.teams.is_empty()
+    }));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_burst_of_identical_refusals_collapses_into_one_counted_entry() {
     let test = app().await;
     let key = provisioner(&test).await;
