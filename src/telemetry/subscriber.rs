@@ -690,11 +690,9 @@ pub(crate) mod capture {
             };
             let subscriber =
                 super::build_with_writer(settings, Some(&tracer), Some(&logger), capture.clone());
-            let guard = tracing::subscriber::set_default(subscriber);
-            // Tests on other threads, with no subscriber, can have cached
-            // "disabled" for a callsite this test uses; recompute every
-            // cached answer against this subscriber.
-            tracing::callsite::rebuild_interest_cache();
+            // The helper keeps a first registration on another thread from
+            // caching "disabled" for a callsite this test uses (issue #481).
+            let guard = crate::test_tracing::set_default(subscriber);
             Self {
                 span_exporter,
                 log_exporter,
