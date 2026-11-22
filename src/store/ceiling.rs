@@ -558,7 +558,90 @@ pub async fn set_member_access(
     actor: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<MemberAccess, OkfError> {
-    check_names(None, catalog)?;
+    let change = MemberAccessChange {
+        catalog,
+        access,
+        owner: None,
+    };
+    change_member_access(pool, &change, actor, now).await
+}
+
+/// The refusal for a caller that is no owner of the catalog's shared team.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: builds an error value, no I/O"
+    )
+)]
+fn not_team_owner() -> OkfError {
+    OkfError::Forbidden {
+        reason: "this needs an admin that reaches every catalog, or an owner of the catalog's \
+                 team signed in to the console"
+            .to_string(),
+    }
+}
+
+/// A change of a catalog's member access: [`change_member_access`]'s input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemberAccessChange<'a> {
+    /// The catalog's name.
+    pub catalog: &'a str,
+    /// The new value.
+    pub access: MemberAccess,
+    /// `Some(users.id)` when the caller may make the change only as an
+    /// owner of the catalog's shared team (a console session that is not an
+    /// every-catalog admin): checked under the locks, so an owner demoted
+    /// or a catalog moved to another team meanwhile is refused. `None` when
+    /// the caller is already allowed (an every-catalog admin, the CLI).
+    pub owner: Option<&'a str>,
+}
+
+/// As [`set_member_access`], with the owner check of
+/// [`MemberAccessChange::owner`] (issue #352): the owner's membership row
+/// is locked in the transaction (`lock_shared_team_owner`), so a demotion
+/// or an owner change meanwhile cannot race the write.
+///
+/// Lock order (`tools/agentic/lessons.md`): the users the entry resolves,
+/// then the owner's membership row, then the catalog row, then
+/// `server_state`.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `change` - the catalog, the value, and the owner to check, if any.
+/// * `actor` - who, for the audit log.
+/// * `now` - the server clock.
+///
+/// # Returns
+/// The value it had before.
+///
+/// # Errors
+/// [`OkfError::CatalogNotSelected`] for an unknown or malformed catalog
+/// without an owner check; [`OkfError::Forbidden`] when the owner check
+/// fails (a personal team's owner, and an unknown catalog, included, so it
+/// reveals nothing); [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.change_member_access"))]
+pub async fn change_member_access(
+    pool: &PgPool,
+    change: &MemberAccessChange<'_>,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<MemberAccess, OkfError> {
+    let MemberAccessChange {
+        catalog,
+        access,
+        owner,
+    } = *change;
+    // The refusal for "no such catalog": an owner learns nothing from it.
+    let not_found = || match owner {
+        Some(_) => not_team_owner(),
+        None => unknown_catalog(catalog),
+    };
+    if owner.is_none() {
+        check_names(None, catalog)?;
+    } else if !catalogs::is_valid_name(catalog) {
+        return Err(not_found());
+    }
     let mut tx = pool.begin().await?;
     audit::lock_people(
         &mut tx,
@@ -569,6 +652,14 @@ pub async fn set_member_access(
         },
     )
     .await?;
+    // `lock_shared_team_owner` holds the owner's membership row, so a
+    // concurrent removal or demotion waits for this change.
+    let owner_team = match owner {
+        Some(user_id) => {
+            Some(catalogs::lock_shared_team_owner(&mut tx, catalog, user_id, not_team_owner).await?)
+        }
+        None => None,
+    };
     // As in `catalogs::set_owner`: the subquery reads the row as it was,
     // under its row lock, so this returns the value it replaced.
     let previous: Option<(i64, String, Option<String>)> = sqlx::query_as(
@@ -580,7 +671,12 @@ pub async fn set_member_access(
     .bind(access.as_str())
     .fetch_optional(&mut *tx)
     .await?;
-    let (catalog_id, previous, owner_team_id) = previous.ok_or_else(|| unknown_catalog(catalog))?;
+    let (catalog_id, previous, owner_team_id) = previous.ok_or_else(not_found)?;
+    // Under the row lock the owner team is fixed: a catalog moved to
+    // another team after the membership was read is refused.
+    if owner_team.is_some() && owner_team != owner_team_id {
+        return Err(not_team_owner());
+    }
     let previous =
         MemberAccess::parse(&previous).expect("the schema checks catalogs.member_access");
     if previous != access {
@@ -632,6 +728,135 @@ pub async fn member_access(pool: &PgPool, catalog: &str) -> Result<MemberAccess,
     Ok(MemberAccess::parse(&stored).expect("the schema checks catalogs.member_access"))
 }
 
+/// One member of a catalog's owning team, as [`team_access`] lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TeamMember {
+    /// The user's name.
+    pub user: String,
+    /// `owner` or `member`.
+    pub role: String,
+}
+
+/// One entitlement to a catalog, as [`team_access`] lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogEntitlement {
+    /// The user's name.
+    pub user: String,
+    /// `Read` or `Write`.
+    pub access: Access,
+}
+
+/// What the catalog drawer shows of who reaches a catalog through its
+/// owning team: [`team_access`]'s answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TeamAccess {
+    /// What the team's members get through the team.
+    pub member_access: MemberAccess,
+    /// The owning team's members, sorted by user name (empty for an
+    /// unassigned catalog).
+    pub members: Vec<TeamMember>,
+    /// The catalog's entitlements, sorted by user name. For an owner, only
+    /// those of the team's members: another tenant's names stay hidden.
+    pub entitlements: Vec<CatalogEntitlement>,
+}
+
+/// A catalog's member access, its owning team's members and its
+/// entitlements, in one transaction (issue #352).
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `catalog` - the catalog's name.
+/// * `owner` - `Some(users.id)` when the caller may read it only as an owner
+///   of the catalog's shared team (a console session that is not an admin):
+///   checked under the owner's membership row lock. `None` for a caller
+///   that is already allowed.
+///
+/// # Returns
+/// The view.
+///
+/// # Errors
+/// [`OkfError::CatalogNotSelected`] for an unknown or malformed catalog
+/// without an owner check; [`OkfError::Forbidden`] when the owner check
+/// fails (a personal team's owner, and an unknown catalog, included);
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.team_access"))]
+pub async fn team_access(
+    pool: &PgPool,
+    catalog: &str,
+    owner: Option<&str>,
+) -> Result<TeamAccess, OkfError> {
+    let not_found = || match owner {
+        Some(_) => not_team_owner(),
+        None => unknown_catalog(catalog),
+    };
+    if !catalogs::is_valid_name(catalog) {
+        return Err(not_found());
+    }
+    let mut tx = pool.begin().await?;
+    let team = match owner {
+        Some(user_id) => {
+            Some(catalogs::lock_shared_team_owner(&mut tx, catalog, user_id, not_team_owner).await?)
+        }
+        None => None,
+    };
+    let row: Option<(i64, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, member_access, owner_team_id FROM catalogs WHERE name = $1 FOR SHARE",
+    )
+    .bind(catalog)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (catalog_id, member_access, owner_team) = row.ok_or_else(not_found)?;
+    // A catalog moved to another team after the membership was read.
+    if team.is_some() && team != owner_team {
+        return Err(not_team_owner());
+    }
+    let members: Vec<(String, String)> = sqlx::query_as(
+        "SELECT u.name, m.role FROM team_members m JOIN users u ON u.id = m.user_id \
+         WHERE m.team_id = $1 ORDER BY u.name",
+    )
+    .bind(&owner_team)
+    .fetch_all(&mut *tx)
+    .await?;
+    // `$2` is the owner's team, or NULL for an admin, who sees every user.
+    let entitlements: Vec<(String, String)> = sqlx::query_as(
+        "SELECT u.name, e.access FROM user_catalogs e JOIN users u ON u.id = e.user_id \
+         WHERE e.catalog_id = $1 \
+           AND ($2::text IS NULL \
+                OR e.user_id IN (SELECT user_id FROM team_members WHERE team_id = $2)) \
+         ORDER BY u.name",
+    )
+    .bind(catalog_id)
+    .bind(&team)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(TeamAccess {
+        member_access: MemberAccess::parse(&member_access)
+            .expect("the schema checks catalogs.member_access"),
+        members: members
+            .into_iter()
+            .map(|(user, role)| TeamMember { user, role })
+            .collect(),
+        entitlements: entitlements
+            .into_iter()
+            .map(|(user, access)| CatalogEntitlement {
+                user,
+                access: Access::parse(&access).expect("the schema checks user_catalogs.access"),
+            })
+            .collect(),
+    })
+}
+
+/// A user's entitlement to a catalog, by names: what [`unentitle_as_owner`]
+/// removes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EntitlementRef<'a> {
+    /// The user's name.
+    pub user: &'a str,
+    /// The catalog's name.
+    pub catalog: &'a str,
+}
+
 /// An entitlement to give: what [`entitle`] is asked to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NewEntitlement<'a> {
@@ -665,6 +890,51 @@ pub async fn entitle(
     actor: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<(), OkfError> {
+    entitle_checked(pool, new, None, actor, now).await
+}
+
+/// As [`entitle`], for an owner of the catalog's shared team signed in to
+/// the console (issue #352): the user must be a member of that team, and the
+/// owner is checked, with the membership, under their row locks. A user who
+/// is unknown, malformed or outside the team gets one refusal, and so does a
+/// catalog that is unknown, owned by another team or by a personal team, so
+/// nothing leaks across tenants.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `owner` - `users.id` of the caller.
+/// * `new` - the user, the catalog and the level.
+/// * `actor` - who, for the audit log (the owner).
+/// * `now` - when it is given (server clock).
+///
+/// # Errors
+/// [`OkfError::Refused`] for `Admin`; [`OkfError::Forbidden`] for a caller
+/// that is no owner of the catalog's shared team, or a user outside it;
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.entitle_as_owner"))]
+pub async fn entitle_as_owner(
+    pool: &PgPool,
+    owner: &str,
+    new: &NewEntitlement<'_>,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<(), OkfError> {
+    entitle_checked(pool, new, Some(owner), actor, now).await
+}
+
+/// The write behind [`entitle`] and [`entitle_as_owner`] (`owner` is
+/// `Some(users.id)` for the latter).
+///
+/// # Errors
+/// As the two callers.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.entitle_checked"))]
+async fn entitle_checked(
+    pool: &PgPool,
+    new: &NewEntitlement<'_>,
+    owner: Option<&str>,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<(), OkfError> {
     // Destructuring copies the fields out (`NewEntitlement` is `Copy`).
     let NewEntitlement {
         user,
@@ -677,10 +947,8 @@ pub async fn entitle(
                 .to_string(),
         });
     }
-    check_names(Some(user), catalog)?;
-    let mut tx = pool.begin().await?;
-    let user_id = lock_entitlement_users(&mut tx, user, catalog, actor).await?;
-    let catalog_id = catalogs::find(&mut *tx, catalog).await?.id;
+    let (mut tx, user_id, catalog_id) =
+        begin_entitlement(pool, &EntitlementRef { user, catalog }, owner, actor).await?;
     // The `WHERE` on the update makes an unchanged level write nothing, so
     // no row comes back. A row that does: `xmax = 0` is Postgres' mark of a
     // row this statement inserted (an updated row carries this transaction
@@ -749,10 +1017,47 @@ pub async fn unentitle(
     actor: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<(), OkfError> {
-    check_names(Some(user), catalog)?;
-    let mut tx = pool.begin().await?;
-    let user_id = lock_entitlement_users(&mut tx, user, catalog, actor).await?;
-    let catalog_id = catalogs::find(&mut *tx, catalog).await?.id;
+    unentitle_checked(pool, &EntitlementRef { user, catalog }, None, actor, now).await
+}
+
+/// As [`unentitle`], for an owner of the catalog's shared team signed in to
+/// the console, with the checks and the refusals of [`entitle_as_owner`].
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `owner` - `users.id` of the caller.
+/// * `target` - the user and the catalog.
+/// * `actor` - who, for the audit log (the owner).
+/// * `now` - the server clock.
+///
+/// # Errors
+/// [`OkfError::Forbidden`] as for [`entitle_as_owner`];
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.unentitle_as_owner"))]
+pub async fn unentitle_as_owner(
+    pool: &PgPool,
+    owner: &str,
+    target: &EntitlementRef<'_>,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<(), OkfError> {
+    unentitle_checked(pool, target, Some(owner), actor, now).await
+}
+
+/// The write behind [`unentitle`] and [`unentitle_as_owner`].
+///
+/// # Errors
+/// As the two callers.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.unentitle_checked"))]
+async fn unentitle_checked(
+    pool: &PgPool,
+    target: &EntitlementRef<'_>,
+    owner: Option<&str>,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<(), OkfError> {
+    let (mut tx, user_id, catalog_id) = begin_entitlement(pool, target, owner, actor).await?;
+    let catalog = target.catalog;
     let removed = sqlx::query("DELETE FROM user_catalogs WHERE user_id = $1 AND catalog_id = $2")
         .bind(&user_id)
         .bind(catalog_id)
@@ -771,6 +1076,103 @@ pub async fn unentitle(
     }
     tx.commit().await?;
     Ok(())
+}
+
+/// The refusal for a user an owner may not entitle: unknown, malformed or
+/// outside the owning team, all the same, with no name in it.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: builds an error value, no I/O"
+    )
+)]
+fn not_team_member() -> OkfError {
+    OkfError::Forbidden {
+        reason: "an owner may entitle only members of the catalog's owning team".to_string(),
+    }
+}
+
+/// Opens an entitlement change's transaction and takes its locks, in the
+/// order of `tools/agentic/lessons.md`: the users, then (for an owner) the
+/// owner's and the user's membership rows and the catalog row, then
+/// whatever the change takes.
+///
+/// For an owner every refusal that would tell something about another
+/// tenant is the same: an unknown or malformed user and a user outside the
+/// owning team are [`not_team_member`], an unknown catalog or one the
+/// caller does not own is [`not_team_owner`], and the owner check comes
+/// first, so a non-owner learns nothing about the user.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `target` - the user and the catalog.
+/// * `owner` - `users.id` of the caller when it acts as an owner.
+/// * `actor` - who acts.
+///
+/// # Returns
+/// The transaction, the user's id and the catalog's id.
+///
+/// # Errors
+/// [`OkfError::Forbidden`] for an owner's refusals; for an admin
+/// [`OkfError::UnknownName`] and [`OkfError::CatalogNotSelected`];
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.begin_entitlement"))]
+async fn begin_entitlement(
+    pool: &PgPool,
+    target: &EntitlementRef<'_>,
+    owner: Option<&str>,
+    actor: &AuditActor,
+) -> Result<(sqlx::Transaction<'static, sqlx::Postgres>, String, i64), OkfError> {
+    let EntitlementRef { user, catalog } = *target;
+    let Some(owner) = owner else {
+        check_names(Some(user), catalog)?;
+        let mut tx = pool.begin().await?;
+        let user_id = lock_entitlement_users(&mut tx, user, catalog, actor).await?;
+        let catalog_id = catalogs::find(&mut *tx, catalog).await?.id;
+        return Ok((tx, user_id, catalog_id));
+    };
+    // A malformed name names nothing Postgres could take: refuse it as the
+    // unknown it is.
+    if !catalogs::is_valid_name(catalog) {
+        return Err(not_team_owner());
+    }
+    let mut tx = pool.begin().await?;
+    let people = People {
+        target: catalogs::is_valid_name(user).then_some((user, RowLock::KeyShare)),
+        catalogs: &[catalog],
+        ..People::default()
+    };
+    // An unknown user is not refused here: the owner check comes first.
+    let user_id = match audit::lock_people(&mut tx, actor, &people).await {
+        Ok(found) => found.map(|(id, _)| id),
+        Err(OkfError::UnknownName { .. }) => None,
+        Err(error) => return Err(error),
+    };
+    let team = catalogs::lock_shared_team_owner(&mut tx, catalog, owner, not_team_owner).await?;
+    // The catalog row under a share lock: a move to another team waits for
+    // this change, and one that happened since the membership was read is
+    // refused.
+    let row: Option<(i64, Option<String>)> =
+        sqlx::query_as("SELECT id, owner_team_id FROM catalogs WHERE name = $1 FOR SHARE")
+            .bind(catalog)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let catalog_id = match row {
+        Some((id, owner_team)) if owner_team.as_deref() == Some(team.as_str()) => id,
+        _ => return Err(not_team_owner()),
+    };
+    let user_id = user_id.ok_or_else(not_team_member)?;
+    // The user's membership row under a share lock, so a removal waits.
+    let member: Option<i32> = sqlx::query_scalar(
+        "SELECT 1 FROM team_members WHERE team_id = $1 AND user_id = $2 FOR SHARE",
+    )
+    .bind(&team)
+    .bind(&user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    member.ok_or_else(not_team_member)?;
+    Ok((tx, user_id, catalog_id))
 }
 
 /// Locks the user rows an entitlement change and its entry take: the user
@@ -1806,5 +2208,443 @@ mod tests {
                 "{prefix:?} after {after:?}: {rows} rows: {plan:#}"
             );
         }
+    }
+
+    // ---- Team owners manage member access and entitlements (issue #352) ----
+
+    /// An actor that is `user_id`, as a console session's is.
+    fn owner_actor(user_id: &str) -> AuditActor {
+        AuditActor {
+            user_id: Some(user_id.to_string()),
+            ..AuditActor::cli()
+        }
+    }
+
+    /// An owner's write of `catalog`'s member access.
+    async fn owner_sets(
+        pool: &PgPool,
+        owner: &str,
+        catalog: &str,
+        access: MemberAccess,
+    ) -> Result<MemberAccess, OkfError> {
+        let change = MemberAccessChange {
+            catalog,
+            access,
+            owner: Some(owner),
+        };
+        change_member_access(pool, &change, &owner_actor(owner), now()).await
+    }
+
+    /// An owner's entitlement of `user` to `catalog` at `access`.
+    async fn owner_entitles(
+        pool: &PgPool,
+        owner: &str,
+        user: &str,
+        catalog: &str,
+        access: Access,
+    ) -> Result<(), OkfError> {
+        let new = NewEntitlement {
+            user,
+            catalog,
+            access,
+        };
+        entitle_as_owner(pool, owner, &new, &owner_actor(owner), now()).await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_owner_sets_member_access_and_bumps_the_generation() {
+        // Arrange
+        let db = test_db().await;
+        family(&db.pool).await;
+        let alice = id(&db.pool, "alice").await;
+        let before = catalogs::admin_generation(&db.pool).await.unwrap();
+
+        // Act
+        let previous = owner_sets(&db.pool, &alice, "shared", MemberAccess::Read).await;
+
+        // Assert
+        assert_eq!(previous.unwrap(), MemberAccess::Write);
+        assert_eq!(
+            member_access(&db.pool, "shared").await.unwrap(),
+            MemberAccess::Read
+        );
+        assert!(catalogs::admin_generation(&db.pool).await.unwrap() > before);
+        let bob = id(&db.pool, "bob").await;
+        assert_eq!(
+            by_id(&db.pool, &bob).await,
+            ceiling(&[("shared", Access::Read)])
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_owner_is_refused_member_access_where_it_does_not_own_a_shared_team() {
+        // Arrange: bob is only a member of `family`; `solo` is alice's
+        // personal catalog; `other` belongs to the fixture user's team.
+        let db = test_db().await;
+        family(&db.pool).await;
+        let (alice, bob) = (id(&db.pool, "alice").await, id(&db.pool, "bob").await);
+        let before = catalogs::admin_generation(&db.pool).await.unwrap();
+
+        // Act
+        let refused = [
+            owner_sets(&db.pool, &bob, "shared", MemberAccess::None).await,
+            owner_sets(&db.pool, &alice, "solo", MemberAccess::None).await,
+            owner_sets(&db.pool, &alice, "other", MemberAccess::None).await,
+            owner_sets(&db.pool, &alice, "nowhere", MemberAccess::None).await,
+            owner_sets(&db.pool, &alice, "a\0b", MemberAccess::None).await,
+        ];
+
+        // Assert: every refusal is the same one, and nothing changed.
+        for result in &refused {
+            assert!(
+                matches!(result, Err(OkfError::Forbidden { .. })),
+                "{result:?}"
+            );
+        }
+        let first = format!("{:?}", refused[0]);
+        assert!(refused.iter().all(|result| format!("{result:?}") == first));
+        assert_eq!(
+            member_access(&db.pool, "shared").await.unwrap(),
+            MemberAccess::Write
+        );
+        assert_eq!(
+            member_access(&db.pool, "solo").await.unwrap(),
+            MemberAccess::Write
+        );
+        assert_eq!(catalogs::admin_generation(&db.pool).await.unwrap(), before);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_owner_entitles_a_member_and_takes_it_away() {
+        // Arrange
+        let db = test_db().await;
+        family(&db.pool).await;
+        let alice = id(&db.pool, "alice").await;
+        let before = catalogs::admin_generation(&db.pool).await.unwrap();
+
+        // Act
+        owner_entitles(&db.pool, &alice, "bob", "shared", Access::Read)
+            .await
+            .unwrap();
+        let given = entitlements(&db.pool, "bob").await.unwrap();
+        let target = EntitlementRef {
+            user: "bob",
+            catalog: "shared",
+        };
+        unentitle_as_owner(&db.pool, &alice, &target, &owner_actor(&alice), now())
+            .await
+            .unwrap();
+        let after = entitlements(&db.pool, "bob").await.unwrap();
+
+        // Assert
+        assert_eq!(given.len(), 1);
+        assert_eq!(
+            (given[0].catalog.as_str(), given[0].access),
+            ("shared", Access::Read)
+        );
+        assert!(after.is_empty());
+        assert!(catalogs::admin_generation(&db.pool).await.unwrap() > before);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_owner_cannot_entitle_to_admin_and_the_refusal_comes_before_any_lookup() {
+        let db = test_db().await;
+        family(&db.pool).await;
+        let alice = id(&db.pool, "alice").await;
+
+        let refused = owner_entitles(&db.pool, &alice, "bob", "shared", Access::Admin).await;
+
+        assert!(
+            matches!(refused, Err(OkfError::Refused { .. })),
+            "{refused:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unknown_user_and_one_outside_the_team_get_the_same_refusal() {
+        // Arrange: the fixture user is in no team with alice's `family`.
+        let db = test_db().await;
+        family(&db.pool).await;
+        let alice = id(&db.pool, "alice").await;
+        let target = |user| EntitlementRef {
+            user,
+            catalog: "shared",
+        };
+
+        // Act
+        let mut puts = Vec::new();
+        let mut deletes = Vec::new();
+        for user in ["nobody", TEST_USER, "a\0b", "BOB", ""] {
+            puts.push(owner_entitles(&db.pool, &alice, user, "shared", Access::Read).await);
+            deletes.push(
+                unentitle_as_owner(&db.pool, &alice, &target(user), &owner_actor(&alice), now())
+                    .await,
+            );
+        }
+
+        // Assert
+        for result in puts.iter().chain(&deletes) {
+            assert!(
+                matches!(result, Err(OkfError::Forbidden { .. })),
+                "{result:?}"
+            );
+        }
+        let first = format!("{:?}", puts[0]);
+        assert!(puts
+            .iter()
+            .chain(&deletes)
+            .all(|result| format!("{result:?}") == first));
+        assert!(entitlements(&db.pool, TEST_USER).await.unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_owner_is_refused_entitlements_outside_its_shared_team() {
+        // Arrange: bob (a member only), alice on her personal `solo`, on
+        // `other` (another team's), on an unknown catalog.
+        let db = test_db().await;
+        family(&db.pool).await;
+        let (alice, bob) = (id(&db.pool, "alice").await, id(&db.pool, "bob").await);
+
+        // Act
+        let refused = [
+            owner_entitles(&db.pool, &bob, "bob", "shared", Access::Read).await,
+            owner_entitles(&db.pool, &alice, "alice", "solo", Access::Read).await,
+            owner_entitles(&db.pool, &alice, "bob", "other", Access::Read).await,
+            owner_entitles(&db.pool, &alice, "bob", "nowhere", Access::Read).await,
+            owner_entitles(&db.pool, &alice, "bob", "a\0b", Access::Read).await,
+        ];
+
+        // Assert
+        for result in &refused {
+            assert!(
+                matches!(result, Err(OkfError::Forbidden { .. })),
+                "{result:?}"
+            );
+        }
+        let first = format!("{:?}", refused[0]);
+        assert!(refused.iter().all(|result| format!("{result:?}") == first));
+        assert!(entitlements(&db.pool, "bob").await.unwrap().is_empty());
+        assert!(entitlements(&db.pool, "alice").await.unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_admin_entitlement_paths_still_answer_unknown_names() {
+        let db = test_db().await;
+        family(&db.pool).await;
+        let new = |user, catalog| NewEntitlement {
+            user,
+            catalog,
+            access: Access::Read,
+        };
+
+        let user = entitle(
+            &db.pool,
+            &new("nobody", "shared"),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await;
+        let catalog = entitle(&db.pool, &new("bob", "nowhere"), &AuditActor::cli(), now()).await;
+        let outside = entitle(
+            &db.pool,
+            &new(TEST_USER, "shared"),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await;
+
+        assert!(
+            matches!(user, Err(OkfError::UnknownName { .. })),
+            "{user:?}"
+        );
+        assert!(
+            matches!(catalog, Err(OkfError::CatalogNotSelected { .. })),
+            "{catalog:?}"
+        );
+        assert!(outside.is_ok(), "an admin may entitle any user");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn team_access_shows_an_owner_only_its_own_members_and_their_entitlements() {
+        // Arrange: bob and the fixture user are entitled to `shared`.
+        let db = test_db().await;
+        family(&db.pool).await;
+        let alice = id(&db.pool, "alice").await;
+        for user in ["bob", TEST_USER] {
+            let new = NewEntitlement {
+                user,
+                catalog: "shared",
+                access: Access::Read,
+            };
+            entitle(&db.pool, &new, &AuditActor::cli(), now())
+                .await
+                .unwrap();
+        }
+
+        // Act
+        let owner = team_access(&db.pool, "shared", Some(&alice)).await.unwrap();
+        let admin = team_access(&db.pool, "shared", None).await.unwrap();
+        let personal = team_access(&db.pool, "solo", Some(&alice)).await;
+        let stranger = team_access(&db.pool, "nowhere", Some(&alice)).await;
+
+        // Assert
+        let users = |view: &TeamAccess| {
+            view.entitlements
+                .iter()
+                .map(|e| e.user.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(owner.member_access, MemberAccess::Write);
+        assert_eq!(
+            owner
+                .members
+                .iter()
+                .map(|m| m.user.as_str())
+                .collect::<Vec<_>>(),
+            ["alice", "bob"]
+        );
+        assert_eq!(users(&owner), ["bob"], "the outsider's name stays hidden");
+        assert_eq!(users(&admin), ["bob", TEST_USER]);
+        assert!(
+            matches!(personal, Err(OkfError::Forbidden { .. })),
+            "{personal:?}"
+        );
+        assert!(
+            matches!(stranger, Err(OkfError::Forbidden { .. })),
+            "{stranger:?}"
+        );
+    }
+
+    /// Demotes `user` of `family` to a plain member, as an admin does.
+    async fn demote(pool: &PgPool, user: &str) -> Result<(), OkfError> {
+        let membership = crate::store::teams::Membership {
+            team: "family",
+            user,
+            role: Role::Member,
+        };
+        teams::set_member(pool, &membership, &AuditActor::cli(), now())
+            .await
+            .map(|_| ())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_owner_demoted_while_its_write_waits_is_refused() {
+        // Arrange: hold `server_state`, so alice's demotion takes her
+        // membership row and then waits there.
+        let db = test_db().await;
+        family(&db.pool).await;
+        let alice = id(&db.pool, "alice").await;
+        // A second owner, so demoting alice is no last-owner refusal.
+        let promotion = crate::store::teams::Membership {
+            team: "family",
+            user: "bob",
+            role: Role::Owner,
+        };
+        teams::set_member(&db.pool, &promotion, &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        let limit = std::time::Duration::from_secs(30);
+        let mut holder = db.pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM server_state FOR UPDATE")
+            .execute(&mut *holder)
+            .await
+            .unwrap();
+        let pool = db.pool.clone();
+        let demotion = tokio::spawn(async move { demote(&pool, "alice").await });
+        tokio::time::timeout(
+            limit,
+            crate::http::api::testing::wait_for_lock_waiters(&db.pool, 1),
+        )
+        .await
+        .expect("the demotion waits on server_state");
+        // Alice's two writes then wait on her membership row.
+        let (pool, owner) = (db.pool.clone(), alice.clone());
+        let access =
+            tokio::spawn(
+                async move { owner_sets(&pool, &owner, "shared", MemberAccess::None).await },
+            );
+        let (pool, owner) = (db.pool.clone(), alice.clone());
+        let entitle = tokio::spawn(async move {
+            owner_entitles(&pool, &owner, "bob", "shared", Access::Read).await
+        });
+        tokio::time::timeout(
+            limit,
+            crate::http::api::testing::wait_for_lock_waiters(&db.pool, 3),
+        )
+        .await
+        .expect("both writes wait on the membership row");
+
+        // Act
+        holder.rollback().await.unwrap();
+        let demoted = tokio::time::timeout(limit, demotion)
+            .await
+            .unwrap()
+            .unwrap();
+        let access = tokio::time::timeout(limit, access).await.unwrap().unwrap();
+        let entitle = tokio::time::timeout(limit, entitle).await.unwrap().unwrap();
+
+        // Assert: both checked the membership after the demotion.
+        assert!(demoted.is_ok(), "{demoted:?}");
+        assert!(
+            matches!(access, Err(OkfError::Forbidden { .. })),
+            "{access:?}"
+        );
+        assert!(
+            matches!(entitle, Err(OkfError::Forbidden { .. })),
+            "{entitle:?}"
+        );
+        assert_eq!(
+            member_access(&db.pool, "shared").await.unwrap(),
+            MemberAccess::Write
+        );
+        assert!(entitlements(&db.pool, "bob").await.unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_entitlement_to_a_member_removed_while_it_waits_is_refused() {
+        // Arrange: hold `server_state`, so bob's removal takes his
+        // membership row and then waits there.
+        let db = test_db().await;
+        family(&db.pool).await;
+        let alice = id(&db.pool, "alice").await;
+        let limit = std::time::Duration::from_secs(30);
+        let mut holder = db.pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM server_state FOR UPDATE")
+            .execute(&mut *holder)
+            .await
+            .unwrap();
+        let pool = db.pool.clone();
+        let removal = tokio::spawn(async move {
+            teams::remove_member(&pool, "family", "bob", &AuditActor::cli(), now()).await
+        });
+        tokio::time::timeout(
+            limit,
+            crate::http::api::testing::wait_for_lock_waiters(&db.pool, 1),
+        )
+        .await
+        .expect("the removal waits on server_state");
+        let (pool, owner) = (db.pool.clone(), alice.clone());
+        let entitle = tokio::spawn(async move {
+            owner_entitles(&pool, &owner, "bob", "shared", Access::Read).await
+        });
+        tokio::time::timeout(
+            limit,
+            crate::http::api::testing::wait_for_lock_waiters(&db.pool, 2),
+        )
+        .await
+        .expect("the entitlement waits on bob's membership row");
+
+        // Act
+        holder.rollback().await.unwrap();
+        let removed = tokio::time::timeout(limit, removal).await.unwrap().unwrap();
+        let entitled = tokio::time::timeout(limit, entitle).await.unwrap().unwrap();
+
+        // Assert
+        assert!(removed.is_ok(), "{removed:?}");
+        assert!(
+            matches!(entitled, Err(OkfError::Forbidden { .. })),
+            "{entitled:?}"
+        );
+        assert!(entitlements(&db.pool, "bob").await.unwrap().is_empty());
     }
 }

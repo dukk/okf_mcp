@@ -50,13 +50,15 @@ use crate::error::OkfError;
 use crate::http::api::keys::{manages, manages_grants, parse_access, KeyView};
 use crate::http::api::me::{SessionList, SessionView, SignInList, SignInView, RECENT_SIGN_INS};
 use crate::http::api::oauth::SignInCodeView;
-use crate::http::api::{require_admin, require_every_catalog, require_manager, require_reader};
+use crate::http::api::{
+    owner_session, require_admin, require_every_catalog, require_manager, require_reader,
+};
 use crate::http::AppError;
 use crate::labels::directory::{Labels, Wanted};
 use crate::labels::{team_label, user_label, DisplayName};
 use crate::mail::invite;
 use crate::store::audit::AuditActor;
-use crate::store::ceiling::{self, Entitlement, NewEntitlement};
+use crate::store::ceiling::{self, Entitlement, EntitlementRef, NewEntitlement};
 use crate::store::keys::{self as key_rows, Access};
 use crate::store::oauth::codes;
 use crate::store::teams::{self, MemberChange, Membership, NewTeam, Role, TeamRecord};
@@ -780,13 +782,52 @@ async fn invite_user(
     Ok((StatusCode::ACCEPTED, Json(Invited { name, email })))
 }
 
-/// `PUT /users/{name}/entitlements/{catalog}`: lets the user reach the
-/// catalog at `access`, beyond its teams' catalogs.
+/// The entitlement routes' caller: an every-catalog admin (`None`, the
+/// answers as they have always been), or an owner of the catalog's shared
+/// team signed in to the console (`Some(users.id)`, issue #352), which the
+/// store checks under its locks. Keys and OAuth grants, an owner's
+/// included, get the admin refusal.
 ///
 /// # Errors
-/// 403 unless the caller is an admin reaching every catalog; 400 for an
-/// access other than `read` or `write`; 404 for an unknown user or catalog;
-/// 422 without `access`.
+/// [`OkfError::Forbidden`] for anyone else.
+#[tracing::instrument(level = "debug", skip_all)]
+fn entitlement_caller(principal: &Principal) -> Result<Option<&str>, OkfError> {
+    owner_session(principal, require_every_catalog(principal))
+}
+
+/// What an entitlement route answers: an admin gets the user's entitlements
+/// on every catalog, as before; an owner only the one on the catalog it
+/// acted on, so nothing about the user's other catalogs leaks across
+/// tenants.
+///
+/// # Errors
+/// [`OkfError::Database`], or an unknown user (a race with its deletion).
+#[tracing::instrument(level = "debug", skip_all)]
+async fn entitlements_answer(
+    app: &App,
+    name: String,
+    catalog: &str,
+    owner: Option<&str>,
+) -> Result<Json<Entitlements>, OkfError> {
+    let mut entitlements = entitlement_views(app, &name).await?;
+    if owner.is_some() {
+        entitlements.retain(|entitlement| entitlement.catalog == catalog);
+    }
+    Ok(Json(Entitlements { name, entitlements }))
+}
+
+/// `PUT /users/{name}/entitlements/{catalog}`: lets the user reach the
+/// catalog at `access`, beyond its teams' catalogs. An every-catalog admin
+/// may entitle any user; an owner of the catalog's shared team, signed in to
+/// the console, only a member of that team, at `read` or `write`, and gets
+/// only that catalog's entitlement back (issue #352).
+///
+/// # Errors
+/// 403 unless the caller is an admin reaching every catalog, or such an
+/// owner; for an owner, 403 with one body for an unknown user and a user
+/// outside the team alike; 400 for an access other than `read` or `write`;
+/// 404 for an unknown user or catalog asked by an admin; 422 without
+/// `access`.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn entitle(
     State(app): State<Arc<App>>,
@@ -795,7 +836,7 @@ async fn entitle(
     Path((name, catalog)): Path<(String, String)>,
     Json(body): Json<EntitlementBody>,
 ) -> Result<Json<Entitlements>, AppError> {
-    require_every_catalog(&principal)?;
+    let owner = entitlement_caller(&principal)?;
     let access = parse_access(&body.access)?;
     if access == Access::Admin {
         return Err(OkfError::InvalidPath {
@@ -809,7 +850,12 @@ async fn entitle(
         catalog: &catalog,
         access,
     };
-    ceiling::entitle(app.pool(), &new, &actor, app.clock().now()).await?;
+    match owner {
+        None => ceiling::entitle(app.pool(), &new, &actor, app.clock().now()).await?,
+        Some(owner) => {
+            ceiling::entitle_as_owner(app.pool(), owner, &new, &actor, app.clock().now()).await?
+        }
+    }
     split_event!(
         info,
         { %catalog, access = access.as_str(), },
@@ -818,16 +864,17 @@ async fn entitle(
     );
     // M16 bridge (spec Decision 14): remove in the release after 0.23.
     app.bridge_to_m16();
-    let entitlements = entitlement_views(&app, &name).await?;
-    Ok(Json(Entitlements { name, entitlements }))
+    Ok(entitlements_answer(&app, name, &catalog, owner).await?)
 }
 
 /// `DELETE /users/{name}/entitlements/{catalog}`: removes an entitlement
-/// (none given: no change).
+/// (none given: no change), with the callers, refusals and answer of
+/// `PUT`.
 ///
 /// # Errors
-/// 403 unless the caller is an admin reaching every catalog; 404 for an
-/// unknown user or catalog.
+/// 403 unless the caller is an admin reaching every catalog, or such an
+/// owner (one body for an unknown user and a user outside the team); 404 for
+/// an unknown user or catalog asked by an admin.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn unentitle(
     State(app): State<Arc<App>>,
@@ -835,9 +882,18 @@ async fn unentitle(
     actor: AuditActor,
     Path((name, catalog)): Path<(String, String)>,
 ) -> Result<Json<Entitlements>, AppError> {
-    require_every_catalog(&principal)?;
+    let owner = entitlement_caller(&principal)?;
     let now = app.clock().now();
-    ceiling::unentitle(app.pool(), &name, &catalog, &actor, now).await?;
+    match owner {
+        None => ceiling::unentitle(app.pool(), &name, &catalog, &actor, now).await?,
+        Some(owner) => {
+            let target = EntitlementRef {
+                user: &name,
+                catalog: &catalog,
+            };
+            ceiling::unentitle_as_owner(app.pool(), owner, &target, &actor, now).await?
+        }
+    }
     split_event!(
         info,
         { %catalog, },
@@ -846,8 +902,7 @@ async fn unentitle(
     );
     // M16 bridge (spec Decision 14): remove in the release after 0.23.
     app.bridge_to_m16();
-    let entitlements = entitlement_views(&app, &name).await?;
-    Ok(Json(Entitlements { name, entitlements }))
+    Ok(entitlements_answer(&app, name, &catalog, owner).await?)
 }
 
 /// `GET /users/{name}/sessions`: the user's console sessions, by id prefix

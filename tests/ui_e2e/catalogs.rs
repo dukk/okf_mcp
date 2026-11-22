@@ -839,6 +839,10 @@ async fn a_non_admin_team_owner_renames_their_catalog_and_a_member_sees_no_edito
             .is_visible("#catalog-display-name")
             .expect("visible"));
         assert!(!ui.page.is_visible("#catalog-save").expect("visible"));
+        // A member who is not an owner gets no access controls either.
+        for hidden in ["#catalog-member-access", "#catalog-entitlements"] {
+            assert!(!ui.page.is_visible(hidden).expect("visible"), "{hidden}");
+        }
     })
     .await;
     if !ran {
@@ -849,15 +853,14 @@ async fn a_non_admin_team_owner_renames_their_catalog_and_a_member_sees_no_edito
         ui.open("/catalogs");
         ui.click("[data-catalog=acme-notes]");
         ui.wait_visible("#catalog-display-name");
-        // No team picker, member access or Delete: the admin's alone.
+        // No team picker or Delete: the admin's alone. The owner of a
+        // shared team has the team's member access and entitlements.
         assert!(!ui
             .page
             .is_visible("#catalog-owner-select")
             .expect("visible"));
-        assert!(!ui
-            .page
-            .is_visible("#catalog-member-access")
-            .expect("visible"));
+        ui.wait_visible("#catalog-member-access");
+        ui.wait_visible("#catalog-entitlements");
         assert!(!ui.page.is_visible("#catalog-delete").expect("visible"));
         assert_eq!(input_value(ui, "#catalog-display-name"), "");
         ui.fill("#catalog-display-name", "Acme Notes");
@@ -873,6 +876,94 @@ async fn a_non_admin_team_owner_renames_their_catalog_and_a_member_sees_no_edito
         .await
         .expect("the catalog");
     assert_eq!(row.display_name, "Acme Notes");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_team_owner_sets_member_access_and_entitles_a_member_from_the_drawer() {
+    let server = login_server().await;
+    crate::account::acme_with_owner_and_member(&server).await;
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password("bob@example.com", PASSWORD);
+        ui.open("/catalogs");
+        ui.click("[data-catalog=acme-notes]");
+        // Member access: lower it to read, and the server's value shows.
+        ui.wait_text("#catalog-member-access-current", "write");
+        ui.wait_visible("#catalog-member-access-select:not([disabled])");
+        ui.select("#catalog-member-access-select", "read");
+        ui.click("#catalog-member-access-save");
+        ui.wait_text("#catalog-member-access-current", "read");
+        // Entitle the team's member above it, from the members only.
+        ui.wait_visible("#catalog-entitle-user:not([disabled])");
+        ui.select("#catalog-entitle-user", "carol");
+        ui.select("#catalog-entitle-level", "write");
+        ui.click("#catalog-entitle-save");
+        ui.wait_text("#catalog-entitlements-list", "carol: write");
+        ui.wait_text("#toasts", "now reaches");
+        // Taking it away.
+        ui.click("[data-remove=carol]");
+        ui.wait_text_gone("#catalog-entitlements-list", "carol: write");
+        ui.wait_text("#catalog-entitlements-list", "No one is entitled");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    // The writes happened and are what the server holds.
+    let pool = &server.db.pool;
+    assert_eq!(
+        ceiling::member_access(pool, "acme-notes")
+            .await
+            .expect("member access"),
+        MemberAccess::Read
+    );
+    assert!(ceiling::entitlements(pool, "carol")
+        .await
+        .expect("entitlements")
+        .is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_entitle_in_flight_is_sent_once_and_a_refusal_shows_its_reason() {
+    let server = login_server().await;
+    crate::account::acme_with_owner_and_member(&server).await;
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password("bob@example.com", PASSWORD);
+        ui.open("/catalogs");
+        ui.click("[data-catalog=acme-notes]");
+        ui.wait_visible("#catalog-entitle-user:not([disabled])");
+        ui.select("#catalog-entitle-user", "carol");
+        // Held: a double click sends one request.
+        ui.hold_next("PUT", "/entitlements/acme-notes");
+        assert!(
+            ui.click_twice("#catalog-entitle-save"),
+            "Entitle is not disabled while it runs"
+        );
+        assert_eq!(ui.held_matches(), 1, "a second entitle was sent");
+        ui.release_held();
+        ui.wait_text("#catalog-entitlements-list", "carol: read");
+        // A refused write keeps its reason on the page.
+        ui.fail_next(
+            "PUT",
+            "/entitlements/acme-notes",
+            403,
+            "refused by the test",
+        );
+        ui.select("#catalog-entitle-level", "write");
+        ui.click("#catalog-entitle-save");
+        ui.wait_visible("#catalog-entitlements-error");
+        ui.wait_text("#catalog-entitlements-error", "refused by the test");
+        ui.wait_text("#catalog-entitlements-list", "carol: read");
+        ui.wait_visible("#catalog-entitle-save:not([disabled])");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let given = ceiling::entitlements(&server.db.pool, "carol")
+        .await
+        .expect("entitlements");
+    assert_eq!(given.len(), 1);
+    assert_eq!(given[0].access, Access::Read);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

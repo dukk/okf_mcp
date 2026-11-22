@@ -25132,6 +25132,8 @@ gh issue create --label enhancement \
 Today only admins set a catalog's team member access and a user's entitlements (user login design, "Non-goals"; M12 plan, deferred table).
 
 Let a team's owners set `member_access` on the catalogs their team owns, and entitle users to those catalogs. The permission check is one function, `store::ceiling::may_set_member_access(principal, catalog)`, which allows admins today: extend it to team owners, and add the console control to the team's drawer. No schema change is needed.
+
+> **Corrected (issue #352).** Delivered differently from this sketch: `may_set_member_access` stays the admin check for keys and the CLI. Owners of a shared team, in a console session only, are checked by the store under row locks (`ceiling::change_member_access`, `entitle_as_owner`, `unentitle_as_owner`), may entitle members of the owning team only, and use the catalog's drawer, not the team's (non-admins have no team drawer). See `docs/operations.md`, "The ceiling and member access".
 EOF
 gh issue create --label enhancement \
   --title "OIDC providers configured in the database" \
