@@ -5,10 +5,10 @@
     "by": "server",
     "mac": "832704121b3a2ebdcb8335564c65b957ab2777810568a3cc7d8dbc438524ba2c"
   },
-  "next_evidence_seq": 669,
+  "next_evidence_seq": 670,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "eb7681afde2fdf6981642bfe9eaf40a361948792cd508eff63b0a65aa3fcee04"
+    "mac": "8d099fad4ba846fb5903e526018a59523991fed194eda480fae31b90eda65929"
   },
   "claims": [
     {
@@ -41503,6 +41503,28 @@
             "by": "server",
             "mac": "ae3a0fe01520cf99f8295a48ca23dcaaa09f094ed695a58562a902b052da4bdd"
           }
+        },
+        {
+          "id": "EVD-0669",
+          "kind": "inspection",
+          "locator": "src/investigator/claude_tests.rs:567-605; tests/fixtures/investigator/claude/fake_child.py",
+          "summary": "At fbf6292 the descendant publishes holder.json (its pid, atomic rename) before it waits; the test counts an attempt only once that marker exists, retries with 2/10/40 s deadlines otherwise, asserts Child, that the parent is reaped, and that the holder pid is still in /proc before it writes the release file. Still no elapsed-time assertion. investigator_claude passed 5 runs in a row (18 tests each).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/investigator/claude_tests.rs",
+              "lines": {
+                "start": 555,
+                "end": 605
+              },
+              "commit": "fbf62926549c793952078c1ab490311c6ff6f9c5"
+            }
+          },
+          "recorded_at": "2026-11-22T23:43:08.097836734Z",
+          "seal": {
+            "by": "server",
+            "mac": "5c01a9116f56e2d1c16c51b09bb6f484e31b2f25618a260369ba6440b1d7cdcc"
+          }
         }
       ],
       "verdicts": [
@@ -41518,13 +41540,26 @@
             "by": "server",
             "mac": "efc009d19ac3382786f01dec726f91c8d57b094833551bfa7615ab3c43bf12e5"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at fbf6292 after the review: an attempt counts only once the descendant's marker exists, and the holder is asserted alive before release; the retry-on-late-start behaviour is now tied to the marker, not record.json.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0669"
+          ],
+          "recorded_at": "2026-11-22T23:43:11.251341703Z",
+          "seal": {
+            "by": "server",
+            "mac": "99dc6bc53dd1713daf96baadfc2e83f35277dcdd64806e00386e904603102b1f"
+          }
         }
       ],
       "created_at": "2026-11-22T23:04:49.663095956Z",
-      "updated_at": "2026-11-22T23:05:58.679642736Z",
+      "updated_at": "2026-11-22T23:43:11.251341703Z",
       "seal": {
         "by": "server",
-        "mac": "925924f96932e9861755f95eb7cb73d1b0f4c361eb559ec89ac7fb506c505788"
+        "mac": "1b3ef4df081ff84700baa798ac508ae8f709f9c056ec27f27a4c2143ece12041"
       }
     },
     {
