@@ -1,13 +1,15 @@
 # Issue #423: audit a provisioner's email lookups and refusals
 
 ## Added
-- Audit actions `user.looked_up` and `provisioner.refused` (`src/store/audit.rs`), and target kind `route` (migration `0031_provisioner_audit.sql`, which widens the `target_kind` check `NOT VALID`: the new set is a superset, so no scan of the log).
+- Audit actions `user.looked_up` and `provisioner.refused` (`src/store/audit.rs`), and target kind `route` (migration `0031_provisioner_audit.sql`, which widens the `target_kind` check `NOT VALID`: the new set is a superset, so no scan of the log under the lock; `0032_provisioner_audit_validate.sql` validates it in its own transaction, as 0029/0030 do).
 - `audit::record_provisioner_use`: one entry per key, event kind and clock hour with an exact count in `audit_access_counts` (as `catalog.admin_read` does), at most `PROVISIONER_ENTRIES_PER_HOUR` (50) entries per key per hour with the rest counted in one overflow entry per action. The entry belongs to no team, so owners never see it.
 - `App::note_provisioner_use`: the background write, limited to `MAX_PENDING_PROVISIONER_WRITES` (32) in flight; a request that finds them all busy loses its count.
 - `provisioner_gate` (`src/http/api/mod.rs`) now records every refusal of a provisioner, its own (`route_not_allowed`) and a handler's or store check's 403 (`forbidden`), with the method (standard methods only, else `OTHER`) and the route template. `list_users` records an email lookup's outcome and matched user.
 - `AdmittedActor` (the identities fixed at admission) shared by `AccessRecord` and the new `ProvisionerUse`; `Principal::admitted_actor`; `Requester::of_extensions`; `UserRecord.id`.
 - Console Audit page: the request count shows for the two new actions.
 - Tests: `src/store/audit.rs` (collapse under concurrency, the hourly cap and its overflow, found and not-found lookups, pruning the budget counters) and `src/http/api/provisioner_tests.rs` (found and not-found lookup with no address stored, an admin match recorded as not found, a refused route by template with no literal path or query, a burst collapsing, a state change still writing exactly one entry and reads and no-ops none, owners seeing neither action).
+
+- Review round 1: the budget row is locked before the bucket is looked for again, so two concurrent first requests for the same kind at the last slot share one entry (the loser returns its slot); tests for that interleaving and for the 32-write limit (a 33rd use is dropped, and capacity returns once the writes settle).
 
 ## Changed
 - `audit::prune` also deletes the budget counter rows of past hours (rows with no entry to cascade from).

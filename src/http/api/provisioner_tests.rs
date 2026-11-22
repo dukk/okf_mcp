@@ -853,3 +853,68 @@ async fn an_owner_of_the_users_team_never_sees_provisioner_lookups_or_refusals()
         "{seen:?}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_flood_past_the_pending_write_limit_loses_the_overflow_and_recovers() {
+    use crate::app::MAX_PENDING_PROVISIONER_WRITES;
+    use crate::store::audit::{
+        AdmittedActor, ProvisionerEvent, ProvisionerUse, RefusalReason, Source,
+    };
+    let test = app().await;
+    let at = chrono::Utc::now();
+    let usage = || ProvisionerUse {
+        actor: AdmittedActor {
+            source: Source::Api,
+            credential: None,
+            person: None,
+            label: "api key".to_string(),
+            operator: true,
+            ip: None,
+            at,
+        },
+        event: ProvisionerEvent::Refused {
+            method: "GET",
+            route: "/api/v1/keys".to_string(),
+            reason: RefusalReason::RouteNotAllowed,
+        },
+    };
+    let requests = |test: &crate::mcp::testing::TestApp| {
+        let pool = test.app.pool().clone();
+        async move {
+            sqlx::query_scalar::<_, Option<i64>>(
+                "SELECT sum(c.requests)::bigint FROM audit_access_counts c \
+                 JOIN audit_entries e ON e.id = c.entry_id \
+                 WHERE e.action = 'provisioner.refused'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .unwrap_or(0)
+        }
+    };
+    let limit = i64::try_from(MAX_PENDING_PROVISIONER_WRITES).unwrap();
+
+    // Every write is held, so every permit stays taken until the hold goes.
+    let hold = std::sync::Arc::clone(&test.app.access_hold)
+        .lock_owned()
+        .await;
+    for _ in 0..MAX_PENDING_PROVISIONER_WRITES + 1 {
+        test.app.note_provisioner_use(usage());
+    }
+    drop(hold);
+    tokio::time::timeout(std::time::Duration::from_secs(30), test.app.settle_access())
+        .await
+        .expect("the held writes finish");
+    assert_eq!(
+        requests(&test).await,
+        limit,
+        "the request past the limit was dropped"
+    );
+
+    // Its permit is back, so a later use is recorded.
+    test.app.note_provisioner_use(usage());
+    tokio::time::timeout(std::time::Duration::from_secs(30), test.app.settle_access())
+        .await
+        .expect("the write finishes");
+    assert_eq!(requests(&test).await, limit + 1, "capacity came back");
+}

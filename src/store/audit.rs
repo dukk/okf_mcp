@@ -1146,6 +1146,20 @@ async fn count_bucket(
     .await?)
 }
 
+/// Whether a bucket has a row.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.bucket_exists"))]
+async fn bucket_exists(conn: &mut PgConnection, bucket: &str) -> Result<bool, OkfError> {
+    Ok(
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM audit_access_counts WHERE bucket = $1)")
+            .bind(bucket)
+            .fetch_one(conn)
+            .await?,
+    )
+}
+
 /// Ties a bucket to the entry that was written for it.
 ///
 /// # Errors
@@ -1333,15 +1347,22 @@ pub async fn record_provisioner_use(pool: &PgPool, usage: &ProvisionerUse) -> Re
     // A bucket that exists collapses for free. A new one counts against the
     // key's hourly budget (a row that is only a counter, which `prune`
     // clears once its hour is past) and is spent on the overflow entry once
-    // the budget is gone.
-    let known: bool =
-        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM audit_access_counts WHERE bucket = $1)")
-            .bind(&bucket)
-            .fetch_one(&mut *tx)
+    // the budget is gone. The counter row's lock serialises the key's
+    // allocations, so the bucket is looked for again once it is held: a
+    // concurrent request for the same kind may have created it, and then
+    // this one collapses into it and gives its slot back.
+    if !bucket_exists(&mut tx, &bucket).await? {
+        let cap = format!("provcap\u{1f}{who}\u{1f}{stamp}");
+        let (_, used) = count_bucket(&mut tx, &cap).await?;
+        if bucket_exists(&mut tx, &bucket).await? {
+            sqlx::query(
+                "UPDATE audit_access_counts SET requests = GREATEST(requests - 1, 1) \
+                 WHERE bucket = $1",
+            )
+            .bind(&cap)
+            .execute(&mut *tx)
             .await?;
-    if !known {
-        let (_, used) = count_bucket(&mut tx, &format!("provcap\u{1f}{who}\u{1f}{stamp}")).await?;
-        if used > PROVISIONER_ENTRIES_PER_HOUR {
+        } else if used > PROVISIONER_ENTRIES_PER_HOUR {
             bucket = format!(
                 "provov\u{1f}{who}\u{1f}{}\u{1f}{stamp}",
                 shape.action.as_str()
@@ -3251,6 +3272,62 @@ mod tests {
         // too, into an entry of their own action.
         let lookups = counted(&db.pool, "user.looked_up").await;
         assert_eq!(lookups, [(Some("*".to_string()), 3)]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn two_first_requests_for_the_last_slots_kind_share_one_entry() {
+        use crate::http::api::testing::wait_for_lock_waiters;
+        let db = test_db().await;
+        let last = PROVISIONER_ENTRIES_PER_HOUR - 1;
+        for number in 0..last {
+            let usage = refusal(&format!("/api/v1/route-{number}"), now());
+            record_provisioner_use(&db.pool, &usage).await.unwrap();
+        }
+        // Hold the key's budget row, so both requests pass the first look
+        // for their bucket (absent) and queue on the budget.
+        let mut holder = db.pool.begin().await.unwrap();
+        let cap = format!("provcap\u{1f}lapi key\u{1f}{}", now().timestamp());
+        sqlx::query("SELECT 1 FROM audit_access_counts WHERE bucket = $1 FOR UPDATE")
+            .bind(&cap)
+            .fetch_one(&mut *holder)
+            .await
+            .unwrap();
+        let mut writes = tokio::task::JoinSet::new();
+        for _ in 0..2 {
+            let (pool, usage) = (db.pool.clone(), refusal("/api/v1/the-last", now()));
+            writes.spawn(async move { record_provisioner_use(&pool, &usage).await });
+        }
+        wait_for_lock_waiters(&db.pool, 2).await;
+        holder.commit().await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while let Some(write) = writes.join_next().await {
+                write.unwrap().unwrap();
+            }
+        })
+        .await
+        .expect("both requests finish once the budget row is released");
+
+        let refused = counted(&db.pool, "provisioner.refused").await;
+        let budget = usize::try_from(PROVISIONER_ENTRIES_PER_HOUR).unwrap();
+        assert_eq!(refused.len(), budget, "no overflow entry");
+        assert_eq!(
+            refused[budget - 1],
+            (Some("GET /api/v1/the-last".to_string()), 2),
+            "both counted in the regular entry"
+        );
+        assert!(refused
+            .iter()
+            .all(|(target, _)| target.as_deref() != Some("*")));
+        // The loser gave its slot back: one more kind still gets an entry.
+        record_provisioner_use(&db.pool, &refusal("/api/v1/one-more", now()))
+            .await
+            .unwrap();
+        let after = counted(&db.pool, "provisioner.refused").await;
+        assert_eq!(
+            after.last(),
+            Some(&(Some("*".to_string()), 1)),
+            "the 51st kind overflows"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
