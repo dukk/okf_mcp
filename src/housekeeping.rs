@@ -591,7 +591,8 @@ async fn revoke_idle_grants(app: &App, now: DateTime<Utc>) -> Result<(), OkfErro
 }
 
 /// Deletes the audit entries older than the `audit_retention_days` setting
-/// plus [`AUDIT_PRUNE_MARGIN_HOURS`]. Nothing else deletes entries.
+/// plus [`AUDIT_PRUNE_MARGIN_HOURS`], and the provisioner budget counters of
+/// past hours. Nothing else deletes entries.
 ///
 /// # Errors
 /// [`OkfError::Database`].
@@ -600,12 +601,16 @@ async fn prune_audit(app: &App) -> Result<(), OkfError> {
     // Outside any request, so it checks the settings itself (spec Decision
     // 9): the retention never runs on settings older than `credential_ttl`.
     let days = i64::from(app.fresh_settings().await.audit_retention_days);
-    let before =
-        app.clock().now() - TimeDelta::days(days) - TimeDelta::hours(AUDIT_PRUNE_MARGIN_HOURS);
+    let now = app.clock().now();
+    let before = now - TimeDelta::days(days) - TimeDelta::hours(AUDIT_PRUNE_MARGIN_HOURS);
     let mut steps = Steps::default();
     steps.note(
         "audit entries past retention",
         audit::prune(app.pool(), before).await,
+    );
+    steps.note(
+        "provisioner budget counters of past hours",
+        audit::prune_budget_counters(app.pool(), now).await,
     );
     steps.finish()
 }
@@ -1551,6 +1556,17 @@ mod tests {
             tx.commit().await.unwrap();
         }
 
+        // A provisioner budget counter from three hours ago, well inside the
+        // retention period.
+        sqlx::query("INSERT INTO audit_access_counts (bucket, requests) VALUES ($1, 1)")
+            .bind(format!(
+                "provcap\u{1f}lapi key\u{1f}{}",
+                (Utc::now() - TimeDelta::hours(3)).timestamp()
+            ))
+            .execute(&pool)
+            .await
+            .unwrap();
+
         run(Task::PruneAudit, &test.app).await.unwrap();
 
         let left: i64 = sqlx::query_scalar(
@@ -1560,6 +1576,12 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(left, 1, "61 days is past 60 (plus the hour); 59 is not");
+        let counters: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM audit_access_counts WHERE entry_id IS NULL")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(counters, 0, "a past hour's budget counter goes too");
     }
 
     #[tokio::test(flavor = "multi_thread")]

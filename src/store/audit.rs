@@ -951,23 +951,48 @@ pub async fn forget_person(conn: &mut PgConnection, user_id: &str) -> Result<(),
 /// [`OkfError::Database`], which deletes nothing.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.prune"))]
 pub async fn prune(pool: &PgPool, before: DateTime<Utc>) -> Result<u64, OkfError> {
-    // The hourly budget counters of provisioner entries are rows with no
-    // entry to cascade from; they go once their hour is before the cut-off.
-    // The `CASE` keeps the cast to the counters' numeric third part: Postgres
-    // may evaluate `AND` terms in any order.
-    sqlx::query(
+    Ok(sqlx::query("DELETE FROM audit_entries WHERE at < $1")
+        .bind(before)
+        .execute(pool)
+        .await?
+        .rows_affected())
+}
+
+/// How long past the end of its hour a provisioner budget counter is kept,
+/// so a replica whose clock lags a little still finds its hour's counter.
+const BUDGET_COUNTER_GRACE_HOURS: i64 = 1;
+
+/// Deletes the hourly budget counters of provisioner entries (rows of
+/// `audit_access_counts` with no entry to cascade from) once their hour
+/// ended over [`BUDGET_COUNTER_GRACE_HOURS`] before `now`. A counter only
+/// gates the entries opened within its own hour and records nothing itself
+/// (the entries carry the counts), so it is not kept for the retention
+/// period.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `now` - the server clock.
+///
+/// # Returns
+/// How many counters went.
+///
+/// # Errors
+/// [`OkfError::Database`], which deletes nothing.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.prune_budget_counters"))]
+pub async fn prune_budget_counters(pool: &PgPool, now: DateTime<Utc>) -> Result<u64, OkfError> {
+    // A counter's third part is the start of its hour, in Unix seconds; the
+    // hour ended an hour after that. The `CASE` keeps the cast to counter
+    // rows: Postgres may evaluate `AND` terms in any order.
+    let before = now - TimeDelta::hours(1 + BUDGET_COUNTER_GRACE_HOURS);
+    Ok(sqlx::query(
         "DELETE FROM audit_access_counts WHERE entry_id IS NULL \
            AND CASE WHEN split_part(bucket, chr(31), 1) = 'provcap' \
                     THEN split_part(bucket, chr(31), 3)::bigint < $1 END",
     )
     .bind(before.timestamp())
     .execute(pool)
-    .await?;
-    Ok(sqlx::query("DELETE FROM audit_entries WHERE at < $1")
-        .bind(before)
-        .execute(pool)
-        .await?
-        .rows_affected())
+    .await?
+    .rows_affected())
 }
 
 /// What a recorded access did.
@@ -1345,8 +1370,8 @@ pub async fn record_provisioner_use(pool: &PgPool, usage: &ProvisionerUse) -> Re
     let mut tx = pool.begin().await?;
     let mut bucket = format!("prov\u{1f}{who}\u{1f}{}\u{1f}{stamp}", shape.key);
     // A bucket that exists collapses for free. A new one counts against the
-    // key's hourly budget (a row that is only a counter, which `prune`
-    // clears once its hour is past) and is spent on the overflow entry once
+    // key's hourly budget (a row that is only a counter, which
+    // `prune_budget_counters` clears once its hour is past) and is spent on the overflow entry once
     // the budget is gone. The counter row's lock serialises the key's
     // allocations, so the bucket is looked for again once it is held: a
     // concurrent request for the same kind may have created it, and then
@@ -3371,38 +3396,62 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn pruning_clears_the_budget_counters_of_past_hours_with_the_entries() {
+    async fn budget_counters_go_once_their_hour_ended_over_the_grace_before() {
+        let db = test_db().await;
+        let at = |time: &str| -> DateTime<Utc> { time.parse().unwrap() };
+        let clock = at("2026-11-13T12:30:00Z");
+        // Hour 10 ended at 11:00, over the hour's grace before 12:30; hour 11
+        // ended at 12:00, within it; hour 12 is the current one.
+        for time in [
+            "2026-11-13T10:59:00Z",
+            "2026-11-13T11:10:00Z",
+            "2026-11-13T12:05:00Z",
+        ] {
+            record_provisioner_use(&db.pool, &refusal("/api/v1/keys", at(time)))
+                .await
+                .unwrap();
+        }
+        let counters = |pool: PgPool| async move {
+            sqlx::query_scalar::<_, String>(
+                "SELECT split_part(bucket, chr(31), 3) FROM audit_access_counts \
+                 WHERE entry_id IS NULL ORDER BY 1",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        };
+        assert_eq!(counters(db.pool.clone()).await.len(), 3, "one per hour");
+
+        let removed = prune_budget_counters(&db.pool, clock).await.unwrap();
+
+        assert_eq!(removed, 1);
+        let kept = [at("2026-11-13T11:00:00Z"), at("2026-11-13T12:00:00Z")]
+            .map(|hour| hour.timestamp().to_string());
+        assert_eq!(counters(db.pool.clone()).await, kept);
+        assert_eq!(
+            counted(&db.pool, "provisioner.refused").await.len(),
+            3,
+            "the entries stay for the retention period"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_retention_prune_leaves_budget_counters_alone() {
         let db = test_db().await;
         let old: DateTime<Utc> = "2024-01-01T12:00:00Z".parse().unwrap();
         record_provisioner_use(&db.pool, &refusal("/api/v1/keys", old))
             .await
             .unwrap();
-        record_provisioner_use(&db.pool, &refusal("/api/v1/keys", now()))
-            .await
-            .unwrap();
-        let leftover = |pool: PgPool| async move {
-            sqlx::query_scalar::<_, i64>(
-                "SELECT count(*) FROM audit_access_counts WHERE entry_id IS NULL",
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap()
-        };
-        assert_eq!(
-            leftover(db.pool.clone()).await,
-            2,
-            "one budget counter per hour"
-        );
 
         let removed = prune(&db.pool, old + TimeDelta::days(1)).await.unwrap();
 
         assert_eq!(removed, 1);
-        assert_eq!(
-            leftover(db.pool.clone()).await,
-            1,
-            "the current hour's counter stays"
-        );
-        assert_eq!(counted(&db.pool, "provisioner.refused").await.len(), 1);
+        let counters: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM audit_access_counts WHERE entry_id IS NULL")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(counters, 1, "prune_budget_counters owns them");
     }
 
     #[tokio::test(flavor = "multi_thread")]

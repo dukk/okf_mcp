@@ -7,12 +7,12 @@
 - `provisioner_gate` (`src/http/api/mod.rs`) now records every refusal of a provisioner, its own (`route_not_allowed`) and a handler's or store check's 403 (`forbidden`), with the method (standard methods only, else `OTHER`) and the route template. `list_users` records an email lookup's outcome and matched user.
 - `AdmittedActor` (the identities fixed at admission) shared by `AccessRecord` and the new `ProvisionerUse`; `Principal::admitted_actor`; `Requester::of_extensions`; `UserRecord.id`.
 - Console Audit page: the request count shows for the two new actions.
-- Tests: `src/store/audit.rs` (collapse under concurrency, the hourly cap and its overflow, found and not-found lookups, pruning the budget counters) and `src/http/api/provisioner_tests.rs` (found and not-found lookup with no address stored, an admin match recorded as not found, a refused route by template with no literal path or query, a burst collapsing, a state change still writing exactly one entry and reads and no-ops none, owners seeing neither action).
+- Tests: `src/store/audit.rs` (collapse under concurrency, the hourly cap and its overflow, found and not-found lookups, pruning the budget counters past their hour, and the retention prune leaving them alone) and `src/http/api/provisioner_tests.rs` (found and not-found lookup with no address stored, an admin match recorded as not found, a refused route by template with no literal path or query, a burst collapsing, a state change still writing exactly one entry and reads and no-ops none, owners seeing neither action).
 
 - Review round 1: the budget row is locked before the bucket is looked for again, so two concurrent first requests for the same kind at the last slot share one entry (the loser returns its slot); tests for that interleaving and for the 32-write limit (a 33rd use is dropped, and capacity returns once the writes settle).
 
 ## Changed
-- `audit::prune` also deletes the budget counter rows of past hours (rows with no entry to cascade from).
+- `audit::prune_budget_counters`, run by the daily `prune_audit` job after the retention prune, deletes the budget counter rows (rows with no entry to cascade from) whose hour ended over an hour before, rather than at the audit retention cut-off.
 - Operator API design Part 4 and its "What shipped differently" note, the M14 plan's pointer to #423, and `docs/operations.md` (provisioner paragraph, audit table, a paragraph on the bounds) say what ships: every state change, every email lookup and every refused request is audited with the key as actor; other reads and no-ops appear in request traces and metrics.
 
 ## Notes

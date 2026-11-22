@@ -2166,7 +2166,9 @@ request is let in, and bounded so a scripted flood cannot fill the log:
   one overflow entry per action, target `*`, with `details.overflow` set;
   the entry for a kind already opened keeps counting in its own entry. The
   budget's counter rows are removed by the daily `prune_audit` job once
-  their hour is past.
+  their hour ended over an hour before (a grace for a lagging replica
+  clock), not kept for the audit retention period: they gate only their
+  own hour, and the entries hold the counts.
 - At most 32 such writes are pending on a replica; a request that finds them
   all busy loses its count (a debug event says so) rather than queueing
   without bound. A failed write is logged and never fails the request.
