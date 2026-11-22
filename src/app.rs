@@ -31,12 +31,16 @@ use crate::oauth::OAuth;
 use crate::oidc::OidcProviders;
 use crate::overlay::Overlays;
 use crate::shared;
-use crate::store::audit::{self, AccessKind, AccessRecord};
+use crate::store::audit::{self, AccessKind, AccessRecord, ProvisionerUse};
 use crate::store::catalogs::{CatalogGeneration, CatalogRow};
 use crate::store::settings::{self, Settings};
 use crate::store::{catalogs, unlocks};
 use crate::telemetry::metrics::{AnnouncementResult, Metrics, Outcome};
 use crate::telemetry::subscriber::split_event;
+
+/// How many background writes of provisioner uses may be pending at once;
+/// more are dropped, not queued ([`App::note_provisioner_use`]).
+pub const MAX_PENDING_PROVISIONER_WRITES: usize = 32;
 
 /// The longest a settings check may take. A check runs before every
 /// request whose settings expired, outside the routes' own timeouts, so a
@@ -158,6 +162,10 @@ pub struct App {
     // shutdown can wait for them; a `std` mutex, held only to spawn into it
     // or to take it out.
     access_writes: std::sync::Mutex<tokio::task::JoinSet<()>>,
+    // Permits for the background writes of provisioner uses: a flood that
+    // outruns the database drops its overflow instead of queueing tasks
+    // without bound ([`App::note_provisioner_use`]).
+    provisioner_writes: Arc<tokio::sync::Semaphore>,
     // The metric instruments (M15 Task 2); built on the global meter provider
     // unless a test supplies its own.
     metrics: Metrics,
@@ -370,6 +378,9 @@ impl App {
             passkeys,
             oidc,
             access_writes: std::sync::Mutex::new(tokio::task::JoinSet::new()),
+            provisioner_writes: Arc::new(tokio::sync::Semaphore::new(
+                MAX_PENDING_PROVISIONER_WRITES,
+            )),
             metrics,
             #[cfg(test)]
             access_hold: Arc::default(),
@@ -418,6 +429,44 @@ impl App {
                     { catalog = %record.catalog, ?kind, },
                     { %error, },
                     "recording an operator access failed"
+                );
+            }
+        });
+    }
+
+    /// Records one provisioner request (an email lookup, or a refusal) in
+    /// the background, off the request path. At most
+    /// [`MAX_PENDING_PROVISIONER_WRITES`] writes are pending: a flood that
+    /// outruns the database loses the overflow's counts (logged at debug)
+    /// rather than queueing tasks without bound. A failure is logged.
+    ///
+    /// # Arguments
+    /// * `usage` - the request, with the actor fixed at admission.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn note_provisioner_use(&self, usage: ProvisionerUse) {
+        let Ok(permit) = Arc::clone(&self.provisioner_writes).try_acquire_owned() else {
+            tracing::debug!("a provisioner use was not recorded: too many writes pending");
+            return;
+        };
+        let pool = self.pool.clone();
+        #[cfg(test)]
+        let hold = Arc::clone(&self.access_hold);
+        let mut writes = self
+            .access_writes
+            .lock()
+            .expect("access writes lock poisoned");
+        while writes.try_join_next().is_some() {}
+        writes.spawn(async move {
+            // The permit is released when the task ends, however it ends.
+            let _permit = permit;
+            #[cfg(test)]
+            let _held = hold.lock().await;
+            if let Err(error) = audit::record_provisioner_use(&pool, &usage).await {
+                split_event!(
+                    error,
+                    {},
+                    { %error, },
+                    "recording a provisioner use failed"
                 );
             }
         });

@@ -33,7 +33,7 @@ use crate::http::requester::Requester;
 use crate::http::AppError;
 use crate::keys;
 use crate::oauth::access::OAuthVerifier;
-use crate::store::audit::{AccessRecord, AuditActor};
+use crate::store::audit::{AccessRecord, AdmittedActor, AuditActor};
 use crate::store::catalogs::CatalogRow;
 use crate::store::ceiling::{cap, Ceiling};
 use crate::store::gates::UserGates;
@@ -754,10 +754,37 @@ impl Principal {
         self.admission(row, access, now)
     }
 
+    /// This principal as the audit log will record it, with every identity
+    /// fixed now from the access facts, so a write that runs later neither
+    /// looks anything up by name nor creates a person or credential row
+    /// (M14 Decisions 21 and 22).
+    ///
+    /// # Arguments
+    /// * `requester` - the request's address and source.
+    /// * `now` - when it was admitted (server clock).
+    ///
+    /// # Returns
+    /// The actor.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn admitted_actor(&self, requester: &Requester, now: DateTime<Utc>) -> AdmittedActor {
+        let actor = AuditActor::of(self, requester);
+        let user = self.facts.user.as_deref();
+        AdmittedActor {
+            source: requester.source,
+            // A session acts with no credential, so it records none.
+            credential: actor.credential.as_ref().and(self.facts.credential),
+            person: user.and_then(|user| user.person),
+            label: actor.stored_label(),
+            // As `audit::record` marks it: an operator credential, or a
+            // credential of an admin user.
+            operator: actor.operator || user.is_some_and(|user| user.is_admin),
+            ip: requester.ip,
+            at: now,
+        }
+    }
+
     /// This principal's access to `catalog` as the audit log will record
-    /// it, with every identity and scope fixed now from the access facts,
-    /// so a write that runs later neither looks anything up by name nor
-    /// creates a person or credential row (M14 Decisions 21 and 22).
+    /// it ([`Self::admitted_actor`], plus the catalog's identity and scope).
     ///
     /// # Arguments
     /// * `requester` - the request's address and source.
@@ -775,21 +802,10 @@ impl Principal {
         scope: CatalogScope,
         now: DateTime<Utc>,
     ) -> AccessRecord {
-        let actor = AuditActor::of(self, requester);
-        let user = self.facts.user.as_deref();
         AccessRecord {
-            source: requester.source,
-            // A session acts with no credential, so it records none.
-            actor_credential: actor.credential.as_ref().and(self.facts.credential),
-            actor_person: user.and_then(|user| user.person),
-            actor_label: actor.stored_label(),
-            // As `audit::record` marks it: an operator credential, or a
-            // credential of an admin user.
-            operator: actor.operator || user.is_some_and(|user| user.is_admin),
-            ip: requester.ip,
+            actor: self.admitted_actor(requester, now),
             catalog: catalog.to_string(),
             scope,
-            at: now,
         }
     }
 
@@ -2090,9 +2106,9 @@ mod tests {
 
         assert_eq!(
             (
-                record.actor_credential,
-                record.actor_person,
-                record.operator
+                record.actor.credential,
+                record.actor.person,
+                record.actor.operator
             ),
             (Some(22), Some(11), true)
         );

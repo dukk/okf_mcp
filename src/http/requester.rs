@@ -45,11 +45,31 @@ impl Requester {
         )
     )]
     pub fn of(parts: &Parts) -> Self {
+        Self::of_extensions(&parts.extensions)
+    }
+
+    /// The requester of a request's extensions, for middleware that holds
+    /// the whole request rather than its parts.
+    ///
+    /// # Arguments
+    /// * `extensions` - the request's extensions, after `require_principal`
+    ///   or `require_key` ran.
+    ///
+    /// # Returns
+    /// As [`Requester::of`].
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn of_extensions(extensions: &axum::http::Extensions) -> Self {
         Self {
             // `and_then` flattens the two layers of `Option`: no extension,
             // or an extension holding no address.
-            ip: parts.extensions.get::<ClientIp>().and_then(|ip| ip.0),
-            source: if parts.extensions.get::<ConsoleSession>().is_some() {
+            ip: extensions.get::<ClientIp>().and_then(|ip| ip.0),
+            source: if extensions.get::<ConsoleSession>().is_some() {
                 Source::Console
             } else {
                 Source::Api

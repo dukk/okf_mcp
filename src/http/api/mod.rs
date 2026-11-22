@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use crate::http::AppError;
-use axum::extract::{MatchedPath, Request};
+use axum::extract::{MatchedPath, Request, State};
 use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::middleware;
 use axum::middleware::Next;
@@ -22,6 +22,7 @@ use crate::error::OkfError;
 use crate::http::console_session::require_principal;
 use crate::http::requester::Requester;
 use crate::mcp::context::ToolContext;
+use crate::store::audit::{standard_method, ProvisionerEvent, ProvisionerUse, RefusalReason};
 use crate::store::catalogs::CatalogRow;
 use crate::store::keys::Access;
 
@@ -99,7 +100,10 @@ pub(crate) fn routes(app: &Arc<App>) -> Router<Arc<App>> {
         .merge(crate::http::oidc::api_routes())
         // `route_layer` covers the routes merged above and runs only when one
         // matched, so an unknown API path stays 404 rather than 401.
-        .route_layer(middleware::from_fn(provisioner_gate))
+        .route_layer(middleware::from_fn_with_state(
+            Arc::clone(app),
+            provisioner_gate,
+        ))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(app),
             require_principal,
@@ -306,30 +310,66 @@ pub(crate) fn provisioner_may(method: &Method, template: &str) -> bool {
 }
 
 /// axum middleware, inside `require_principal`: refuses a provisioner on
-/// every route that is not in [`PROVISIONER_ROUTES`].
+/// every route that is not in [`PROVISIONER_ROUTES`], and records every
+/// refusal of a provisioner, this one or a handler's, as a
+/// `provisioner.refused` entry (the key as actor, fixed before the handler
+/// runs; the route template, method and a stable reason code, never the
+/// path, query or body). A refusal is a 403.
+///
+/// # Arguments
+/// * `app` - the application, which records the refusal in the background.
+/// * `request` - the request.
+/// * `next` - the route.
 ///
 /// # Returns
 /// The route's response, or 403.
 #[tracing::instrument(level = "debug", skip_all)]
-async fn provisioner_gate(request: Request, next: Next) -> Response {
-    let provisioner = request
+async fn provisioner_gate(State(app): State<Arc<App>>, request: Request, next: Next) -> Response {
+    let Some(principal) = request
         .extensions()
         .get::<Arc<Principal>>()
-        .is_some_and(|principal| principal.provisioner);
-    // `MatchedPath` holds the template with the `/api/v1` prefix (verified facts).
-    let allowed = {
-        request
-            .extensions()
-            .get::<MatchedPath>()
-            .is_some_and(|path| provisioner_may(request.method(), path.as_str()))
+        .filter(|principal| principal.provisioner)
+        .cloned()
+    else {
+        return next.run(request).await;
     };
-    if provisioner && !allowed {
-        return AppError(OkfError::Forbidden {
+    // `MatchedPath` holds the template with the `/api/v1` prefix (verified facts).
+    let route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|path| path.as_str().to_string());
+    let method = standard_method(request.method().as_str());
+    let allowed = route
+        .as_deref()
+        .is_some_and(|template| provisioner_may(request.method(), template));
+    // The actor as admission saw it, before the handler can change anything.
+    let actor = principal.admitted_actor(
+        &Requester::of_extensions(request.extensions()),
+        app.clock().now(),
+    );
+    let (response, reason) = if allowed {
+        let response = next.run(request).await;
+        let reason =
+            (response.status() == StatusCode::FORBIDDEN).then_some(RefusalReason::Forbidden);
+        (response, reason)
+    } else {
+        let refusal = AppError(OkfError::Forbidden {
             reason: "a provisioner key may not call this route".to_string(),
         })
         .into_response();
+        (refusal, Some(RefusalReason::RouteNotAllowed))
+    };
+    if let (Some(reason), Some(route)) = (reason, route) {
+        app.note_provisioner_use(ProvisionerUse {
+            actor,
+            event: ProvisionerEvent::Refused {
+                method,
+                route,
+                reason,
+            },
+        });
     }
-    next.run(request).await
+    response
 }
 
 /// Refuses all but a provisioner or an admin that reaches every catalog:
