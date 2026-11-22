@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 449,
+  "next_claim_seq": 465,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "a8b409b5732a0b512b7df7c78a2d3e413e718d5c80d3ef187e0a675f2e834d62"
+    "mac": "94d820604e2c217f4f5cd2a0f9da192cb303cfa29def03d0284afa91716a0e6a"
   },
-  "next_evidence_seq": 543,
+  "next_evidence_seq": 563,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "5a2d361ca0a61dd9c6a7e212243120ad9e4c23911a4e88e76c0d9ba8ba1e4e3d"
+    "mac": "350851707e95b0cd199d227353125cf83c66e5d44352fec9e0d25798311c223b"
   },
   "claims": [
     {
@@ -35565,6 +35565,1159 @@
       "seal": {
         "by": "server",
         "mac": "0bb11e3c82286b474660f32f3367d6d6d2e462d28aa9773bceb64f937f307d66"
+      }
+    },
+    {
+      "id": "CLM-0449",
+      "statement": "Issue #423 as decided by pgrace on 2026-11-20 is implemented: audit entries for provisioner email lookups and refusals, bounded, with no other new entries, and the spec, docs and tests updated.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/423 (comment '## Decision (pgrace, 2026-11-20)')",
+      "derived_from": [],
+      "artifacts": [
+        "src/store/audit.rs",
+        "src/http/api/mod.rs",
+        "src/http/api/people.rs"
+      ],
+      "tags": [
+        "from-issue:423"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0562",
+          "kind": "analysis",
+          "locator": "children of CLM-0449",
+          "summary": "All fifteen children are supported: lookups, refusals, privacy, visibility, collapse, bounds, admission-fixed actor, no extra entries, unchanged allow-list tests, spec, docs, migration, prune and console. Each decision item and each required test (found, not-found, refused route, burst, one event per change, allow-list unchanged) maps to a child. Gaps are untested bounds (32-write cap) and tests not run.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T19:46:00.693780414Z",
+          "seal": {
+            "by": "server",
+            "mac": "ba33bfcd7dec689777448464a62aa1623ac654a1a08fc558f6072906f51d8829"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Every child is supported; the decision's requirements and tests each map to a supported child. Tests were read, not run.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0562"
+          ],
+          "recorded_at": "2026-11-22T19:46:04.082352697Z",
+          "seal": {
+            "by": "server",
+            "mac": "b6e14417417658f3efb429cd67fcdf4fc4e0072ec51431c58ba3304499e6f819"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T19:44:34.392205800Z",
+      "updated_at": "2026-11-22T19:46:04.082352697Z",
+      "seal": {
+        "by": "server",
+        "mac": "5f40caded938e48aff9b9505879a459013651e92eecf5b2919adfd0870470c39"
+      }
+    },
+    {
+      "id": "CLM-0450",
+      "statement": "A provisioner key's GET /api/v1/users?email= writes a user.looked_up audit entry with actor the key, outcome found or not_found, and the matched user as the entry's person when found.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #423 decision, Add item 1; PR body 'user.looked_up: ...'",
+      "derived_from": [
+        "CLM-0449"
+      ],
+      "artifacts": [
+        "src/http/api/people.rs",
+        "src/store/audit.rs",
+        "src/http/api/provisioner_tests.rs"
+      ],
+      "tags": [
+        "from-issue:423"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0543",
+          "kind": "inspection",
+          "locator": "src/http/api/people.rs:564-587; src/store/audit.rs:1269-1285,1323-1400",
+          "summary": "list_users, when principal.provisioner and an email was given, calls note_provisioner_use with ProvisionerEvent::Lookup{matched: first record id}. shape() maps matched Some/None to outcome found/not_found in details and Action::UserLookedUp; the INSERT joins audit_people to put the matched user in target_person_id (target_kind 'user'), else target_kind 'route'. Actor is the provisioner key.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/people.rs",
+              "lines": {
+                "start": 564,
+                "end": 587
+              },
+              "commit": "216248c9205977b745c86ffaf426c81039e6e6c0"
+            }
+          },
+          "recorded_at": "2026-11-22T19:45:31.059263909Z",
+          "seal": {
+            "by": "server",
+            "mac": "bf77512f8e2e1dfce25026d40bbfc236c91acf4c29a25a25f18e1e1b6dc6a5c2"
+          }
+        },
+        {
+          "id": "EVD-0544",
+          "kind": "inspection",
+          "locator": "src/http/api/provisioner_tests.rs:555-644 an_email_lookup_is_audited_with_the_outcome_and_never_the_address (read, not run)",
+          "summary": "Test performs one found and one not-found lookup and asserts two user.looked_up entries: details.outcome found with person alice and target_kind user, then not_found with target 'GET /api/v1/users'; actor_operator, source api, actor credential equals the key's credential id. Read only; the suite was not run (database needed).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/provisioner_tests.rs",
+              "lines": {
+                "start": 555,
+                "end": 644
+              },
+              "commit": "216248c9205977b745c86ffaf426c81039e6e6c0"
+            }
+          },
+          "recorded_at": "2026-11-22T19:45:31.093103991Z",
+          "seal": {
+            "by": "server",
+            "mac": "358a8fd5e6a1bec3559d7fdebbce4babff8554ca37a212e0bbf79a744926d1b3"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Handler code records outcome and matched user for provisioner email lookups; the test asserts both found and not_found entries. Tests read, not run.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0543",
+            "EVD-0544"
+          ],
+          "recorded_at": "2026-11-22T19:46:00.246269885Z",
+          "seal": {
+            "by": "server",
+            "mac": "74d9569ff4aebf5ea6637434f2193d4c9a603214bda905a1e90456868510dc4f"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T19:44:34.392205800Z",
+      "updated_at": "2026-11-22T19:46:00.246269885Z",
+      "seal": {
+        "by": "server",
+        "mac": "72ea68a931f13595598f02ed201d5e03a048d70358b56fd831a84d2bab837d0e"
+      }
+    },
+    {
+      "id": "CLM-0451",
+      "statement": "No part of the looked-up email address (raw or hashed) is stored in any audit entry or counter bucket written for a lookup.",
+      "kind": "security",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "analysis",
+      "source": "Issue #423 decision: 'Never store the raw email'; PR body 'The address is stored nowhere.'",
+      "derived_from": [
+        "CLM-0449"
+      ],
+      "artifacts": [
+        "src/store/audit.rs",
+        "src/http/api/people.rs",
+        "src/http/api/provisioner_tests.rs"
+      ],
+      "tags": [
+        "from-issue:423"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0545",
+          "kind": "inspection",
+          "locator": "src/http/api/people.rs:564-587; src/store/audit.rs:1217-1280 (ProvisionerEvent::Lookup, shape)",
+          "summary": "ProvisionerEvent::Lookup carries only Option<String> matched user id; the email is never passed into ProvisionerUse. Bucket key is outcome plus matched id; details is {outcome, hour}; target_name is the constant 'GET /api/v1/users'. No code path writes or hashes the email, and no server_keys use appears in the diff.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit.rs",
+              "lines": {
+                "start": 1269,
+                "end": 1285
+              },
+              "commit": "216248c9205977b745c86ffaf426c81039e6e6c0"
+            }
+          },
+          "recorded_at": "2026-11-22T19:45:31.127094783Z",
+          "seal": {
+            "by": "server",
+            "mac": "abac514f56e38035c6062b44f91fa2cb9da496ccc590edeaa23952a48cc0000f"
+          }
+        },
+        {
+          "id": "EVD-0546",
+          "kind": "inspection",
+          "locator": "src/http/api/provisioner_tests.rs:536-545,589-593 (everything_stored; lowercase search for the address, 'nobody' and 'example.com')",
+          "summary": "The test dumps every audit_entries row as JSON plus every audit_access_counts bucket and asserts that none contains alice@example.com, 'nobody' or 'example.com'. Read only, not run. Caveat: the search covers audit tables only, not logs or traces.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/provisioner_tests.rs",
+              "lines": {
+                "start": 536,
+                "end": 545
+              },
+              "commit": "216248c9205977b745c86ffaf426c81039e6e6c0"
+            }
+          },
+          "recorded_at": "2026-11-22T19:45:31.160794944Z",
+          "seal": {
+            "by": "server",
+            "mac": "70842780fe2c36e4f28803e375a3a6a06255b37ebcc4e5254e3935678eff673c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The email never enters ProvisionerUse, so no code path can store it or a hash; the test searches all audit rows and buckets for it. Search covers audit tables only.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0545",
+            "EVD-0546"
+          ],
+          "recorded_at": "2026-11-22T19:46:00.278881220Z",
+          "seal": {
+            "by": "server",
+            "mac": "f8a0aba704ea9723a700e4ab3d6c20d19cd0e80fbfc208b82aaee4c25b3673f0"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T19:44:34.392205800Z",
+      "updated_at": "2026-11-22T19:46:00.278881220Z",
+      "seal": {
+        "by": "server",
+        "mac": "850ba5d6fd3f41c0338cf3e4908340c028c055ff32a0e7d65afab6de27d260bc"
+      }
+    },
+    {
+      "id": "CLM-0452",
+      "statement": "user.looked_up and provisioner.refused entries are visible to admins (and to the provisioner key that wrote them) and are invisible to team owners.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #423 decision: 'visible to admins'; PR body 'Visibility: admins see the entries ... Team owners see none'",
+      "derived_from": [
+        "CLM-0449"
+      ],
+      "artifacts": [
+        "src/store/audit.rs",
+        "src/http/api/provisioner_tests.rs"
+      ],
+      "tags": [
+        "from-issue:423"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0547",
+          "kind": "inspection",
+          "locator": "src/store/audit.rs:1323-1400 (INSERT omits teams, default '{}'); migrations/0012_audit.sql:77-80; provisioner_tests.rs:556-644,816-855",
+          "summary": "The entry INSERT sets no teams column, which defaults to an empty array, so an owner's team-scoped view cannot match it; actor_operator is true. Test 816-855 lists as an Owner viewer after one lookup and one refusal and asserts neither action appears. Test 556-644 shows an admin and the provisioner key (Viewer::Credential) each list 2 user.looked_up entries. Read only, not run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/provisioner_tests.rs",
+              "lines": {
+                "start": 816,
+                "end": 855
+              },
+              "commit": "216248c9205977b745c86ffaf426c81039e6e6c0"
+            }
+          },
+          "recorded_at": "2026-11-22T19:45:31.194400265Z",
+          "seal": {
+            "by": "server",
+            "mac": "bdf612706b838d2b97fe094148cbddd03db62e23239ff108576486c1ba13f55c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Entries have empty teams and operator actor; tests cover admin, provisioner-key and owner views.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0547"
+          ],
+          "recorded_at": "2026-11-22T19:46:00.309645497Z",
+          "seal": {
+            "by": "server",
+            "mac": "c54418c5ad8e3f75b682f291be587f759073d30128b5c1c380c1683017c5c787"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T19:44:34.392205800Z",
+      "updated_at": "2026-11-22T19:46:00.309645497Z",
+      "seal": {
+        "by": "server",
+        "mac": "88e0ff6c05d74a1a49d27020b35eea8666fbf7060601603c541e84e944b166fe"
+      }
+    },
+    {
+      "id": "CLM-0453",
+      "statement": "Every 403 returned to a provisioner key (from provisioner_gate as route_not_allowed, or from a handler or store check as forbidden) writes a provisioner.refused entry holding the method (standard method else OTHER), the matched route template and that code, and never the literal path, query, body or error text.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #423 decision, Add item 2; PR body 'provisioner.refused: any 403 for a provisioner key ...'",
+      "derived_from": [
+        "CLM-0449"
+      ],
+      "artifacts": [
+        "src/http/api/mod.rs",
+        "src/store/audit.rs",
+        "src/http/api/provisioner_tests.rs"
+      ],
+      "tags": [
+        "from-issue:423"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0548",
+          "kind": "inspection",
+          "locator": "src/http/api/mod.rs:312-373 provisioner_gate; src/store/audit.rs:1197-1220,1269-1300",
+          "summary": "Gate takes the template from MatchedPath, method via standard_method (nine standard names else OTHER), and records RouteNotAllowed when the route is not allow-listed, or Forbidden when an allowed route's response status is 403. Only method, template and the RefusalReason code reach ProvisionerEvent::Refused; details is {method, route, reason, hour}. No path, query, body or error text is passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/mod.rs",
+              "lines": {
+                "start": 312,
+                "end": 373
+              },
+              "commit": "216248c9205977b745c86ffaf426c81039e6e6c0"
+            }
+          },
+          "recorded_at": "2026-11-22T19:45:31.229540960Z",
+          "seal": {
+            "by": "server",
+            "mac": "da29cf38b3d791e01951a0d69d341f30e110da75591debfe62129cb2c6c2011a"
+          }
+        },
+        {
+          "id": "EVD-0549",
+          "kind": "inspection",
+          "locator": "src/http/api/provisioner_tests.rs:695-741 a_refused_route_is_audited_by_template_method_and_a_stable_code (read, not run)",
+          "summary": "Requests GET /api/v1/catalogs/main/tree?secret=hunter2 (gate refusal) and GET /api/v1/users with no email (handler 403); asserts details exactly {method GET, route '/api/v1/catalogs/{catalog}/tree', reason route_not_allowed} and reason forbidden for the second, and that the stored text contains neither 'hunter2' nor '/catalogs/main'. Read only, not run. No test sends a non-standard method to exercise OTHER.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/provisioner_tests.rs",
+              "lines": {
+                "start": 695,
+                "end": 741
+              },
+              "commit": "216248c9205977b745c86ffaf426c81039e6e6c0"
+            }
+          },
+          "recorded_at": "2026-11-22T19:45:31.262051038Z",
+          "seal": {
+            "by": "server",
+            "mac": "5700f1207731d5b4a5a40847d267a098d068a1ced846f0d117474b43c6834927"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Gate records both refusal paths with only template, standard method and a fixed code; the test asserts exact details and the absence of the secret query and literal path. The OTHER method branch has no test.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0548",
+            "EVD-0549"
+          ],
+          "recorded_at": "2026-11-22T19:46:00.339912143Z",
+          "seal": {
+            "by": "server",
+            "mac": "3e631058461fa92ec060f40185a5b1a02a2ba21a82e1d2c545aed8f71f413c4c"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T19:44:34.392205800Z",
+      "updated_at": "2026-11-22T19:46:00.339912143Z",
+      "seal": {
+        "by": "server",
+        "mac": "7a89317baa7fcd1f0504784454de15454118403a75c82a5b6789a46057e4d2dd"
+      }
+    },
+    {
+      "id": "CLM-0454",
+      "statement": "Repeats of the same (key, event kind, clock hour) collapse into one audit entry whose request count is exact under concurrency.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #423 decision: 'collapse repeats of the same (key, route, reason) within a window'; PR body 'repeats collapse to one entry per key, event kind and clock hour with an exact count'",
+      "derived_from": [
+        "CLM-0449"
+      ],
+      "artifacts": [
+        "src/store/audit.rs"
+      ],
+      "tags": [
+        "from-issue:423"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0550",
+          "kind": "inspection",
+          "locator": "src/store/audit.rs:1133-1160,1323-1400; tests 3167-3215 and provisioner_tests.rs:743-759",
+          "summary": "count_bucket upserts (bucket, requests=1) ON CONFLICT requests+1 RETURNING entry_id, so concurrent first requests serialise on the row; only the request that sees entry_id None inserts the entry and link_bucket ties it. Unit test fires 20 concurrent refusals and asserts one entry with count 20, a next-hour one with 1 and a different reason with 1; API test sends 25 identical refusals and asserts one entry with requests 25. Read only, not run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit.rs",
+              "lines": {
+                "start": 1133,
+                "end": 1160
+              },
+              "commit": "216248c9205977b745c86ffaf426c81039e6e6c0"
+            }
+          },
+          "recorded_at": "2026-11-22T19:45:31.294334926Z",
+          "seal": {
+            "by": "server",
+            "mac": "9ceebe4d01aa562eec19eb8c20b2f1b1c2bd6000c7abc5bf41165069392cf211"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Upsert-counter design is exact under concurrency and two tests (20 concurrent, 25 sequential) assert collapse to one counted entry.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0550"
+          ],
+          "recorded_at": "2026-11-22T19:46:00.369712317Z",
+          "seal": {
+            "by": "server",
+            "mac": "6946266c54b4b3b1c0de1fc85b9900538d476639a6b9f60d8f8b5c4fcfdbf21a"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T19:44:34.392205800Z",
+      "updated_at": "2026-11-22T19:46:00.369712317Z",
+      "seal": {
+        "by": "server",
+        "mac": "b2bd16ecef26de2a2dd68435479de9884aeb09a5bfe6f23e26180587ab28cc82"
+      }
+    },
+    {
+      "id": "CLM-0455",
+      "statement": "A provisioner key opens at most 50 provisioner audit entries per clock hour; further new kinds count in one overflow entry per action (target '*'), and an entry already opened keeps counting in its own entry.",
+      "kind": "security",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "analysis",
+      "source": "Issue #423 decision: 'Rate-limit the writes so a scripted flood can't fill the audit table'; PR body 'a key opens at most 50 entries an hour, the rest count in one overflow entry per action'",
+      "derived_from": [
+        "CLM-0449"
+      ],
+      "artifacts": [
+        "src/store/audit.rs"
+      ],
+      "tags": [
+        "from-issue:423"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0551",
+          "kind": "inspection",
+          "locator": "src/store/audit.rs:1323-1360 (cap logic), 1165; test 3218-3252 (read, not run)",
+          "summary": "A bucket not yet in audit_access_counts counts against a per-key-hour 'provcap' row; when used exceeds 50 the bucket becomes 'provov' (one per action), target '*', matched None, details {overflow}. A known bucket skips the budget so it keeps counting. Bounds: 50 regular entries per key-hour (shared by both actions) plus at most 2 overflow entries, so up to 52 rows per key-hour, which the PR text ('at most 50 entries... the rest in one overflow entry per action') does not state exactly. The unit test sends 57 routes and asserts 50 entries plus one overflow with count 7, route-0 counting 2, and lookups overflowing into their own '*' entry with count 3. A concurrent double-count of one new bucket only over-spends the budget, never under-enforces it.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit.rs",
+              "lines": {
+                "start": 1323,
+                "end": 1360
+              },
+              "commit": "216248c9205977b745c86ffaf426c81039e6e6c0"
+            }
+          },
+          "recorded_at": "2026-11-22T19:45:31.325477711Z",
+          "seal": {
+            "by": "server",
+            "mac": "2d915fe174ea7c2cc35b92b11ab0a27cb6bba57358ff6af4a685c3c3caaffbe8"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The budget is enforced in record_provisioner_use and tested with 57 routes. The budget is 50 regular entries across both actions plus up to two overflow entries (52 rows per key-hour); the PR and docs state the overflow rule, so this is exact but worth knowing.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0551"
+          ],
+          "recorded_at": "2026-11-22T19:46:00.401951690Z",
+          "seal": {
+            "by": "server",
+            "mac": "6175bb76d3d96305365ee605bb7289a270468321c52637d0c5d0490a7d85a18b"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T19:44:34.392205800Z",
+      "updated_at": "2026-11-22T19:46:00.401951690Z",
+      "seal": {
+        "by": "server",
+        "mac": "af6cde77da7f016eea1895b102a744a3b68b1ca65cc81d179e90ca600840f8c3"
+      }
+    },
+    {
+      "id": "CLM-0456",
+      "statement": "At most 32 background provisioner audit writes are pending per replica; a request finding all permits taken is dropped with a debug event and never queued.",
+      "kind": "security",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body 'at most 32 background writes are pending per replica'",
+      "derived_from": [
+        "CLM-0449"
+      ],
+      "artifacts": [
+        "src/app.rs"
+      ],
+      "tags": [
+        "from-issue:423"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0552",
+          "kind": "inspection",
+          "locator": "src/app.rs:43,378-383,446-475",
+          "summary": "provisioner_writes is a Semaphore of MAX_PENDING_PROVISIONER_WRITES=32; note_provisioner_use does try_acquire_owned and on failure logs at debug and returns without spawning; the permit is moved into the spawned task and dropped when it ends. Enforced as stated. No test exercises the 32 limit or the drop path (grep finds MAX_PENDING_PROVISIONER_WRITES only in app.rs).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/app.rs",
+              "lines": {
+                "start": 440,
+                "end": 475
+              },
+              "commit": "216248c9205977b745c86ffaf426c81039e6e6c0"
+            }
+          },
+          "recorded_at": "2026-11-22T19:45:31.358223750Z",
+          "seal": {
+            "by": "server",
+            "mac": "33155ea7cd953eeae3f475aca484aec808b9558e58fcf3834a2306484376a017"
+          }
+        },
+        {
+          "id": "EVD-0553",
+          "kind": "analysis",
+          "locator": "git grep -nE 'MAX_PENDING_PROVISIONER_WRITES|provisioner_writes' -- src tests",
+          "summary": "Only app.rs references the semaphore or constant; no test fills the permits and asserts a write is dropped. The behavior is correct by reading, untested.",
+          "stance": "neutral",
+          "anchor": {
+            "search": {
+              "pattern": "MAX_PENDING_PROVISIONER_WRITES|provisioner_writes",
+              "scope": [
+                "src",
+                "tests"
+              ],
+              "hits": 6,
+              "commit": "216248c9205977b745c86ffaf426c81039e6e6c0"
+            }
+          },
+          "recorded_at": "2026-11-22T19:45:31.399324149Z",
+          "seal": {
+            "by": "server",
+            "mac": "135f6079b449ba80cd96c4433e8e3dac5c6ede164747f59f3198a610b0d5efe6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Semaphore with try_acquire_owned enforces the 32 limit and drops overflow; verified by reading only, no test fills the permits.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0552"
+          ],
+          "recorded_at": "2026-11-22T19:46:00.433512910Z",
+          "seal": {
+            "by": "server",
+            "mac": "b8dc33b25b91e72dc88637dc6d71ca262306c14a15cb53ec9e8efc45a21da6a5"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T19:44:34.392205800Z",
+      "updated_at": "2026-11-22T19:46:00.433512910Z",
+      "seal": {
+        "by": "server",
+        "mac": "59bcbbd396951ccd89f87be7e2d263b757e5631122f607fce5b9d6b3b34bd131"
+      }
+    },
+    {
+      "id": "CLM-0457",
+      "statement": "The actor (key, source, address, person, operator flag) of a provisioner audit entry is built from the admitted principal before the handler runs, and the lookup outcome is taken from the answer the key was shown.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #423 decision: 'The actor and outcome are fixed at admission'; PR body 'Fixed at admission'",
+      "derived_from": [
+        "CLM-0449"
+      ],
+      "artifacts": [
+        "src/http/api/mod.rs",
+        "src/http/api/people.rs",
+        "src/auth.rs"
+      ],
+      "tags": [
+        "from-issue:423"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0554",
+          "kind": "inspection",
+          "locator": "src/http/api/mod.rs:327-373; src/auth.rs:757-786; src/http/api/people.rs:564-587",
+          "summary": "The gate builds the AdmittedActor from the Principal in the request extensions before next.run(request), using only admission facts (credential, person, label, operator, ip, source); the write runs later in a spawned task using only that value. In list_users the actor also comes from the admitted principal, and the outcome is derived from the records the key is about to be shown (admin users filtered out first). Minor: the 'at' timestamp of a lookup is taken in the handler, not at the gate. No test varies the principal between admission and write.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/auth.rs",
+              "lines": {
+                "start": 757,
+                "end": 786
+              },
+              "commit": "216248c9205977b745c86ffaf426c81039e6e6c0"
+            }
+          },
+          "recorded_at": "2026-11-22T19:45:31.429471572Z",
+          "seal": {
+            "by": "server",
+            "mac": "b7b03d104baeb761324dbc2ae313ea8b944a9ffb7711d4fe530927a3b346b03b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Actor is a value copied from the admitted principal before the handler or write; outcome comes from the answer shown. By reading only, no test varies state between admission and write.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0554"
+          ],
+          "recorded_at": "2026-11-22T19:46:00.463167444Z",
+          "seal": {
+            "by": "server",
+            "mac": "f774f74882294bd84a6fc5d1d1c6b2f4d60df7bd1313c7c0c161e9e69aa88013"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T19:44:34.392205800Z",
+      "updated_at": "2026-11-22T19:46:00.463167444Z",
+      "seal": {
+        "by": "server",
+        "mac": "abde70edb049a37a7146bc1acae7a981b35feda35162d1e9daed3e36b1603196"
+      }
+    },
+    {
+      "id": "CLM-0458",
+      "statement": "A provisioner's GET /users/{name}, GET /teams, GET /teams/{name}, GET /audit and requests that change nothing write no audit entry, and a successful state change still writes exactly one event with no duplicate provisioner entry.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #423 decision: 'Don't add' and 'Nothing duplicates the existing transactional change events'",
+      "derived_from": [
+        "CLM-0449"
+      ],
+      "artifacts": [
+        "src/http/api/mod.rs",
+        "src/http/api/people.rs",
+        "src/http/api/provisioner_tests.rs"
+      ],
+      "tags": [
+        "from-issue:423"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0555",
+          "kind": "inspection",
+          "locator": "src/http/api/mod.rs:327-373; provisioner_tests.rs:761-814 (read, not run)",
+          "summary": "The gate records only refusals (403s); list_users records only when an email was given. Nothing else in the diff calls note_provisioner_use (git grep: 2 call sites). Test: POST /users writes exactly one entry (+1), POST /teams, then GET users/{name}, teams/{name}, teams and a no-op PATCH leave the entry count unchanged and user.looked_up empty. A state change and a provisioner entry cannot coincide because only a 403 refusal writes one. Read only, not run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/provisioner_tests.rs",
+              "lines": {
+                "start": 761,
+                "end": 814
+              },
+              "commit": "216248c9205977b745c86ffaf426c81039e6e6c0"
+            }
+          },
+          "recorded_at": "2026-11-22T19:45:31.462958542Z",
+          "seal": {
+            "by": "server",
+            "mac": "e719f5c6a6f032300f1af377d322f7d63114a03988a1803fe78e2167ecc3ba39"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Only two call sites record, both on refusals or email lookups; the test asserts +1 entry for a change and 0 for reads and a no-op.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0555"
+          ],
+          "recorded_at": "2026-11-22T19:46:00.493004808Z",
+          "seal": {
+            "by": "server",
+            "mac": "0125db01db8a7343a0e02501714b3e7eb1dfeace01dfc5c3abb2e3921f8d07c4"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T19:44:34.392205800Z",
+      "updated_at": "2026-11-22T19:46:00.493004808Z",
+      "seal": {
+        "by": "server",
+        "mac": "a25d74404937b85342cfde341a7b3872cce87bc7c6639e84ad2e27390c648088"
+      }
+    },
+    {
+      "id": "CLM-0459",
+      "statement": "The provisioner allow-list tests are unchanged by the commit (provisioner_tests.rs has only additions) and the PROVISIONER_ROUTES list is unchanged.",
+      "kind": "constraint",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #423 decision: 'the existing provisioner allow-list tests unchanged'",
+      "derived_from": [
+        "CLM-0449"
+      ],
+      "artifacts": [
+        "src/http/api/provisioner_tests.rs",
+        "src/http/api/mod.rs"
+      ],
+      "tags": [
+        "from-issue:423"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0556",
+          "kind": "analysis",
+          "locator": "git diff origin/main..HEAD -- src/http/api/provisioner_tests.rs (numstat 323 added, 0 deleted); git diff -- src/http/api/mod.rs hunk at PROVISIONER_ROUTES",
+          "summary": "numstat shows 323 additions and 0 deletions in provisioner_tests.rs, and the only '-' line is the file header; the_allow_list_is_the_specs_and_names_routes_by_template (318-370) is untouched. The mod.rs diff does not touch PROVISIONER_ROUTES or provisioner_may.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/provisioner_tests.rs",
+              "lines": {
+                "start": 318,
+                "end": 370
+              },
+              "commit": "216248c9205977b745c86ffaf426c81039e6e6c0"
+            }
+          },
+          "recorded_at": "2026-11-22T19:45:31.495446721Z",
+          "seal": {
+            "by": "server",
+            "mac": "c9c2b30758a6fc65f21e02ab1d3eca59e6f74eb22dad4bda2c20d2c2308cc563"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test file diff is additions only and the allow-list is untouched.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0556"
+          ],
+          "recorded_at": "2026-11-22T19:46:00.521167025Z",
+          "seal": {
+            "by": "server",
+            "mac": "c44dac4592fe6cbbd4fe9e3c2e0922ef8f743aba22969dd66d07d4e16e2a3e56"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T19:44:34.392205800Z",
+      "updated_at": "2026-11-22T19:46:00.521167025Z",
+      "seal": {
+        "by": "server",
+        "mac": "985268fabb73e98d0701a9c551bad4d1067825089725d72c92da78e1bafc9ccd"
+      }
+    },
+    {
+      "id": "CLM-0460",
+      "statement": "Operator API design Part 4 and its 'What shipped differently' note say that every state change, every email lookup and every refused request is audited with its key as actor, and other reads and no-ops appear in request traces and metrics.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "Issue #423 decision, Spec paragraph",
+      "derived_from": [
+        "CLM-0449"
+      ],
+      "artifacts": [
+        "docs/superpowers/specs/2026-11-13-okf-operator-api-design.md"
+      ],
+      "tags": [
+        "from-issue:423"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0557",
+          "kind": "inspection",
+          "locator": "docs/superpowers/specs/2026-11-13-okf-operator-api-design.md:225-231 and 627-644",
+          "summary": "Part 4 bullet now reads 'Every state change it makes, every email lookup and every refused request is audited with its key as the actor; other reads and no-op requests appear in request traces and metrics' (the decision's sentence, nearly verbatim) with a dated Reworded note; 'What shipped differently' is rewritten with the same sentence and the bounds. The line-110 summary was also updated.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/specs/2026-11-13-okf-operator-api-design.md",
+              "lines": {
+                "start": 225,
+                "end": 231
+              },
+              "commit": "216248c9205977b745c86ffaf426c81039e6e6c0"
+            }
+          },
+          "recorded_at": "2026-11-22T19:45:31.528835611Z",
+          "seal": {
+            "by": "server",
+            "mac": "4407ab55a57e48b814cf0ffe03aed19e661d27df1817cf6fa030d32a1b45c71c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Spec Part 4 and the shipped-differently note carry the decision's sentence.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0557"
+          ],
+          "recorded_at": "2026-11-22T19:46:00.551017539Z",
+          "seal": {
+            "by": "server",
+            "mac": "349f82c51ca34ad8a21b5df2244302d7c710e718b392418a85ee3afac64e24bd"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T19:44:34.392205800Z",
+      "updated_at": "2026-11-22T19:46:00.551017539Z",
+      "seal": {
+        "by": "server",
+        "mac": "1bc02043b1b8c652c82fa993be92ef4a47fb243f6063f0f9922c43c288480f1e"
+      }
+    },
+    {
+      "id": "CLM-0461",
+      "statement": "docs/operations.md's audit action table has rows for user.looked_up and provisioner.refused, and its provisioner paragraph and bounds text match the code.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "Issue #423 decision: 'Update docs/operations.md's audit action table too'; PR body Docs",
+      "derived_from": [
+        "CLM-0449"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:423"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0558",
+          "kind": "inspection",
+          "locator": "docs/operations.md:1743-1750, 2138-2140, 2150-2185",
+          "summary": "Table rows for user.looked_up and provisioner.refused exist and match the code (target route, hour, outcome, method/route/reason, overflow). Bounds text (50 per hour, overflow per action target '*', 32 pending, prune of counters, no hash) matches record_provisioner_use and app.rs. Nit: 'its other reads (GET /users/{name}, GET /teams, ...)' is accurate; the doc says 'A key opens at most 50 entries an hour' while up to 2 overflow entries come on top (stated as the overflow rule).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 2138,
+                "end": 2140
+              },
+              "commit": "216248c9205977b745c86ffaf426c81039e6e6c0"
+            }
+          },
+          "recorded_at": "2026-11-22T19:45:31.559862996Z",
+          "seal": {
+            "by": "server",
+            "mac": "bacd1cde64a3a39b9ef5faaf217600eac9675868eab2bf7f14d809c6ec53fdcc"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Audit table rows and bounds text match the code.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0558"
+          ],
+          "recorded_at": "2026-11-22T19:46:00.579898400Z",
+          "seal": {
+            "by": "server",
+            "mac": "7c60f371463e97f4f605ab904a45a0a0ffb1d50677815433db4de5db935701c2"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T19:44:34.392205800Z",
+      "updated_at": "2026-11-22T19:46:00.579898400Z",
+      "seal": {
+        "by": "server",
+        "mac": "dcf94c742be80b326eeafff48feae7ac202e771ca0ff208a356c48476e33fd43"
+      }
+    },
+    {
+      "id": "CLM-0462",
+      "statement": "A lookup that matches an admin user is recorded not_found, as the provisioner was shown no user.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body 'A match on an admin user is recorded not_found, as the key was shown.'",
+      "derived_from": [
+        "CLM-0449"
+      ],
+      "artifacts": [
+        "src/http/api/people.rs",
+        "src/http/api/provisioner_tests.rs"
+      ],
+      "tags": [
+        "from-issue:423"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0559",
+          "kind": "inspection",
+          "locator": "src/http/api/people.rs:566-587; provisioner_tests.rs:646-693",
+          "summary": "The records vector is filtered to drop admin users for a provisioner before the lookup is recorded, so matched is None for an admin match. Test makes 'staff' an admin, looks it up by email as the key and asserts one entry with outcome not_found and no person. Read only, not run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/people.rs",
+              "lines": {
+                "start": 564,
+                "end": 587
+              },
+              "commit": "216248c9205977b745c86ffaf426c81039e6e6c0"
+            }
+          },
+          "recorded_at": "2026-11-22T19:45:31.591371932Z",
+          "seal": {
+            "by": "server",
+            "mac": "74b874751751d43464ba7b8a5aceb17f34d89afaf2600e68309f587585c282fc"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Admin filter precedes recording; test asserts not_found.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0559"
+          ],
+          "recorded_at": "2026-11-22T19:46:00.607286924Z",
+          "seal": {
+            "by": "server",
+            "mac": "1a52d096c276bf0701195e31f1889cb7d487141b7fe4eeb272bba6c9c4502663"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T19:44:34.392205800Z",
+      "updated_at": "2026-11-22T19:46:00.607286924Z",
+      "seal": {
+        "by": "server",
+        "mac": "509657325f7226ac9b6e9063aaffb27a5375e18efe5021a25e7806536d615050"
+      }
+    },
+    {
+      "id": "CLM-0463",
+      "statement": "Migration 0031_provisioner_audit.sql adds the target kind 'route' to audit_entries_target_kind_check as NOT VALID, and the new set is a superset of the old one.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body 'Migration 0031_provisioner_audit.sql adds the target kind route (NOT VALID ...)'",
+      "derived_from": [
+        "CLM-0449"
+      ],
+      "artifacts": [
+        "migrations/0031_provisioner_audit.sql",
+        "migrations/0012_audit.sql"
+      ],
+      "tags": [
+        "from-issue:423"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0560",
+          "kind": "inspection",
+          "locator": "migrations/0031_provisioner_audit.sql:11-14 vs migrations/0012_audit.sql:57-58",
+          "summary": "0012 allowed user, team, catalog, key, grant, code, setting, unlock; 0031 drops and re-adds the check with the same eight plus 'route' and NOT VALID. The shape check's ELSE branch requires target_name for 'route'. No other migration changes target_kind.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/0031_provisioner_audit.sql",
+              "lines": {
+                "start": 11,
+                "end": 14
+              },
+              "commit": "216248c9205977b745c86ffaf426c81039e6e6c0"
+            }
+          },
+          "recorded_at": "2026-11-22T19:45:31.624914623Z",
+          "seal": {
+            "by": "server",
+            "mac": "1b0b602271fc213cf03908ac24962b6582a606628a816df5eb2ff08c33b9cb98"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "New check set equals old set plus route; NOT VALID.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0560"
+          ],
+          "recorded_at": "2026-11-22T19:46:00.635565632Z",
+          "seal": {
+            "by": "server",
+            "mac": "1dfd093042b55314ff534fa6e2c1056b386301283864944966060acb53d8b55c"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T19:44:34.392205800Z",
+      "updated_at": "2026-11-22T19:46:00.635565632Z",
+      "seal": {
+        "by": "server",
+        "mac": "1b5cc490da31aef655f0130b43d8c5663bf48482868b8ad599b4579c92f9165a"
+      }
+    },
+    {
+      "id": "CLM-0464",
+      "statement": "audit::prune deletes the provisioner hourly budget counter rows (audit_access_counts rows with no entry) whose hour is before the cut-off, and the Console Audit page shows the request count for user.looked_up and provisioner.refused.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body 'prune_audit removes the hourly budget counter rows'; 'Console Audit page shows the request count for the two new actions'",
+      "derived_from": [
+        "CLM-0449"
+      ],
+      "artifacts": [
+        "src/store/audit.rs",
+        "src/http/ui/js/pages/audit.js"
+      ],
+      "tags": [
+        "from-issue:423"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0561",
+          "kind": "inspection",
+          "locator": "src/store/audit.rs:953-975; test 3295-3335; src/http/ui/js/pages/audit.js:64-72",
+          "summary": "prune first deletes audit_access_counts rows with entry_id IS NULL, bucket part 1 'provcap' and hour (part 3) below the cut-off, then the entries (counts with entries cascade). Test: two counters (old and current hour), prune at old+1 day removes 1 entry and leaves 1 counter. audit.js COUNTED includes both new actions so the request count renders. Fragility: the DELETE casts split_part(bucket,..,3)::bigint and relies on entry_id IS NULL / the 'provcap' test to exclude entry-bound prov buckets, whose third part is text; Postgres does not guarantee qual order, so the cast could in principle error. Not run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit.rs",
+              "lines": {
+                "start": 953,
+                "end": 975
+              },
+              "commit": "216248c9205977b745c86ffaf426c81039e6e6c0"
+            }
+          },
+          "recorded_at": "2026-11-22T19:45:31.659724407Z",
+          "seal": {
+            "by": "server",
+            "mac": "0397d694e6fb02ec303a9c26b8ed955726cc43af1058b28e6e02c4aa0197085f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Prune deletes the counters and the console renders counts for both actions; the prune qual-ordering fragility is a risk, not a failure of the claim. Fix (optional hardening): guard the cast, e.g. use a CASE or a regex check so split_part(...,3)::bigint is only evaluated for rows whose part 1 is 'provcap'.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0561"
+          ],
+          "recorded_at": "2026-11-22T19:46:00.664022521Z",
+          "seal": {
+            "by": "server",
+            "mac": "fe9e6a9b874b5d803634e3d048a585a8f83add6b487a739b6fa402d0566deb05"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T19:44:34.392205800Z",
+      "updated_at": "2026-11-22T19:46:00.664022521Z",
+      "seal": {
+        "by": "server",
+        "mac": "11c5a992fe39e00941183fabe490cd6fbff56d40b291898371c02b0047417c76"
       }
     }
   ]
