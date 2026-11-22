@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 466,
+  "next_claim_seq": 467,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "df016a1f6b7cb74821b2eb829a38ce7cf717b6fa835151d59b247e75779ffadc"
+    "mac": "a65aebc36b09fcbbecbfc5fd8b073d6b65ea749491c4a407e0cf9d384ee1f175"
   },
-  "next_evidence_seq": 578,
+  "next_evidence_seq": 587,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "44ccadc96c6773baf0c2b0c74b1d96c7efe9d606804bfe2fb95551b08ad82fd6"
+    "mac": "715dc342ef1a5ea4eee3bdd8452169f138ae258a9a090d24a685b2b0694d816b"
   },
   "claims": [
     {
@@ -35940,6 +35940,28 @@
             "by": "server",
             "mac": "e87e0752a7fc997229264091bd436052a788383b00c5c98679dad8a2edbcb6d0"
           }
+        },
+        {
+          "id": "EVD-0585",
+          "kind": "inspection",
+          "locator": "src/http/api/provisioner_tests.rs:881-920; src/store/audit.rs:1411-1425",
+          "summary": "The entry INSERT in record_provisioner_use (1411) lists no teams column and sets actor_operator to literal true, so owners' team-scoped view cannot match. Test an_owner_of_the_users_team_never_sees_provisioner_lookups_or_refusals (881-920, read, not run) lists as Viewer::Owner and asserts no user.looked_up or provisioner.refused entry. Content unchanged from the earlier audit; only moved.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/provisioner_tests.rs",
+              "lines": {
+                "start": 881,
+                "end": 920
+              },
+              "commit": "0f9f1d8d644a0331bb6fa82d51d2863a380f18eb"
+            }
+          },
+          "recorded_at": "2026-11-22T20:47:58.980061781Z",
+          "seal": {
+            "by": "server",
+            "mac": "9fd98128a8669f3b3325b42d4e6c3283416e345612e96d2b53d980531f7673a8"
+          }
         }
       ],
       "verdicts": [
@@ -35968,13 +35990,26 @@
             "by": "server",
             "mac": "bfe0bf6a39b2ef43b8f21d46b53b6531e03cf0ec47d1fe81b8b44ebd105aa081"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at HEAD after the lines moved; no teams on insert, owner test asserts invisibility.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0585"
+          ],
+          "recorded_at": "2026-11-22T20:48:04.732399877Z",
+          "seal": {
+            "by": "server",
+            "mac": "c5f3231967e3b2bdfef80e9d1c2839428545debb3bf462753e8678bfde1a4ae0"
+          }
         }
       ],
       "created_at": "2026-11-22T19:44:34.392205800Z",
-      "updated_at": "2026-11-22T20:26:44.210990647Z",
+      "updated_at": "2026-11-22T20:48:04.732399877Z",
       "seal": {
         "by": "server",
-        "mac": "4b46d6cb68fd0396d73c69bf33b172febbb3343724571ab57acd586da4222b40"
+        "mac": "36ccefcdc6a35defe3fa286e109dc205fa9e580c99247eef9eca2470b5ba5dba"
       }
     },
     {
@@ -35997,7 +36032,9 @@
         "from-issue:423"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "Review round 4 of PR #916 (review 6014422841) showed it false at 04c90a0: require_key refused a provisioner on /mcp and the archive routes without recording. Fixed in 0f9f1d8; replaced by a claim that names both refusal points.",
+        "retired_at": "2026-11-22T20:46:08.245358660Z"
       },
       "evidence": [
         {
@@ -36097,10 +36134,10 @@
         }
       ],
       "created_at": "2026-11-22T19:44:34.392205800Z",
-      "updated_at": "2026-11-22T20:26:44.239552092Z",
+      "updated_at": "2026-11-22T20:46:08.245358660Z",
       "seal": {
         "by": "server",
-        "mac": "8d8d9b7ac0cf51e95b9a0e11976bee395b8d8055c0eb19513599fa6cd7621205"
+        "mac": "3eed825d6e1cc2d23373585c6cfd148daef2396488f1f00f93150b780a8aec55"
       }
     },
     {
@@ -36473,6 +36510,28 @@
             "by": "server",
             "mac": "b7b03d104baeb761324dbc2ae313ea8b944a9ffb7711d4fe530927a3b346b03b"
           }
+        },
+        {
+          "id": "EVD-0580",
+          "kind": "inspection",
+          "locator": "src/http/api/mod.rs:316-345,389-420; src/auth.rs:1126-1131",
+          "summary": "AdmittedRefusal::of (336-346) builds the actor via principal.admitted_actor(Requester, clock now) plus method and MatchedPath template into an owned value. provisioner_gate calls it at line 399 before next.run(request) and notes it afterwards from that value; require_key builds it before refusing. The handler cannot alter it. Lookup-outcome half not re-read in this pass (previously audited). Read, not run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/mod.rs",
+              "lines": {
+                "start": 316,
+                "end": 345
+              },
+              "commit": "0f9f1d8d644a0331bb6fa82d51d2863a380f18eb"
+            }
+          },
+          "recorded_at": "2026-11-22T20:47:22.703217578Z",
+          "seal": {
+            "by": "server",
+            "mac": "2e2afab50d0664f264f1a805ba2986b25a336b5061fd81a7f592d9be79f3acae"
+          }
         }
       ],
       "verdicts": [
@@ -36488,13 +36547,26 @@
             "by": "server",
             "mac": "f774f74882294bd84a6fc5d1d1c6b2f4d60df7bd1313c7c0c161e9e69aa88013"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Actor is built in AdmittedRefusal::of before the handler runs; read, not run.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0580"
+          ],
+          "recorded_at": "2026-11-22T20:47:31.574582905Z",
+          "seal": {
+            "by": "server",
+            "mac": "81cbb42140dcd9cfb4d88b1efd8ceaea3c69d3bc1ce1c376c39bb74c8cc33f7b"
+          }
         }
       ],
       "created_at": "2026-11-22T19:44:34.392205800Z",
-      "updated_at": "2026-11-22T19:46:00.463167444Z",
+      "updated_at": "2026-11-22T20:47:31.574582905Z",
       "seal": {
         "by": "server",
-        "mac": "abde70edb049a37a7146bc1acae7a981b35feda35162d1e9daed3e36b1603196"
+        "mac": "59689ba0d021299fd8062cec133bd4b8390d87471bf607fa523594beb6ddf5fa"
       }
     },
     {
@@ -36563,6 +36635,28 @@
             "by": "server",
             "mac": "adcf4c99a2e5578dbaedaf90c55024d3760c818cc1fe2b5f26b3010ad93a7371"
           }
+        },
+        {
+          "id": "EVD-0586",
+          "kind": "inspection",
+          "locator": "src/http/api/provisioner_tests.rs:826-879; git grep note_provisioner_use( src",
+          "summary": "Non-test callers of note_provisioner_use are only AdmittedRefusal::note (mod.rs:363, reached from provisioner_gate on 403s and from require_key's refusal) and list_users (people.rs:580, email lookups). Test a_successful_change_still_writes_exactly_one_event_and_other_reads_none (826-879, read, not run) is the same content as before, moved. The new require_key caller records refusals only, so the claim still holds.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/provisioner_tests.rs",
+              "lines": {
+                "start": 826,
+                "end": 879
+              },
+              "commit": "0f9f1d8d644a0331bb6fa82d51d2863a380f18eb"
+            }
+          },
+          "recorded_at": "2026-11-22T20:47:59.011141405Z",
+          "seal": {
+            "by": "server",
+            "mac": "f8c4599328d48a5c2bd7f0020d1b19f2d2e205859f34682bb1680a97f25a6a94"
+          }
         }
       ],
       "verdicts": [
@@ -36591,13 +36685,26 @@
             "by": "server",
             "mac": "209bae86a72301ce462c0205a8ca4286df68b23cd0a064c1794c26c53ba24037"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at HEAD; only refusals and email lookups write; the new require_key caller records refusals only.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0586"
+          ],
+          "recorded_at": "2026-11-22T20:48:04.759851348Z",
+          "seal": {
+            "by": "server",
+            "mac": "0f50dd27a58cd90188512fb625e239e8d9a2a5231e5d4fe621367fb7f59e36d6"
+          }
         }
       ],
       "created_at": "2026-11-22T19:44:34.392205800Z",
-      "updated_at": "2026-11-22T20:26:44.352579579Z",
+      "updated_at": "2026-11-22T20:48:04.759851348Z",
       "seal": {
         "by": "server",
-        "mac": "8af2fac96f56dda9a21b2b841eec5b75136a76eda0ecae463b1c73f0f127a75d"
+        "mac": "53ffbf2ebda70f0e928afaa39af9b1b18391e1e183fd637a719b065f6298f955"
       }
     },
     {
@@ -36643,6 +36750,28 @@
             "by": "server",
             "mac": "c9c2b30758a6fc65f21e02ab1d3eca59e6f74eb22dad4bda2c20d2c2308cc563"
           }
+        },
+        {
+          "id": "EVD-0581",
+          "kind": "analysis",
+          "locator": "git diff origin/main -- src/http/api/provisioner_tests.rs; git diff origin/main -- src/http/api/mod.rs",
+          "summary": "git diff --stat origin/main shows provisioner_tests.rs 453 insertions, 0 deletions (no '-' body lines). The mod.rs diff has no added or removed (METHOD, template) tuple lines, so the 20-entry PROVISIONER_ROUTES (270-291) is unchanged; only doc comments and gate code changed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/mod.rs",
+              "lines": {
+                "start": 270,
+                "end": 291
+              },
+              "commit": "0f9f1d8d644a0331bb6fa82d51d2863a380f18eb"
+            }
+          },
+          "recorded_at": "2026-11-22T20:47:22.736174957Z",
+          "seal": {
+            "by": "server",
+            "mac": "f2dd3deb87ad8b8ad03a4d4ab588875b3f3044f085a0447b6e6addff5938c0a0"
+          }
         }
       ],
       "verdicts": [
@@ -36658,13 +36787,26 @@
             "by": "server",
             "mac": "c44dac4592fe6cbbd4fe9e3c2e0922ef8f743aba22969dd66d07d4e16e2a3e56"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Test file diff is additions only (453+, 0-); route tuples untouched.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0581"
+          ],
+          "recorded_at": "2026-11-22T20:47:31.599436917Z",
+          "seal": {
+            "by": "server",
+            "mac": "14a076dbf4ba8b04aabcf04f92bd1d553c18b000ef58198364ccdc3abffc96c5"
+          }
         }
       ],
       "created_at": "2026-11-22T19:44:34.392205800Z",
-      "updated_at": "2026-11-22T19:46:00.521167025Z",
+      "updated_at": "2026-11-22T20:47:31.599436917Z",
       "seal": {
         "by": "server",
-        "mac": "985268fabb73e98d0701a9c551bad4d1067825089725d72c92da78e1bafc9ccd"
+        "mac": "26914713e20f0683e37a306b6742889b89fb097ad2be59272551ea7e99ad8abd"
       }
     },
     {
@@ -36709,6 +36851,28 @@
             "by": "server",
             "mac": "4407ab55a57e48b814cf0ffe03aed19e661d27df1817cf6fa030d32a1b45c71c"
           }
+        },
+        {
+          "id": "EVD-0582",
+          "kind": "inspection",
+          "locator": "docs/superpowers/specs/2026-11-13-okf-operator-api-design.md:225-231 and 627-644",
+          "summary": "Part 4 bullet (225-231) says every state change, every email lookup and every refused request is audited with the key as actor, other reads and no-ops in traces and metrics. 'What shipped differently' (627-644) repeats it and names refusals from the API gate, MCP and archive routes, or a handler's 403, matching the code at HEAD.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/specs/2026-11-13-okf-operator-api-design.md",
+              "lines": {
+                "start": 225,
+                "end": 231
+              },
+              "commit": "0f9f1d8d644a0331bb6fa82d51d2863a380f18eb"
+            }
+          },
+          "recorded_at": "2026-11-22T20:47:22.769605168Z",
+          "seal": {
+            "by": "server",
+            "mac": "22fa279f02df91f21c16c7537e97a52fa10964551072ffdcd39ae4b56c778bc5"
+          }
         }
       ],
       "verdicts": [
@@ -36724,13 +36888,26 @@
             "by": "server",
             "mac": "349f82c51ca34ad8a21b5df2244302d7c710e718b392418a85ee3afac64e24bd"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Spec text matches the claim and the code.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0582"
+          ],
+          "recorded_at": "2026-11-22T20:47:31.629060246Z",
+          "seal": {
+            "by": "server",
+            "mac": "9e476adde5837124384a695518f6ca0efa5fdc886bc1726a87289ee8e7db3630"
+          }
         }
       ],
       "created_at": "2026-11-22T19:44:34.392205800Z",
-      "updated_at": "2026-11-22T19:46:00.551017539Z",
+      "updated_at": "2026-11-22T20:47:31.629060246Z",
       "seal": {
         "by": "server",
-        "mac": "1bc02043b1b8c652c82fa993be92ef4a47fb243f6063f0f9922c43c288480f1e"
+        "mac": "f51c7b968ffdf31553a62153bbfec9f984ba5219eb86c2e4e2010497174ff46a"
       }
     },
     {
@@ -36797,6 +36974,28 @@
             "by": "server",
             "mac": "cb6c970e50fb0f58fe5adada3cedd4070bb46103dc843bbdc7ddbe32749bbc4f"
           }
+        },
+        {
+          "id": "EVD-0583",
+          "kind": "inspection",
+          "locator": "docs/operations.md:1743-1750, 2139-2140",
+          "summary": "Row 2140 says provisioner.refused covers off-list routes (API gate, plus /mcp and archive export/import via require_key) and any other 403 from an allow-listed route, with method/route/reason (route_not_allowed|forbidden); this matches provisioner_gate and require_key at HEAD. Paragraph 1743-1750 matches (refusals audited; GET /users/{name}, /teams, /audit unaudited). Row 2139 for user.looked_up unchanged from prior audit. Read, not run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 2139,
+                "end": 2140
+              },
+              "commit": "0f9f1d8d644a0331bb6fa82d51d2863a380f18eb"
+            }
+          },
+          "recorded_at": "2026-11-22T20:47:22.803676131Z",
+          "seal": {
+            "by": "server",
+            "mac": "be04ed3f6fb77b8841b93eb32958fa67a5c502f31946003c3d2df30f8f0c9e8d"
+          }
         }
       ],
       "verdicts": [
@@ -36825,13 +37024,26 @@
             "by": "server",
             "mac": "ea24b58d2c8ca899aa607eca3732c11b217420806db038894bad9a89fc1ecf0e"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Doc rows and paragraphs match the code at HEAD.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0583"
+          ],
+          "recorded_at": "2026-11-22T20:47:31.657996963Z",
+          "seal": {
+            "by": "server",
+            "mac": "424efafcdb75fbc188ea967792d566b6044e1dbf1eb979070ff225f171a3dd17"
+          }
         }
       ],
       "created_at": "2026-11-22T19:44:34.392205800Z",
-      "updated_at": "2026-11-22T20:26:44.125257170Z",
+      "updated_at": "2026-11-22T20:47:31.657996963Z",
       "seal": {
         "by": "server",
-        "mac": "0c7bd9ec02a7e341eed0397c26604bf253801af77ef609466f37c2fa4af92689"
+        "mac": "0e51e3059dd84f6a0ea6577388be3a048d04ca117ca3502a35adf7975797ba06"
       }
     },
     {
@@ -37212,6 +37424,28 @@
             "by": "server",
             "mac": "0d63ba9cd4df4f0ae3f548a0933aab5f4670f51101f62c9a76c76748a6bcad98"
           }
+        },
+        {
+          "id": "EVD-0584",
+          "kind": "inspection",
+          "locator": "src/store/audit.rs:953-1000; src/housekeeping.rs:596-615",
+          "summary": "At HEAD 0f9f1d8: audit::prune (953-959) only deletes audit_entries by retention cut-off. prune_budget_counters (982-998) deletes audit_access_counts rows with entry_id IS NULL whose provcap bucket's hour-start (third part) < now - 2h, i.e. hour ended over an hour before now, independent of retention. prune_audit (housekeeping 596-615) calls both, the second with the server clock. audit.js COUNTED (EVD-0575) unchanged by this pass. Read, not run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit.rs",
+              "lines": {
+                "start": 953,
+                "end": 998
+              },
+              "commit": "0f9f1d8d644a0331bb6fa82d51d2863a380f18eb"
+            }
+          },
+          "recorded_at": "2026-11-22T20:47:58.945138502Z",
+          "seal": {
+            "by": "server",
+            "mac": "e82a6a378468f57cc7d87020f0691febf62e114fe653bf41065cf4216714a36b"
+          }
         }
       ],
       "verdicts": [
@@ -37230,13 +37464,119 @@
             "by": "server",
             "mac": "dea1f123d07e86f8cde4205a77d621c77ab883cd1223ee01a0d9607b39f306e1"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at HEAD; prune/prune_budget_counters/prune_audit match the claim.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0584",
+            "EVD-0575"
+          ],
+          "recorded_at": "2026-11-22T20:48:04.705317007Z",
+          "seal": {
+            "by": "server",
+            "mac": "43c8c53ddfd3b6b72af357542ff143f5a1df51d4afa56b1459ef33aec37cec13"
+          }
         }
       ],
       "created_at": "2026-11-22T20:24:26.126081250Z",
-      "updated_at": "2026-11-22T20:31:22.563483819Z",
+      "updated_at": "2026-11-22T20:48:04.705317007Z",
       "seal": {
         "by": "server",
-        "mac": "eda999b2da39b9f8dafc0edd1cd3d2f56d936767ec2c73343b8302728c671a64"
+        "mac": "b2e3f362c0f2c440eaf016b04fa262e421e6ee329dff4b4de60797822c38274c"
+      }
+    },
+    {
+      "id": "CLM-0466",
+      "statement": "Every 403 returned to a provisioner key writes a provisioner.refused entry (through the bounded background path) holding the method (standard method else OTHER), the matched route template and a stable code, and never the literal path, query or body: from provisioner_gate on /api/v1 (route_not_allowed for a route off the allow-list, forbidden for a handler's or store check's 403) and from require_key on /mcp, /catalogs/{name}/export and /catalogs/{name}/import (route_not_allowed); require_principal and require_key are the only middleware that authenticate a bearer key.",
+      "kind": "security",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #423 decision (2026-11-20) item 2; PR #916 description; review 6014422841",
+      "derived_from": [
+        "CLM-0449"
+      ],
+      "artifacts": [
+        "src/http/api/mod.rs",
+        "src/auth.rs",
+        "src/http/mod.rs",
+        "src/http/api/provisioner_tests.rs"
+      ],
+      "tags": [
+        "from-issue:423"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0578",
+          "kind": "inspection",
+          "locator": "src/http/api/mod.rs:389-420; src/auth.rs:1114-1148; src/http/mod.rs:398-416,454-455; src/http/console_session.rs:461-520",
+          "summary": "Whole surface read at HEAD 0f9f1d8. (1) Bearer authentication outside tests happens only in require_key (auth.rs:1121) and require_principal (console_session.rs:469); other authenticate( calls are in cfg(test) (oauth/access.rs from line 377, auth.rs tests). (2) router: /mcp and archive export/import sit behind keyed route_layer(require_key); everything under /api/v1 behind route_layer(provisioner_gate) inside route_layer(require_principal) (gate runs after principal is set); healthz, ui, oauth, signin, passkeys, oidc take no bearer. (3) require_key admits a provisioner only to refuse it 403 and note RouteNotAllowed via AdmittedRefusal::of (MatchedPath set since route_layer). (4) provisioner_gate: non-allow-listed -> 403 + RouteNotAllowed; allow-listed -> any response status == 403 recorded as Forbidden. (5) require_principal's only own 403 is the cookie CSRF check, reachable only for sessions (never a provisioner key; bearer wins). Outer layers (check_settings, apply_own_writes, request_telemetry, TraceLayer, api_headers) produce no 403. Unmatched API paths 404 (route_layer skipped). Record is method/matched template/code only. Caveats not gaps: write dropped past 32 pending (documented bound); record skipped if no MatchedPath (never true on these routes). Read, not run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/mod.rs",
+              "lines": {
+                "start": 389,
+                "end": 420
+              },
+              "commit": "0f9f1d8d644a0331bb6fa82d51d2863a380f18eb"
+            }
+          },
+          "recorded_at": "2026-11-22T20:47:22.635243223Z",
+          "seal": {
+            "by": "server",
+            "mac": "5575575ca55df57060ec8ef6bb6dac6b05451705e4dbdcce29ce099f019526c4"
+          }
+        },
+        {
+          "id": "EVD-0579",
+          "kind": "test",
+          "locator": "src/http/api/provisioner_tests.rs:700-748,751-806",
+          "summary": "Read, not run. a_refused_route_is_audited_by_template_method_and_a_stable_code: an off-list route and a handler-refused allow-listed route both 403, entries carry method/template/reason (route_not_allowed, forbidden), no literal path or query secret stored. a_refusal_on_mcp_or_an_archive_route_is_audited_like_an_api_one: GET export, POST import, POST /mcp all 403, targets are the templates, reason route_not_allowed, requests == 1, no secret or literal path stored.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/provisioner_tests.rs",
+              "lines": {
+                "start": 700,
+                "end": 806
+              },
+              "commit": "0f9f1d8d644a0331bb6fa82d51d2863a380f18eb"
+            }
+          },
+          "recorded_at": "2026-11-22T20:47:22.669843798Z",
+          "seal": {
+            "by": "server",
+            "mac": "d3b4321f4cb5ea238c2e3c46caa7a2bb4f8cdc79b80140241b474a7f8312ba70"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Every bearer-authenticating path (require_key, require_principal) was traced; each 403 to a provisioner passes provisioner_gate or require_key, both recording method, template and a stable code. No outer layer or other route yields a 403 to a provisioner. Tests read, not run.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0578",
+            "EVD-0579"
+          ],
+          "recorded_at": "2026-11-22T20:47:31.548257538Z",
+          "seal": {
+            "by": "server",
+            "mac": "7060f735cc77fc03aed6ecdb8e9828b5ad8aa00b06de00fff74358fcac32a73b"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T20:46:08.278612097Z",
+      "updated_at": "2026-11-22T20:47:31.548257538Z",
+      "seal": {
+        "by": "server",
+        "mac": "b7e6440689520274eb2c21cffa23a00f36b4fbc7fd20c3fc76ee6beeba7654c6"
       }
     }
   ]
