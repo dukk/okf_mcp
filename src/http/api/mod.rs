@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use crate::http::AppError;
-use axum::extract::{MatchedPath, Request};
+use axum::extract::{MatchedPath, Request, State};
 use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::middleware;
 use axum::middleware::Next;
@@ -22,6 +22,9 @@ use crate::error::OkfError;
 use crate::http::console_session::require_principal;
 use crate::http::requester::Requester;
 use crate::mcp::context::ToolContext;
+use crate::store::audit::{
+    standard_method, AdmittedActor, ProvisionerEvent, ProvisionerUse, RefusalReason,
+};
 use crate::store::catalogs::CatalogRow;
 use crate::store::keys::Access;
 
@@ -99,7 +102,10 @@ pub(crate) fn routes(app: &Arc<App>) -> Router<Arc<App>> {
         .merge(crate::http::oidc::api_routes())
         // `route_layer` covers the routes merged above and runs only when one
         // matched, so an unknown API path stays 404 rather than 401.
-        .route_layer(middleware::from_fn(provisioner_gate))
+        .route_layer(middleware::from_fn_with_state(
+            Arc::clone(app),
+            provisioner_gate,
+        ))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(app),
             require_principal,
@@ -305,31 +311,112 @@ pub(crate) fn provisioner_may(method: &Method, template: &str) -> bool {
         .any(|(allowed, route)| method.as_str() == *allowed && template == *route)
 }
 
+/// What a provisioner refusal records about a request, fixed when it is let
+/// in: the key as actor, the normalized method and the matched route
+/// template (never the literal path, query or body).
+#[derive(Debug, Clone)]
+pub(crate) struct AdmittedRefusal {
+    actor: AdmittedActor,
+    method: &'static str,
+    route: Option<String>,
+}
+
+impl AdmittedRefusal {
+    /// The refusal context of `request`, made by `principal`, now.
+    ///
+    /// # Arguments
+    /// * `app` - the application (its clock).
+    /// * `principal` - the provisioner.
+    /// * `request` - the request, after routing (so `MatchedPath` is set)
+    ///   and after its client address was taken.
+    ///
+    /// # Returns
+    /// The context; its route is `None` when no route matched.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) fn of(app: &App, principal: &Principal, request: &Request) -> Self {
+        Self {
+            actor: principal.admitted_actor(
+                &Requester::of_extensions(request.extensions()),
+                app.clock().now(),
+            ),
+            method: standard_method(request.method().as_str()),
+            // `MatchedPath` holds the full template, `/api/v1` prefix included.
+            route: request
+                .extensions()
+                .get::<MatchedPath>()
+                .map(|path| path.as_str().to_string()),
+        }
+    }
+
+    /// Records the refusal as a `provisioner.refused` entry in the
+    /// background ([`App::note_provisioner_use`]); nothing when no route
+    /// matched.
+    ///
+    /// # Arguments
+    /// * `app` - the application.
+    /// * `reason` - the stable refusal code.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) fn note(self, app: &App, reason: RefusalReason) {
+        let Some(route) = self.route else {
+            return;
+        };
+        app.note_provisioner_use(ProvisionerUse {
+            actor: self.actor,
+            event: ProvisionerEvent::Refused {
+                method: self.method,
+                route,
+                reason,
+            },
+        });
+    }
+}
+
 /// axum middleware, inside `require_principal`: refuses a provisioner on
-/// every route that is not in [`PROVISIONER_ROUTES`].
+/// every route that is not in [`PROVISIONER_ROUTES`], and records every
+/// refusal of a provisioner, this one or a handler's, as a
+/// `provisioner.refused` entry ([`AdmittedRefusal`]). A refusal is a 403.
+/// `require_key` records its own refusals of a provisioner (MCP and the
+/// archive routes) the same way.
+///
+/// # Arguments
+/// * `app` - the application, which records the refusal in the background.
+/// * `request` - the request.
+/// * `next` - the route.
 ///
 /// # Returns
 /// The route's response, or 403.
 #[tracing::instrument(level = "debug", skip_all)]
-async fn provisioner_gate(request: Request, next: Next) -> Response {
-    let provisioner = request
+async fn provisioner_gate(State(app): State<Arc<App>>, request: Request, next: Next) -> Response {
+    let Some(principal) = request
         .extensions()
         .get::<Arc<Principal>>()
-        .is_some_and(|principal| principal.provisioner);
-    // `MatchedPath` holds the template with the `/api/v1` prefix (verified facts).
-    let allowed = {
-        request
-            .extensions()
-            .get::<MatchedPath>()
-            .is_some_and(|path| provisioner_may(request.method(), path.as_str()))
+        .filter(|principal| principal.provisioner)
+        .cloned()
+    else {
+        return next.run(request).await;
     };
-    if provisioner && !allowed {
-        return AppError(OkfError::Forbidden {
+    // The actor as admission saw it, before the handler can change anything.
+    let refusal = AdmittedRefusal::of(&app, &principal, &request);
+    let allowed = refusal
+        .route
+        .as_deref()
+        .is_some_and(|template| provisioner_may(request.method(), template));
+    let (response, reason) = if allowed {
+        let response = next.run(request).await;
+        let reason =
+            (response.status() == StatusCode::FORBIDDEN).then_some(RefusalReason::Forbidden);
+        (response, reason)
+    } else {
+        let refused = AppError(OkfError::Forbidden {
             reason: "a provisioner key may not call this route".to_string(),
         })
         .into_response();
+        (refused, Some(RefusalReason::RouteNotAllowed))
+    };
+    if let Some(reason) = reason {
+        refusal.note(&app, reason);
     }
-    next.run(request).await
+    response
 }
 
 /// Refuses all but a provisioner or an admin that reaches every catalog:

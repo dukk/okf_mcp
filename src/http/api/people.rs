@@ -53,11 +53,12 @@ use crate::http::api::oauth::SignInCodeView;
 use crate::http::api::{
     owner_session, require_admin, require_every_catalog, require_manager, require_reader,
 };
+use crate::http::requester::Requester;
 use crate::http::AppError;
 use crate::labels::directory::{Labels, Wanted};
 use crate::labels::{team_label, user_label, DisplayName};
 use crate::mail::invite;
-use crate::store::audit::AuditActor;
+use crate::store::audit::{AuditActor, ProvisionerEvent, ProvisionerUse};
 use crate::store::ceiling::{self, Entitlement, EntitlementRef, NewEntitlement};
 use crate::store::keys::{self as key_rows, Access};
 use crate::store::oauth::codes;
@@ -104,6 +105,7 @@ impl From<UserRecord> for UserView {
         // Destructuring names every field, so one added to the record later
         // fails to compile here until someone decides whether to show it.
         let UserRecord {
+            id: _,
             name,
             display_name,
             created_at,
@@ -547,6 +549,7 @@ fn change_name(change: MemberChange) -> &'static str {
 async fn list_users(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
+    requester: Requester,
     Query(query): Query<UserQuery>,
 ) -> Result<Json<UserList>, AppError> {
     require_reader(&principal)?;
@@ -558,6 +561,7 @@ async fn list_users(
         }
         .into());
     }
+    let looked_up = query.email.is_some();
     let records = match query.email {
         Some(email) => users::find_record_by_email(app.pool(), &email)
             .await?
@@ -565,11 +569,22 @@ async fn list_users(
             .collect(),
         None => users::list(app.pool()).await?,
     };
-    let users = records
+    // An admin user is left out for a provisioner, so it counts as not found.
+    let records: Vec<UserRecord> = records
         .into_iter()
         .filter(|user| !(principal.provisioner && user.is_admin))
-        .map(UserView::from)
         .collect();
+    if principal.provisioner && looked_up {
+        // The outcome and the matched user, never the address: the entry
+        // is recorded in the background, from what this answer shows.
+        app.note_provisioner_use(ProvisionerUse {
+            actor: principal.admitted_actor(&requester, app.clock().now()),
+            event: ProvisionerEvent::Lookup {
+                matched: records.first().map(|user| user.id.clone()),
+            },
+        });
+    }
+    let users = records.into_iter().map(UserView::from).collect();
     Ok(Json(UserList { users }))
 }
 

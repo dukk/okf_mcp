@@ -1740,10 +1740,12 @@ Protect it like an admin key: it can take over any non-admin account by changing
 its email and sending a setup link. It cannot act on admin users: lookup leaves
 them out, detail refuses them, and mutations check the live flag under the user
 row lock. User detail never shows key, grant or sign-in-code lists to a
-provisioner; the user view retains their aggregate count. Administrative state
-changes are audited with its key as actor; metadata reads, unchanged operations
-and refusals do not themselves create use-log entries (the design asked for
-every use to be recorded; #423 tracks that gap). Team and catalog
+provisioner; the user view retains their aggregate count. Every state change
+it makes, every email lookup and every refused request is audited with its key
+as actor; its other reads (`GET /users/{name}`, `GET /teams`, `GET /teams/{name}`,
+`GET /audit`) and its requests that change nothing appear in request traces and
+metrics, not in the audit log (see the `user.looked_up` and `provisioner.refused`
+rows of the [audit log](#audit-log) table; #423). Team and catalog
 management remains server-wide, as the allow-list specifies; the admin-target
 refusal applies to named user operations and membership/initial-owner targets.
 
@@ -2133,6 +2135,9 @@ of `docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`).
 | **Data access** | | |
 | `catalog.exported` | Every export, whoever asks: `okf-mcp export` (source `cli`), `GET /catalogs/{name}/export` and its `/api/v1` twin, the console. Written before the archive is compressed; an export whose entry cannot be written fails. A refused export records nothing | `generation` (the one the archive holds), `files`, `catalog_id`; the entry belongs to the team that owned the catalog when it was read |
 | `catalog.admin_read` | An admin credential reads a catalog's contents (MCP read tools, a changeset read, the console's and the API's browse, history and search routes) and its user is not in the catalog's owner team; a key with no user always counts. One entry per credential (or session user), catalog identity, owning team and clock hour, with an exact request count; members' reads, writes (recorded as publishes) and paths that read no contents (listing catalogs or changesets, opening a changeset, the connection's catalog list) record nothing. Only the catalogs a call actually reads count: a read that answers from the first catalog of a connection's list records only that one | `hour` (its start), `catalog_id` (the catalog's immutable id), and the request count |
+| **Provisioner use** | | |
+| `user.looked_up` | A provisioner key looks a user up by email (`GET /api/v1/users?email=`). One entry per key, outcome, matched user and clock hour, with an exact request count. A found user is the entry's person; no match, and an admin user (which a provisioner is never shown), is `not_found` with the route as the target (`GET /api/v1/users`). The address is never stored, not even hashed. No team's owners see it: it belongs to no team, and its actor is an operator. The provisioner's other reads and its requests that change nothing record nothing | `outcome` (`found` or `not_found`), `hour` (its start), and the request count; `overflow` for the hour's overflow entry (below) |
+| `provisioner.refused` | A request by a provisioner key is refused: a route outside its allow-list (a 403 from the API's gate, or from MCP and the archive routes, `/mcp` and `/catalogs/{name}/export` and `/import`, which never take a provisioner key), or an allow-listed route its handler or a store check refuses (any other 403: a listing with no `email`, an admin user as the target). One entry per key, method, route template, reason and clock hour, with an exact request count. The target is the route (`GET /api/v1/keys`); no team's owners see it | `method` (a standard method, else `OTHER`), `route` (the matched template, never the literal path, query or body), `reason` (`route_not_allowed` or `forbidden`), `hour`, and the request count; `overflow` for the hour's overflow entry (below) |
 | **Unlocks and maintenance passes** | | |
 | `catalog.unlocked` | An admin unlocks a catalog (`unlock create`, `POST /api/v1/unlocks`, the console's Unlock). The entry's person is the unlocked admin, marked operator, so owners see neither who it was nor the reason. A refused unlock records nothing | `unlock` (its id), `category`, `reason` (removed for owners), `starts`, `expires` |
 | `catalog.unlock_ended` | An admin ends a live unlock early (`unlock end`, `DELETE /api/v1/unlocks/{id}`, Unlocks → End); its person is the unlock's admin, as above. An unlock that simply expires records nothing more, and ending one already ended or expired is refused and records nothing | `unlock` |
@@ -2145,8 +2150,39 @@ the CLI records its operating-system actor. Secrets and hashes never enter
 entry details. New credentials get their audit reference in the creation
 transaction. An older credential's first reference resolution can wait on
 another first resolver; existing-reference refreshes skip locked rows.
-These credential-change entries do not claim to record every provisioner
-request (the separate every-use design work remains outstanding).
+These credential-change entries do not record every provisioner request:
+its lookups and refusals are recorded as above, and its other reads and
+no-op requests stay in request traces and metrics.
+
+Provisioner lookups and refusals are written off the request path too,
+with the key (its `audit_credentials` id), source and address fixed when the
+request is let in, and bounded so a scripted flood cannot fill the log:
+
+- Repeats collapse. Within a clock hour one entry per key and kind of event
+  (a lookup's outcome and matched user; a refusal's method, route template
+  and reason) counts every request exactly, in the way `catalog.admin_read`
+  does.
+- A key opens at most 50 entries an hour. Further kinds that hour count in
+  one overflow entry per action, target `*`, with `details.overflow` set;
+  the entry for a kind already opened keeps counting in its own entry. The
+  budget's counter rows are removed by the daily `prune_audit` job once
+  their hour ended over an hour before (a grace for a lagging replica
+  clock), not kept for the audit retention period: they gate only their
+  own hour, and the entries hold the counts.
+- At most 32 such writes are pending on a replica; a request that finds them
+  all busy loses its count (a debug event says so) rather than queueing
+  without bound. A failed write is logged and never fails the request.
+
+An email lookup stores no part of the address, not even a hash. A found
+lookup already names the user it matched, and a not-found one has no user to
+name, so nothing needs to correlate repeated lookups of one address. A keyed
+hash (under `server_keys`) would only add a value that links lookups of the
+same unknown address, with nothing in the log to use it for, and a key to
+rotate.
+A team's owners never see these entries: they belong to no team, and the
+actor is an operator, whom owners see only as "an operator". Admins see
+them, and a provisioner key reading `GET /api/v1/audit` sees the ones it
+wrote.
 
 Admin reads are counted off the request path: the server notes each
 catalog at most once per request and writes the count in the background,

@@ -3356,6 +3356,11 @@ git commit -m "feat(audit): record team, membership, suspension, catalog and imp
 > skip-locked, not all resolver calls nonblocking. `0015_provisioner.sql` is
 > unchanged. The provisioner every-use audit design gap is tracked by #423,
 > not implemented or claimed complete here.
+>
+> > **Corrected (issue #423, 2026-11-22).** Resolved: the spec's Part 4 now
+> > says every state change, every email lookup and every refused request is
+> > audited, and the other reads and no-ops are not (`user.looked_up` and
+> > `provisioner.refused`, migration `0031_provisioner_audit.sql`).
 
 > **Corrected (issue #398, 2026-11-15).** `grant_by_id` and `ungrant_by_id`
 > take an exact id, so they reach an OAuth grant too: like revoke and

@@ -61,10 +61,14 @@ function targetCell(entry, admin) {
         name && person ? [' ', h('span', { class: 'muted small' }, personLabel ?? person)] : null);
 }
 
-// The details: a count for an admin read, a word for a maintenance run, then
-// the stored JSON (already redacted for owners), or "-" when there is none.
+// Actions whose repeats collapse into one entry per hour, with the request
+// count beside it.
+const COUNTED = ['catalog.admin_read', 'user.looked_up', 'provisioner.refused'];
+
+// The details: a count for a collapsed entry, a word for a maintenance run,
+// then the stored JSON (already redacted for owners), or "-" when there is none.
 function detailsCell(entry) {
-    const summary = entry.action === 'catalog.admin_read' ? count(entry.requests ?? 0, 'request')
+    const summary = COUNTED.includes(entry.action) ? count(entry.requests ?? 0, 'request')
         : entry.action === 'catalog.maintenance_run' ? 'maintenance ran'
             : null;
     const details = entry.details && Object.keys(entry.details).length

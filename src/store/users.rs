@@ -31,6 +31,8 @@ pub struct NewUser<'a> {
 // `sqlx::FromRow` maps a result row's columns onto the fields by name.
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct UserRecord {
+    /// `users.id`, for the audit log; never shown (see `UserView`).
+    pub id: String,
     /// Its name.
     pub name: String,
     /// Its display name (may be empty).
@@ -72,7 +74,7 @@ pub struct UserAuth {
 // column's type plain for every reader.
 macro_rules! select_users {
     () => {
-        "SELECT u.name, u.display_name, u.created_at, \
+        "SELECT u.id, u.name, u.display_name, u.created_at, \
                 (SELECT count(*) FROM api_keys k WHERE k.user_id = u.id) \
               + (SELECT count(*) FROM sign_in_codes s WHERE s.user_id = u.id) AS credentials, \
                 COALESCE((SELECT array_agg(t.name ORDER BY t.name) FROM team_members m \
@@ -268,6 +270,7 @@ pub async fn create(
     audit::team_ref(&mut tx, new.name).await?;
     tx.commit().await?;
     Ok(UserRecord {
+        id: user_id,
         name: new.name.to_string(),
         display_name: new.display_name.as_str().to_string(),
         created_at: now,
