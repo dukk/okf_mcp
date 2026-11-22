@@ -1150,6 +1150,16 @@ async fn begin_entitlement(
         Err(error) => return Err(error),
     };
     let team = catalogs::lock_shared_team_owner(&mut tx, catalog, owner, not_team_owner).await?;
+    let user_id = user_id.ok_or_else(not_team_member)?;
+    // The user's membership row under a share lock, so a removal waits.
+    let member: Option<i32> = sqlx::query_scalar(
+        "SELECT 1 FROM team_members WHERE team_id = $1 AND user_id = $2 FOR SHARE",
+    )
+    .bind(&team)
+    .bind(&user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    member.ok_or_else(not_team_member)?;
     // The catalog row under a share lock: a move to another team waits for
     // this change, and one that happened since the membership was read is
     // refused.
@@ -1162,16 +1172,6 @@ async fn begin_entitlement(
         Some((id, owner_team)) if owner_team.as_deref() == Some(team.as_str()) => id,
         _ => return Err(not_team_owner()),
     };
-    let user_id = user_id.ok_or_else(not_team_member)?;
-    // The user's membership row under a share lock, so a removal waits.
-    let member: Option<i32> = sqlx::query_scalar(
-        "SELECT 1 FROM team_members WHERE team_id = $1 AND user_id = $2 FOR SHARE",
-    )
-    .bind(&team)
-    .bind(&user_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-    member.ok_or_else(not_team_member)?;
     Ok((tx, user_id, catalog_id))
 }
 
