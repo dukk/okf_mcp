@@ -1408,7 +1408,7 @@ extensions). One trace shows the request, the tool call and, with a raised
 `traces_filter`, the tool's own spans. The request span stays a root: the
 caller's `traceparent` is a link only. The request span's exported duration can
 cover the tool call. `initialize`, `tools/list` and notifications never reach a
-tool, so their traces hold the request span alone.
+tool, so at the default `info` filter their traces hold the request span alone.
 
 | Span | Attributes |
 |---|---|
