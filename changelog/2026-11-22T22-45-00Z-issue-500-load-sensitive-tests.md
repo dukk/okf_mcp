@@ -18,6 +18,12 @@ Each test on the issue was read against the code first. Some were already fixed,
 ## The sign-in page's empty response
 The `ERR_EMPTY_RESPONSE` and connection resets on `/signin` were reproduced (a stress run on 4 cores with 16 busy loops) and traced. The journeys open `http://localhost:<port>`, and Chromium tries `::1` before `127.0.0.1`. The test server binds `127.0.0.1` on a port the OS picks looking only at IPv4, and the same number can be a listener of another process on `[::]` only (a container engine's port proxy publishes each port on both families, and some outlive their container). That listener, not the server, then answers the browser. It does not depend on load; it depends on how many such listeners exist, and a busy machine running many test containers has more. `curl http://localhost:<port>/` against a `127.0.0.1` server on such a port gives "Empty reply from server" while `127.0.0.1` works.
 
+Evidence, from the stress run that failed (run 3, 4 cores, 16 busy loops, before the rule existed):
+- The journey's error was `open the sign-in page: Message("Page.goto: net::ERR_EMPTY_RESPONSE at http://localhost:43227/signin")`.
+- `ss -ltn` on the machine showed `[::]:43227` listening and nothing on `0.0.0.0:43227`, so the kernel could hand `127.0.0.1:43227` to the test server.
+- Binding `127.0.0.1:43227` in a script and requesting it: `curl http://127.0.0.1:43227/` returned the page, and `curl http://localhost:43227/` failed with "Empty reply from server".
+- Not run: a direct trace of Chromium's address order. That it tries `::1` first is the reading consistent with the above and with the regression test below, which fails without the rule.
+
 - `tests/ui_e2e/harness.rs`: Chromium launches with `--host-resolver-rules=MAP localhost 127.0.0.1`. The origin stays `localhost`, so the secure context and WebAuthn's relying party are unchanged.
 - `tests/ui_e2e/smoke.rs`: `localhost_reaches_the_ipv4_server_when_another_process_holds_the_ipv6_port` binds a squatter on `[::1]:<port>` that closes every connection, serves the page on `127.0.0.1:<port>`, and loads it through `localhost`. It fails without the rule (checked by taking the rule out) and passes with it. It skips without an IPv6 loopback.
 

@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 507,
+  "next_claim_seq": 523,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "5fc27a88dfcbad85a08b588cfca3ef3533e8378fab1f9643cd6baa3c816b804e"
+    "mac": "832704121b3a2ebdcb8335564c65b957ab2777810568a3cc7d8dbc438524ba2c"
   },
-  "next_evidence_seq": 648,
+  "next_evidence_seq": 668,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "063ad68c9c867cec1d49f1104cf6f7c4dc9f773e73a8b78da59b95535dfd1adc"
+    "mac": "2b6ec3d9637911ddb49287c1f29772a45940da4df57340dd872eca554ee9250c"
   },
   "claims": [
     {
@@ -38963,6 +38963,28 @@
             "by": "server",
             "mac": "fd619a412f5e365fde47a32c6222969bd8852f8c40c8f4e0ef10525ef0251d26"
           }
+        },
+        {
+          "id": "EVD-0666",
+          "kind": "inspection",
+          "locator": "tests/tls.rs:196-203",
+          "summary": "Failure message still 'the start did not fail with a timeout-class error: {error:?}' at head.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/tls.rs",
+              "lines": {
+                "start": 196,
+                "end": 203
+              },
+              "commit": "01494f1452166af4d7f0699c400b6058641d97c9"
+            }
+          },
+          "recorded_at": "2026-11-22T23:06:26.026386864Z",
+          "seal": {
+            "by": "server",
+            "mac": "68ecaccca00f7d66cbb5d98c8d751abad0219d2ccc15946913f9b0f169a15bec"
+          }
         }
       ],
       "verdicts": [
@@ -38978,13 +39000,26 @@
             "by": "server",
             "mac": "ac799623d45a1ddb15a2ab7f0717aa9b963bf120317dd0266497fcaca59f8aee"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head: message unchanged, lines shifted.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0666"
+          ],
+          "recorded_at": "2026-11-22T23:06:31.886349966Z",
+          "seal": {
+            "by": "server",
+            "mac": "ca77ed1dadc1ad49f3bc903207bae3e509779adb1650e121ffdaaa6efaffbbbc"
+          }
         }
       ],
       "created_at": "2026-11-22T21:53:52.936911242Z",
-      "updated_at": "2026-11-22T21:54:56.787486439Z",
+      "updated_at": "2026-11-22T23:06:31.886349966Z",
       "seal": {
         "by": "server",
-        "mac": "03e2e30ec5d262cd7d82e0311468e7bac7fc438dda6ea540a695c0e6e412574a"
+        "mac": "abec01db195820a881ae8004509f63344d102d4550a54a3e651b4e4f7582f617"
       }
     },
     {
@@ -39041,6 +39076,28 @@
             "by": "server",
             "mac": "64b5b45dc9b40ca7200b734827f0a1d7f6679cc81041a7491993b13b2dce3f9d"
           }
+        },
+        {
+          "id": "EVD-0665",
+          "kind": "inspection",
+          "locator": "tests/support/pg.rs:589-604; tests/tls.rs:193-203",
+          "summary": "At head the predicate moved verbatim to pg::is_timeout_class (same exhaustive match, no catch-all arm); the TLS test still asserts error.is_some_and(pg::is_timeout_class).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/support/pg.rs",
+              "lines": {
+                "start": 578,
+                "end": 604
+              },
+              "commit": "01494f1452166af4d7f0699c400b6058641d97c9"
+            }
+          },
+          "recorded_at": "2026-11-22T23:06:25.978862693Z",
+          "seal": {
+            "by": "server",
+            "mac": "f3e101fec417f1bed8988e757ec08094905a5f1656db1b72fb600d9a234e6ff4"
+          }
         }
       ],
       "verdicts": [
@@ -39057,13 +39114,26 @@
             "by": "server",
             "mac": "22d6d451a934f2be6228ef1b60523273d84c48d051d1980036b76d57962de17f"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head after the predicate moved to pg.rs: unchanged exhaustive match, test still uses it.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0665"
+          ],
+          "recorded_at": "2026-11-22T23:06:31.854113126Z",
+          "seal": {
+            "by": "server",
+            "mac": "5d504bb41550a5194a7a18d1c0a25018567b56405005a9a0172a2139b59e8018"
+          }
         }
       ],
       "created_at": "2026-11-22T21:53:52.936911242Z",
-      "updated_at": "2026-11-22T21:54:56.816899436Z",
+      "updated_at": "2026-11-22T23:06:31.854113126Z",
       "seal": {
         "by": "server",
-        "mac": "ecbe204110ce9e6d400c95c7056b0c84cef27f090c3c3ca84bfd3bd93fe73eba"
+        "mac": "e10f7dc033568d5ebf6b9f354f6692efca3d2e9ac8559c4383f512331532e1ee"
       }
     },
     {
@@ -39174,6 +39244,28 @@
             "by": "server",
             "mac": "c79c401ebfce49f3ef8d9acb908633c17730d88181161f3801b2a4689f4c0223"
           }
+        },
+        {
+          "id": "EVD-0667",
+          "kind": "inspection",
+          "locator": "tests/tls.rs:207-231",
+          "summary": "At head the same six assertions (3 accepted, 3 refused) remain, calling pg::is_timeout_class. Not rerun (needs Docker-free test but the gate was limited).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/tls.rs",
+              "lines": {
+                "start": 207,
+                "end": 231
+              },
+              "commit": "01494f1452166af4d7f0699c400b6058641d97c9"
+            }
+          },
+          "recorded_at": "2026-11-22T23:06:26.061796398Z",
+          "seal": {
+            "by": "server",
+            "mac": "876dd30768f100d5ebccf9018e0a1318dfa3aa1f609584db60246e142b0f1337"
+          }
         }
       ],
       "verdicts": [
@@ -39189,13 +39281,26 @@
             "by": "server",
             "mac": "9fcfa13a2f2b85ab8429939c6d64997daacf30dde5d81ac2d2468136840aa430"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head: same assertions, now via pg::is_timeout_class.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0667"
+          ],
+          "recorded_at": "2026-11-22T23:06:31.917153139Z",
+          "seal": {
+            "by": "server",
+            "mac": "b811fcc988ac88661219b3879d208803e097d107f7bdf7c03f8ff617629ab572"
+          }
         }
       ],
       "created_at": "2026-11-22T21:53:52.936911242Z",
-      "updated_at": "2026-11-22T21:55:01.416076031Z",
+      "updated_at": "2026-11-22T23:06:31.917153139Z",
       "seal": {
         "by": "server",
-        "mac": "465efc931652147ff9c48ca1c7e3266c209d90c7919ceefa48797e05fc658b54"
+        "mac": "9bf4e0fef10c32c18389ffd89e3d4cf548e6e4f11c33e183a94a91a1954d04a8"
       }
     },
     {
@@ -40608,6 +40713,1085 @@
       "seal": {
         "by": "server",
         "mac": "6af4b02e794ab401b77661f2b534d3af52ba41d7e585a01ce4ca587159f0c9ee"
+      }
+    },
+    {
+      "id": "CLM-0507",
+      "statement": "Issue #500: each listed load-sensitive test is fixed at its cause (explicit wait or generous polled bound, no #[ignore]) or was already fixed by earlier work.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/500",
+      "derived_from": [],
+      "artifacts": [
+        "tests/ui_e2e",
+        "src/investigator",
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:500"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0664",
+          "kind": "analysis",
+          "locator": "children of CLM-0507",
+          "summary": "Fifteen children are supported; CLM-0513 (stated cause of the sign-in ERR_EMPTY_RESPONSE) is not_enough_info. The 20-in-a-row under-load requirement was not audited (STRESS placeholder).",
+          "stance": "neutral",
+          "recorded_at": "2026-11-22T23:06:02.345874109Z",
+          "seal": {
+            "by": "server",
+            "mac": "09665b6050fdbff2996c87a74ebe4a4773ff982bc768d39bce0685946f922ce1"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Code changes and descriptive statements hold, but the sign-in cause rests on a reproduction I could not check, and the 20-run stress requirement is outside this audit. Fix: record the stress-run evidence for the 20 consecutive passes and the port-43227 reproduction log so both can be checked.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0664"
+          ],
+          "recorded_at": "2026-11-22T23:06:06.661100853Z",
+          "seal": {
+            "by": "server",
+            "mac": "debc5d1a3971ae1b957cf41bff52493dca25ab62b714b29436d7abe9d89da2db"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T23:04:49.663095956Z",
+      "updated_at": "2026-11-22T23:06:06.661100853Z",
+      "seal": {
+        "by": "server",
+        "mac": "7924d98cbbf7580cf34eb97cbaaef87d83e2ae06be8bbde25f151d09f4ac45bd"
+      }
+    },
+    {
+      "id": "CLM-0508",
+      "statement": "The span-capture tests (okf::caller tests, http::tests::an_internal_request_error_exports_its_kind_and_not_its_text, oauth::authorize::tests::a_refused_client_id_reaches_stderr_and_not_otlp, oauth::token::tests::oauth_tokens_count_by_grant) were already fixed before this PR: they register their subscriber through crate::test_tracing, and Observer::finish drops the dispatcher and flushes both providers before reading the exporters.",
+      "kind": "documentation",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"the first-registration race, #481, through `crate::test_tracing`; `Observer::finish` drops the dispatcher and flushes both providers before it reads the exporters\"",
+      "derived_from": [
+        "CLM-0507"
+      ],
+      "artifacts": [
+        "src/test_tracing.rs",
+        "src/telemetry/subscriber.rs"
+      ],
+      "tags": [
+        "from-issue:500"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0648",
+          "kind": "inspection",
+          "locator": "src/telemetry/subscriber.rs:699-720 (Observer::start/finish)",
+          "summary": "Observer::start installs the subscriber through crate::test_tracing::set_default; finish drops the guard first, then force_flush on tracer and logger, then reads the exporters. observe() wraps Observer; the four named tests call observe or test_tracing (caller.rs:141,157,171; http/mod.rs:1019 and oauth tests use observe).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/telemetry/subscriber.rs",
+              "lines": {
+                "start": 689,
+                "end": 720
+              },
+              "commit": "01494f1452166af4d7f0699c400b6058641d97c9"
+            }
+          },
+          "recorded_at": "2026-11-22T23:05:17.045570338Z",
+          "seal": {
+            "by": "server",
+            "mac": "c7601d2854d777553418f2d2c40b71ec7c93810e2ade767e763aee564b47faa9"
+          }
+        },
+        {
+          "id": "EVD-0649",
+          "kind": "inspection",
+          "locator": "git log: e1d03c9 fix: install the telemetry SpanRecorder through the test_tracing helper; eb76a7b/e71b2fd audit for #481; src/okf/caller.rs:141",
+          "summary": "History shows the #481 fix (test_tracing helper) landed on main before this branch's base; caller tests use crate::test_tracing at caller.rs:141,157,171,205,224.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/caller.rs",
+              "lines": {
+                "start": 139,
+                "end": 172
+              },
+              "commit": "01494f1452166af4d7f0699c400b6058641d97c9"
+            }
+          },
+          "recorded_at": "2026-11-22T23:05:17.096276967Z",
+          "seal": {
+            "by": "server",
+            "mac": "4a99eac0084d7896c376f83f48be3840d6549db89c95b091d05c08d970303531"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Observer::finish orders drop, flush, read; test_tracing helper is used by the named tests; history shows it predates the branch.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0648",
+            "EVD-0649"
+          ],
+          "recorded_at": "2026-11-22T23:05:58.269918615Z",
+          "seal": {
+            "by": "server",
+            "mac": "45f33121c38bacf7bb88846794504e8dd9989aa649e24cecb238cc0609d7c257"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T23:04:49.663095956Z",
+      "updated_at": "2026-11-22T23:05:58.269918615Z",
+      "seal": {
+        "by": "server",
+        "mac": "9e362855bd058d80adaf86e6b4401238815824968950a2350f8943913997ea5d"
+      }
+    },
+    {
+      "id": "CLM-0509",
+      "statement": "investigator_claude_stdin_timeout_cancel_reap was already fixed by earlier work (issue #307, PR #636) that retries a timed run whose child had not started.",
+      "kind": "documentation",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"`investigator_claude_stdin_timeout_cancel_reap` (#307 / PR #636)\"",
+      "derived_from": [
+        "CLM-0507"
+      ],
+      "artifacts": [
+        "src/investigator/claude_tests.rs"
+      ],
+      "tags": [
+        "from-issue:500"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0650",
+          "kind": "inspection",
+          "locator": "src/investigator/claude_tests.rs:358-379,702-712; git show 83f1f4b; merge 18e3138 (PR #636)",
+          "summary": "The test calls run_timed_after_start, which retries with deadlines 200ms/1s/5s/25s until the fake has written record.json. Commit 83f1f4b (merged by PR #636, issue #307 line) says it makes the test independent of start-up time. These lines are unchanged by this PR's diff.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/investigator/claude_tests.rs",
+              "lines": {
+                "start": 358,
+                "end": 379
+              },
+              "commit": "01494f1452166af4d7f0699c400b6058641d97c9"
+            }
+          },
+          "recorded_at": "2026-11-22T23:05:17.134026037Z",
+          "seal": {
+            "by": "server",
+            "mac": "329bf51478148685818f5bfa9fd420ee9207958d583c32abba852318966030cd"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "run_timed_after_start retries until the child started; code is on main from 83f1f4b / PR #636.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0650"
+          ],
+          "recorded_at": "2026-11-22T23:05:58.305109089Z",
+          "seal": {
+            "by": "server",
+            "mac": "9e254f802bff8537d1f2bf7a6e864412734ba8d6baafbe63640e0225b9eca9ee"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T23:04:49.663095956Z",
+      "updated_at": "2026-11-22T23:05:58.305109089Z",
+      "seal": {
+        "by": "server",
+        "mac": "b79faa53fd0c4ce9bf5ad4bcb34ed03ac29f75d8341b6a86925b810264d28b9a"
+      }
+    },
+    {
+      "id": "CLM-0510",
+      "statement": "app::tests::a_loaded_catalog_that_keeps_failing_to_refresh_counts_failed_every_pass no longer exists at head; M18 task 8 replaced it with src/cache/catalogs_tests.rs.",
+      "kind": "documentation",
+      "level": "component",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: \"no longer exists: M18 task 8 replaced it with `src/cache/catalogs_tests.rs`\"",
+      "derived_from": [
+        "CLM-0507"
+      ],
+      "artifacts": [
+        "src/app.rs",
+        "src/cache/catalogs_tests.rs"
+      ],
+      "tags": [
+        "from-issue:500"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0651",
+          "kind": "analysis",
+          "locator": "git grep a_loaded_catalog_that_keeps_failing_to_refresh; git log -S ... -- src (5eaaa88, 1331680)",
+          "summary": "The name no longer occurs in src at head (only in this PR's changelog). It existed before 5eaaa88^ (M18 task 8, 'catalogs load on demand into a bounded cache'), whose stat rewrites src/app.rs; src/cache/catalogs_tests.rs exists.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "a_loaded_catalog_that_keeps_failing_to_refresh",
+              "scope": [
+                "src",
+                "tests"
+              ],
+              "hits": 0,
+              "commit": "01494f1452166af4d7f0699c400b6058641d97c9"
+            }
+          },
+          "recorded_at": "2026-11-22T23:05:17.180757867Z",
+          "seal": {
+            "by": "server",
+            "mac": "fb92b76107fa340d026e7d43a7b2fd6bd04883fd2131910aad26e16b80c4fda7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Zero hits at head; present before commit 5eaaa88; replacement cache tests file exists.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0651"
+          ],
+          "recorded_at": "2026-11-22T23:05:58.341963260Z",
+          "seal": {
+            "by": "server",
+            "mac": "1b5303d3a3b676ab25113062355939ba7a7b152026c6bdb6602a2951e9028f27"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T23:04:49.663095956Z",
+      "updated_at": "2026-11-22T23:05:58.341963260Z",
+      "seal": {
+        "by": "server",
+        "mac": "159876654121aac8dd60014730473f1bb2e251147a2254207e12da63c94f930b"
+      }
+    },
+    {
+      "id": "CLM-0511",
+      "statement": "The ui_e2e harness launches Chromium with --host-resolver-rules=MAP localhost 127.0.0.1.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "inspection",
+      "source": "PR body: \"Chromium launches with `--host-resolver-rules=MAP localhost 127.0.0.1`\"",
+      "derived_from": [
+        "CLM-0507"
+      ],
+      "artifacts": [
+        "tests/ui_e2e/harness.rs"
+      ],
+      "tags": [
+        "from-issue:500"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0652",
+          "kind": "inspection",
+          "locator": "tests/ui_e2e/harness.rs:24,114-119",
+          "summary": "LOCALHOST_IS_IPV4 = \"--host-resolver-rules=MAP localhost 127.0.0.1\" is passed with .arg() to LaunchOptions in the launch call.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/harness.rs",
+              "lines": {
+                "start": 110,
+                "end": 120
+              },
+              "commit": "01494f1452166af4d7f0699c400b6058641d97c9"
+            }
+          },
+          "recorded_at": "2026-11-22T23:05:17.219172360Z",
+          "seal": {
+            "by": "server",
+            "mac": "648f6d1b1ff6be462ad061d8c26f17d5deeac16388198d7246c1cb7782769023"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The flag is passed in the launch call. Whether it works in Chromium was not run by me; the claim is only that the flag is passed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0652"
+          ],
+          "recorded_at": "2026-11-22T23:05:58.428485641Z",
+          "seal": {
+            "by": "server",
+            "mac": "428a0d699fbdf8908e1dc7e07febf991e507fa86b333e55402bd0f8167efb73e"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T23:04:49.663095956Z",
+      "updated_at": "2026-11-22T23:05:58.428485641Z",
+      "seal": {
+        "by": "server",
+        "mac": "ba31cccd1c2a25b6545f7973083a61c2ec0eef847059d1ec2190c321151e8411"
+      }
+    },
+    {
+      "id": "CLM-0512",
+      "statement": "Test smoke::localhost_reaches_the_ipv4_server_when_another_process_holds_the_ipv6_port exists and binds a listener on [::1] at a port, serves a page on 127.0.0.1 at the same port, and loads it through http://localhost:<port> in the browser.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "inspection",
+      "source": "PR body: \"New test `smoke::localhost_reaches_the_ipv4_server_when_another_process_holds_the_ipv6_port`\"",
+      "derived_from": [
+        "CLM-0507"
+      ],
+      "artifacts": [
+        "tests/ui_e2e/smoke.rs"
+      ],
+      "tags": [
+        "from-issue:500"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0653",
+          "kind": "inspection",
+          "locator": "tests/ui_e2e/smoke.rs:93-128",
+          "summary": "The test binds [::1]:0, takes its port, binds 127.0.0.1 on the same port, spawns an accept-and-close loop on the squatter, serves axum '/' with id=here on the IPv4 listener, and drives the browser to http://localhost:<port>/ waiting for 'served'. Not run (ui_e2e stress loop active); it skips when no IPv6 loopback or port taken.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/smoke.rs",
+              "lines": {
+                "start": 92,
+                "end": 128
+              },
+              "commit": "01494f1452166af4d7f0699c400b6058641d97c9"
+            }
+          },
+          "recorded_at": "2026-11-22T23:05:17.255976256Z",
+          "seal": {
+            "by": "server",
+            "mac": "82005123d486858e64a60ce95196e65b56efe925d8e1f3863aad1ef1792ca1c2"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test exists with the described structure (read, not run, since a ui_e2e stress loop is active).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0653"
+          ],
+          "recorded_at": "2026-11-22T23:05:58.462471809Z",
+          "seal": {
+            "by": "server",
+            "mac": "6050d2d5575c85a47446efe79c1fbe0d23e3a29dc0949d49ba797e66d5753678"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T23:04:49.663095956Z",
+      "updated_at": "2026-11-22T23:05:58.462471809Z",
+      "seal": {
+        "by": "server",
+        "mac": "7b9eda9c97c0feced20b3d83b0d41b0f4854dfa76ba510e5c8042dcf635486b1"
+      }
+    },
+    {
+      "id": "CLM-0513",
+      "statement": "The ERR_EMPTY_RESPONSE on /signin has the stated cause: Chromium tries ::1 before 127.0.0.1 for localhost and another process's IPv6-only listener on the same port number answers (reproduced at port 43227 with curl giving Empty reply).",
+      "kind": "documentation",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body table row 1 \"Confirmed cause\"",
+      "derived_from": [
+        "CLM-0507"
+      ],
+      "artifacts": [
+        "tests/ui_e2e/harness.rs"
+      ],
+      "tags": [
+        "from-issue:500"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0654",
+          "kind": "analysis",
+          "locator": "tests/ui_e2e/harness.rs:15-24 (comment); tests/ui_e2e/smoke.rs:84-92",
+          "summary": "The code comments and regression test are consistent with the stated cause, but the reproduction at port 43227 (stress run, curl 'Empty reply') is not in the repository and I did not run ui_e2e, so neither the reproduction nor Chromium's ::1-first behaviour is confirmed by my own evidence.",
+          "stance": "neutral",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/harness.rs",
+              "lines": {
+                "start": 15,
+                "end": 24
+              },
+              "commit": "01494f1452166af4d7f0699c400b6058641d97c9"
+            }
+          },
+          "recorded_at": "2026-11-22T23:05:17.294078628Z",
+          "seal": {
+            "by": "server",
+            "mac": "b96c8ed3a7682f5cd4a0afd48e8d67da0b14d82613ad89d3a7669d468c969524"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Mechanism is plausible and coherent with the fix, but the port-43227 reproduction and Chromium's resolution order are not in the repository and were not independently run. Fix: reword the PR statement to say the cause is inferred, or record the stress-run log (port, ss output for [::]:port, curl result) in the changelog or PR so it can be checked.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0654"
+          ],
+          "recorded_at": "2026-11-22T23:05:58.502059162Z",
+          "seal": {
+            "by": "server",
+            "mac": "0c3a7cb23033191a92ae39afb49c56639d8bb1738ef0aa3f6af2d9aea35675f4"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T23:04:49.663095956Z",
+      "updated_at": "2026-11-22T23:05:58.502059162Z",
+      "seal": {
+        "by": "server",
+        "mac": "5a9c99817e2561593e871da4315813e7c49fd9f8ce31cb500df41a65253c4e31"
+      }
+    },
+    {
+      "id": "CLM-0514",
+      "statement": "open_account opens /account and waits for #main .view[data-loaded=true]; every Account journey that clicks on the page uses it, except those that hold or fail a read before load and the key journey, which still use ui.open.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "inspection",
+      "source": "PR body: \"`open_account` opens the page and waits for `#main .view[data-loaded=true]`; every journey that clicks on the page uses it\" and Changes list",
+      "derived_from": [
+        "CLM-0507"
+      ],
+      "artifacts": [
+        "tests/ui_e2e/account.rs"
+      ],
+      "tags": [
+        "from-issue:500"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0655",
+          "kind": "inspection",
+          "locator": "tests/ui_e2e/account.rs:123-145 and git grep 'ui.open(\"/account\")' tests/ui_e2e",
+          "summary": "open_account does ui.open(\"/account\") then wait_loaded (ui.wait_visible(\"#main .view[data-loaded=true]\")). The only remaining ui.open(\"/account\") calls besides inside open_account are at account.rs:556 (hold_next GET /me/sessions), :675 (API-key login, account denied), :1035 (hold_next /api/v1/me), :1070 (fail_next /api/v1/me): exactly the exceptions stated. All other journeys (including the five named in the issue) call open_account.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/account.rs",
+              "lines": {
+                "start": 120,
+                "end": 146
+              },
+              "commit": "01494f1452166af4d7f0699c400b6058641d97c9"
+            }
+          },
+          "recorded_at": "2026-11-22T23:05:17.335281463Z",
+          "seal": {
+            "by": "server",
+            "mac": "db9fa68ab2da7a38485ca001f9a14add2f5bbc2062815d5d588e0a1c40840d24"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Remaining ui.open(\"/account\") calls are exactly the held, failed and key journeys.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0655"
+          ],
+          "recorded_at": "2026-11-22T23:05:58.537199086Z",
+          "seal": {
+            "by": "server",
+            "mac": "4b28ef4a92998c995af3778d5d3629028c6bee71d0c63b692fc2f61a0382b360"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T23:04:49.663095956Z",
+      "updated_at": "2026-11-22T23:05:58.537199086Z",
+      "seal": {
+        "by": "server",
+        "mac": "6771dfbb702a69e89b732e05deeb37870b9e22a9345b9d08afde6b70dfa8e6bc"
+      }
+    },
+    {
+      "id": "CLM-0515",
+      "statement": "The ui_e2e harness WAIT constant goes from 10 s to 60 s.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"The harness's `WAIT` goes from 10 s to 60 s\"",
+      "derived_from": [
+        "CLM-0507"
+      ],
+      "artifacts": [
+        "tests/ui_e2e/harness.rs"
+      ],
+      "tags": [
+        "from-issue:500"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0656",
+          "kind": "inspection",
+          "locator": "tests/ui_e2e/harness.rs:13; git diff origin/main..HEAD",
+          "summary": "const WAIT: Duration = Duration::from_secs(60); the diff replaces from_secs(10). The deadline loop at harness.rs ~399 polls until the condition holds, so it is a bound, not a pace.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/harness.rs",
+              "lines": {
+                "start": 9,
+                "end": 13
+              },
+              "commit": "01494f1452166af4d7f0699c400b6058641d97c9"
+            }
+          },
+          "recorded_at": "2026-11-22T23:05:17.372889383Z",
+          "seal": {
+            "by": "server",
+            "mac": "ba2256030592124bfc6e1bd7aadc8fd88122925828cf252fe52983d9a91af0ce"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "WAIT is 60 s, 10 s before.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0656"
+          ],
+          "recorded_at": "2026-11-22T23:05:58.574977151Z",
+          "seal": {
+            "by": "server",
+            "mac": "b77772dab7488be9e81bfc018217cf5f6e29217b1b58fdde5ff64f231f7d4693"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T23:04:49.663095956Z",
+      "updated_at": "2026-11-22T23:05:58.574977151Z",
+      "seal": {
+        "by": "server",
+        "mac": "e44ad7338c253d7dfd7aae5aaad07bf08625014190054378bd12923bc1faae9a"
+      }
+    },
+    {
+      "id": "CLM-0516",
+      "statement": "db::tests::a_timed_out_start_labelled_leaves_no_container and a_timed_out_start_leaks_without_cleanup_and_remove_labelled_reaps_it both accept any timeout-class error, and the leak test repeats the start under a fresh label until one leaks; before, the first asserted StartupTimeout exactly and the second exactly one leaked container.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "inspection",
+      "source": "PR body table row 3",
+      "derived_from": [
+        "CLM-0507"
+      ],
+      "artifacts": [
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:500"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0657",
+          "kind": "inspection",
+          "locator": "src/db.rs:1824-1895; git diff origin/main..HEAD -- src/db.rs",
+          "summary": "Leak test loops up to ATTEMPTS=10 fresh labels, asserts each error is_timeout_class, continues when no container found, panics if none leaked, then asserts count 1 and reaps. Labelled test asserts is_timeout_class instead of matches!(StartupTimeout). The removed lines show the old exact StartupTimeout match and assert_eq!(len,1).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 1824,
+                "end": 1895
+              },
+              "commit": "01494f1452166af4d7f0699c400b6058641d97c9"
+            }
+          },
+          "recorded_at": "2026-11-22T23:05:34.181843614Z",
+          "seal": {
+            "by": "server",
+            "mac": "3923a9216310d2bc6618ac3eb106c3bd115a452d6a18baa81cb2ef7bbcc98ca2"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code matches the statement for both tests, including the before-state in the diff.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0657"
+          ],
+          "recorded_at": "2026-11-22T23:05:58.610594236Z",
+          "seal": {
+            "by": "server",
+            "mac": "5bf24c59496873acfc5ba83c70f27b1094e502fed4a404cd3c19ccce81ff6e80"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T23:04:49.663095956Z",
+      "updated_at": "2026-11-22T23:05:58.610594236Z",
+      "seal": {
+        "by": "server",
+        "mac": "c1c212b3520132ebb662beea0c254c1dced67382b348ffdbfe7e3720482bd96a"
+      }
+    },
+    {
+      "id": "CLM-0517",
+      "statement": "is_timeout_class moved from tests/tls.rs to tests/support/pg.rs and is shared by tests/tls.rs and src/db.rs tests, with no copy left in tests/tls.rs.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"`pg::is_timeout_class`, moved from `tests/tls.rs`\"",
+      "derived_from": [
+        "CLM-0507"
+      ],
+      "artifacts": [
+        "tests/support/pg.rs",
+        "tests/tls.rs",
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:500"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0658",
+          "kind": "inspection",
+          "locator": "tests/support/pg.rs:589; tests/tls.rs:200,215-231; git grep -n \"fn is_timeout_class\"",
+          "summary": "pub fn is_timeout_class defined once in pg.rs; tls.rs's private copy is deleted and its calls use pg::is_timeout_class; db.rs tests call pg_support::is_timeout_class (pg_support is the same module).",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "fn is_timeout_class",
+              "scope": [
+                "src",
+                "tests"
+              ],
+              "hits": 1,
+              "commit": "01494f1452166af4d7f0699c400b6058641d97c9"
+            }
+          },
+          "recorded_at": "2026-11-22T23:05:34.228330823Z",
+          "seal": {
+            "by": "server",
+            "mac": "00bead0ddb235ea0a21f11f5f0660ee165c14acfe1e695a3c33ff3e1d5ed1246"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Single definition at pg.rs, callers updated.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0658"
+          ],
+          "recorded_at": "2026-11-22T23:05:58.645262227Z",
+          "seal": {
+            "by": "server",
+            "mac": "06c754518336ff3418852a95b8c1d7c1ff0a23d8ac38bbce7e8dc8037f20d11c"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T23:04:49.663095956Z",
+      "updated_at": "2026-11-22T23:05:58.645262227Z",
+      "seal": {
+        "by": "server",
+        "mac": "42fe652ec5be6a212de2cadc6fc5b351fbbd8314040933eb59c39ee0191dfc35"
+      }
+    },
+    {
+      "id": "CLM-0518",
+      "statement": "investigator_claude_timeout_includes_pipe_eof no longer asserts elapsed time; the fake's pipe-holding descendant waits for a release file; a run whose child had not started is repeated with a longer deadline; and the test passes.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body table row 4",
+      "derived_from": [
+        "CLM-0507"
+      ],
+      "artifacts": [
+        "src/investigator/claude_tests.rs",
+        "tests/fixtures/investigator/claude/fake_child.py"
+      ],
+      "tags": [
+        "from-issue:500"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0659",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --jobs 4 --lib -- investigator_claude_timeout_includes_pipe_eof",
+          "summary": "Ran at head: 1 passed; 0 failed (2.00 s, 2826 filtered out). Code at claude_tests.rs:556-585 has no elapsed assertion, retries with 2/10/40 s deadlines until fake.has_record(), and writes the release file afterwards; fake_child.py:40-50 waits on root/release.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/investigator/claude_tests.rs",
+              "lines": {
+                "start": 547,
+                "end": 585
+              },
+              "commit": "01494f1452166af4d7f0699c400b6058641d97c9"
+            }
+          },
+          "recorded_at": "2026-11-22T23:05:34.265640631Z",
+          "seal": {
+            "by": "server",
+            "mac": "ae3a0fe01520cf99f8295a48ca23dcaaa09f094ed695a58562a902b052da4bdd"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code matches and the narrow run passed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0659"
+          ],
+          "recorded_at": "2026-11-22T23:05:58.679642736Z",
+          "seal": {
+            "by": "server",
+            "mac": "efc009d19ac3382786f01dec726f91c8d57b094833551bfa7615ab3c43bf12e5"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T23:04:49.663095956Z",
+      "updated_at": "2026-11-22T23:05:58.679642736Z",
+      "seal": {
+        "by": "server",
+        "mac": "925924f96932e9861755f95eb7cb73d1b0f4c361eb559ec89ac7fb506c505788"
+      }
+    },
+    {
+      "id": "CLM-0519",
+      "statement": "The investigator_claude polls (Fake::started and the kill wait in investigator_claude_drop_and_serialization) are bounded at 60 s (POLL_BOUND) instead of 5 s.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body table row 5",
+      "derived_from": [
+        "CLM-0507"
+      ],
+      "artifacts": [
+        "src/investigator/claude_tests.rs"
+      ],
+      "tags": [
+        "from-issue:500"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0660",
+          "kind": "inspection",
+          "locator": "src/investigator/claude_tests.rs:277,334,609",
+          "summary": "POLL_BOUND = 60 s; both polls loop POLL_BOUND.as_millis()/5 iterations (previously 1000 iterations, i.e. 5 s at a 5 ms step per diff context). Each loop returns/breaks as soon as its condition holds.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/investigator/claude_tests.rs",
+              "lines": {
+                "start": 328,
+                "end": 345
+              },
+              "commit": "01494f1452166af4d7f0699c400b6058641d97c9"
+            }
+          },
+          "recorded_at": "2026-11-22T23:05:34.302244236Z",
+          "seal": {
+            "by": "server",
+            "mac": "cc1b966d8921d3c86b1a520752e97d2374486b121eb131b9c78863183447d186"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both polls use POLL_BOUND (60 s).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0660"
+          ],
+          "recorded_at": "2026-11-22T23:05:58.713597424Z",
+          "seal": {
+            "by": "server",
+            "mac": "48a4de8d1c3face3e226dbcba5f669503a8abd9f90768facf914169c1e0cbe8d"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T23:04:49.663095956Z",
+      "updated_at": "2026-11-22T23:05:58.713597424Z",
+      "seal": {
+        "by": "server",
+        "mac": "9648fc02cd028d5c58cd8ad05f4d1abc788f00665628a6755198a737d950009e"
+      }
+    },
+    {
+      "id": "CLM-0520",
+      "statement": "In investigator_client_paginated_setup_can_be_dropped_at_deadline_or_cancel the 300 ms deadline counts from the moment the second list is in flight and the elapsed-time assertion is removed.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "inspection",
+      "source": "PR body table row 6",
+      "derived_from": [
+        "CLM-0507"
+      ],
+      "artifacts": [
+        "src/investigator/client_tests.rs"
+      ],
+      "tags": [
+        "from-issue:500"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0661",
+          "kind": "inspection",
+          "locator": "src/investigator/client_tests.rs:146-190",
+          "summary": "The trigger cancels a 'reached' token once lists>=2; the deadline future awaits reached, then (cancel round) pends forever, else sleeps 300 ms; the old start-based sleep and `assert!(start.elapsed() < 1s)` are removed per the diff. Remaining assertions (lists==2, no calls) are intact.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/investigator/client_tests.rs",
+              "lines": {
+                "start": 146,
+                "end": 190
+              },
+              "commit": "01494f1452166af4d7f0699c400b6058641d97c9"
+            }
+          },
+          "recorded_at": "2026-11-22T23:05:34.339818095Z",
+          "seal": {
+            "by": "server",
+            "mac": "5151f9c3ec4f3ab9138e0f90467339dc8416773c4f6aa581d72ecf97a5f80201"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Deadline is gated on the reached token; elapsed assertion gone.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0661"
+          ],
+          "recorded_at": "2026-11-22T23:05:58.747526352Z",
+          "seal": {
+            "by": "server",
+            "mac": "502c9818a4f03f087f8af19a061588857cbfc514e24aa9c2d25b93de29909005"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T23:04:49.663095956Z",
+      "updated_at": "2026-11-22T23:05:58.747526352Z",
+      "seal": {
+        "by": "server",
+        "mac": "0b535f8ce6934deffeacab4aa8fabd9a7a654c50cb7c6b31f5d1a64b6b59abe7"
+      }
+    },
+    {
+      "id": "CLM-0521",
+      "statement": "tools/agentic/lessons.md gains two rules, and the repository has no known-flakes list, so there is no entry to drop.",
+      "kind": "documentation",
+      "level": "unit",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: \"The file has no known-flakes list, so there was no entry to drop\"",
+      "derived_from": [
+        "CLM-0507"
+      ],
+      "artifacts": [
+        "tools/agentic/lessons.md"
+      ],
+      "tags": [
+        "from-issue:500"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0662",
+          "kind": "inspection",
+          "locator": "tools/agentic/lessons.md:62-63; git grep -niE \"known.flake\" -- tools AGENTS.md",
+          "summary": "The diff adds exactly two bullets (lines 62-63). Searching tools, docs and AGENTS.md for 'known-flakes' finds no list (only unrelated mentions of flakes #434/#440 in a design spec).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/lessons.md",
+              "lines": {
+                "start": 62,
+                "end": 63
+              },
+              "commit": "01494f1452166af4d7f0699c400b6058641d97c9"
+            }
+          },
+          "recorded_at": "2026-11-22T23:05:34.377821017Z",
+          "seal": {
+            "by": "server",
+            "mac": "60cb6283c5aeea08e4a208f1f8f4369046df4c302376b9346259558c5cdd7bc9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Two bullets added; no flakes list exists.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0662"
+          ],
+          "recorded_at": "2026-11-22T23:05:58.789739007Z",
+          "seal": {
+            "by": "server",
+            "mac": "0fb05bb6bf369c44dbc1151fd65f73342645aaafe965db486e94f14cb808c9ca"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T23:04:49.663095956Z",
+      "updated_at": "2026-11-22T23:05:58.789739007Z",
+      "seal": {
+        "by": "server",
+        "mac": "606ad4ded4d46c03533c588c85e3f48391591e82e606f4b806988ba25d801e9e"
+      }
+    },
+    {
+      "id": "CLM-0522",
+      "statement": "No test is marked #[ignore] by this change.",
+      "kind": "constraint",
+      "level": "software",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/500 requirements: never #[ignore]",
+      "derived_from": [
+        "CLM-0507"
+      ],
+      "artifacts": [
+        "tests",
+        "src"
+      ],
+      "tags": [
+        "from-issue:500"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0663",
+          "kind": "analysis",
+          "locator": "git diff origin/main..HEAD | grep '^+.*#\\[ignore'",
+          "summary": "Zero added lines contain #[ignore]. Repository-wide search of src and tests at head for the attribute (zero would be the expected hit count within these files).",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "#\\[ignore",
+              "scope": [
+                "src/db.rs",
+                "src/investigator",
+                "tests/ui_e2e"
+              ],
+              "hits": 3,
+              "commit": "01494f1452166af4d7f0699c400b6058641d97c9"
+            }
+          },
+          "recorded_at": "2026-11-22T23:05:34.420075387Z",
+          "seal": {
+            "by": "server",
+            "mac": "4218da3f67094aca133be71a51da92726cd3e6baf9682dc3fa07b9652f837095"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The diff adds no #[ignore]; the three existing ones are in unrelated tests.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0663"
+          ],
+          "recorded_at": "2026-11-22T23:05:58.824613249Z",
+          "seal": {
+            "by": "server",
+            "mac": "519967687b19975e1ad868cc6a35b22b8604ba5a538366f9332586e17687c2b4"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T23:04:49.663095956Z",
+      "updated_at": "2026-11-22T23:05:58.824613249Z",
+      "seal": {
+        "by": "server",
+        "mac": "ad4b2a149de786fec9339d86c3de8494f9dbb4992cb8b151b5dfe25c0b82689f"
       }
     }
   ]
