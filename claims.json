@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 467,
+  "next_claim_seq": 477,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "a65aebc36b09fcbbecbfc5fd8b073d6b65ea749491c4a407e0cf9d384ee1f175"
+    "mac": "0322ca767a32b4467d05cd6a2aaa8d6d48be5ca7cfe937385d38ae2cc7c7fc4f"
   },
-  "next_evidence_seq": 587,
+  "next_evidence_seq": 600,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "715dc342ef1a5ea4eee3bdd8452169f138ae258a9a090d24a685b2b0694d816b"
+    "mac": "45600f91cfca49378e4c8efeaf2bfa7c65937d78d76e553f65341792ecb32184"
   },
   "claims": [
     {
@@ -37577,6 +37577,709 @@
       "seal": {
         "by": "server",
         "mac": "b7e6440689520274eb2c21cffa23a00f36b4fbc7fd20c3fc76ee6beeba7654c6"
+      }
+    },
+    {
+      "id": "CLM-0467",
+      "statement": "The console lets an admin edit a suspended team's notice from the Teams drawer without lifting the suspension.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/361",
+      "derived_from": [],
+      "artifacts": [
+        "src/http/ui/js/pages/teams.js",
+        "tests/ui_e2e/teams.rs"
+      ],
+      "tags": [
+        "from-issue:361"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0599",
+          "kind": "analysis",
+          "locator": "children of CLM-0467",
+          "summary": "The feature children (textarea, request, unchanged suspended_at and refusal, journey, guarding, refusal display, changelog) are supported, so the feature the issue asked for is delivered. Two PR statements (the revert check and the gate counts) are not decided here, so the parent cannot be fully rolled up.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-22T21:25:43.316110343Z",
+          "seal": {
+            "by": "server",
+            "mac": "a41d6b2f48379eed312ba280ffd1a8b4fc449dba2604ba0b53b47f5fbd231f61"
+          }
+        }
+      ],
+      "verdicts": [],
+      "created_at": "2026-11-22T21:24:48.591579309Z",
+      "updated_at": "2026-11-22T21:25:43.316110343Z",
+      "seal": {
+        "by": "server",
+        "mac": "cc4f9e4f55d592650f2d0b78220131f3ac27b604dd3e84ca1808438971ecd268"
+      }
+    },
+    {
+      "id": "CLM-0468",
+      "statement": "In the Teams drawer's suspended branch, a notice textarea is shown, prefilled with the team's current notice.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #361: \"a notice textarea prefilled with the current notice\"",
+      "derived_from": [
+        "CLM-0467"
+      ],
+      "artifacts": [
+        "src/http/ui/js/pages/teams.js"
+      ],
+      "tags": [
+        "from-issue:361"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0587",
+          "kind": "inspection",
+          "locator": "src/http/ui/js/pages/teams.js:309-322",
+          "summary": "Suspended branch (inside `if (team.suspended_at)`) builds a textarea whose child is team.suspension_notice and includes the form in the returned section; h() drops null children so a null notice gives an empty textarea.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/ui/js/pages/teams.js",
+              "lines": {
+                "start": 309,
+                "end": 322
+              },
+              "commit": "f23e3cc1db323c22f2c728532d3d4857bc3de9ef"
+            }
+          },
+          "recorded_at": "2026-11-22T21:25:20.223500432Z",
+          "seal": {
+            "by": "server",
+            "mac": "7ae0ddcaa6f5d801e08f35270a9357f2a862cc74a7a2072a21c759f0f1ef2cfc"
+          }
+        },
+        {
+          "id": "EVD-0588",
+          "kind": "test",
+          "locator": "cargo test --test ui_e2e teams::a_suspended_teams_notice_is_edited (1 passed)",
+          "summary": "Reran the journey on HEAD f23e3cc: 1 passed, 0 failed (8.53s). It evals the textarea value in the browser and asserts it equals \"Paused for review.\".",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/teams.rs",
+              "lines": {
+                "start": 434,
+                "end": 441
+              },
+              "commit": "f23e3cc1db323c22f2c728532d3d4857bc3de9ef"
+            }
+          },
+          "recorded_at": "2026-11-22T21:25:20.256218463Z",
+          "seal": {
+            "by": "server",
+            "mac": "1bb761cb9977a08c74700faff4a582f87a9fd4e68a75e0ccc0972b572888b69d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "JS builds the prefilled textarea in the suspended branch, and the journey, rerun on HEAD, reads the value in the browser and gets the current notice.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0587",
+            "EVD-0588"
+          ],
+          "recorded_at": "2026-11-22T21:25:37.385777028Z",
+          "seal": {
+            "by": "server",
+            "mac": "9a3371c58e22eae48bda363ae8cba11b87d36dbdf049136728a6b2e6f97f68dd"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:24:48.591579309Z",
+      "updated_at": "2026-11-22T21:25:37.385777028Z",
+      "seal": {
+        "by": "server",
+        "mac": "d9ddccf3e9fa05deed42bdac8e45dbdeda20fa997ae49502ad979aa5a3a50694"
+      }
+    },
+    {
+      "id": "CLM-0469",
+      "statement": "The drawer's \"Save notice\" button sends PUT /api/v1/teams/{name}/suspension with the body {suspended: true, notice} where notice is the textarea's value.",
+      "kind": "interface",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #361: \"a 'Save notice' button that sends {suspended: true, notice}\"",
+      "derived_from": [
+        "CLM-0467"
+      ],
+      "artifacts": [
+        "src/http/ui/js/pages/teams.js"
+      ],
+      "tags": [
+        "from-issue:361"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0589",
+          "kind": "inspection",
+          "locator": "src/http/ui/js/pages/teams.js:313-316,288-298",
+          "summary": "The form's submit handler calls write({suspended: true, notice: notice.value}, ...)(); write calls api.put(`/teams/${enc(team.name)}/suspension`, ...) and api.js prefixes `/api/v1`. Server body struct SuspensionBody accepts exactly {suspended, notice}.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/ui/js/pages/teams.js",
+              "lines": {
+                "start": 286,
+                "end": 316
+              },
+              "commit": "f23e3cc1db323c22f2c728532d3d4857bc3de9ef"
+            }
+          },
+          "recorded_at": "2026-11-22T21:25:20.289652978Z",
+          "seal": {
+            "by": "server",
+            "mac": "f88be8f3df36ae33a8b63493966129456b33aaa15f199a72babb8a3059d62cf5"
+          }
+        },
+        {
+          "id": "EVD-0590",
+          "kind": "test",
+          "locator": "cargo test --test ui_e2e teams::a_suspended_teams_notice_is_edited (1 passed)",
+          "summary": "End-to-end: after clicking #team-notice-save with \"Back on Monday.\", the stored notice read from the database equals \"Back on Monday.\", so the request reached the suspension endpoint with the typed notice and suspended: true. The request body itself is not asserted separately.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/teams.rs",
+              "lines": {
+                "start": 442,
+                "end": 460
+              },
+              "commit": "f23e3cc1db323c22f2c728532d3d4857bc3de9ef"
+            }
+          },
+          "recorded_at": "2026-11-22T21:25:20.319575489Z",
+          "seal": {
+            "by": "server",
+            "mac": "9b9a0c436d76799f3e48771b2851c87701a29d1f0e7fe2ecfa7baac8b892e4ae"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The submit handler calls api.put on the suspension path with {suspended: true, notice: textarea value}; the journey shows the typed notice reaches the stored team record.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0589",
+            "EVD-0590"
+          ],
+          "recorded_at": "2026-11-22T21:25:37.414344505Z",
+          "seal": {
+            "by": "server",
+            "mac": "a2721b79b44dfb74cc2fa436a7abe3a7433c6bb0459251baf6d59ca9392a9b03"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:24:48.591579309Z",
+      "updated_at": "2026-11-22T21:25:37.414344505Z",
+      "seal": {
+        "by": "server",
+        "mac": "bc15a31ea575f50d6e25fabb49c3ad8bd4a6cfac6e366c5f50d807530f72e5be"
+      }
+    },
+    {
+      "id": "CLM-0470",
+      "statement": "Saving a new notice on a suspended team leaves its suspended_at unchanged and its members still refused (now with the new notice).",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Issue #361: \"the notice changes while suspended_at and the members' refusal stay the same\"; PR: \"the team stays suspended with its original suspended_at\"",
+      "derived_from": [
+        "CLM-0467"
+      ],
+      "artifacts": [
+        "src/store/teams.rs",
+        "src/http/api/people.rs",
+        "tests/ui_e2e/teams.rs"
+      ],
+      "tags": [
+        "from-issue:361"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0591",
+          "kind": "inspection",
+          "locator": "src/store/teams.rs:872-891",
+          "summary": "teams::suspend on an already suspended team updates with `suspended_at = COALESCE(suspended_at, $2)`, keeping the first time, and replaces the notice; the PUT handler (src/http/api/people.rs:1210-1225) routes suspended:true to it.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/teams.rs",
+              "lines": {
+                "start": 872,
+                "end": 891
+              },
+              "commit": "f23e3cc1db323c22f2c728532d3d4857bc3de9ef"
+            }
+          },
+          "recorded_at": "2026-11-22T21:25:20.354533239Z",
+          "seal": {
+            "by": "server",
+            "mac": "4354a539df45df84d803113be40e59c5894d820b7db8ec5ce4df3e62036ace6a"
+          }
+        },
+        {
+          "id": "EVD-0592",
+          "kind": "test",
+          "locator": "cargo test --test ui_e2e teams::a_suspended_teams_notice_is_edited (1 passed)",
+          "summary": "The journey suspends an hour ago, saves via the console, then asserts after.notice == new notice, after.since == before.since, and that the member reader's /browse/main still shows #browse-suspended with the new notice. Passed on HEAD.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/teams.rs",
+              "lines": {
+                "start": 455,
+                "end": 470
+              },
+              "commit": "f23e3cc1db323c22f2c728532d3d4857bc3de9ef"
+            }
+          },
+          "recorded_at": "2026-11-22T21:25:20.386842959Z",
+          "seal": {
+            "by": "server",
+            "mac": "bc14e34571537de24557dfcda98a6f22498b096ed76bef286b186e91a43706b7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The store keeps the first suspended_at via COALESCE and replaces the notice, and the journey asserts since is unchanged and the member is still refused with the new notice.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0591",
+            "EVD-0592"
+          ],
+          "recorded_at": "2026-11-22T21:25:37.439693286Z",
+          "seal": {
+            "by": "server",
+            "mac": "d34f4d00b6d1e63e7e08f6e2e8664c5da33e8b91f9ebbfb5aa46e5c761f5022f"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:24:48.591579309Z",
+      "updated_at": "2026-11-22T21:25:37.439693286Z",
+      "seal": {
+        "by": "server",
+        "mac": "45e2eb5f123d28e10b9ac584061af8a59b194736a587d3aed102696c27dfb4ca"
+      }
+    },
+    {
+      "id": "CLM-0471",
+      "statement": "A browser journey exists that asserts the notice changes while suspended_at and the member's refusal stay the same.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #361: \"plus a browser journey asserting the notice changes while suspended_at and the members' refusal stay the same\"; PR: journey `a_suspended_teams_notice_is_edited_without_lifting_the_suspension`: \"The textarea is prefilled, saving changes the stored notice, `suspended_at` equals its earlier value, the drawer still offers Lift, and a member's browse page is still refused and shows the new notice.\"",
+      "derived_from": [
+        "CLM-0467"
+      ],
+      "artifacts": [
+        "tests/ui_e2e/teams.rs"
+      ],
+      "tags": [
+        "from-issue:361"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0593",
+          "kind": "test",
+          "locator": "tests/ui_e2e/teams.rs:403-470; cargo test --test ui_e2e teams::a_suspended_teams_notice_is_edited (1 passed)",
+          "summary": "Read the assertions: textarea value eq \"Paused for review.\" (439-441); toast and #team-suspension-notice text \"Back on Monday.\" (444-445); Lift visible and suspend form hidden (447-448); DB notice eq new and since eq before (460-461); member browse shows #browse-suspended with new notice (466-468). Test passed on HEAD.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/teams.rs",
+              "lines": {
+                "start": 403,
+                "end": 471
+              },
+              "commit": "f23e3cc1db323c22f2c728532d3d4857bc3de9ef"
+            }
+          },
+          "recorded_at": "2026-11-22T21:25:20.416843390Z",
+          "seal": {
+            "by": "server",
+            "mac": "ebd5bea77fd15c1fb19ec9881d6199c0a02cdde331598a85c69d1ee1128da6d3"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "I read the assertions: they cover prefill, changed notice, unchanged suspended_at, Lift still offered and the member refusal with the new notice, and the test passes on HEAD.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0593"
+          ],
+          "recorded_at": "2026-11-22T21:25:37.464663435Z",
+          "seal": {
+            "by": "server",
+            "mac": "a53b75c85db9e709058b90f8bba275304f9230abe2777c7879ed8bbddc958089"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:24:48.591579309Z",
+      "updated_at": "2026-11-22T21:25:37.464663435Z",
+      "seal": {
+        "by": "server",
+        "mac": "cd39f7b4275bfff7cc555ee772f32e95ca66e1bf8349c7fd862c9d2eece31842"
+      }
+    },
+    {
+      "id": "CLM-0472",
+      "statement": "The notice textarea and Save notice button are guarded by the suspension pending-write key, so they are disabled while any suspension write runs.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR: \"it reuses the section's pending-write key and `write` helper, so its controls are disabled while any suspension write runs\"",
+      "derived_from": [
+        "CLM-0467"
+      ],
+      "artifacts": [
+        "src/http/ui/js/pages/teams.js"
+      ],
+      "tags": [
+        "from-issue:361"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0594",
+          "kind": "inspection",
+          "locator": "src/http/ui/js/pages/teams.js:309-312, 287, src/http/ui/js/core/pending.js:21-60",
+          "summary": "Both controls pass `key` (`team:<name>:suspension`) to guard(); write() runs the PUT inside once(key, ...), and pending.js update() disables every element guarded by a pending key. The new journey does not assert the disabled state for these two controls (the existing Suspend/Lift journeys at tests/ui_e2e/teams.rs:517-555 do for theirs).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/ui/js/pages/teams.js",
+              "lines": {
+                "start": 309,
+                "end": 312
+              },
+              "commit": "f23e3cc1db323c22f2c728532d3d4857bc3de9ef"
+            }
+          },
+          "recorded_at": "2026-11-22T21:25:20.445960758Z",
+          "seal": {
+            "by": "server",
+            "mac": "0162ac586f1328873d6c26a7b334c693992f9fa1ca61baf2ceacd6256454054f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both controls use guard() with the suspension key and the write runs in once(key), the same mechanism as Suspend and Lift. The behavior is not asserted for the new controls by a test, but the claim is level 2 and by inspection.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0594"
+          ],
+          "recorded_at": "2026-11-22T21:25:37.489624653Z",
+          "seal": {
+            "by": "server",
+            "mac": "73ce5e476a50e71e4af8db1afdd64c0782ae483d6a66bb1bdac0f617b76f645e"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:24:48.591579309Z",
+      "updated_at": "2026-11-22T21:25:37.489624653Z",
+      "seal": {
+        "by": "server",
+        "mac": "1715e5729a61adb5f6de18d774b57c032bb89ce7e2e3dd9c4e1b8659e1dc51a2"
+      }
+    },
+    {
+      "id": "CLM-0473",
+      "statement": "A refused notice save shows the refusal's reason in the drawer, and a successful save redraws the drawer through `changed` (numbered reads).",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR: \"a refusal's reason shows, and the drawer redraws through `changed` (numbered reads)\"",
+      "derived_from": [
+        "CLM-0467"
+      ],
+      "artifacts": [
+        "src/http/ui/js/pages/teams.js"
+      ],
+      "tags": [
+        "from-issue:361"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0595",
+          "kind": "inspection",
+          "locator": "src/http/ui/js/pages/teams.js:288-300,121-131",
+          "summary": "The submit handler returns write(...)(), which catches an api.put error as `refused`, then awaits changed(team.name, answer, {message, refusal: refused}); changed draws through openDetail with a numbered `read`, and `error` (#team-suspension-error) renders `refusal`. Not exercised by a test for the notice form.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/ui/js/pages/teams.js",
+              "lines": {
+                "start": 286,
+                "end": 300
+              },
+              "commit": "f23e3cc1db323c22f2c728532d3d4857bc3de9ef"
+            }
+          },
+          "recorded_at": "2026-11-22T21:25:20.477735876Z",
+          "seal": {
+            "by": "server",
+            "mac": "dbc434335c62385a72cbe6dc3dba4b5d08a5932a0cd3a9e7371bb6e8ed745ec7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The notice form goes through the shared write() helper, which captures a refusal and passes it to changed(); the section renders it. Untested for this form specifically.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0595"
+          ],
+          "recorded_at": "2026-11-22T21:25:37.514494220Z",
+          "seal": {
+            "by": "server",
+            "mac": "4144a6dac4c600f72676fc09529abe0c4ae81592a8d53cf2eb91451828ca330a"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:24:48.591579309Z",
+      "updated_at": "2026-11-22T21:25:37.514494220Z",
+      "seal": {
+        "by": "server",
+        "mac": "3729b8649825994887dfdc4932cf777d5e85862505666b6430f10a7c7f1ccc4e"
+      }
+    },
+    {
+      "id": "CLM-0474",
+      "statement": "With the form removed from the JS, the new journey fails (timed out waiting for #team-notice-save).",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR: \"Revert check: with the form removed from the JS, the new journey fails (timed out waiting for `#team-notice-save`).\"",
+      "derived_from": [
+        "CLM-0467"
+      ],
+      "artifacts": [
+        "tests/ui_e2e/teams.rs"
+      ],
+      "tags": [
+        "from-issue:361"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0596",
+          "kind": "other",
+          "locator": "PR body, Validation section",
+          "summary": "No revert-check run was repeated in this audit; only the author's statement exists. Reading the journey, it waits on #team-notice-save:not([disabled]) first (tests/ui_e2e/teams.rs:433), which would time out without the form, so the claim is plausible but unverified.",
+          "stance": "neutral",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/teams.rs",
+              "lines": {
+                "start": 433,
+                "end": 433
+              },
+              "commit": "f23e3cc1db323c22f2c728532d3d4857bc3de9ef"
+            }
+          },
+          "recorded_at": "2026-11-22T21:25:20.507031465Z",
+          "seal": {
+            "by": "server",
+            "mac": "17a1029de1d78991b96af8ddf7dcc9cbb55f686d91302b0029e2606321e3c1d8"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "The revert check was a manual run that this audit did not repeat; the journey would plausibly time out on the missing button, but that is inference.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0596"
+          ],
+          "recorded_at": "2026-11-22T21:25:37.544879041Z",
+          "seal": {
+            "by": "server",
+            "mac": "a44f5d742a4d74d7b245d9176f563103b12cfb7367e188f428ec2e2e7fad1b91"
+          }
+        },
+        {
+          "verdict": "not_enough_info",
+          "rationale": "The revert check was a manual run that this audit did not repeat; the journey would plausibly time out on the missing button, but that is inference. Fix: temporarily remove noticeForm from the suspended branch in src/http/ui/js/pages/teams.js, run cargo test --test ui_e2e teams::a_suspended_teams_notice_is_edited, record the failure text as evidence, then restore the file.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0596"
+          ],
+          "recorded_at": "2026-11-22T21:25:43.285696092Z",
+          "seal": {
+            "by": "server",
+            "mac": "1f5462a59f6c3e5259f4f24483441cf8db154228b20377bd10e436aa9cd00042"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:24:48.591579309Z",
+      "updated_at": "2026-11-22T21:25:43.285696092Z",
+      "seal": {
+        "by": "server",
+        "mac": "472e7369edcc2b1d2891e55d0921dd983443eb963d708f8dd41c890b2029f980"
+      }
+    },
+    {
+      "id": "CLM-0475",
+      "statement": "The gates passed: test 3318 passed 0 failed, test-ui 272 passed 0 failed 1 ignored, plus fmt, lint and dylint.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR: \"`test` (3318 passed, 0 failed), `test-ui` (272 passed, 0 failed, 1 ignored)\"",
+      "derived_from": [
+        "CLM-0467"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:361"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0597",
+          "kind": "other",
+          "locator": "cargo test --test ui_e2e teams::a_suspended_teams_notice_is_edited (273 tests in binary: 1 run, 272 filtered out)",
+          "summary": "Not rerun (full gates excluded from this audit). The ui_e2e binary has 273 tests, consistent with the claimed 272 passed + 1 ignored, but the other gate counts and fmt/lint/dylint cannot be checked here.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-22T21:25:20.532394519Z",
+          "seal": {
+            "by": "server",
+            "mac": "81800040a70d8507d104675f01b38fe81973b7c3638037f749adeceb3fc7c1a9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Full gates were not rerun in this audit; only the ui_e2e test count is consistent with the claim, and the journey itself passes. Fix: rerun tools/agentic/gate.sh for test and test-ui on the head commit and record the printed pass counts as evidence.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0597"
+          ],
+          "recorded_at": "2026-11-22T21:25:37.575035141Z",
+          "seal": {
+            "by": "server",
+            "mac": "f31ef9c2ff0a7ec8cc1b4bf8c97883c52a6a283521560caae5f7ffa95a02c0e5"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:24:48.591579309Z",
+      "updated_at": "2026-11-22T21:25:37.575035141Z",
+      "seal": {
+        "by": "server",
+        "mac": "d3d36408fc8e126e75f3cbf2cee3279978988c00c08d51b991d5a35e3495d585"
+      }
+    },
+    {
+      "id": "CLM-0476",
+      "statement": "A changelog entry for the change exists under changelog/ with a dated, timestamped name.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR: \"Changelog entry.\"",
+      "derived_from": [
+        "CLM-0467"
+      ],
+      "artifacts": [
+        "changelog/2026-11-22T20-57-26Z-issue-361-suspended-notice-edit.md"
+      ],
+      "tags": [
+        "from-issue:361"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0598",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-22T20-57-26Z-issue-361-suspended-notice-edit.md",
+          "summary": "The file is added in the commit with a UTC date-time name and three bullets describing the textarea and button, the shared pending-write path, and the new journey; they match the code and test read above.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-22T20-57-26Z-issue-361-suspended-notice-edit.md",
+              "commit": "f23e3cc1db323c22f2c728532d3d4857bc3de9ef"
+            }
+          },
+          "recorded_at": "2026-11-22T21:25:20.566952848Z",
+          "seal": {
+            "by": "server",
+            "mac": "ff52f89d5a0420d743ebbda243a90395262eeaad910dd98b7ffe14114af413ac"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The timestamped changelog file exists in the commit and its content matches the change.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0598"
+          ],
+          "recorded_at": "2026-11-22T21:25:37.604222312Z",
+          "seal": {
+            "by": "server",
+            "mac": "aca0fe9dee1c85164df98d4a7f6adc4b570a307d16441bd32893ad396256405d"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:24:48.591579309Z",
+      "updated_at": "2026-11-22T21:25:37.604222312Z",
+      "seal": {
+        "by": "server",
+        "mac": "fc0766f74032cd13d57502f46d6035c216972b3791e7859257c7a79e3fac99c2"
       }
     }
   ]
