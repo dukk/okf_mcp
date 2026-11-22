@@ -494,9 +494,8 @@ mod tests {
     /// instruction must not push the model to save what the person didn't ask to keep.
     #[test]
     fn the_instructions_tell_a_remember_request_to_save_to_the_catalog() {
-        assert!(INSTRUCTIONS.contains(
-            "When the person asks you to remember something, save it to the catalog"
-        ));
+        assert!(INSTRUCTIONS
+            .contains("When the person asks you to remember something, save it to the catalog"));
         assert!(INSTRUCTIONS.contains("Don't save what they didn't ask you to keep."));
     }
 
