@@ -124,6 +124,26 @@ fn wait_loaded(ui: &Ui) {
     ui.wait_visible("#main .view[data-loaded=true]");
 }
 
+/// Opens the Account page and waits until it has drawn every section.
+///
+/// The six sections load in any order and each one moves the controls below
+/// it, so a control that is visible is not yet in its final place: a click
+/// on it can land on an element a later section redraws (`Detached`), or
+/// miss a section that has not answered within the wait on a loaded machine
+/// (issues #373, #440, #500). A journey that must see the page before it is
+/// loaded (a held read), or on which it never loads (a key's session is
+/// refused the page), opens it with `ui.open` instead.
+///
+/// # Arguments
+/// * `ui` - the browser the journey drives.
+///
+/// # Panics
+/// When the page is not fully drawn within the harness's wait.
+fn open_account(ui: &Ui) {
+    ui.open("/account");
+    wait_loaded(ui);
+}
+
 /// The `data-test` of the Sign out button on the session row whose text
 /// contains `agent`, in `#session-table`.
 fn revoke_button_of(ui: &Ui, agent: &str) -> String {
@@ -144,7 +164,7 @@ async fn a_member_changes_their_password_and_signs_in_with_the_new_one() {
     member(&server, Access::Write).await;
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
-        ui.open("/account");
+        open_account(ui);
         ui.wait_visible("#password-form");
         ui.fill("#password-form input[name=current]", PASSWORD);
         ui.fill("#password-form input[name=password]", NEW_PASSWORD);
@@ -177,7 +197,7 @@ async fn a_wrong_current_password_is_refused_and_keeps_the_session() {
     member(&server, Access::Write).await;
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
-        ui.open("/account");
+        open_account(ui);
         ui.fill(
             "#password-form input[name=current]",
             "not the password at all",
@@ -213,7 +233,7 @@ async fn mismatched_new_passwords_are_caught_before_sending() {
     member(&server, Access::Write).await;
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
-        ui.open("/account");
+        open_account(ui);
         ui.fill("#password-form input[name=current]", PASSWORD);
         ui.fill("#password-form input[name=password]", NEW_PASSWORD);
         ui.fill(
@@ -245,7 +265,7 @@ async fn a_member_adds_a_passkey_with_the_browser_and_other_sessions_end() {
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
         let _authenticator = ui.virtual_authenticator();
-        ui.open("/account");
+        open_account(ui);
         ui.wait_text("#session-table", "phone browser");
         ui.wait_text("#passkey-list", "No passkeys yet");
         ui.fill("#passkey-name", "laptop");
@@ -277,7 +297,7 @@ async fn a_member_renames_and_removes_a_passkey_and_a_cancelled_add_adds_none() 
     alices_passkey(&server.db.pool, &id, "laptop").await;
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
-        ui.open("/account");
+        open_account(ui);
         ui.wait_visible("[data-test=passkey-laptop]");
         // Rename: a write signed in by session, so it also proves the
         // console sends the CSRF header.
@@ -335,7 +355,7 @@ async fn the_last_sign_in_method_stays_and_the_page_says_why() {
                 .await
                 .expect("drop alice's password");
         });
-        ui.open("/account");
+        open_account(ui);
         ui.click("[data-test=passkey-remove-laptop]");
         ui.click("#confirm-ok");
         // The 409's reason.
@@ -361,7 +381,7 @@ async fn a_member_signs_out_other_sessions_one_at_a_time() {
     }
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
-        ui.open("/account");
+        open_account(ui);
         ui.wait_text("#session-table", "phone browser");
         ui.wait_text("#session-table", "this browser");
         let phone = revoke_button_of(ui, "phone browser");
@@ -394,7 +414,7 @@ async fn signing_this_browser_out_from_the_account_page_ends_its_session() {
     another_session(pool, &id, "phone browser").await;
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
-        ui.open("/account");
+        open_account(ui);
         ui.wait_text("#session-table", "phone browser");
         let here = revoke_button_of(ui, "this browser");
         ui.click(&format!("[data-test={here}]"));
@@ -434,7 +454,7 @@ async fn a_member_unlinks_an_identity_and_sees_their_ceiling_and_sign_ins() {
     let journey_pool = pool.clone();
     let ran = drive(console_base(&server), move |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
-        ui.open("/account");
+        open_account(ui);
         ui.wait_text("[data-test=ceiling-main]", "main");
         ui.wait_text("#ceiling-table", "write");
         assert!(!ui.text("#ceiling-table").contains("other"));
@@ -484,7 +504,7 @@ async fn a_bad_credential_at_finish_shows_the_reason_and_keeps_the_session() {
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
         let _authenticator = ui.virtual_authenticator();
-        ui.open("/account");
+        open_account(ui);
         ui.wait_text("#passkey-list", "No passkeys yet");
         // The page's own fetch, wrapped: the finish request's client data
         // claims a sign-in (`webauthn.get`), so the server cannot verify it.
@@ -562,11 +582,10 @@ async fn a_member_links_an_identity_and_keeps_their_other_sessions() {
     another_session(pool, &id, "phone browser").await;
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
-        ui.open("/account");
         // Every section has drawn before anything is clicked: each one moves
         // the controls below it, and the phone's row proves the second
         // session existed when the page first read the list (issue #373).
-        wait_loaded(ui);
+        open_account(ui);
         ui.wait_text("#session-table", "phone browser");
         ui.wait_text("[data-test=identity-link-example]", "Link Example ID");
         ui.click("#identity-keep-sessions");
@@ -617,7 +636,7 @@ async fn a_refused_link_shows_the_reason_and_stays_on_the_page() {
     let id = alices_id(&server.db.pool).await;
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
-        ui.open("/account");
+        open_account(ui);
         ui.click("[data-test=identity-link-example]");
         ui.wait_text("#toasts", "discovery for example failed");
         assert_eq!(
@@ -692,7 +711,7 @@ async fn a_member_edits_their_display_name_and_an_over_long_one_is_refused() {
     let ran = drive(console_base(&server), move |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
         ui.wait_text("#whoami", "Alice Example - write");
-        ui.open("/account");
+        open_account(ui);
         ui.wait_visible("#account-display-name");
         assert_eq!(ui.eval(DISPLAY_NAME_VALUE, json!(null)), "Alice Example");
         // The slug stays visible as an id, apart from the name.
@@ -781,7 +800,7 @@ async fn a_non_admin_team_owner_renames_their_team_from_account() {
     acme_with_owner_and_member(&server).await;
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password("bob@example.com", PASSWORD);
-        ui.open("/account");
+        open_account(ui);
         ui.wait_visible("#account-team-acme");
         assert_eq!(input_value(ui, "#account-team-acme"), "Acme");
         ui.fill("#account-team-acme", "Acme Ltd");
@@ -811,7 +830,7 @@ async fn a_member_who_is_not_an_owner_sees_the_team_but_no_editor() {
     acme_with_owner_and_member(&server).await;
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password("carol@example.com", PASSWORD);
-        ui.open("/account");
+        open_account(ui);
         // The team is listed in Profile by its label.
         ui.wait_text("#account-facts", "Acme");
         ui.wait_text("[data-test=owned-team-carol]", "Named after you");
@@ -848,7 +867,7 @@ async fn the_ceiling_is_paged_with_a_find_box() {
     crate::self_service::seed_alices_catalogs(&server, 150).await;
     drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
-        ui.open("/account");
+        open_account(ui);
         ui.wait_visible("[data-test=ceiling-c00001]");
         ui.wait_visible("#ceiling-more");
         assert_eq!(ceiling_rows(ui).len(), 100, "one page");
@@ -901,7 +920,7 @@ async fn a_member_deletes_their_account_with_their_password_and_is_signed_out() 
     member(&server, Access::Write).await;
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
-        ui.open("/account");
+        open_account(ui);
         ui.wait_visible("#account-delete-password");
         ui.fill("#account-delete-password", PASSWORD);
         // The deletion is held, so the page is seen while it runs.
@@ -945,7 +964,7 @@ async fn a_refused_deletion_shows_the_reason_and_keeps_the_page() {
     .expect("give alice's team main");
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
-        ui.open("/account");
+        open_account(ui);
         ui.wait_visible("#account-delete-password");
         ui.fill("#account-delete-password", PASSWORD);
         ui.click("#account-delete");
@@ -982,7 +1001,7 @@ async fn a_member_confirms_with_a_passkey_and_deletes_their_account() {
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
         let _authenticator = ui.virtual_authenticator();
-        ui.open("/account");
+        open_account(ui);
         ui.wait_text("#passkey-list", "No passkeys yet");
         ui.fill("#passkey-name", "laptop");
         ui.click("#passkey-add");

@@ -146,19 +146,33 @@ async fn investigator_client_paginated_setup_can_be_dropped_at_deadline_or_cance
         *fake.state.page_delay.lock().unwrap() = true;
         let cancel = tokio_util::sync::CancellationToken::new();
         let signal = cancel.clone();
+        // Set once the second page list is in flight: the deadline below
+        // counts from here, not from the start, so a loaded machine that is
+        // slow to reach it neither fires the deadline before the cancel nor
+        // before the second list (issue #500).
+        let reached = tokio_util::sync::CancellationToken::new();
+        let reached_signal = reached.clone();
         let state = fake.state.clone();
         let trigger = tokio::spawn(async move {
             while state.lists.load(Ordering::SeqCst) < 2 {
                 tokio::task::yield_now().await;
             }
+            reached_signal.cancel();
             if cancelled {
                 signal.cancel();
             }
         });
-        let start = tokio::time::Instant::now();
+        let deadline = async {
+            reached.cancelled().await;
+            if cancelled {
+                // The cancel decides this round; the deadline never fires.
+                std::future::pending::<()>().await;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        };
         let result = tokio::select! {
             _ = cancel.cancelled() => Err(RunnerError::Cancelled),
-            _ = tokio::time::sleep(std::time::Duration::from_millis(300)) => Err(RunnerError::Budget),
+            () = deadline => Err(RunnerError::Budget),
             result = fake.client() => result.map(|_| ()),
         };
         assert_eq!(
@@ -169,7 +183,6 @@ async fn investigator_client_paginated_setup_can_be_dropped_at_deadline_or_cance
                 RunnerError::Budget
             })
         );
-        assert!(start.elapsed() < std::time::Duration::from_secs(1));
         assert_eq!(fake.state.lists.load(Ordering::SeqCst), 2);
         assert!(fake.state.calls.lock().unwrap().is_empty());
         tokio::time::timeout(std::time::Duration::from_secs(1), trigger)

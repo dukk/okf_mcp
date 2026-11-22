@@ -270,6 +270,12 @@ fn investigator_claude_object_parser_rejects_duplicate_fields() {
     }
 }
 
+/// The longest a test polls for something that happens at once on an idle
+/// machine (a child starting, a killed child leaving `/proc`). A poll returns
+/// as soon as its condition holds, so this only matters when the machine is
+/// so loaded that the condition is late (issue #500).
+const POLL_BOUND: Duration = Duration::from_secs(60);
+
 struct Fake {
     dir: tempfile::TempDir,
     config: RunnerConfig,
@@ -323,7 +329,9 @@ impl Fake {
             .is_some_and(|bytes| serde_json::from_slice::<Value>(&bytes).is_ok())
     }
     async fn started(&self) {
-        for _ in 0..1000 {
+        // A generous bound, not a pace: it returns the moment the fake has
+        // started, and a loaded machine can take seconds to start Python.
+        for _ in 0..(POLL_BOUND.as_millis() / 5) {
             if self.has_record() {
                 return;
             }
@@ -536,25 +544,43 @@ async fn investigator_claude_bounds_pipes_and_reaps() {
     fake.reaped();
 }
 
+/// The deadline covers waiting for the pipes to close: a descendant that
+/// keeps them open after the child exits must not hold `run_process` past it.
+///
+/// The fake's descendant holds the pipes until the test releases it, so
+/// returning at all, with the descendant still alive, proves the deadline
+/// ended the run, however slow the machine is. The deadline also covers
+/// spawning, so a run whose child had not started when it fired proves
+/// nothing and is repeated with a longer one (issue #307, issue #500).
 #[tokio::test]
 async fn investigator_claude_timeout_includes_pipe_eof() {
     let _test = TEST_LOCK.lock().await;
-    let fake = Fake::new(json!({"hold_pipes":true}));
-    let begin = std::time::Instant::now();
-    let result = run_process(
-        fake.config.claude_binary.clone(),
-        vec![],
-        None,
-        vec![],
-        CancellationToken::new(),
+    let mut ended = None;
+    for deadline in [
         Duration::from_secs(2),
-    )
-    .await;
+        Duration::from_secs(10),
+        Duration::from_secs(40),
+    ] {
+        let fake = Fake::new(json!({"hold_pipes":true}));
+        let result = run_process(
+            fake.config.claude_binary.clone(),
+            vec![],
+            None,
+            vec![],
+            CancellationToken::new(),
+            deadline,
+        )
+        .await;
+        if fake.has_record() {
+            ended = Some((fake, result));
+            break;
+        }
+    }
+    let (fake, result) = ended.expect("the fake did not start within the longest deadline");
     assert_eq!(result.err(), Some(RunnerError::Child));
-    assert!(begin.elapsed() < Duration::from_millis(2900));
     fake.reaped();
-    // Allow the deliberately short-lived fake pipe holder to exit naturally.
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    // Let the descendant, which exits on this file, go.
+    std::fs::write(fake.dir.path().join("release"), b"").unwrap();
 }
 
 #[tokio::test]
@@ -580,7 +606,7 @@ async fn investigator_claude_drop_and_serialization() {
     running.abort();
     let _ = running.await;
     let pid = first.record()["pid"].as_u64().unwrap();
-    for _ in 0..1000 {
+    for _ in 0..(POLL_BOUND.as_millis() / 5) {
         if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
             break;
         }

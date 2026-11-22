@@ -6,8 +6,22 @@ use std::time::{Duration, Instant};
 
 use rustwright::{chromium, ActionOptions, Browser, GotoOptions, LaunchOptions, Page};
 
-/// How long `wait_*` polls before failing.
-const WAIT: Duration = Duration::from_secs(10);
+/// How long `wait_*` polls before failing. A generous upper bound, not a
+/// pace: a poll returns the moment its condition holds, so a passing journey
+/// never waits this long, and a machine running several gates at once (load
+/// average past 16, issue #500) gets the time a page needs to draw.
+const WAIT: Duration = Duration::from_secs(60);
+
+/// Chromium's rule that `localhost` is the IPv4 loopback, where the test
+/// servers listen. Without it Chromium tries `::1` first, and the servers
+/// bind `127.0.0.1` on a port the OS picks with only IPv4 in mind: the same
+/// port number can be an IPv6-only listener of another process (a container
+/// engine's port proxy listens on `[::]` for every port it publishes), which
+/// then answers the browser with an empty response or a reset instead of
+/// the connection being refused and retried on IPv4 (issue #500, seen as
+/// `ERR_EMPTY_RESPONSE` on the sign-in page). The page's origin stays
+/// `localhost`, so its secure-context and WebAuthn behaviour are unchanged.
+const LOCALHOST_IS_IPV4: &str = "--host-resolver-rules=MAP localhost 127.0.0.1";
 
 /// Holds the page's next request with method `arg.method` to a path ending
 /// in `arg.suffix` until `window.releaseHeld()`; `window.heldDone` turns
@@ -98,7 +112,11 @@ where
             return false;
         }
         let browser = chromium()
-            .launch(LaunchOptions::default().headless(true))
+            .launch(
+                LaunchOptions::default()
+                    .headless(true)
+                    .arg(LOCALHOST_IS_IPV4),
+            )
             .expect("launch Chromium");
         let page = browser.new_page().expect("open a page");
         page.arm_console_capture().expect("capture the console");

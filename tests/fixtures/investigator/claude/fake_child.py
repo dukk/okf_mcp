@@ -39,10 +39,14 @@ sys.stdout.buffer.write(payload + b" " * max(0, size - len(payload)))
 sys.stdout.buffer.flush()
 t.join()
 if cfg.get("hold_pipes"):
-    # A short-lived owned fake descendant keeps the pipes open after parent exit.
-    # It exits naturally; the adapter must never signal an unowned PID/group.
+    # An owned fake descendant keeps the pipes open after parent exit. It exits
+    # naturally, when the test creates `release` (or its directory is gone, or
+    # after two minutes); the adapter must never signal an unowned PID/group.
     if os.fork() == 0:
-        time.sleep(3)
+        for _ in range(2400):
+            if os.path.exists(root + "/release") or not os.path.isdir(root):
+                break
+            time.sleep(0.05)
         os._exit(0)
 if cfg.get("after_output_stall"):
     time.sleep(120)

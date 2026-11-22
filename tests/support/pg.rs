@@ -575,6 +575,34 @@ pub async fn start_labelled<I: Image>(
     }
 }
 
+/// Whether `error` is the kind a start with a zero-length timeout can
+/// legitimately end in: the wait stage's own `StartupTimeout`, or, when the
+/// machine is loaded enough that an earlier stage (pull, create, copy) runs
+/// out of time first, a Docker client, I/O or wrapped error that says it timed
+/// out. Any other error (a refusal, a missing image, a bad request) is not.
+///
+/// # Arguments
+/// * `error` - what a start with a zero-length timeout returned.
+///
+/// # Returns
+/// Whether the error is a timeout of some stage of the start.
+pub fn is_timeout_class(error: &TestcontainersError) -> bool {
+    use testcontainers_modules::testcontainers::core::error::WaitContainerError;
+
+    match error {
+        TestcontainersError::WaitContainer(WaitContainerError::StartupTimeout) => true,
+        TestcontainersError::Io(io) => io.kind() == std::io::ErrorKind::TimedOut,
+        TestcontainersError::Client(_) | TestcontainersError::Other(_) => {
+            let text = error.to_string().to_lowercase();
+            text.contains("timed out") || text.contains("timeout")
+        }
+        TestcontainersError::WaitContainer(_)
+        | TestcontainersError::PortNotExposed { .. }
+        | TestcontainersError::MissingInfo(_)
+        | TestcontainersError::Exec(_) => false,
+    }
+}
+
 /// The ids of every container (running or not) labelled `START_LABEL=label`.
 ///
 /// # Errors
