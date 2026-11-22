@@ -66,4 +66,6 @@ pub mod selection;
 pub mod shared;
 pub mod store;
 pub mod telemetry;
+#[cfg(test)]
+pub(crate) mod test_tracing;
 pub mod write;

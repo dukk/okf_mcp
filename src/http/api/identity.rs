@@ -533,7 +533,7 @@ mod tests {
 
         let (status, body) = {
             // Only this thread's events: the request runs on it.
-            let _guard = tracing::subscriber::set_default(subscriber);
+            let _guard = crate::test_tracing::set_default(subscriber);
             tokio::time::timeout(
                 std::time::Duration::from_secs(30),
                 send(&test, "GET", "/api/v1/whoami", Some(&keys.read), None),

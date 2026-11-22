@@ -1115,7 +1115,7 @@ mod tests {
             .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NEW)
             .finish();
         // `set_default` installs it for this thread until the guard drops.
-        let guard = tracing::subscriber::set_default(subscriber);
+        let guard = crate::test_tracing::set_default(subscriber);
         // tracing caches whether each log callsite is enabled. Tests on
         // other threads, with no subscriber, can cache "disabled" for the
         // callsites these requests use while this one starts. So run the

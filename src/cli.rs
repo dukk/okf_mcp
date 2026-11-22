@@ -3395,7 +3395,7 @@ mod tests {
             .with_writer(capture.clone())
             .with_ansi(false)
             .finish();
-        let guard = tracing::subscriber::set_default(subscriber);
+        let guard = crate::test_tracing::set_default(subscriber);
 
         let result = dispatch(revoke_cli(&db), config, None, clock, &|_| None).await;
 
@@ -3425,7 +3425,7 @@ mod tests {
             .with_writer(capture.clone())
             .with_ansi(false)
             .finish();
-        let guard = tracing::subscriber::set_default(subscriber);
+        let guard = crate::test_tracing::set_default(subscriber);
 
         let result = dispatch(revoke_cli(&db), config, None, clock, &env).await;
 
