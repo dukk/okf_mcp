@@ -27,6 +27,10 @@ Time: see the file name (UTC).
   remove that is no longer queued, `sources` or `open_questions` no longer a
   list. Queuing a question that is already queued changes nothing, as `question`
   does.
+- The `AddQuestion` that `review` records carries `convert_mapping`, so its replay
+  keeps `review`'s rule for a mapping-valued `open_questions` (treated as empty and
+  converted to a list); `question`'s own replay still refuses such a value with
+  Shape (review round 1).
 - `RemoveQuestion` matches the question's exact text and never reads it as an
   index. An `unquestion` of a question that is not a string records no replay (a
   free edit, as before).

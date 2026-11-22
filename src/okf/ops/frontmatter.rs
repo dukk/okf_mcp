@@ -202,6 +202,7 @@ pub fn review(
             &path,
             ReplayOp::AddQuestion {
                 text: (*text).to_string(),
+                convert_mapping: true,
             },
         );
     }
@@ -254,7 +255,7 @@ pub fn question(
         mut doc,
         data,
     } = load_concept(workspace, concept)?;
-    if !add_question_edit(&path, &mut doc, &data, question)? {
+    if !add_question_edit(&path, &mut doc, &data, question, false)? {
         return Ok(OpOutcome::unchanged(format!(
             "{path}: open question already queued: {question}"
         )));
@@ -265,6 +266,7 @@ pub fn question(
         &path,
         ReplayOp::AddQuestion {
             text: question.to_string(),
+            convert_mapping: false,
         },
     );
     outcome.message = format!("{path}: queued open question: {question}");
@@ -273,6 +275,11 @@ pub fn question(
 
 /// The edit [`question`] and its replay share: queues `question` unless it
 /// is already in `data`'s `open_questions`.
+///
+/// `convert_mapping` is `review`'s rule: a mapping, scalar or null
+/// `open_questions` counts as empty here and the append converts a mapping
+/// to a list (or refuses a scalar). `question`'s rule, `false`, refuses
+/// anything but a list with [`OkfError::Shape`].
 ///
 /// # Returns
 /// Whether the question was added.
@@ -286,8 +293,16 @@ fn add_question_edit(
     doc: &mut Doc,
     data: &IndexMap<String, Value>,
     question: &str,
+    convert_mapping: bool,
 ) -> Result<bool, OkfError> {
-    let existing = list_or_nothing(path, data, OPEN_QUESTIONS)?;
+    let existing = if convert_mapping {
+        match data.get(OPEN_QUESTIONS) {
+            Some(Value::Seq(items)) => items,
+            None | Some(Value::Null | Value::Str(_) | Value::Map(_)) => &[][..],
+        }
+    } else {
+        list_or_nothing(path, data, OPEN_QUESTIONS)?
+    };
     if existing.iter().any(|v| v.as_str() == Some(question)) {
         return Ok(false);
     }
@@ -731,8 +746,11 @@ pub(crate) fn replay_edit(
             outcome,
             note,
         } => set_reviewed_edit(&mut doc, by, at, outcome, note),
-        ReplayOp::AddQuestion { text } => {
-            if !add_question_edit(path, &mut doc, &data, text)? {
+        ReplayOp::AddQuestion {
+            text,
+            convert_mapping,
+        } => {
+            if !add_question_edit(path, &mut doc, &data, text, *convert_mapping)? {
                 return Ok(None);
             }
         }
@@ -1328,6 +1346,7 @@ mod tests {
     fn replaying_a_queued_question_again_changes_nothing_and_a_digit_text_is_not_an_index() {
         let queued = ReplayOp::AddQuestion {
             text: "Old?".to_string(),
+            convert_mapping: false,
         };
         let digits = ReplayOp::RemoveQuestion {
             text: "1".to_string(),
@@ -1347,6 +1366,7 @@ mod tests {
     fn a_replay_keeps_crlf_line_endings_and_refuses_a_text_without_frontmatter() {
         let op = ReplayOp::AddQuestion {
             text: "Q?".to_string(),
+            convert_mapping: false,
         };
 
         let crlf = replayed("---\r\ntype: Note\r\n---\r\n", std::slice::from_ref(&op)).unwrap();
@@ -1392,9 +1412,34 @@ mod tests {
                     note: "Ok.".to_string(),
                 },
                 ReplayOp::AddQuestion {
-                    text: "New?".to_string()
+                    text: "New?".to_string(),
+                    convert_mapping: true,
                 },
             ]
         );
+    }
+
+    #[test]
+    fn a_review_replays_over_a_mapping_valued_open_questions_as_it_ran() {
+        let before = "---\ntype: Note\nopen_questions:\n  k: v\n---\nBody\n";
+        let ws = MemWorkspace::from_files([("a.md", before)]);
+        let questions = ["Q?".to_string()];
+        let outcome = review(&ws, &ctx(), "a", "verified", "Ok.", &questions).unwrap();
+        let direct = read(&ws, "a.md");
+        let newer = before.replacen("type: Note\n", "type: Note\ntitle: Newer\n", 1);
+
+        let text = replayed(&newer, &outcome.replay["a.md"]).unwrap();
+
+        assert_eq!(direct, text.replace("title: Newer\n", ""));
+        assert!(text.contains("\"Q?\""), "{text}");
+        // `question` itself still refuses the mapping, and so does its replay.
+        let refused = question(&ws, &ctx(), "a", "Z?");
+        assert!(refused.is_ok(), "the converted list now accepts a question");
+        let strict = ReplayOp::AddQuestion {
+            text: "Z?".to_string(),
+            convert_mapping: false,
+        };
+        let error = replayed(before, &[strict]).unwrap_err();
+        assert!(matches!(error, OkfError::Shape { .. }), "{error:?}");
     }
 }

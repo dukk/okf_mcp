@@ -198,6 +198,11 @@ pub enum ReplayOp {
     AddQuestion {
         /// The question.
         text: String,
+        /// `review`'s rule for a mapping-valued `open_questions`: treat it
+        /// as empty and convert it to a list. `question` leaves this off
+        /// and refuses such a value.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        convert_mapping: bool,
     },
     /// `unquestion`: remove the open question whose text is exactly `text`
     /// (never read as an index); refused when none is (issue #830). Not
