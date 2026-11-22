@@ -598,8 +598,12 @@ async fn an_email_lookup_is_audited_with_the_outcome_and_never_the_address() {
     assert!(!stored.contains("alice@example.com"), "{stored}");
     assert!(!stored.contains("nobody"), "{stored}");
     assert!(!stored.contains("example.com"), "{stored}");
-    let entries = crate::store::audit::testing::entries(test.app.pool(), "user.looked_up").await;
+    let mut entries =
+        crate::store::audit::testing::entries(test.app.pool(), "user.looked_up").await;
     assert_eq!(entries.len(), 2);
+    // The writes are background tasks, so their ids follow no request
+    // order: find each entry by its outcome (`found` sorts before `not_found`).
+    entries.sort_by_key(|entry| entry.details["outcome"].to_string());
     assert_eq!(entries[0].details["outcome"], "found");
     assert_eq!(entries[0].person.as_deref(), Some("alice"));
     assert_eq!(entries[0].target_kind, "user");
@@ -716,25 +720,28 @@ async fn a_refused_route_is_audited_by_template_method_and_a_stable_code() {
         !stored.contains("/catalogs/main"),
         "no literal path: {stored}"
     );
-    let entries =
+    let mut entries =
         crate::store::audit::testing::entries(test.app.pool(), "provisioner.refused").await;
     assert_eq!(entries.len(), 2);
+    // Background writes: find each entry by its reason, not by id order
+    // (`forbidden` sorts before `route_not_allowed`).
+    entries.sort_by_key(|entry| entry.details["reason"].to_string());
+    // A route on the list that its handler refuses (a listing with no email).
+    assert_eq!(entries[0].details["route"], "/api/v1/users");
+    assert_eq!(entries[0].details["reason"], "forbidden");
     assert_eq!(
-        entries[0].details,
+        entries[1].details,
         json!({
             "method": "GET",
             "route": "/api/v1/catalogs/{catalog}/tree",
             "reason": "route_not_allowed",
-            "hour": entries[0].details["hour"],
+            "hour": entries[1].details["hour"],
         })
     );
     assert_eq!(
-        entries[0].target.as_deref(),
+        entries[1].target.as_deref(),
         Some("GET /api/v1/catalogs/{catalog}/tree")
     );
-    // A route on the list that its handler refuses (a listing with no email).
-    assert_eq!(entries[1].details["route"], "/api/v1/users");
-    assert_eq!(entries[1].details["reason"], "forbidden");
     assert!(entries
         .iter()
         .all(|entry| entry.actor_operator && entry.teams.is_empty()));
