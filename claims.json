@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 477,
+  "next_claim_seq": 492,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "0322ca767a32b4467d05cd6a2aaa8d6d48be5ca7cfe937385d38ae2cc7c7fc4f"
+    "mac": "19b305f241957700f937cbbf760f74397f4041d5f405a40d062d6159a3a7a8a0"
   },
-  "next_evidence_seq": 600,
+  "next_evidence_seq": 629,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "45600f91cfca49378e4c8efeaf2bfa7c65937d78d76e553f65341792ecb32184"
+    "mac": "b40cdff770e960a0f87b6ccdd9cd3c7f24711c1a698ecd1bb4ba3030dbbbf01e"
   },
   "claims": [
     {
@@ -38280,6 +38280,1203 @@
       "seal": {
         "by": "server",
         "mac": "fc0766f74032cd13d57502f46d6035c216972b3791e7859257c7a79e3fac99c2"
+      }
+    },
+    {
+      "id": "CLM-0477",
+      "statement": "Issue #481 is resolved: the caller span-propagation test and the zero-timeout TLS container test no longer fail under load for the reasons the issue names.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/481",
+      "derived_from": [],
+      "artifacts": [
+        "src/test_tracing.rs",
+        "src/okf/caller.rs",
+        "tests/tls.rs"
+      ],
+      "tags": [
+        "from-issue:481"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0618",
+          "kind": "analysis",
+          "locator": "children of CLM-0477",
+          "summary": "The TLS requirements and the caller test fix are supported, but one child, the same-shape-tests-fixed requirement, is refuted because the Observer test fixture in src/telemetry/subscriber.rs still uses raw set_default.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-22T21:55:01.443432210Z",
+          "seal": {
+            "by": "server",
+            "mac": "5b42aeb8c7befc5b8987e10328bb04cb6d88927413c4fe15cbda742fa54ad501"
+          }
+        },
+        {
+          "id": "EVD-0622",
+          "kind": "analysis",
+          "locator": "children of CLM-0477",
+          "summary": "All children are now supported: cause confirmed, helper and regression test, converted tests including Observer, TLS message, timeout-class predicate with refusals, no-container assertion, gates and manual plan, changelog.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T22:02:02.355564134Z",
+          "seal": {
+            "by": "server",
+            "mac": "8d7d78a5c32bb0fdb7a342a47d1bf55bef73c45829011494bba2a54aee191f67"
+          }
+        },
+        {
+          "id": "EVD-0628",
+          "kind": "analysis",
+          "locator": "children of CLM-0477",
+          "summary": "Re-rolled on e1d03c9: all children are supported, including the new SpanRecorder claim CLM-0491 and the re-judged same-shape claim CLM-0482.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T22:10:43.780153425Z",
+          "seal": {
+            "by": "server",
+            "mac": "7424d625ea072b2c4902db278d2283816d54e1a563ee28ca44fb68b9d943ec6b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "Child CLM-0482 is refuted: the Observer fixture still uses raw set_default. Fix: route Observer::start in src/telemetry/subscriber.rs through crate::test_tracing::set_default, then re-audit the same-shape claim and this roll-up.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0618"
+          ],
+          "recorded_at": "2026-11-22T21:55:05.435591551Z",
+          "seal": {
+            "by": "server",
+            "mac": "2cfd37625b248a42f4e602028fa1c9cd1fbd4bd62a0c1da24bdb65be535f88e5"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Every child is supported after the Observer fix in b055d61; together they cover the cause, the race removal, the other tests and the TLS test.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0622"
+          ],
+          "recorded_at": "2026-11-22T22:02:05.936363623Z",
+          "seal": {
+            "by": "server",
+            "mac": "ab0c6c4cca69ec8f8eec635fa46372e7837b70a81c437aedd5bb7112b6ae4c38"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged on e1d03c9: every child supported, including CLM-0491 (SpanRecorder) and CLM-0482 (wide grep).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0628"
+          ],
+          "recorded_at": "2026-11-22T22:10:47.663433675Z",
+          "seal": {
+            "by": "server",
+            "mac": "60fa64abb4cf9813bf0a267f1dede16d16dfc46873f2e38140b6394ccba5b734"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:53:52.936911242Z",
+      "updated_at": "2026-11-22T22:10:47.663433675Z",
+      "seal": {
+        "by": "server",
+        "mac": "12749c04cab037013cf73615a767df152aceeebf2e1f8f3f3bff0d5f8833e621"
+      }
+    },
+    {
+      "id": "CLM-0478",
+      "statement": "The cause of snapshot_build_documents_are_children_of_the_build_span reading left 0 right 3000 is a tracing-core callsite-interest race: while only one dispatcher is registered, a thread reaching a callsite for the first time computes and caches its interest from its own default subscriber, so a thread with no subscriber caches the callsite as never although another test's scoped subscriber is live.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "issue #481 req 1 'confirming the cause first'; PR body: 'Cause of the caller test's left: 0, right: 3000 (confirmed in tracing-core 0.1.36, callsite.rs)'",
+      "derived_from": [
+        "CLM-0477"
+      ],
+      "artifacts": [
+        "src/test_tracing.rs"
+      ],
+      "tags": [
+        "from-issue:481"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0600",
+          "kind": "analysis",
+          "locator": "~/.cargo/registry/src/*/tracing-core-0.1.36/src/callsite.rs:484-580 (Cargo.lock pins tracing-core 0.1.36)",
+          "summary": "register_dispatch sets has_just_one = (registered dispatchers <= 1); rebuilder() returns JustOne when true, and JustOne::for_each calls dispatcher::get_default only, i.e. the registering thread's own default subscriber; no default gives Interest::never (rebuild_callsite_interest unwrap_or_else(never)). The result is cached on the callsite and only recomputed when a dispatch registers or rebuild_interest_cache runs. This matches the stated mechanism.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T21:54:09.074908636Z",
+          "seal": {
+            "by": "server",
+            "mac": "98bed3cfe65e9e67e24f449deecf6288558e7d0e1c81c1c42bf552593c693050"
+          }
+        },
+        {
+          "id": "EVD-0601",
+          "kind": "test",
+          "locator": "cargo test --lib okf::caller::tests::a_callsite (anchor force removed, then restored with git checkout)",
+          "summary": "With the LazyLock::force(&ANCHOR) line deleted from keep_alive, the forced-interleaving test failed with 'left: 0 right: 1' (1 failed); this reproduces the issue's symptom (no read_document spans) from the mechanism. Restored; worktree clean.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T21:54:09.130883393Z",
+          "seal": {
+            "by": "server",
+            "mac": "9bc478093bf7a1b9c3fadf2e4c26a5a2993e18b27551ea5eaab7a77715377ce1"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "tracing-core 0.1.36 source shows the mechanism, and removing the anchor reproduces the exact symptom.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0600",
+            "EVD-0601"
+          ],
+          "recorded_at": "2026-11-22T21:54:56.582975172Z",
+          "seal": {
+            "by": "server",
+            "mac": "7a8020c55b2210064c578a1ab9d59df6a8cac98b284a699218ebae3115a99e21"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:53:52.936911242Z",
+      "updated_at": "2026-11-22T21:54:56.582975172Z",
+      "seal": {
+        "by": "server",
+        "mac": "540eb7e9398270e1d29a8c4ebffea919329c5a9139b04240da84e3a9a303ca3b"
+      }
+    },
+    {
+      "id": "CLM-0479",
+      "statement": "src/test_tracing.rs keeps one inert subscriber alive for the whole process and forces it to exist before any scoped subscriber its set_default, with_default and keep_alive helpers install, so the registry holds at least two dispatchers and a first callsite registration is computed from all of them.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: 'keeps one inert subscriber alive for the process and creates it before any scoped subscriber, so the registry always holds at least two'",
+      "derived_from": [
+        "CLM-0477"
+      ],
+      "artifacts": [
+        "src/test_tracing.rs"
+      ],
+      "tags": [
+        "from-issue:481"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0602",
+          "kind": "inspection",
+          "locator": "src/test_tracing.rs:23-64",
+          "summary": "ANCHOR is a static LazyLock<Dispatch::new(NoSubscriber)> (never dropped, so stays in the registry); keep_alive, set_default and with_default each LazyLock::force(&ANCHOR) before creating or installing the test subscriber. With the anchor plus the test's Dispatch, registrations see 2 dispatchers, so Rebuilder is Read/Write and interest is the AND over all dispatchers (never AND test interest = sometimes), not just the calling thread's.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/test_tracing.rs",
+              "lines": {
+                "start": 23,
+                "end": 64
+              },
+              "commit": "e94e229372113c9f243bdfc67b3e6dc10c9c8c7d"
+            }
+          },
+          "recorded_at": "2026-11-22T21:54:09.186780320Z",
+          "seal": {
+            "by": "server",
+            "mac": "4a865e7c7e2e5fa7d3f96857f1bc6d906475583caaa29c23634a253c82a460e7"
+          }
+        },
+        {
+          "id": "EVD-0603",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib okf::caller --jobs 4",
+          "summary": "5 passed, 0 failed, including snapshot_build_documents_are_children_of_the_build_span and the forced-interleaving regression test.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T21:54:09.241225040Z",
+          "seal": {
+            "by": "server",
+            "mac": "fb0820f3ec2ababd823abfc9bcc1cc0e2775222051426a68b9d994bf5cf1616e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code forces the anchor in every helper; caller tests pass and the regression test shows the anchor matters.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0602",
+            "EVD-0603"
+          ],
+          "recorded_at": "2026-11-22T21:54:56.613434924Z",
+          "seal": {
+            "by": "server",
+            "mac": "d8bec0511d1bb56f482bf7af3ee3722d567940c6fc69095713bda2ba4230331b"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:53:52.936911242Z",
+      "updated_at": "2026-11-22T21:54:56.613434924Z",
+      "seal": {
+        "by": "server",
+        "mac": "72869a83ab11d57f0ca0973e449871d6f17f7fa8c57a0ed6159133e314b83213"
+      }
+    },
+    {
+      "id": "CLM-0480",
+      "statement": "The new regression test a_callsite_first_reached_by_a_thread_without_a_subscriber_is_still_recorded forces the interleaving and fails with left: 0, right: 1 when the anchor force in keep_alive is removed.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'it fails with left: 0, right: 1 when the helper's anchor is removed'",
+      "derived_from": [
+        "CLM-0479"
+      ],
+      "artifacts": [
+        "src/okf/caller.rs",
+        "src/test_tracing.rs"
+      ],
+      "tags": [
+        "from-issue:481"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0604",
+          "kind": "test",
+          "locator": "sed delete of LazyLock::force(&ANCHOR) in keep_alive; tools/agentic/gate.sh narrow --lib okf::caller::tests::a_callsite --jobs 4",
+          "summary": "Test FAILED with 'assertion left == right failed, left: 0, right: 1'; exactly the PR's stated outcome. File restored via git checkout.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T21:54:09.271059582Z",
+          "seal": {
+            "by": "server",
+            "mac": "18b4f1521f189aee7c8689de905d435054d5d7118f53a7264da5238751b2a127"
+          }
+        },
+        {
+          "id": "EVD-0605",
+          "kind": "inspection",
+          "locator": "src/okf/caller.rs:133-152",
+          "summary": "Test builds a recording subscriber, keep_alive registers it, a spawned thread with no default builds a Snapshot first, then with_default(&dispatch) builds again and asserts exactly 1 read_document span: it forces the bad interleaving and the assertion reads the outcome.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/caller.rs",
+              "lines": {
+                "start": 133,
+                "end": 152
+              },
+              "commit": "e94e229372113c9f243bdfc67b3e6dc10c9c8c7d"
+            }
+          },
+          "recorded_at": "2026-11-22T21:54:09.304461940Z",
+          "seal": {
+            "by": "server",
+            "mac": "c745ec154d58a5fab54336491bd59ce81ae1169bfa212a3b2c9cb3341904ab65"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "I deleted the force line and the test failed with left 0 right 1 as stated; the test body forces the interleaving.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0604",
+            "EVD-0605"
+          ],
+          "recorded_at": "2026-11-22T21:54:56.643499014Z",
+          "seal": {
+            "by": "server",
+            "mac": "23d2e457ca3a9d94a76ccc2423a5735b9fc5407cd3e753cc4fc123f478400687"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:53:52.936911242Z",
+      "updated_at": "2026-11-22T21:54:56.643499014Z",
+      "seal": {
+        "by": "server",
+        "mac": "27963854567bb79fb9436134afd210f1e9c653de854df60f06c52d368920ae83"
+      }
+    },
+    {
+      "id": "CLM-0481",
+      "statement": "The four tests in src/okf/caller.rs, rows_returned::counting, the whoami statement-counting test in src/http/api/identity.rs, the session-revocation log test in src/http/mod.rs and the two Redis-warning tests in src/cli.rs install their scoped subscriber through crate::test_tracing instead of tracing's own with_default or set_default.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body 'Same shape, same helper: the four tests in src/okf/caller.rs, rows_returned::counting ..., the whoami ..., the session-revocation ..., and the two Redis-warning tests'",
+      "derived_from": [
+        "CLM-0477"
+      ],
+      "artifacts": [
+        "src/okf/caller.rs",
+        "src/rows_returned.rs",
+        "src/http/api/identity.rs",
+        "src/http/mod.rs",
+        "src/cli.rs"
+      ],
+      "tags": [
+        "from-issue:481"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0606",
+          "kind": "inspection",
+          "locator": "git diff origin/main..HEAD -- src/okf/caller.rs src/rows_returned.rs src/http/api/identity.rs src/http/mod.rs src/cli.rs",
+          "summary": "caller.rs: 3 with_default and 1 set_default switched (4 tests) plus the new keep_alive test; rows_returned.rs:59, identity.rs:536, http/mod.rs:1118, cli.rs:3398 and 3428 all now call crate::test_tracing::set_default. The one remaining raw call in caller.rs (line 71) is production Caller code, not a test.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "crate::test_tracing::(set_default|with_default)",
+              "scope": [
+                "src"
+              ],
+              "hits": 9,
+              "commit": "e94e229372113c9f243bdfc67b3e6dc10c9c8c7d"
+            }
+          },
+          "recorded_at": "2026-11-22T21:54:29.620521247Z",
+          "seal": {
+            "by": "server",
+            "mac": "42456a987dd16a995618f0ae02f8bf6840bb4907613a26824e7fbe886834d2c9"
+          }
+        },
+        {
+          "id": "EVD-0626",
+          "kind": "inspection",
+          "locator": "src/telemetry/subscriber.rs:572 at e1d03c9",
+          "summary": "Neutral for the listed tests (the claim names a specific set, all of which hold per EVD-0606). Note the PR's list was not the whole set: SpanRecorder (subscriber.rs:572, users cache/catalogs_tests.rs and mcp/changesets.rs) was also converted in e1d03c9 and is covered by CLM-0491; Observer by CLM-0482.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-22T22:10:35.288087632Z",
+          "seal": {
+            "by": "server",
+            "mac": "fa3bfe38e677025dc2c81ca0227e4f2105a544435b2c9ba3d32d7a89b6697bdc"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All listed tests now call the helper (9 call sites by search).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0606"
+          ],
+          "recorded_at": "2026-11-22T21:54:56.684225996Z",
+          "seal": {
+            "by": "server",
+            "mac": "a4b1bf85dbcc37c1a047d96ed31148a8ab7411edd037520efbf63ce2ce0eb308"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:53:52.936911242Z",
+      "updated_at": "2026-11-22T22:10:35.288087632Z",
+      "seal": {
+        "by": "server",
+        "mac": "4de06068780cfb98a81e076458c2c674a1e8c7ddb873aa2c46f198b53b511c0c"
+      }
+    },
+    {
+      "id": "CLM-0482",
+      "statement": "No other test in the repository that installs a scoped subscriber with tracing's with_default or set_default and asserts on span or event counts or records emitted by code shared with other tests still bypasses the crate::test_tracing helper.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "issue #481 req 1: 'fix other tests in the repo of the same with_default/set_default plus span- or event-counting shape the same way'",
+      "derived_from": [
+        "CLM-0477"
+      ],
+      "artifacts": [
+        "src/telemetry/subscriber.rs",
+        "src/test_tracing.rs"
+      ],
+      "tags": [
+        "from-issue:481"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0607",
+          "kind": "inspection",
+          "locator": "src/telemetry/subscriber.rs:670-698 (Observer::start)",
+          "summary": "The shared test fixture Observer::start installs its scoped subscriber with raw tracing::subscriber::set_default and then calls tracing::callsite::rebuild_interest_cache(), not crate::test_tracing. It then asserts on exported spans and logs (finish() returns Observed spans/stderr/logs). It is used by 24 call sites (src/app.rs, http/archives.rs, http/signin.rs, http/telemetry_tests.rs, mcp/telemetry_tests.rs, mcp/feedback.rs, oauth/*, store/sign_in_events.rs, telemetry/propagation.rs) that exercise production callsites shared with other tests. This is the same set_default + span/event-recording shape, and the PR's own description says rebuild_interest_cache only narrows the race.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/telemetry/subscriber.rs",
+              "lines": {
+                "start": 670,
+                "end": 698
+              },
+              "commit": "e94e229372113c9f243bdfc67b3e6dc10c9c8c7d"
+            }
+          },
+          "recorded_at": "2026-11-22T21:54:29.656419176Z",
+          "seal": {
+            "by": "server",
+            "mac": "97b029d697d8c21f2f8c907ae633e9a9c6938e96bf5ea3ce541c5dfe92693aee"
+          }
+        },
+        {
+          "id": "EVD-0608",
+          "kind": "analysis",
+          "locator": "git grep over src and tests for subscriber::with_default|set_default|dispatcher::with_default outside src/test_tracing.rs",
+          "summary": "Raw calls left: telemetry/json.rs (239,296,337), telemetry/mod.rs (1047,1139), telemetry/subscriber.rs (693 Observer, 1050 fallback test, 1175 stress test), tests/telemetry_privacy.rs:127, telemetry/mod.rs:649 (production startup). The json.rs, mod.rs, 1050 and telemetry_privacy ones record only events and spans from callsites written inside the test body (target okf_mcp::test or probe), which no other test reaches, so they are not exposed to the race. http/mod.rs:1134 keeps its own rebuild workaround after the helper. Observer is the exposed one: other threads can first reach shared production callsites with no subscriber while a lone Observer is the only dispatcher.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-22T21:54:29.685962366Z",
+          "seal": {
+            "by": "server",
+            "mac": "7e47af3066cdf5b736681d24088963e7871b6a15f959a07232064e586fc2d967"
+          }
+        },
+        {
+          "id": "EVD-0619",
+          "kind": "inspection",
+          "locator": "src/telemetry/subscriber.rs:690-696 at b055d61",
+          "summary": "Observer::start now installs its subscriber with crate::test_tracing::set_default and the rebuild_interest_cache call is gone. All 24 Observer users inherit it.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/telemetry/subscriber.rs",
+              "lines": {
+                "start": 690,
+                "end": 696
+              },
+              "commit": "b055d615fed0603eb6106b50921a336b762b2fe5"
+            }
+          },
+          "recorded_at": "2026-11-22T22:01:57.794481983Z",
+          "seal": {
+            "by": "server",
+            "mac": "d6711b80c057982665f23d3979d92f53434c18b291a849a1de64a8e3756ccae1"
+          }
+        },
+        {
+          "id": "EVD-0620",
+          "kind": "analysis",
+          "locator": "git grep -nE 'subscriber::(set_default|with_default)|dispatcher::(set_default|with_default)|rebuild_interest_cache' -- src tests (at b055d61)",
+          "summary": "Raw installs left: caller.rs:71 (production Caller) and :146 (the keep_alive regression test, deliberately); telemetry/json.rs 239/296/337, telemetry/mod.rs 1047/1139, subscriber.rs:1048, tests/telemetry_privacy.rs:127 all record only from callsites inside their own test bodies, which no other test reaches (re-read); telemetry/mod.rs:649 production startup; subscriber.rs:1173-1174 is the #738 stress test that installs an empty registry and counts nothing; http/mod.rs:1134 is a redundant rebuild after the helper. No remaining test counts records from a shared callsite through a raw install.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T22:01:57.838284683Z",
+          "seal": {
+            "by": "server",
+            "mac": "c2d4dd257ca495e968addbec1a07c7ed4f43df473cd3576147f8f5f7b5a00f85"
+          }
+        },
+        {
+          "id": "EVD-0621",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib telemetry --jobs 4; cargo fmt --all --check",
+          "summary": "On b055d61: 112 passed, 0 failed in telemetry tests (Observer users included); fmt check exit 0. The r2-*.log files have no exit marker lines, and r2-test.log's summed counts are 3320 passed, 0 failed, 21 ignored; I did not rerun the full suite.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T22:01:57.868009134Z",
+          "seal": {
+            "by": "server",
+            "mac": "d72e5ab04a8f3eb7d89c210edc5d755c297dc351bf0a47f5b0fc89059cb67513"
+          }
+        },
+        {
+          "id": "EVD-0625",
+          "kind": "analysis",
+          "locator": "git grep -nE 'Dispatch::new|dispatcher::(with|set)_default|subscriber::(with|set)_default|set_global_default|rebuild_interest_cache' -- src tests, at e1d03c9",
+          "summary": "SUPERSEDES EVD-0620, whose 'no remaining test' statement was wrong: its pattern omitted Dispatch::new and missed SpanRecorder (subscriber.rs:572/600, now fixed). Wide re-grep, each site classified. Through helper: cli.rs:3398,3428; identity.rs:536; http/mod.rs:1118; caller.rs:141,157,171,205,224; rows_returned.rs:59; subscriber.rs:572 (SpanRecorder), 694 (Observer). Raw but safe: caller.rs:71 production Caller; caller.rs:146 uses the keep_alive dispatch; json.rs:239 (bodies at 256, 368), 296, 337 and mod.rs:1047, 1139 and subscriber.rs:1047 and tests/telemetry_privacy.rs:127 all emit only from callsites written inside their own test body, which no other test executes; mod.rs:649 and :712 and bin/okf-maintenance.rs:291 production startup; subscriber.rs:1172-1173 the #738 stress test, counts nothing; http/mod.rs:1134 redundant rebuild. telemetry_privacy.rs emit_a_span: the shared `probe` callsite is reached only inside with_default, so every thread reaching it has its own default and the no-subscriber first-registration race does not apply; the file also serializes tests with SERIAL (5 of 5 lock sites) and its 6 tests passed 3 of 3 reruns. Residual, not proven: telemetry.subscriber() builds a Dispatch before with_default, and a Dispatch registration recomputes cached interest from the registering thread's default when it is the only live dispatcher; I did not establish whether that matters there (tests pass), and it is not the #481 race.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T22:10:35.256856523Z",
+          "seal": {
+            "by": "server",
+            "mac": "5b3f17600198e503bf50780f7d9bd25b37b39737e59bbe167d8cf9defb5b65c5"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "Observer::start in src/telemetry/subscriber.rs (24 call sites asserting on spans/logs from shared production callsites) still uses raw set_default with rebuild_interest_cache, which the PR itself says only narrows the race. Fix: change Observer::start in src/telemetry/subscriber.rs to install its subscriber with crate::test_tracing::set_default (keep or drop the rebuild_interest_cache call), and review the two Observer uses in telemetry/subscriber.rs's own tests; the body-local-callsite tests in telemetry/json.rs, telemetry/mod.rs and tests/telemetry_privacy.rs need no change.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0607"
+          ],
+          "recorded_at": "2026-11-22T21:54:56.717890040Z",
+          "seal": {
+            "by": "server",
+            "mac": "6e31a5bd04438f5931223fe1b2ed344863455fffa6f0d876ec251a1a3244263e"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Observer::start now uses the helper; re-grep finds no remaining raw install that counts records from a shared callsite. Earlier refutation (EVD-0607) addressed by the fix in b055d61.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0619",
+            "EVD-0620",
+            "EVD-0621"
+          ],
+          "recorded_at": "2026-11-22T22:02:02.325021679Z",
+          "seal": {
+            "by": "server",
+            "mac": "d0cebd6ac9b709b4b3be97484f053ad72ebcfe226147b1d2629da243ed08b3b1"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The previous supported verdict relied on EVD-0620, whose grep missed SpanRecorder (raw Dispatch::new); that is now fixed and the wide grep (EVD-0625, which supersedes EVD-0620) classifies every Dispatch::new, with_default, set_default and set_global_default site in src and tests. Cited: Observer fix, the wide grep and tests.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0619",
+            "EVD-0625",
+            "EVD-0621"
+          ],
+          "recorded_at": "2026-11-22T22:10:43.718392252Z",
+          "seal": {
+            "by": "server",
+            "mac": "16a7e1b1fcbad8dfe97fbc32102736caaa55dadfb51bc9f4f3273e3c83a022e0"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:53:52.936911242Z",
+      "updated_at": "2026-11-22T22:10:43.718392252Z",
+      "seal": {
+        "by": "server",
+        "mac": "4b6399f38b3434cdec28207db0bbda5fcc14587a3a3d303aee146fe1c8e4b458"
+      }
+    },
+    {
+      "id": "CLM-0483",
+      "statement": "PR statement: calling rebuild_interest_cache() after installing the scoped subscriber would only narrow the race, because a callsite first reached afterwards by a thread with no subscriber is not covered.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: 'rebuild_interest_cache() after installing would only narrow the race (a callsite first reached afterwards is not covered)'",
+      "derived_from": [
+        "CLM-0478"
+      ],
+      "artifacts": [
+        "src/test_tracing.rs"
+      ],
+      "tags": [
+        "from-issue:481"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0609",
+          "kind": "analysis",
+          "locator": "tracing-core-0.1.36 callsite.rs:484-580",
+          "summary": "rebuild_interest_cache recomputes interest only for callsites already registered at that moment. A callsite first reached later registers through the rebuilder, which is JustOne while a single dispatcher is registered and then uses only the registering thread's default (none, so never). Hence the cache rebuild narrows but does not close the race, as the PR says.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T21:54:29.716701932Z",
+          "seal": {
+            "by": "server",
+            "mac": "73f5e6d09028e77afe622c29463f58f61f8484dd905f83e968ea4d5d0709d26a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "tracing-core callsite.rs shows a later-registered callsite uses only the registering thread's default when one dispatcher exists.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0609"
+          ],
+          "recorded_at": "2026-11-22T21:54:56.750933083Z",
+          "seal": {
+            "by": "server",
+            "mac": "3c21ed85563d8ff8088d2e84d93787c1a2aadeafe9af3dbcea6f8bfe5940baa1"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:53:52.936911242Z",
+      "updated_at": "2026-11-22T21:54:56.750933083Z",
+      "seal": {
+        "by": "server",
+        "mac": "8758f0d817d96db905061462352a8e31fd723aeffab7a191ba1a3c5bc7b30613"
+      }
+    },
+    {
+      "id": "CLM-0484",
+      "statement": "a_timed_out_tls_start_leaves_no_container prints the error value, including its variant, in the first assertion's failure message.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "issue #481 req 2: 'print the error variant in the assertion message'",
+      "derived_from": [
+        "CLM-0477"
+      ],
+      "artifacts": [
+        "tests/tls.rs"
+      ],
+      "tags": [
+        "from-issue:481"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0610",
+          "kind": "inspection",
+          "locator": "tests/tls.rs:219-225",
+          "summary": "Assertion message is 'the start did not fail with a timeout-class error: {error:?}' where error is the Option<TestcontainersError>; Debug output of the enum prints the variant. Container has no Debug so .err() is used.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/tls.rs",
+              "lines": {
+                "start": 219,
+                "end": 225
+              },
+              "commit": "e94e229372113c9f243bdfc67b3e6dc10c9c8c7d"
+            }
+          },
+          "recorded_at": "2026-11-22T21:54:29.749624717Z",
+          "seal": {
+            "by": "server",
+            "mac": "fd619a412f5e365fde47a32c6222969bd8852f8c40c8f4e0ef10525ef0251d26"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The failure message formats the error with {:?}, which prints the variant.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0610"
+          ],
+          "recorded_at": "2026-11-22T21:54:56.787486439Z",
+          "seal": {
+            "by": "server",
+            "mac": "ac799623d45a1ddb15a2ab7f0717aa9b963bf120317dd0266497fcaca59f8aee"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:53:52.936911242Z",
+      "updated_at": "2026-11-22T21:54:56.787486439Z",
+      "seal": {
+        "by": "server",
+        "mac": "03e2e30ec5d262cd7d82e0311468e7bac7fc438dda6ea540a695c0e6e412574a"
+      }
+    },
+    {
+      "id": "CLM-0485",
+      "statement": "a_timed_out_tls_start_leaves_no_container accepts StartupTimeout, an I/O TimedOut error, and a client or other error whose text names a timeout, and refuses every other error variant, so it does not accept any error.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "issue #481 req 2: 'accept the timeout-class errors ... without weakening it into accepting any error'",
+      "derived_from": [
+        "CLM-0477"
+      ],
+      "artifacts": [
+        "tests/tls.rs"
+      ],
+      "tags": [
+        "from-issue:481"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0611",
+          "kind": "inspection",
+          "locator": "tests/tls.rs:185-201",
+          "summary": "is_timeout_class matches exhaustively: WaitContainer(StartupTimeout) true; Io true only for ErrorKind::TimedOut; Client and Other true only when the lowercased text contains 'timed out' or 'timeout'; other WaitContainer variants, PortNotExposed, MissingInfo, Exec false. No catch-all arm, so not 'any error'. The test uses error.is_some_and(is_timeout_class), so an Ok start also fails.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/tls.rs",
+              "lines": {
+                "start": 185,
+                "end": 201
+              },
+              "commit": "e94e229372113c9f243bdfc67b3e6dc10c9c8c7d"
+            }
+          },
+          "recorded_at": "2026-11-22T21:54:29.780396513Z",
+          "seal": {
+            "by": "server",
+            "mac": "cf56f6ff3e2f41332fe7f20f5afe2372d0df5ee8fce124f64cc2ae20542ca978"
+          }
+        },
+        {
+          "id": "EVD-0612",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --test tls --jobs 4 -- a_timed_out only_timeout",
+          "summary": "2 passed, 0 failed: a_timed_out_tls_start_leaves_no_container and only_timeout_class_errors_pass_the_zero_timeout_check.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T21:54:29.811663571Z",
+          "seal": {
+            "by": "server",
+            "mac": "64b5b45dc9b40ca7200b734827f0a1d7f6679cc81041a7491993b13b2dce3f9d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Exhaustive match with false arms for non-timeout variants, and the test passed on head.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0611",
+            "EVD-0612"
+          ],
+          "recorded_at": "2026-11-22T21:54:56.816899436Z",
+          "seal": {
+            "by": "server",
+            "mac": "22d6d451a934f2be6228ef1b60523273d84c48d051d1980036b76d57962de17f"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:53:52.936911242Z",
+      "updated_at": "2026-11-22T21:54:56.816899436Z",
+      "seal": {
+        "by": "server",
+        "mac": "ecbe204110ce9e6d400c95c7056b0c84cef27f090c3c3ca84bfd3bd93fe73eba"
+      }
+    },
+    {
+      "id": "CLM-0486",
+      "statement": "a_timed_out_tls_start_leaves_no_container still asserts that no container with the start label is left behind.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "inspection",
+      "source": "issue #481 req 2: 'keeping the no-container-left-behind assertion'",
+      "derived_from": [
+        "CLM-0477"
+      ],
+      "artifacts": [
+        "tests/tls.rs"
+      ],
+      "tags": [
+        "from-issue:481"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0613",
+          "kind": "inspection",
+          "locator": "tests/tls.rs:226",
+          "summary": "Line 226 still asserts pg::labelled_containers(&label).await.unwrap().is_empty(), unconditionally after the error check; unchanged from main.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/tls.rs",
+              "lines": {
+                "start": 226,
+                "end": 226
+              },
+              "commit": "e94e229372113c9f243bdfc67b3e6dc10c9c8c7d"
+            }
+          },
+          "recorded_at": "2026-11-22T21:54:29.859042550Z",
+          "seal": {
+            "by": "server",
+            "mac": "2da793d494d830fe3414df0e5a4cacda81a36def219540a2d83c3a50167660a2"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The assertion at tests/tls.rs:226 is present and unconditional.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0613"
+          ],
+          "recorded_at": "2026-11-22T21:54:56.846146993Z",
+          "seal": {
+            "by": "server",
+            "mac": "58bdadea83ba4200b90506502fe0b8349b63d347a7679b948a56b7ce684b8508"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:53:52.936911242Z",
+      "updated_at": "2026-11-22T21:54:56.846146993Z",
+      "seal": {
+        "by": "server",
+        "mac": "4974c6f5da2ca17f7d2a8b8768ed4aef6079d20921dac5793de5dbd537b1f837"
+      }
+    },
+    {
+      "id": "CLM-0487",
+      "statement": "The test only_timeout_class_errors_pass_the_zero_timeout_check asserts that the timeout-class predicate accepts StartupTimeout, io TimedOut and a timed-out message, and refuses io NotFound, WaitContainer Unhealthy and a no such image error.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'only_timeout_class_errors_pass_the_zero_timeout_check pins that other errors are refused'",
+      "derived_from": [
+        "CLM-0485"
+      ],
+      "artifacts": [
+        "tests/tls.rs"
+      ],
+      "tags": [
+        "from-issue:481"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0614",
+          "kind": "inspection",
+          "locator": "tests/tls.rs:230-254",
+          "summary": "The test asserts true for StartupTimeout, Io(TimedOut) and an Other 'request timed out; ...' message, and false for Io(NotFound), WaitContainer(Unhealthy) and Other 'no such image'. The test ran and passed (2 passed in the narrow gate run).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/tls.rs",
+              "lines": {
+                "start": 230,
+                "end": 254
+              },
+              "commit": "e94e229372113c9f243bdfc67b3e6dc10c9c8c7d"
+            }
+          },
+          "recorded_at": "2026-11-22T21:54:29.903602067Z",
+          "seal": {
+            "by": "server",
+            "mac": "c79c401ebfce49f3ef8d9acb908633c17730d88181161f3801b2a4689f4c0223"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Assertions read directly and the test passed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0614"
+          ],
+          "recorded_at": "2026-11-22T21:55:01.416076031Z",
+          "seal": {
+            "by": "server",
+            "mac": "9fcfa13a2f2b85ab8429939c6d64997daacf30dde5d81ac2d2468136840aa430"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:53:52.936911242Z",
+      "updated_at": "2026-11-22T21:55:01.416076031Z",
+      "seal": {
+        "by": "server",
+        "mac": "465efc931652147ff9c48ca1c7e3266c209d90c7919ceefa48797e05fc658b54"
+      }
+    },
+    {
+      "id": "CLM-0488",
+      "statement": "On the pushed head, tools/agentic/gate.sh fmt, lint and dylint pass and test passes with 3320 passed, 0 failed, 21 ignored.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body Validation: 'fmt: pass; lint: pass; test: pass, 3320 passed, 0 failed, 21 ignored; dylint: pass'",
+      "derived_from": [
+        "CLM-0477"
+      ],
+      "artifacts": [
+        "target/i481-logs/test2.log"
+      ],
+      "tags": [
+        "from-issue:481"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0615",
+          "kind": "log",
+          "locator": "target/i481-logs/test2.log, lint.log, dylint.log, fmt.log (each ends 'exit 0')",
+          "summary": "fmt, lint and dylint logs end exit 0. test2.log ends exit 0; its 28 'test result: ok' lines sum to 3320 passed, 0 failed, 21 ignored (I summed them), plus a node test block. Logs are not rerun by me (full suite out of scope); the passed-count and exit codes come from the logs only. The head e94e229 is the single commit on the branch.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T21:54:37.590253336Z",
+          "seal": {
+            "by": "server",
+            "mac": "ca23ece87ddc21ab20e2b93ad26b19382d102b13e11069a12e9eaa762ff0e00d"
+          }
+        },
+        {
+          "id": "EVD-0627",
+          "kind": "log",
+          "locator": "target/i481-logs/r3-fmt.log, r3-lint.log, r3-dylint.log, r3-test.log (head e1d03c9)",
+          "summary": "r3 logs: r3-test.log 'test result' lines sum to 3320 passed, 0 failed, 21 ignored; fmt, lint and dylint logs end in normal success output (no exit marker lines exist in the r2/r3 logs, so exit codes are inferred from the output, not read). I reran only narrow tests and fmt, not the gates.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T22:10:35.320669546Z",
+          "seal": {
+            "by": "server",
+            "mac": "353958c3566acf919ed8e388caeac69971205b2b0d90c6e3ac7ab1c20801aae9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Logs show exit 0 for all four gates and summed counts match; not rerun by me.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0615"
+          ],
+          "recorded_at": "2026-11-22T21:54:56.876028932Z",
+          "seal": {
+            "by": "server",
+            "mac": "dbc1f02950b544c90468e41a4a7cca44adcf2eaa929ba90997d14d2c15c82796"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged on head e1d03c9: r3 logs show the same totals 3320 passed, 0 failed, 21 ignored with fmt, lint and dylint output clean. Exit codes are inferred, not read, and the gates were not rerun by me.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0627"
+          ],
+          "recorded_at": "2026-11-22T22:10:43.749945841Z",
+          "seal": {
+            "by": "server",
+            "mac": "fc289a85b7159ea68524b56e3021edbdab2b679aa3545e0d57ef68b875fa1814"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:53:52.936911242Z",
+      "updated_at": "2026-11-22T22:10:43.749945841Z",
+      "seal": {
+        "by": "server",
+        "mac": "80a17aa34d3ec1e534c495030414818e9026ce22dd498ebf3244d970c7cb827c"
+      }
+    },
+    {
+      "id": "CLM-0489",
+      "statement": "The PR's manual test plan results hold: cargo test --lib okf::caller runs 5 passed, and the tls test selection a_timed_out plus only_timeout runs 2 passed.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "test",
+      "source": "PR body Manual Test Plan",
+      "derived_from": [
+        "CLM-0477"
+      ],
+      "artifacts": [
+        "src/okf/caller.rs",
+        "tests/tls.rs"
+      ],
+      "tags": [
+        "from-issue:481"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0616",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib okf::caller --jobs 4; tools/agentic/gate.sh narrow --test tls --jobs 4 -- a_timed_out only_timeout",
+          "summary": "Reran on head: caller run printed '5 passed; 0 failed'; tls run printed '2 passed; 0 failed' (a_timed_out_tls_start_leaves_no_container and only_timeout_class_errors_pass_the_zero_timeout_check).",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T21:54:37.620558789Z",
+          "seal": {
+            "by": "server",
+            "mac": "af46f22fc7561b5c8776d77cef549719dee8d1916cdf294ad6afa8179b2944cb"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Reran both commands; counts match.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0616"
+          ],
+          "recorded_at": "2026-11-22T21:54:56.905456600Z",
+          "seal": {
+            "by": "server",
+            "mac": "abf25c12801fdfab8df8251f2ab0888727b2e60acaf17ca66abafb76b59682f2"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:53:52.936911242Z",
+      "updated_at": "2026-11-22T21:54:56.905456600Z",
+      "seal": {
+        "by": "server",
+        "mac": "5ef181fc7e38a353239507bcf5762a90ab94a27dc0dbe37ecac2c87566a8c553"
+      }
+    },
+    {
+      "id": "CLM-0490",
+      "statement": "The PR adds a changelog file matching changelog/*-issue-481-load-flakes.md.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: 'Changelog: changelog/*-issue-481-load-flakes.md'",
+      "derived_from": [
+        "CLM-0477"
+      ],
+      "artifacts": [
+        "changelog/2026-11-22T21-39-06Z-issue-481-load-flakes.md"
+      ],
+      "tags": [
+        "from-issue:481"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0617",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-22T21-39-06Z-issue-481-load-flakes.md",
+          "summary": "File is tracked in the commit range (git diff --stat lists it, 11 lines added).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-22T21-39-06Z-issue-481-load-flakes.md",
+              "commit": "e94e229372113c9f243bdfc67b3e6dc10c9c8c7d"
+            }
+          },
+          "recorded_at": "2026-11-22T21:54:37.656762710Z",
+          "seal": {
+            "by": "server",
+            "mac": "638d73cb8a70abe15a54fb3ba8893af95c89e6c52558bdf3e4af3cdc01f272d2"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The changelog file exists in the diff.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0617"
+          ],
+          "recorded_at": "2026-11-22T21:54:56.935447649Z",
+          "seal": {
+            "by": "server",
+            "mac": "f08e0e4f5e722d787e594c8eccd2e774c38267f351da5c79da1ff6018038f50b"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T21:53:52.936911242Z",
+      "updated_at": "2026-11-22T21:54:56.935447649Z",
+      "seal": {
+        "by": "server",
+        "mac": "c8321bfe260c0778b36f658a54e58929e510bdd1e1015aa7fa0a9ae128dff12e"
+      }
+    },
+    {
+      "id": "CLM-0491",
+      "statement": "capture::SpanRecorder::new in src/telemetry/subscriber.rs registers its recording subscriber through crate::test_tracing::keep_alive, so tests that run futures under SpanRecorder::run (cache/catalogs_tests.rs, mcp/changesets.rs) record spans from shared production callsites without the first-registration race.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "issue #481 req 1: 'fix other tests in the repo of the same shape the same way'; review finding on HEAD e1d03c9",
+      "derived_from": [
+        "CLM-0477"
+      ],
+      "artifacts": [
+        "src/telemetry/subscriber.rs",
+        "src/cache/catalogs_tests.rs",
+        "src/mcp/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:481"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0623",
+          "kind": "inspection",
+          "locator": "src/telemetry/subscriber.rs:563-576 and 596-604 at e1d03c9",
+          "summary": "SpanRecorder::new builds the registry+Collect subscriber and stores crate::test_tracing::keep_alive(subscriber) as its dispatch (forces the process-wide anchor first, then Dispatch::new). run() installs it with dispatcher::with_default on a scoped thread. Before the fix this was a raw Dispatch::new, so a single live dispatcher let a no-subscriber thread cache shared callsites as never.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/telemetry/subscriber.rs",
+              "lines": {
+                "start": 563,
+                "end": 576
+              },
+              "commit": "e1d03c962d86b8c9ff0ad57921de957e4d9ff5c0"
+            }
+          },
+          "recorded_at": "2026-11-22T22:10:35.179376115Z",
+          "seal": {
+            "by": "server",
+            "mac": "e71f129a44b37e0c0c1dd3fc0dc83eb308e5afea4c32dc850f508fcd3acf6051"
+          }
+        },
+        {
+          "id": "EVD-0624",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib telemetry --jobs 4; tools/agentic/gate.sh narrow --lib publish_records_duration",
+          "summary": "On e1d03c9: telemetry tests 112 passed, 0 failed; mcp::changesets publish_records_duration_and_lock_wait (a SpanRecorder user) 1 passed. Users: cache/catalogs_tests.rs:299-315 (counts 'build' spans) and mcp/changesets.rs:1463-1470 (asserts publish spans and parents).",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T22:10:35.224029148Z",
+          "seal": {
+            "by": "server",
+            "mac": "e6eda0b8de98f5cb5101a5a008a5086934be2212478743a0b326613530eac161"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "SpanRecorder::new goes through keep_alive and its user tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0623",
+            "EVD-0624"
+          ],
+          "recorded_at": "2026-11-22T22:10:43.677068272Z",
+          "seal": {
+            "by": "server",
+            "mac": "1b9fa0b9452c7623164391fe46584bf404dec3047f30bc4b94d54d118c345c9a"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T22:10:19.953733440Z",
+      "updated_at": "2026-11-22T22:10:43.677068272Z",
+      "seal": {
+        "by": "server",
+        "mac": "e9b457b64e102eee5ef268b5b6e470514b8a63f91f3d4516a5fbbf206c44d5f8"
       }
     }
   ]

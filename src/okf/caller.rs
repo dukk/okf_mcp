@@ -130,11 +130,31 @@ mod tests {
         seen.iter().filter(|(n, _, _)| n == name).collect()
     }
 
+    /// Issue #481: a thread with no subscriber that reaches a callsite first,
+    /// while the test's subscriber is the only live one, used to cache the
+    /// callsite as "never", and the test then recorded nothing.
+    #[test]
+    fn a_callsite_first_reached_by_a_thread_without_a_subscriber_is_still_recorded() {
+        let (subscriber, seen) = recording();
+        let workspace = MemWorkspace::from_files([("a.md", "---\ntype: note\n---\n\n# T\n")]);
+        // Arrange: keep the test's subscriber alive, not yet the default.
+        let dispatch = crate::test_tracing::keep_alive(subscriber);
+        // Act: another thread, with no subscriber, builds first.
+        thread::scope(|scope| {
+            scope.spawn(|| Snapshot::build(&workspace).expect("builds"));
+        });
+        tracing::dispatcher::with_default(&dispatch, || {
+            Snapshot::build(&workspace).expect("builds")
+        });
+        // Assert: the document span reached the test's subscriber.
+        assert_eq!(named(&seen.lock().expect("lock"), "read_document").len(), 1);
+    }
+
     #[test]
     fn workers_without_the_caller_start_root_spans() {
         let (subscriber, seen) = recording();
         // Arrange: a scoped subscriber, a parent span, and no capture.
-        tracing::subscriber::with_default(subscriber, || {
+        crate::test_tracing::with_default(subscriber, || {
             let _root = tracing::info_span!("root").entered();
             // Act: workers run the leaf with nothing carried over.
             pool().install(|| (0..16).into_par_iter().for_each(|_| leaf()));
@@ -148,7 +168,7 @@ mod tests {
     fn workers_keep_the_callers_span_and_subscriber() {
         let (subscriber, seen) = recording();
         let main_thread = thread::current().id();
-        tracing::subscriber::with_default(subscriber, || {
+        crate::test_tracing::with_default(subscriber, || {
             let root = tracing::info_span!("root");
             // Act: capture under `root`, then run the leaves on a 4-thread pool.
             let caller = root.in_scope(Caller::capture);
@@ -182,7 +202,7 @@ mod tests {
         // The subscriber is scoped to the thread that calls `build` (a pool
         // thread here); the other pool threads only get it through `Caller`.
         pool().install(|| {
-            tracing::subscriber::with_default(subscriber, || {
+            crate::test_tracing::with_default(subscriber, || {
                 Snapshot::build(&workspace).expect("snapshot builds")
             })
         });
@@ -201,7 +221,7 @@ mod tests {
         let (subscriber, seen) = recording();
         let test_thread = thread::current().id();
         // A guard (not `with_default`) because the scope spans an `.await`.
-        let _guard = tracing::subscriber::set_default(subscriber);
+        let _guard = crate::test_tracing::set_default(subscriber);
         let root = tracing::info_span!("root");
         // Act: run a span-opening closure through `blocking` under `root`.
         let _entered = root.enter();

@@ -56,7 +56,7 @@ pub(crate) async fn counting<F: Future>(work: F) -> (F::Output, u64, u64) {
         ),
     );
     let output = {
-        let _guard = tracing::subscriber::set_default(subscriber);
+        let _guard = crate::test_tracing::set_default(subscriber);
         work.await
     };
     let relaxed = std::sync::atomic::Ordering::Relaxed;
