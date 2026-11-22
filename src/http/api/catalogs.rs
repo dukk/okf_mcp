@@ -12,7 +12,7 @@ use axum::routing::{get, patch, put};
 use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 
-use super::{reachable_page, require_every_catalog, PageQuery};
+use super::{owner_session, reachable_page, require_every_catalog, PageQuery};
 use crate::app::App;
 use crate::auth::{CredentialKind, Principal};
 use crate::catalog::CatalogState;
@@ -58,6 +58,7 @@ pub(crate) fn routes(app: &App) -> Router<Arc<App>> {
             "/catalogs/{catalog}/member-access",
             get(member_access).put(set_member_access),
         )
+        .route("/catalogs/{catalog}/entitlements", get(team_entitlements))
         .route("/catalogs/{catalog}/export", archives::export_route())
         .route("/catalogs/{catalog}/import", archives::import_route(app))
 }
@@ -620,22 +621,75 @@ pub(crate) struct MemberAccessChanged {
     pub member_access: &'static str,
 }
 
+/// The refusal of a member-access or entitlement control for a key or an
+/// OAuth grant, as it has always been.
+const ADMIN_ONLY: &str = "this needs an admin key that reaches every catalog";
+
+/// Whether an admin check refused because the caller does not reach the
+/// catalog (the 404 these reads have always answered), as opposed to
+/// reaching it below `admin` (403).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: checks a value, no I/O"
+    )
+)]
+fn is_unreached(admin: &Result<(), OkfError>) -> bool {
+    matches!(admin, Err(OkfError::CatalogNotSelected { .. }))
+}
+
+/// An owner check's refusal for a session that does not reach the catalog
+/// stays the 404 the admin check gave, so a session cannot tell an unknown
+/// catalog from one it merely does not reach; any other error is kept.
+///
+/// # Arguments
+/// * `error` - what the store answered.
+/// * `unreached` - [`is_unreached`] of the admin check.
+/// * `catalog` - the catalog asked about.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: maps a value, no I/O"
+    )
+)]
+fn keep_not_found(error: OkfError, unreached: bool, catalog: &str) -> OkfError {
+    match error {
+        OkfError::Forbidden { .. } if unreached => OkfError::CatalogNotSelected {
+            catalog: catalog.to_string(),
+        },
+        other => other,
+    }
+}
+
 /// `GET /catalogs/{catalog}/member-access`: what the owning team's members
-/// may reach through their self-issued credentials.
+/// may reach through their self-issued credentials. For `admin` on the
+/// catalog, or an owner of its shared team signed in to the console (issue
+/// #352); the store checks the owner under its locks.
 ///
 /// # Errors
 /// 404 for a catalog the caller does not reach or that does not exist; 403
-/// below `admin` on it.
+/// below `admin` on it, for a key or grant that is not an admin, and for a
+/// session that reaches the catalog but does not own its shared team (a
+/// personal team's catalog included).
 #[tracing::instrument(level = "debug", skip_all)]
 async fn member_access(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
     Path(catalog): Path<String>,
 ) -> Result<Json<MemberAccessView>, AppError> {
-    principal
+    let admin = principal
         .require_in(app.directory(), Access::Admin, &catalog)
-        .await?;
-    let access = ceiling::member_access(app.pool(), &catalog).await?;
+        .await;
+    let unreached = is_unreached(&admin);
+    let access = match owner_session(&principal, admin)? {
+        None => ceiling::member_access(app.pool(), &catalog).await?,
+        // The scalar only: no member or entitlement list is read for it.
+        Some(owner) => ceiling::member_access_as_owner(app.pool(), &catalog, owner)
+            .await
+            .map_err(|refusal| keep_not_found(refusal, unreached, &catalog))?,
+    };
     Ok(Json(MemberAccessView {
         name: catalog,
         member_access: access.as_str(),
@@ -643,13 +697,17 @@ async fn member_access(
 }
 
 /// `PUT /catalogs/{catalog}/member-access`: sets it; every member's
-/// self-issued credentials are re-capped at once. The permission
-/// is `ceiling::may_set_member_access`, the one hook team owners will
-/// later share (spec "Admin surface").
+/// self-issued credentials are re-capped at once. The permission is
+/// `ceiling::may_set_member_access` (a provisioner or an every-catalog
+/// admin), or an owner of the catalog's shared team signed in to the
+/// console (issue #352), which the store checks under its locks. Keys and
+/// OAuth grants, an owner's included, get the admin refusal.
 ///
 /// # Errors
-/// 403 for a caller `may_set_member_access` refuses; 400 for an unknown
-/// level; 404 for an unknown catalog; 422 without `access`.
+/// 403 for a caller `may_set_member_access` refuses that is not such an
+/// owner (a non-owner's session, an unknown catalog and a personal team's
+/// catalog included); 400 for an unknown level; 404 for an unknown catalog
+/// asked by an admin; 422 without `access`.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn set_member_access(
     State(app): State<Arc<App>>,
@@ -658,18 +716,25 @@ async fn set_member_access(
     Path(catalog): Path<String>,
     Json(body): Json<MemberAccessBody>,
 ) -> Result<Json<MemberAccessChanged>, AppError> {
-    if !ceiling::may_set_member_access(&principal, &catalog) {
-        return Err(OkfError::Forbidden {
-            reason: "this needs an admin key that reaches every catalog".to_string(),
-        }
-        .into());
-    }
+    let admin = if ceiling::may_set_member_access(&principal, &catalog) {
+        Ok(())
+    } else {
+        Err(OkfError::Forbidden {
+            reason: ADMIN_ONLY.to_string(),
+        })
+    };
+    let owner = owner_session(&principal, admin)?;
     let access = MemberAccess::parse(&body.access).ok_or_else(|| OkfError::InvalidPath {
         path: "access".to_string(),
         reason: format!("must be none, read or write, not {:?}", body.access),
     })?;
+    let change = ceiling::MemberAccessChange {
+        catalog: &catalog,
+        access,
+        owner,
+    };
     let previous =
-        ceiling::set_member_access(app.pool(), &catalog, access, &actor, app.clock().now()).await?;
+        ceiling::change_member_access(app.pool(), &change, &actor, app.clock().now()).await?;
     split_event!(
         info,
         { %catalog, previous = previous.as_str(), access = access.as_str(), },
@@ -682,6 +747,137 @@ async fn set_member_access(
         name: catalog,
         previous: previous.as_str(),
         member_access: access.as_str(),
+    }))
+}
+
+/// One member of a catalog's owning team, as the drawer picks entitlement
+/// targets from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct TeamMemberView {
+    /// The user's name.
+    pub user: String,
+    /// The user's label, as `GET /labels` gives it.
+    pub label: String,
+    /// `owner` or `member`.
+    pub role: String,
+}
+
+/// One entitlement to the catalog.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct CatalogEntitlementView {
+    /// The user's name.
+    pub user: String,
+    /// The user's label.
+    pub label: String,
+    /// `read` or `write`.
+    pub access: &'static str,
+}
+
+/// `GET /catalogs/{catalog}/entitlements`' answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct TeamEntitlementsView {
+    /// The catalog.
+    pub name: String,
+    /// The owning team's members, the only users an owner may entitle.
+    pub members: Vec<TeamMemberView>,
+    /// The last member of this page when more follow: send it back as
+    /// `members_after`; `null` on the last page.
+    pub members_next: Option<String>,
+    /// The entitlements to the catalog (an owner sees its members' only).
+    pub entitlements: Vec<CatalogEntitlementView>,
+    /// As `members_next`, for `entitlements_after`.
+    pub entitlements_next: Option<String>,
+}
+
+/// `GET /catalogs/{catalog}/entitlements`' query: the cursors of the two
+/// lists, the page size and which list to read.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TeamEntitlementsQuery {
+    /// The `members_next` of the previous page; absent for the first.
+    members_after: Option<String>,
+    /// The `entitlements_next` of the previous page; absent for the first.
+    entitlements_after: Option<String>,
+    /// The page size of each list: default 100, at most 1000 (a larger one
+    /// is cut).
+    limit: Option<u32>,
+    /// `members` or `entitlements` to read only that list (a continuation);
+    /// absent for both.
+    list: Option<String>,
+}
+
+/// `GET /catalogs/{catalog}/entitlements`: the owning team's members and the
+/// catalog's entitlements, for the catalog drawer's entitlement section
+/// (issue #352). The same callers and refusals as
+/// `GET /catalogs/{catalog}/member-access`.
+///
+/// # Errors
+/// As `GET /catalogs/{catalog}/member-access`.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn team_entitlements(
+    State(app): State<Arc<App>>,
+    Extension(principal): Extension<Arc<Principal>>,
+    Path(catalog): Path<String>,
+    Query(query): Query<TeamEntitlementsQuery>,
+) -> Result<Json<TeamEntitlementsView>, AppError> {
+    let lists = match query.list.as_deref() {
+        None => ceiling::TeamLists::Both,
+        Some("members") => ceiling::TeamLists::Members,
+        Some("entitlements") => ceiling::TeamLists::Entitlements,
+        Some(other) => {
+            return Err(OkfError::InvalidPath {
+                path: "list".to_string(),
+                reason: format!("must be members or entitlements, not {other:?}"),
+            }
+            .into())
+        }
+    };
+    let page = ceiling::TeamPage {
+        members_after: query.members_after.as_deref().unwrap_or(""),
+        entitlements_after: query.entitlements_after.as_deref().unwrap_or(""),
+        limit: i64::from(query.limit.filter(|limit| *limit > 0).unwrap_or(100)),
+        lists,
+    };
+    let admin = principal
+        .require_in(app.directory(), Access::Admin, &catalog)
+        .await;
+    let unreached = is_unreached(&admin);
+    let owner = owner_session(&principal, admin)?;
+    let access = ceiling::team_access(app.pool(), &catalog, owner, &page)
+        .await
+        .map_err(|refusal| keep_not_found(refusal, unreached, &catalog))?;
+    let mut wanted = Wanted::default();
+    for member in &access.members {
+        wanted.user(&member.user);
+    }
+    for entitlement in &access.entitlements {
+        wanted.user(&entitlement.user);
+    }
+    let labels = app.labels().labels_for(&wanted).await?;
+    // A user created since the last load has no label yet: show the slug.
+    let label_of = |user: &str| labels.user(user).unwrap_or(user).to_string();
+    Ok(Json(TeamEntitlementsView {
+        name: catalog,
+        members: access
+            .members
+            .into_iter()
+            .map(|member| TeamMemberView {
+                label: label_of(&member.user),
+                user: member.user,
+                role: member.role,
+            })
+            .collect(),
+        entitlements: access
+            .entitlements
+            .into_iter()
+            .map(|entitlement| CatalogEntitlementView {
+                label: label_of(&entitlement.user),
+                user: entitlement.user,
+                access: entitlement.access.as_str(),
+            })
+            .collect(),
+        members_next: access.members_next,
+        entitlements_next: access.entitlements_next,
     }))
 }
 

@@ -2,7 +2,9 @@
 // edit descriptions and delete; an admin key that reaches every catalog
 // also creates them and changes their owner (plan Decision 3). Anyone may
 // open a catalog's drawer for its maintenance switch, which an every-catalog
-// admin and the owners of the catalog's team change (M14 Task 9e).
+// admin and the owners of the catalog's team change (M14 Task 9e). An owner
+// of a shared team also sets the team's member access and entitles its
+// members from the drawer (issue #352), in a console session only.
 import { $, h, fill, pill } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
@@ -266,15 +268,19 @@ export async function render(main) {
 
     // Someone who administers no catalog: the drawer holds the maintenance
     // switch, and above it the details editor for an owner of the catalog's
-    // team (never the owner picker, member access or Delete, which are the
-    // admin's).
+    // team (never the owner picker or Delete, which are the admin's). An
+    // owner of a shared team also gets the team's member access and the
+    // entitlements of its members (issue #352).
     async function openOwner(row) {
         const ticket = drawerTicket(main);
-        const allowed = await maySwitchMaintenance(row);
+        const [allowed, sharing] = await Promise.all([maySwitchMaintenance(row), maySetTeamAccess(row)]);
         if (!ticket.current()) return;
         const switcher = maintenance(row, allowed, ticket);
-        ticket.open(row.label, subtitle(row), allowed ? detailsEditor(row, ticket) : null, switcher.section);
-        await switcher.refresh();
+        const members = sharing ? memberAccess(row, true, ticket) : null;
+        const given = sharing ? entitlements(row, ticket) : null;
+        ticket.open(row.label, subtitle(row), allowed ? detailsEditor(row, ticket) : null,
+            members?.section ?? null, given?.section ?? null, switcher.section);
+        await Promise.all([switcher.refresh(), members?.refresh(), given?.refresh()]);
     }
 
     // fill(), not native append: the note may be null (issue #302).
@@ -387,6 +393,196 @@ function memberAccess(row, allowed, ticket) {
     return { section, refresh };
 }
 
+// The entitlements section the catalog drawer shows (or last showed):
+// {catalog, ticket, refresh, report, take}. See entitlements.
+let shownEntitlements = null;
+
+// The owner drawer's "Entitlements": the users given this catalog beyond
+// the team's member access, and a form to entitle another member of the
+// owning team at read or write (an owner may entitle members only, never
+// admin). It reads GET /catalogs/{catalog}/entitlements when the drawer
+// opens and after every write, refused or not. Writes are pending writes
+// keyed by the catalog (and by user for a removal) in core/pending.js, so a
+// drawer reopened while one runs draws its controls disabled. A settled
+// write draws its own answer in the section the drawer shows now if it is
+// this catalog's (`shownEntitlements`), takes a read number before anything
+// else awaits so an older read never draws over it, keeps a refusal's
+// reason in #catalog-entitlements-error until the next write, and reads
+// again; a read that fails keeps what was drawn, marked as possibly out of
+// date, with the controls usable. Returns the section and `refresh()`.
+function entitlements(row, ticket) {
+    const name = row.name;
+    const path = `/catalogs/${enc(name)}/entitlements`;
+    const writeKey = `catalog:${name}:entitle`;
+    const removeKey = user => `catalog:${name}:unentitle:${user}`;
+    let loaded = false;
+    let stale = false;
+    let members = [];   // [{user, label, role}] the owning team's members drawn so far
+    let given = [];     // [{user, label, access}] this catalog's entitlements drawn so far
+    // The cursors that continue each list (null: no more), kept with the rows
+    // they continue and replaced only when a first page draws.
+    let membersNext = null;
+    let givenNext = null;
+    let continuing = false;   // a continuation read is pending
+
+    const who = guard(h('select', { id: 'catalog-entitle-user', 'aria-label': 'Team member' }),
+        writeKey, () => loaded && members.length > 0);
+    const level = guard(h('select', { id: 'catalog-entitle-level', 'aria-label': 'Level' },
+        ['read', 'write'].map(option => h('option', { value: option }, option))), writeKey, () => loaded);
+    const add = guard(h('button', { type: 'button', id: 'catalog-entitle-save' }, 'Entitle'),
+        writeKey, () => loaded && who.value !== '');
+    who.addEventListener('change', () => recheck(add));
+    const list = h('ul', { id: 'catalog-entitlements-list' });
+    const note = h('p', { id: 'catalog-entitlements-stale', class: 'muted small', role: 'status', hidden: true },
+        'Could not be read again; this may be out of date.');
+    const refusal = h('p', { id: 'catalog-entitlements-error', class: 'error small', role: 'alert', hidden: true });
+    const moreMembers = h('button', { type: 'button', id: 'catalog-members-more', class: 'secondary small', hidden: true,
+                                      onclick: () => more('members') }, 'Load more members');
+    const moreGiven = h('button', { type: 'button', id: 'catalog-entitlements-more', class: 'secondary small', hidden: true,
+                                    onclick: () => more('entitlements') }, 'Load more entitlements');
+
+    const labelOf = user => members.find(member => member.user === user)?.label ?? user;
+    const optionText = member => (member.label === member.user ? member.user : `${member.label} (${member.user})`);
+
+    function draw() {
+        const keep = who.value;
+        who.replaceChildren(
+            h('option', { value: '', disabled: true, selected: true }, 'Choose a member...'),
+            ...members.map(member => h('option', { value: member.user }, optionText(member))));
+        if (members.some(member => member.user === keep)) who.value = keep;
+        list.replaceChildren(...(given.length
+            ? given.map(entry => h('li', { dataset: { user: entry.user } },
+                `${entry.label}: ${entry.access} `,
+                guard(h('button', { type: 'button', class: 'secondary small', dataset: { remove: entry.user },
+                                    onclick: () => unentitle(entry.user) }, 'Remove'),
+                    removeKey(entry.user), () => loaded)))
+            : [h('li', { class: 'muted' }, loaded ? 'No one is entitled beyond the team\'s member access.' : '...')]));
+        note.hidden = !stale;
+        // A continuation shows only while the rows drawn have a cursor and no
+        // continuation is pending (a second click would append twice).
+        moreMembers.hidden = membersNext === null || continuing;
+        moreGiven.hidden = givenNext === null || continuing;
+        recheck(who); recheck(level); recheck(add);
+    }
+
+    let reads = 0;
+    async function refresh() {
+        const mine = ++reads;
+        let answer = null;
+        try { answer = await api.get(path); } catch { /* toasted */ }
+        if (mine !== reads || !ticket.current()) return;
+        loaded = true;
+        stale = answer === null;
+        if (answer !== null) {
+            members = answer.members;
+            given = answer.entitlements;
+            membersNext = answer.members_next ?? null;
+            givenNext = answer.entitlements_next ?? null;
+        }
+        continuing = false;
+        draw();
+    }
+
+    // The page after the rows drawn of one list, appended; dropped when a
+    // newer read has started since (it replaces the rows and cursors). A
+    // failure keeps the cursor for a retry and marks the rows possibly out
+    // of date.
+    async function more(which) {
+        const cursor = which === 'members' ? membersNext : givenNext;
+        if (cursor === null || continuing) return;
+        const mine = reads;
+        continuing = true;
+        draw();
+        const query = new URLSearchParams({ list: which, [`${which === 'members' ? 'members' : 'entitlements'}_after`]: cursor });
+        let answer = null;
+        try { answer = await api.get(`${path}?${query}`); } catch { /* toasted */ }
+        if (mine !== reads || !ticket.current()) return;
+        continuing = false;
+        if (answer === null) {
+            stale = true;
+        } else if (which === 'members') {
+            members = members.concat(answer.members);
+            membersNext = answer.members_next ?? null;
+        } else {
+            given = given.concat(answer.entitlements);
+            givenNext = answer.entitlements_next ?? null;
+        }
+        draw();
+    }
+
+    // Draws a settled write's answer (`apply` changes the entitlements, or
+    // null for a refusal) and cancels any read that started before it.
+    const take = apply => {
+        reads++;
+        continuing = false;
+        if (apply !== null) {
+            given = apply(given);
+            stale = false;
+        }
+        loaded = true;
+        draw();
+    };
+    const report = reason => {
+        refusal.textContent = reason ?? '';
+        refusal.hidden = reason === null;
+    };
+    const self = { catalog: name, ticket, refresh, report, take };
+    shownEntitlements = self;
+
+    // Runs one write, then draws it in the section the drawer shows now.
+    function write(key, send, apply, done) {
+        return once(key, async () => {
+            let change = null;
+            let refused = null;
+            try {
+                await send();
+                toast(done, 'ok');
+                change = apply;
+            } catch (error) {
+                refused = error.message;   // already toasted
+            }
+            const shown = shownEntitlements;
+            const view = shown?.catalog === name && shown.ticket.current() ? shown : self;
+            view.report(refused);
+            view.take(change);
+            await view.refresh();
+        });
+    }
+
+    function unentitle(user) {
+        return write(removeKey(user),
+            () => api.del(`/users/${enc(user)}/entitlements/${enc(name)}`),
+            entries => entries.filter(entry => entry.user !== user),
+            `${labelOf(user)} no longer has ${row.label} beyond the team's access.`);
+    }
+
+    add.addEventListener('click', () => {
+        const user = who.value;
+        const access = level.value;
+        if (!user) return;
+        write(writeKey,
+            () => api.put(`/users/${enc(user)}/entitlements/${enc(name)}`, { access }),
+            entries => entries.filter(entry => entry.user !== user)
+                .concat([{ user, label: labelOf(user), access }])
+                .sort((a, b) => (a.user < b.user ? -1 : 1)),
+            `${labelOf(user)} now reaches ${row.label} at ${access}.`);
+    });
+
+    const section = h('section', { id: 'catalog-entitlements' },
+        h('h3', {}, 'Entitlements'),
+        h('p', { class: 'muted small' },
+            `Raise a member of ${row.owner_team_label ?? row.owner_team ?? 'the owner team'} above the team's member access, `
+            + 'at read or write. Only members of the team can be entitled.'),
+        list,
+        moreGiven,
+        h('div', { class: 'inline-form' }, who, level, add),
+        moreMembers,
+        note,
+        refusal);
+    draw();
+    return { section, refresh };
+}
+
 // A catalog drawer's subtitle.
 function subtitle(row) {
     return `generation ${row.generation} - ${count(row.concepts, 'concept')}, ${count(row.files, 'file')}`;
@@ -404,6 +600,21 @@ async function maySwitchMaintenance(row) {
         return (await freshAccount()).owned_teams.includes(row.owner_team);
     } catch {
         return true;   // toasted; the server refuses a non-owner
+    }
+}
+
+// Whether to offer `row`'s member access and entitlements to an owner: a
+// console session that owns the catalog's team (GET /me's
+// `owned_team_details`) when that team is shared, never a personal one.
+// Only a hint, since the server checks the owner under its locks; when
+// /me cannot be read nothing is offered.
+async function maySetTeamAccess(row) {
+    if (!store.session || !row.owner_team) return false;
+    try {
+        const team = (await freshAccount()).owned_team_details.find(owned => owned.name === row.owner_team);
+        return Boolean(team) && !team.personal;
+    } catch {
+        return false;   // toasted
     }
 }
 

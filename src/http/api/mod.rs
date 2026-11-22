@@ -16,7 +16,7 @@ use axum::Router;
 use serde::Deserialize;
 
 use crate::app::App;
-use crate::auth::{Principal, Reach};
+use crate::auth::{CredentialKind, Principal, Reach};
 use crate::cache::directory::{page_size, Page};
 use crate::error::OkfError;
 use crate::http::console_session::require_principal;
@@ -46,6 +46,8 @@ mod maintenance;
 mod malformed_name_tests;
 mod me;
 mod oauth;
+#[cfg(test)]
+mod owner_access_tests;
 mod people;
 #[cfg(test)]
 mod provisioner_tests;
@@ -220,6 +222,38 @@ pub(crate) fn require_every_catalog(principal: &Principal) -> Result<(), OkfErro
         Reach::Catalogs(_) | Reach::Ceiling => Err(OkfError::Forbidden {
             reason: "this needs an admin key that reaches every catalog".to_string(),
         }),
+    }
+}
+
+/// Decides whether the store must check the caller as an owner, for the
+/// controls an admin or an owner of a catalog's team may use (issue #352).
+///
+/// Only a console session may be an owner: an owner's keys and OAuth
+/// grants are often handed to AI clients with narrower purposes, so they
+/// keep the admin-only refusal (as the maintenance switch, the audit viewer
+/// and the unlock list do). A failed read is not a refusal: it is passed on.
+///
+/// # Arguments
+/// * `principal` - the caller.
+/// * `admin` - the result of the admin check the route already has.
+///
+/// # Returns
+/// `None` when the admin check passed; `Some(users.id)` for a console
+/// session that failed it, which the store checks under its locks.
+///
+/// # Errors
+/// The admin refusal for a key or an OAuth grant; a database or busy error
+/// as it came.
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) fn owner_session(
+    principal: &Principal,
+    admin: Result<(), OkfError>,
+) -> Result<Option<&str>, OkfError> {
+    match (admin, &principal.kind) {
+        (Ok(()), _) => Ok(None),
+        (Err(error @ (OkfError::Database { .. } | OkfError::Busy { .. })), _) => Err(error),
+        (Err(_), CredentialKind::Session { user_id }) => Ok(Some(user_id.as_str())),
+        (Err(refusal), CredentialKind::ApiKey | CredentialKind::OAuth { .. }) => Err(refusal),
     }
 }
 

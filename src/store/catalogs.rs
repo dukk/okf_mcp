@@ -573,6 +573,44 @@ pub(crate) async fn lock_owner(
     .ok_or_else(not_owner)
 }
 
+/// As [`lock_owner`], but only for a shared team: an owner of a personal
+/// team gets nothing, so it cannot share its personal catalogs (issue #352).
+/// Used by the member-access and entitlement controls, not by the
+/// maintenance switch or the details editor, which keep their reach.
+///
+/// # Arguments
+/// * `conn` - the change's transaction.
+/// * `name` - the catalog (a valid name; the caller checks it).
+/// * `user_id` - `users.id` of the would-be owner.
+/// * `not_owner` - builds the refusal to return.
+///
+/// # Returns
+/// The owner team's id.
+///
+/// # Errors
+/// `not_owner()` when the user is no owner of the catalog's team, the team
+/// is personal, or the catalog does not exist; [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.lock_shared_team_owner"))]
+pub(crate) async fn lock_shared_team_owner(
+    conn: &mut PgConnection,
+    name: &str,
+    user_id: &str,
+    not_owner: impl Fn() -> OkfError,
+) -> Result<String, OkfError> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT m.team_id FROM catalogs c \
+         JOIN teams t ON t.id = c.owner_team_id \
+         JOIN team_members m ON m.team_id = t.id \
+         WHERE c.name = $1 AND m.user_id = $2 AND m.role = 'owner' \
+           AND t.personal_of IS NULL FOR SHARE OF m",
+    )
+    .bind(name)
+    .bind(user_id)
+    .fetch_optional(&mut *conn)
+    .await?
+    .ok_or_else(not_owner)
+}
+
 /// A catalog's maintenance flag, `on` or `off`, as the CLI, the REST body
 /// and the listing spell it (spec Part 6).
 // `clap::ValueEnum` parses `on|off` on the command line; serde's

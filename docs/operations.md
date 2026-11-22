@@ -2039,12 +2039,12 @@ the test checks the flag exists.
 | `okf-mcp user set-admin` | `PUT /api/v1/users/{name}/admin` | Users → user → Admin switch |
 | `okf-mcp user set-email` | `PUT /api/v1/users/{name}/email` | Users → user → Email (Save, Clear) |
 | `okf-mcp user invite` | `POST /api/v1/users/{name}/invite` | Users → user → Send setup email |
-| `okf-mcp user entitle` | `PUT /api/v1/users/{name}/entitlements/{catalog}` | Users → user → Entitlements → Entitle, or a level |
-| `okf-mcp user unentitle` | `DELETE /api/v1/users/{name}/entitlements/{catalog}` | Users → user → Entitlements → Remove |
+| `okf-mcp user entitle` | `PUT /api/v1/users/{name}/entitlements/{catalog}` | Users → user → Entitlements → Entitle, or a level; an owner of the catalog's shared team: Catalogs → catalog → Entitlements → Entitle |
+| `okf-mcp user unentitle` | `DELETE /api/v1/users/{name}/entitlements/{catalog}` | Users → user → Entitlements → Remove; an owner: Catalogs → catalog → Entitlements → Remove |
 | `okf-mcp user sessions` | `GET /api/v1/users/{name}/sessions` | Users → user → Console sessions |
 | `okf-mcp user revoke-sessions` | `DELETE /api/v1/users/{name}/sessions` | Users → user → Sign out everywhere |
 | `okf-mcp user sign-ins` | `GET /api/v1/users/{name}/sign-ins` | Users → user → Recent sign-ins |
-| `okf-mcp catalog set-member-access` | `PUT /api/v1/catalogs/{catalog}/member-access` | Catalogs → catalog → Team member access |
+| `okf-mcp catalog set-member-access` | `PUT /api/v1/catalogs/{catalog}/member-access` | Catalogs → catalog → Team member access (an owner of the catalog's shared team too, in a console session) |
 | `okf-mcp catalog set-maintenance` | `PUT /api/v1/catalogs/{catalog}/maintenance` | Catalogs → catalog → Maintenance switch |
 | `okf-mcp settings list` | `GET /api/v1/settings` | Settings → Policy |
 | `okf-mcp settings set` | `PUT /api/v1/settings/{key}` | Settings → Policy → a value's Save |
@@ -2064,8 +2064,9 @@ team's drawer in the console) have no command of their own: `user list` and
 `team list` show the same facts. Nor do `DELETE
 /api/v1/users/{name}/sessions/{id_prefix}` (one session's Sign out in the
 drawer; `user revoke-sessions` ends them all) and `GET
-/api/v1/catalogs/{catalog}/member-access` (`catalog set-member-access`
-prints the previous level). The self-service routes under `/api/v1/me` are
+/api/v1/catalogs/{catalog}/member-access` and `GET
+/api/v1/catalogs/{catalog}/entitlements` (`catalog set-member-access`
+prints the previous level; the owner's entitlement section reads the second). The self-service routes under `/api/v1/me` are
 not admin actions and have no command. The users, teams and unassigned writes need
 an admin key that reaches every catalog, as `POST /api/v1/catalogs` does;
 reading users and teams needs any admin key, so a scoped admin can pick the
@@ -2873,9 +2874,36 @@ okf-mcp user entitle bob notes --access read             # one more catalog for 
 okf-mcp user unentitle bob notes
 ```
 
-Only admins change member access and entitlements, and changing them needs
-an admin that reaches every catalog. Team owners may later (#352): the
-server's one check is `store::ceiling::may_set_member_access`.
+Admins change member access and entitlements, and changing them through a
+key needs an admin that reaches every catalog (the server's check is
+`store::ceiling::may_set_member_access`). An **owner of a shared team**
+signed in to the console may also do both for the catalogs their team owns
+(issue #352), from the catalog's drawer (Catalogs, then the catalog: Team
+member access, and Entitlements). The rules:
+
+- **Console session only.** An owner's API keys and OAuth grants cannot
+  change member access or entitlements, as with the maintenance switch, the
+  audit viewer and the unlock list: they keep the admin-only refusal (403).
+- **Shared teams only.** The owner of a personal team gets none of these
+  controls on its catalogs.
+- **Entitlements go to members of the owning team only**, at `read` or
+  `write` (never `admin`): the use is raising one member above the team's
+  member access. An unknown user and a user outside the team get the same
+  403, with the same body, so nothing about other tenants can be probed; an
+  unknown catalog and one the caller does not own are refused alike. The
+  answer carries only the entitlement on that catalog, never the user's
+  entitlements elsewhere (an admin still gets all of them). An entitlement
+  an admin gave to someone who has since left the team is not shown to the
+  owner and cannot be removed by one.
+- **Checked under locks.** The owner's membership row (and, for an
+  entitlement, the user's and the catalog's) is locked in the transaction
+  that writes, so a demotion, a removal or a change of the catalog's owner
+  team that commits meanwhile is refused or waits.
+- **Same effects as an admin's change:** a ceiling write bumps
+  `admin_generation` and re-caps running keys and grants at once, and the
+  change is audited (`catalog.member_access_changed`,
+  `user.entitlement_set`, `user.entitlement_removed`) with the owner as
+  actor.
 
 ### Rollout
 
@@ -3643,8 +3671,8 @@ admin). Every change takes effect at once. A refusal under the
 | `PUT /api/v1/users/{name}/admin` | admin, every catalog | Body `{admin: bool}`. Answers `{name, previous, admin}`. A change signs the user out of every console session (they sign in again with the new flag). 409 for clearing the last admin user (only the CLI may), 422 without `admin` |
 | `PUT /api/v1/users/{name}/email` | admin, every catalog | Body `{email}` (`null` clears; the field is required). Answers the user. A change ends the user's outstanding emailed links. 409 "Another user has this email" (in any letter case), 422 for an address that is not one or without `email` |
 | `POST /api/v1/users/{name}/invite` | admin, every catalog | Queues a setup email with a single-use link (replacing any older one) to the user's email; 202 `{name, email}`. 409 without an email or without `public_url` |
-| `PUT /api/v1/users/{name}/entitlements/{catalog}` | admin, every catalog | Body `{access: "read"\|"write"}`. Adds the entitlement or changes its level; answers `{name, entitlements}`. 400 for another level, 404 for an unknown user or catalog |
-| `DELETE /api/v1/users/{name}/entitlements/{catalog}` | admin, every catalog | Removes it (none given: no change); answers `{name, entitlements}` |
+| `PUT /api/v1/users/{name}/entitlements/{catalog}` | admin, every catalog; or an owner of the catalog's shared team, signed in to the console, for a member of that team | Body `{access: "read"\|"write"}`. Adds the entitlement or changes its level; answers `{name, entitlements}` (for an owner, only the entitlement on this catalog). 400 for another level, 404 for an unknown user or catalog asked by an admin. 403 for an owner's key or grant, a non-owner, a personal team's owner, and, for an owner, one identical refusal for an unknown user and a user outside the team |
+| `DELETE /api/v1/users/{name}/entitlements/{catalog}` | admin, every catalog; or an owner, as `PUT` | Removes it (none given: no change); answers `{name, entitlements}` (an owner: this catalog's only). The same refusals as `PUT` |
 | `GET /api/v1/users/{name}/sessions` | admin | `{sessions}`, most recently used first: `id_prefix`, `created_at`, `last_seen_at`, `ip`, `user_agent`, `current` (always `false` here). Never a session id, token or hash |
 | `DELETE /api/v1/users/{name}/sessions` | admin, every catalog | Signs the user out of every console session (keys and grants keep working); answers `{name, revoked}` |
 | `DELETE /api/v1/users/{name}/sessions/{id_prefix}` | admin, every catalog | Signs one session out; 204. 404 for a malformed prefix or one that matches none of the user's sessions, 409 for one that matches several (none is ended) |
@@ -3950,8 +3978,9 @@ curl -s -H "Authorization: Bearer $OKF_MCP_KEY" \
 | `GET /api/v1/labels?after=&limit=` | any credential; not a provisioner | `{users, teams, catalogs, next}`, each of the first three a map from id to label. `catalogs` is one page of the catalogs the caller reaches (paginated as `GET /api/v1/catalogs`; labels shared within a page are told apart). Every caller, an admin that reaches every catalog included, gets its own user, its teams and the owner teams of the catalogs on its page. The console reads it to show labels where an answer names something by id (see [Display names and labels](#display-names-and-labels)) |
 | `GET /api/v1/labels/named?users=&teams=` | any credential; not a provisioner | `{users, teams}`, maps from id to label for the comma-separated ids named, at most 100 of each (more, or an unknown parameter, is 400). An admin key or session (which may list every user and team with their labels, `GET /api/v1/users` and `/teams`) gets every one that exists; anyone else only its own user and its own teams. An id that does not exist, or that the caller may not see, is absent. The console reads the labels of the users and teams a view shows with it |
 | `PUT /api/v1/catalogs/{catalog}/owner` | admin, every catalog | `{team}`. Makes the team the owner; answers `{name, previous, owner_team}` (`previous` is `null` for a legacy catalog). 404 for an unknown catalog or team, 422 without `team`. Ownership grants no access |
-| `GET /api/v1/catalogs/{catalog}/member-access` | admin | `{name, member_access}` (`none`, `read` or `write`): what members of the owner team reach through their own keys and grants |
-| `PUT /api/v1/catalogs/{catalog}/member-access` | admin, every catalog | Body `{access: "none"\|"read"\|"write"}`. Sets it, and every member's own keys and grants are capped again at once; answers `{name, previous, member_access}`. 400 for another value, 404 for an unknown catalog, 422 without `access` |
+| `GET /api/v1/catalogs/{catalog}/member-access` | admin; or an owner of the catalog's shared team, signed in to the console | `{name, member_access}` (`none`, `read` or `write`): what members of the owner team reach through their own keys and grants. 403 for an owner's key or grant, a non-owner and a personal team's owner (an unknown catalog too, for a session) |
+| `GET /api/v1/catalogs/{catalog}/entitlements?members_after=&entitlements_after=&limit=&list=` | admin; or an owner, as `member-access` | `{name, members, members_next, entitlements, entitlements_next}`: one page of the owner team's members (`[{user, label, role}]`, the only users an owner may entitle) and of the catalog's entitlements (`[{user, label, access}]`; an owner sees its members' only), each in byte order of the user name. `limit` is the size of each list (default 100, at most 1000). A `*_next` that is not `null` goes back as the matching `*_after` for the next page; `list=members` or `list=entitlements` reads only that list (a continuation), the other coming back empty. 400 for another `list`. The same refusals |
+| `PUT /api/v1/catalogs/{catalog}/member-access` | admin, every catalog; or an owner of the catalog's shared team, signed in to the console | Body `{access: "none"\|"read"\|"write"}`. Sets it, and every member's own keys and grants are capped again at once; answers `{name, previous, member_access}`. 400 for another value, 404 for an unknown catalog asked by an admin, 422 without `access`. 403 as for the reads |
 | `PUT /api/v1/catalogs/{catalog}/maintenance` | admin, every catalog; or an owner of the catalog's team, signed in | Body `{maintenance: "on"\|"off"}`. Lets the maintenance runner in or keeps it out; answers `{name, previous, maintenance}`. 403 for anyone else (a non-owner's session also for an unknown catalog), 404 for an unknown catalog asked by an admin, 422 for another value or without `maintenance` |
 | `DELETE /api/v1/catalogs/{catalog}[?force=true]` | admin | Deletes the catalog with its documents, history, changesets and grants; answers `{name}`. 409 while an open changeset holds unpublished changes, unless `force=true` |
 | `GET /api/v1/catalogs/{catalog}/export` | read | The same handler and 120 s timeout as `/catalogs/{name}/export` |
