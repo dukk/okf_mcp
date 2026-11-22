@@ -453,13 +453,15 @@ mode = "standalone"         # or "cluster"
   key under `{<key_prefix>}` and, for the announcements, on the channels under
   it:
   - the connection: `PING`, `HELLO`, `AUTH` (`+@connection`);
-  - keys: `GET`, `SET`, `GETDEL`, `DEL`, `EXISTS`, `PEXPIRE`, `PTTL`, `INCR`
+  - keys: `GET`, `MGET`, `SET`, `GETDEL`, `DEL`, `EXISTS`, `PEXPIRE`, `PTTL`, `INCR`
     (`+@read +@write +@keyspace`);
   - hashes, for the rate-limit buckets: `HMGET`, `HSET`;
   - scripts: `EVALSHA`, `EVAL`, `SCRIPT LOAD` (`+@scripting`). **Redis checks
     every command a script calls against the same ACL**, so the user needs
     the commands above for the scripts too;
   - pub/sub: `PUBLISH`, `SUBSCRIBE` (`+@pubsub`);
+  - with `mode = "cluster"`, also `CLUSTER SLOTS`, which the client sends to
+    learn the topology (`+cluster|slots`, not in any category above);
   - **`TIME`**, which the rate limiter's script calls so that every replica
     counts on Redis's one clock. `TIME` is in none of the categories above
     (it is `@fast`), so a user granted those and denied `-@dangerous` must be
@@ -469,15 +471,16 @@ mode = "standalone"         # or "cluster"
 
   A working access string is `on >password ~{okf:}* &{okf:}* -@all +@read
   +@write +@keyspace +@connection +@transaction +@scripting +@pubsub +time
-  -@dangerous` (with your `key_prefix`). The server checks this at start-up:
+  -@dangerous` (with your `key_prefix`; add `+cluster|slots` for
+  `mode = "cluster"`). The server checks this at start-up:
   it runs the limiter's script once against a throwaway key and, if Redis
   refuses it, logs an **error** ("the shared rate limiter's script cannot run
   on Redis") and reports `"rate_limits": "degraded"` on `/healthz` (section 7).
   The server still starts; limits are decided per replica until the ACL is
   fixed. Fallbacks are counted per limiter in `okf_ratelimit_fallbacks_total`
   and logged as a warning at most once a minute per limiter. In exported logs
-  the limiter `oauth_token` is named `oauth-tok`, because Sentry's scrubbing
-  replaces any value containing "token" with `[Filtered]`; the metric labels
+  the limiter `oauth_token` is named `oauth-tok`, because Sentry's scrubbing was seen
+  replacing the value `oauth_token` with `[Filtered]`; the metric labels
   keep their names.
 - **Why the script uses `TIME`.** One clock for every replica means no
   replica's clock skew refills a bucket early. Passing the caller's clock
