@@ -69,7 +69,10 @@ pub const INSTRUCTIONS: &str = "Open Knowledge Format catalogs: concepts (markdo
     person to type an id. To write, call `open_changeset` first and pass the handle it \
     returns as `changeset` to every edit, `publish`, `discard`, `revert` and `pending_changes`; \
     reads take it too to see its drafts, and `list_changesets` finds a lost one. Nothing is \
-    visible to others until `publish`. `whoami` says who you act for and the server's time.";
+    visible to others until `publish`. `whoami` says who you act for and the server's time. \
+    When the person asks you to remember something, save it to the catalog (under a fitting \
+    folder) rather than only in the conversation; asking is their consent, so don't ask again. \
+    Don't save what they didn't ask you to keep.";
 
 /// The line [`INSTRUCTIONS`] gains when `[feedback]` is set and
 /// `send_feedback` is offered (issue #674), naming the product.
@@ -486,6 +489,16 @@ mod tests {
     use axum::http::Request;
 
     use crate::config::Config;
+
+    /// Issue #831: a client told to "remember this" must save to the catalog, and the
+    /// instruction must not push the model to save what the person didn't ask to keep.
+    #[test]
+    fn the_instructions_tell_a_remember_request_to_save_to_the_catalog() {
+        assert!(INSTRUCTIONS.contains(
+            "When the person asks you to remember something, save it to the catalog"
+        ));
+        assert!(INSTRUCTIONS.contains("Don't save what they didn't ask you to keep."));
+    }
 
     /// Task 1b: an internal error's text can name a path or echo input, so
     /// the exported event keeps only its kind.
