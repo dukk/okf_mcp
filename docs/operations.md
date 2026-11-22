@@ -1401,9 +1401,14 @@ the dotted originals.
 
 Spans are exported with `info` as the default filter. A request span is a
 root, and a clock check, a housekeeping job and a mail job are roots too, since no
-request started them. A tool call's `mcp <tool>` span is not a child of its
-`POST /mcp` request span: it is seen as a trace of its own (rmcp runs the call
-on its own task), so find a call by its tool span, not by the request's trace.
+request started them. A tool call's `mcp <tool>` span is a child of its
+`POST /mcp` request span, in the same trace (rmcp runs the call on its own
+task, so the HTTP layer hands the request span over in the request's
+extensions). One trace shows the request, the tool call and, with a raised
+`traces_filter`, the tool's own spans. The request span stays a root: the
+caller's `traceparent` is a link only. The request span's exported duration can
+cover the tool call. `initialize`, `tools/list` and notifications never reach a
+tool, so their traces hold the request span alone.
 
 | Span | Attributes |
 |---|---|
