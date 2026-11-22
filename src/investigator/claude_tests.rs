@@ -328,6 +328,13 @@ impl Fake {
             .ok()
             .is_some_and(|bytes| serde_json::from_slice::<Value>(&bytes).is_ok())
     }
+    /// The pid in the marker `name` once the fake wrote it (see `mark` in the
+    /// fixture), `None` before. A marker, unlike `record.json`, says the child
+    /// reached the state a scenario is about, not only that it started.
+    fn marker_pid(&self, name: &str) -> Option<u64> {
+        let bytes = std::fs::read(self.dir.path().join(name)).ok()?;
+        serde_json::from_slice::<Value>(&bytes).ok()?["pid"].as_u64()
+    }
     async fn started(&self) {
         // A generous bound, not a pace: it returns the moment the fake has
         // started, and a loaded machine can take seconds to start Python.
@@ -351,10 +358,12 @@ impl Fake {
 /// result once the child demonstrably started before the deadline fired.
 ///
 /// The deadline covers spawning and interpreter start-up, so on a loaded machine a
-/// short deadline can expire before the fake wrote `record.json`. Then the run
-/// proves nothing about the stall, and `reaped` has no pid to read. In that case
-/// retry on a fresh fake with a longer deadline (issue #307). Returns the fake,
-/// the result and the number of attempts used.
+/// short deadline can expire before the fake reached its stall (the `reached.json`
+/// marker, written right before it: `record.json` is written earlier, before the
+/// stdin read and the output). Then the run proves nothing about the stall, and
+/// `reaped` may have no pid to read. In that case retry on a fresh fake with a
+/// longer deadline (issue #307, issue #500). Returns the fake, the result and the
+/// number of attempts used.
 async fn run_timed_after_start(
     scenario: Value,
     args: Vec<String>,
@@ -371,11 +380,11 @@ async fn run_timed_after_start(
             Duration::from_millis(millis),
         )
         .await;
-        if fake.has_record() {
+        if fake.marker_pid("reached.json").is_some() {
             return (fake, result, attempt + 1);
         }
     }
-    panic!("fake did not start within the longest deadline");
+    panic!("fake did not reach its stall within the longest deadline");
 }
 
 fn request() -> ModelRequest {
@@ -547,11 +556,13 @@ async fn investigator_claude_bounds_pipes_and_reaps() {
 /// The deadline covers waiting for the pipes to close: a descendant that
 /// keeps them open after the child exits must not hold `run_process` past it.
 ///
-/// The fake's descendant holds the pipes until the test releases it, so
-/// returning at all, with the descendant still alive, proves the deadline
-/// ended the run, however slow the machine is. The deadline also covers
-/// spawning, so a run whose child had not started when it fired proves
-/// nothing and is repeated with a longer one (issue #307, issue #500).
+/// The fake's descendant holds the pipes until the test releases it, and
+/// publishes `holder.json` (with its pid) before it waits, so an attempt counts
+/// only once the marker shows the pipes were held. Returning with `Child` and
+/// the descendant still alive then proves the deadline ended the run, however
+/// slow the machine is. A deadline that fired before the descendant existed
+/// proves nothing, and the attempt is repeated with a longer one (issue #307,
+/// issue #500).
 #[tokio::test]
 async fn investigator_claude_timeout_includes_pipe_eof() {
     let _test = TEST_LOCK.lock().await;
@@ -571,14 +582,19 @@ async fn investigator_claude_timeout_includes_pipe_eof() {
             deadline,
         )
         .await;
-        if fake.has_record() {
-            ended = Some((fake, result));
+        if let Some(holder) = fake.marker_pid("holder.json") {
+            ended = Some((fake, result, holder));
             break;
         }
     }
-    let (fake, result) = ended.expect("the fake did not start within the longest deadline");
+    let (fake, result, holder) =
+        ended.expect("the fake never held the pipes within the longest deadline");
     assert_eq!(result.err(), Some(RunnerError::Child));
     fake.reaped();
+    assert!(
+        std::path::Path::new(&format!("/proc/{holder}")).exists(),
+        "the pipe holder was gone before the release: the deadline did not end the run"
+    );
     // Let the descendant, which exits on this file, go.
     std::fs::write(fake.dir.path().join("release"), b"").unwrap();
 }
