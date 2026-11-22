@@ -569,7 +569,7 @@ pub(crate) mod capture {
             let seen = Arc::new(Mutex::new(Vec::new()));
             let subscriber = tracing_subscriber::registry().with(Collect(Arc::clone(&seen)));
             Self {
-                dispatch: tracing::Dispatch::new(subscriber),
+                dispatch: crate::test_tracing::keep_alive(subscriber),
                 seen,
             }
         }
@@ -606,7 +606,6 @@ pub(crate) mod capture {
             })
         }
 
-        /// The spans created so far, in creation order.
         /// The spans created so far, in creation order.
         pub(crate) fn finished(&self) -> Vec<SeenSpan> {
             self.seen.lock().expect("recorder lock").clone()
