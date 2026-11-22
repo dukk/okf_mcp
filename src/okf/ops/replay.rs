@@ -29,6 +29,13 @@
 //! describing a folder needs no free edit of that (often shared) index.
 //! Its edit, `set_listing_summary_text`, works on universal-newline text.
 //!
+//! Issue #830 adds the frontmatter bookkeeping ops of a concept,
+//! [`ReplayOp::AddSource`], [`ReplayOp::RemoveSource`], [`ReplayOp::Stamp`],
+//! [`ReplayOp::SetReviewed`], [`ReplayOp::AddQuestion`] and
+//! [`ReplayOp::RemoveQuestion`]. Each is redone by the same edit the tool
+//! ran (`frontmatter::replay_edit`), on the file's own line endings, and
+//! refuses with the tool's own reason when it no longer applies.
+//!
 //! [`log_text`] is `okf.py`'s `cmd_log` body (`:752`) and
 //! [`insert_index_bullet_text`] its `insert_index_bullet` (`:1410`), line
 //! for line. `okf.py` reads and writes these files in text mode, so both
@@ -41,7 +48,9 @@ use serde::{Deserialize, Serialize};
 use crate::error::OkfError;
 use crate::okf::analysis::links::INDEX_HEADING;
 use crate::okf::markdown::{encode_link_path, find_links, resolve_link};
+use crate::okf::ops::frontmatter::replay_edit;
 use crate::okf::ops::relink::{rewrite_text, unlink_text, Redirect};
+use crate::okf::ops::StampField;
 use crate::okf::paths::{basename, is_concept};
 use crate::okf::pystr::{py_repr_str, py_strip, py_unquote, universal_newlines};
 use crate::okf::workspace::{MemWorkspace, Workspace};
@@ -141,6 +150,67 @@ pub enum ReplayOp {
         /// The new summary, its whitespace already collapsed.
         summary: String,
     },
+    /// `source`: append the entry to the concept's `sources`; refused when
+    /// the text now has a source with this `id` (issue #830).
+    AddSource {
+        /// The entry's id.
+        id: String,
+        /// What was consulted.
+        resource: String,
+        /// Optional title.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        /// Optional author.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        author: Option<String>,
+    },
+    /// `remove_source`: remove the `sources` entry with this `id`; refused
+    /// when it is gone, or a footnote now cites it (issue #830).
+    RemoveSource {
+        /// The entry's id.
+        id: String,
+    },
+    /// `stamp`: set `generated` or append to `verified` with the actor and
+    /// time the original edit recorded (issue #830), not the replay's.
+    Stamp {
+        /// Which stamp.
+        field: StampField,
+        /// The actor.
+        by: String,
+        /// The timestamp, `2026-11-03T12:00:00Z`.
+        at: String,
+    },
+    /// `review`: replace `reviewed` with what the original edit recorded
+    /// (issue #830). The questions it queued are separate
+    /// [`ReplayOp::AddQuestion`]s.
+    SetReviewed {
+        /// The actor.
+        by: String,
+        /// The timestamp, `2026-11-03T12:00:00Z`.
+        at: String,
+        /// One of the review outcomes.
+        outcome: String,
+        /// What was and was not checked.
+        note: String,
+    },
+    /// `question` and the questions of `review`: queue `text` unless an
+    /// identical question is already queued (issue #830).
+    AddQuestion {
+        /// The question.
+        text: String,
+        /// `review`'s rule for a mapping-valued `open_questions`: treat it
+        /// as empty and convert it to a list. `question` leaves this off
+        /// and refuses such a value.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        convert_mapping: bool,
+    },
+    /// `unquestion`: remove the open question whose text is exactly `text`
+    /// (never read as an index); refused when none is (issue #830). Not
+    /// recorded for a question that is not a string.
+    RemoveQuestion {
+        /// The removed question's text.
+        text: String,
+    },
 }
 
 /// Redoes `ops` on a file's current text (design "Publish", step 3).
@@ -151,7 +221,7 @@ pub enum ReplayOp {
 /// no link left into its source, an `Unlink` with no link left into its
 /// target, a `RewriteRawListing` whose raw line is gone, and a
 /// `SetListingSummary` whose bullet already reads so all leave the text
-/// alone. Text that no operation
+/// alone, as does an `AddQuestion` of a question already queued. Text that no operation
 /// changes is returned byte for byte; text a bookkeeping edit changed has
 /// `\n` endings, as `okf.py` writes it, while a `Relink` or an `Unlink`
 /// keeps the file's own line endings.
@@ -176,7 +246,12 @@ pub enum ReplayOp {
 /// the move, when a `SetListingSummary` finds no bullet listing its target
 /// (another changeset removed or rewrote it), or when a `Relink` redirects
 /// (or an `Unlink` names) a non-concept (`index.md`, `log.md`), which only a
-/// corrupt stored op can hold.
+/// corrupt stored op can hold. For the concept ops ([`ReplayOp::AddSource`]
+/// and the other five of issue #830), [`OkfError::Refused`] with the tool's
+/// own reason when the text now has the source id, lacks the source or
+/// question, or a footnote cites the source; [`OkfError::Shape`] when
+/// `sources` or `open_questions` is no longer a list;
+/// [`OkfError::FrontmatterParse`] when the frontmatter no longer parses.
 ///
 /// # Examples
 /// ```
@@ -263,6 +338,13 @@ pub fn replay(path: &str, current: Option<&str>, ops: &[ReplayOp]) -> Result<Str
                     Some(updated) => Some(updated),
                 }
             }
+            // Edits of one concept's frontmatter, redone on its current text.
+            ReplayOp::AddSource { .. }
+            | ReplayOp::RemoveSource { .. }
+            | ReplayOp::Stamp { .. }
+            | ReplayOp::SetReviewed { .. }
+            | ReplayOp::AddQuestion { .. }
+            | ReplayOp::RemoveQuestion { .. } => replay_edit(path, present(path, &text)?, op)?,
             ReplayOp::Relink { redirect } => {
                 // `no_dirs` cannot tell a directory link (`[x](../a)`) from a file
                 // link, which only matters when `from` is an `index.md`. Moves and

@@ -23,7 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
@@ -148,7 +148,7 @@ impl OpOutcome {
 // Python int). `Deserialize` reads the lowercase spellings, and `JsonSchema`
 // describes them in the `stamp` tool's input schema (the variants' doc comments
 // become the choices' descriptions).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 #[schemars(inline, extend("type" = "string"))]
 pub enum StampField {
@@ -266,9 +266,16 @@ pub(crate) fn save(
 /// `{ by, at }` for a stamp: the actor and the frozen "now".
 #[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn stamp_value(ctx: &OpContext<'_>) -> Value {
+    stamp_entry(ctx.by, &format_timestamp(ctx.now))
+}
+
+/// `{ by, at }` from an actor and an already formatted timestamp: what a
+/// stamp replay writes (the values the original edit recorded).
+#[tracing::instrument(level = "trace", skip_all)]
+pub(crate) fn stamp_entry(by: &str, at: &str) -> Value {
     Value::Map(IndexMap::from([
-        ("by".to_string(), Value::Str(ctx.by.to_string())),
-        ("at".to_string(), Value::Str(format_timestamp(ctx.now))),
+        ("by".to_string(), Value::Str(by.to_string())),
+        ("at".to_string(), Value::Str(at.to_string())),
     ]))
 }
 

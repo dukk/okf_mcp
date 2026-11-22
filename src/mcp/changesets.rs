@@ -435,7 +435,9 @@ impl OkfServer {
         description = "Publish the changeset `changeset` names: its edits become the \
                        published documents, each with a new revision carrying `message`. Refused \
                        with Conflict when a document changed since this changeset read it \
-                       (log.md and index.md bookkeeping is replayed onto the new text instead), \
+                       (log.md and index.md bookkeeping, and the stamp, review, question, unquestion, \
+                       add_source and remove_source edits of a concept, are replayed onto the new \
+                       text instead; a replay that can no longer apply is refused with its reason), \
                        or with LintFailed when a changed file has lint errors; the changeset \
                        then stays open. Lint errors elsewhere come back as warnings. When every \
                        edit already matches the published text, the changeset is closed with \
@@ -510,7 +512,7 @@ pub struct PendingFile {
     pub current_revision: Option<i32>,
     /// Whether the path was published since the entry was made (`base_revision` differs from `current_revision`). Publish replays a stale replayable entry and refuses any other with Conflict.
     pub stale: bool,
-    /// Whether publish can replay the entry onto newer text (log.md and index.md bookkeeping only).
+    /// Whether publish can replay the entry onto newer text (bookkeeping only: log.md and index.md edits, and a concept's stamp, review, question, unquestion, add_source and remove_source edits, unless a free edit of the path follows).
     pub replayable: bool,
     /// Whether `diff` shows the entry replayed onto the published text, the bytes publish would write: true only for a stale, replayable entry whose replay succeeds. Publish still runs its lint on that result. False: `diff` shows the entry's stored text, or the `replay_error` note.
     pub replayed: bool,

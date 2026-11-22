@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 400,
+  "next_claim_seq": 412,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "d26159e68880b93173b763d3024ed2c3ffa651dd96c8dc7558ba01ee234aeb17"
+    "mac": "d7552efcb8e6a3e495a23aed8b6725a9e335440907e52acf3f93a5519f16395e"
   },
-  "next_evidence_seq": 473,
+  "next_evidence_seq": 488,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "58ffdffb55e516b265b339963f562acb34872182f7209e086032fa9ed0d27f37"
+    "mac": "e9f558df8a1a3a85f8af99828710789b9a0e6019721490f9e5db61fa5ee2d566"
   },
   "claims": [
     {
@@ -233,6 +233,18 @@
             "by": "server",
             "mac": "dc7cff8d943c1b6c12519c5138163ee74b58851d2aca6cbf6d2a8b007c9935dd"
           }
+        },
+        {
+          "id": "EVD-0486",
+          "kind": "test",
+          "locator": "target/i830-logs/test.log:1364 mcp::reference::the_checked_in_tool_reference_matches_the_tool_list",
+          "summary": "On head d1808ab the generated-reference pin test passes, so the changed docs/reference/tools.md still matches the tool list. The diff to tools.md only changes the six tool descriptions and publish text.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T16:55:34.739515564Z",
+          "seal": {
+            "by": "server",
+            "mac": "f722e63b85b56803d7767549c86cc7a9ddc594e973b27289f9c5bd4b117c44df"
+          }
         }
       ],
       "verdicts": [
@@ -248,13 +260,26 @@
             "by": "server",
             "mac": "394e2fad8c23f21ccfef1e515cb6071bc0f3fb83bdd104f7504d08af080296b3"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audit on d1808ab: generated reference pin test passes after the tools.md change.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0486"
+          ],
+          "recorded_at": "2026-11-22T16:55:40.383117230Z",
+          "seal": {
+            "by": "server",
+            "mac": "b4253c9a12d2bf83793c5db715c790763058ad6c559aa533e35753efa505c79d"
+          }
         }
       ],
       "created_at": "2026-11-21T19:04:12.375208519Z",
-      "updated_at": "2026-11-21T19:13:20.080457211Z",
+      "updated_at": "2026-11-22T16:55:40.383117230Z",
       "seal": {
         "by": "server",
-        "mac": "13b2399359726a1dbe989601c60930d1969272dd6aeb119c5d210eb620e4d49c"
+        "mac": "bcad0256ac8e633cb6a6fdcc6c3888d1e10e288222a636beed78a898b850cdf1"
       }
     },
     {
@@ -24457,6 +24482,28 @@
             "by": "server",
             "mac": "0c3a84b0fd7fb204f0d1a0a72349337bf9cc32aa05cc019de80e40b68cc83f0b"
           }
+        },
+        {
+          "id": "EVD-0487",
+          "kind": "inspection",
+          "locator": "src/mcp/reports.rs:32,245,276",
+          "summary": "At head DEFAULT_N = 5 still used by both handlers; reports.rs not in the diff. The tools.md hunks do not touch the oldest/sprawl entries.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/reports.rs",
+              "lines": {
+                "start": 32,
+                "end": 32
+              },
+              "commit": "d1808ab7a6993a043f8c46b8a84a9a6ac4007147"
+            }
+          },
+          "recorded_at": "2026-11-22T16:55:34.768538506Z",
+          "seal": {
+            "by": "server",
+            "mac": "040cf8e54634de5622c462e5185ec7ce758e417da0149daadd9fff63377f8b74"
+          }
         }
       ],
       "verdicts": [
@@ -24472,13 +24519,26 @@
             "by": "server",
             "mac": "321673f4383afcd5b5d7453c0db953057f7a5ef83ec0c3afcbd0e21123eb1217"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audit on d1808ab: default unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0487"
+          ],
+          "recorded_at": "2026-11-22T16:55:40.409721182Z",
+          "seal": {
+            "by": "server",
+            "mac": "c134b778df6a8472e8b26348301dfe4129b4d3265d443db36d10b79ff3c0d7bf"
+          }
         }
       ],
       "created_at": "2026-11-21T19:08:08.066114433Z",
-      "updated_at": "2026-11-21T19:10:02.396297558Z",
+      "updated_at": "2026-11-22T16:55:40.409721182Z",
       "seal": {
         "by": "server",
-        "mac": "9e677cb546f8e231b388dc8e8661651128e4acbc731c6eb29200e655f98264b5"
+        "mac": "a5e0914a8b173e32de4ebb9fc948d04c872a94c4b4b6177792da4549b11faa69"
       }
     },
     {
@@ -31806,6 +31866,798 @@
       "seal": {
         "by": "server",
         "mac": "bb3d50f7a19c0db86727e938cf342d89ec07668b145cb32e63f68e9c1c855611"
+      }
+    },
+    {
+      "id": "CLM-0400",
+      "statement": "Issue #830 is resolved: stamp, review, question, unquestion, add_source and remove_source are replayable at publish, so a concurrent publish of the same concept no longer forces a discard.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/830",
+      "derived_from": [],
+      "artifacts": [
+        "src/okf/ops/replay.rs",
+        "src/okf/ops/frontmatter.rs",
+        "src/mcp/writes.rs"
+      ],
+      "tags": [
+        "from-issue:830"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0485",
+          "kind": "analysis",
+          "locator": "children of CLM-0400",
+          "summary": "Children cover issue reqs 1-4 and 6 (variants, emission+replay, specific replay errors, free-edit non-replayable, regression tests) and the PR's factual statements; req 5 is optional and declared not done.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T16:55:22.659541876Z",
+          "seal": {
+            "by": "server",
+            "mac": "220e61c1dab1c2e52036fb454f5ee3e1cd87cbc80b84705f1c74ecbc3b11ea22"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All eleven children supported; the optional req 5 is not done and the PR says so.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0485"
+          ],
+          "recorded_at": "2026-11-22T16:55:40.440340280Z",
+          "seal": {
+            "by": "server",
+            "mac": "fb5110b5f668dcd7b7e2eac2fcaf49a281d7c731180f7e059a16eb2f4d5a8a72"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:54:27.317160226Z",
+      "updated_at": "2026-11-22T16:55:40.440340280Z",
+      "seal": {
+        "by": "server",
+        "mac": "c4d2a00fb6181adc0cfffaafcda37c757ce8ef87961f66a74bd147240bf39d74"
+      }
+    },
+    {
+      "id": "CLM-0401",
+      "statement": "ReplayOp has variants AddSource, RemoveSource, Stamp, SetReviewed, AddQuestion and RemoveQuestion recording the semantic edit.",
+      "kind": "interface",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "Issue #830 req 1; PR: \"`ReplayOp` gains `AddSource`, `RemoveSource`, `Stamp`, `SetReviewed`, `AddQuestion` and `RemoveQuestion`\"",
+      "derived_from": [
+        "CLM-0400"
+      ],
+      "artifacts": [
+        "src/okf/ops/replay.rs"
+      ],
+      "tags": [
+        "from-issue:830"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0473",
+          "kind": "inspection",
+          "locator": "src/okf/ops/replay.rs:150-210",
+          "summary": "enum ReplayOp declares AddSource{id,resource,title,author}, RemoveSource{id}, Stamp{field,by,at}, SetReviewed{by,at,outcome,note}, AddQuestion{text}, RemoveQuestion{text}.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/ops/replay.rs",
+              "lines": {
+                "start": 150,
+                "end": 210
+              },
+              "commit": "d1808ab7a6993a043f8c46b8a84a9a6ac4007147"
+            }
+          },
+          "recorded_at": "2026-11-22T16:55:00.450459484Z",
+          "seal": {
+            "by": "server",
+            "mac": "619195fb669d983db5506bb2b85d155b83f6f024228399b4ac2054c2f908481b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Op variants exist and are replayed by the tools' own edits; tests prove no conflict on concurrent publish.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0473"
+          ],
+          "recorded_at": "2026-11-22T16:55:04.007607867Z",
+          "seal": {
+            "by": "server",
+            "mac": "257af7fb71fd928dab3e532f99edeed518cd7f352acff4ca281ad80e2ac29ed4"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:54:27.317160226Z",
+      "updated_at": "2026-11-22T16:55:04.007607867Z",
+      "seal": {
+        "by": "server",
+        "mac": "e12a7fe5ac7ffed48d8a3da193505f683b4b6afa257213fa3d3a2da5e5bd16d8"
+      }
+    },
+    {
+      "id": "CLM-0402",
+      "statement": "Each of the six tools records its ReplayOp variant (review records SetReviewed plus one AddQuestion per queued question), and publish's replay applies them to the current text.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #830 req 2; PR: \"`review` records `SetReviewed` plus one `AddQuestion` per question it queued\"",
+      "derived_from": [
+        "CLM-0400"
+      ],
+      "artifacts": [
+        "src/okf/ops/frontmatter.rs",
+        "src/okf/ops/replay.rs",
+        "src/store/publish.rs"
+      ],
+      "tags": [
+        "from-issue:830"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0474",
+          "kind": "inspection",
+          "locator": "src/okf/ops/frontmatter.rs:695-760 (replay_edit), record sites :100,:191,:201,:264,:424,:468,:601; src/okf/ops/replay.rs:336-342",
+          "summary": "Each tool calls outcome.record with its variant (stamp:100, review:191/201, question:264, unquestion:424, source:468, remove_source:601); replay() dispatches the six variants to replay_edit, which reuses the tools' edit functions.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/ops/frontmatter.rs",
+              "lines": {
+                "start": 695,
+                "end": 760
+              },
+              "commit": "d1808ab7a6993a043f8c46b8a84a9a6ac4007147"
+            }
+          },
+          "recorded_at": "2026-11-22T16:55:00.483893204Z",
+          "seal": {
+            "by": "server",
+            "mac": "dcb96cecab7d690c682c64e77a20980aff2e8fe2c6791793ddf96f5e18e92c09"
+          }
+        },
+        {
+          "id": "EVD-0475",
+          "kind": "test",
+          "locator": "target/i830-logs/test.log:1434-1468,1797-1819; tests mcp::writes::the_concept_commands_edit_frontmatter_as_replayable_edits, okf::ops::frontmatter::tests::review_records_the_review_and_each_question_it_queued",
+          "summary": "The writes.rs test asserts the stored op sequence stamp, add_question x2, remove_question, set_reviewed, add_source x2, remove_source; frontmatter unit test asserts review records SetReviewed plus AddQuestion; the replay tests pass in the logged run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/writes.rs",
+              "lines": {
+                "start": 1425,
+                "end": 1447
+              },
+              "commit": "d1808ab7a6993a043f8c46b8a84a9a6ac4007147"
+            }
+          },
+          "recorded_at": "2026-11-22T16:55:00.515180845Z",
+          "seal": {
+            "by": "server",
+            "mac": "830de91374e8ab9c158c7c02e02a30904f145062c4ef6c929c4ef8b080b0f65e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Every tool records its variant and the dispatch applies them; op-sequence test confirms.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0474",
+            "EVD-0475"
+          ],
+          "recorded_at": "2026-11-22T16:55:18.906525621Z",
+          "seal": {
+            "by": "server",
+            "mac": "23cba27d5118093ebfa83469e692bddecb989e2de4d6e240098f5d7b88c71877"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:54:27.317160226Z",
+      "updated_at": "2026-11-22T16:55:18.906525621Z",
+      "seal": {
+        "by": "server",
+        "mac": "8a74140d9955934dc489a646a5c6044eac32d199f1f625cf4859ae0a983d3a5c"
+      }
+    },
+    {
+      "id": "CLM-0403",
+      "statement": "A replay that can no longer apply fails with a specific refusal (source id already present, source gone, source now cited, question no longer queued) surfaced as replay_error and publish refusal, not a silent overwrite.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #830 req 3; PR: \"A replay refuses with the tool's own reason ...\"",
+      "derived_from": [
+        "CLM-0400"
+      ],
+      "artifacts": [
+        "src/okf/ops/frontmatter.rs",
+        "src/mcp/writes.rs"
+      ],
+      "tags": [
+        "from-issue:830"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0476",
+          "kind": "test",
+          "locator": "mcp::writes::frontmatter_replay_tests::the_same_source_id_on_both_sides_is_a_replay_error, a_source_now_cited_cannot_be_removed_on_replay; okf::ops::frontmatter::tests::a_replay_refuses_what_the_op_would_refuse_on_the_newer_text",
+          "summary": "Tests assert replay_error contains \"already has a source with id 's1'\" and equals publish's error text; \"still cites source 's0'\"; and refusals \"a.md has no source with id 's9'\" and \"no open question in a.md exactly matches 'Gone?'\". All passed in test.log.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/writes.rs",
+              "lines": {
+                "start": 2762,
+                "end": 2810
+              },
+              "commit": "d1808ab7a6993a043f8c46b8a84a9a6ac4007147"
+            }
+          },
+          "recorded_at": "2026-11-22T16:55:00.546604637Z",
+          "seal": {
+            "by": "server",
+            "mac": "658a5a0a4de65bfe753917c9f15aa5794aa245c16614bd19e8b4ea6e2c5a8d81"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Tests assert specific refusal messages for duplicate id, cited source, missing source and question, and that publish refuses with the same reason. Sources/open_questions-not-a-list on replay is covered only by doc/shared edit code, not a replay-specific test.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0476"
+          ],
+          "recorded_at": "2026-11-22T16:55:18.944960292Z",
+          "seal": {
+            "by": "server",
+            "mac": "91bcdf2000b8a600dccd521ee00d79e12196696076bbe5a7e5a0211d69036b4c"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:54:27.317160226Z",
+      "updated_at": "2026-11-22T16:55:18.944960292Z",
+      "seal": {
+        "by": "server",
+        "mac": "0b39483670161d0ffc61230e7d7efda53531b6444b4844e10467c5625313b3b8"
+      }
+    },
+    {
+      "id": "CLM-0404",
+      "statement": "A free edit (such as edit_document) of the same path in the changeset still makes the entry non-replayable, so it conflicts on a stale base.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #830 req 4; PR: \"A free edit (such as `edit_document`) of the same path in the changeset still clears the replay\"",
+      "derived_from": [
+        "CLM-0400"
+      ],
+      "artifacts": [
+        "src/mcp/writes.rs"
+      ],
+      "tags": [
+        "from-issue:830"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0477",
+          "kind": "test",
+          "locator": "mcp::writes::frontmatter_replay_tests::a_free_edit_on_the_path_still_makes_the_entry_a_conflict",
+          "summary": "add_source then edit_document in changeset A, concurrent stamp published; asserts (stale, replayable)==(true,false) and publish returns OkfError::Conflict. Passed in test.log:1434.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/writes.rs",
+              "lines": {
+                "start": 2812,
+                "end": 2834
+              },
+              "commit": "d1808ab7a6993a043f8c46b8a84a9a6ac4007147"
+            }
+          },
+          "recorded_at": "2026-11-22T16:55:00.576881924Z",
+          "seal": {
+            "by": "server",
+            "mac": "aad99a079399363a56494e9b7d49c7a4a8531c39dafaa70f9ff5dcd6528ed4fa"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test asserts replayable false and a Conflict after a free edit.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0477"
+          ],
+          "recorded_at": "2026-11-22T16:55:18.970516499Z",
+          "seal": {
+            "by": "server",
+            "mac": "84bd445756bbf4cbcbdd10a78959f91853dbde57c6cce517d1181f764878868e"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:54:27.317160226Z",
+      "updated_at": "2026-11-22T16:55:18.970516499Z",
+      "seal": {
+        "by": "server",
+        "mac": "4d6a10e5b86947d8159e5ece57024ee003cdab7e2d4f1cf7fb20221699791cf2"
+      }
+    },
+    {
+      "id": "CLM-0405",
+      "statement": "Regression tests cover add_source, remove_source, question/unquestion and stamp/review replaying over a concurrent publish (pending_changes replayable true, replayed true; publish succeeds with the path in `replayed`), plus a same-source-id conflict that yields a replay_error.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #830 req 6",
+      "derived_from": [
+        "CLM-0400"
+      ],
+      "artifacts": [
+        "src/mcp/writes.rs"
+      ],
+      "tags": [
+        "from-issue:830"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0478",
+          "kind": "test",
+          "locator": "src/mcp/writes.rs:2638-2784 (replays helper and 5 tests); test.log:1434-1468",
+          "summary": "The replays helper asserts (stale,replayable,replayed,error)==(true,true,true,None) and publish report.replayed==[\"/infra/ntp.md\"]; used by add_source, remove_source, question+unquestion tests (concurrent stamp); stamp+review test checks the same flags over a concurrent source; same-id test asserts replay_error and publish refusal. All pass.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/writes.rs",
+              "lines": {
+                "start": 2638,
+                "end": 2784
+              },
+              "commit": "d1808ab7a6993a043f8c46b8a84a9a6ac4007147"
+            }
+          },
+          "recorded_at": "2026-11-22T16:55:00.606105387Z",
+          "seal": {
+            "by": "server",
+            "mac": "22451ecb2feeb0993109917f76707e5a2376202116abb6019a83c5a1eb837d99"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All requested scenarios present, assertions read and match the issue.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0478"
+          ],
+          "recorded_at": "2026-11-22T16:55:18.995582435Z",
+          "seal": {
+            "by": "server",
+            "mac": "14016f10942c33c632ea4076096238b97889547b93e4b61d5e2c4226d7b7e50d"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:54:27.317160226Z",
+      "updated_at": "2026-11-22T16:55:18.995582435Z",
+      "seal": {
+        "by": "server",
+        "mac": "de264bf80a0d415c6cfb27bdba6f0cb8c6bd9f0bea1d38907ed1895b68f20553"
+      }
+    },
+    {
+      "id": "CLM-0406",
+      "statement": "RemoveQuestion matches exact text never an index, and unquestion of a non-string question records no replay.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR: \"`RemoveQuestion` matches exact text, never an index. `unquestion` of a non-string question records no replay.\"",
+      "derived_from": [
+        "CLM-0400"
+      ],
+      "artifacts": [
+        "src/okf/ops/frontmatter.rs"
+      ],
+      "tags": [
+        "from-issue:830"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0479",
+          "kind": "test",
+          "locator": "okf::ops::frontmatter::tests::replaying_a_queued_question_again_changes_nothing_and_a_digit_text_is_not_an_index; ...::an_unquestion_of_a_non_string_question_records_no_replay",
+          "summary": "First test replays RemoveQuestion with digit text and expects an error (not index removal); second asserts outcome.replay is empty for a non-string question. Both pass in test.log.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/ops/frontmatter.rs",
+              "lines": {
+                "start": 1328,
+                "end": 1378
+              },
+              "commit": "d1808ab7a6993a043f8c46b8a84a9a6ac4007147"
+            }
+          },
+          "recorded_at": "2026-11-22T16:55:00.637365028Z",
+          "seal": {
+            "by": "server",
+            "mac": "fa06889a51a4ea428cb5e33b794d53f0f945d5b0337fcf2670834b4891a7484e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Two unit tests assert both halves.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0479"
+          ],
+          "recorded_at": "2026-11-22T16:55:19.021212412Z",
+          "seal": {
+            "by": "server",
+            "mac": "4b2a1a85c48d86fd9bbadc889bddce2a33e1766e7e6f86e7f73caae9f8261924"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:54:27.317160226Z",
+      "updated_at": "2026-11-22T16:55:19.021212412Z",
+      "seal": {
+        "by": "server",
+        "mac": "a8fcbe68fa37c050b69e651ea36edb764a051104b0da4b52dcbc9ef20274fc7a"
+      }
+    },
+    {
+      "id": "CLM-0407",
+      "statement": "Stamp and SetReviewed replays carry the original actor and time, and a replay keeps the file's line endings.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR: \"`Stamp` and `SetReviewed` carry the original actor and time\" and \"Line endings are kept.\"",
+      "derived_from": [
+        "CLM-0400"
+      ],
+      "artifacts": [
+        "src/okf/ops/frontmatter.rs"
+      ],
+      "tags": [
+        "from-issue:830"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0480",
+          "kind": "test",
+          "locator": "okf::ops::frontmatter::tests::a_replay_keeps_the_stamp_time_and_actor_of_the_original_edit; ...::a_replay_keeps_crlf_line_endings_and_refuses_a_text_without_frontmatter; mcp::writes::...stamp_and_review_replay_over_a_concurrent_source",
+          "summary": "Tests replay Stamp/ SetReviewed onto text and check original actor/time (\"by: reviewer\", \"by: stamper\") and CRLF endings preserved. Pass in test.log.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/ops/frontmatter.rs",
+              "lines": {
+                "start": 1288,
+                "end": 1365
+              },
+              "commit": "d1808ab7a6993a043f8c46b8a84a9a6ac4007147"
+            }
+          },
+          "recorded_at": "2026-11-22T16:55:00.666409889Z",
+          "seal": {
+            "by": "server",
+            "mac": "1ae96ed4c977d86189b67e6f4c899403b454d653cb03871ab0b417dbdfc06901"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Unit tests assert original actor/time and CRLF preservation.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0480"
+          ],
+          "recorded_at": "2026-11-22T16:55:19.046490758Z",
+          "seal": {
+            "by": "server",
+            "mac": "aec3f05d4f511e90eacf0046fb96208db86af14c8443e3c3c9b5e24683ba9062"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:54:27.317160226Z",
+      "updated_at": "2026-11-22T16:55:19.046490758Z",
+      "seal": {
+        "by": "server",
+        "mac": "f165cd27aa32a0e01f139e5a52a02bcccb62bc2e3433270983acbd14073a67d3"
+      }
+    },
+    {
+      "id": "CLM-0408",
+      "statement": "Tool descriptions, the publish description, the PendingFile.replayable doc and docs/reference/tools.md say these edits are replayed, and a changelog entry was added.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR: \"Tool descriptions, the `publish` description, `PendingFile.replayable` doc and `docs/reference/tools.md` (regenerated) say these edits are replayed. Changelog entry added.\"",
+      "derived_from": [
+        "CLM-0400"
+      ],
+      "artifacts": [
+        "docs/reference/tools.md",
+        "src/mcp/writes.rs",
+        "src/mcp/changesets.rs",
+        "changelog/"
+      ],
+      "tags": [
+        "from-issue:830"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0481",
+          "kind": "inspection",
+          "locator": "src/mcp/writes.rs:757,782,806,831,854,880; src/mcp/changesets.rs:435-441,515; docs/reference/tools.md:459; changelog/2026-11-22T16-39-40Z-replayable-frontmatter-ops.md",
+          "summary": "Six tool descriptions say \"Replayed at publish...\"; publish description and PendingFile.replayable doc list the six edits; tools.md line 459 carries the new publish text; the changelog file exists.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/reference/tools.md",
+              "lines": {
+                "start": 459,
+                "end": 459
+              },
+              "commit": "d1808ab7a6993a043f8c46b8a84a9a6ac4007147"
+            }
+          },
+          "recorded_at": "2026-11-22T16:55:00.696998188Z",
+          "seal": {
+            "by": "server",
+            "mac": "ed92da026482dbc26d36efd7c11b6e353b35b80f1730eba88bc229a89122bd53"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Descriptions, doc comment, tools.md and changelog all present.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0481"
+          ],
+          "recorded_at": "2026-11-22T16:55:19.071634124Z",
+          "seal": {
+            "by": "server",
+            "mac": "7b549ab87199afb5f3a25768cfd447bf446471de43925fcf48c4ff5e606d8444"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:54:27.317160226Z",
+      "updated_at": "2026-11-22T16:55:19.071634124Z",
+      "seal": {
+        "by": "server",
+        "mac": "8fd9b2bc9781e699d66d81ac4ea4dbe4beb4f8dad021a6459dd2aeb163cf4231"
+      }
+    },
+    {
+      "id": "CLM-0409",
+      "statement": "The optional pending_changes note for a stale non-replayable entry is not implemented in this change.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR: \"Not done: the optional `pending_changes` note for a stale, non-replayable entry.\"",
+      "derived_from": [
+        "CLM-0400"
+      ],
+      "artifacts": [
+        "src/mcp/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:830"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0482",
+          "kind": "inspection",
+          "locator": "git diff origin/main..HEAD -- src/mcp/changesets.rs; src/mcp/changesets.rs:889-921",
+          "summary": "The diff of changesets.rs only changes two doc/description strings; pending_changes logic (889-921) has no new note for stale non-replayable entries.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/changesets.rs",
+              "lines": {
+                "start": 885,
+                "end": 925
+              },
+              "commit": "d1808ab7a6993a043f8c46b8a84a9a6ac4007147"
+            }
+          },
+          "recorded_at": "2026-11-22T16:55:00.728531840Z",
+          "seal": {
+            "by": "server",
+            "mac": "6d214ae7efcfb78ee5ddfbb1ddcc993897d17fd8303e6d91879148eaaed87cf0"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Diff of changesets.rs is string-only; no note added.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0482"
+          ],
+          "recorded_at": "2026-11-22T16:55:19.096538288Z",
+          "seal": {
+            "by": "server",
+            "mac": "301f2494e29c2646083b4ae32d5e75c131cc1e93090b4ac5917a7c2d69b2c86f"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:54:27.317160226Z",
+      "updated_at": "2026-11-22T16:55:19.096538288Z",
+      "seal": {
+        "by": "server",
+        "mac": "ae5d561f03a7032dbfce92d3559050d21eb5bada41dd3a32c7a15ef74ba0825a"
+      }
+    },
+    {
+      "id": "CLM-0410",
+      "statement": "fmt, lint, test and dylint gates all exit 0 on the head, and the lib test target reports 2789 passed, 0 failed.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR: \"`tools/agentic/gate.sh fmt`, `lint`, `test`, `dylint`: all exit 0 ... `test`: 2789 passed in the lib target, 0 failed.\"",
+      "derived_from": [
+        "CLM-0400"
+      ],
+      "artifacts": [
+        "target/i830-logs/gates.log",
+        "target/i830-logs/test.log"
+      ],
+      "tags": [
+        "from-issue:830"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0483",
+          "kind": "log",
+          "locator": "target/i830-logs/gates.log (fmt/lint/test/dylint exit 0); target/i830-logs/test.log:2922",
+          "summary": "gates.log shows \"fmt exit 0, lint exit 0, test exit 0, dylint exit 0\"; test.log:2922 \"test result: ok. 2789 passed; 0 failed; 2 ignored\". I read the logs, did not rerun the gates (parent ran them; instructed not to rerun). Log is of an earlier run on the same single commit d1808ab; working tree clean.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T16:55:00.756278387Z",
+          "seal": {
+            "by": "server",
+            "mac": "984a4524a57863c2f4e7e455bf187bfed7ae1e7272d7c419c1fd03388c732354"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Logs show exit 0 for all four and 2789 passed in the lib target; read from logs, not rerun.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0483"
+          ],
+          "recorded_at": "2026-11-22T16:55:19.129253575Z",
+          "seal": {
+            "by": "server",
+            "mac": "2d7d1e70f6b0c8efe3b927afe68efce3dfd2a54af1e61bdf046c2d5adf54bda2"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:54:27.317160226Z",
+      "updated_at": "2026-11-22T16:55:19.129253575Z",
+      "seal": {
+        "by": "server",
+        "mac": "5c7467bac68647714061c7d38bedad22be839f36c1f23bf91f8112e9e9b7f4c8"
+      }
+    },
+    {
+      "id": "CLM-0411",
+      "statement": "Reverting the add_source recording makes add_source_replays_over_a_concurrent_stamp fail.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR: \"Reverting the `add_source` recording makes `add_source_replays_over_a_concurrent_stamp` fail.\"",
+      "derived_from": [
+        "CLM-0400"
+      ],
+      "artifacts": [
+        "target/i830-logs/revert.log"
+      ],
+      "tags": [
+        "from-issue:830"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0484",
+          "kind": "log",
+          "locator": "target/i830-logs/revert.log",
+          "summary": "revert.log shows the source ops missing from the stored text (s1,s2 absent), assertion left (true,false,false,None) vs right (true,true,true,None), \"failures: mcp::writes::frontmatter_replay_tests::add_source_replays_over_a_concurrent_stamp\", test result FAILED. Which source change was reverted is not recorded in the log; I did not reproduce it.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T16:55:00.783044359Z",
+          "seal": {
+            "by": "server",
+            "mac": "83a2e8e4f6a77bd7efc23e13ebbd9546d8fceeb67a10bc3664d87658e8c1db63"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "revert.log records the named test failing with the expected assertion mismatch.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0484"
+          ],
+          "recorded_at": "2026-11-22T16:55:19.153977149Z",
+          "seal": {
+            "by": "server",
+            "mac": "8e2e23379acca79425ff40c7d4d3b434f329fd46cab5bd9b6881be37a43ce254"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T16:54:27.317160226Z",
+      "updated_at": "2026-11-22T16:55:19.153977149Z",
+      "seal": {
+        "by": "server",
+        "mac": "35551e10ab02cf1f71203d3e97d8d1d924457ec3e2b3d1c9e9f4cbea178b9712"
       }
     }
   ]

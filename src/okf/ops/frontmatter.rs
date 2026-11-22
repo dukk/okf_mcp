@@ -13,10 +13,12 @@ use indexmap::IndexMap;
 
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
+use crate::okf::doc::Doc;
 use crate::okf::markdown::{footnote_paragraphs, footnote_refs};
+use crate::okf::ops::replay::ReplayOp;
 use crate::okf::ops::{
-    load_concept, refused, save, stamp_value, LoadedConcept, OpContext, OpOutcome, SourceEntry,
-    StampField,
+    load_concept, refused, save, stamp_entry, stamp_value, LoadedConcept, OpContext, OpOutcome,
+    SourceEntry, StampField,
 };
 use crate::okf::pystr::{py_repr_str, py_str};
 use crate::okf::workspace::Workspace;
@@ -92,6 +94,25 @@ pub fn stamp(
 ) -> Result<OpOutcome, OkfError> {
     let LoadedConcept { path, mut doc, .. } = load_concept(workspace, concept)?;
     let item = flow_value(&stamp_value(ctx));
+    stamp_edit(&mut doc, field, &item)?;
+    let mut outcome = OpOutcome::default();
+    save(workspace, &doc, &mut outcome)?;
+    outcome.record(
+        &path,
+        ReplayOp::Stamp {
+            field,
+            by: ctx.by.to_string(),
+            at: format_timestamp(ctx.now),
+        },
+    );
+    outcome.message = format!("{path}: {} {item}", field.as_str());
+    Ok(outcome)
+}
+
+/// The edit [`stamp`] and its replay share: `item` (a rendered `{ by, at }`)
+/// becomes `generated`, or is appended to `verified`.
+#[tracing::instrument(level = "trace", skip_all)]
+fn stamp_edit(doc: &mut Doc, field: StampField, item: &str) -> Result<(), OkfError> {
     // `match` must cover every variant: a third stamp field would not compile here.
     match field {
         StampField::Generated => doc.set_block("generated", vec![format!("generated: {item}")]),
@@ -101,10 +122,7 @@ pub fn stamp(
             block_item,
         )?,
     }
-    let mut outcome = OpOutcome::default();
-    save(workspace, &doc, &mut outcome)?;
-    outcome.message = format!("{path}: {} {item}", field.as_str());
-    Ok(outcome)
+    Ok(())
 }
 
 /// Port of `cmd_review`: replaces `reviewed` and queues open questions not
@@ -145,16 +163,7 @@ pub fn review(
         data,
     } = load_concept(workspace, concept)?;
     let at = format_timestamp(ctx.now);
-    doc.set_block(
-        "reviewed",
-        vec![
-            "reviewed:".to_string(),
-            format!("  by: {}", scalar(ctx.by, ScalarStyle::Block)),
-            format!("  at: {at}"),
-            format!("  outcome: {outcome}"),
-            format!("  note: {}", scalar(note, ScalarStyle::Quoted)),
-        ],
-    );
+    set_reviewed_edit(&mut doc, ctx.by, &at, outcome, note);
     // A non-list `open_questions` counts as empty here, as in okf.py; the
     // append below then converts a mapping or refuses a scalar.
     let have: &[Value] = match data.get(OPEN_QUESTIONS) {
@@ -179,6 +188,24 @@ pub fn review(
     }
     let mut result = OpOutcome::default();
     save(workspace, &doc, &mut result)?;
+    result.record(
+        &path,
+        ReplayOp::SetReviewed {
+            by: ctx.by.to_string(),
+            at: at.clone(),
+            outcome: outcome.to_string(),
+            note: note.to_string(),
+        },
+    );
+    for text in &added {
+        result.record(
+            &path,
+            ReplayOp::AddQuestion {
+                text: (*text).to_string(),
+                convert_mapping: true,
+            },
+        );
+    }
     let mut summary = format!("{path}: reviewed {outcome} at {at}");
     if !added.is_empty() {
         summary.push_str(&format!("; queued {} question(s)", added.len()));
@@ -186,6 +213,21 @@ pub fn review(
     lines.push(summary);
     result.message = lines.join("\n");
     Ok(result)
+}
+
+/// The edit [`review`] and its replay share: `reviewed` is replaced.
+#[tracing::instrument(level = "trace", skip_all)]
+fn set_reviewed_edit(doc: &mut Doc, by: &str, at: &str, outcome: &str, note: &str) {
+    doc.set_block(
+        "reviewed",
+        vec![
+            "reviewed:".to_string(),
+            format!("  by: {}", scalar(by, ScalarStyle::Block)),
+            format!("  at: {at}"),
+            format!("  outcome: {outcome}"),
+            format!("  note: {}", scalar(note, ScalarStyle::Quoted)),
+        ],
+    );
 }
 
 /// Port of `cmd_question`: queues one open question without a review.
@@ -213,21 +255,63 @@ pub fn question(
         mut doc,
         data,
     } = load_concept(workspace, concept)?;
-    let existing = list_or_nothing(&path, &data, OPEN_QUESTIONS)?;
-    if existing.iter().any(|v| v.as_str() == Some(question)) {
+    if !add_question_edit(&path, &mut doc, &data, question, false)? {
         return Ok(OpOutcome::unchanged(format!(
             "{path}: open question already queued: {question}"
         )));
+    }
+    let mut outcome = OpOutcome::default();
+    save(workspace, &doc, &mut outcome)?;
+    outcome.record(
+        &path,
+        ReplayOp::AddQuestion {
+            text: question.to_string(),
+            convert_mapping: false,
+        },
+    );
+    outcome.message = format!("{path}: queued open question: {question}");
+    Ok(outcome)
+}
+
+/// The edit [`question`] and its replay share: queues `question` unless it
+/// is already in `data`'s `open_questions`.
+///
+/// `convert_mapping` is `review`'s rule: a mapping, scalar or null
+/// `open_questions` counts as empty here and the append converts a mapping
+/// to a list (or refuses a scalar). `question`'s rule, `false`, refuses
+/// anything but a list with [`OkfError::Shape`].
+///
+/// # Returns
+/// Whether the question was added.
+///
+/// # Errors
+/// [`OkfError::Shape`] when `open_questions` is not a list; the append's own
+/// errors.
+#[tracing::instrument(level = "trace", skip_all)]
+fn add_question_edit(
+    path: &str,
+    doc: &mut Doc,
+    data: &IndexMap<String, Value>,
+    question: &str,
+    convert_mapping: bool,
+) -> Result<bool, OkfError> {
+    let existing = if convert_mapping {
+        match data.get(OPEN_QUESTIONS) {
+            Some(Value::Seq(items)) => items,
+            None | Some(Value::Null | Value::Str(_) | Value::Map(_)) => &[][..],
+        }
+    } else {
+        list_or_nothing(path, data, OPEN_QUESTIONS)?
+    };
+    if existing.iter().any(|v| v.as_str() == Some(question)) {
+        return Ok(false);
     }
     doc.append_seq_item(
         OPEN_QUESTIONS,
         |indent| vec![quoted_item(question, indent)],
         render_quoted,
     )?;
-    let mut outcome = OpOutcome::default();
-    save(workspace, &doc, &mut outcome)?;
-    outcome.message = format!("{path}: queued open question: {question}");
-    Ok(outcome)
+    Ok(true)
 }
 
 /// The 0-based index `unquestion` removes: a 1-based number, else the
@@ -249,6 +333,12 @@ fn question_index(path: &str, questions: &[Value], question: &str) -> Result<usi
                 ))
             });
     }
+    question_by_text(path, questions, question)
+}
+
+/// The 0-based index of the question whose text is exactly `question`.
+#[tracing::instrument(level = "trace", skip_all)]
+fn question_by_text(path: &str, questions: &[Value], question: &str) -> Result<usize, OkfError> {
     questions
         .iter()
         .position(|v| v.as_str() == Some(question))
@@ -258,6 +348,57 @@ fn question_index(path: &str, questions: &[Value], question: &str) -> Result<usi
                 py_repr_str(question)
             ))
         })
+}
+
+/// `open_questions` as a non-empty list, else the refusal `unquestion` gives.
+#[tracing::instrument(level = "trace", skip_all)]
+fn queued_questions<'d>(
+    path: &str,
+    data: &'d IndexMap<String, Value>,
+) -> Result<&'d [Value], OkfError> {
+    match data.get(OPEN_QUESTIONS) {
+        Some(Value::Seq(items)) if !items.is_empty() => Ok(items),
+        None | Some(Value::Null | Value::Str(_) | Value::Seq(_) | Value::Map(_)) => {
+            Err(refused(format!("{path} has no open_questions")))
+        }
+    }
+}
+
+/// The edit [`unquestion`] and its replay share: removes `questions[index]`,
+/// deleting the key when it was the last one.
+///
+/// # Returns
+/// Whether it was the last question (the key is gone).
+#[tracing::instrument(level = "trace", skip_all)]
+fn remove_question_edit(doc: &mut Doc, questions: &[Value], index: usize) -> bool {
+    let last = questions.len() == 1;
+    if last {
+        doc.delete_block(OPEN_QUESTIONS);
+        return true;
+    }
+    match doc.seq_items(OPEN_QUESTIONS) {
+        Some(items) if items.spans.len() == questions.len() => {
+            doc.remove_lines(items.spans[index].clone());
+        }
+        // A flow list, on one line or several, is rewritten as a block
+        // list of the remaining items. okf.py takes this branch for any
+        // list `seq_items` can't map item by item; probing okf.py found
+        // no block list that parses and gets here (a continuation or
+        // indent `seq_items` refuses also fails to parse), so in practice
+        // it is flow lists only.
+        _ => {
+            let mut lines = vec![format!("{OPEN_QUESTIONS}:")];
+            lines.extend(
+                questions
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != index)
+                    .map(|(_, q)| quoted_item(&py_str(q), 2)),
+            );
+            doc.set_block(OPEN_QUESTIONS, lines);
+        }
+    }
+    false
 }
 
 /// Port of `cmd_unquestion`: removes one open question, deleting the key
@@ -287,43 +428,21 @@ pub fn unquestion(
         mut doc,
         data,
     } = load_concept(workspace, concept)?;
-    let questions = match data.get(OPEN_QUESTIONS) {
-        Some(Value::Seq(items)) if !items.is_empty() => items,
-        None | Some(Value::Null | Value::Str(_) | Value::Seq(_) | Value::Map(_)) => {
-            return Err(refused(format!("{path} has no open_questions")));
-        }
-    };
+    let questions = queued_questions(&path, &data)?;
     let index = question_index(&path, questions, question)?;
     let removed = py_str(&questions[index]);
-    let last = questions.len() == 1;
-    if last {
-        doc.delete_block(OPEN_QUESTIONS);
-    } else {
-        match doc.seq_items(OPEN_QUESTIONS) {
-            Some(items) if items.spans.len() == questions.len() => {
-                doc.remove_lines(items.spans[index].clone());
-            }
-            // A flow list, on one line or several, is rewritten as a block
-            // list of the remaining items. okf.py takes this branch for any
-            // list `seq_items` can't map item by item; probing okf.py found
-            // no block list that parses and gets here (a continuation or
-            // indent `seq_items` refuses also fails to parse), so in practice
-            // it is flow lists only.
-            _ => {
-                let mut lines = vec![format!("{OPEN_QUESTIONS}:")];
-                lines.extend(
-                    questions
-                        .iter()
-                        .enumerate()
-                        .filter(|(i, _)| *i != index)
-                        .map(|(_, q)| quoted_item(&py_str(q), 2)),
-                );
-                doc.set_block(OPEN_QUESTIONS, lines);
-            }
-        }
-    }
+    let last = remove_question_edit(&mut doc, questions, index);
     let mut outcome = OpOutcome::default();
     save(workspace, &doc, &mut outcome)?;
+    // A question that is not a string has no text a replay could match.
+    if let Some(text) = questions[index].as_str() {
+        outcome.record(
+            &path,
+            ReplayOp::RemoveQuestion {
+                text: text.to_string(),
+            },
+        );
+    }
     let left = if last {
         " (key deleted, none left)"
     } else {
@@ -358,7 +477,35 @@ pub fn source(
         mut doc,
         data,
     } = load_concept(workspace, concept)?;
-    let existing = list_or_nothing(&path, &data, SOURCES)?;
+    add_source_edit(&path, &mut doc, &data, entry)?;
+    let mut outcome = OpOutcome::default();
+    save(workspace, &doc, &mut outcome)?;
+    outcome.record(
+        &path,
+        ReplayOp::AddSource {
+            id: entry.id.to_string(),
+            resource: entry.resource.to_string(),
+            title: entry.title.map(str::to_string),
+            author: entry.author.map(str::to_string),
+        },
+    );
+    outcome.message = format!("{path}: added source {}", entry.id);
+    Ok(outcome)
+}
+
+/// The edit [`source`] and its replay share: appends `entry` to `sources`.
+///
+/// # Errors
+/// [`OkfError::Shape`] when `sources` is not a list; [`OkfError::Refused`]
+/// when an entry with this id exists.
+#[tracing::instrument(level = "trace", skip_all)]
+fn add_source_edit(
+    path: &str,
+    doc: &mut Doc,
+    data: &IndexMap<String, Value>,
+    entry: &SourceEntry<'_>,
+) -> Result<(), OkfError> {
+    let existing = list_or_nothing(path, data, SOURCES)?;
     // `matches!(x, Pattern if guard)` is a one-line `match` returning a bool.
     let duplicate = existing.iter().any(
         |s| matches!(s, Value::Map(map) if map.get("id").and_then(Value::as_str) == Some(entry.id)),
@@ -382,10 +529,7 @@ pub fn source(
     }
     let item = Value::Map(fields);
     doc.append_seq_item(SOURCES, |indent| block_item(&item, indent), block_item)?;
-    let mut outcome = OpOutcome::default();
-    save(workspace, &doc, &mut outcome)?;
-    outcome.message = format!("{path}: added source {}", entry.id);
-    Ok(outcome)
+    Ok(())
 }
 
 /// Does `text` hold `token` with no word character (letter, digit, `_`,
@@ -461,7 +605,35 @@ pub fn remove_source(
         mut doc,
         data,
     } = load_concept(workspace, concept)?;
-    let sources = list_or_nothing(&path, &data, SOURCES)?;
+    let last = remove_source_edit(&path, &mut doc, &data, id)?;
+    let mut outcome = OpOutcome::default();
+    save(workspace, &doc, &mut outcome)?;
+    let left = if last {
+        " (key deleted, none left)"
+    } else {
+        ""
+    };
+    outcome.record(&path, ReplayOp::RemoveSource { id: id.to_string() });
+    outcome.message = format!("{path}: removed source {id}{left}");
+    Ok(outcome)
+}
+
+/// The edit [`remove_source`] and its replay share: removes the entry with
+/// id `id`, deleting the key when it was the last one.
+///
+/// # Returns
+/// Whether it was the last source (the key is gone).
+///
+/// # Errors
+/// As [`remove_source`] after loading the concept.
+#[tracing::instrument(level = "trace", skip_all)]
+fn remove_source_edit(
+    path: &str,
+    doc: &mut Doc,
+    data: &IndexMap<String, Value>,
+    id: &str,
+) -> Result<bool, OkfError> {
+    let sources = list_or_nothing(path, data, SOURCES)?;
     let found = sources
         .iter()
         .enumerate()
@@ -507,15 +679,93 @@ pub fn remove_source(
             }
         }
     }
-    let mut outcome = OpOutcome::default();
-    save(workspace, &doc, &mut outcome)?;
-    let left = if last {
-        " (key deleted, none left)"
-    } else {
-        ""
-    };
-    outcome.message = format!("{path}: removed source {id}{left}");
-    Ok(outcome)
+    Ok(last)
+}
+
+/// Redoes one frontmatter edit of the concept at `path` on its current
+/// `text` (publish's replay of a [`ReplayOp`] made by `stamp`, `review`,
+/// `question`, `unquestion`, `source` or `remove_source`; issue #830).
+///
+/// It runs the edit the op itself ran, so the replay refuses what the op
+/// would refuse on this text: a source id now present, a source now gone
+/// or cited, a question no longer queued to remove. Queuing a question
+/// that is already queued changes nothing, as `question` does.
+///
+/// # Arguments
+/// * `path` - the concept's catalog-relative path.
+/// * `text` - its current published text.
+/// * `op` - one of the six frontmatter ops.
+///
+/// # Returns
+/// The new text (the file's own line endings kept), or `None` when the op
+/// changes nothing.
+///
+/// # Errors
+/// [`OkfError::Refused`] as above, or when the text has no frontmatter;
+/// [`OkfError::Shape`] when `sources` or `open_questions` is no longer a
+/// list; [`OkfError::FrontmatterParse`] when the frontmatter does not
+/// parse, or the edit would break it. [`OkfError::Refused`] too for an op
+/// that is not a frontmatter op, which only a corrupt stored op can be.
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) fn replay_edit(
+    path: &str,
+    text: &str,
+    op: &ReplayOp,
+) -> Result<Option<String>, OkfError> {
+    let mut doc = Doc::from_text(path, text);
+    if !doc.has_frontmatter() {
+        return Err(refused(format!(
+            "{path} has no frontmatter; add it with your editor first"
+        )));
+    }
+    let data = doc.parse_checked()?;
+    match op {
+        ReplayOp::AddSource {
+            id,
+            resource,
+            title,
+            author,
+        } => {
+            let entry = SourceEntry {
+                id,
+                resource,
+                title: title.as_deref(),
+                author: author.as_deref(),
+            };
+            add_source_edit(path, &mut doc, &data, &entry)?;
+        }
+        ReplayOp::RemoveSource { id } => {
+            remove_source_edit(path, &mut doc, &data, id)?;
+        }
+        ReplayOp::Stamp { field, by, at } => {
+            stamp_edit(&mut doc, *field, &flow_value(&stamp_entry(by, at)))?;
+        }
+        ReplayOp::SetReviewed {
+            by,
+            at,
+            outcome,
+            note,
+        } => set_reviewed_edit(&mut doc, by, at, outcome, note),
+        ReplayOp::AddQuestion {
+            text,
+            convert_mapping,
+        } => {
+            if !add_question_edit(path, &mut doc, &data, text, *convert_mapping)? {
+                return Ok(None);
+            }
+        }
+        ReplayOp::RemoveQuestion { text } => {
+            let questions = queued_questions(path, &data)?;
+            let index = question_by_text(path, questions, text)?;
+            remove_question_edit(&mut doc, questions, index);
+        }
+        other => {
+            return Err(refused(format!(
+                "{path}: not a frontmatter replay operation: {other:?}"
+            )));
+        }
+    }
+    doc.render_checked().map(Some)
 }
 
 #[cfg(test)]
@@ -557,7 +807,14 @@ mod tests {
             "---\ntype: Note\ngenerated: { by: tester, at: 2026-11-03T12:00:00Z }\n---\nBody\n"
         );
         assert_eq!(outcome.touched, ["a.md"]);
-        assert!(outcome.replay.is_empty());
+        assert_eq!(
+            outcome.replay["a.md"],
+            [ReplayOp::Stamp {
+                field: StampField::Generated,
+                by: "tester".to_string(),
+                at: "2026-11-03T12:00:00Z".to_string(),
+            }]
+        );
         assert_eq!(
             outcome.message,
             "a.md: generated { by: tester, at: 2026-11-03T12:00:00Z }"
@@ -986,5 +1243,203 @@ mod tests {
         // A multibyte neighbour is a char, not a byte: no slicing panic.
         assert!(!contains_token("\u{e9}s1", "s1"));
         assert!(contains_token("\u{2014}s1\u{2014}", "s1"));
+    }
+
+    /// What a successful op recorded for `a.md`, and the file it wrote.
+    fn recorded(ws: &MemWorkspace, outcome: &OpOutcome) -> (Vec<ReplayOp>, String) {
+        (outcome.replay["a.md"].clone(), read(ws, "a.md"))
+    }
+
+    /// Replays `ops` onto `text` the way publish does.
+    fn replayed(text: &str, ops: &[ReplayOp]) -> Result<String, OkfError> {
+        crate::okf::ops::replay::replay("a.md", Some(text), ops)
+    }
+
+    /// Runs `op` on `before`, then replays what it recorded onto `before`
+    /// plus a `title` someone else added since.
+    fn replay_onto_newer(
+        before: &str,
+        op: impl FnOnce(&MemWorkspace) -> OpOutcome,
+    ) -> (String, String) {
+        let ws = MemWorkspace::from_files([("a.md", before)]);
+        let outcome = op(&ws);
+        let (ops, direct) = recorded(&ws, &outcome);
+        let newer = before.replacen("type: Note\n", "type: Note\ntitle: Newer\n", 1);
+        (direct, replayed(&newer, &ops).unwrap())
+    }
+
+    /// One op run on a workspace.
+    type Case = Box<dyn Fn(&MemWorkspace) -> OpOutcome>;
+
+    const BASE: &str = "---\ntype: Note\nsources:\n  - id: s0\n    resource: r0\nopen_questions:\n  - Old?\n---\nBody\n";
+
+    #[test]
+    fn a_replay_of_each_op_equals_the_op_beside_a_newer_title() {
+        let cases: Vec<Case> = vec![
+            Box::new(|ws| {
+                let entry = SourceEntry {
+                    id: "s1",
+                    resource: "r1",
+                    title: Some("T"),
+                    author: None,
+                };
+                source(ws, &ctx(), "a", &entry).unwrap()
+            }),
+            Box::new(|ws| remove_source(ws, &ctx(), "a", "s0").unwrap()),
+            Box::new(|ws| stamp(ws, &ctx(), "a", StampField::Verified).unwrap()),
+            Box::new(|ws| stamp(ws, &ctx(), "a", StampField::Generated).unwrap()),
+            Box::new(|ws| question(ws, &ctx(), "a", "New?").unwrap()),
+            Box::new(|ws| unquestion(ws, &ctx(), "a", "1").unwrap()),
+            Box::new(|ws| {
+                review(ws, &ctx(), "a", "partial", "Half.", &["Q?".to_string()]).unwrap()
+            }),
+        ];
+        for case in cases {
+            let (direct, replay) = replay_onto_newer(BASE, case);
+            // Both hold the op's edit; only the replay holds the newer title.
+            assert!(replay.contains("title: Newer\n"), "{replay}");
+            assert_eq!(direct, replay.replace("title: Newer\n", ""));
+        }
+    }
+
+    #[test]
+    fn a_replay_keeps_the_stamp_time_and_actor_of_the_original_edit() {
+        let ws = MemWorkspace::from_files([("a.md", "---\ntype: Note\n---\n")]);
+        let outcome = stamp(&ws, &ctx(), "a", StampField::Verified).unwrap();
+
+        let text = replayed("---\ntype: Note\ntitle: T\n---\n", &outcome.replay["a.md"]).unwrap();
+
+        assert_eq!(
+            text,
+            "---\ntype: Note\ntitle: T\nverified:\n  - { by: tester, at: 2026-11-03T12:00:00Z }\n---\n"
+        );
+    }
+
+    #[test]
+    fn a_replay_refuses_what_the_op_would_refuse_on_the_newer_text() {
+        let add = ReplayOp::AddSource {
+            id: "s0".to_string(),
+            resource: "r".to_string(),
+            title: None,
+            author: None,
+        };
+        let remove = ReplayOp::RemoveSource {
+            id: "s9".to_string(),
+        };
+        let unqueue = ReplayOp::RemoveQuestion {
+            text: "Gone?".to_string(),
+        };
+
+        let duplicate = replayed(BASE, &[add]).unwrap_err();
+        let missing = replayed(BASE, &[remove]).unwrap_err();
+        let no_question = replayed(BASE, &[unqueue]).unwrap_err();
+
+        assert_eq!(refusal(duplicate), "a.md already has a source with id 's0'");
+        assert_eq!(refusal(missing), "a.md has no source with id 's9'");
+        assert_eq!(
+            refusal(no_question),
+            "no open question in a.md exactly matches 'Gone?'"
+        );
+    }
+
+    #[test]
+    fn replaying_a_queued_question_again_changes_nothing_and_a_digit_text_is_not_an_index() {
+        let queued = ReplayOp::AddQuestion {
+            text: "Old?".to_string(),
+            convert_mapping: false,
+        };
+        let digits = ReplayOp::RemoveQuestion {
+            text: "1".to_string(),
+        };
+
+        let same = replayed(BASE, &[queued]).unwrap();
+        let error = replayed(BASE, &[digits]).unwrap_err();
+
+        assert_eq!(same, BASE);
+        assert_eq!(
+            refusal(error),
+            "no open question in a.md exactly matches '1'"
+        );
+    }
+
+    #[test]
+    fn a_replay_keeps_crlf_line_endings_and_refuses_a_text_without_frontmatter() {
+        let op = ReplayOp::AddQuestion {
+            text: "Q?".to_string(),
+            convert_mapping: false,
+        };
+
+        let crlf = replayed("---\r\ntype: Note\r\n---\r\n", std::slice::from_ref(&op)).unwrap();
+        let bare = replayed("Text only\n", std::slice::from_ref(&op)).unwrap_err();
+
+        assert_eq!(
+            crlf,
+            "---\r\ntype: Note\r\nopen_questions:\r\n  - \"Q?\"\r\n---\r\n"
+        );
+        assert_eq!(
+            refusal(bare),
+            "a.md has no frontmatter; add it with your editor first"
+        );
+    }
+
+    #[test]
+    fn an_unquestion_of_a_non_string_question_records_no_replay() {
+        let ws = MemWorkspace::from_files([(
+            "a.md",
+            "---\ntype: Note\nopen_questions:\n  - k: v\n---\n",
+        )]);
+
+        let outcome = unquestion(&ws, &ctx(), "a", "1").unwrap();
+
+        assert_eq!(outcome.touched, ["a.md"]);
+        assert!(outcome.replay.is_empty());
+    }
+
+    #[test]
+    fn review_records_the_review_and_each_question_it_queued() {
+        let ws = MemWorkspace::from_files([("a.md", BASE)]);
+        let questions = ["Old?", "New?"].map(String::from);
+
+        let outcome = review(&ws, &ctx(), "a", "verified", "Ok.", &questions).unwrap();
+
+        assert_eq!(
+            outcome.replay["a.md"],
+            [
+                ReplayOp::SetReviewed {
+                    by: "tester".to_string(),
+                    at: "2026-11-03T12:00:00Z".to_string(),
+                    outcome: "verified".to_string(),
+                    note: "Ok.".to_string(),
+                },
+                ReplayOp::AddQuestion {
+                    text: "New?".to_string(),
+                    convert_mapping: true,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_review_replays_over_a_mapping_valued_open_questions_as_it_ran() {
+        let before = "---\ntype: Note\nopen_questions:\n  k: v\n---\nBody\n";
+        let ws = MemWorkspace::from_files([("a.md", before)]);
+        let questions = ["Q?".to_string()];
+        let outcome = review(&ws, &ctx(), "a", "verified", "Ok.", &questions).unwrap();
+        let direct = read(&ws, "a.md");
+        let newer = before.replacen("type: Note\n", "type: Note\ntitle: Newer\n", 1);
+
+        let text = replayed(&newer, &outcome.replay["a.md"]).unwrap();
+
+        assert_eq!(direct, text.replace("title: Newer\n", ""));
+        assert!(text.contains("\"Q?\""), "{text}");
+        // `question` itself still refuses the mapping, and so does its replay.
+        let refused = question(&ws, &ctx(), "a", "Z?");
+        assert!(refused.is_ok(), "the converted list now accepts a question");
+        let strict = ReplayOp::AddQuestion {
+            text: "Z?".to_string(),
+            convert_mapping: false,
+        };
+        let error = replayed(before, &[strict]).unwrap_err();
+        assert!(matches!(error, OkfError::Shape { .. }), "{error:?}");
     }
 }
