@@ -221,6 +221,7 @@ struct Instruments {
     auth_attempts: Counter<u64>,
     oauth_tokens_issued: Counter<u64>,
     ratelimit_rejections: Counter<u64>,
+    ratelimit_fallbacks: Counter<u64>,
     mail_jobs: Counter<u64>,
     mail_queue_depth: Arc<MailQueueDepth>,
     // The cluster-wide open changeset count `okf.changesets.open` reports,
@@ -285,6 +286,7 @@ impl Metrics {
         "okf_auth_attempts_total",
         "okf_oauth_tokens_issued_total",
         "okf_ratelimit_rejections_total",
+        "okf_ratelimit_fallbacks_total",
         "okf_mail_jobs_total",
         "okf_clock_checks_total",
         "okf_clock_offset_seconds",
@@ -391,6 +393,11 @@ impl Metrics {
                     meter,
                     "okf.ratelimit.rejections",
                     "Requests a rate limiter refused.",
+                ),
+                ratelimit_fallbacks: counter(
+                    meter,
+                    "okf.ratelimit.fallbacks",
+                    "Rate-limit decisions a replica's own bucket made because the shared one failed.",
                 ),
                 mail_jobs: counter(
                     meter,
@@ -816,6 +823,17 @@ impl Limiter {
             Self::OauthConsent => "oauth_consent",
         }
     }
+
+    /// The name an exported event carries instead of [`Limiter::as_str`].
+    /// Sentry's data scrubbing replaces a value that contains "token" with
+    /// `[Filtered]`, so `oauth_token` becomes `oauth-tok` here: the event
+    /// still says which limiter failed. Every other name is its label.
+    pub const fn event_name(self) -> &'static str {
+        match self {
+            Self::OauthToken => "oauth-tok",
+            other => other.as_str(),
+        }
+    }
 }
 
 /// The OAuth grants the token endpoint serves: the `grant` label.
@@ -1014,6 +1032,18 @@ impl Metrics {
     pub fn rate_limited(&self, limiter: Limiter) {
         self.inner
             .ratelimit_rejections
+            .add(1, &[KeyValue::new("limiter", limiter.as_str())]);
+    }
+
+    /// Counts one rate-limit decision this replica's own bucket made
+    /// because the shared (Redis) bucket failed.
+    ///
+    /// # Arguments
+    /// * `limiter` - which limiter fell back.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn rate_limit_fallback(&self, limiter: Limiter) {
+        self.inner
+            .ratelimit_fallbacks
             .add(1, &[KeyValue::new("limiter", limiter.as_str())]);
     }
 
@@ -1312,6 +1342,7 @@ mod tests {
         metrics.auth_attempt(Method::Password, SignInOutcome::Ok);
         metrics.oauth_token_issued(Grant::RefreshToken);
         metrics.rate_limited(Limiter::OauthToken);
+        metrics.rate_limit_fallback(Limiter::OauthToken);
         metrics.mail_job(MailProvider::Log, MailOutcome::Sent);
         metrics.clock_check(Outcome::Ok, Some(10));
         metrics.archive(Direction::Export, "notes", Outcome::Ok, elapsed, Some(10));

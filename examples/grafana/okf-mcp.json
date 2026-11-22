@@ -2149,7 +2149,7 @@
     {
       "type": "timeseries",
       "title": "Rate-limit rejections",
-      "description": "Requests a limiter turned away, by limiter.",
+      "description": "Requests a limiter turned away, by limiter, and decisions a replica made from its own bucket because the shared one failed (any bar means the limit is per replica).",
       "targets": [
         {
           "datasource": {
@@ -2159,6 +2159,17 @@
           "refId": "A",
           "expr": "sum by (limiter) (increase(okf_ratelimit_rejections_total{job=~\"$job\"}[$__rate_interval]))",
           "legendFormat": "{{limiter}}",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "B",
+          "expr": "sum by (limiter) (increase(okf_ratelimit_fallbacks_total{job=~\"$job\"}[$__rate_interval]))",
+          "legendFormat": "{{limiter}} (own bucket)",
           "range": true,
           "instant": false
         }

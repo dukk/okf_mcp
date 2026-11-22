@@ -448,6 +448,42 @@ mode = "standalone"         # or "cluster"
   seconds, and each command waits at most 2. The message names the variable
   and the Redis error's kind, never the URL.
 
+- **The Redis user's permissions.** A deployment whose Redis user is
+  restricted by an ACL must grant it every command the server runs, on every
+  key under `{<key_prefix>}` and, for the announcements, on the channels under
+  it:
+  - the connection: `PING`, `HELLO`, `AUTH` (`+@connection`);
+  - keys: `GET`, `SET`, `GETDEL`, `DEL`, `EXISTS`, `PEXPIRE`, `PTTL`, `INCR`
+    (`+@read +@write +@keyspace`);
+  - hashes, for the rate-limit buckets: `HMGET`, `HSET`;
+  - scripts: `EVALSHA`, `EVAL`, `SCRIPT LOAD` (`+@scripting`). **Redis checks
+    every command a script calls against the same ACL**, so the user needs
+    the commands above for the scripts too;
+  - pub/sub: `PUBLISH`, `SUBSCRIBE` (`+@pubsub`);
+  - **`TIME`**, which the rate limiter's script calls so that every replica
+    counts on Redis's one clock. `TIME` is in none of the categories above
+    (it is `@fast`), so a user granted those and denied `-@dangerous` must be
+    given `+time` by name. Without it the script fails with `ACL failure in
+    script: User ... has no permissions to run the 'time' command` on every
+    call, and every rate limit falls back to each replica's own bucket.
+
+  A working access string is `on >password ~{okf:}* &{okf:}* -@all +@read
+  +@write +@keyspace +@connection +@transaction +@scripting +@pubsub +time
+  -@dangerous` (with your `key_prefix`). The server checks this at start-up:
+  it runs the limiter's script once against a throwaway key and, if Redis
+  refuses it, logs an **error** ("the shared rate limiter's script cannot run
+  on Redis") and reports `"rate_limits": "degraded"` on `/healthz` (section 7).
+  The server still starts; limits are decided per replica until the ACL is
+  fixed. Fallbacks are counted per limiter in `okf_ratelimit_fallbacks_total`
+  and logged as a warning at most once a minute per limiter. In exported logs
+  the limiter `oauth_token` is named `oauth-tok`, because Sentry's scrubbing
+  replaces any value containing "token" with `[Filtered]`; the metric labels
+  keep their names.
+- **Why the script uses `TIME`.** One clock for every replica means no
+  replica's clock skew refills a bucket early. Passing the caller's clock
+  instead would drop the `+time` requirement but give that up, so the script
+  keeps `TIME`.
+
 ### What Redis holds
 
 `{p}` stands for `{<key_prefix>}`, and `h(x)` for the hex SHA-256 of `x`. A
@@ -1345,6 +1381,7 @@ the dotted originals.
 | `okf_auth_attempts_total` | counter | `method`, `outcome` | Sign-in attempts. `method` is `password`, `passkey`, `oidc` or `setup`; `outcome` is `ok`, `failed` or `locked` |
 | `okf_oauth_tokens_issued_total` | counter | `grant` | Token pairs issued: `authorization_code` or `refresh_token` |
 | `okf_ratelimit_rejections_total` | counter | `limiter` | Requests a limiter refused: `sign_in_per_ip`, `forgot_per_email`, `forgot_per_ip`, `link_starts`, `oauth_register`, `oauth_token` or `oauth_consent` |
+| `okf_ratelimit_fallbacks_total` | counter | `limiter` | Decisions this replica's own bucket made because the shared (Redis) bucket failed, by the same `limiter` values. Any rate above 0 means the effective limit is the configured one times the replica count; alert on it. Only with `[redis]` |
 | `okf_mail_jobs_total` | counter | `provider`, `outcome` | Mail tries. `provider` is the configured one; `outcome` is `sent`, `retry` or `failed` |
 | `okf_mail_queue_depth` | gauge | `status` | Mail not yet sent, as of the last `cluster_stats` housekeeping job (the same on every replica): `pending`, `sending`, `retrying` or `failed` |
 | `okf_housekeeping_runs_total` | counter | `task`, `outcome` | Housekeeping jobs run on this replica. `task` is `prune_changesets`, `prune_oauth`, `prune_audit`, `prune_workers` or `cluster_stats`; `outcome` is `ok` or `error` (an error is retried) |
@@ -4431,7 +4468,7 @@ fails: [Redis](#redis)) and the rest 400.
 `GET /healthz` needs no key:
 
 ```json
-{"database": "ok", "cached_catalogs": 2, "clock": {"ok": true, "checked_at": "2026-11-03T12:00:00Z", "offset_ms": 3, "stratum": 2}, "redis": "ok"}
+{"database": "ok", "cached_catalogs": 2, "clock": {"ok": true, "checked_at": "2026-11-03T12:00:00Z", "offset_ms": 3, "stratum": 2}, "redis": "ok", "rate_limits": "shared"}
 ```
 
 - **Status:** 200 when the database answers `SELECT 1` within 2 seconds;
@@ -4446,6 +4483,15 @@ fails: [Redis](#redis)) and the rest 400.
   reads and writes. A failed probe is counted in `okf_redis_errors_total`
   (as `get`). The body never names the Redis host or URL. Alert on `"redis":
   "unavailable"` or on that counter, not on the status.
+- **`rate_limits`:** `"shared"` while the shared rate limiter's Redis calls
+  work, `"degraded"` once the last one failed (each replica is then deciding
+  from its own buckets, so the effective limit is the configured one times the
+  replica count), and `null` without `[redis]`. The usual cause is a Redis user
+  whose ACL lacks a command the limiter's script calls (see "The Redis user's
+  permissions" in [Redis](#redis)). **It never changes the status code.** At
+  start-up the server runs the script once and logs an error naming the
+  problem; alert on `"rate_limits": "degraded"` or on
+  `okf_ratelimit_fallbacks_total`.
 - **`clock`:** the last clock check, or `null` without a `time_server` (or
   before the first check). It is coarse on purpose, since the route is
   public:

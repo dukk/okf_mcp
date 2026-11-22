@@ -15,9 +15,17 @@
 //! - **A Redis failure fails open to this replica's own bucket**, which the
 //!   limiter keeps for that purpose: the request is decided by the same
 //!   budget counted per replica, as it was before #357, never unlimited. The
-//!   failure is counted (`okf.redis.errors`, operation `limit`) and logged.
+//!   failure is counted (`okf.redis.errors`, operation `limit`, and
+//!   `okf.ratelimit.fallbacks` per limiter) and logged, as a warning at most
+//!   once a minute per limiter.
+//! - **The script needs the Redis commands it calls.** `TAKE` calls `TIME`,
+//!   `HMGET`, `HSET` and `PEXPIRE`; a Redis user whose ACL lacks one of them
+//!   fails every call (issue #832). [`check`] runs the script once at
+//!   start-up, logs an error naming the ACL problem and sets the flag
+//!   `/healthz` reports as `rate_limits`. The trade-off of dropping `TIME`
+//!   for the caller's clock was not taken: it would give up the single clock.
 
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use super::{hashed, Redis};
@@ -61,6 +69,10 @@ const TAKE: &str = "local capacity = tonumber(ARGV[1])\n\
 // server does not know the script yet.
 static TAKE_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| redis::Script::new(TAKE));
 
+/// The most often a limiter logs its fallback warning (every fallback is
+/// still counted).
+const FALLBACK_LOG_EVERY: Duration = Duration::from_secs(60);
+
 /// The id of a global limiter's one bucket (the OAuth limits are not keyed).
 const GLOBAL_ID: &str = "global";
 
@@ -70,9 +82,59 @@ struct SharedBuckets {
     limiter: Limiter,
     capacity: u32,
     per: Duration,
+    /// When this limiter last logged a fallback warning.
+    last_logged: Mutex<Option<Instant>>,
 }
 
 impl SharedBuckets {
+    /// A limiter's buckets in `redis`.
+    ///
+    /// # Arguments
+    /// * `redis` - the shared Redis.
+    /// * `limiter` - which limiter (names its key space).
+    /// * `capacity` - the burst.
+    /// * `per` - how long an empty bucket takes to refill.
+    ///
+    /// # Returns
+    /// The buckets.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial constructor: builds a value from its arguments"
+        )
+    )]
+    fn new(redis: &Redis, limiter: Limiter, capacity: u32, per: Duration) -> Self {
+        Self {
+            redis: redis.clone(),
+            limiter,
+            capacity,
+            per,
+            last_logged: Mutex::new(None),
+        }
+    }
+
+    /// Whether a fallback warning is due now, and if so marks it logged.
+    ///
+    /// # Returns
+    /// `true` for the first fallback and then at most once per
+    /// [`FALLBACK_LOG_EVERY`].
+    #[tracing::instrument(level = "trace", skip_all)]
+    fn warning_due(&self) -> bool {
+        // A poisoned lock only means another thread panicked holding it; the
+        // timestamp inside is still usable.
+        let mut last = self
+            .last_logged
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let now = Instant::now();
+        let due = last.is_none_or(|logged| now.duration_since(logged) >= FALLBACK_LOG_EVERY);
+        if due {
+            *last = Some(now);
+        }
+        due
+    }
+
     /// The full key of `id`'s bucket.
     ///
     /// # Arguments
@@ -117,17 +179,66 @@ impl SharedBuckets {
     #[tracing::instrument(level = "debug", skip_all)]
     async fn take_or(&self, id: &str, local: impl FnOnce() -> bool) -> bool {
         match self.take(id).await {
-            Ok(taken) => taken,
+            Ok(taken) => {
+                self.redis.set_limits_degraded(false);
+                taken
+            }
             Err(error) => {
                 self.redis.count(RedisOp::Limit);
-                split_event!(
-                    warn,
-                    { limiter = self.limiter.as_str(), kind = ?error.kind(), },
-                    { %error, },
-                    "a shared rate limit failed; this replica's own bucket decided"
-                );
+                self.redis.count_fallback(self.limiter);
+                self.redis.set_limits_degraded(true);
+                if self.warning_due() {
+                    split_event!(
+                        warn,
+                        { limiter = self.limiter.event_name(), kind = ?error.kind(), },
+                        { %error, },
+                        "a shared rate limit failed; this replica's own bucket decided"
+                    );
+                }
                 local()
             }
+        }
+    }
+}
+
+/// Runs the `TAKE` script once against a throwaway key, so a Redis user that
+/// may not run a command the script calls (`TIME`, issue #832) is found at
+/// start-up, not by the first request.
+///
+/// A refusal is logged as an error that names the ACL problem and sets
+/// [`Redis::limits_degraded`], which `/healthz` reports. It never stops
+/// start-up: every limit still works from this replica's own bucket.
+///
+/// # Arguments
+/// * `redis` - the shared Redis.
+///
+/// # Returns
+/// `true` if the script ran.
+#[tracing::instrument(level = "info", skip_all, fields(db.system.name = "redis", db.operation.name = "limit"))]
+pub async fn check(redis: &Redis) -> bool {
+    // One token in a bucket that expires after a second: nothing it leaves
+    // behind outlives the check.
+    let probe = TAKE_SCRIPT
+        .key(redis.key("ratelimit:startup_check", "probe"))
+        .arg(1_u32)
+        .arg(1_000_u32)
+        .invoke_async::<i64>(&mut redis.connection())
+        .await;
+    match probe {
+        Ok(_) => {
+            redis.set_limits_degraded(false);
+            true
+        }
+        Err(error) => {
+            redis.count(RedisOp::Limit);
+            redis.set_limits_degraded(true);
+            split_event!(
+                error,
+                { kind = ?error.kind(), },
+                { %error, },
+                "the shared rate limiter's script cannot run on Redis (usually the Redis user's ACL lacks a command it calls, such as TIME; see docs/operations.md, Redis); every rate limit is decided by each replica's own bucket"
+            );
+            false
         }
     }
 }
@@ -172,12 +283,7 @@ impl KeyedLimit {
     ) -> Self {
         Self {
             local: KeyedLimiter::new(capacity, per, max_keys),
-            shared: redis.map(|redis| SharedBuckets {
-                redis: redis.clone(),
-                limiter,
-                capacity,
-                per,
-            }),
+            shared: redis.map(|redis| SharedBuckets::new(redis, limiter, capacity, per)),
         }
     }
 
@@ -237,11 +343,9 @@ impl GlobalLimit {
     ) -> Self {
         Self {
             local: TokenBucket::new(capacity, refill_per_sec),
-            shared: redis.map(|redis| SharedBuckets {
-                redis: redis.clone(),
-                limiter,
-                capacity,
-                per: Duration::from_secs_f64(f64::from(capacity) / refill_per_sec),
+            shared: redis.map(|redis| {
+                let per = Duration::from_secs_f64(f64::from(capacity) / refill_per_sec);
+                SharedBuckets::new(redis, limiter, capacity, per)
             }),
         }
     }
@@ -547,5 +651,116 @@ mod tests {
         })
         .await
         .expect("the outage test within 120 s");
+    }
+
+    /// The production Redis user's access string (issue #832), plus `~*`
+    /// (a user needs key access to do anything) and `&*` (channels).
+    const PRODUCTION_ACL: &str = "-@all +@read +@write +@keyspace +@connection \
+        +@transaction +@scripting +@pubsub -@dangerous ~* &*";
+
+    /// Connects as the user `url` names, counting on `metrics`.
+    async fn connect_as(server: &TestRedis, url: String, metrics: &Metrics) -> Redis {
+        let env =
+            move |name: &str| (name == crate::db::redis_support::URL_VAR).then(|| url.clone());
+        Redis::connect(&testing::config(server), &env, metrics)
+            .await
+            .expect("connect as the restricted user")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_redis_user_without_time_is_found_at_startup_and_falls_back() {
+        tokio::time::timeout(BOUND, async {
+            let server = TestRedis::start().await;
+            let (_provider, metrics, registry) = crate::mcp::testing::local_metrics();
+            let url = server.url_for_user(PRODUCTION_ACL).await;
+            let redis = connect_as(&server, url, &metrics).await;
+            let limit = GlobalLimit::new(Limiter::OauthToken, 2, 1.0, Some(&redis));
+
+            let script_runs = check(&redis).await;
+
+            assert!(!script_runs, "TIME is not in the production ACL");
+            assert!(redis.limits_degraded(), "/healthz reports it");
+            let mut taken = Vec::new();
+            for _ in 0..3 {
+                taken.push(limit.try_take(Instant::now()).await);
+            }
+            assert_eq!(taken, [true, true, false], "the replica's own bucket");
+            let rendered = crate::mcp::testing::render(&registry);
+            assert_eq!(error_count(&rendered, "limit"), 4, "{rendered}");
+            assert!(
+                rendered.contains("okf_ratelimit_fallbacks_total{limiter=\"oauth_token\"} 3"),
+                "{rendered}"
+            );
+        })
+        .await
+        .expect("the production ACL test within 120 s");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn granting_time_makes_the_check_pass_and_the_limiter_share() {
+        tokio::time::timeout(BOUND, async {
+            let server = TestRedis::start().await;
+            let url = server
+                .url_for_user(&format!("{PRODUCTION_ACL} +time"))
+                .await;
+            let redis = connect_as(&server, url, &Metrics::global()).await;
+            let limit = GlobalLimit::new(Limiter::OauthToken, 2, 1.0, Some(&redis));
+
+            assert!(check(&redis).await, "the script runs once +time is granted");
+            assert!(!redis.limits_degraded());
+            let mut taken = Vec::new();
+            for _ in 0..3 {
+                taken.push(limit.try_take(Instant::now()).await);
+            }
+
+            assert_eq!(taken, [true, true, false]);
+            assert!(
+                !redis.limits_degraded(),
+                "decided by Redis, not the fallback"
+            );
+        })
+        .await
+        .expect("the granted ACL test within 120 s");
+    }
+
+    #[tokio::test]
+    async fn the_fallback_warning_is_due_once_a_minute() {
+        // No connection is made: `warning_due` only reads the clock.
+        let server = TestRedis::start().await;
+        let redis = testing::connect(&server).await;
+        let buckets = SharedBuckets::new(&redis, Limiter::OauthToken, 1, Duration::from_secs(1));
+
+        assert!(buckets.warning_due(), "the first fallback logs");
+        assert!(
+            !buckets.warning_due(),
+            "the next ones within a minute do not"
+        );
+        *buckets.last_logged.lock().expect("lock") =
+            Some(Instant::now() - FALLBACK_LOG_EVERY - Duration::from_secs(1));
+        assert!(buckets.warning_due(), "after a minute it logs again");
+    }
+
+    #[test]
+    fn an_exported_limiter_name_survives_sentrys_scrubbing() {
+        for limiter in [
+            Limiter::SignInPerIp,
+            Limiter::ForgotPerEmail,
+            Limiter::ForgotPerIp,
+            Limiter::LinkStarts,
+            Limiter::OauthRegister,
+            Limiter::OauthToken,
+            Limiter::OauthConsent,
+        ] {
+            assert!(
+                !limiter.event_name().contains("token"),
+                "{} would be [Filtered]",
+                limiter.event_name()
+            );
+        }
+        assert_eq!(
+            Limiter::OauthToken.as_str(),
+            "oauth_token",
+            "the label stays"
+        );
     }
 }

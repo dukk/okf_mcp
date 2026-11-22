@@ -140,6 +140,49 @@ impl TestRedis {
         }
     }
 
+    /// Creates a Redis user with the access string `rules` (an `ACL SETUSER`
+    /// rule list) and returns the URL that signs in as it. The user's name
+    /// and password are random, so tests sharing one server never meet.
+    ///
+    /// # Arguments
+    /// * `rules` - for example the production string, `-@all +@read ...`.
+    ///
+    /// # Returns
+    /// A `redis://<user>:<password>@host:port/<db>` URL for this server.
+    ///
+    /// # Panics
+    /// If the server refuses `ACL SETUSER`, or the URL has no `redis://`.
+    pub async fn url_for_user(&self, rules: &str) -> String {
+        let mut bytes = [0_u8; 8];
+        getrandom::fill(&mut bytes).expect("random bytes for the test user");
+        let name: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        let password = format!("pw{name}");
+        let user = format!("okftest{name}");
+        let client = redis::Client::open(self.url.as_str()).expect("a redis URL");
+        let mut connection = client
+            .get_multiplexed_async_connection()
+            .await
+            .expect("connect as the default user");
+        let mut command = redis::cmd("ACL");
+        command
+            .arg("SETUSER")
+            .arg(&user)
+            .arg("on")
+            .arg(format!(">{password}"));
+        for rule in rules.split_whitespace() {
+            command.arg(rule);
+        }
+        let _: () = command
+            .query_async(&mut connection)
+            .await
+            .expect("ACL SETUSER");
+        let rest = self
+            .url
+            .strip_prefix("redis://")
+            .expect("a redis:// test URL");
+        format!("redis://{user}:{password}@{rest}")
+    }
+
     /// An `env` reader for `Redis::connect` that knows only [`URL_VAR`].
     pub fn env(&self) -> impl Fn(&str) -> Option<String> + '_ {
         move |name| (name == URL_VAR).then(|| self.url.clone())
