@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 491,
+  "next_claim_seq": 492,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "2b82e88232b3d3e9a289aac7a4c80fa90c0bbec9d3ab2ef798f4b025dfcd4e01"
+    "mac": "19b305f241957700f937cbbf760f74397f4041d5f405a40d062d6159a3a7a8a0"
   },
-  "next_evidence_seq": 623,
+  "next_evidence_seq": 629,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "3af464af7127dcea0128599cb81191d07a5eaa46995e77a2847836980be27d8d"
+    "mac": "b40cdff770e960a0f87b6ccdd9cd3c7f24711c1a698ecd1bb4ba3030dbbbf01e"
   },
   "claims": [
     {
@@ -38326,6 +38326,18 @@
             "by": "server",
             "mac": "8d7d78a5c32bb0fdb7a342a47d1bf55bef73c45829011494bba2a54aee191f67"
           }
+        },
+        {
+          "id": "EVD-0628",
+          "kind": "analysis",
+          "locator": "children of CLM-0477",
+          "summary": "Re-rolled on e1d03c9: all children are supported, including the new SpanRecorder claim CLM-0491 and the re-judged same-shape claim CLM-0482.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T22:10:43.780153425Z",
+          "seal": {
+            "by": "server",
+            "mac": "7424d625ea072b2c4902db278d2283816d54e1a563ee28ca44fb68b9d943ec6b"
+          }
         }
       ],
       "verdicts": [
@@ -38354,13 +38366,26 @@
             "by": "server",
             "mac": "ab0c6c4cca69ec8f8eec635fa46372e7837b70a81c437aedd5bb7112b6ae4c38"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged on e1d03c9: every child supported, including CLM-0491 (SpanRecorder) and CLM-0482 (wide grep).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0628"
+          ],
+          "recorded_at": "2026-11-22T22:10:47.663433675Z",
+          "seal": {
+            "by": "server",
+            "mac": "60fa64abb4cf9813bf0a267f1dede16d16dfc46873f2e38140b6394ccba5b734"
+          }
         }
       ],
       "created_at": "2026-11-22T21:53:52.936911242Z",
-      "updated_at": "2026-11-22T22:02:05.936363623Z",
+      "updated_at": "2026-11-22T22:10:47.663433675Z",
       "seal": {
         "by": "server",
-        "mac": "164b5f7cd1ee2fc70e4751b2f4bd4993d82383e15c71da64c36abed906e0eac7"
+        "mac": "12749c04cab037013cf73615a767df152aceeebf2e1f8f3f3bff0d5f8833e621"
       }
     },
     {
@@ -38637,6 +38662,18 @@
             "by": "server",
             "mac": "42456a987dd16a995618f0ae02f8bf6840bb4907613a26824e7fbe886834d2c9"
           }
+        },
+        {
+          "id": "EVD-0626",
+          "kind": "inspection",
+          "locator": "src/telemetry/subscriber.rs:572 at e1d03c9",
+          "summary": "Neutral for the listed tests (the claim names a specific set, all of which hold per EVD-0606). Note the PR's list was not the whole set: SpanRecorder (subscriber.rs:572, users cache/catalogs_tests.rs and mcp/changesets.rs) was also converted in e1d03c9 and is covered by CLM-0491; Observer by CLM-0482.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-22T22:10:35.288087632Z",
+          "seal": {
+            "by": "server",
+            "mac": "fa3bfe38e677025dc2c81ca0227e4f2105a544435b2c9ba3d32d7a89b6697bdc"
+          }
         }
       ],
       "verdicts": [
@@ -38655,10 +38692,10 @@
         }
       ],
       "created_at": "2026-11-22T21:53:52.936911242Z",
-      "updated_at": "2026-11-22T21:54:56.684225996Z",
+      "updated_at": "2026-11-22T22:10:35.288087632Z",
       "seal": {
         "by": "server",
-        "mac": "8db1fdcee791aaffdc07682c64e9cfbe4cc5ebbaf41aadd452f07dab1b09e437"
+        "mac": "4de06068780cfb98a81e076458c2c674a1e8c7ddb873aa2c46f198b53b511c0c"
       }
     },
     {
@@ -38762,6 +38799,18 @@
             "by": "server",
             "mac": "d72e5ab04a8f3eb7d89c210edc5d755c297dc351bf0a47f5b0fc89059cb67513"
           }
+        },
+        {
+          "id": "EVD-0625",
+          "kind": "analysis",
+          "locator": "git grep -nE 'Dispatch::new|dispatcher::(with|set)_default|subscriber::(with|set)_default|set_global_default|rebuild_interest_cache' -- src tests, at e1d03c9",
+          "summary": "SUPERSEDES EVD-0620, whose 'no remaining test' statement was wrong: its pattern omitted Dispatch::new and missed SpanRecorder (subscriber.rs:572/600, now fixed). Wide re-grep, each site classified. Through helper: cli.rs:3398,3428; identity.rs:536; http/mod.rs:1118; caller.rs:141,157,171,205,224; rows_returned.rs:59; subscriber.rs:572 (SpanRecorder), 694 (Observer). Raw but safe: caller.rs:71 production Caller; caller.rs:146 uses the keep_alive dispatch; json.rs:239 (bodies at 256, 368), 296, 337 and mod.rs:1047, 1139 and subscriber.rs:1047 and tests/telemetry_privacy.rs:127 all emit only from callsites written inside their own test body, which no other test executes; mod.rs:649 and :712 and bin/okf-maintenance.rs:291 production startup; subscriber.rs:1172-1173 the #738 stress test, counts nothing; http/mod.rs:1134 redundant rebuild. telemetry_privacy.rs emit_a_span: the shared `probe` callsite is reached only inside with_default, so every thread reaching it has its own default and the no-subscriber first-registration race does not apply; the file also serializes tests with SERIAL (5 of 5 lock sites) and its 6 tests passed 3 of 3 reruns. Residual, not proven: telemetry.subscriber() builds a Dispatch before with_default, and a Dispatch registration recomputes cached interest from the registering thread's default when it is the only live dispatcher; I did not establish whether that matters there (tests pass), and it is not the #481 race.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T22:10:35.256856523Z",
+          "seal": {
+            "by": "server",
+            "mac": "5b3f17600198e503bf50780f7d9bd25b37b39737e59bbe167d8cf9defb5b65c5"
+          }
         }
       ],
       "verdicts": [
@@ -38792,13 +38841,28 @@
             "by": "server",
             "mac": "d0cebd6ac9b709b4b3be97484f053ad72ebcfe226147b1d2629da243ed08b3b1"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The previous supported verdict relied on EVD-0620, whose grep missed SpanRecorder (raw Dispatch::new); that is now fixed and the wide grep (EVD-0625, which supersedes EVD-0620) classifies every Dispatch::new, with_default, set_default and set_global_default site in src and tests. Cited: Observer fix, the wide grep and tests.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0619",
+            "EVD-0625",
+            "EVD-0621"
+          ],
+          "recorded_at": "2026-11-22T22:10:43.718392252Z",
+          "seal": {
+            "by": "server",
+            "mac": "16a7e1b1fcbad8dfe97fbc32102736caaa55dadfb51bc9f4f3273e3c83a022e0"
+          }
         }
       ],
       "created_at": "2026-11-22T21:53:52.936911242Z",
-      "updated_at": "2026-11-22T22:02:02.325021679Z",
+      "updated_at": "2026-11-22T22:10:43.718392252Z",
       "seal": {
         "by": "server",
-        "mac": "6333a9f0020e08181886e776714621741375c74b05b4c9137bb9d652e74f58bd"
+        "mac": "4b6399f38b3434cdec28207db0bbda5fcc14587a3a3d303aee146fe1c8e4b458"
       }
     },
     {
@@ -39166,6 +39230,18 @@
             "by": "server",
             "mac": "ca23ece87ddc21ab20e2b93ad26b19382d102b13e11069a12e9eaa762ff0e00d"
           }
+        },
+        {
+          "id": "EVD-0627",
+          "kind": "log",
+          "locator": "target/i481-logs/r3-fmt.log, r3-lint.log, r3-dylint.log, r3-test.log (head e1d03c9)",
+          "summary": "r3 logs: r3-test.log 'test result' lines sum to 3320 passed, 0 failed, 21 ignored; fmt, lint and dylint logs end in normal success output (no exit marker lines exist in the r2/r3 logs, so exit codes are inferred from the output, not read). I reran only narrow tests and fmt, not the gates.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T22:10:35.320669546Z",
+          "seal": {
+            "by": "server",
+            "mac": "353958c3566acf919ed8e388caeac69971205b2b0d90c6e3ac7ab1c20801aae9"
+          }
         }
       ],
       "verdicts": [
@@ -39181,13 +39257,26 @@
             "by": "server",
             "mac": "dbc1f02950b544c90468e41a4a7cca44adcf2eaa929ba90997d14d2c15c82796"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged on head e1d03c9: r3 logs show the same totals 3320 passed, 0 failed, 21 ignored with fmt, lint and dylint output clean. Exit codes are inferred, not read, and the gates were not rerun by me.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0627"
+          ],
+          "recorded_at": "2026-11-22T22:10:43.749945841Z",
+          "seal": {
+            "by": "server",
+            "mac": "fc289a85b7159ea68524b56e3021edbdab2b679aa3545e0d57ef68b875fa1814"
+          }
         }
       ],
       "created_at": "2026-11-22T21:53:52.936911242Z",
-      "updated_at": "2026-11-22T21:54:56.876028932Z",
+      "updated_at": "2026-11-22T22:10:43.749945841Z",
       "seal": {
         "by": "server",
-        "mac": "59b7c120b643c7f0a98acef742e19b50df8ba65fbecd4484052743c039857919"
+        "mac": "80a17aa34d3ec1e534c495030414818e9026ce22dd498ebf3244d970c7cb827c"
       }
     },
     {
@@ -39307,6 +39396,87 @@
       "seal": {
         "by": "server",
         "mac": "c8321bfe260c0778b36f658a54e58929e510bdd1e1015aa7fa0a9ae128dff12e"
+      }
+    },
+    {
+      "id": "CLM-0491",
+      "statement": "capture::SpanRecorder::new in src/telemetry/subscriber.rs registers its recording subscriber through crate::test_tracing::keep_alive, so tests that run futures under SpanRecorder::run (cache/catalogs_tests.rs, mcp/changesets.rs) record spans from shared production callsites without the first-registration race.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "issue #481 req 1: 'fix other tests in the repo of the same shape the same way'; review finding on HEAD e1d03c9",
+      "derived_from": [
+        "CLM-0477"
+      ],
+      "artifacts": [
+        "src/telemetry/subscriber.rs",
+        "src/cache/catalogs_tests.rs",
+        "src/mcp/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:481"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0623",
+          "kind": "inspection",
+          "locator": "src/telemetry/subscriber.rs:563-576 and 596-604 at e1d03c9",
+          "summary": "SpanRecorder::new builds the registry+Collect subscriber and stores crate::test_tracing::keep_alive(subscriber) as its dispatch (forces the process-wide anchor first, then Dispatch::new). run() installs it with dispatcher::with_default on a scoped thread. Before the fix this was a raw Dispatch::new, so a single live dispatcher let a no-subscriber thread cache shared callsites as never.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/telemetry/subscriber.rs",
+              "lines": {
+                "start": 563,
+                "end": 576
+              },
+              "commit": "e1d03c962d86b8c9ff0ad57921de957e4d9ff5c0"
+            }
+          },
+          "recorded_at": "2026-11-22T22:10:35.179376115Z",
+          "seal": {
+            "by": "server",
+            "mac": "e71f129a44b37e0c0c1dd3fc0dc83eb308e5afea4c32dc850f508fcd3acf6051"
+          }
+        },
+        {
+          "id": "EVD-0624",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib telemetry --jobs 4; tools/agentic/gate.sh narrow --lib publish_records_duration",
+          "summary": "On e1d03c9: telemetry tests 112 passed, 0 failed; mcp::changesets publish_records_duration_and_lock_wait (a SpanRecorder user) 1 passed. Users: cache/catalogs_tests.rs:299-315 (counts 'build' spans) and mcp/changesets.rs:1463-1470 (asserts publish spans and parents).",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T22:10:35.224029148Z",
+          "seal": {
+            "by": "server",
+            "mac": "e6eda0b8de98f5cb5101a5a008a5086934be2212478743a0b326613530eac161"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "SpanRecorder::new goes through keep_alive and its user tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0623",
+            "EVD-0624"
+          ],
+          "recorded_at": "2026-11-22T22:10:43.677068272Z",
+          "seal": {
+            "by": "server",
+            "mac": "1b9fa0b9452c7623164391fe46584bf404dec3047f30bc4b94d54d118c345c9a"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T22:10:19.953733440Z",
+      "updated_at": "2026-11-22T22:10:43.677068272Z",
+      "seal": {
+        "by": "server",
+        "mac": "e9b457b64e102eee5ef268b5b6e470514b8a63f91f3d4516a5fbbf206c44d5f8"
       }
     }
   ]
