@@ -5,10 +5,10 @@
     "by": "server",
     "mac": "df016a1f6b7cb74821b2eb829a38ce7cf717b6fa835151d59b247e75779ffadc"
   },
-  "next_evidence_seq": 577,
+  "next_evidence_seq": 578,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "1cca2d32081158b0823e8e1aa459ddcdeb3ff9378c9dbd5124a8f8c80d94adb7"
+    "mac": "44ccadc96c6773baf0c2b0c74b1d96c7efe9d606804bfe2fb95551b08ad82fd6"
   },
   "claims": [
     {
@@ -37190,6 +37190,28 @@
             "by": "server",
             "mac": "b040857ee05f1eaaec13690466424eda43249c0336f3a700861bb58e343666c9"
           }
+        },
+        {
+          "id": "EVD-0577",
+          "kind": "inspection",
+          "locator": "src/store/audit.rs:963-1000 at f2195c1",
+          "summary": "Only the doc comment of prune_budget_counters changed after EVD-0572 (it no longer links the private BUDGET_COUNTER_GRACE_HOURS, for rustdoc); the DELETE, the now - (1 + grace) hours cut-off and the call from prune_audit are unchanged.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit.rs",
+              "lines": {
+                "start": 963,
+                "end": 1000
+              },
+              "commit": "f2195c1b2c6636fdbda556bf60b7bee40e03dfca"
+            }
+          },
+          "recorded_at": "2026-11-22T20:31:22.563483819Z",
+          "seal": {
+            "by": "server",
+            "mac": "0d63ba9cd4df4f0ae3f548a0933aab5f4670f51101f62c9a76c76748a6bcad98"
+          }
         }
       ],
       "verdicts": [
@@ -37211,10 +37233,10 @@
         }
       ],
       "created_at": "2026-11-22T20:24:26.126081250Z",
-      "updated_at": "2026-11-22T20:26:44.095506641Z",
+      "updated_at": "2026-11-22T20:31:22.563483819Z",
       "seal": {
         "by": "server",
-        "mac": "6d4cbe0b56afdd32e1982afad6626723c0d20bb58b2ec3d1267a54405193dbf9"
+        "mac": "eda999b2da39b9f8dafc0edd1cd3d2f56d936767ec2c73343b8302728c671a64"
       }
     }
   ]
