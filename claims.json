@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 432,
+  "next_claim_seq": 449,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "f22dd597f1bd5455f04e77887e9925aa4191ec78a071362207c5ba074625e056"
+    "mac": "a8b409b5732a0b512b7df7c78a2d3e413e718d5c80d3ef187e0a675f2e834d62"
   },
-  "next_evidence_seq": 516,
+  "next_evidence_seq": 541,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "a202f97f9779237f7a1bcef4c18aba3429b5884aa28409ee29c893b393e21daa"
+    "mac": "714f613640a6e72d6b7a2928e55ccd0fb33f2905d980c84e6294d6634e1db99c"
   },
   "claims": [
     {
@@ -34184,6 +34184,1317 @@
       "seal": {
         "by": "server",
         "mac": "3d456c75f0a45991207ec42417321dd2b6963798c9c108b3d15736fad10dc35a"
+      }
+    },
+    {
+      "id": "CLM-0432",
+      "statement": "Issue #352 as decided on 2026-11-20: owners of a shared team can set the catalog's member access and entitle team members, in a console session only, with the specified refusals, locking, auditing, console drawer and docs.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/352 comment 'Decision (pgrace, 2026-11-20)'",
+      "derived_from": [],
+      "artifacts": [
+        "src/store/ceiling.rs",
+        "src/http/api/catalogs.rs",
+        "src/http/api/people.rs"
+      ],
+      "tags": [
+        "from-issue:352"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0540",
+          "kind": "analysis",
+          "locator": "children CLM-0433..CLM-0448",
+          "summary": "All child claims are now supported; all five gates are green on the head's code.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T18:52:55.101271744Z",
+          "seal": {
+            "by": "server",
+            "mac": "c7cbbebd9aa9df86e173d596b067f6dfafb1cf1827af2c9455a7085428a84fb1"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Every functional and security child is supported; two children are undecided: lock-order conformance with lessons.md (CLM-0439) and fmt/lint exit status (CLM-0446). The ui_e2e result is pending. Fix: reorder the target membership lock before the catalog lock in begin_entitlement with an interleaving test, then rerun gate.sh fmt, lint and test-ui and record their exit statuses.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [],
+          "recorded_at": "2026-11-22T18:33:35.693234988Z",
+          "seal": {
+            "by": "server",
+            "mac": "f49a8366a5ea9e8fd665d982657f5b0cb27a406641221eb28647a45e5916427c"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Every child is supported.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0540"
+          ],
+          "recorded_at": "2026-11-22T18:53:02.524230745Z",
+          "seal": {
+            "by": "server",
+            "mac": "17209c05196f3903f4521f901eab8d13abd643d6b757586ab13dd413c0415baa"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T18:31:53.062287178Z",
+      "updated_at": "2026-11-22T18:53:02.524230745Z",
+      "seal": {
+        "by": "server",
+        "mac": "b18e0a9104f2f7ab15fa6b188752716345f1a68d128a18f6e51438405ef626fa"
+      }
+    },
+    {
+      "id": "CLM-0433",
+      "statement": "An owner's API key or OAuth grant cannot change member access or entitlements: owner_session returns the admin refusal for CredentialKind::ApiKey and OAuth, and the PUT/DELETE routes never reach the owner store path for them.",
+      "kind": "security",
+      "level": "component",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Decision Q1: 'console session only, an owner's API keys and OAuth grants cannot change member access or entitlements'",
+      "derived_from": [
+        "CLM-0432"
+      ],
+      "artifacts": [
+        "src/http/api/mod.rs",
+        "src/http/api/owner_access_tests.rs"
+      ],
+      "tags": [
+        "from-issue:352"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0516",
+          "kind": "inspection",
+          "locator": "src/http/api/mod.rs:248-258",
+          "summary": "owner_session returns Some(user) only for CredentialKind::Session; ApiKey and OAuth return the admin refusal. All three owner routes (catalogs.rs:686,728,806; people.rs:795) go through it, and only Some(owner) reaches the *_as_owner / owner store functions.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/mod.rs",
+              "lines": {
+                "start": 248,
+                "end": 258
+              },
+              "commit": "d9519041fa8e44fddbc8a7375987281665ba8d56"
+            }
+          },
+          "recorded_at": "2026-11-22T18:32:57.589109323Z",
+          "seal": {
+            "by": "server",
+            "mac": "50f579a7336db0d20dcddb5d5a7cb4e5da19a29f9295fc7af0fc8ae400bfcab0"
+          }
+        },
+        {
+          "id": "EVD-0517",
+          "kind": "test",
+          "locator": "http::api::owner_access_tests::an_owners_keys_and_oauth_grants_are_refused_every_control (target/i352-logs/test.log:665, ok)",
+          "summary": "Owner's write key and OAuth grant get 403/404 on all five controls; a docs-scoped admin key gets 403 on every write (200 on GETs, as before); stored member access stays write and no entitlement is created. Assertion for key/grant is loose (403 or 404) but the stored-state asserts show nothing changed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/owner_access_tests.rs",
+              "lines": {
+                "start": 306,
+                "end": 337
+              },
+              "commit": "d9519041fa8e44fddbc8a7375987281665ba8d56"
+            }
+          },
+          "recorded_at": "2026-11-22T18:32:57.635971134Z",
+          "seal": {
+            "by": "server",
+            "mac": "d23f7a92c7d7b7d388bdaeb65b6c050e88001cc733d1bd99da52b556b4b7118c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "owner_session is the single gate, matching exhaustively on CredentialKind, and the test shows key, grant and scoped-admin key writes refused with state unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0516",
+            "EVD-0517"
+          ],
+          "recorded_at": "2026-11-22T18:33:27.960707190Z",
+          "seal": {
+            "by": "server",
+            "mac": "ff05355eb9f9ad37bebd6f603461fe108ebc04d5b6c9090c81e6e6f71b078ef3"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T18:31:53.062287178Z",
+      "updated_at": "2026-11-22T18:33:27.960707190Z",
+      "seal": {
+        "by": "server",
+        "mac": "d03702c84059ded3264085296b9acd6d6fa22a60bfec25c7e52f27ed3ef068b4"
+      }
+    },
+    {
+      "id": "CLM-0434",
+      "statement": "For an owner, PUT/DELETE entitlements for an unknown user and for a user outside the owning team give the same status and body, and the owner path never entitles a non-member or entitles at admin.",
+      "kind": "security",
+      "level": "component",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Decision Q2: 'an unknown user and a user outside the team get the same refusal (same status and body)', 'capped at write'",
+      "derived_from": [
+        "CLM-0432"
+      ],
+      "artifacts": [
+        "src/store/ceiling.rs",
+        "src/http/api/people.rs"
+      ],
+      "tags": [
+        "from-issue:352"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0518",
+          "kind": "inspection",
+          "locator": "src/store/ceiling.rs:1121-1176 begin_entitlement",
+          "summary": "Owner path: unknown user is not refused early (UnknownName swallowed to None); the owner/catalog check runs first (not_team_owner); then user_id None and a non-member both end in the same not_team_member() (Forbidden, same reason text). Handler (people.rs:836-858) rejects access=admin before the store, identical for all targets. Malformed names map to None too.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/ceiling.rs",
+              "lines": {
+                "start": 1121,
+                "end": 1176
+              },
+              "commit": "d9519041fa8e44fddbc8a7375987281665ba8d56"
+            }
+          },
+          "recorded_at": "2026-11-22T18:32:57.668945178Z",
+          "seal": {
+            "by": "server",
+            "mac": "8c1138e7ccd5db9f31ab538c06aaf4907e751d3dc18135f8998d7962022be0c0"
+          }
+        },
+        {
+          "id": "EVD-0519",
+          "kind": "test",
+          "locator": "http::api::owner_access_tests::an_unknown_user_and_one_outside_the_team_get_one_refusal_and_nothing_leaks (test.log:671); store::ceiling::tests::an_unknown_user_and_one_outside_the_team_get_the_same_refusal",
+          "summary": "API test PUT and DELETE for ghost, rex (other tenant), otto, a%00b, the fixture user and an unknown name all give 403 with byte-equal JSON bodies that do not contain the probed names; nothing is stored. Store test compares the Debug of the errors for 5 targets. Admin-at-admin refusal is tested before any lookup.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/owner_access_tests.rs",
+              "lines": {
+                "start": 415,
+                "end": 486
+              },
+              "commit": "d9519041fa8e44fddbc8a7375987281665ba8d56"
+            }
+          },
+          "recorded_at": "2026-11-22T18:32:57.700378526Z",
+          "seal": {
+            "by": "server",
+            "mac": "80eb175a282899ab003eeb5fd73c056e6a6e76a330a2deb46f0b40093ccab426"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code funnels unknown and out-of-team targets to one not_team_member error after the owner check; test compares status and full body across six targets for PUT and DELETE.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0518",
+            "EVD-0519"
+          ],
+          "recorded_at": "2026-11-22T18:33:27.986547833Z",
+          "seal": {
+            "by": "server",
+            "mac": "ae1b32c50827d9a9047f42b3075927e4ece47a204f53fc7ed3499c2d1f88cfcd"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T18:31:53.062287178Z",
+      "updated_at": "2026-11-22T18:33:27.986547833Z",
+      "seal": {
+        "by": "server",
+        "mac": "f9c503bb26c6709eba4aba5da068bac54b15680c47b26b58fd178cc9c5ed0762"
+      }
+    },
+    {
+      "id": "CLM-0435",
+      "statement": "The owner's entitlement response (PUT/DELETE) contains only the entitlement on the catalog acted on, while an admin's response still contains all of the user's entitlements.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Decision Q2: 'the response echoes only the entitlement on the catalog in question for an owner, admins keep today's responses'",
+      "derived_from": [
+        "CLM-0432"
+      ],
+      "artifacts": [
+        "src/http/api/people.rs"
+      ],
+      "tags": [
+        "from-issue:352"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0520",
+          "kind": "inspection",
+          "locator": "src/http/api/people.rs:803-817 entitlements_answer",
+          "summary": "When owner.is_some() the views are retained to entitlement.catalog == catalog; the admin path (owner None) returns entitlement_views unchanged.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/people.rs",
+              "lines": {
+                "start": 803,
+                "end": 817
+              },
+              "commit": "d9519041fa8e44fddbc8a7375987281665ba8d56"
+            }
+          },
+          "recorded_at": "2026-11-22T18:32:57.731908714Z",
+          "seal": {
+            "by": "server",
+            "mac": "155ccad4bb59a8316a0440f3ba11f48924df24d81eec5f97bdcad9eaf9b7ac57"
+          }
+        },
+        {
+          "id": "EVD-0521",
+          "kind": "test",
+          "locator": "http::api::owner_access_tests::an_owner_session_entitles_a_team_member_and_sees_only_that_catalog (test.log:664, ok)",
+          "summary": "Mia holds entitlements on main and docs; owner PUT echo and DELETE echo name only docs (len 1, then []), while the admin's GET /users/mia shows 2. Also, an admin PUT echoes both (test at :416-486 final asserts len 2).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/owner_access_tests.rs",
+              "lines": {
+                "start": 233,
+                "end": 304
+              },
+              "commit": "d9519041fa8e44fddbc8a7375987281665ba8d56"
+            }
+          },
+          "recorded_at": "2026-11-22T18:32:57.763186701Z",
+          "seal": {
+            "by": "server",
+            "mac": "f6915c7f7c4d1802e30e8e5fecd7097bc4b0d67564638146a270c0395d832a7d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Filter applied only for owners; test shows echo of 1 versus admin's 2.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0520",
+            "EVD-0521"
+          ],
+          "recorded_at": "2026-11-22T18:33:28.009595507Z",
+          "seal": {
+            "by": "server",
+            "mac": "eface420a8e99ee9a61ff337830d778a7a540c9e1afd66aa1707244a49bedad5"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T18:31:53.062287178Z",
+      "updated_at": "2026-11-22T18:33:28.009595507Z",
+      "seal": {
+        "by": "server",
+        "mac": "77c2bf7aa66046c551c508c01fca3b70eb1efd651c7a844f6ef05429ef0fd5bc"
+      }
+    },
+    {
+      "id": "CLM-0436",
+      "statement": "Owners of a personal team are refused member-access and entitlement changes on its catalogs (the owner check excludes teams with personal_of set).",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Decision Q3: 'personal teams excluded'",
+      "derived_from": [
+        "CLM-0432"
+      ],
+      "artifacts": [
+        "src/store/catalogs.rs",
+        "src/store/ceiling.rs"
+      ],
+      "tags": [
+        "from-issue:352"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0522",
+          "kind": "inspection",
+          "locator": "src/store/catalogs.rs:596-612 lock_shared_team_owner",
+          "summary": "The query joins teams and requires t.personal_of IS NULL, so a personal team's owner matches no row and gets not_owner(). All three owner entry points (change_member_access, team_access, begin_entitlement) use this function; no owner path uses plain lock_owner.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 596,
+                "end": 612
+              },
+              "commit": "d9519041fa8e44fddbc8a7375987281665ba8d56"
+            }
+          },
+          "recorded_at": "2026-11-22T18:32:57.794916500Z",
+          "seal": {
+            "by": "server",
+            "mac": "024647322bf75ae8bbb76ebc60444b36d42afe61e2502b2d5f663719f468258b"
+          }
+        },
+        {
+          "id": "EVD-0523",
+          "kind": "test",
+          "locator": "http::api::owner_access_tests::a_non_owner_another_teams_owner_a_stranger_and_a_personal_owner_are_refused_alike (test.log:673); store::ceiling::tests::an_owner_is_refused_member_access_where_it_does_not_own_a_shared_team",
+          "summary": "The fixture user (owner of a personal team owning main) gets 403 on all five controls on main and main's member_access stays write; store test refuses alice on her personal catalog solo with no generation bump.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/owner_access_tests.rs",
+              "lines": {
+                "start": 339,
+                "end": 413
+              },
+              "commit": "d9519041fa8e44fddbc8a7375987281665ba8d56"
+            }
+          },
+          "recorded_at": "2026-11-22T18:32:57.826784540Z",
+          "seal": {
+            "by": "server",
+            "mac": "139c790e5336552313c37f9ece079912bb432e66e8b119ad90aeec650379329d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The SQL excludes personal teams and tests refuse a personal owner on every control with state unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0522",
+            "EVD-0523"
+          ],
+          "recorded_at": "2026-11-22T18:33:28.032368680Z",
+          "seal": {
+            "by": "server",
+            "mac": "1971c534db44baeca44ce9a678466522927f53e58f3985d7c93be1274558adc7"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T18:31:53.062287178Z",
+      "updated_at": "2026-11-22T18:33:28.032368680Z",
+      "seal": {
+        "by": "server",
+        "mac": "e16f858347b0b20fcc95daac6ce3ab0db0726b0774e11cff43a0f2ef0441b9e9"
+      }
+    },
+    {
+      "id": "CLM-0437",
+      "statement": "GET /catalogs/{c}/member-access is open to an owner of the owning shared team in a console session, with keys, grants, non-owners and personal-team owners refused, and the new GET /catalogs/{c}/entitlements lists only the owning team's members and, for an owner, only their entitlements on that catalog.",
+      "kind": "interface",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Decision Q4: 'GET /catalogs/{c}/member-access opened to owners of the owning team with the same session-only and lock rules'",
+      "derived_from": [
+        "CLM-0432"
+      ],
+      "artifacts": [
+        "src/http/api/catalogs.rs",
+        "src/store/ceiling.rs"
+      ],
+      "tags": [
+        "from-issue:352"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0524",
+          "kind": "inspection",
+          "locator": "src/http/api/catalogs.rs:677-700, 780-841; src/store/ceiling.rs:783-860 team_access",
+          "summary": "Both GETs compute the admin check, then owner_session (keys/grants refused unless they pass admin), then team_access with lock_shared_team_owner; members come from the owner team, and the entitlements query is filtered to team members when the caller is an owner. Admin-passing callers (incl. a catalog-scoped admin key) take the unfiltered admin path; that is also true of the pre-existing member-access GET but is new for GET entitlements.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/catalogs.rs",
+              "lines": {
+                "start": 677,
+                "end": 700
+              },
+              "commit": "d9519041fa8e44fddbc8a7375987281665ba8d56"
+            }
+          },
+          "recorded_at": "2026-11-22T18:32:57.858074377Z",
+          "seal": {
+            "by": "server",
+            "mac": "e648c27f65d532c94cd7418e0f3aa106ee22dbfb17edb1514a3c5a49bac91b0b"
+          }
+        },
+        {
+          "id": "EVD-0525",
+          "kind": "test",
+          "locator": "store::ceiling::tests::team_access_shows_an_owner_only_its_own_members_and_their_entitlements (test.log:2358); owner_access_tests::an_owner_session_entitles_a_team_member_and_sees_only_that_catalog",
+          "summary": "Store test checks an owner sees only its own team's members and their entitlements (outsiders hidden); API test checks the GET view's members list (mia member, olive owner) and entitlements. Refusals for non-owners and personal owners on the GETs are in the refused-alike test (404 only for sessions not reaching the catalog). Gap: no API-level test has an outsider entitlement on docs and reads it through the owner GET; the store test covers that filter.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/ceiling.rs",
+              "lines": {
+                "start": 2468,
+                "end": 2530
+              },
+              "commit": "d9519041fa8e44fddbc8a7375987281665ba8d56"
+            }
+          },
+          "recorded_at": "2026-11-22T18:32:57.887606817Z",
+          "seal": {
+            "by": "server",
+            "mac": "1fb822f55209489ce61ba269ce77f2f1eb0fe953ee7f9403a63a365bac3d07c9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code and store test show the owner filter; API test covers refusals. Minor gap noted: the owner GET filter of an outsider's entitlement is covered at store level only. A catalog-scoped admin key can read the new GET entitlements unfiltered (admin access, same as the existing member-access GET).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0524",
+            "EVD-0525"
+          ],
+          "recorded_at": "2026-11-22T18:33:28.062776038Z",
+          "seal": {
+            "by": "server",
+            "mac": "c1b464e75c107fdecf4333edcc4a31be1d108f1c35c7eab27cd3859bf1c1d22b"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T18:31:53.062287178Z",
+      "updated_at": "2026-11-22T18:33:28.062776038Z",
+      "seal": {
+        "by": "server",
+        "mac": "bede8cfc82895dae8a7b9acb241ac8457a8378460b358f3297ed4378faf283d1"
+      }
+    },
+    {
+      "id": "CLM-0438",
+      "statement": "The owner is checked in the database inside the writing transaction under a lock_owner-style row lock (FOR SHARE on the owner's membership row), a demotion or member removal or catalog move mid-request is refused, and the lock sequence is owner membership row, then catalog row, then the target's membership row.",
+      "kind": "security",
+      "level": "component",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Decision: 'ownership checked in the database under the lock_owner-style row lock'; PR body Changes bullet 'Store'",
+      "derived_from": [
+        "CLM-0432"
+      ],
+      "artifacts": [
+        "src/store/catalogs.rs",
+        "src/store/ceiling.rs"
+      ],
+      "tags": [
+        "from-issue:352"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0526",
+          "kind": "inspection",
+          "locator": "src/store/catalogs.rs:596-612; src/store/ceiling.rs:644-680, 1121-1176",
+          "summary": "lock_shared_team_owner selects the owner's membership row FOR SHARE OF m inside the writing tx (same shape as lock_owner plus the personal exclusion). change_member_access and begin_entitlement then lock the catalog row (UPDATE/FOR SHARE), refuse if owner_team differs from the locked team, and begin_entitlement finally locks the target's membership row FOR SHARE. Sequence matches the PR text.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/ceiling.rs",
+              "lines": {
+                "start": 1121,
+                "end": 1176
+              },
+              "commit": "d9519041fa8e44fddbc8a7375987281665ba8d56"
+            }
+          },
+          "recorded_at": "2026-11-22T18:32:57.918703074Z",
+          "seal": {
+            "by": "server",
+            "mac": "961873aadd2a25a9e8831213598daf6c2d8e3e0ef89186cb8c682581c5771638"
+          }
+        },
+        {
+          "id": "EVD-0527",
+          "kind": "test",
+          "locator": "store::ceiling::tests::an_owner_demoted_while_its_write_waits_is_refused, an_entitlement_to_a_member_removed_while_it_waits_is_refused (test.log:2342,2350, ok)",
+          "summary": "Both force the interleaving (hold the row, queue the change, release) and assert refusal. No test forces a catalog move to another team mid-request, though the code checks it.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/ceiling.rs",
+              "lines": {
+                "start": 2531,
+                "end": 2650
+              },
+              "commit": "d9519041fa8e44fddbc8a7375987281665ba8d56"
+            }
+          },
+          "recorded_at": "2026-11-22T18:32:57.949304278Z",
+          "seal": {
+            "by": "server",
+            "mac": "0cd51bdf7c64ccefad21da1930374c4c1ec7bca7cccd0019b1ff287df065744e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "FOR SHARE OF m membership row lock in the writing transaction, then catalog row, then target membership row, as the PR says; forced-interleaving tests cover demotion and member removal.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0526",
+            "EVD-0527"
+          ],
+          "recorded_at": "2026-11-22T18:33:28.089516064Z",
+          "seal": {
+            "by": "server",
+            "mac": "8a48104de8f2bbf41038782d82e2451648941a2fa4c48737e986fdf98191943f"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T18:31:53.062287178Z",
+      "updated_at": "2026-11-22T18:33:28.089516064Z",
+      "seal": {
+        "by": "server",
+        "mac": "948847b0b709b093e108984ff69ff4076dceb85e623d19d38ea4570059a39053"
+      }
+    },
+    {
+      "id": "CLM-0439",
+      "statement": "The new owner write path acquires its row locks in the order tools/agentic/lessons.md requires (users, then teams, then catalogs, then server_state), including the target's team_members row.",
+      "kind": "constraint",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "tools/agentic/lessons.md 'Locks and races': 'Every writer of the same rows locks them in one order'",
+      "derived_from": [
+        "CLM-0432"
+      ],
+      "artifacts": [
+        "src/store/ceiling.rs"
+      ],
+      "tags": [
+        "from-issue:352"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0528",
+          "kind": "analysis",
+          "locator": "src/store/ceiling.rs:1121-1176 begin_entitlement vs tools/agentic/lessons.md:7",
+          "summary": "lock_people (users) then lock_shared_team_owner (team_members) then catalog row then the target's team_members row. The last lock takes a team-level row after a catalog-level row, against the stated users, teams, catalogs order. The owner's membership row and the target's are in the same team, so the target lock could be taken before the catalog row. I found no concrete cycle (remove_member/set_role lock the team row first and write no catalog row; set_owner locks catalog then no member row), and no forced-interleaving test pairs entitle_as_owner with remove_member or set_owner. The PR body states the order accurately but does not claim it conforms.",
+          "stance": "neutral",
+          "anchor": {
+            "file": {
+              "path": "src/store/ceiling.rs",
+              "lines": {
+                "start": 1148,
+                "end": 1176
+              },
+              "commit": "d9519041fa8e44fddbc8a7375987281665ba8d56"
+            }
+          },
+          "recorded_at": "2026-11-22T18:32:57.977664023Z",
+          "seal": {
+            "by": "server",
+            "mac": "2067fe34ff479999a648d0ca925ec4c1b011c5a77498724c07caba0c3d225e54"
+          }
+        },
+        {
+          "id": "EVD-0538",
+          "kind": "inspection",
+          "locator": "src/store/ceiling.rs begin_entitlement",
+          "summary": "After commit 154a287 the order is users (lock_people), owner membership row, target membership row, then catalog row, matching users, teams, catalogs in lessons.md. The forced-interleaving test an_entitlement_to_a_member_removed_while_it_waits_is_refused passes.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "The user's membership row under a share lock",
+              "scope": [
+                "src/store/ceiling.rs"
+              ],
+              "hits": 1,
+              "commit": "154a287e694982a6fe73b9d55d7fd046c9729dc1"
+            }
+          },
+          "recorded_at": "2026-11-22T18:52:42.150043439Z",
+          "seal": {
+            "by": "server",
+            "mac": "a3e8ec4edba28948a6c25381638d1e3b94bc74808c17cd5a89c22ef4abe05680"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "begin_entitlement locks the target's team_members row after the catalog row, which does not follow lessons.md's users, teams, catalogs order; I found no concrete deadlock partner but no test pairs it with remove_member or set_owner either, so conformance cannot be shown. Fix: in begin_entitlement take the target's team_members FOR SHARE lock (the team id is known from lock_shared_team_owner) before the catalog row SELECT ... FOR SHARE, and add a forced-interleaving test of entitle_as_owner against remove_member and against catalogs::set_owner as lessons.md prescribes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [],
+          "recorded_at": "2026-11-22T18:33:28.116518320Z",
+          "seal": {
+            "by": "server",
+            "mac": "b601b27a4b40fa52714eadf666071578f5bd9f13b7f681591096f72d536b4e14"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Lock order fixed in 154a287 per the audit's Fix step.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0538"
+          ],
+          "recorded_at": "2026-11-22T18:52:51.582272618Z",
+          "seal": {
+            "by": "server",
+            "mac": "787131ca271b08c5d8b7668c76b539919ce4f1ec19bc3cbdeb196f7b7ec496be"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T18:31:53.062287178Z",
+      "updated_at": "2026-11-22T18:52:51.582272618Z",
+      "seal": {
+        "by": "server",
+        "mac": "9e4d29894fcd50bf5e141e8c07467873249901bfde0cf62deec213bad4866b57"
+      }
+    },
+    {
+      "id": "CLM-0440",
+      "statement": "Owner ceiling writes bump admin_generation (when something changed) and every change is audited with the owner as actor.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Decision: 'ceiling writes bump admin_generation, every change audited with the owner as actor'; PR body: 'Ceiling writes still bump admin_generation ... audited with the owner as actor'",
+      "derived_from": [
+        "CLM-0432"
+      ],
+      "artifacts": [
+        "src/store/ceiling.rs",
+        "src/http/api/owner_access_tests.rs"
+      ],
+      "tags": [
+        "from-issue:352"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0529",
+          "kind": "test",
+          "locator": "store::ceiling::tests::an_owner_sets_member_access_and_bumps_the_generation, an_owner_entitles_a_member_and_takes_it_away; owner_access_tests::an_owner_session_sets_member_access_and_it_is_audited_with_the_owner_as_actor (test.log:663, ok)",
+          "summary": "Store tests assert admin_generation increases after owner set and owner entitle/unentitle; API test asserts audit events have actor_person olive and source console. Owner functions reuse the existing writer bodies that bump and record (entitle_checked/unentitle_checked share the admin code after begin_entitlement; change_member_access is the former set_member_access body).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/owner_access_tests.rs",
+              "lines": {
+                "start": 177,
+                "end": 232
+              },
+              "commit": "d9519041fa8e44fddbc8a7375987281665ba8d56"
+            }
+          },
+          "recorded_at": "2026-11-22T18:32:58.007875596Z",
+          "seal": {
+            "by": "server",
+            "mac": "41d4d964b75e90555e4b300c42c44195d37ac03f34b01165c80c3f36cedd7545"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Tests assert the generation increases for owner set, entitle and removal, and audit entries carry the owner as actor with console source.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0529"
+          ],
+          "recorded_at": "2026-11-22T18:33:28.142747185Z",
+          "seal": {
+            "by": "server",
+            "mac": "672b8ddb03010f7275bd79f39cc200bb0ad9f02ff605f215b32adadfee238eb5"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T18:31:53.062287178Z",
+      "updated_at": "2026-11-22T18:33:28.142747185Z",
+      "seal": {
+        "by": "server",
+        "mac": "b35dd0a88599562257dda65ef2541edf7e5c9e70e541b7965b5dc503336c1069"
+      }
+    },
+    {
+      "id": "CLM-0441",
+      "statement": "The console shows Team member access and Entitlements in the catalog drawer only for a console session that owns the catalog's team when that team is not personal, using /api/v1/me owned_team_details, and entitlement targets are picked only from the owning team's members.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "Decision Q4: 'the catalog drawer next to the maintenance switch, filled from /api/v1/me's owned_teams ... entitlement targets picked from the owning team's members only'",
+      "derived_from": [
+        "CLM-0432"
+      ],
+      "artifacts": [
+        "src/http/ui/js/pages/catalogs.js"
+      ],
+      "tags": [
+        "from-issue:352"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0530",
+          "kind": "inspection",
+          "locator": "src/http/ui/js/pages/catalogs.js:561-572 maySetTeamAccess, 413-545 entitlements",
+          "summary": "maySetTeamAccess requires store.session and a team in /me owned_team_details matching row.owner_team with !team.personal; the entitlement picker is filled from GET /catalogs/{c}/entitlements members only. Uses owned_team_details (owned_teams has no personal flag), a deviation from the decision's wording but equivalent source. Server re-checks regardless. No UI test covers a personal-team owner's drawer.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/ui/js/pages/catalogs.js",
+              "lines": {
+                "start": 561,
+                "end": 572
+              },
+              "commit": "d9519041fa8e44fddbc8a7375987281665ba8d56"
+            }
+          },
+          "recorded_at": "2026-11-22T18:32:58.038964912Z",
+          "seal": {
+            "by": "server",
+            "mac": "6584f4e782bea4ee6d53141dea2408f6d90b572cdabce94085222b8eea095cb4"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code inspection shows session-only, non-personal owned team gating and member-only picker; the server is the real control.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0530"
+          ],
+          "recorded_at": "2026-11-22T18:33:28.168685508Z",
+          "seal": {
+            "by": "server",
+            "mac": "5ae60d34b758d88fccddb49633ed38d22b6b6a7aac9ee051d9d29873ea9e3c8b"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T18:31:53.062287178Z",
+      "updated_at": "2026-11-22T18:33:28.168685508Z",
+      "seal": {
+        "by": "server",
+        "mac": "2b7a505bb1d934bc95991ade816e31d45b22b4d8cae22dfc1cc10e53c8fc4633"
+      }
+    },
+    {
+      "id": "CLM-0442",
+      "statement": "tests/ui_e2e/catalogs.rs has a journey for the owner's drawer (member access, entitle, remove) that waits on concrete elements, plus a held-entitle-sent-once test and a member-sees-no-controls assertion.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "Decision test list: 'a ui_e2e journey for the drawer waiting on concrete elements'; PR body 'Console (tests/ui_e2e/catalogs.rs)'",
+      "derived_from": [
+        "CLM-0432"
+      ],
+      "artifacts": [
+        "tests/ui_e2e/catalogs.rs"
+      ],
+      "tags": [
+        "from-issue:352"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0531",
+          "kind": "inspection",
+          "locator": "tests/ui_e2e/catalogs.rs a_team_owner_sets_member_access_and_entitles_a_member_from_the_drawer, an_entitle_in_flight_is_sent_once_and_a_refusal_shows_its_reason",
+          "summary": "The journey uses wait_text/wait_visible/wait_text_gone on concrete ids (#catalog-member-access-current, #catalog-entitlements-list, ...) and checks persisted store state; the held-entitle test uses hold_next/click_twice/held_matches; the member test asserts #catalog-member-access and #catalog-entitlements are hidden. Not run by me: test-ui result is pending.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/catalogs.rs",
+              "lines": {
+                "start": 1,
+                "end": 40
+              },
+              "commit": "d9519041fa8e44fddbc8a7375987281665ba8d56"
+            }
+          },
+          "recorded_at": "2026-11-22T18:32:58.070990373Z",
+          "seal": {
+            "by": "server",
+            "mac": "efd46ec2dc0a7ab936d58cc0f6ed32089fc328f97ab67937e62adf62b590bf57"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The tests exist and wait on concrete elements; passing status is not claimed (test-ui pending).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0531"
+          ],
+          "recorded_at": "2026-11-22T18:33:28.194807702Z",
+          "seal": {
+            "by": "server",
+            "mac": "5d6089e1c0726d1eaa584dfabb7be5b2a794c64fe82a510471c7920aec6cd054"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T18:31:53.062287178Z",
+      "updated_at": "2026-11-22T18:33:28.194807702Z",
+      "seal": {
+        "by": "server",
+        "mac": "f9de2d11268a86fd29f575c8a968c3cf54d611b18d598da52161e26d50a594b7"
+      }
+    },
+    {
+      "id": "CLM-0443",
+      "statement": "Admin paths are unchanged: set_member_access, entitle and unentitle behave as before (unknown names still answered as unknown, admin responses still list all entitlements).",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Decision test list 'admin paths unchanged'; PR body: 'Admin functions (set_member_access, entitle, unentitle) are unchanged'",
+      "derived_from": [
+        "CLM-0432"
+      ],
+      "artifacts": [
+        "src/store/ceiling.rs",
+        "src/http/api/people.rs"
+      ],
+      "tags": [
+        "from-issue:352"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0532",
+          "kind": "test",
+          "locator": "store::ceiling::tests::an_admin_entitlement_unknown_users_and_unknown_catalogs_are_refused; owner_access_tests::an_owner_cannot_entitle_at_admin_and_the_admin_routes_are_unchanged (test.log:661,2337, ok); pre-existing ceiling tests all pass",
+          "summary": "Admin routes still 404 for unknown user, still echo both entitlements; admin store functions delegate to the shared bodies with owner None whose non-owner branch in begin_entitlement is the old check_names/lock_entitlement_users/catalogs::find sequence. The pre-existing tests (every_write_that_moves_a_ceiling_bumps_the_generation etc.) pass in the 3300-test run. 'Unchanged' is behavioral, not textual: the functions were refactored to delegate.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/ceiling.rs",
+              "lines": {
+                "start": 1121,
+                "end": 1135
+              },
+              "commit": "d9519041fa8e44fddbc8a7375987281665ba8d56"
+            }
+          },
+          "recorded_at": "2026-11-22T18:32:58.101973269Z",
+          "seal": {
+            "by": "server",
+            "mac": "f1dbcf83194a5c230e78606d073e31f7ecdb96d079cbd234ccf7098d8f9b5c51"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Admin behavior preserved (tests plus unchanged non-owner branch); the functions are textually refactored to delegate, which the PR phrase 'unchanged' glosses over but behavior is the same.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0532"
+          ],
+          "recorded_at": "2026-11-22T18:33:28.221577948Z",
+          "seal": {
+            "by": "server",
+            "mac": "b6e89da9cfb352e243fa47439ef403340add5b1aee340c6542bb0c89d15c71d1"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T18:31:53.062287178Z",
+      "updated_at": "2026-11-22T18:33:28.221577948Z",
+      "seal": {
+        "by": "server",
+        "mac": "5902125715d228e23c4e2a3fb17083d9d03f42c226be39fbf0f2e4da26e1d7c7"
+      }
+    },
+    {
+      "id": "CLM-0444",
+      "statement": "docs/operations.md 'The ceiling and member access' documents the owner path (console only, shared teams only, members only, locks, audit), the API reference and the parity table rows are updated, and the user-login spec, M12 plan and a changelog entry are updated.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Decision: 'a parity note for the new non-admin path, docs/operations.md updated'; PR body Docs bullet",
+      "derived_from": [
+        "CLM-0432"
+      ],
+      "artifacts": [
+        "docs/operations.md",
+        "changelog/2026-11-22T18-14-40Z-team-owners-manage-access.md"
+      ],
+      "tags": [
+        "from-issue:352"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0533",
+          "kind": "inspection",
+          "locator": "git diff origin/main..HEAD -- docs/operations.md docs/superpowers; changelog/2026-11-22T18-14-40Z-team-owners-manage-access.md",
+          "summary": "operations.md adds the owner section (console only, shared teams only, members only, checked under locks, same effects and audit), updates API reference rows including GET /catalogs/{c}/entitlements and the parity-table console column for entitle, unentitle and set-member-access (the parity note). The spec Future-work item, a Corrected note in the M12 plan and the changelog file exist. Parity test tests/admin_parity.rs row set unchanged.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 2008,
+                "end": 2040
+              },
+              "commit": "d9519041fa8e44fddbc8a7375987281665ba8d56"
+            }
+          },
+          "recorded_at": "2026-11-22T18:32:58.134763242Z",
+          "seal": {
+            "by": "server",
+            "mac": "dbeaf173315a7ea35cf8f310ba500cb12e8aefdcc704f5b86c39d67605920bda"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All listed docs, notes and the changelog are present in the diff.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0533"
+          ],
+          "recorded_at": "2026-11-22T18:33:28.247440841Z",
+          "seal": {
+            "by": "server",
+            "mac": "14d9a9b6f77c4511e530a8b2f6db44c74e2e658d9f032b76fe17ef4718a0300d"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T18:31:53.062287178Z",
+      "updated_at": "2026-11-22T18:33:28.247440841Z",
+      "seal": {
+        "by": "server",
+        "mac": "c9e7735680787c61d983e9af00ac4beb505fdaf482c2006e8d71dc8e0f326629"
+      }
+    },
+    {
+      "id": "CLM-0445",
+      "statement": "PR body: 'tools/agentic/gate.sh test: 3300 passed, 0 failed, 21 ignored.'",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body Validation",
+      "derived_from": [
+        "CLM-0432"
+      ],
+      "artifacts": [
+        "target/i352-logs/test.log"
+      ],
+      "tags": [
+        "from-issue:352"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0534",
+          "kind": "log",
+          "locator": "target/i352-logs/test.log (sum of 'test result' lines); gates.status: test exit 0",
+          "summary": "Summing every 'test result' line in test.log gives 3300 passed, 0 failed, 21 ignored; gates.status records test exit 0. I read the author's log, I did not rerun the full suite.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T18:32:58.162375734Z",
+          "seal": {
+            "by": "server",
+            "mac": "62d5f07d8587ce27e6345c03f8147018612a901b6b1cde67b78757a34412f1e5"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Counts in test.log sum to exactly the stated numbers (log read, not rerun).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0534"
+          ],
+          "recorded_at": "2026-11-22T18:33:28.273349384Z",
+          "seal": {
+            "by": "server",
+            "mac": "1416cd4652a2d14a671f505cc1f97f4feaccb681f2dd5b2a0ab1140e6b5cfd8b"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T18:31:53.062287178Z",
+      "updated_at": "2026-11-22T18:33:28.273349384Z",
+      "seal": {
+        "by": "server",
+        "mac": "ec2e03f1169e7483d96bbd762ddfda493d2a1090561617f0241705dd32fd2bf0"
+      }
+    },
+    {
+      "id": "CLM-0446",
+      "statement": "PR body: 'tools/agentic/gate.sh fmt, lint and dylint: pass.'",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body Validation",
+      "derived_from": [
+        "CLM-0432"
+      ],
+      "artifacts": [
+        "target/i352-logs/fmt.log",
+        "target/i352-logs/lint.log",
+        "target/i352-logs/dylint.log"
+      ],
+      "tags": [
+        "from-issue:352"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0535",
+          "kind": "log",
+          "locator": "target/i352-logs/fmt.log, lint.log, dylint.log, gates.status",
+          "summary": "gates.status records only 'dylint exit 0' and 'test exit 0'. fmt.log holds only the command line (no output, no exit status); lint.log ends in a successful doc build with no explicit exit status. So dylint passing is shown; fmt and lint passing are consistent with the logs but not recorded.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-22T18:32:58.189677905Z",
+          "seal": {
+            "by": "server",
+            "mac": "e361e994a0d678537b5a798761a66cb33f36c89d9d20cc354a910fbfcaa9cc33"
+          }
+        },
+        {
+          "id": "EVD-0539",
+          "kind": "log",
+          "locator": "target/i352-logs/gates.status (second run)",
+          "summary": "tools/agentic/gate.sh fmt, lint, dylint, test and test-ui all exited 0 on the head's code (fmt exit 0, lint exit 0, dylint exit 0, test exit 0, test-ui exit 0); test: 3300 passed, 0 failed, 21 ignored; test-ui journeys included.",
+          "stance": "supports",
+          "recorded_at": "2026-11-22T18:52:42.179423812Z",
+          "seal": {
+            "by": "server",
+            "mac": "8ab726702023335ca3d51edbb83ccc792d5b5b4967736272d0992ec15f9a0dc9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Only dylint has a recorded exit status; fmt and lint logs have no exit marker. Fix: rerun `tools/agentic/gate.sh fmt` and `tools/agentic/gate.sh lint` on head and record their exit status in target/i352-logs/gates.status.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0535"
+          ],
+          "recorded_at": "2026-11-22T18:33:28.307246883Z",
+          "seal": {
+            "by": "server",
+            "mac": "531b0fea59289776f0b871a18214e0bc32bcb530a19fe47c075dd19b4669dcb1"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "All five gates exited 0 on this head's code.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0539"
+          ],
+          "recorded_at": "2026-11-22T18:52:51.610719567Z",
+          "seal": {
+            "by": "server",
+            "mac": "e25da6c58a63268d6ece1924f937b4bccbe6633d4fa7535bee8aafde827bd8e5"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T18:31:53.062287178Z",
+      "updated_at": "2026-11-22T18:52:51.610719567Z",
+      "seal": {
+        "by": "server",
+        "mac": "381f903ccbe274e79a3ac0f4438728234dda3808086cb15a840bb1d8838f3cf1"
+      }
+    },
+    {
+      "id": "CLM-0447",
+      "statement": "PR body: for an owner, 'an unknown, malformed or out-of-team user gets one 403 with one body; an unknown catalog, another team's catalog, a catalog of a personal team and a non-owner all get the same 403. A read by a session that does not reach the catalog stays 404, as before.'",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body Changes, 'Refusals for an owner'",
+      "derived_from": [
+        "CLM-0432"
+      ],
+      "artifacts": [
+        "src/http/api/owner_access_tests.rs",
+        "src/http/api/catalogs.rs"
+      ],
+      "tags": [
+        "from-issue:352"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0536",
+          "kind": "test",
+          "locator": "owner_access_tests::a_non_owner_another_teams_owner_a_stranger_and_a_personal_owner_are_refused_alike and an_unknown_user_and_one_outside_the_team_get_one_refusal_and_nothing_leaks (test.log:671,673, ok); store test an_owner_is_refused_member_access_where_it_does_not_own_a_shared_team",
+          "summary": "Writes: every refusal is 403 and the 403 bodies are all equal (forbidden.len() > 10, all == first). GETs: 404 only for pat/otto (sessions not reaching docs), 403 otherwise. Store test makes malformed/unknown/other-team/personal catalog errors identical. Note the body for an owned catalog with an unknown or out-of-team target (not_team_member text) differs from the non-owner body (not_team_owner text); the PR sentence groups them separately, so it holds. A non-owner probing someone's catalog with a rex/ghost target gets the not-owner body because the owner check precedes the member check.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/owner_access_tests.rs",
+              "lines": {
+                "start": 339,
+                "end": 413
+              },
+              "commit": "d9519041fa8e44fddbc8a7375987281665ba8d56"
+            }
+          },
+          "recorded_at": "2026-11-22T18:32:58.221124303Z",
+          "seal": {
+            "by": "server",
+            "mac": "260441e47c41277c74ae9d3ab3e96ff9e045770ffd6985680c28ace6d5e91bd6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Tests assert status and byte-equal bodies within each group, and 404 only for sessions not reaching the catalog.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0536"
+          ],
+          "recorded_at": "2026-11-22T18:33:28.333186267Z",
+          "seal": {
+            "by": "server",
+            "mac": "fb7ecc66cf615be9dc0c204b88e3d0a51ffe5e0b38bdf7c8a01dc70782b1728e"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T18:31:53.062287178Z",
+      "updated_at": "2026-11-22T18:33:28.333186267Z",
+      "seal": {
+        "by": "server",
+        "mac": "b57b145e1decdff111a5c85448f15f9ca58a66212d4441348d4c606cb6475f78"
+      }
+    },
+    {
+      "id": "CLM-0448",
+      "statement": "PR body: 'API keys and OAuth grants, an owner's included, keep today's admin-only 403.'",
+      "kind": "security",
+      "level": "artifact",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "PR body Changes, API bullet",
+      "derived_from": [
+        "CLM-0432"
+      ],
+      "artifacts": [
+        "src/http/api/owner_access_tests.rs",
+        "src/http/api/mod.rs"
+      ],
+      "tags": [
+        "from-issue:352"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0537",
+          "kind": "test",
+          "locator": "owner_access_tests::an_owners_keys_and_oauth_grants_are_refused_every_control (test.log:665, ok); src/http/api/mod.rs:248-258",
+          "summary": "Writes by an owner's non-admin key, grant and docs-scoped admin key are refused 403 (and nothing changes). A docs-scoped admin key, an admin by its own right, still reads both GETs with 200, as before for member-access and newly for GET /catalogs/{c}/entitlements (which lists every entitlement on the catalog including users outside the team); the PR sentence is true for writes and for non-admin keys, and the scoped-admin read is admin access, not owner access.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/owner_access_tests.rs",
+              "lines": {
+                "start": 306,
+                "end": 337
+              },
+              "commit": "d9519041fa8e44fddbc8a7375987281665ba8d56"
+            }
+          },
+          "recorded_at": "2026-11-22T18:32:58.252118879Z",
+          "seal": {
+            "by": "server",
+            "mac": "9fa156380e40bb4dd5c640a9b5a5c9c030bb85f6ceed1d1400851c3f89421af1"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Writes by keys and grants are refused; only a key that is itself admin on the catalog reads the GETs, as before.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0537"
+          ],
+          "recorded_at": "2026-11-22T18:33:28.359763212Z",
+          "seal": {
+            "by": "server",
+            "mac": "535e2e6e871359b8dfc23157ddd7a0de3ccadb3b0bde48cd061e80edc3e01563"
+          }
+        }
+      ],
+      "created_at": "2026-11-22T18:31:53.062287178Z",
+      "updated_at": "2026-11-22T18:33:28.359763212Z",
+      "seal": {
+        "by": "server",
+        "mac": "0bb11e3c82286b474660f32f3367d6d6d2e462d28aa9773bceb64f937f307d66"
       }
     }
   ]
