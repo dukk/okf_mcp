@@ -30,6 +30,9 @@ struct FakeState {
     redirect: Mutex<Option<String>>,
     pagination: Mutex<&'static str>,
     page_delay: Mutex<bool>,
+    /// Holds every page list after the first while `page_delay` is set, until
+    /// a test adds a permit (issue #500: a timed hold raced the test's deadline).
+    page_gate: tokio::sync::Semaphore,
     lists: AtomicUsize,
     credentials: AtomicUsize,
     delay: Mutex<bool>,
@@ -51,6 +54,7 @@ impl Fake {
             redirect: Mutex::new(None),
             pagination: Mutex::new("none"),
             page_delay: Mutex::new(false),
+            page_gate: tokio::sync::Semaphore::new(0),
             lists: AtomicUsize::new(0),
             credentials: AtomicUsize::new(0),
             delay: Mutex::new(false),
@@ -108,7 +112,18 @@ async fn handle(
         "tools/list" => {
             let index = state.lists.fetch_add(1, Ordering::SeqCst);
             let delay = *state.page_delay.lock().unwrap();
-            if delay && index > 0 { tokio::time::sleep(std::time::Duration::from_secs(4)).await; }
+            if delay && index > 0 {
+                // Held until the test releases it; the outer bound only ends a
+                // stuck test.
+                if let Ok(Ok(permit)) = tokio::time::timeout(
+                    std::time::Duration::from_secs(60),
+                    state.page_gate.acquire(),
+                )
+                .await
+                {
+                    permit.forget();
+                }
+            }
             let tools = OkfServer::tools().list_all();
             match *state.pagination.lock().unwrap() {
                 "pages" if index == 0 => json!({"tools":&tools[..20],"nextCursor":"next"}),
@@ -175,6 +190,9 @@ async fn investigator_client_paginated_setup_can_be_dropped_at_deadline_or_cance
             () = deadline => Err(RunnerError::Budget),
             result = fake.client() => result.map(|_| ()),
         };
+        // The setup future is dropped; only now may the held page answer, so
+        // it can never win against the deadline or the cancel.
+        fake.state.page_gate.add_permits(1);
         assert_eq!(
             result,
             Err(if cancelled {
